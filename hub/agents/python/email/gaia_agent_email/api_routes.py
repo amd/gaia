@@ -48,12 +48,10 @@ import hmac
 import re
 import secrets
 import threading
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, ConfigDict, Field
-
 from gaia_agent_email.contract import (
     ActionItem,
     DraftReply,
@@ -65,10 +63,17 @@ from gaia_agent_email.contract import (
     EmailTriageResult,
     SingleEmailInput,
     ThreadInput,
+    TriageUsage,
 )
 from gaia_agent_email.tools.llm_triage import LLMTriageError
 from gaia_agent_email.tools.summarize_tools import EmailSummarizeError
-from gaia_agent_email.tools.triage_heuristics import classify_category_heuristic
+from gaia_agent_email.tools.triage_heuristics import (
+    classify_category_heuristic,
+    default_action_for,
+)
+from gaia_agent_email.version import AGENT_VERSION, API_VERSION
+from pydantic import BaseModel, ConfigDict, Field
+
 from gaia.connectors.api import connected_mailbox_providers
 from gaia.logger import get_logger
 
@@ -113,7 +118,16 @@ _DUE_HINT_RE = re.compile(
 )
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_URL_RE = re.compile(r"https?://[^\s>\"']+", re.IGNORECASE)
 _MAX_SUMMARY_CHARS = 300
+
+# Fast pre-flight timeouts for the "is Lemonade even up?" probe (#1677). The
+# real chat path uses a 900s scalar timeout — correct for long generation, but
+# it also governs the TCP connect, so an unreachable server blocks on the OS
+# SYN timeout (~30s) before erroring. A short connect timeout turns "server
+# down" into a prompt 502 instead of a 30s hang.
+_LEMONADE_PROBE_CONNECT_TIMEOUT = 2.0
+_LEMONADE_PROBE_READ_TIMEOUT = 3.0
 
 
 def _split_sentences(text: str) -> List[str]:
@@ -121,6 +135,42 @@ def _split_sentences(text: str) -> List[str]:
     if not text:
         return []
     return [s.strip() for s in _SENTENCE_SPLIT_RE.split(text) if s.strip()]
+
+
+def _aggregate_usage(call_stats: List[dict]) -> Optional[TriageUsage]:
+    """Sum the per-call ``AgentResponse.stats`` (#1277/#1278) across the
+    classify + summarize LLM calls into a single :class:`TriageUsage`.
+
+    prompt_tokens = Σ input_tokens; total_tokens = Σ(input + output);
+    tokens_per_second = Σ output / Σ decode_time, where each call's decode time
+    is output_tokens / tokens_per_second (so the aggregate is total output
+    tokens over total decode time, not a naive TPS average). Returns ``None``
+    when no LLM call produced stats (the heuristic-only path).
+    """
+    if not call_stats:
+        return None
+    total_input = 0
+    total_output = 0
+    decode_output = 0  # output only from calls with a usable TPS (>0)
+    total_decode_time = 0.0
+    for s in call_stats:
+        inp = int(s.get("input_tokens") or 0)
+        out = int(s.get("output_tokens") or 0)
+        tps = float(s.get("tokens_per_second") or 0.0)
+        total_input += inp
+        total_output += out
+        if out and tps > 0:
+            decode_output += out
+            total_decode_time += out / tps
+    # Numerator excludes output from tps==0 calls so they can't inflate the
+    # aggregate (they add nothing to the decode-time denominator).
+    agg_tps = decode_output / total_decode_time if total_decode_time > 0 else 0.0
+    return TriageUsage(
+        prompt_tokens=total_input,
+        completion_tokens=total_output,
+        total_tokens=total_input + total_output,
+        tokens_per_second=agg_tps,
+    )
 
 
 class EmailTriageService:
@@ -149,12 +199,13 @@ class EmailTriageService:
         """
         payload = request.payload
         resolved_chat = chat or self._build_llm_chat()
+        context = request.context
         if isinstance(payload, SingleEmailInput):
             kind = "single"
-            result = self._triage_single_llm(payload, resolved_chat)
+            result = self._triage_single_llm(payload, resolved_chat, context=context)
         elif isinstance(payload, ThreadInput):
             kind = "thread"
-            result = self._triage_thread_llm(payload, resolved_chat)
+            result = self._triage_thread_llm(payload, resolved_chat, context=context)
         else:  # pragma: no cover - discriminated union guarantees one of the two
             raise HTTPException(
                 status_code=422,
@@ -170,10 +221,15 @@ class EmailTriageService:
         cloud LLM — no silent fallback to heuristic.
         """
         from gaia_agent_email.config import EmailAgentConfig
+
         from gaia.chat.sdk import AgentConfig, AgentSDK
 
         cfg = EmailAgentConfig(base_url=base_url)
         cfg.validate()
+
+        # Fail fast + loud if Lemonade isn't reachable, before the chat path's
+        # long-timeout connect can stall ~30s (#1677).
+        self._assert_lemonade_reachable(base_url)
 
         sdk_cfg = AgentConfig(
             base_url=base_url,
@@ -183,8 +239,48 @@ class EmailTriageService:
             # Output cap (not input); context window governs what fits.
             # 4096 gives Gemma-4-E4B room for its reasoning chain + JSON.
             max_tokens=4096,
+            # Surface per-call token/TPS stats on AgentResponse.stats so the
+            # triage result can report usage metrics (#1540) — reuses the
+            # existing measurement; no new path.
+            show_stats=True,
         )
         return AgentSDK(sdk_cfg)
+
+    def _assert_lemonade_reachable(self, base_url: Optional[str]) -> None:
+        """Probe Lemonade's /health with a short connect timeout (#1677).
+
+        Raises ``LLMTriageError`` (→ HTTP 502 at the route) when the local
+        server can't be reached, so "Lemonade is down" surfaces as a prompt,
+        actionable failure instead of a ~30s hang. Any HTTP response — even
+        an error status — means the server is up; only a connection/timeout
+        failure counts as unreachable (auth/model errors surface later on the
+        real chat call, where their messages are specific).
+        """
+        import requests
+        from gaia.llm.lemonade_client import _get_lemonade_config
+
+        if base_url:
+            probe_base = base_url.rstrip("/")
+            if not probe_base.endswith("/api/v1"):
+                probe_base = f"{probe_base}/api/v1"
+        else:
+            _, _, probe_base = _get_lemonade_config()
+        health_url = f"{probe_base}/health"
+
+        try:
+            requests.get(
+                health_url,
+                timeout=(
+                    _LEMONADE_PROBE_CONNECT_TIMEOUT,
+                    _LEMONADE_PROBE_READ_TIMEOUT,
+                ),
+            )
+        except requests.exceptions.RequestException as exc:
+            raise LLMTriageError(
+                f"Local Lemonade Server is not reachable at {probe_base} "
+                f"({type(exc).__name__}: {exc}). Start it with "
+                "`lemonade-server serve` (or run `gaia init`), then retry."
+            ) from exc
 
     def triage_gmail_message(
         self, msg: dict, *, principal_email: str
@@ -216,7 +312,7 @@ class EmailTriageService:
         )
 
     def _triage_single_llm(
-        self, payload: SingleEmailInput, chat: Any
+        self, payload: SingleEmailInput, chat: Any, context: Any = None
     ) -> EmailTriageResult:
         msg = payload.message
         return self._build_result_llm(
@@ -228,9 +324,12 @@ class EmailTriageService:
             reply_to=msg.from_,
             chat=chat,
             message_id=msg.message_id,
+            context=context,
         )
 
-    def _triage_thread_llm(self, payload: ThreadInput, chat: Any) -> EmailTriageResult:
+    def _triage_thread_llm(
+        self, payload: ThreadInput, chat: Any, context: Any = None
+    ) -> EmailTriageResult:
         messages: List[EmailMessage] = payload.messages
         last = messages[-1]
         # Join newest-first so the model sees the most recent context first.
@@ -247,6 +346,7 @@ class EmailTriageService:
             summary_prefix=f"Thread of {len(messages)} messages. ",
             chat=chat,
             message_id=payload.thread_id,
+            context=context,
         )
 
     def _build_result_llm(
@@ -261,6 +361,7 @@ class EmailTriageService:
         summary_prefix: str = "",
         chat: Any,
         message_id: Optional[str] = None,
+        context: Any = None,
     ) -> EmailTriageResult:
         """Build a result using LLM escalation when heuristic confidence is low."""
         from gaia_agent_email.tools.llm_triage import classify_email_llm
@@ -270,6 +371,10 @@ class EmailTriageService:
             subject=subject, sender=sender_raw, label_ids=label_ids
         )
 
+        # Per-call LLM stats accumulate here so the result can report aggregate
+        # usage (#1540). Reuses AgentResponse.stats — no new measurement.
+        call_stats: List[dict] = []
+
         if heuristic.confident:
             category = EmailCategory(heuristic.category)
         else:
@@ -278,6 +383,8 @@ class EmailTriageService:
                 subject=subject,
                 sender=sender_raw,
                 body=body,
+                collect_stats=call_stats,
+                context=context,
             )
             category = EmailCategory(llm_result["category"])
 
@@ -286,6 +393,8 @@ class EmailTriageService:
             subject=subject,
             sender=sender_raw,
             body=body,
+            collect_stats=call_stats,
+            context=context,
         )
         summary = summary_prefix + llm_summary
 
@@ -297,6 +406,11 @@ class EmailTriageService:
             is_spam=heuristic.is_spam,
             is_phishing=heuristic.is_phishing,
         )
+        suggested_action = (
+            llm_result.get("suggested_action")
+            if not heuristic.confident
+            else default_action_for(category.value)
+        ) or default_action_for(category.value)
         return EmailTriageResult(
             category=category,
             is_spam=heuristic.is_spam,
@@ -305,6 +419,8 @@ class EmailTriageService:
             action_items=action_items,
             draft=draft,
             message_id=message_id,
+            suggested_action=suggested_action,
+            usage=_aggregate_usage(call_stats),
         )
 
     def _build_result(
@@ -332,6 +448,7 @@ class EmailTriageService:
             is_spam=heuristic.is_spam,
             is_phishing=heuristic.is_phishing,
         )
+        suggested_action = default_action_for(category.value)
         return EmailTriageResult(
             category=category,
             is_spam=heuristic.is_spam,
@@ -340,6 +457,7 @@ class EmailTriageService:
             action_items=action_items,
             draft=draft,
             message_id=message_id,
+            suggested_action=suggested_action,
         )
 
     def _summarize(self, subject: str, body: str) -> str:
@@ -371,7 +489,29 @@ class EmailTriageService:
             seen.add(key)
             due_match = _DUE_HINT_RE.search(sentence)
             due_hint = due_match.group(1) if due_match else None
-            items.append(ActionItem(description=normalized, due_hint=due_hint))
+            url_match = _URL_RE.search(sentence)
+            if url_match:
+                # Trim trailing sentence punctuation the greedy match grabs
+                # ("...report." → "...report") so the link is well-formed.
+                # Strip char-by-char, but keep a ")" that closes a "(" inside
+                # the URL itself (e.g. .../Python_(programming_language)) so we
+                # don't silently truncate Wikipedia/Confluence-style links.
+                url = url_match.group(0)
+                _trailing = ".,;:!?)]}\"'"
+                while url and url[-1] in _trailing:
+                    if url[-1] == ")" and "(" in url:
+                        break
+                    url = url[:-1]
+                items.append(
+                    ActionItem(
+                        description=normalized,
+                        due_hint=due_hint,
+                        type="link",
+                        url=url,
+                    )
+                )
+            else:
+                items.append(ActionItem(description=normalized, due_hint=due_hint))
         return items
 
     def _build_draft(
@@ -629,6 +769,37 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class HealthResponse(_Strict):
+    """Liveness/readiness probe for the email surface.
+
+    Dependency-light by design: it never touches a live mailbox or the LLM, so a
+    host can confirm the router is mounted and serving before any connector or
+    model is configured.
+    """
+
+    status: Literal["ok"] = Field(
+        default="ok", description="Always 'ok' when the surface is serving."
+    )
+    service: Literal["gaia-agent-email"] = Field(
+        default="gaia-agent-email", description="Stable service identifier."
+    )
+
+
+class VersionResponse(_Strict):
+    """The two version numbers a host negotiates against.
+
+    ``apiVersion`` is the frozen REST/contract version (a contract bump bumps it);
+    ``agentVersion`` is the package build. Both come from
+    ``gaia_agent_email.version`` so this endpoint and the freeze server's
+    ``/version`` report identical values.
+    """
+
+    apiVersion: str = Field(
+        ..., description="REST/contract version (contract.SCHEMA_VERSION)."
+    )
+    agentVersion: str = Field(..., description="Package build version.")
+
+
 class EmailDraftRequest(_Strict):
     """Propose a reply and obtain a confirmation token for it."""
 
@@ -790,6 +961,27 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
     return EmailSendResponse(sent_id=sent_id, to=request.to, subject=request.subject)
 
 
+@router.get("/health", response_model=HealthResponse)
+async def email_health() -> HealthResponse:
+    """Report that the email REST surface is mounted and serving.
+
+    Dependency-light: no live mailbox, no LLM. A host uses this for the sidecar
+    readiness handshake and for liveness checks once mounted on the product app.
+    """
+    return HealthResponse()
+
+
+@router.get("/version", response_model=VersionResponse)
+async def email_version() -> VersionResponse:
+    """Report the REST/contract version and the package build version.
+
+    Both values come from ``gaia_agent_email.version`` — the same constants the
+    freeze server's root ``/version`` reads — so the product surface and the
+    frozen binary can never disagree on what contract they speak.
+    """
+    return VersionResponse(apiVersion=API_VERSION, agentVersion=AGENT_VERSION)
+
+
 @router.get("/spec", response_class=HTMLResponse, include_in_schema=False)
 async def email_spec() -> HTMLResponse:
     """Serve the self-contained HTML endpoint spec page.
@@ -802,6 +994,38 @@ async def email_spec() -> HTMLResponse:
     return HTMLResponse(content=render_endpoint_spec_html())
 
 
+# The local-only guarantee (#1796) is enforced HERE, not promised: connect-src
+# 'self' makes the browser refuse any non-local fetch, so the page can only ever
+# reach this sidecar. Served same-origin → no CORS, no remote-controlled code.
+_PLAYGROUND_CSP = (
+    "default-src 'none'; "
+    "connect-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "font-src 'self'; "
+    "base-uri 'none'; "
+    "form-action 'none'"
+)
+
+
+@router.get("/playground", response_class=HTMLResponse, include_in_schema=False)
+async def email_playground() -> HTMLResponse:
+    """Serve the self-contained, localhost-only playground page (#1796).
+
+    A GAIA-styled health-check + endpoint playground that runs entirely against
+    this local sidecar. Excluded from the OpenAPI schema — it's a human page, not
+    a contract endpoint. The CSP header makes "data never leaves the box" a
+    structural guarantee rather than a promise.
+    """
+    from gaia_agent_email.playground_html import render_playground_html
+
+    return HTMLResponse(
+        content=render_playground_html(),
+        headers={"Content-Security-Policy": _PLAYGROUND_CSP},
+    )
+
+
 __all__ = [
     "router",
     "EmailTriageService",
@@ -812,6 +1036,8 @@ __all__ = [
     "EmailDraftResponse",
     "EmailSendRequest",
     "EmailSendResponse",
+    "HealthResponse",
+    "VersionResponse",
     # Shared formatting helpers reused by the MCP surface.
     "_format_address",
     "_payload_fingerprint",

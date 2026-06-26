@@ -1,0 +1,116 @@
+---
+// Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+// Manifest-driven install-method switcher. The tabs and commands come entirely
+// from the agent MANIFEST (via installMethods(), keyed off `language`) — never
+// from README markup. Interactive like the hub filter pills, but fully
+// keyboard-accessible (ArrowLeft/Right, roving tabindex) and ARIA-correct.
+
+import { installMethods, type Agent } from '../data/catalog';
+
+interface Props {
+  agent: Agent;
+}
+
+const { agent } = Astro.props;
+const methods = installMethods(agent);
+---
+
+<div data-install-methods>
+  {/* The switcher only makes sense with 2+ methods. A single-method agent (e.g.
+      an npm-only sidecar) just shows its command — no lone, inert tab button. */}
+  {methods.length > 1 && (
+    <div
+      role="tablist"
+      aria-label={`How to install ${agent.name}`}
+      class="inline-flex flex-wrap gap-1 rounded-lg border border-g-border bg-g-surface p-1"
+    >
+      {methods.map((m, i) => (
+        <button
+          type="button"
+          role="tab"
+          id={`im-tab-${m.key}`}
+          aria-controls={`im-panel-${m.key}`}
+          aria-selected={i === 0 ? 'true' : 'false'}
+          tabindex={i === 0 ? 0 : -1}
+          data-im-tab={m.key}
+          class="im-tab rounded-md px-3.5 py-1.5 text-[13px] font-medium text-g-muted transition-colors hover:text-g-text aria-selected:bg-g-gold aria-selected:font-semibold aria-selected:text-black"
+        >
+          {m.label}
+        </button>
+      ))}
+    </div>
+  )}
+
+  {methods.map((m, i) => (
+    <div
+      role="tabpanel"
+      id={`im-panel-${m.key}`}
+      aria-labelledby={`im-tab-${m.key}`}
+      data-im-panel={m.key}
+      hidden={i !== 0}
+      class="mt-3"
+    >
+      <button
+        type="button"
+        data-im-copy={m.command}
+        aria-label={`Copy install command: ${m.command}`}
+        class="im-copy group flex w-full items-center gap-3 rounded-md border border-g-border bg-g-surface px-4 py-2.5 text-left font-mono text-[13px] text-g-text transition-colors hover:border-g-gold/50"
+      >
+        <span class="select-none text-g-gold" aria-hidden="true">$</span>
+        <span class="min-w-0 flex-1 truncate">{m.command}</span>
+        <span class="im-copy-label flex-none select-none text-[11px] text-g-muted transition-colors group-hover:text-g-gold-text">copy</span>
+      </button>
+      {m.note && <p class="mt-2 text-[12.5px] text-g-muted">{m.note}</p>}
+    </div>
+  ))}
+</div>
+
+<script>
+  document.querySelectorAll<HTMLElement>('[data-install-methods]').forEach((root) => {
+    const tabs = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-im-tab]'));
+    const panels = Array.from(root.querySelectorAll<HTMLElement>('[data-im-panel]'));
+
+    const select = (key: string) => {
+      tabs.forEach((t) => {
+        const active = t.dataset.imTab === key;
+        t.setAttribute('aria-selected', active ? 'true' : 'false');
+        t.tabIndex = active ? 0 : -1;
+      });
+      panels.forEach((p) => {
+        p.hidden = p.dataset.imPanel !== key;
+      });
+    };
+
+    tabs.forEach((tab, i) => {
+      tab.addEventListener('click', () => select(tab.dataset.imTab!));
+      tab.addEventListener('keydown', (e) => {
+        if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+        e.preventDefault();
+        const dir = e.key === 'ArrowRight' ? 1 : -1;
+        const next = tabs[(i + dir + tabs.length) % tabs.length];
+        select(next.dataset.imTab!);
+        next.focus();
+      });
+    });
+
+    root.querySelectorAll<HTMLButtonElement>('.im-copy').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(btn.dataset.imCopy || '');
+        } catch {
+          return; // clipboard blocked (no HTTPS / permission) — do nothing loudly visible
+        }
+        btn.classList.remove('animate-g-pulse');
+        void btn.offsetWidth; // restart the pulse animation
+        btn.classList.add('animate-g-pulse');
+        const label = btn.querySelector('.im-copy-label');
+        if (label) {
+          label.textContent = 'copied';
+          setTimeout(() => (label.textContent = 'copy'), 1500);
+        }
+      });
+    });
+  });
+</script>

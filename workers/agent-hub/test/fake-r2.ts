@@ -155,9 +155,19 @@ export function publishRequest(opts: {
   artifact: Uint8Array | string;
   filename: string;
   contentType?: string;
+  readme?: string;
+  changelog?: string;
+  spec?: string;
+  skill?: string;
+  packageFiles?: string;
 }): Request {
   const form = new FormData();
   form.set("manifest", opts.manifestYaml);
+  if (opts.readme !== undefined) form.set("readme", opts.readme);
+  if (opts.changelog !== undefined) form.set("changelog", opts.changelog);
+  if (opts.spec !== undefined) form.set("spec", opts.spec);
+  if (opts.skill !== undefined) form.set("skill", opts.skill);
+  if (opts.packageFiles !== undefined) form.set("package_files", opts.packageFiles);
   const bytes = typeof opts.artifact === "string" ? new TextEncoder().encode(opts.artifact) : opts.artifact;
   form.set(
     "artifact",
@@ -192,6 +202,7 @@ export function sampleManifest(overrides: Partial<Record<string, string>> = {}):
     `min_gaia_version: "${overrides.min_gaia_version ?? "0.18.0"}"`,
     "tags: [chat, general]",
     "models: [Qwen3.5-35B-A3B-GGUF]",
+    `tools_count: ${overrides.tools_count ?? "6"}`,
     "requirements:",
     "  min_memory_gb: 8",
     "  platforms: [win-x64, linux-x64, darwin-arm64]",

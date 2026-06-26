@@ -1,0 +1,135 @@
+---
+title: "v0.21.2"
+description: "A new native gaia-bash coding agent ships, the email agent learns your inbox and speaks a richer 5-bucket triage schema, you can roll the desktop app back to a previous version on demand, plus early Agent Hub groundwork and a batch of email, connector, UI, and installer fixes."
+---
+
+# GAIA v0.21.2 Release Notes
+
+GAIA v0.21.2 is a feature-packed patch on top of v0.21.1. A new native `gaia-bash` coding agent joins the lineup, the email agent gets smarter — it learns which senders matter to you and now returns a 5-bucket triage taxonomy with a concrete suggested action per message — and the desktop app now lets you roll back to a previous release whenever you want. Early Agent Hub plumbing also lands as a work in progress. The rest of the release clears a batch of email, connector, UI, and installer bugs.
+
+**Why upgrade:**
+- **A new native coding agent** — `gaia-bash` is a fast, self-contained C++ bash agent with an interactive TUI, CLI, REST API, and MCP server, usable on its own or from Claude Code / OpenCode.
+- **Your inbox, learned and better sorted** — `gaia email` now remembers which senders matter to you and sorts mail into five intuitive buckets, each with a suggested next action.
+- **Roll back to a previous version anytime** — Settings → About now lists published releases and rolls the app back to one you pick, pausing auto-update so it can't silently re-upgrade past your choice.
+- **Agent Hub — work in progress** — the publish pipeline, catalog, and redesigned site are taking shape as the foundation for a hub to browse and install agents. Still in active development and not yet live.
+
+---
+
+## What's New
+
+### A native bash coding agent — `gaia-bash`
+
+`gaia-bash` joins GAIA's native C++ agents (alongside the WiFi, health, and process agents) as a fully native binary coding agent for the shell. It offers five ways to use it — an interactive TUI, a one-shot CLI query, pipe mode, an OpenAI-compatible REST API server, and an MCP stdio server, so external tools like Claude Code and OpenCode can drive it directly. It ships with file I/O, git, and shell-execution tools on the reusable C++ framework any future native agent can build on (PR [#985](https://github.com/amd/gaia/pull/985)).
+
+---
+
+### Sharper inbox triage — `gaia email`
+
+Triage used to return four flat buckets with no next-step. The email agent now sorts mail into five intuitive categories — **URGENT, NEEDS_RESPONSE, FYI, PROMOTIONAL, PERSONAL** — and attaches a concrete `suggested_action` (reply, archive, or none) to every message, so the result maps to how you actually clear an inbox. Spam and phishing stay independent flags, kept separate from priority (PRs [#1690](https://github.com/amd/gaia/pull/1690), [#1696](https://github.com/amd/gaia/pull/1696)). Try it: `gaia email`.
+
+---
+
+### The email agent learns your inbox — `gaia email`
+
+`gaia email` no longer treats every inbox the same. It now profiles your mailbox and learns which senders you actually engage with, prioritizing them in future triage runs — and remembers those preferences across sessions instead of relearning from scratch each time. It all runs locally, so nothing about your mail leaves your machine (PRs [#1633](https://github.com/amd/gaia/pull/1633), [#1642](https://github.com/amd/gaia/pull/1642), [#1643](https://github.com/amd/gaia/pull/1643)).
+
+---
+
+### Roll back to a previous version — Agent UI
+
+Switching back to an earlier release used to mean hunting down an old installer yourself. The Agent UI now has **Settings → About → "Roll back to a previous version"**: pick an older published release, confirm, and the app downloads it and restarts into it. After a manual rollback it pauses auto-update so the next scheduled check can't silently re-upgrade past your choice — resume forward updates from the same panel when you're ready (PR [#1711](https://github.com/amd/gaia/pull/1711)).
+
+---
+
+### Recover failed document indexing — Agent UI
+
+Documents that failed to index used to leave you with no detail and no way to retry. Failed documents now persist their last error, and a reindex API lets you retry them without re-adding the file (PR [#1749](https://github.com/amd/gaia/pull/1749)).
+
+---
+
+### Web research via Tavily — connector groundwork
+
+Agents could previously only reach the web through keyless DuckDuckGo scraping. This release adds a Tavily connector and a `gaia.web.tavily` wrapper — proper `search`/`extract` from a single keyring-stored API key, with result caching, a credit budget, and an automatic DuckDuckGo fallback. It's not yet wired into an agent (the Knowledge Agent that consumes it lands in a later phase), so treat this as the plumbing rather than a user-facing feature (PR [#1234](https://github.com/amd/gaia/pull/1234)).
+
+---
+
+### Agent Hub — work in progress
+
+The Agent Hub is moving from code toward a real service for browsing and installing agents. This release lands foundational pieces — a one-command publish pipeline producing immutable, checksummed agent versions, a catalog, and a redesigned website shared across GAIA surfaces, with `gaia://` "Open in GAIA" deep links as the intended primary flow. It's still in active development and not yet live; this is the infrastructure it will run on (PRs [#1564](https://github.com/amd/gaia/pull/1564), [#1705](https://github.com/amd/gaia/pull/1705)).
+
+---
+
+## Bug Fixes
+
+- **Agent UI served a stale frontend after an upgrade** (PR [#1741](https://github.com/amd/gaia/pull/1741)) — the frontend dist path was cached at startup, so an in-place upgrade could keep serving the old UI; it's now resolved per request.
+- **MCP couldn't reliably activate an Agent UI session** (PR [#1750](https://github.com/amd/gaia/pull/1750)) — MCP→Agent UI session activation is now reliable and errors are normalized into actionable messages.
+- **Archive-undo dropped messages on multi-mailbox inboxes** (PR [#1752](https://github.com/amd/gaia/pull/1752)) — undoing an archive now restores both Outlook and Gmail messages instead of only one.
+- **One ungranted mailbox aborted the whole scan** (PR [#1753](https://github.com/amd/gaia/pull/1753)) — a single mailbox you haven't granted no longer kills triage across all your other connected mailboxes.
+- **Email actions could hit the wrong mailbox** (PR [#1735](https://github.com/amd/gaia/pull/1735)) — multi-mailbox message actions are now routed by each message's recorded source account.
+- **Calendar picked the wrong backend** (PR [#1736](https://github.com/amd/gaia/pull/1736)) — the calendar backend is now chosen by the connected, scoped provider rather than defaulting to Google.
+- **Quarantine-undo and slot-proposal meetings mishandled** (PR [#1737](https://github.com/amd/gaia/pull/1737)) — slot-proposal meetings are now detected, and undoing a quarantine restores the message to INBOX.
+- **File Browser row-click only previewed** (PR [#1734](https://github.com/amd/gaia/pull/1734)) — clicking a row in the File Browser now selects the file, not just previews it.
+- **Triage hung when Lemonade was down** (PR [#1678](https://github.com/amd/gaia/pull/1678)) — email triage now fails fast with an actionable error when Lemonade is unreachable.
+- **Email summary truncated by a tool docstring** (PR [#1668](https://github.com/amd/gaia/pull/1668)) — an oversized `pre_scan_inbox` docstring no longer eats into the Gemma-4-E4B summary budget.
+- **Agent UI broke when the hub was unreachable** (PR [#1698](https://github.com/amd/gaia/pull/1698)) — the Agent UI stays usable when the hub can't be reached and nothing is cached.
+- **Backend install failed behind a TLS-inspecting proxy** (PRs [#1575](https://github.com/amd/gaia/pull/1575), [#1694](https://github.com/amd/gaia/pull/1694)) — the network pre-check now trusts system/proxy CAs and honors `HTTPS_PROXY`, and backend install retries with `--native-tls` on a TLS trust failure.
+- **Chat runs died on New Task** (PR [#1656](https://github.com/amd/gaia/pull/1656)) — starting a New Task keeps existing chat runs alive and shows a running indicator.
+- **Forwarded grant agents imported unchecked** (PR [#1674](https://github.com/amd/gaia/pull/1674)) — forwarded grant agents are now validated before import.
+- **API debug logs leaked request bodies** (PR [#1679](https://github.com/amd/gaia/pull/1679)) — API debug request logging is now redacted.
+
+---
+
+## Full Changelog
+
+**48 commits** since v0.21.1:
+
+- `3677a504` — feat(website): Agent Factory homepage redesign (#1730)
+- `4ac6a5fd` — fix(mcp): post-merge review fixes for #1750 (error envelope + session nav) (#1756)
+- `5bedec4a` — docs(hub): agent publishing guide + standalone-sidecar example fixes (#1713)
+- `c3131be0` — fix(mcp): reliable MCP->Agent UI session activation + error normalization (#1750)
+- `bd155faa` — fix(webui): serve frontend dist resolved per-request, not cached at startup (#1741)
+- `bbe23cf1` — feat(documents): persist last_error + reindex API for failed docs (#1749)
+- `d78572a9` — fix(email): restore both Outlook and Gmail messages on archive-undo (#1738) (#1752)
+- `292f7080` — fix(email): one ungranted mailbox no longer aborts the whole multi-mailbox scan (#1739) (#1753)
+- `1304b222` — fix(webui): File Browser row-click selects the file, not just preview (#1734)
+- `aa6fa7e9` — fix(email): route multi-mailbox message actions by recorded provenance (#1707) (#1735)
+- `03f88011` — fix(email): select calendar backend by connected+scoped provider, not a Google default (#1708) (#1736)
+- `13bc65cf` — fix(email): detect slot-proposal meetings; restore INBOX on quarantine-undo (#1709) (#1737)
+- `6876369c` — feat(agent-ui): in-app rollback to a previous release (#1711)
+- `894d9783` — feat(email): schema 2.0 contract amendments — typed action items, usage metrics, request context (#1538/#1540/#1541) (#1696)
+- `a1000cfd` — ci(windows): run Gemma on a persistent Lemonade server (fix Windows integration jobs) (#1733)
+- `aa1b4303` — docs(specs): land canonical skill auto-synthesis spec (#887) (#1732)
+- `d9f929db` — ci(windows): pull Gemma via server API, not the lemonade CLI (#1715)
+- `e334b9e2` — ci(windows): pull Gemma-4-E4B instead of legacy Llama-3.2-3B-Hybrid (#1712)
+- `6cc43eaf` — feat(hub): auto-populate website from live hub + ship email README (#1705)
+- `59359ba8` — chore(deps): bump Lemonade Server to v10.7.0 (#1571)
+- `cfd2e414` — fix(installer): retry backend install with --native-tls on TLS trust failure (#1694)
+- `921872be` — fix(installer): trust system/proxy CA + honor HTTPS_PROXY in network pre-check (#1575)
+- `79e27a64` — fix(agent-ui): match renamed --danger token in error-border test (#1704)
+- `7ca62daf` — ci(email-release): approval gate + env-secret + Intel build/verify split (#1702)
+- `2c93c5bc` — fix(agent-ui): stub getActiveRuns in ChatView test mock (#1701)
+- `e045a514` — feat(hub): Agent Hub launch — Railway deployment, publish pipeline, website redesign (#1564)
+- `5c982c74` — ci(email-release): publish binaries through the Agent Hub Worker, not rclone (#1699)
+- `2e5bac22` — feat(knowledge): Tavily connector + web-research wrapper with caching (#1234)
+- `4a024eda` — docs(spec): restructure the SKILL.md format spec on the Agent Skills standard (#691) (#1695)
+- `2145472a` — feat(email-release): publish frozen binaries to R2 via rclone (#1688)
+- `0b3dcc93` — fix(hub): keep Agent UI usable when the hub is unreachable with no cache (#1698)
+- `3cc2551d` — feat(email): schema 2.0 — 5-bucket triage taxonomy + suggested_action (#1690)
+- `077aa156` — ci(agents): build agent wheels on tags only, not on every PR (#1687)
+- `efe8d582` — feat(cpp): gaia-bash — native C++ bash coding agent with TUI, API server, MCP server (#985)
+- `797118bb` — docs(email): Email Agent specification (#1628)
+- `df5db4ab` — Redact API debug request logging (#1679)
+- `433cad33` — docs(plans): registry-driven package publishing architecture (#1686)
+- `d69bbaba` — feat(agents): tool loader Part 1 — selection + dual-path filtering (#1449) (#1629)
+- `4546e113` — fix(email): triage fails fast when Lemonade is unreachable (#1678)
+- `cb4b0c52` — Validate forwarded grant agents before import (#1674)
+- `cb0e8b40` — feat(email-packaging): no-Python email-agent binary + thin @amd-gaia/agent-email npm client (#1654)
+- `77aaee21` — feat(email): behavioral learning for sender prioritization (#1290) (#1643)
+- `be47293c` — fix(email): stop pre_scan_inbox docstring from truncating the gemma-4-e4b summary (#1668)
+- `ff5ee371` — feat(email): inbox profiling from memory (#1289) (#1642)
+- `95fea565` — ci(behavior-e2e): install [dev,ui] so gaia.ui.server can boot (#1640)
+- `c27a87c2` — feat(email): persist triage preferences across sessions (#1288) (#1633)
+- `41e67d39` — fix(agent-ui): keep chat runs alive after New Task + show running indicator (#1580) (#1656)
+- `a2b2ff08` — chore(context7): claim GAIA library on Context7 (#1673)
+
+Full Changelog: [v0.21.1...v0.21.2](https://github.com/amd/gaia/compare/v0.21.1...v0.21.2)

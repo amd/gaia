@@ -1,0 +1,50 @@
+id: data_vs_recall_disambiguation
+name: "Data Tool vs Recall -- Disambiguation (#800)"
+category: tool_selection
+agent_type: doc
+severity: high
+description: |
+  Live proof for #800: in the doc profile the structured-data tool
+  (analyze_data_file) is a conditional bundle member, while memory recall is
+  always-on CORE. An aggregate question over a CSV should route to
+  analyze_data_file -- not chunk retrieval (query_documents) and not memory
+  recall. Cold state: memory is empty, so this tests the activation direction
+  the loader actually gates (recall-from-history is unprovable on a fresh run).
+
+persona: power_user
+
+setup:
+  index_documents:
+    - corpus_doc: sales_data
+      path: "eval/corpus/documents/sales_data_2025.csv"
+
+turns:
+  - turn: 1
+    objective: "Ask 'What was the total Q1 revenue across all salespeople in eval/corpus/documents/sales_data_2025.csv?'"
+    ground_truth:
+      doc_id: sales_data
+      fact_id: q1_total_revenue
+      expected_answer: "$340,000"
+    success_criteria: |
+      Agent computes the aggregate by analyzing the structured data file
+      (analyze_data_file) and reports total Q1 revenue of $340,000.
+      PASS if the correct $340,000 total is returned via data analysis.
+      FAIL if the agent answers from query_documents chunk retrieval, misroutes
+      to a memory tool (recall), or returns a wrong total.
+
+  - turn: 2
+    objective: "Ask 'Who was the top salesperson by revenue?'"
+    ground_truth:
+      doc_id: sales_data
+      fact_id: top_salesperson
+      expected_answer: "Sarah Chen with $70,000"
+    success_criteria: |
+      Agent identifies Sarah Chen (top by revenue, $70,000) from the same data
+      file. PASS if Sarah Chen is named as the top salesperson.
+
+expected_outcome: |
+  Agent routes the aggregate questions to analyze_data_file rather than RAG
+  chunk retrieval or memory recall, computing the correct Q1 total and top
+  salesperson. Demonstrates the #800 collision resolution end-to-end: the
+  conditional data tool activates only when the turn justifies it, while recall
+  remains available as CORE without being misused.

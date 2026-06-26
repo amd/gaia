@@ -33,14 +33,18 @@ export interface Publisher {
   authors: string[];
 }
 
-/** The subset of the `requirements:` block surfaced in the catalog. */
+/**
+ * The `requirements:` block as stored in per-agent manifests. Numbers default
+ * to 0 and `npu` to false when the uploaded gaia-agent.yaml omits them, so the
+ * stored shape is always fully populated.
+ */
 export interface Requirements {
   platforms: string[];
-  min_memory_gb?: number;
-  min_disk_gb?: number;
-  min_context_size?: number;
-  npu?: boolean;
-  gpu_vram_gb?: number;
+  min_memory_gb: number;
+  min_disk_gb: number;
+  min_context_size: number;
+  npu: boolean;
+  gpu_vram_gb: number;
 }
 
 export interface Interfaces {
@@ -70,9 +74,14 @@ export interface ParsedManifest {
   security_tier: string;
   min_gaia_version?: string;
   models: string[];
+  tools_count: number;
+  permissions: string[];
   requirements: Requirements;
   interfaces: Interfaces;
   deprecated: boolean;
+  deprecation_message?: string;
+  npm_package?: string;
+  playground_url?: string;
 }
 
 /** Metadata for one stored artifact (computed server-side). */
@@ -86,13 +95,28 @@ export interface ArtifactInfo {
   content_type: string;
 }
 
-/** One published version inside a per-agent manifest. */
+/**
+ * One published version inside a per-agent manifest.
+ *
+ * A version may carry MORE THAN ONE artifact — one per platform for a native
+ * binary release (e.g. the frozen email agent ships win32-x64, darwin-arm64,
+ * darwin-x64, linux-x64 under a single `0.1.0`). `artifacts` is the complete
+ * set; `artifact` is the primary (first-published) entry kept for catalog
+ * display and backward compatibility with single-artifact (wheel) agents.
+ *
+ * Within a version the artifact set is APPEND-ONLY per distinct filename:
+ * adding a new platform binary is allowed, but re-uploading an existing
+ * filename is rejected (immutability / tamper guard).
+ */
 export interface VersionEntry {
   version: string;
   published_at: string;
   publisher: string;
   deprecated: boolean;
+  /** Primary artifact (first published for this version). */
   artifact: ArtifactInfo;
+  /** All artifacts published under this version (one per platform). */
+  artifacts: ArtifactInfo[];
 }
 
 /**
@@ -112,14 +136,37 @@ export interface AgentManifest {
   security_tier: string;
   min_gaia_version?: string;
   models: string[];
+  tools_count: number;
+  permissions: string[];
   requirements: Requirements;
   interfaces: Interfaces;
   latest_version: string;
   deprecated: boolean;
+  deprecation_message?: string;
+  npm_package?: string;
+  playground_url?: string;
   versions: Record<string, VersionEntry>;
 }
 
-/** One lightweight entry in the top-level catalog index.json. */
+/**
+ * The `requirements` block in an index entry. Same numbers as
+ * {@link Requirements} but `npu` is rendered as "required"/"optional" — the
+ * shape the website Hub pages consume.
+ */
+export interface IndexRequirements {
+  min_memory_gb: number;
+  min_disk_gb: number;
+  min_context_size: number;
+  platforms: string[];
+  npu: "required" | "optional";
+  gpu_vram_gb: number;
+}
+
+/**
+ * One entry in the top-level catalog index.json. This is the contract the
+ * website Hub pages build from (`website/src/data/catalog.ts` `Agent`) — keep
+ * the two in sync.
+ */
 export interface IndexEntry {
   id: string;
   name: string;
@@ -131,8 +178,49 @@ export interface IndexEntry {
   author: string;
   security_tier: string;
   download_size_bytes: number;
-  requirements: { platforms: string[] };
+  tags: string[];
+  tools_count: number;
+  models: string[];
+  /** Empty string when the manifest does not declare one. */
+  min_gaia_version: string;
+  permissions: string[];
   deprecated: boolean;
+  deprecation_message?: string;
+  requirements: IndexRequirements;
+  /** README.md markdown of the latest version; empty string if none was published. */
+  readme: string;
+  /** CHANGELOG.md markdown of the latest version; empty string if none was published. */
+  changelog: string;
+  /** SPEC.md (technical reference) markdown of the latest version; "" if none was published. */
+  spec: string;
+  /** SKILL.md (AI-integration playbook) markdown of the latest version; "" if none was published. */
+  skill: string;
+  /** npm package name when the agent is distributed via npm; absent otherwise. */
+  npm_package?: string;
+  /** Localhost playground URL served by the agent's sidecar; absent otherwise. */
+  playground_url?: string;
+  /**
+   * Whole-package download: a single zip (all platform binaries + client + docs)
+   * plus its file listing. Present only when a `package_files` manifest was
+   * published for the latest version.
+   */
+  package?: PackageInfo;
+}
+
+/** One file inside the whole-package zip (for the hub's file-list display). */
+export interface PackageFile {
+  name: string;
+  size_bytes: number;
+}
+
+/** The downloadable whole-package zip + its contents. */
+export interface PackageInfo {
+  /** Zip artifact filename, e.g. "agent-email-0.2.1.zip" (downloaded from the version dir). */
+  filename: string;
+  /** Zip size in bytes; 0 if the artifact isn't found. */
+  size_bytes: number;
+  /** Files contained in the zip (sorted), for the hub's file list. */
+  files: PackageFile[];
 }
 
 /** The top-level catalog served at GET /index.json. */

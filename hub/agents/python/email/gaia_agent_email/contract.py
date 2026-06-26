@@ -26,7 +26,7 @@ Design notes
 - **Single email vs full thread** is a discriminated union on ``kind`` so a
   consumer branches deterministically and an empty/`messages`-less thread is
   rejected at validation time.
-- **Categories** mirror the agent's frozen four-bucket taxonomy. The strings are
+- **Categories** mirror the agent's five-bucket taxonomy. The strings are
   duplicated here (not imported) to keep this module backend-free; the contract
   tests assert byte-for-byte equality against
   ``triage_heuristics.ALL_CATEGORIES`` so drift is caught at test time, not by
@@ -38,16 +38,17 @@ from __future__ import annotations
 from enum import Enum
 from typing import List, Literal, Optional, Union, cast
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Category strings — kept in sync with ``triage_heuristics.ALL_CATEGORIES`` by
 # ``test_contract_schema.test_categories_match_agent_taxonomy``. Duplicated
 # (not imported) so this module stays free of the email package's heavy
 # ``__init__`` import chain.
-CATEGORY_URGENT = "urgent"
-CATEGORY_ACTIONABLE = "actionable"
-CATEGORY_INFORMATIONAL = "informational"
-CATEGORY_LOW_PRIORITY = "low priority"
+CATEGORY_URGENT = "URGENT"
+CATEGORY_NEEDS_RESPONSE = "NEEDS_RESPONSE"
+CATEGORY_FYI = "FYI"
+CATEGORY_PROMOTIONAL = "PROMOTIONAL"
+CATEGORY_PERSONAL = "PERSONAL"
 
 # ---------------------------------------------------------------------------
 # Versioning
@@ -56,7 +57,7 @@ CATEGORY_LOW_PRIORITY = "low priority"
 # Bump on ANY breaking change to the shapes below. Echoed in both request and
 # response so a consumer can detect a mismatch loudly instead of silently
 # mis-parsing. The first frozen revision is "1.0".
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "2.0"
 
 
 class _Strict(BaseModel):
@@ -71,14 +72,15 @@ class _Strict(BaseModel):
 
 
 class EmailCategory(str, Enum):
-    """The frozen four-bucket triage taxonomy. Values MUST match
+    """The five-bucket triage taxonomy (schema 2.0, #1615). Values MUST match
     ``triage_heuristics.ALL_CATEGORIES`` — the contract tests assert this.
     """
 
     URGENT = CATEGORY_URGENT
-    ACTIONABLE = CATEGORY_ACTIONABLE
-    INFORMATIONAL = CATEGORY_INFORMATIONAL
-    LOW_PRIORITY = CATEGORY_LOW_PRIORITY
+    NEEDS_RESPONSE = CATEGORY_NEEDS_RESPONSE
+    FYI = CATEGORY_FYI
+    PROMOTIONAL = CATEGORY_PROMOTIONAL
+    PERSONAL = CATEGORY_PERSONAL
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +186,29 @@ class ThreadInput(_BaseInput):
 EmailInput = Union[SingleEmailInput, ThreadInput]
 
 
+class TriageContext(_Strict):
+    """Optional caller-supplied context that biases categorization/summary
+    (#1541). Absent → behavior is identical to today. Coexists with gaia
+    memory (#1114) without requiring it.
+    """
+
+    people: List[str] = Field(
+        default_factory=list,
+        description="Important people whose mail should weigh higher.",
+    )
+    projects: List[str] = Field(
+        default_factory=list,
+        description="Active projects the principal cares about.",
+    )
+    tone: Optional[str] = Field(
+        default=None, description="Preferred summary tone, e.g. 'concise'."
+    )
+    self_email: Optional[str] = Field(
+        default=None,
+        description="The principal's own address, so the model knows who 'I' is.",
+    )
+
+
 class EmailTriageRequest(_Strict):
     """Top-level request envelope shared by REST (#1229) and MCP stdio (#1104)."""
 
@@ -195,6 +220,13 @@ class EmailTriageRequest(_Strict):
         ...,
         discriminator="kind",
         description="The single-email or full-thread input.",
+    )
+    context: Optional[TriageContext] = Field(
+        default=None,
+        description=(
+            "Optional context (people/projects/tone/self-email) that biases "
+            "categorization and summary. Absent → behavior unchanged."
+        ),
     )
 
 
@@ -211,6 +243,17 @@ class ActionItem(_Strict):
         default=None,
         description="Free-text due hint as written ('Friday', 'EOD'); not parsed.",
     )
+    type: Literal["text", "link"] = Field(
+        default="text",
+        description=(
+            "Discriminator: 'text' for a plain imperative action; 'link' when the "
+            "action involves following a URL (url is then required and non-empty)."
+        ),
+    )
+    url: Optional[str] = Field(
+        default=None,
+        description="The URL to follow for a 'link' action item; None for 'text'.",
+    )
 
     @field_validator("description")
     @classmethod
@@ -218,6 +261,18 @@ class ActionItem(_Strict):
         if not (v or "").strip():
             raise ValueError("action item description must be non-empty")
         return v
+
+    @model_validator(mode="after")
+    def _url_consistent_with_type(self) -> "ActionItem":
+        if self.type == "link":
+            if not (self.url or "").strip():
+                raise ValueError(
+                    "url is required and must be non-empty when type='link'"
+                )
+        else:
+            if self.url is not None:
+                raise ValueError("url must be None when type='text'")
+        return self
 
 
 class DraftReply(_Strict):
@@ -232,10 +287,34 @@ class DraftReply(_Strict):
     body: str = Field(..., description="Proposed reply body.")
 
 
+class TriageUsage(_Strict):
+    """LLM usage metrics for a triage, aggregated across the classify +
+    summarize calls. Reuses the existing ``AgentResponse.stats`` measurement
+    (#1277/#1278) — no new measurement path. ``None`` on the heuristic-only
+    path where no LLM call is made.
+    """
+
+    prompt_tokens: int = Field(
+        default=0, description="Sum of input tokens across the LLM calls."
+    )
+    completion_tokens: int = Field(
+        default=0, description="Sum of output (completion) tokens across the LLM calls."
+    )
+    total_tokens: int = Field(
+        default=0, description="Sum of input + output tokens across the LLM calls."
+    )
+    tokens_per_second: float = Field(
+        default=0.0,
+        description="Aggregate decode throughput (total output tokens / total decode time).",
+    )
+
+
 class EmailTriageResult(_Strict):
     """The structured analysis of a single email or thread."""
 
-    category: EmailCategory = Field(..., description="One of the four buckets.")
+    category: EmailCategory = Field(
+        ..., description="One of the five taxonomy buckets (schema 2.0)."
+    )
     is_spam: bool = Field(default=False, description="Spam signal (independent).")
     is_phishing: bool = Field(
         default=False, description="Phishing signal (independent of spam)."
@@ -247,12 +326,27 @@ class EmailTriageResult(_Strict):
     draft: Optional[DraftReply] = Field(
         default=None, description="Proposed reply, or null when none is suggested."
     )
+    suggested_action: Literal["reply", "none", "archive"] = Field(
+        default="none",
+        description=(
+            "Suggested next action: reply (URGENT/NEEDS_RESPONSE), "
+            "archive (PROMOTIONAL), or none (FYI/PERSONAL). Derived by "
+            "precedence rule -- never required so existing consumers are unaffected."
+        ),
+    )
     message_id: Optional[str] = Field(
         default=None,
         description=(
             "Echoes the provider message-id from the request (SingleEmailInput.message "
             "or ThreadInput.thread_id). Null when the result was produced from a "
             "raw Gmail-API message (no contract message_id available)."
+        ),
+    )
+    usage: Optional[TriageUsage] = Field(
+        default=None,
+        description=(
+            "LLM usage metrics (tokens + aggregate TPS) for this triage. Null on "
+            "the heuristic-only path where no LLM call was made."
         ),
     )
 
@@ -301,9 +395,11 @@ __all__ = [
     "SingleEmailInput",
     "ThreadInput",
     "EmailInput",
+    "TriageContext",
     "EmailTriageRequest",
     "ActionItem",
     "DraftReply",
+    "TriageUsage",
     "EmailTriageResult",
     "EmailTriageResponse",
     "parse_request",

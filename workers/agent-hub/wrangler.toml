@@ -13,15 +13,22 @@ name = "agent-hub"
 main = "src/index.ts"
 compatibility_date = "2025-01-29"
 
-# The route the publish/catalog API is served under in production.
-# routes = [{ pattern = "hub.amd-gaia.ai/*", zone_name = "amd-gaia.ai" }]
+# The Agent Hub is served at hub.amd-gaia.ai. A custom domain (not a bare route)
+# so Cloudflare manages the DNS record + TLS cert automatically.
+routes = [{ pattern = "hub.amd-gaia.ai", custom_domain = true }]
+
+# Also keep the workers.dev URL live. Public downloads use hub.amd-gaia.ai, but
+# the free-plan managed WAF on that proxied custom domain blocks large binary
+# multipart uploads (the POST /publish path). workers.dev is a separate zone with
+# no such ruleset, so CI publishes through it; downloads stay on hub.amd-gaia.ai.
+workers_dev = true
 
 # Production R2 binding. `binding` is the name the Worker code reads
 # (env.BUCKET); `bucket_name` is the real bucket the maintainer creates.
 [[r2_buckets]]
 binding = "BUCKET"
-bucket_name = "gaia-agent-hub"
-preview_bucket_name = "gaia-agent-hub-preview"
+bucket_name = "gaia-hub"
+preview_bucket_name = "gaia-hub-preview"
 
 [vars]
 # Reject artifacts larger than this many bytes (default 250 MiB). Override per

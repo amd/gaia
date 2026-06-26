@@ -156,6 +156,84 @@ def test_publish_posts_to_r2_and_twine(
     assert result.agent_id == "demo"
 
 
+def test_publish_r2_includes_readme_when_present(
+    fake_keyring, clean_env, monkeypatch, pack_result, manifest_file
+):
+    """A README.md next to the manifest ships as the 'readme' form field."""
+    publisher.store_token("hub", "hub-tok")
+    readme = manifest_file.parent / "README.md"
+    readme.write_text("# Demo\n\nHello hub.\n", encoding="utf-8")
+
+    posted = {}
+
+    def _fake_post(url, headers=None, files=None, timeout=None):
+        posted["files"] = dict(files)
+        return _FakeResponse(201, "{}")
+
+    import requests
+
+    monkeypatch.setattr(requests, "post", _fake_post)
+
+    publisher.publish(
+        pack_result, manifest_file, hub_url="https://hub.example", skip_pypi=True
+    )
+
+    assert set(posted["files"]) == {"manifest", "artifact", "readme"}
+    name, content, content_type = posted["files"]["readme"]
+    assert name == "README.md"
+    assert content == "# Demo\n\nHello hub.\n"
+    assert content_type == "text/markdown"
+
+
+def test_publish_r2_omits_readme_when_absent(
+    fake_keyring, clean_env, monkeypatch, pack_result, manifest_file
+):
+    publisher.store_token("hub", "hub-tok")
+    posted = {}
+
+    def _fake_post(url, headers=None, files=None, timeout=None):
+        posted["files"] = set(files)
+        return _FakeResponse(201, "{}")
+
+    import requests
+
+    monkeypatch.setattr(requests, "post", _fake_post)
+
+    publisher.publish(
+        pack_result, manifest_file, hub_url="https://hub.example", skip_pypi=True
+    )
+    assert posted["files"] == {"manifest", "artifact"}
+
+
+def test_publish_r2_includes_changelog_when_present(
+    fake_keyring, clean_env, monkeypatch, pack_result, manifest_file
+):
+    """A CHANGELOG.md next to the manifest ships as the 'changelog' form field."""
+    publisher.store_token("hub", "hub-tok")
+    changelog = manifest_file.parent / "CHANGELOG.md"
+    changelog.write_text("# Changelog\n\n## 0.1.0\n\n- First.\n", encoding="utf-8")
+
+    posted = {}
+
+    def _fake_post(url, headers=None, files=None, timeout=None):
+        posted["files"] = dict(files)
+        return _FakeResponse(201, "{}")
+
+    import requests
+
+    monkeypatch.setattr(requests, "post", _fake_post)
+
+    publisher.publish(
+        pack_result, manifest_file, hub_url="https://hub.example", skip_pypi=True
+    )
+
+    assert set(posted["files"]) == {"manifest", "artifact", "changelog"}
+    name, content, content_type = posted["files"]["changelog"]
+    assert name == "CHANGELOG.md"
+    assert content == "# Changelog\n\n## 0.1.0\n\n- First.\n"
+    assert content_type == "text/markdown"
+
+
 def test_publish_skip_pypi(
     fake_keyring, clean_env, monkeypatch, pack_result, manifest_file
 ):

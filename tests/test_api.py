@@ -16,6 +16,7 @@ Test coverage includes:
 """
 
 import json
+import logging
 import time
 
 import pytest
@@ -142,6 +143,69 @@ class TestApiUnitValidation:
         assert response.status_code == 200, response.text
         call_args, _ = fake_agent.process_query.call_args
         assert call_args[0] == "second question"
+
+    def test_debug_logging_redacts_chat_request_content(
+        self, mocker, monkeypatch, caplog
+    ):
+        """Debug logs should keep request shape without persisting secrets."""
+        monkeypatch.setenv("GAIA_API_DEBUG", "1")
+        caplog.set_level(logging.DEBUG, logger="gaia.api.openai_server")
+
+        fake_agent = mocker.MagicMock()
+        fake_agent.process_query.return_value = {
+            "status": "success",
+            "result": "assistant secret response",
+        }
+
+        from gaia.api.openai_server import registry as server_registry
+
+        mocker.patch.object(server_registry, "get_agent", return_value=fake_agent)
+
+        prompt = (
+            "<workspace_info>\n"
+            "I am working in a workspace with the following folders:\n"
+            "- /Users/alice/private-project\n"
+            "</workspace_info>\n"
+            "Please summarize customer-secret-token-123"
+        )
+        response = self.client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gaia-code",
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": False,
+                "temperature": 0.2,
+            },
+            headers={"Authorization": "Bearer api-secret-token"},
+        )
+
+        assert response.status_code == 200, response.text
+        logs = caplog.text
+        assert "authorization" in logs
+        assert "Bearer api-secret-token" not in logs
+        assert "customer-secret-token-123" not in logs
+        assert "/Users/alice/private-project" not in logs
+        assert "assistant secret response" not in logs
+        assert "[redacted]" in logs
+
+    def test_debug_logging_redacts_non_chat_body(self, monkeypatch, caplog):
+        """Raw request logging must not persist decoded bodies."""
+        monkeypatch.setenv("GAIA_API_DEBUG", "1")
+        caplog.set_level(logging.DEBUG, logger="gaia.api.openai_server")
+
+        response = self.client.post(
+            "/health",
+            json={"refresh_token": "rt-secret", "prompt": "private prompt"},
+            headers={"X-Api-Key": "key-secret"},
+        )
+
+        assert response.status_code == 405
+        logs = caplog.text
+        assert "x-api-key" in logs
+        assert "key-secret" not in logs
+        assert "rt-secret" not in logs
+        assert "private prompt" not in logs
+        assert "Body (decoded UTF-8): [redacted]" in logs
 
     # -------------------------------------------------------------------------
     # Model Validation Tests
@@ -1281,7 +1345,7 @@ class TestEmailTriageEndpoint:
                 if "Classify" in content:
                     resp.text = json.dumps(
                         {
-                            "category": "actionable",
+                            "category": "NEEDS_RESPONSE",
                             "confidence": 0.9,
                             "reasoning": "test",
                         }
@@ -1344,7 +1408,7 @@ class TestEmailTriageEndpoint:
         """The agent's real heuristic categorizer drives the result —
         a promo subject lands in 'low priority' deterministically."""
         from gaia_agent_email.contract import parse_response
-        from gaia_agent_email.tools.triage_heuristics import CATEGORY_LOW_PRIORITY
+        from gaia_agent_email.tools.triage_heuristics import CATEGORY_PROMOTIONAL
 
         payload = _single_email_payload(
             subject="50% off — sale ends tonight!",
@@ -1354,7 +1418,7 @@ class TestEmailTriageEndpoint:
         resp = self.client.post("/v1/email/triage", json=payload)
         assert resp.status_code == 200, resp.text
         parsed = parse_response(resp.json())
-        assert parsed.result.category.value == CATEGORY_LOW_PRIORITY
+        assert parsed.result.category.value == CATEGORY_PROMOTIONAL
 
     def test_response_matches_contract_schema_shape(self):
         """The response body has exactly the #1262 top-level keys."""

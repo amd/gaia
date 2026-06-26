@@ -19,6 +19,7 @@ Endpoint implementations are split into router modules under
 """
 
 import asyncio
+import importlib.util
 import logging
 import os
 import shutil  # noqa: F401  # pylint: disable=unused-import
@@ -38,6 +39,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 # expose these names at module level.  The canonical implementations live
 # in ``_chat_helpers`` (shared by both server.py and the router modules).
 # pylint: disable=unused-import
+from ._chat_helpers import _attach_chat_stream  # noqa: F401
 from ._chat_helpers import _build_history_pairs  # noqa: F401
 from ._chat_helpers import _compute_allowed_paths  # noqa: F401
 from ._chat_helpers import _get_chat_response  # noqa: F401
@@ -66,7 +68,7 @@ from .tunnel import TunnelManager
 from .utils import ALLOWED_EXTENSIONS as _ALLOWED_EXTENSIONS  # noqa: F401
 from .utils import compute_file_hash as _compute_file_hash  # noqa: F401
 from .utils import sanitize_document_path as _sanitize_document_path  # noqa: F401
-from .utils import sanitize_static_path as _sanitize_static_path  # noqa: F401
+from .utils import sanitize_static_path as _sanitize_static_path
 from .utils import validate_file_path as _validate_file_path  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -368,7 +370,17 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             def _run() -> str:
                 from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
 
-                config = ChatAgentConfig(max_steps=5, silent_mode=True, debug=False)
+                # Beta dynamic tool loader (#1798). Inert here: scheduled runs
+                # use the default "full" prompt profile and the loader only
+                # activates on the "doc" profile — wired for future-proofing so
+                # this path doesn't silently diverge if that ever changes.
+                dynamic_tools = db.get_setting("dynamic_tools", "false") == "true"
+                config = ChatAgentConfig(
+                    max_steps=5,
+                    silent_mode=True,
+                    debug=False,
+                    dynamic_tools=dynamic_tools,
+                )
                 agent = ChatAgent(config)
                 result = agent.process_query(prompt)
                 if isinstance(result, dict):
@@ -582,6 +594,21 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(connectors_router_mod.router)
     # Issue #1292 — forwarded pre-authenticated connections (/v1/connections).
     app.include_router(connectors_router_mod.forwarded_router)
+    # Issue #1768 — Email REST surface (/v1/email/*).
+    # Ships with the standalone gaia-agent-email wheel; mount only when present.
+    # find_spec gates on wheel availability without importing it; the import and
+    # include_router are outside any except so a broken installed wheel fails
+    # loudly per the no-silent-fallback rule.
+    if importlib.util.find_spec("gaia_agent_email") is None:
+        logger.info(
+            "Email REST routes unavailable: install the email agent "
+            "(pip install gaia-agent-email) to enable POST /v1/email/*. "
+            "(#1768)"
+        )
+    else:
+        from gaia_agent_email.api_routes import router as email_router
+
+        app.include_router(email_router)
 
     # ── Serve Uploaded Files ─────────────────────────────────────────────
     # Mount the uploads directory so uploaded files can be served by URL.
@@ -594,131 +621,17 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     )
 
     # ── Serve Frontend Static Files ──────────────────────────────────────
-    # Look for built frontend assets in the webui dist directory
+    # Look for built frontend assets in the webui dist directory.
+    # The dist path is resolved per-request so a build that completes after
+    # startup is served immediately on the next refresh without restarting
+    # the server (issue #1088).
     _default_dist = Path(__file__).resolve().parent.parent / "apps" / "webui" / "dist"
     _webui_dist = Path(webui_dist) if webui_dist else _default_dist
-    if _webui_dist.is_dir():
-        logger.info("Serving frontend from %s", _webui_dist)
 
-        from fastapi.responses import FileResponse
-
-        # Mount static assets (JS, CSS, etc.)
-        app.mount(
-            "/assets",
-            StaticFiles(directory=str(_webui_dist / "assets")),
-            name="static-assets",
-        )
-
-        # Serve index.html for all non-API routes (SPA fallback)
-        _resolved_dist = _webui_dist.resolve()
-        _index_html = str(_resolved_dist / "index.html")
-        # Prevent browsers and tunnel proxies from caching index.html so
-        # that rebuilt assets (with new content hashes) are always picked up.
-        # Hashed files under /assets/ are cached normally by StaticFiles.
-        # ``Referrer-Policy: no-referrer`` ensures that even if a token
-        # transiently appears in the URL (the QR-code landing path), it is
-        # never leaked to outbound requests via the ``Referer`` header.
-        _NO_CACHE = {
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache",
-            "Expires": "0",
-            "Referrer-Policy": "no-referrer",
-        }
-
-        def _maybe_bootstrap_tunnel_cookie(request: Request):
-            """Validate ``?token=<uuid>`` and return a token-stripping redirect.
-
-            When a mobile browser first opens the QR-code URL
-            ``https://<tunnel>/?token=<uuid>``, we validate the token against
-            the active tunnel and:
-
-            1. Set a ``HttpOnly``, ``SameSite=Strict``, ``Secure`` cookie so
-               the SPA's subsequent same-origin ``fetch('/api/...')`` calls
-               authenticate automatically -- no frontend token-plumbing.
-            2. Redirect (303) to the same path with ``token`` stripped so the
-               token doesn't linger in the address bar, browser history, or
-               outbound ``Referer`` headers.
-
-            ``SameSite=Strict`` is the cookie-side defence against CSRF on
-            state-changing endpoints reached via the cookie path -- modern
-            browsers refuse to attach the cookie on any cross-site request.
-
-            Returns the redirect response if a cookie was bootstrapped, or
-            ``None`` if no token was present / valid (caller serves the
-            requested file normally).
-            """
-            tunnel_mgr = getattr(request.app.state, "tunnel", None)
-            qs_token = request.query_params.get("token")
-            if not (
-                tunnel_mgr is not None
-                and tunnel_mgr.active
-                and qs_token
-                and tunnel_mgr.validate_token(qs_token)
-            ):
-                return None
-
-            # ngrok terminates TLS and forwards plain HTTP, so direct
-            # request.url.scheme is often "http".  Trust X-Forwarded-Proto
-            # when present so the Secure flag is set on real tunnel requests.
-            fwd_proto = request.headers.get("x-forwarded-proto", "").lower()
-            is_https = request.url.scheme == "https" or fwd_proto == "https"
-
-            # Build the redirect target: same path, all query params except
-            # ``token``. Preserves friendly params like ``?session=...``.
-            stripped_qs = urlencode(
-                [(k, v) for k, v in request.query_params.multi_items() if k != "token"]
-            )
-            target = request.url.path + (f"?{stripped_qs}" if stripped_qs else "")
-
-            redirect = RedirectResponse(url=target, status_code=303)
-            redirect.set_cookie(
-                key=_TUNNEL_COOKIE_NAME,
-                value=qs_token,
-                httponly=True,
-                secure=is_https,
-                samesite="strict",
-                path="/",
-            )
-            logger.info(
-                "Tunnel auth: bootstrapped cookie for client %s (secure=%s, target=%s)",
-                request.client.host if request.client else "unknown",
-                is_https,
-                request.url.path,
-            )
-            return redirect
-
-        @app.get("/{full_path:path}")
-        async def serve_spa(request: Request, full_path: str):
-            """Serve the React SPA for all non-API routes."""
-            # 1. Token bootstrap path: only fires for the index-html case
-            #    (token always lands on ``/`` from the QR code). On any
-            #    static asset path we ignore the token entirely so the
-            #    cookie can't be planted via ``GET /favicon.png?token=...``.
-            #
-            # 2. Static asset path: use the shared ``sanitize_static_path``
-            #    utility -- it explicitly returns ``None`` for traversal
-            #    attempts, so CodeQL can trace the validation through to
-            #    the ``FileResponse`` call.
-            sanitized = _sanitize_static_path(_resolved_dist, full_path)
-
-            if sanitized is not None and sanitized.is_file():
-                # Static asset (JS, CSS, image) -- never bootstrap a cookie
-                # off this path; only the SPA index does that.
-                return FileResponse(str(sanitized))
-
-            # SPA fallback: serve index.html. Bootstrap the auth cookie
-            # if a valid ?token= is present (returns a 303 redirect that
-            # strips the token from the URL).
-            redirect = _maybe_bootstrap_tunnel_cookie(request)
-            if redirect is not None:
-                return redirect
-            return FileResponse(_index_html, headers=_NO_CACHE)
-
-    else:
-        # Resolve to an absolute path so users can act on the warning. Prefer
-        # the resolved form, but fall back to the raw value if the directory
-        # truly doesn't exist (resolve() of a missing path is harmless on POSIX
-        # but can surprise on Windows).
+    # Warn at startup when the dist dir is absent so that users can diagnose
+    # a wheel install without frontend assets. The warning is advisory only --
+    # the per-request handler will serve the fallback page until a build appears.
+    if not (_webui_dist / "index.html").is_file():
         try:
             _resolved_for_log = _webui_dist.resolve()
         except OSError:
@@ -734,8 +647,24 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             "in src/gaia/apps/webui/.",
             _resolved_for_log,
         )
+    else:
+        logger.info("Serving frontend from %s", _webui_dist)
 
-        _FALLBACK_HTML = """<!DOCTYPE html>
+    from fastapi.responses import FileResponse
+
+    # Prevent browsers and tunnel proxies from caching index.html so
+    # that rebuilt assets (with new content hashes) are always picked up.
+    # ``Referrer-Policy: no-referrer`` ensures that even if a token
+    # transiently appears in the URL (the QR-code landing path), it is
+    # never leaked to outbound requests via the ``Referer`` header.
+    _NO_CACHE = {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0",
+        "Referrer-Policy": "no-referrer",
+    }
+
+    _FALLBACK_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -791,15 +720,113 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 </html>
 """
 
-        @app.get("/", response_class=HTMLResponse)
-        async def no_frontend():
-            """Serve a helpful HTML landing page when no frontend build is present.
+    def _maybe_bootstrap_tunnel_cookie(request: Request):
+        """Validate ``?token=<uuid>`` and return a token-stripping redirect.
 
-            The backend API is still fully functional; this page just tells
-            human visitors where to find the desktop app and API docs instead
-            of returning raw JSON.
-            """
+        When a mobile browser first opens the QR-code URL
+        ``https://<tunnel>/?token=<uuid>``, we validate the token against
+        the active tunnel and:
+
+        1. Set a ``HttpOnly``, ``SameSite=Strict``, ``Secure`` cookie so
+           the SPA's subsequent same-origin ``fetch('/api/...')`` calls
+           authenticate automatically -- no frontend token-plumbing.
+        2. Redirect (303) to the same path with ``token`` stripped so the
+           token doesn't linger in the address bar, browser history, or
+           outbound ``Referer`` headers.
+
+        ``SameSite=Strict`` is the cookie-side defence against CSRF on
+        state-changing endpoints reached via the cookie path -- modern
+        browsers refuse to attach the cookie on any cross-site request.
+
+        Returns the redirect response if a cookie was bootstrapped, or
+        ``None`` if no token was present / valid (caller serves the
+        requested file normally).
+        """
+        tunnel_mgr = getattr(request.app.state, "tunnel", None)
+        qs_token = request.query_params.get("token")
+        if not (
+            tunnel_mgr is not None
+            and tunnel_mgr.active
+            and qs_token
+            and tunnel_mgr.validate_token(qs_token)
+        ):
+            return None
+
+        # ngrok terminates TLS and forwards plain HTTP, so direct
+        # request.url.scheme is often "http".  Trust X-Forwarded-Proto
+        # when present so the Secure flag is set on real tunnel requests.
+        fwd_proto = request.headers.get("x-forwarded-proto", "").lower()
+        is_https = request.url.scheme == "https" or fwd_proto == "https"
+
+        # Build the redirect target: same path, all query params except
+        # ``token``. Preserves friendly params like ``?session=...``.
+        stripped_qs = urlencode(
+            [(k, v) for k, v in request.query_params.multi_items() if k != "token"]
+        )
+        target = request.url.path + (f"?{stripped_qs}" if stripped_qs else "")
+
+        redirect = RedirectResponse(url=target, status_code=303)
+        redirect.set_cookie(
+            key=_TUNNEL_COOKIE_NAME,
+            value=qs_token,
+            httponly=True,
+            secure=is_https,
+            samesite="strict",
+            path="/",
+        )
+        logger.info(
+            "Tunnel auth: bootstrapped cookie for client %s (secure=%s, target=%s)",
+            request.client.host if request.client else "unknown",
+            is_https,
+            request.url.path,
+        )
+        return redirect
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(request: Request, full_path: str):
+        """Serve the React SPA for all non-API routes.
+
+        Resolves the dist directory on every request so a build that
+        completes after startup is picked up immediately without a
+        process restart (issue #1088).
+        """
+        resolved_dist = _webui_dist.resolve()
+        index_html = resolved_dist / "index.html"
+
+        if not index_html.is_file():
+            # Frontend build not present yet -- serve the actionable fallback.
             return HTMLResponse(content=_FALLBACK_HTML, status_code=200)
+
+        # 1. Token bootstrap path: only fires for the index-html case
+        #    (token always lands on ``/`` from the QR code). On any
+        #    static asset path we ignore the token entirely so the
+        #    cookie can't be planted via ``GET /favicon.png?token=...``.
+        #
+        # 2. Static asset path: use the shared ``sanitize_static_path``
+        #    utility -- it explicitly returns ``None`` for traversal
+        #    attempts, so CodeQL can trace the validation through to
+        #    the ``FileResponse`` call.
+        sanitized = _sanitize_static_path(resolved_dist, full_path)
+
+        if sanitized is not None and sanitized.is_file():
+            # Static asset (JS, CSS, image) -- never bootstrap a cookie
+            # off this path; only the SPA index does that.
+            return FileResponse(str(sanitized))
+
+        # A missing file under /assets/ is a real 404 -- don't mask a broken
+        # hashed chunk with index.html, or the browser parses the HTML as JS
+        # (``Uncaught SyntaxError: Unexpected token '<'``). SPA fallback is for
+        # route paths only.
+        if full_path.startswith("assets/"):
+            return HTMLResponse(content="Not Found", status_code=404)
+
+        # SPA fallback: serve index.html. Bootstrap the auth cookie
+        # if a valid ?token= is present (returns a 303 redirect that
+        # strips the token from the URL).
+        redirect = _maybe_bootstrap_tunnel_cookie(request)
+        if redirect is not None:
+            return redirect
+        return FileResponse(str(index_html), headers=_NO_CACHE)
 
     return app
 

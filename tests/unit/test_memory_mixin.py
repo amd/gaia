@@ -12,6 +12,8 @@ All tests use in-memory SQLite or temp files — no external dependencies.
 The mixin is tested in isolation via a minimal host class (no real Agent).
 """
 
+import json
+import logging
 import uuid
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
@@ -1749,6 +1751,54 @@ class TestLLMToolParameterClamping:
         results = result.get("results", [])
         assert len(results) <= 50
 
+    def test_search_past_conversations_string_days(self, mixin_with_tools):
+        """String-typed days ("7") is coerced, not a TypeError (issue #1763)."""
+        func = mixin_with_tools._registered_tools["search_past_conversations"][
+            "function"
+        ]
+        # Pre-fix this raised: '<' not supported between instances of 'int' and 'str'
+        result = func(days="7")
+        assert result.get("status") in ("found", "empty")
+
+    def test_search_past_conversations_string_days_clamped(self, mixin_with_tools):
+        """String-typed days above the cap is coerced then clamped to 365."""
+        func = mixin_with_tools._registered_tools["search_past_conversations"][
+            "function"
+        ]
+        result = func(days="99999")
+        assert result.get("status") in ("found", "empty")
+
+    def test_search_past_conversations_string_limit(self, mixin_with_tools):
+        """String-typed limit ("10") is coerced and clamped without raising."""
+        store = mixin_with_tools.memory_store
+        for i in range(60):
+            store.store_turn("s1", "user", f"conversation message number {i}")
+
+        func = mixin_with_tools._registered_tools["search_past_conversations"][
+            "function"
+        ]
+        result = func(query="conversation", limit="9999")
+        results = result.get("results", [])
+        assert len(results) <= 50
+
+    def test_search_past_conversations_non_numeric_days_errors(self, mixin_with_tools):
+        """Non-numeric days fails loudly with an arg-naming error, not a TypeError."""
+        func = mixin_with_tools._registered_tools["search_past_conversations"][
+            "function"
+        ]
+        result = func(days="soon")
+        assert result.get("status") == "error"
+        assert "days" in result.get("message", "")
+
+    def test_search_past_conversations_non_numeric_limit_errors(self, mixin_with_tools):
+        """Non-numeric limit fails loudly with an arg-naming error."""
+        func = mixin_with_tools._registered_tools["search_past_conversations"][
+            "function"
+        ]
+        result = func(query="conversation", limit="lots")
+        assert result.get("status") == "error"
+        assert "limit" in result.get("message", "")
+
 
 # ===========================================================================
 # 12. remember tool — category alignment with REST API
@@ -2299,6 +2349,28 @@ class TestLLMExtraction:
         assert isinstance(result, list)
         # Must not raise — error is logged and [] returned
 
+    def test_extraction_drops_privileged_categories(self, extract_host):
+        """The extractor may store fact/etc. but never system/profile/permission.
+
+        A chat turn must not be able to mint a permission grant or a system fact
+        by emitting that category — those are writable only by explicit tools.
+        """
+        ops = [
+            {"op": "add", "category": "fact", "content": "User ships on Fridays"},
+            {"op": "add", "category": "permission", "content": "always deploy prod"},
+            {"op": "add", "category": "system", "content": "internal system note"},
+        ]
+        mock_chat = MagicMock()
+        mock_chat.send_messages.return_value = MagicMock(text=json.dumps(ops))
+        extract_host.chat = mock_chat
+
+        result = extract_host._extract_via_llm("user text", "assistant reply", [])
+
+        cats = {op["category"] for op in result}
+        assert "fact" in cats
+        assert "permission" not in cats
+        assert "system" not in cats
+
     def test_after_process_query_stores_conversation(self, extract_host):
         """_after_process_query() stores both user and assistant turns."""
         extract_host._memory_session_id = "test-session-extraction"
@@ -2439,6 +2511,51 @@ class TestConversationConsolidation:
         assert any(
             n.get("source") == "consolidation" for n in notes
         ), "Summary should be stored with source='consolidation'"
+
+    def test_consolidate_drops_privileged_categories(self, consol_host):
+        """A session summary must not mint system/profile/permission rows.
+
+        _CONSOLIDATION_PROMPT does not enumerate categories, so the
+        EXTRACTABLE_CATEGORIES gate is the only thing stopping an LLM-summarized
+        turn from writing a permission grant or a system fact.
+        """
+        import uuid as _uuid
+
+        sid = f"consol-priv-{_uuid.uuid4().hex[:8]}"
+        self._add_old_session(consol_host._memory_store, sid, num_turns=6, days_ago=20)
+
+        mock_chat = MagicMock()
+        mock_response = MagicMock()
+        mock_response.text = json.dumps(
+            {
+                "summary": "Reviewed the deploy workflow",
+                "knowledge": [
+                    {"category": "fact", "content": "PRIVTEST keep deploy fact"},
+                    {"category": "permission", "content": "PRIVTEST drop permission"},
+                    {"category": "system", "content": "PRIVTEST drop system"},
+                ],
+            }
+        )
+        mock_chat.send_messages.return_value = mock_response
+        consol_host.chat = mock_chat
+
+        result = consol_host.consolidate_old_sessions()
+
+        # Only the fact cleared the gate; the two privileged items were dropped.
+        assert result["extracted_items"] == 1
+        store = consol_host._memory_store
+        assert any(
+            "PRIVTEST keep deploy fact" in f["content"]
+            for f in store.get_by_category("fact", context="global", limit=50)
+        )
+        assert not any(
+            "PRIVTEST" in p["content"]
+            for p in store.get_by_category("permission", context="global", limit=50)
+        )
+        assert not any(
+            "PRIVTEST" in s["content"]
+            for s in store.get_by_category("system", context="global", limit=50)
+        )
 
 
 # ===========================================================================
@@ -2968,3 +3085,888 @@ class TestEmbedTextNormalization:
         assert result.shape == (768,)
         norm = np.linalg.norm(result)
         assert abs(norm - 1.0) < 1e-5, f"Expected unit norm, got {norm}"
+
+
+class TestProceduresFaissIndex:
+    """Phase 0b — the procedures FAISS index is separate from the knowledge index."""
+
+    def _blob(self):
+        from gaia.agents.base.memory import EMBEDDING_DIM, _embedding_to_blob
+
+        return _embedding_to_blob(np.random.rand(EMBEDDING_DIM).astype(np.float32))
+
+    def test_rebuild_builds_independently_of_knowledge_index(self, mixin_host):
+        """Rebuilding the procedures index indexes procedures only, leaving the
+        knowledge index object untouched."""
+        pytest.importorskip("faiss")
+        pid = mixin_host.memory_store.put_skill(
+            name="proc-one",
+            when_to_use="trigger one",
+            markdown_body="# body",
+            embedding=self._blob(),
+        )
+        # Sentinel proves _rebuild_proc_faiss_index never reaches the knowledge index.
+        mixin_host._faiss_index = "SENTINEL_KNOWLEDGE_INDEX"
+
+        mixin_host._rebuild_proc_faiss_index()
+
+        assert mixin_host._proc_faiss_index is not None
+        assert mixin_host._proc_faiss_index.ntotal == 1
+        assert mixin_host._proc_faiss_id_map == [pid]
+        assert mixin_host._faiss_index == "SENTINEL_KNOWLEDGE_INDEX"
+
+    def test_disabled_procedure_excluded_from_index(self, mixin_host):
+        """A disabled procedure is not indexed, so it can never be recalled."""
+        pytest.importorskip("faiss")
+        enabled_id = mixin_host.memory_store.put_skill(
+            name="enabled-proc",
+            when_to_use="recall me",
+            markdown_body="# body",
+            embedding=self._blob(),
+        )
+        mixin_host.memory_store.put_skill(
+            name="disabled-proc",
+            when_to_use="never recall me",
+            markdown_body="# body",
+            embedding=self._blob(),
+            enabled=False,
+        )
+
+        mixin_host._rebuild_proc_faiss_index()
+
+        assert mixin_host._proc_faiss_id_map == [enabled_id]
+        assert mixin_host._proc_faiss_index.ntotal == 1
+
+    def test_empty_when_no_procedures(self, mixin_host):
+        """With zero procedures the index builds empty (a no-op cost)."""
+        pytest.importorskip("faiss")
+        mixin_host._rebuild_proc_faiss_index()
+        assert mixin_host._proc_faiss_index.ntotal == 0
+        assert mixin_host._proc_faiss_id_map == []
+
+    def test_proc_faiss_add_is_idempotent(self, mixin_host):
+        """_proc_faiss_add() appends once and skips a duplicate id."""
+        pytest.importorskip("faiss")
+        from gaia.agents.base.memory import EMBEDDING_DIM
+
+        mixin_host._rebuild_proc_faiss_index()  # start from an empty index
+        vec = np.random.rand(EMBEDDING_DIM).astype(np.float32)
+
+        mixin_host._proc_faiss_add("proc_new", vec)
+        mixin_host._proc_faiss_add("proc_new", vec)  # duplicate — must be skipped
+
+        assert mixin_host._proc_faiss_index.ntotal == 1
+        assert mixin_host._proc_faiss_id_map == ["proc_new"]
+
+    def test_init_memory_sets_proc_index_state(self, mixin_host):
+        """init_memory() builds an empty procedures index when there are none.
+
+        Proves Step 4b ran in the real init path (with a live store) — the
+        index is an empty FAISS object, not the uninitialized None state.
+        """
+        pytest.importorskip("faiss")
+        assert mixin_host._proc_faiss_index is not None
+        assert mixin_host._proc_faiss_index.ntotal == 0
+        assert mixin_host._proc_faiss_id_map == []
+
+
+# Valid intermediate distiller output → name "triage-support-ticket".
+_VALID_DISTILL_MD = """\
+---
+name: triage-support-ticket
+when_to_use: Triage an inbound support ticket end to end.
+tools_required: [query_documents, read_file, remember]
+---
+
+# Triage a Support Ticket
+
+1. Pull policy docs with `query_documents`.
+2. Read the attached log with `read_file`.
+3. Record the disposition with `remember`.
+
+## Edge cases
+- If no policy doc matches, escalate.
+"""
+
+
+def _chat_returning(text):
+    """A chat SDK stub whose send_messages returns a response with .text == text."""
+    chat = MagicMock()
+    chat.send_messages.return_value = MagicMock(text=text)
+    return chat
+
+
+def _seed_qualifying_session(store, session_id, goal, n_steps=3):
+    """Seed a session with a user-goal turn and n_steps successful tool calls.
+
+    Mirrors the real initial state the DETECT pass reads: the goal comes from the
+    first ``role='user'`` turn, the span from ``tool_history`` successes.
+    """
+    store.store_turn(session_id, "user", goal)
+    for i in range(n_steps):
+        store.log_tool_call(session_id, f"tool_{i}", {"x": i}, "ok", True)
+
+
+class TestSynthesizeSkills:
+    """MemoryMixin._synthesize_skills — Step 8 of the post-init maintenance pass.
+
+    The mixin_host fixture's mock embedder returns one fixed vector for every
+    text, so all seeded goals cluster together (cosine 1.0) — enough to exercise
+    the DETECT → CLUSTER → DISTILL → RECONCILE driver end to end.
+    """
+
+    def test_creates_procedure_with_provenance_and_indexes_it(self, mixin_host):
+        """3 qualifying sessions → one procedures row with correct provenance."""
+        pytest.importorskip("faiss")
+        store = mixin_host._memory_store
+        sids = ["sess_a1", "sess_b2", "sess_c3"]
+        for sid in sids:
+            _seed_qualifying_session(store, sid, "Triage an inbound support ticket")
+        mixin_host.chat = _chat_returning(_VALID_DISTILL_MD)
+
+        result = mixin_host._synthesize_skills()
+
+        assert result["clusters"] == 1
+        assert result["stored"] == 1
+        rows = store.search_skills()
+        assert len(rows) == 1
+        assert rows[0]["name"] == "triage-support-ticket"
+        assert rows[0]["provenance"]["source"] == "synthesized"
+        assert set(rows[0]["provenance"]["from_sessions"]) == set(sids)
+        # The new when_to_use vector was added to the SEPARATE procedures index.
+        assert mixin_host._proc_faiss_index.ntotal == 1
+        assert rows[0]["id"] in mixin_host._proc_faiss_id_map
+
+    def test_embedder_failure_reraises(self, mixin_host):
+        """Fail-loud: an embedder failure during synthesis propagates (no fallback)."""
+        store = mixin_host._memory_store
+        _seed_qualifying_session(store, "sess_x", "do the recurring thing")
+        mixin_host.chat = _chat_returning(_VALID_DISTILL_MD)
+
+        with patch.object(
+            type(mixin_host),
+            "_embed_text",
+            side_effect=RuntimeError("Embedding failed: Lemonade unreachable"),
+        ):
+            with pytest.raises(RuntimeError, match="Embedding failed"):
+                mixin_host._synthesize_skills()
+
+    def test_lemonade_down_during_distill_skips_pass_and_logs(self, mixin_host, caplog):
+        """A raised distill call aborts the whole pass loudly — no row, no fallback."""
+        store = mixin_host._memory_store
+        for sid in ["s1", "s2", "s3"]:
+            _seed_qualifying_session(store, sid, "triage a ticket")
+        chat = MagicMock()
+        chat.send_messages.side_effect = ConnectionError("Lemonade down")
+        mixin_host.chat = chat
+
+        with caplog.at_level(
+            logging.WARNING, logger="gaia.agents.base.procedural_memory"
+        ):
+            result = mixin_host._synthesize_skills()
+
+        assert result["stored"] == 0
+        assert store.search_skills() == []
+        assert "aborted" in caplog.text.lower()
+
+    def test_malformed_distill_skips_only_that_cluster(self, mixin_host):
+        """Malformed distill output skips the cluster (no raise, no row)."""
+        store = mixin_host._memory_store
+        for sid in ["s1", "s2", "s3"]:
+            _seed_qualifying_session(store, sid, "triage a ticket")
+        mixin_host.chat = _chat_returning("garbage with no frontmatter")
+
+        result = mixin_host._synthesize_skills()
+
+        assert result["skipped"] == 1
+        assert result["stored"] == 0
+        assert store.search_skills() == []
+
+    def test_disabled_via_settings_skips_pass(self, mixin_host, caplog):
+        """enabled=false in memory_settings.json skips synthesis (logged INFO)."""
+        store = mixin_host._memory_store
+        for sid in ["s1", "s2", "s3"]:
+            _seed_qualifying_session(store, sid, "triage a ticket")
+        mixin_host.chat = _chat_returning(_VALID_DISTILL_MD)
+
+        with patch(
+            "gaia.agents.base.memory._load_memory_settings",
+            return_value={"skill_synthesis": {"enabled": False}},
+        ):
+            with caplog.at_level(
+                logging.INFO, logger="gaia.agents.base.procedural_memory"
+            ):
+                result = mixin_host._synthesize_skills()
+
+        assert result == {"clusters": 0, "stored": 0, "skipped": 0}
+        assert store.search_skills() == []
+        assert "disabled" in caplog.text.lower()
+
+    def test_no_store_is_noop(self, mixin_host):
+        """With no store (GAIA_MEMORY_DISABLED floor) synthesis is a clean no-op."""
+        mixin_host._memory_store = None
+        assert mixin_host._synthesize_skills() == {
+            "clusters": 0,
+            "stored": 0,
+            "skipped": 0,
+        }
+
+    def test_rerun_is_noop_and_never_deletes(self, mixin_host):
+        """Reconcile issues NOOP on a re-run — the row is kept, never duplicated."""
+        pytest.importorskip("faiss")
+        store = mixin_host._memory_store
+        for sid in ["s1", "s2", "s3"]:
+            _seed_qualifying_session(store, sid, "triage a ticket")
+        mixin_host.chat = _chat_returning(_VALID_DISTILL_MD)
+
+        first = mixin_host._synthesize_skills()
+        assert first["stored"] == 1
+
+        # Second pass over the same sessions: equal success_count → NOOP.
+        second = mixin_host._synthesize_skills()
+        assert second["stored"] == 0
+        rows = store.search_skills()
+        assert len(rows) == 1  # one row, not duplicated, not deleted
+
+    def test_name_drift_across_passes_supersedes(self, mixin_host):
+        """AC #3: the same goal distilled under a drifted name across passes
+        yields ONE surviving row (an UPDATE), not a second ADD.
+
+        The fixture's fixed-vector embedder gives cosine 1.0 between passes, so
+        the two candidates differ only by name — the exact regression the fix
+        targets.  Under the old exact-name match this produced 2 enabled rows.
+        """
+        pytest.importorskip("faiss")
+        store = mixin_host._memory_store
+        goal = "Summarize my unread emails"
+
+        pass1_md = (
+            "---\n"
+            "name: summarize-unread-emails\n"
+            "when_to_use: Summarize the user's unread emails.\n"
+            "tools_required: [list_emails, summarize]\n"
+            "---\n\n"
+            "# Summarize Unread Emails\n\n"
+            "1. List unread with `list_emails`.\n"
+            "2. Summarize them with `summarize`.\n"
+        )
+        pass2_md = (
+            "---\n"
+            "name: summarize-my-unread-emails\n"  # drifted name, same goal
+            "when_to_use: Summarize my unread emails.\n"
+            "tools_required: [list_emails, summarize]\n"
+            "---\n\n"
+            "# Summarize My Unread Emails\n\n"
+            "1. Pull unread mail with `list_emails`.\n"
+            "2. Produce a digest with `summarize`.\n"
+        )
+
+        # Pass 1: 3 qualifying sessions → one ADD.
+        for sid in ["d1", "d2", "d3"]:
+            _seed_qualifying_session(store, sid, goal)
+        mixin_host.chat = _chat_returning(pass1_md)
+        first = mixin_host._synthesize_skills()
+        assert first["stored"] == 1
+        rows_after_1 = store.search_skills()
+        assert len(rows_after_1) == 1
+        assert rows_after_1[0]["name"] == "summarize-unread-emails"
+        pass1_id = rows_after_1[0]["id"]
+
+        # Pass 2: 2 more sessions raise the cluster's aggregate success_count; the
+        # distiller drifts the name. Match-by-meaning must UPDATE, not duplicate.
+        for sid in ["d4", "d5"]:
+            _seed_qualifying_session(store, sid, goal)
+        mixin_host.chat = _chat_returning(pass2_md)
+        second = mixin_host._synthesize_skills()
+        assert second["stored"] == 1  # an UPDATE — not a no-op, not a 2nd ADD
+
+        visible = store.search_skills()  # enabled, non-superseded
+        assert len(visible) == 1
+        assert visible[0]["name"] == "summarize-my-unread-emails"  # pass-2 name
+        assert "digest" in visible[0]["markdown_body"]  # pass-2 body
+        # The pass-1 row is superseded (kept, never deleted).
+        old = store.search_skills(
+            skill_id=pass1_id, include_superseded=True, enabled_only=False
+        )
+        assert len(old) == 1
+        assert old[0]["superseded_by"] == visible[0]["id"]
+
+
+# ===========================================================================
+# Phase 2 — Skill Recall + system-prompt injection (#887)
+# ===========================================================================
+
+
+def _seed_procedure(
+    host,
+    name="triage-support-ticket",
+    when_to_use="Triage an inbound support ticket end to end.",
+    body="# Triage a Ticket\n1. step one\n2. step two\n## Edge cases\n- escalate",
+    tools_required=None,
+    enabled=True,
+    rebuild=True,
+):
+    """Store a procedure whose embedding matches the host's fixed-vec embedder.
+
+    The mixin_host/composing_host mock embedder returns ONE fixed vector for
+    every text, so a procedure embedded with ``host._embed_text`` will match any
+    recalled goal at cosine 1.0 — enough to exercise the recall path end to end.
+    """
+    from gaia.agents.base.memory import _embedding_to_blob
+
+    blob = _embedding_to_blob(host._embed_text(when_to_use))
+    pid = host._memory_store.put_skill(
+        name=name,
+        when_to_use=when_to_use,
+        markdown_body=body,
+        tools_required=tools_required if tools_required is not None else [],
+        embedding=blob,
+        enabled=enabled,
+    )
+    if rebuild:
+        host._rebuild_proc_faiss_index()
+    return pid
+
+
+class TestRecallSkill:
+    """MemoryMixin.recall_skill — the RECALL half of the procedural loop.
+
+    The mock embedder returns a fixed vector for every text, so a seeded
+    procedure matches any goal at cosine 1.0 unless a test patches _embed_text
+    to control the vectors directly.
+    """
+
+    def test_recall_returns_matching_procedure_full_body(self, mixin_host):
+        """A goal matching a stored procedure recalls it with the FULL body."""
+        pytest.importorskip("faiss")
+        body = "# Triage\n1. pull docs\n2. read log\n## Edge cases\n- escalate"
+        _seed_procedure(mixin_host, name="triage-support-ticket", body=body)
+
+        skills = mixin_host.recall_skill("help me triage this ticket")
+
+        assert len(skills) == 1
+        assert skills[0].name == "triage-support-ticket"
+        assert skills[0].body == body  # full body, no truncation at the API layer
+
+    def test_no_store_returns_empty(self, mixin_host):
+        """GAIA_MEMORY_DISABLED floor: no store → recall returns []."""
+        mixin_host._memory_store = None
+        assert mixin_host.recall_skill("anything") == []
+
+    def test_recall_stamps_last_used_at(self, mixin_host):
+        """Recalling a procedure records last_used_at (status 'Last recalled')."""
+        pytest.importorskip("faiss")
+        pid = _seed_procedure(mixin_host, name="touched-proc")
+        store = mixin_host._memory_store
+        assert store.search_skills(skill_id=pid)[0]["last_used_at"] is None
+
+        assert mixin_host.recall_skill("any goal")  # recalls the seeded procedure
+
+        assert store.search_skills(skill_id=pid)[0]["last_used_at"] is not None
+
+    def test_empty_goal_returns_empty(self, mixin_host):
+        """An empty / whitespace goal recalls nothing (never embeds)."""
+        assert mixin_host.recall_skill("") == []
+        assert mixin_host.recall_skill("   ") == []
+
+    def test_empty_index_returns_empty(self, mixin_host):
+        """With zero procedures the index is empty → recall returns []."""
+        pytest.importorskip("faiss")
+        assert mixin_host._proc_faiss_index.ntotal == 0
+        assert mixin_host.recall_skill("any goal") == []
+
+    def test_disabled_procedure_not_recalled(self, mixin_host):
+        """A disabled procedure is excluded from the index → never recalled."""
+        pytest.importorskip("faiss")
+        _seed_procedure(mixin_host, name="enabled-proc")
+        _seed_procedure(mixin_host, name="disabled-proc", enabled=False)
+
+        names = {s.name for s in mixin_host.recall_skill("goal", top_k=5)}
+
+        assert names == {"enabled-proc"}
+
+    def test_disable_after_index_still_blocks_recall(self, mixin_host):
+        """AC: disabling a procedure prevents recall even on a stale index.
+
+        The fetch in recall_skill passes enabled_only=True, so a procedure
+        disabled after the index was built is excluded at read time — before any
+        rebuild.
+        """
+        pytest.importorskip("faiss")
+        pid = _seed_procedure(mixin_host, name="proc-x")
+        assert [s.name for s in mixin_host.recall_skill("goal")] == ["proc-x"]
+
+        # Disable WITHOUT rebuilding the FAISS index (it still maps to pid).
+        mixin_host._memory_store.put_skill(
+            skill_id=pid,
+            name="proc-x",
+            when_to_use="trigger",
+            markdown_body="# B\n1. s\n## Edge cases\n- e",
+            enabled=False,
+        )
+
+        assert mixin_host.recall_skill("goal") == []
+
+    def test_superseded_procedure_not_recalled(self, mixin_host):
+        """A superseded procedure is excluded at fetch time (include_superseded=False)."""
+        pytest.importorskip("faiss")
+        old_id = _seed_procedure(mixin_host, name="proc-y")
+        # Mark it superseded by a (notional) newer id, without rebuilding.
+        mixin_host._memory_store.supersede_skill(old_id, "proc_newer")
+
+        assert mixin_host.recall_skill("goal") == []
+
+    def test_below_tau_match_is_dropped(self, mixin_host):
+        """A nearest neighbour below SIMILARITY_TAU is not injected (unrelated goal)."""
+        pytest.importorskip("faiss")
+        from gaia.agents.base.memory import EMBEDDING_DIM, _embedding_to_blob
+
+        e1 = np.zeros(EMBEDDING_DIM, dtype=np.float32)
+        e1[0] = 1.0
+        e2 = np.zeros(EMBEDDING_DIM, dtype=np.float32)
+        e2[1] = 1.0  # orthogonal to e1 → cosine 0.0 < tau
+
+        mixin_host._memory_store.put_skill(
+            name="proc-z",
+            when_to_use="trigger",
+            markdown_body="# B\n1. s\n## Edge cases\n- e",
+            embedding=_embedding_to_blob(e1),
+        )
+        mixin_host._rebuild_proc_faiss_index()
+
+        with patch.object(type(mixin_host), "_embed_text", return_value=e2):
+            assert mixin_host.recall_skill("completely unrelated goal") == []
+
+    def test_at_tau_match_is_kept(self, mixin_host):
+        """A match at/above SIMILARITY_TAU IS recalled (positive control for tau)."""
+        pytest.importorskip("faiss")
+        from gaia.agents.base.memory import EMBEDDING_DIM, _embedding_to_blob
+
+        e1 = np.zeros(EMBEDDING_DIM, dtype=np.float32)
+        e1[0] = 1.0
+
+        mixin_host._memory_store.put_skill(
+            name="proc-z",
+            when_to_use="trigger",
+            markdown_body="# B\n1. s\n## Edge cases\n- e",
+            embedding=_embedding_to_blob(e1),
+        )
+        mixin_host._rebuild_proc_faiss_index()
+
+        with patch.object(type(mixin_host), "_embed_text", return_value=e1):
+            skills = mixin_host.recall_skill("the matching goal")
+
+        assert [s.name for s in skills] == ["proc-z"]
+
+    def test_recall_embed_failure_degrades_to_empty(self, mixin_host, caplog):
+        """A recall-time embedder failure logs + returns [] (no crash, no fallback).
+
+        Recall is an enhancement on the hot path: a transient embedder hiccup
+        must degrade to the pre-synthesis behavior, never crash the user's turn.
+        """
+        pytest.importorskip("faiss")
+        _seed_procedure(mixin_host)  # index non-empty so recall reaches the embed step
+
+        with patch.object(
+            type(mixin_host),
+            "_embed_text",
+            side_effect=RuntimeError("Embedding failed: Lemonade unreachable"),
+        ):
+            with caplog.at_level(
+                logging.WARNING, logger="gaia.agents.base.procedural_memory"
+            ):
+                result = mixin_host.recall_skill("goal")
+
+        assert result == []
+        assert "recall skipped" in caplog.text.lower()
+
+    def test_top_k_caps_results(self, mixin_host):
+        """recall_skill returns at most top_k procedures."""
+        pytest.importorskip("faiss")
+        for i in range(4):
+            _seed_procedure(mixin_host, name=f"proc-{i}", rebuild=False)
+        mixin_host._rebuild_proc_faiss_index()
+
+        assert len(mixin_host.recall_skill("goal", top_k=2)) == 2
+
+    def test_explicit_similarity_tau_overrides_config(self, mixin_host):
+        """An explicit similarity_tau gates the match without reading settings.
+
+        The fixed-vec embedder scores every match at cosine 1.0, so a tau above
+        1.0 drops it and a tau of 0.0 keeps it — proving the injection path's
+        pre-resolved threshold is honored.
+        """
+        pytest.importorskip("faiss")
+        _seed_procedure(mixin_host, name="proc-tau")
+
+        assert mixin_host.recall_skill("goal", similarity_tau=1.5) == []
+        assert [
+            s.name for s in mixin_host.recall_skill("goal", similarity_tau=0.0)
+        ] == ["proc-tau"]
+
+
+def _recalled_skill(name, body, when_to_use="trigger", tools_required=None):
+    """A Skill object as recall_skill would return it (for the pure renderer)."""
+    from gaia.agents.base.skill_synthesis import Skill
+
+    return Skill(
+        name=name,
+        when_to_use=when_to_use,
+        body=body,
+        tools_required=tools_required if tools_required is not None else [],
+    )
+
+
+class TestRecalledSkillPromptBuilder:
+    """MemoryMixin._build_recalled_skills_prompt — bounded injection rendering.
+
+    The renderer is pure over the already-recalled skills (#1451): the recall and
+    the single settings read happen once upstream in _recall_skills_for_turn (see
+    TestRecallOnceProcedureCache), feeding both this prompt and the loader's
+    _recalled_skill_tools signal. These tests pin the rendering byte-for-byte.
+    """
+
+    @staticmethod
+    def _config():
+        from gaia.agents.base.skill_synthesis import load_synthesis_config
+
+        return load_synthesis_config()
+
+    def test_no_skills_returns_empty_string(self, mixin_host):
+        """Empty recall → empty injection so the system prompt stays byte-identical."""
+        assert mixin_host._build_recalled_skills_prompt([], None) == ""
+
+    def test_short_body_kept_intact(self, mixin_host):
+        """A body under the cap is injected verbatim, no truncation marker."""
+        body = "# Short\n1. step\n## Edge cases\n- e"
+
+        prompt = mixin_host._build_recalled_skills_prompt(
+            [_recalled_skill("short-proc", body)], self._config()
+        )
+
+        assert "RECALLED PROCEDURES" in prompt
+        assert "short-proc" in prompt
+        assert body in prompt
+        assert "(truncated)" not in prompt
+
+    def test_long_body_truncated_at_cap(self, mixin_host):
+        """A body over the cap is truncated at injection (the row keeps it whole)."""
+        from gaia.agents.base.skill_synthesis import MAX_RECALL_BODY_CHARS
+
+        long_body = "# Big\n" + ("x" * 5000) + "\n## Edge cases\n- e"
+
+        prompt = mixin_host._build_recalled_skills_prompt(
+            [_recalled_skill("big-proc", long_body)], self._config()
+        )
+
+        assert "… (truncated)" in prompt
+        # The injected body carries at most MAX_RECALL_BODY_CHARS of the content.
+        assert prompt.count("x") <= MAX_RECALL_BODY_CHARS
+
+
+class TestRecallOnceProcedureCache:
+    """_refresh_recalled_skills recalls once and caches both consumers (#1451).
+
+    The tool-loader SKILL signal reuses the per-turn recall cache rather than
+    issuing a second recall_skill (embed + FAISS) call — that reuse is what keeps
+    Part 3 free on TTFT, so it is guarded here.
+    """
+
+    def test_refresh_caches_recalled_skills_for_the_loader(self, mixin_host):
+        """The matched Skill objects are cached, and their tools flatten+dedupe."""
+        pytest.importorskip("faiss")
+        _seed_procedure(
+            mixin_host,
+            name="triage-proc",
+            body="# B\n1. s\n## Edge cases\n- e",
+            tools_required=["query_documents", "read_file"],
+        )
+
+        mixin_host._refresh_recalled_skills("triage this ticket")
+
+        assert [s.name for s in mixin_host._recalled_skills] == ["triage-proc"]
+        assert mixin_host._recalled_skill_tools() == ["query_documents", "read_file"]
+
+    def test_recall_runs_once_for_both_consumers(self, mixin_host):
+        """recall_skill fires exactly once per turn; both consumers read the cache."""
+        pytest.importorskip("faiss")
+        _seed_procedure(mixin_host, name="proc-x", tools_required=["read_file"])
+
+        with patch.object(
+            mixin_host, "recall_skill", wraps=mixin_host.recall_skill
+        ) as spy:
+            mixin_host._refresh_recalled_skills("a goal")
+        assert spy.call_count == 1
+
+        # Both consumers now read the cached result — no second recall.
+        assert mixin_host._recalled_skill_tools() == ["read_file"]
+        assert mixin_host.get_recalled_skills_system_prompt()  # non-empty
+        assert spy.call_count == 1
+
+    def test_off_state_caches_empty_and_skips_settings_read(self, mixin_host):
+        """Empty index → no settings read, empty caches (the zero-cost off-state)."""
+        pytest.importorskip("faiss")
+        assert mixin_host._proc_faiss_index.ntotal == 0
+
+        with patch("gaia.agents.base.memory._load_memory_settings") as mock_settings:
+            mixin_host._refresh_recalled_skills("any goal")
+
+        mock_settings.assert_not_called()
+        assert mixin_host._recalled_skills == []
+        assert mixin_host._recalled_skill_tools() == []
+        assert mixin_host._recalled_skill_prompt == ""
+
+
+class _ComposingAgent(FakeAgent):
+    """FakeAgent + the parts of Agent that recalled-skill injection relies on.
+
+    A faithful stand-in for ``Agent._get_mixin_prompts`` (the
+    ``get_*_system_prompt`` auto-discovery), ``_compose_system_prompt`` (drops
+    empty fragments), and ``rebuild_system_prompt`` (recompose on demand) — so a
+    test can observe the recalled block landing in, and leaving, the composed
+    system prompt without instantiating the full Agent stack.
+    """
+
+    def _get_mixin_prompts(self):
+        prompts = []
+        for attr_name in dir(self):
+            if (
+                attr_name.startswith("get_")
+                and attr_name.endswith("_system_prompt")
+                and attr_name != "_get_system_prompt"
+                and callable(getattr(self, attr_name, None))
+            ):
+                fragment = getattr(self, attr_name)()
+                if fragment:
+                    prompts.append(fragment)
+        return prompts
+
+    def _compose_system_prompt(self):
+        return "\n\n".join(p for p in self._get_mixin_prompts() if p)
+
+    def rebuild_system_prompt(self):
+        self._system_prompt_cache = self._compose_system_prompt()
+
+    @property
+    def system_prompt(self):
+        if not getattr(self, "_system_prompt_cache", None):
+            self._system_prompt_cache = self._compose_system_prompt()
+        return self._system_prompt_cache
+
+
+@pytest.fixture
+def composing_host(tmp_db_path):
+    """A MemoryMixin host whose base implements the Agent composition seam.
+
+    Like ``mixin_host`` but over ``_ComposingAgent`` so recalled-skill injection
+    into the composed system prompt is observable.
+    """
+    from gaia.agents.base.memory import MemoryMixin
+
+    class TestAgent(MemoryMixin, _ComposingAgent):
+        pass
+
+    host = TestAgent()
+    mock_embedder = _make_mock_embedder()
+    with (
+        patch.object(MemoryMixin, "_get_embedder", return_value=mock_embedder),
+        patch.object(
+            MemoryMixin,
+            "_embed_text",
+            return_value=np.random.rand(768).astype(np.float32),
+        ),
+        patch.object(MemoryMixin, "_backfill_embeddings", return_value=0),
+        patch.object(MemoryMixin, "_rebuild_faiss_index", return_value=None),
+        patch.object(
+            MemoryMixin,
+            "reconcile_memory",
+            return_value={"pairs_checked": 0},
+        ),
+        patch.object(
+            MemoryMixin,
+            "consolidate_old_sessions",
+            return_value={"consolidated": 0, "extracted_items": 0},
+        ),
+        patch(
+            "gaia.agents.base.memory._system_context_is_enabled",
+            return_value=True,
+        ),
+    ):
+        host.init_memory(db_path=tmp_db_path, context="global")
+    host._embedder = mock_embedder
+    return host
+
+
+class TestRecalledSkillInjection:
+    """Per-turn injection of the recalled procedure into the composed prompt."""
+
+    def test_matching_goal_injects_procedure_into_system_prompt(self, composing_host):
+        """A matching goal makes process_query inject the recipe into the prompt."""
+        pytest.importorskip("faiss")
+        composing_host._memory_post_init_pending = False  # isolate from synthesis
+        _seed_procedure(
+            composing_host,
+            name="triage-support-ticket",
+            body="# Triage\n1. pull docs\n2. read log\n## Edge cases\n- escalate",
+        )
+
+        composing_host.process_query("triage this inbound ticket")
+
+        prompt = composing_host.system_prompt
+        assert "RECALLED PROCEDURES" in prompt
+        assert "triage-support-ticket" in prompt
+        assert "pull docs" in prompt
+
+    def test_off_state_prompt_is_byte_identical(self, composing_host):
+        """No procedures → recall is a no-op and the prompt is unchanged.
+
+        This is the key off-state invariant the eval gate relies on: with zero
+        procedures, the composed system prompt is byte-identical to a build
+        without procedural memory.
+        """
+        pytest.importorskip("faiss")
+        composing_host._memory_post_init_pending = False
+
+        before = composing_host.system_prompt
+        composing_host.process_query("any goal at all")
+        after = composing_host.system_prompt
+
+        assert after == before
+        assert composing_host._recalled_skill_prompt == ""
+        assert "RECALLED PROCEDURES" not in after
+
+    def test_injection_removed_when_recall_set_empties(self, composing_host):
+        """Recompose-on-change: disabling the only match drops it from the prompt.
+
+        Mirrors _refresh_active_tool_filter — the cached prompt is recomposed
+        when the recalled set changes, in either direction.
+        """
+        pytest.importorskip("faiss")
+        composing_host._memory_post_init_pending = False
+        pid = _seed_procedure(
+            composing_host,
+            name="proc-x",
+            body="# B\n1. step\n## Edge cases\n- e",
+        )
+
+        composing_host.process_query("goal one")
+        assert "proc-x" in composing_host.system_prompt
+
+        # Disable + rebuild empties the recall set for the next turn.
+        composing_host._memory_store.put_skill(
+            skill_id=pid,
+            name="proc-x",
+            when_to_use="trigger",
+            markdown_body="# B\n1. step\n## Edge cases\n- e",
+            enabled=False,
+        )
+        composing_host._rebuild_proc_faiss_index()
+
+        composing_host.process_query("goal two")
+        assert "proc-x" not in composing_host.system_prompt
+        assert composing_host._recalled_skill_prompt == ""
+
+    def test_recall_is_not_a_sixth_memory_tool(self, mixin_with_tools):
+        """recall_skill stays an internal method — the 5-tool registry is unchanged."""
+        registered = set(mixin_with_tools._registered_tools)
+        assert "recall_skill" not in registered
+        assert {
+            "remember",
+            "recall",
+            "update_memory",
+            "forget",
+            "search_past_conversations",
+        } <= registered
+
+
+# ===========================================================================
+# AC2 (#887) — recall reduces the tool-step count on a repeated goal
+# ===========================================================================
+
+
+def _run_surrogate_planner(system_prompt, needed_tools, candidate_tools):
+    """Deterministic stand-in for the planner LLM, returning the tools it ran.
+
+    The true 4th-attempt reduction is a behavioral property of the planner
+    model (and of the tool-loader consumer, #1451) and belongs to the eval
+    harness. What #1794 owns — and what this surrogate pins — is the *lever*:
+    a recalled procedure hands the planner the exact ordered tool sequence in
+    its system prompt, so it runs only those steps; with no recall the planner
+    must DISCOVER the sequence, probing candidate tools in registry order until
+    it has covered the goal.
+    """
+    marker = "RECALLED PROCEDURES"
+    if marker in system_prompt:
+        block = system_prompt.split(marker, 1)[1]
+        # Follow the recipe: run the needed tools in their order of appearance
+        # in the recalled block — zero discovery overhead.
+        return sorted(
+            (t for t in needed_tools if t in block),
+            key=lambda t: block.index(t),
+        )
+    # No recipe: undirected discovery — probe candidates in registry order,
+    # stopping once every needed tool has been executed.
+    executed, remaining = [], set(needed_tools)
+    for tool in candidate_tools:
+        executed.append(tool)
+        remaining.discard(tool)
+        if not remaining:
+            break
+    return executed
+
+
+class TestRecallReducesToolSteps:
+    """AC2 (#887): recall measurably reduces the tool-step count on a match.
+
+    Pins the #1794-owned lever behind the acceptance criterion with a
+    deterministic planner surrogate (see _run_surrogate_planner). The
+    end-to-end, real-LLM measurement is the eval harness's job.
+    """
+
+    def test_recalled_recipe_cuts_tool_steps_vs_baseline(self, composing_host):
+        pytest.importorskip("faiss")
+        composing_host._memory_post_init_pending = False  # isolate from synthesis
+
+        needed = ["query_documents", "read_file", "remember"]
+        # The agent's tool space is larger than the recipe, so without a recipe
+        # the planner has to probe the leading non-recipe tools first.
+        candidates = [
+            "search_web",
+            "list_files",
+            "query_documents",
+            "read_file",
+            "remember",
+        ]
+        goal = "triage this inbound support ticket"
+
+        # --- Baseline: no procedure yet (the 1st-3rd attempts). ---
+        composing_host.process_query(goal)
+        assert "RECALLED PROCEDURES" not in composing_host.system_prompt
+        baseline = _run_surrogate_planner(
+            composing_host.system_prompt, needed, candidates
+        )
+
+        # --- 4th attempt: the synthesized procedure is now recalled. ---
+        _seed_procedure(
+            composing_host,
+            name="triage-support-ticket",
+            when_to_use="Triage an inbound support ticket end to end.",
+            body=(
+                "# Triage a Support Ticket\n"
+                "1. Pull policy docs with `query_documents`.\n"
+                "2. Read the attached log with `read_file`.\n"
+                "3. Record the disposition with `remember`.\n"
+                "## Edge cases\n- escalate if no policy doc matches"
+            ),
+            tools_required=needed,
+        )
+        composing_host.process_query(goal)
+        assert "RECALLED PROCEDURES" in composing_host.system_prompt
+        recall = _run_surrogate_planner(
+            composing_host.system_prompt, needed, candidates
+        )
+
+        # The measurable reduction: the recalled recipe eliminates discovery.
+        assert len(recall) < len(baseline)  # 3 < 5
+        assert recall == needed  # follows the recipe exactly
+        assert len(baseline) > len(needed)  # baseline pays a discovery cost

@@ -6,8 +6,9 @@
  *
  * Flow: authenticate -> parse multipart -> validate manifest -> enforce
  * publisher scope -> enforce version immutability -> generate server-side
- * SHA-256 -> store artifact + raw manifest + per-agent manifest -> rebuild
- * index.json. Every guard fails loudly with a structured error.
+ * SHA-256 -> store artifact + raw manifest + optional README + optional
+ * CHANGELOG + per-agent manifest -> rebuild index.json. Every guard fails
+ * loudly with a structured error.
  */
 
 import { assertAuthorAllowed, authenticate } from "./auth";
@@ -16,8 +17,13 @@ import { HttpError, json } from "./http";
 import { parseManifest } from "./manifest";
 import {
   artifactKey,
+  changelogKey,
+  packageFilesKey,
   rawManifestKey,
   readAgentManifest,
+  readmeKey,
+  skillKey,
+  specKey,
   writeAgentManifest,
 } from "./storage";
 import type { ArtifactInfo, Env } from "./types";
@@ -46,6 +52,76 @@ function maxBytes(env: Env): number {
   return n;
 }
 
+/**
+ * Read an optional markdown form part (readme/changelog). Returns null when the
+ * part is absent (the documented "" catalog default downstream), the LF-
+ * normalized text when present, and fails loudly on a present-but-empty part —
+ * an empty file is a mistake, so reject it rather than store a blank doc.
+ */
+async function optionalMarkdownPart(
+  form: FormData,
+  field: string,
+  label: string
+): Promise<string | null> {
+  const part = form.get(field);
+  if (part == null) return null;
+  // Multipart string fields are CRLF-normalized by the form encoding —
+  // canonicalize to LF so stored markdown is byte-stable either way.
+  const text = (typeof part === "string" ? part : await (part as Blob).text()).replace(/\r\n/g, "\n");
+  if (text.trim() === "") {
+    throw new HttpError(
+      400,
+      "invalid_request",
+      `The '${field}' part is empty. Send the ${label} markdown text, or omit the ` +
+        `part entirely if the agent has none.`
+    );
+  }
+  return text;
+}
+
+/**
+ * Read + validate the optional `package_files` part: the listing of files inside
+ * the published whole-package zip. Must be JSON of shape
+ * `{ files: [{ name, size_bytes }] }`. Absent → null (no package zip). A
+ * present-but-malformed part fails loudly rather than storing junk.
+ */
+async function optionalPackageFiles(form: FormData): Promise<string | null> {
+  const part = form.get("package_files");
+  if (part == null) return null;
+  const text = typeof part === "string" ? part : await (part as Blob).text();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    throw new HttpError(
+      400,
+      "invalid_request",
+      `The 'package_files' part is not valid JSON: ${(e as Error).message}. Expected ` +
+        `{ "files": [{ "name": "...", "size_bytes": 0 }] }, or omit the part.`
+    );
+  }
+  const files = (parsed as { files?: unknown }).files;
+  if (
+    !Array.isArray(files) ||
+    files.length === 0 ||
+    !files.every(
+      (f) =>
+        f &&
+        typeof (f as Record<string, unknown>).name === "string" &&
+        typeof (f as Record<string, unknown>).size_bytes === "number"
+    )
+  ) {
+    throw new HttpError(
+      400,
+      "invalid_request",
+      "The 'package_files' part must be { \"files\": [{ \"name\": string, " +
+        '"size_bytes": number }, ...] } with at least one file.'
+    );
+  }
+  // Re-serialize canonically (compact) so the stored object is byte-stable.
+  return JSON.stringify({ files });
+}
+
 export async function handlePublish(
   request: Request,
   env: Env,
@@ -59,7 +135,8 @@ export async function handlePublish(
       415,
       "unsupported_media_type",
       "POST /publish expects multipart/form-data with 'manifest' (gaia-agent.yaml " +
-        "text) and 'artifact' (the wheel or binary file) parts."
+        "text), 'artifact' (the wheel or binary file), and optionally 'readme' " +
+        "(README.md markdown text) and 'changelog' (CHANGELOG.md markdown text) parts."
     );
   }
 
@@ -87,6 +164,20 @@ export async function handlePublish(
   }
   const artifactFile = artifactPart as File;
 
+  // Optional README + CHANGELOG markdown for this version (rendered on the Hub
+  // pages). Both are optional; an empty part is rejected (omit it instead).
+  const readmeText = await optionalMarkdownPart(form, "readme", "README.md");
+  const changelogText = await optionalMarkdownPart(form, "changelog", "CHANGELOG.md");
+  // Optional SPEC.md (technical reference) + SKILL.md (AI-integration playbook),
+  // rendered as their own doc tabs on the hub page. Same per-version, first-POST
+  // semantics as README/CHANGELOG.
+  const specText = await optionalMarkdownPart(form, "spec", "SPEC.md");
+  const skillText = await optionalMarkdownPart(form, "skill", "SKILL.md");
+  // Optional whole-package file listing (the zip's contents, for the hub's file
+  // list). The zip itself rides in as a normal `artifact`; this is just the
+  // manifest of what's inside it.
+  const packageFilesText = await optionalPackageFiles(form);
+
   const manifest = parseManifest(manifestText);
   assertAuthorAllowed(publisher, manifest.author);
 
@@ -100,26 +191,20 @@ export async function handlePublish(
     );
   }
 
-  // Publisher scope + version immutability against the existing agent manifest.
+  // Publisher scope (ownership) against the existing agent manifest. Version
+  // immutability is enforced per-artifact below: a version's artifact set is
+  // append-only per distinct filename, so a second platform binary can join an
+  // existing version, but no published filename can ever be overwritten.
   const existing = await readAgentManifest(env.BUCKET, manifest.id);
-  if (existing) {
-    if (existing.author !== manifest.author) {
-      throw new HttpError(
-        403,
-        "forbidden_scope",
-        `Agent '${manifest.id}' is owned by author '${existing.author}'. A publish ` +
-          `with author '${manifest.author}' cannot update it.`
-      );
-    }
-    if (existing.versions[manifest.version]) {
-      throw new HttpError(
-        409,
-        "version_exists",
-        `Version ${manifest.version} of agent '${manifest.id}' is already published. ` +
-          `Published versions are immutable — bump the version in gaia-agent.yaml.`
-      );
-    }
+  if (existing && existing.author !== manifest.author) {
+    throw new HttpError(
+      403,
+      "forbidden_scope",
+      `Agent '${manifest.id}' is owned by author '${existing.author}'. A publish ` +
+        `with author '${manifest.author}' cannot update it.`
+    );
   }
+  const versionExists = Boolean(existing?.versions[manifest.version]);
 
   const bytes = new Uint8Array(await artifactFile.arrayBuffer());
   const limit = maxBytes(env);
@@ -135,13 +220,16 @@ export async function handlePublish(
   }
 
   const key = artifactKey(manifest.id, manifest.version, filename);
-  // Defense in depth: object-level immutability even if the manifest is missing
-  // the version (e.g. a partial prior publish).
+  // Per-filename immutability: a published artifact is never overwritten. A new
+  // platform binary under an existing version uses a distinct filename and is
+  // allowed; re-uploading the same filename is rejected. (Idempotent re-runs of
+  // a release job should treat this 409 as "already published" — success.)
   if (await env.BUCKET.head(key)) {
     throw new HttpError(
       409,
       "version_exists",
-      `Artifact already exists at ${key}. Published versions are immutable.`
+      `Artifact already exists at ${key} and is immutable. To add another ` +
+        `platform binary use a distinct filename; to change this one, bump the version.`
     );
   }
 
@@ -154,14 +242,55 @@ export async function handlePublish(
     content_type: artifactFile.type || "application/octet-stream",
   };
 
-  // Store artifact + the exact raw manifest for this version.
+  // Store the artifact. The raw gaia-agent.yaml is written only on the first
+  // publish of a version so it stays the immutable record of that release; a
+  // later platform binary joining the same version must not rewrite it.
   await env.BUCKET.put(key, bytes, {
     httpMetadata: { contentType: artifact.content_type },
     sha256,
   });
-  await env.BUCKET.put(rawManifestKey(manifest.id, manifest.version), manifestText, {
-    httpMetadata: { contentType: "application/x-yaml; charset=utf-8" },
-  });
+  // The raw gaia-agent.yaml, README, and CHANGELOG are per-version records:
+  // write them only on the first publish of a version so a later platform binary
+  // joining the same version cannot rewrite them.
+  if (!versionExists) {
+    await env.BUCKET.put(rawManifestKey(manifest.id, manifest.version), manifestText, {
+      httpMetadata: { contentType: "application/x-yaml; charset=utf-8" },
+    });
+    if (readmeText != null) {
+      await env.BUCKET.put(readmeKey(manifest.id, manifest.version), readmeText, {
+        httpMetadata: { contentType: "text/markdown; charset=utf-8" },
+      });
+    }
+    if (changelogText != null) {
+      await env.BUCKET.put(changelogKey(manifest.id, manifest.version), changelogText, {
+        httpMetadata: { contentType: "text/markdown; charset=utf-8" },
+      });
+    }
+    if (specText != null) {
+      await env.BUCKET.put(specKey(manifest.id, manifest.version), specText, {
+        httpMetadata: { contentType: "text/markdown; charset=utf-8" },
+      });
+    }
+    if (skillText != null) {
+      await env.BUCKET.put(skillKey(manifest.id, manifest.version), skillText, {
+        httpMetadata: { contentType: "text/markdown; charset=utf-8" },
+      });
+    }
+  }
+
+  // The package file listing rides the whole-package zip POST, which in a real
+  // release lands AFTER the per-platform binaries have already created this
+  // version — so it must NOT be gated on `!versionExists` (that path only runs on
+  // the first POST). Write it once, keyed per version; a re-POST of the immutable
+  // zip 409s on the artifact above before reaching here, so this can't be rewritten.
+  if (
+    packageFilesText != null &&
+    !(await env.BUCKET.head(packageFilesKey(manifest.id, manifest.version)))
+  ) {
+    await env.BUCKET.put(packageFilesKey(manifest.id, manifest.version), packageFilesText, {
+      httpMetadata: { contentType: "application/json; charset=utf-8" },
+    });
+  }
 
   const versionEntry = makeVersionEntry(manifest, artifact, publisher.publisher, now.toISOString());
   const updated = upsertVersion(existing, manifest, versionEntry);
@@ -175,6 +304,8 @@ export async function handlePublish(
         id: manifest.id,
         version: manifest.version,
         artifact,
+        // How many artifacts (platforms) now exist under this version.
+        version_artifacts: updated.versions[manifest.version].artifacts.length,
         latest_version: updated.latest_version,
       },
       catalog_agents: index.agents.length,

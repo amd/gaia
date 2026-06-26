@@ -1,0 +1,261 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/* ── VersionPicker modal ────────────────────────────────────────────────────── */
+
+.version-picker-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9000;
+}
+
+.version-picker-dialog {
+    background: var(--bg-primary, #1a1a1a);
+    border: 1px solid var(--border-color, #333);
+    border-radius: 10px;
+    width: min(520px, 94vw);
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.version-picker-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-color, #333);
+    flex-shrink: 0;
+}
+
+.version-picker-header h3 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary, #e8e8e8);
+}
+
+.version-picker-close {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-secondary, #888);
+    font-size: 20px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    line-height: 1;
+    transition: color 0.15s, background 0.15s;
+}
+
+.version-picker-close:hover {
+    color: var(--text-primary, #e8e8e8);
+    background: var(--bg-hover, #2a2a2a);
+}
+
+.version-picker-body {
+    overflow-y: auto;
+    flex: 1;
+    padding: 8px 0;
+}
+
+/* ── Loading ────────────────────────────────────────────────────────────────── */
+
+.version-picker-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 32px 20px;
+    color: var(--text-secondary, #888);
+    font-size: 14px;
+}
+
+.version-picker-spinner {
+    width: 18px;
+    height: 18px;
+    border: 2px solid var(--border-color, #444);
+    border-top-color: var(--accent, #e05a00);
+    border-radius: 50%;
+    animation: vp-spin 0.7s linear infinite;
+    flex-shrink: 0;
+}
+
+@keyframes vp-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* ── Error state ────────────────────────────────────────────────────────────── */
+
+.version-picker-error {
+    padding: 20px;
+    color: var(--text-secondary, #aaa);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.version-picker-error a {
+    color: var(--accent, #e05a00);
+    text-decoration: underline;
+}
+
+/* ── Release list ───────────────────────────────────────────────────────────── */
+
+.version-picker-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.version-picker-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 20px;
+    cursor: pointer;
+    border: none;
+    background: none;
+    width: 100%;
+    text-align: left;
+    color: var(--text-primary, #e8e8e8);
+    transition: background 0.12s;
+    border-bottom: 1px solid var(--border-color, #2a2a2a);
+}
+
+.version-picker-row:last-child {
+    border-bottom: none;
+}
+
+.version-picker-row:hover:not([aria-disabled="true"]) {
+    background: var(--bg-hover, #242424);
+}
+
+.version-picker-row[aria-disabled="true"] {
+    cursor: default;
+    opacity: 0.65;
+}
+
+.vp-version {
+    font-weight: 600;
+    font-size: 14px;
+    min-width: 70px;
+    font-family: var(--font-mono, monospace);
+}
+
+.vp-date {
+    font-size: 12px;
+    color: var(--text-secondary, #888);
+    flex: 1;
+}
+
+.vp-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.vp-badge-current {
+    background: var(--success-bg, rgba(80, 200, 100, 0.15));
+    color: var(--success, #50c864);
+    border: 1px solid var(--success, #50c864);
+}
+
+.vp-badge-pinned {
+    background: var(--accent-bg, rgba(224, 90, 0, 0.12));
+    color: var(--accent, #e05a00);
+    border: 1px solid var(--accent, #e05a00);
+}
+
+.vp-arrow {
+    color: var(--text-secondary, #666);
+    font-size: 14px;
+}
+
+/* ── Footer / browse-more link ──────────────────────────────────────────────── */
+
+.version-picker-more {
+    margin: 0;
+    padding: 10px 20px 14px;
+    font-size: 12px;
+    color: var(--text-secondary, #888);
+    border-top: 1px solid var(--border-color, #2a2a2a);
+}
+
+.version-picker-more a {
+    color: var(--accent, #e05a00);
+    text-decoration: underline;
+}
+
+/* ── Confirm step ───────────────────────────────────────────────────────────── */
+
+.version-picker-confirm {
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.version-picker-confirm p {
+    margin: 0;
+    font-size: 14px;
+    color: var(--text-primary, #e8e8e8);
+    line-height: 1.5;
+}
+
+.version-picker-confirm p strong {
+    color: var(--accent, #e05a00);
+}
+
+.vp-confirm-note {
+    font-size: 12px;
+    color: var(--text-secondary, #888) !important;
+}
+
+.vp-confirm-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+}
+
+.vp-btn-cancel {
+    background: none;
+    border: 1px solid var(--border-color, #444);
+    color: var(--text-secondary, #aaa);
+    padding: 7px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: border-color 0.15s, color 0.15s;
+}
+
+.vp-btn-cancel:hover {
+    border-color: var(--text-secondary, #888);
+    color: var(--text-primary, #e8e8e8);
+}
+
+.vp-btn-confirm {
+    background: var(--accent, #e05a00);
+    border: none;
+    color: #fff;
+    padding: 7px 18px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    transition: opacity 0.15s;
+}
+
+.vp-btn-confirm:hover:not(:disabled) {
+    opacity: 0.85;
+}
+
+.vp-btn-confirm:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}

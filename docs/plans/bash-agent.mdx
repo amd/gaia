@@ -1,0 +1,697 @@
+---
+title: Bash Coding Agent Plan
+description: Native C++ CLI agent specialized for bash/shell scripting with a Claude Code-style TUI, running locally on AMD hardware via Lemonade Server
+---
+
+# Bash Coding Agent (`gaia-bash`) - Implementation Plan
+
+<Info>
+**Status:** Implemented
+**Priority:** Medium
+**Target:** v0.22.0+
+</Info>
+
+---
+
+## Executive Summary
+
+A native binary CLI tool (`gaia-bash`) built on the GAIA C++ framework (`gaia_core`), providing a Claude Code-style TUI experience specialized for bash/shell scripting. It runs entirely locally on AMD hardware via Lemonade Server, targeting sub-second startup, streaming token output, and a reactive terminal interface with markdown rendering, syntax highlighting, and inline script execution.
+
+**The pitch:** Claude Code is excellent but cloud-only and language-agnostic. `gaia-bash` is local-first, offline-capable, AMD-accelerated, and domain-specialized — it knows bash idioms, ShellCheck rules, POSIX portability traps, and BATS testing patterns out of the box.
+
+---
+
+## The Problem
+
+GAIA's existing coding capabilities are Python-centric and web-centric:
+
+| Current Limitation | Impact |
+|---|---|
+| Python CodeAgent is the only code agent | No first-class support for shell/DevOps/sysadmin workflows |
+| CodeAgent runs via Python runtime | ~3s startup, heavy memory footprint, Python dependency chain |
+| Shell tools (`ShellToolsMixin`) are read-only whitelist | Cannot run arbitrary commands, no piping/redirection, no script execution |
+| No ShellCheck / BATS integration | No bash-specific linting or testing |
+| No native binary coding agent exists | C++ framework has example agents but no production CLI tool |
+| No Claude Code-style TUI in C++ | `CleanConsole` is basic ANSI print-to-stdout, not reactive/interactive |
+
+Meanwhile, the GAIA C++ framework (`cpp/`) already provides a production-grade agent runtime with LLM client, tool registry, MCP integration, security, and streaming — but no one has built a real CLI product on it yet.
+
+---
+
+## The Solution
+
+Build `gaia-bash` as the **first production native binary agent** on `gaia_core`, proving out the C++ framework while delivering a tool that DevOps engineers and sysadmins actually want.
+
+### Why Bash Specifically
+
+1. **Constrained domain** — shell scripting has clear idioms, a finite set of built-ins, and well-defined linting (ShellCheck). This makes it easier for smaller local models to excel compared to general-purpose coding.
+2. **Tool-heavy workflow** — bash work is inherently about running commands and inspecting output. The agent loop (think → tool → observe → think) maps directly to how developers actually work in a terminal.
+3. **Local-first is natural** — sysadmins running scripts on servers often can't send code to cloud APIs. A local agent with zero network dependency is a genuine differentiator.
+4. **Proves the C++ framework** — building a real product on `gaia_core` surfaces missing capabilities and validates the architecture before more agents follow.
+
+---
+
+## Recommended LLM
+
+### Primary: Qwen3-Coder-Next (GGUF)
+
+| Property | Value |
+|---|---|
+| Architecture | MoE — 80B total, 3B active per forward pass |
+| Context window | 256K tokens |
+| SWE-bench Verified | 58.7–70.6% (scaffolding-dependent) |
+| Hardware | Single 24GB GPU (RTX 4090 / AMD equivalent) |
+| Throughput | ~18–22 tok/s GPU, ~10 tok/s CPU-only (96GB RAM) |
+| Format | GGUF via llama.cpp (Lemonade backend) |
+
+**Why this model:**
+- Best overall local coding LLM in 2026 — trained on 800K real GitHub PR scenarios
+- Non-reasoning model: no thinking blocks, direct fast answers — ideal for a scripting assistant where latency matters
+- Ultra-sparse MoE: consumer-grade hardware delivers Sonnet-class coding quality
+- Evaluated on Terminal-Bench (shell scripting, DevOps, system-level programming)
+- Strong agentic tool-calling performance with recovery from execution failures
+
+### Tiered Hardware Options
+
+| Tier | Model | VRAM | Speed | Quality |
+|---|---|---|---|---|
+| High | Qwen3-Coder-Next Q4_K_XL | 24GB | ~20 tok/s | Excellent |
+| Medium | Qwen 2.5 Coder 32B | 24GB | ~25 tok/s | Very good |
+| Budget | Qwen 2.5 Coder 14B | 12GB | ~40 tok/s | Good for simple scripts |
+| Minimal | Qwen 2.5 Coder 7B | 8GB | ~60 tok/s | Autocomplete quality |
+
+<Note>
+**Model quality vs. tool reliability trade-off:** The C++ framework currently uses text-based tool calling (tools described in the system prompt, LLM returns JSON), not OpenAI-native function calling schemas. This means smaller models (7B, 14B) are more likely to hallucinate tool names or produce malformed JSON. The plan includes mitigations — tool argument validation in M1-P1 and optional native function calling in M1-P4 — but Qwen3-Coder-Next at 3B active params is the minimum for reliable multi-step tool orchestration.
+</Note>
+
+---
+
+## Goals
+
+- **Sub-second startup** — native binary, no runtime interpreter
+- **Offline-capable** — runs entirely on local hardware via Lemonade Server
+- **Bash-specialized** — system prompt, tools, and analysis tuned for shell scripting
+- **Claude Code-like TUI** — reactive terminal UI with markdown rendering, streaming tokens, split panes
+- **Safe by default** — destructive commands require explicit approval, path validation on all file ops
+- **Proves `gaia_core`** — first production CLI agent built on the C++ framework, surfacing and fixing framework gaps
+
+## Non-Goals
+
+- **Replacing the Python CodeAgent.** `gaia-code` continues to serve general-purpose coding (Python, TS, web). `gaia-bash` is a complementary domain agent.
+- **Supporting every shell.** M2-P1 targets `bash` and `sh`. PowerShell, zsh, fish are future extensions — not blockers.
+- **Building a general-purpose terminal emulator.** `gaia-bash` runs inside your existing terminal. It's a TUI application, not a terminal replacement.
+- **Remote execution (SSH).** Local-only in this plan. Remote execution via MCP server is a natural follow-up but out of scope.
+- **Embedding llama.cpp directly.** Inference goes through Lemonade Server's HTTP API. Direct `libllama` embedding adds complexity without clear benefit (Lemonade handles model lifecycle, GPU scheduling, quantization).
+- **Windows PowerShell specialization.** The agent runs on Windows (WSL/Git Bash) but the domain expertise is bash/POSIX, not PowerShell. A separate PowerShell agent would be a different project.
+
+---
+
+## Critical Framework Gaps
+
+The C++ framework exploration revealed five issues that must be addressed before or during implementation. These are not blockers — they're known work items.
+
+### Gap 1: Text-Based Tool Calling (No Native Function Calling)
+
+**Current state:** Tools are formatted as text in the system prompt (`==== AVAILABLE TOOLS ====`), and the agent parses LLM responses for `"tool"` / `"tool_args"` JSON fields with regex fallback. The OpenAI-compatible API request does NOT include a `"tools"` parameter.
+
+**Risk:** Higher tool-name hallucination with smaller models. No schema validation at the API level.
+
+**Mitigation:**
+1. **M1-P1:** Add JSON schema validation for tool arguments before execution
+2. **M1-P4 (optional):** Add native function calling via the OpenAI `"tools"` parameter in `LemonadeClient`, gated behind a capability check (Lemonade Server version / model support)
+
+### Gap 2: No File I/O Tools
+
+**Current state:** The C++ framework has no built-in `file_read`, `file_write`, or `file_edit` tools. The Python CodeAgent has `FileIOToolsMixin` but nothing equivalent in C++.
+
+**Resolution:** Implement as framework-level tools in M1-P1. The `ToolRegistry` mechanism is ready — only the tool callbacks need writing. Path validation already exists in `security.cpp`.
+
+### Gap 3: Basic TUI (No Reactive UI)
+
+**Current state:** `CleanConsole` outputs ANSI-colored text via `std::cout`. No cursor control, no screen regions, no interactive widgets. Progress indicators (`startProgress`/`stopProgress`) are no-ops.
+
+**Resolution:** Build `TuiConsole` on FTXUI in M1-P3. `CleanConsole` becomes the fallback for `--no-tui` / piped output modes.
+
+### Gap 4: No REPL Architecture
+
+**Current state:** Existing examples (`wifi_agent`, `health_agent`) use blocking `std::getline()` loops that call `processQuery()` once per input. No session continuity model beyond conversation history.
+
+**Resolution:** Build `ReplRunner` in M1-P2:
+- Two-thread architecture: input thread + agent thread
+- Maintains conversation history across queries (already supported by `Agent`)
+- Slash command framework with built-in commands + agent-registered extensions
+- Ctrl-C cancels current agent run without killing the process
+
+### Gap 5: No Session Persistence
+
+**Current state:** Conversation history is in-memory only. Process exits lose everything.
+
+**Resolution:** Build `SessionStore` in M1-P2. Serialize `conversationHistory_` to `~/.gaia/sessions/<id>.json` on exit, reload on startup with `--resume`.
+
+---
+
+## Architecture
+
+The system has two layers. The bottom layer is the `gaia_core` framework (Milestone 1) — reusable by any future C++ agent. The top layer is the `gaia-bash` agent (Milestone 2) — bash-domain-specific code that plugs into the framework.
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  gaia-bash binary (Milestone 2 — agent-specific)         │
+│                                                          │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │  BashAgent : Agent                                  │  │
+│  │    registerTools():                                │  │
+│  │      bash_execute, script_lint, script_test,       │  │
+│  │      env_inspect, man_lookup, bash_background      │  │
+│  │    getSystemPrompt():                              │  │
+│  │      Bash expert persona (POSIX, ShellCheck, BATS) │  │
+│  │    Slash commands:                                 │  │
+│  │      /run, /lint, /test, /review, /edit            │  │
+│  └────────────────────────────────────────────────────┘  │
+│                            │                              │
+├────────────────────────────┼──────────────────────────────┤
+│  gaia_core library (Milestone 1 — shared framework)      │
+│                            │                              │
+│  ┌──────────────┐  ┌──────┴───────┐  ┌────────────────┐ │
+│  │ TuiConsole   │  │  Agent loop  │  │ ReplRunner     │ │
+│  │ (FTXUI)      │  │  + tools     │  │ (2-thread,     │ │
+│  │ Markdown     │  │  + security  │  │  slash cmds,   │ │
+│  │ Streaming    │  │  + MCP       │  │  cancel)       │ │
+│  └──────────────┘  └──────────────┘  └────────────────┘ │
+│  ┌──────────────┐  ┌──────────────┐  ┌────────────────┐ │
+│  │ FileIOTools  │  │ ProcessRunner│  │ SessionStore   │ │
+│  │ GitTools     │  │ (cross-plat) │  │ (JSON persist) │ │
+│  └──────────────┘  └──────────────┘  └────────────────┘ │
+│                            │                              │
+│              ┌─────────────┴─────────────┐               │
+│              │    LemonadeClient          │               │
+│              │    (HTTP, streaming SSE)    │               │
+│              └─────────────┬─────────────┘               │
+└────────────────────────────┼──────────────────────────────┘
+                             │
+               ┌─────────────┴─────────────┐
+               │    Lemonade Server         │
+               │    Qwen3-Coder-Next GGUF   │
+               │    (AMD NPU / GPU / CPU)   │
+               └────────────────────────────┘
+```
+
+### Build Integration
+
+Framework additions in `cpp/CMakeLists.txt` (Milestone 1):
+
+```cmake
+# FTXUI — optional TUI dependency, gated behind GAIA_BUILD_TUI
+option(GAIA_BUILD_TUI "Build FTXUI-based TUI console" ON)
+if(GAIA_BUILD_TUI)
+    FetchContent_Declare(ftxui
+        GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI
+        GIT_TAG v6.1.9
+    )
+    FetchContent_MakeAvailable(ftxui)
+endif()
+
+# New source files added to gaia_core
+add_library(gaia_core
+    # ... existing sources ...
+    src/process.cpp
+    src/file_tools.cpp
+    src/git_tools.cpp
+    src/repl.cpp
+    src/session.cpp
+)
+if(GAIA_BUILD_TUI)
+    target_sources(gaia_core PRIVATE
+        src/tui_console.cpp
+        src/tui_markdown.cpp
+    )
+    target_link_libraries(gaia_core PRIVATE
+        ftxui::component ftxui::dom ftxui::screen
+    )
+endif()
+```
+
+Agent binary target (Milestone 2):
+
+```cmake
+add_executable(gaia-bash
+    agents/bash/main.cpp
+    agents/bash/bash_agent.cpp
+    agents/bash/bash_tools.cpp
+)
+target_link_libraries(gaia-bash PRIVATE gaia::gaia_core)
+```
+
+---
+
+## Tool Inventory
+
+### Framework Tools (M1-P1 — shared by all agents)
+
+| Tool | Description | Security Policy |
+|---|---|---|
+| `file_read` | Read file contents with optional line range (`--start`, `--end`) | ALLOW |
+| `file_write` | Write/create file (creates parent dirs). Shows diff preview for existing files. | CONFIRM |
+| `file_edit` | Surgical old_string → new_string replacement (Claude Code-style Edit tool) | CONFIRM |
+| `file_search` | Glob + grep across directory tree. Returns paths + context lines. | ALLOW |
+| `git_status` | Read-only git operations: status, diff, log, branch, show | ALLOW |
+
+### Bash Agent Core Tools (M2-P1)
+
+| Tool | Description | Security Policy |
+|---|---|---|
+| `bash_execute` | Run bash/sh command with configurable timeout, capture stdout + stderr + exit code. Supports pipes and redirection. | CONFIRM |
+| `env_inspect` | Shell version, PATH entries, OS info, key env vars | ALLOW |
+
+### Bash Agent Developer Tools (M2-P2)
+
+| Tool | Description | Security Policy |
+|---|---|---|
+| `script_lint` | Run ShellCheck, return structured diagnostics (severity + line + SC code + fix suggestion) | ALLOW |
+| `script_test` | Execute script in temp sandbox, capture results, cleanup | CONFIRM |
+| `man_lookup` | Query man pages or `--help` for command documentation | ALLOW |
+| `git_commit` | Stage + commit with LLM-generated message (shows preview first) | CONFIRM |
+
+### Bash Agent Advanced Tools (M2-P3)
+
+| Tool | Description | Security Policy |
+|---|---|---|
+| `bash_background` | Run long-running command in background, return PID, poll for output | CONFIRM |
+| `process_list` | List running processes with filtering | ALLOW |
+| `cron_inspect` | Read crontab entries, systemd timers | ALLOW |
+| `network_check` | ping, curl, dig diagnostics | CONFIRM |
+| `clipboard_copy` | Copy text to system clipboard | ALLOW |
+
+---
+
+## TUI Design
+
+### Component Stack (M1-P3 — framework-level)
+
+The TUI is a framework component (`TuiConsole`) that any agent gets for free. Bash-specific customizations (syntax highlighting for shell keywords, bash slash commands) are registered by the agent at startup.
+
+| Layer | Library | Milestone | Purpose |
+|---|---|---|---|
+| Layout & widgets | [FTXUI v6.1.9](https://github.com/ArthurSonzogni/FTXUI) | M1-P3 | Reactive fullscreen TUI — input, scrollable output, status bar, split panes |
+| Markdown rendering | Built-in C++17 parser | M1-P3 | Render LLM responses with headings, bold, code blocks, lists. [MarkdownFTXUI](https://github.com/zvasilev/MarkdownFTXUI) (C++20) as future upgrade. |
+| Syntax highlighting | Agent-registered color map | M2-P1 | Bash agent registers bash keywords (`if/then/fi`, pipes, redirects) for code block coloring |
+| Token streaming | Existing `sse_parser.cpp` + FTXUI refresh | M1-P3 | Feed SSE tokens into text element, trigger incremental re-render |
+
+### Modes (M1-P2 — framework-level)
+
+These modes are provided by `ReplRunner` and work for any agent, not just `gaia-bash`:
+
+| Mode | Behavior |
+|---|---|
+| `<agent>` (default) | Interactive FTXUI TUI with full split-pane layout |
+| `<agent> "query"` | Single-query mode: run query, print result, exit |
+| `<agent> --print` | Pipe-friendly: no TUI, streaming plain text to stdout |
+| `<agent> --resume <id>` | Resume a previous session from `~/.gaia/sessions/` |
+
+### Slash Commands
+
+**Framework built-ins** (M1-P2 — available to all agents):
+
+| Command | Action |
+|---|---|
+| `/clear` | Clear conversation history |
+| `/model [name]` | Switch LLM model |
+| `/help` | Show available commands |
+| `/history` | Browse session history |
+
+**Bash-specific** (M2-P2 — registered by `BashAgent`):
+
+| Command | Action |
+|---|---|
+| `/run <cmd>` | Execute bash command directly (bypass LLM) |
+| `/edit <file>` | Open file in `$EDITOR` |
+| `/review [file]` | Multi-pass code review of a script |
+| `/test [file]` | Generate and run BATS tests |
+| `/lint [file]` | Run ShellCheck |
+
+---
+
+## Intelligence Layer
+
+### Bash-Specialized System Prompt
+
+The system prompt encodes bash domain expertise:
+
+- Default to POSIX-compatible scripts; use bashisms only when shebang is `#!/bin/bash`
+- Always include `set -euo pipefail` in non-trivial scripts
+- Quote all variable expansions unless word splitting is intentional
+- Use `"$@"` not `$@`, `"${var}"` not `$var`
+- Prefer built-in shell features over external tools when equivalent
+- For destructive operations (`rm -rf`, `dd`, `mkfs`), always confirm with user
+- Provide ShellCheck codes (SC2086, SC2046, etc.) when explaining fixes
+- Use BATS format for generated tests
+- Include man page references for non-obvious flags
+
+### Code Review Engine (M2-P3)
+
+Multi-pass analysis pipeline:
+
+1. **Correctness** — logic errors, edge cases, exit code handling
+2. **Security** — injection risks, unquoted expansions, `eval` usage, temp file races
+3. **Portability** — bashisms in `#!/bin/sh` scripts, GNU-specific flags
+4. **Performance** — unnecessary subshells, useless `cat`, fork-heavy patterns
+5. **Style** — ShellCheck compliance, naming conventions, comments
+
+### Test Generation (M2-P3)
+
+Given a script, generate [BATS](https://github.com/bats-core/bats-core) test cases covering:
+- Happy path with expected output
+- Error cases (missing args, bad input, missing dependencies)
+- Edge cases (empty input, filenames with spaces/newlines)
+- Exit code verification
+
+---
+
+## Phased Delivery
+
+Work is split into two milestones. **Milestone 1** upgrades the shared `gaia_core` C++ library — every capability added here benefits all future C++ agents (CUA, Docker, PowerShell, etc.), not just `gaia-bash`. **Milestone 2** builds the bash-specific agent on top of the upgraded framework.
+
+| Phase | Scope | Location | Effort |
+|---|---|---|---|
+| **M1-P1** | ProcessRunner, FileIOTools, GitTools, tool arg validation | `cpp/include/gaia/`, `cpp/src/` | 2–3 weeks |
+| **M1-P2** | ReplRunner, slash command framework, SessionStore, agent cancel | `cpp/include/gaia/`, `cpp/src/` | 2–3 weeks |
+| **M1-P3** | TuiConsole (FTXUI), markdown rendering, streaming, `--no-tui` | `cpp/include/gaia/`, `cpp/src/` | 3–4 weeks |
+| **M1-P4** | Native function calling (optional) | `cpp/include/gaia/`, `cpp/src/` | 2–3 weeks |
+| **M2-P1** | BashAgent, `bash_execute`, system prompt, CLI entry point | `cpp/agents/bash/` | 2–3 weeks |
+| **M2-P2** | ShellCheck, BATS, man_lookup, bash slash commands, clipboard | `cpp/agents/bash/` | 2–3 weeks |
+| **M2-P3** | Code review engine, test generation, POSIX checker, advanced tools | `cpp/agents/bash/` | 3–4 weeks |
+| **M2-P4** | Static linking, docs, CI build matrix, Python bridge | `cpp/agents/bash/`, `docs/` | 2–3 weeks |
+| **M2-P5** | REST API server, MCP server, `--serve` / `--mcp` flags | `cpp/agents/bash/` | 3–4 weeks |
+| **M2-P6** | Eval scenarios, eval adapter, ground truth, CI integration | `cpp/agents/bash/`, `src/gaia/eval/` | 2–3 weeks |
+
+**Total estimated effort:** M1: 9–13 weeks, M2: 14–20 weeks. M1-P4 is optional and can be parallelized with M2. M2-P1 can start as soon as M1-P1 through M1-P3 are complete. M2-P5 can be parallelized with M2-P2/P3.
+
+---
+
+### Milestone 1: C++ Framework Upgrades (`gaia_core`)
+
+Everything in this milestone ships as library code in `cpp/include/gaia/` and `cpp/src/`. No bash-specific logic. The validation target is: an existing example agent (e.g. `wifi_agent`) can be refactored to use these new primitives and gain interactive TUI, file I/O, and session persistence for free.
+
+#### M1-P1: Process Runner + File I/O Tools
+
+**Scope:** Extract the ad-hoc `runShell()` pattern into a proper library utility and add reusable file I/O tool callbacks.
+
+**Deliverables:**
+
+| Component | Files | Description |
+|---|---|---|
+| `ProcessRunner` | `include/gaia/process.h`, `src/process.cpp` | `run(cmd, timeout, cwd, env)` → `{stdout, stderr, exitCode}`. Cross-platform (popen on POSIX, `_popen`/CreateProcess on Windows). Configurable timeout with SIGKILL/TerminateProcess fallback. Output size cap (default 64KB). |
+| `FileIOTools` | `include/gaia/file_tools.h`, `src/file_tools.cpp` | Pre-built tool callbacks: `file_read(path, start?, end?)`, `file_write(path, content)`, `file_edit(path, old_string, new_string)`, `file_search(pattern, path?, content_pattern?)`. All use `validatePath()` from `security.cpp`. Register via `ToolRegistry::registerFileTools()`. |
+| `GitTools` | `include/gaia/git_tools.h`, `src/git_tools.cpp` | Read-only git tool callbacks: `git_status()`, `git_diff(path?)`, `git_log(n?)`, `git_show(ref)`. Delegates to `ProcessRunner`. Register via `ToolRegistry::registerGitTools()`. |
+| Tool argument validation | `tool_registry.h/cpp` | Validate JSON args against declared `ToolParameter` types (string, int, bool, required/optional) before invoking callback. Reject malformed args with actionable error instead of passing garbage to the tool. |
+| Unit tests | `tests/test_process.cpp`, `tests/test_file_tools.cpp`, `tests/test_git_tools.cpp` | Mock filesystem and process execution. |
+
+**Estimated effort:** 2–3 weeks
+
+#### M1-P2: REPL Runner + Session Persistence
+
+**Scope:** A reusable interactive loop class that any agent can plug into, replacing the blocking `std::getline()` pattern in examples.
+
+**Deliverables:**
+
+| Component | Files | Description |
+|---|---|---|
+| `ReplRunner` | `include/gaia/repl.h`, `src/repl.cpp` | Two-thread architecture: input thread (reads user input) + agent thread (runs `processQuery()`). Input accepted while agent is thinking. Ctrl-C cancels current agent run (sets a `cancel_` flag checked in the agent loop), doesn't kill the process. |
+| Slash command framework | Built into `ReplRunner` | Register slash commands via `repl.addCommand("/name", callback)`. Built-in commands: `/clear` (reset history), `/help` (list commands), `/model <name>` (switch model), `/history` (show session). Agent-specific commands (e.g. `/lint`) registered by the agent, not the framework. |
+| `SessionStore` | `include/gaia/session.h`, `src/session.cpp` | Serialize/deserialize `conversationHistory_` to `~/.gaia/sessions/<id>.json`. `save(id, history)`, `load(id) → history`, `list() → [{id, timestamp, preview}]`. Supports `--resume <id>` CLI pattern. |
+| Agent cancel support | `agent.h/cpp` | Add `requestCancel()` method and `cancelled_` atomic flag. The agent loop checks this flag between steps and exits early with a partial result. |
+| Unit tests | `tests/test_repl.cpp`, `tests/test_session.cpp` | Test command dispatch, session round-trip serialization, cancel semantics. |
+
+**Estimated effort:** 2–3 weeks
+
+#### M1-P3: FTXUI Console + Markdown Rendering
+
+**Scope:** A reactive `OutputHandler` subclass built on FTXUI that any agent can use as a drop-in replacement for `CleanConsole`.
+
+**Deliverables:**
+
+| Component | Files | Description |
+|---|---|---|
+| FTXUI dependency | `CMakeLists.txt` | FetchContent for FTXUI v6.1.9. Optional — `CleanConsole` remains the default when FTXUI is not available (piped output, `--no-tui`). Build gate: `option(GAIA_BUILD_TUI "Build FTXUI-based TUI console" ON)`. |
+| `TuiConsole` : `OutputHandler` | `include/gaia/tui_console.h`, `src/tui_console.cpp` | FTXUI fullscreen app implementing the `OutputHandler` interface. Layout: scrollable chat history (top), status bar (model name, token count, step N/M), input area (bottom). Streaming tokens update the chat panel in real-time. Tool approval shows a modal dialog ([Y]es / [N]o / [A]lways). |
+| Markdown rendering | `src/tui_markdown.cpp` | Render LLM markdown responses inside FTXUI elements: headings (bold + color), `**bold**`, `` `code` ``, fenced code blocks (bordered, syntax-colored for bash keywords), bullet lists, blockquotes. Built in C++17 — lightweight parser, no cmark dependency. MarkdownFTXUI (C++20) is a future upgrade path, not an M1 dependency. |
+| Input component | Integrated in `TuiConsole` | Multi-line input with Enter to submit (Shift+Enter or Ctrl+Enter for newline). Up/down arrow for input history. Paste support. |
+| Streaming integration | `tui_console.cpp` | `printStreamToken()` appends to the current chat bubble and triggers FTXUI re-render. `printStreamEnd()` finalizes the bubble. |
+| `--no-tui` fallback | `repl.h` | ReplRunner auto-detects piped stdout and falls back to `CleanConsole`. Explicit `--no-tui` flag also forces fallback. |
+| Unit tests | `tests/test_tui_console.cpp` | Test rendering logic (markdown parser), not FTXUI screen output. |
+
+**Estimated effort:** 3–4 weeks
+
+#### M1-P4: Native Function Calling (Optional)
+
+**Scope:** Send tools as OpenAI-compatible `"tools"` array in the API request instead of embedding them as text in the system prompt. Gated behind a capability check.
+
+**Deliverables:**
+
+| Component | Files | Description |
+|---|---|---|
+| Tool schema export | `tool_registry.h/cpp` | `formatAsOpenAITools() → json` — export registered tools as an OpenAI `tools` array with JSON Schema parameter definitions. |
+| LemonadeClient upgrade | `lemonade_client.h/cpp` | Accept optional `tools` JSON in `chatCompletions()` and `chatCompletionsStreaming()`. Include in request body when non-empty. |
+| Response parsing | `json_utils.h/cpp` | Parse OpenAI-style `tool_calls` array in assistant messages (alongside existing text-based fallback). |
+| Agent integration | `agent.cpp` | Config flag `useNativeFunctionCalling` (default: false). When enabled, uses schema export + native parsing. Falls back to text-based on error. |
+| Capability detection | `lemonade_client.cpp` | Probe Lemonade Server `/health` or `/v1/models` for function calling support. Auto-enable when available. |
+| Integration test | `tests/integration/test_function_calling.cpp` | Test with real Lemonade Server + Qwen model. |
+
+<Note>
+This phase is **optional** — the text-based approach works and is what ships first. Native function calling is a reliability upgrade that reduces tool hallucinations, especially with smaller models (7B–14B). It can be deferred or parallelized with Milestone 2 work.
+</Note>
+
+**Estimated effort:** 2–3 weeks
+
+---
+
+### Milestone 2: Bash Coding Agent (`gaia-bash`)
+
+Everything in this milestone is bash-domain-specific code. It lives in `cpp/agents/bash/` (or a similar directory), links against `gaia_core`, and produces a standalone `gaia-bash` binary. Framework components from Milestone 1 are consumed, not modified.
+
+#### M2-P1: Core Agent + Basic TUI
+
+**Scope:** Functional bash agent with domain tools, FTXUI shell, streaming — the "hello world" that proves M1 works end-to-end.
+
+**Deliverables:**
+
+| Component | Description |
+|---|---|
+| `BashAgent : Agent` | Subclass with `registerTools()` and `getSystemPrompt()`. Registers framework tools (file I/O, git) plus bash-specific tools. |
+| Bash system prompt | Expert persona: POSIX-first, `set -euo pipefail`, quoting rules, ShellCheck awareness. |
+| `bash_execute` tool | Wraps `ProcessRunner` with bash-specific concerns: shell detection (bash/sh/WSL), shebang injection, output truncation heuristics. CONFIRM policy. |
+| `env_inspect` tool | Shell version, PATH, OS info, installed tools detection (`jq`, `shellcheck`, `bats`). ALLOW policy. |
+| CLI entry point (`main.cpp`) | Argument parsing: `gaia-bash "query"` (single-shot), `gaia-bash` (interactive), `gaia-bash --print` (piped), `gaia-bash --resume <id>`. |
+| REPL integration | Plugs `BashAgent` into `ReplRunner` with `TuiConsole`. |
+| Cross-platform shell detection | Detect available shell (bash, sh, WSL, Git Bash) and configure `bash_execute` accordingly. |
+| CMake target | `add_executable(gaia-bash ...)` linking `gaia_core`, FTXUI. |
+| Unit + integration tests | Mock-LLM tests for all bash tools. Integration test with real Lemonade. |
+
+**Estimated effort:** 2–3 weeks
+
+#### M2-P2: Developer Tools + Slash Commands
+
+**Scope:** ShellCheck, BATS, man pages, and the slash command UX that makes bash work feel native.
+
+**Deliverables:**
+
+| Component | Description |
+|---|---|
+| `script_lint` tool | Run ShellCheck with `-f json1`, parse structured output → severity + line + SC code + fix suggestion. Graceful degradation if ShellCheck not installed. ALLOW policy. |
+| `script_test` tool | Create temp sandbox dir, write script + generated BATS test, execute `bats`, capture TAP output, cleanup. CONFIRM policy. |
+| `man_lookup` tool | Run `man <cmd>` or `<cmd> --help`, capture and truncate output. ALLOW policy. |
+| `git_commit` tool | Stage files + LLM-generated commit message with preview. CONFIRM policy. |
+| Bash slash commands | `/run <cmd>` (direct execution), `/lint [file]`, `/test [file]`, `/review [file]`, `/edit <file>` (open in `$EDITOR`). Registered via `ReplRunner::addCommand()`. |
+| Clipboard integration | `clipboard_copy` tool — xclip/pbcopy/wl-copy/win32 `SetClipboardData`. ALLOW policy. |
+
+**Estimated effort:** 2–3 weeks
+
+#### M2-P3: Intelligence Layer
+
+**Scope:** The domain expertise that makes `gaia-bash` more than a wrapper around a generic LLM.
+
+**Deliverables:**
+
+| Component | Description |
+|---|---|
+| Code review engine | Multi-pass LLM analysis: correctness → security → portability → performance → style. Triggered by `/review` or `review this script`. |
+| POSIX compliance checker | Flag bashisms (`[[ ]]`, `<<<`, `${var,,}`, arrays) when shebang is `#!/bin/sh`. Suggest portable alternatives. |
+| BATS test generation | Given a script, generate test cases covering happy path, error cases, edge cases, exit codes. |
+| Dependency detection | Scan `#!/bin/bash` scripts for external tool usage (`jq`, `yq`, `curl`, `awk`, `sed`, `docker`, `kubectl`), check which are on PATH, warn on missing. |
+| `bash_background` tool | Run command in background, return PID, `poll(pid)` for output, `kill(pid)` to stop. CONFIRM policy. |
+| `process_list` tool | `ps aux` / `tasklist` with grep filtering. ALLOW policy. |
+| `cron_inspect` tool | Read `crontab -l`, parse systemd timers. ALLOW policy. |
+| `network_check` tool | `ping`, `curl -I`, `dig` with structured output. CONFIRM policy. |
+| Snippet templates | Built-in prompt templates for common patterns: argument parsing (`getopts`), error handling (`trap`), logging, parallel execution (`xargs -P`, GNU parallel). |
+| Auto-mode | Classify tools as safe (read-only → auto-approve) vs. dangerous (writes, network → require confirmation). Config-driven override. |
+
+**Estimated effort:** 3–4 weeks
+
+#### M2-P4: Polish + Distribution
+
+**Scope:** Production readiness, packaging, docs, CI.
+
+**Deliverables:**
+
+| Component | Description |
+|---|---|
+| Static linking | Single-binary distribution — no shared library dependencies beyond libc/kernel32. |
+| `gaia init` integration | Model download for Qwen3-Coder-Next via Lemonade API from C++. First-run setup flow. |
+| Performance benchmarks | Startup latency (&lt;100ms target), token throughput, memory footprint. Tracked in CI. |
+| Integration tests | End-to-end tests against real Lemonade Server in CI. |
+| Documentation | `docs/guides/bash.mdx` — quickstart, tool reference, examples. Update `docs/docs.json`. |
+| CI/CD build matrix | Windows MSVC, Linux GCC/Clang, macOS AppleClang. Artifact upload to GitHub Releases. |
+| Python bridge | `gaia bash` subcommand in `cli.py` that delegates to the native binary if found on PATH. |
+
+**Estimated effort:** 2–3 weeks
+
+#### M2-P5: API Server + MCP Server (Third-Party Integration)
+
+**Scope:** Expose the bash agent via an HTTP REST API and an MCP server so external tools (Claude Code, OpenCode, custom integrations) can interact with it programmatically.
+
+**Deliverables:**
+
+| Component | Description |
+|---|---|
+| **REST API server** | Built-in HTTP server (cpp-httplib, already a dependency) exposing OpenAI-compatible `/v1/chat/completions` endpoint. Runs on configurable port (default 8200). Supports streaming via SSE. Accepts tool calls in request body. |
+| `/v1/chat/completions` | Main endpoint: accepts messages array, routes through BashAgent, returns structured response with tool call results. Streaming mode sends token-by-token SSE events. |
+| `/v1/tools` | List all registered bash agent tools with their schemas (name, description, parameters). Read-only. |
+| `/v1/tools/{name}` | Execute a specific tool directly (bypass LLM). Useful for external orchestrators that want to call `bash_execute` or `file_read` without going through the agent loop. |
+| `/health` | Health check endpoint returning agent status, model info, and tool count. |
+| `/sessions` | CRUD for sessions: `GET /sessions` (list), `POST /sessions` (create), `GET /sessions/{id}` (load), `DELETE /sessions/{id}` (remove). |
+| `--serve` CLI flag | Start the API server: `gaia-bash --serve [--port 8200]`. Runs instead of the interactive TUI. |
+| **MCP server (stdio)** | Expose the bash agent as an MCP tool server over stdio transport. External agents (e.g. Claude Code, OpenCode) can connect via `{"command": "gaia-bash", "args": ["--mcp"]}` in their MCP config. |
+| MCP `tools/list` | Returns all bash agent tools as MCP tool definitions (name, description, inputSchema). |
+| MCP `tools/call` | Executes a tool call, routes through BashAgent for LLM-backed tools or directly for utility tools. Returns structured result. |
+| MCP `prompts/list` | Exposes built-in prompt templates (e.g. "review-script", "generate-bats-test", "explain-command") as MCP prompts. |
+| `--mcp` CLI flag | Start as an MCP stdio server: `gaia-bash --mcp`. Reads JSON-RPC from stdin, writes to stdout. Compatible with Claude Code MCP config. |
+| Integration tests | Test API endpoints with curl/httplib. Test MCP protocol with a mock client. |
+
+**Architecture:**
+
+```
+External tool (Claude Code, OpenCode, curl)
+         │
+         ├── HTTP REST API (:8200)
+         │   └── /v1/chat/completions
+         │   └── /v1/tools/{name}
+         │   └── /health
+         │
+         └── MCP stdio transport
+             └── tools/list, tools/call
+             └── prompts/list
+         │
+         ▼
+    BashAgent : Agent
+    (same agent instance, same tools)
+```
+
+**Usage examples:**
+
+```bash
+# Start as API server
+gaia-bash --serve --port 8200
+
+# Query via curl
+curl http://localhost:8200/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"write a backup script"}]}'
+
+# Use as MCP server in Claude Code (~/.claude/settings.json)
+{
+  "mcpServers": {
+    "gaia-bash": {
+      "command": "gaia-bash",
+      "args": ["--mcp"]
+    }
+  }
+}
+
+# Direct tool call via API
+curl http://localhost:8200/v1/tools/bash_execute \
+  -H "Content-Type: application/json" \
+  -d '{"command":"ls -la","timeoutMs":5000}'
+```
+
+**Estimated effort:** 3–4 weeks
+
+#### M2-P6: Eval Integration
+
+**Scope:** Extend the GAIA evaluation framework to validate the bash agent against bash-specific scenarios.
+
+**Deliverables:**
+
+| Component | Description |
+|---|---|
+| Bash eval scenarios | 20+ test scenarios covering: script writing, script review, file operations, ShellCheck compliance, BATS test generation, error debugging, POSIX portability. |
+| Eval adapter | Connect `gaia eval agent` to the bash agent's REST API (`--serve` mode). The eval runner sends scenarios as chat messages and judges responses. |
+| Ground truth | Expected outputs / acceptance criteria for each scenario. Leverages existing `gaia eval` judge LLM (Claude) for quality assessment. |
+| Benchmark suite | Measure: tool call accuracy, script correctness (run generated scripts, check exit code), ShellCheck pass rate on generated code, POSIX compliance rate. |
+| CI integration | Run bash eval scenarios in CI on each PR touching `cpp/agents/bash/`. Report scorecard in PR comment. |
+
+**Estimated effort:** 2–3 weeks
+
+**Estimated effort:** 2–3 weeks
+
+---
+
+## Risk Register
+
+| Risk | Likelihood | Impact | Affects | Mitigation |
+|---|---|---|---|---|
+| Qwen3-Coder-Next GGUF not available for Lemonade/AMD NPU | Medium | High | M2 | Qwen 2.5 Coder 32B as fallback — already GGUF-available, well-tested |
+| Text-based tool calling unreliable with smaller models | Medium | Medium | M1-P1, M1-P4 | JSON schema validation (M1-P1), optional native function calling (M1-P4), model minimum enforcement (3B+ active params) |
+| FTXUI doesn't handle all terminal emulators well | Low | Medium | M1-P3 | `--print` / `--no-tui` mode as universal fallback; FTXUI has broad terminal support; `CleanConsole` always available |
+| M1 scope creep delays M2 | Medium | Medium | Both | M1-P4 (native function calling) is explicitly optional — M2 can start after M1-P1 through M1-P3. Validate M1 deliverables by refactoring `wifi_agent` before starting M2. |
+| Cross-platform bash execution (Windows) | Medium | Medium | M2-P1 | WSL detection + Git Bash fallback; document minimum requirements |
+| ShellCheck / BATS not installed on target system | Low | Low | M2-P2 | Graceful degradation — tools report "not found, install with..." and suggest package manager commands |
+
+---
+
+## Competitive Positioning
+
+| Feature | gaia-bash | Claude Code | OpenCode | Aider |
+|---|---|---|---|---|
+| Runtime | Native C++ | Node.js/TS | Go | Python |
+| Startup | ~50ms | ~2s | ~500ms | ~3s |
+| LLM | Local (AMD-optimized) | Cloud (Anthropic) | Multi-provider | Multi-provider |
+| Privacy | 100% local | Cloud | Configurable | Configurable |
+| Bash specialization | Domain expert | General purpose | General purpose | General purpose |
+| ShellCheck integration | Built-in | Via hooks | No | No |
+| BATS test generation | Built-in | Manual | No | No |
+| TUI framework | FTXUI (reactive C++) | Ink (React/JS) | Bubble Tea (Go) | None |
+| AMD NPU acceleration | Via Lemonade | No | No | No |
+| Offline capable | Yes | No | With local models | With local models |
+| Single binary | Yes | Needs Node.js | Yes | Needs Python |
+
+---
+
+## Open Questions
+
+1. **Should `gaia-bash` be a standalone binary or a `gaia bash` subcommand?** Standalone (`gaia-bash`) is simpler to distribute and doesn't require Python. Subcommand (`gaia bash`) is more discoverable. Current plan (M2-P4) does both — Python bridge subcommand delegates to the native binary if found on PATH.
+
+2. **Model auto-download.** Should `gaia-bash` auto-download Qwen3-Coder-Next on first run (like `gaia init`), or require explicit setup? Auto-download is better UX but needs the Lemonade model download API from C++. Deferred to M2-P4.
+
+3. **MCP tool passthrough.** Should `gaia-bash` support connecting to MCP servers for extensibility? This would allow users to add custom tools (e.g. a Docker MCP server, a Kubernetes MCP server) without recompiling. Low effort since `MCPClient` already exists in `gaia_core` — question is whether to enable it in M2-P1 or defer.
+
+4. **M1 validation strategy.** The plan proposes refactoring `wifi_agent` to use M1 primitives as a validation gate before starting M2. Is that sufficient, or should we build a minimal "demo agent" (no domain tools, just REPL + TUI + file I/O) as the M1 acceptance test?
+
+5. **Lemonade Server function calling support.** Native function calling (M1-P4) depends on Lemonade Server accepting the OpenAI `"tools"` parameter. Current Lemonade docs don't confirm this explicitly. Needs verification before M1-P4 work begins — if unsupported, M1-P4 becomes a Lemonade Server feature request rather than a `gaia_core` task.
+
+---
+
+## References
+
+- [Best LLMs for Coding 2026 — WhatLLM](https://whatllm.org/best-llm-for-coding)
+- [Qwen3-Coder-Next Complete Guide — DEV Community](https://dev.to/sienna/qwen3-coder-next-the-complete-2026-guide-to-running-powerful-ai-coding-agents-locally-1k95)
+- [Qwen3-Coder-Next — HuggingFace](https://huggingface.co/Qwen/Qwen3-Coder-Next)
+- [Qwen3-Coder-Next Real-World Tests — XDA](https://www.xda-developers.com/tested-qwen3-coder-next-four-local-ai-coding-models-gap-embarassing/)
+- [Qwen3-Coder-Next Ultra-Sparse MoE — VentureBeat](https://venturebeat.com/technology/qwen3-coder-next-offers-vibe-coders-a-powerful-open-source-ultra-sparse-model-with-10x-higher-throughput-for-repo-tasks)
+- [FTXUI — GitHub](https://github.com/ArthurSonzogni/FTXUI)
+- [MarkdownFTXUI — GitHub](https://github.com/zvasilev/MarkdownFTXUI)
+- [llama.cpp Function Calling — GitHub](https://github.com/ggml-org/llama.cpp/blob/master/docs/function-calling.md)
+- [OpenCode TUI — opencode.ai](https://opencode.ai/docs/tui/)
+- [Claude Code Overview — Anthropic](https://code.claude.com/docs/en/overview)
+- [Local Autonomous Agent Stack — SitePoint](https://www.sitepoint.com/the-complete-stack-for-local-autonomous-agents--from-ggml-to-orchestration/)
+- [Best Local LLMs for Coding — Overchat](https://overchat.ai/ai-hub/best-local-llm-for-coding)
+- [Best Local LLMs 2026 — ToolHalla](https://toolhalla.ai/blog/best-local-llms-for-coding-2026)

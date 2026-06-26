@@ -254,20 +254,32 @@ def _publish_r2(wheel: Path, manifest: Path, hub_url: Optional[str]) -> TargetRe
 
     url = f"{_hub_base_url(hub_url)}/publish"
     manifest_text = manifest.read_text(encoding="utf-8")
+    files = {
+        "manifest": ("gaia-agent.yaml", manifest_text, "text/yaml"),
+    }
+    # Workers that predate these fields ignore unknown multipart parts. README
+    # and CHANGELOG are read from beside the manifest and become the catalog
+    # entry's `readme` / `changelog` (rendered on the hub agent page).
+    for doc, field in (("README.md", "readme"), ("CHANGELOG.md", "changelog")):
+        path = manifest.parent / doc
+        if path.exists():
+            files[field] = (doc, path.read_text(encoding="utf-8"), "text/markdown")
+        else:
+            # Not fatal (the field defaults to "" in the catalog), but the hub
+            # page renders it — log so the omission isn't silent.
+            log.info(
+                "publisher: no %s next to the manifest; hub page %s will be empty",
+                doc,
+                field,
+            )
     log.debug("publisher: POST %s (%s)", url, wheel.name)
     try:
         with wheel.open("rb") as fh:
+            files["artifact"] = (wheel.name, fh, "application/octet-stream")
             resp = requests.post(
                 url,
                 headers={"Authorization": f"Bearer {token}"},
-                files={
-                    "manifest": ("gaia-agent.yaml", manifest_text, "text/yaml"),
-                    "artifact": (
-                        wheel.name,
-                        fh,
-                        "application/octet-stream",
-                    ),
-                },
+                files=files,
                 timeout=_PUBLISH_TIMEOUT,
             )
     except requests.RequestException as exc:

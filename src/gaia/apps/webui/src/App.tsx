@@ -20,7 +20,9 @@ import { useChatStore } from './stores/chatStore';
 import { useNotificationStore } from './stores/notificationStore';
 import * as api from './services/api';
 import { log, logBanner } from './utils/logger';
-import { getSessionHash, findSessionByHash } from './utils/format';
+import { getSessionHash } from './utils/format';
+import { resolveUrlNavTarget } from './utils/sessionNav';
+import { getApiBase } from './utils/apiBase';
 
 /** Wrapper that delays unmount to allow CSS exit animations to play. */
 function AnimatedPresence({ show, children, duration = 250 }: {
@@ -80,6 +82,7 @@ function App() {
         setSystemStatus,
         setBackendConnected,
         setAgents,
+        setRunningSessions,
     } = useChatStore();
     const showNotificationPanel = useNotificationStore((s) => s.showPanel);
     const setShowNotificationPanel = useNotificationStore((s) => s.setShowPanel);
@@ -270,34 +273,100 @@ function App() {
         };
     }, [setSessions, addSession, removeSession, updateSessionInList, setBackendConnected]);
 
-    // Support URL-based session navigation (?session=<id> or #<hash>)
+    // Poll which sessions have a running turn so the sidebar can show a
+    // "still running" spinner on backgrounded runs. Backend-truth
+    // (/api/chat/active), independent of any open SSE stream (#1580).
+    const activeRunsPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
     useEffect(() => {
-        if (currentSessionId) return; // Already have a session selected
+        const poll = () => {
+            api.getActiveRuns()
+                .then((data) => setRunningSessions(data.session_ids || []))
+                .catch(() => { /* non-critical — sidebar just won't show spinners */ });
+        };
+        poll();
+        // 2.6s (off the :00/:30 marks) — responsive enough to feel live without
+        // hammering the backend.
+        activeRunsPollRef.current = setInterval(poll, 2_600);
+        return () => {
+            if (activeRunsPollRef.current) clearInterval(activeRunsPollRef.current);
+        };
+    }, [setRunningSessions]);
 
-        const params = new URLSearchParams(window.location.search);
-        const sessionParam = params.get('session');
-        const hashParam = window.location.hash.replace(/^#/, '');
-
-        const target = sessionParam || hashParam;
-        if (!target) return;
-
-        log.nav.info(`URL session parameter: ${target}`);
-        // Defer so session list has time to load
-        const timer = setTimeout(() => {
-            const { sessions } = useChatStore.getState();
-            // Try exact match first (full UUID), then short hash match
-            let matchId: string | null = sessions.some((s: { id: string }) => s.id === target)
-                ? target
-                : findSessionByHash(sessions, target);
+    // Support URL-based session navigation (?session=<id> or #<hash>).
+    // Responds ONLY to external navigation — initial load, and the user pasting
+    // a URL or using browser back/forward (hashchange/popstate). The app's own
+    // session switches update the hash via replaceState (below), which does NOT
+    // fire hashchange/popstate, so this effect never fights a programmatic
+    // switch and can't oscillate with the SSE-activation handler.
+    useEffect(() => {
+        const navigateFromUrl = () => {
+            const params = new URLSearchParams(window.location.search);
+            const sessionParam = params.get('session');
+            const hashParam = window.location.hash.replace(/^#/, '');
+            const target = sessionParam || hashParam;
+            const { currentSessionId: cur, sessions } = useChatStore.getState();
+            const matchId = resolveUrlNavTarget(target, cur, sessions);
             if (matchId) {
+                log.nav.info(`URL session navigation: ${target}`);
                 setCurrentSession(matchId);
                 setMessages([]);
-            } else {
-                log.nav.warn(`Session ${target} not found in loaded sessions`);
             }
-        }, 500);
-        return () => clearTimeout(timer);
-    }, [currentSessionId, setCurrentSession, setMessages]);
+        };
+        // Defer the initial pass so the session list has time to load.
+        const timer = setTimeout(navigateFromUrl, 500);
+        window.addEventListener('hashchange', navigateFromUrl);
+        window.addEventListener('popstate', navigateFromUrl);
+        return () => {
+            clearTimeout(timer);
+            window.removeEventListener('hashchange', navigateFromUrl);
+            window.removeEventListener('popstate', navigateFromUrl);
+        };
+    }, [setCurrentSession, setMessages]);
+
+    // Subscribe to system session-activation events (MCP bridge P1)
+    useEffect(() => {
+        const url = `${getApiBase()}/sessions/events`;
+        let es: EventSource | null = null;
+        let backoff = 2_000;
+        let cancelled = false;
+        let timer: ReturnType<typeof setTimeout> | null = null;
+
+        const connect = () => {
+            if (cancelled) return;
+            es = new EventSource(url);
+            es.onopen = () => { backoff = 2_000; };
+            es.onmessage = (ev) => {
+                try {
+                    const data = JSON.parse(ev.data) as { type: string; session_id?: string };
+                    if (data.type === 'set_active_session' && data.session_id) {
+                        // Only switch (and clear messages) when it's actually a
+                        // different session — re-activating the current one must
+                        // not wipe the visible conversation.
+                        const cur = useChatStore.getState().currentSessionId;
+                        if (data.session_id !== cur) {
+                            log.nav.info(`MCP activate session: ${data.session_id}`);
+                            setCurrentSession(data.session_id);
+                            setMessages([]);
+                        }
+                    }
+                } catch { /* malformed event — ignore */ }
+            };
+            es.onerror = () => {
+                es?.close();
+                es = null;
+                if (cancelled) return;
+                timer = setTimeout(connect, backoff);
+                backoff = Math.min(backoff * 2, 30_000);
+            };
+        };
+
+        connect();
+        return () => {
+            cancelled = true;
+            if (timer) clearTimeout(timer);
+            es?.close();
+        };
+    }, [setCurrentSession, setMessages]);
 
     // Update URL hash when the current session changes
     useEffect(() => {

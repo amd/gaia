@@ -1,13 +1,13 @@
-/* EmailConnectCta — inline Connect Google button rendered next to an
+/* EmailConnectCta — inline Connect button(s) rendered next to an
  * assistant error message when the email agent surfaces a connectors
- * auth-required state. Visually distinct from the normal error banner
- * so the user sees there's something they can act on, not just a wall
- * of text. */
+ * auth-required state (Google and/or Microsoft). Visually distinct
+ * from the normal error banner so the user sees there's something
+ * they can act on, not just a wall of text. */
 
 .email-connect-cta {
     display: flex;
     flex-wrap: wrap;
-    align-items: center;
+    align-items: flex-start;
     gap: 12px;
     margin-top: 8px;
     padding: 10px 12px;
@@ -24,6 +24,21 @@
     gap: 6px;
     flex: 1;
     min-width: 0;
+}
+
+/* Container for one or two provider buttons laid out side by side. */
+.email-connect-cta__buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: flex-start;
+}
+
+/* Wrapper for a single provider button + its per-provider error. */
+.email-connect-cta__provider-slot {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
 }
 
 .email-connect-cta__icon {

@@ -6,6 +6,7 @@
 // (see ANONYMIZATION section below).  No real shell commands are executed.
 
 #include <gtest/gtest.h>
+#include <gmock/gmock.h>
 #include <gaia/agent.h>
 #include <gaia/clean_console.h>
 #include <gaia/security.h>
@@ -505,7 +506,8 @@ TEST_F(WiFiToolsTest, PingHostMissingArgReturnsError) {
     // Empty host
     json result = agent_->tools().executeTool("ping_host", json::object());
     EXPECT_TRUE(result.contains("error"));
-    EXPECT_EQ(result["error"], "host parameter is required");
+    EXPECT_THAT(result["error"].get<std::string>(),
+                ::testing::HasSubstr("missing required parameter"));
     EXPECT_FALSE(result.contains("tool"));
 }
 
@@ -520,13 +522,15 @@ TEST_F(WiFiToolsTest, SetDnsServersMissingArgsReturnsError) {
     // No arguments at all
     json result = agent_->tools().executeTool("set_dns_servers", json::object());
     EXPECT_TRUE(result.contains("error"));
-    EXPECT_EQ(result["error"], "adapter_name and primary_dns are required");
+    EXPECT_THAT(result["error"].get<std::string>(),
+                ::testing::HasSubstr("missing required parameter"));
 
     // Only adapter, no primary_dns
     result = agent_->tools().executeTool(
         "set_dns_servers", {{"adapter_name", "Wi-Fi"}});
     EXPECT_TRUE(result.contains("error"));
-    EXPECT_EQ(result["error"], "adapter_name and primary_dns are required");
+    EXPECT_THAT(result["error"].get<std::string>(),
+                ::testing::HasSubstr("missing required parameter"));
 }
 
 TEST_F(WiFiToolsTest, SetDnsServersReturnsExpectedFormat) {
@@ -557,13 +561,15 @@ TEST_F(WiFiToolsTest, RenewDhcpLeaseReturnsStatus) {
 TEST_F(WiFiToolsTest, RestartWiFiAdapterMissingArgReturnsError) {
     json result = agent_->tools().executeTool("restart_wifi_adapter", json::object());
     EXPECT_TRUE(result.contains("error"));
-    EXPECT_EQ(result["error"], "adapter_name is required");
+    EXPECT_THAT(result["error"].get<std::string>(),
+                ::testing::HasSubstr("missing required parameter"));
 }
 
 TEST_F(WiFiToolsTest, EnableWiFiAdapterMissingArgReturnsError) {
     json result = agent_->tools().executeTool("enable_wifi_adapter", json::object());
     EXPECT_TRUE(result.contains("error"));
-    EXPECT_EQ(result["error"], "adapter_name is required");
+    EXPECT_THAT(result["error"].get<std::string>(),
+                ::testing::HasSubstr("missing required parameter"));
 }
 
 TEST_F(WiFiToolsTest, ToggleWiFiRadioDefaultsToOn) {

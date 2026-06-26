@@ -1,0 +1,37 @@
+---
+// Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+import AgentIcon from './AgentIcon.astro';
+import AuroraBg from './AuroraBg.astro';
+import { type Agent } from '../data/catalog';
+
+interface Props {
+  agent: Agent;
+  eyebrow?: string;
+}
+
+const { agent, eyebrow = 'Featured' } = Astro.props;
+---
+
+<a
+  href={`/hub/${agent.id}`}
+  class="relative block overflow-hidden rounded-xl border border-g-border bg-g-surface p-7 sm:p-9 hover:border-g-gold/40 transition-colors"
+>
+  <AuroraBg />
+  <div class="relative">
+    <div class="text-[11px] font-bold tracking-[0.14em] uppercase text-g-gold-text mb-4">{eyebrow}</div>
+    <div class="flex items-center gap-3 mb-2">
+      <span class="w-9 h-9 rounded-lg border border-g-border bg-g-bg/60 flex items-center justify-center text-g-gold-text">
+        <AgentIcon name={agent.icon} class="w-5 h-5" />
+      </span>
+      <span class="text-xl font-bold tracking-tight text-g-text">{agent.name}</span>
+      <span class="font-mono text-[12px] text-g-muted">v{agent.latest_version}</span>
+    </div>
+    <p class="text-[14px] text-g-muted max-w-md mb-6">{agent.description}</p>
+    <!-- Static chip, not a copy button — the whole card is a link; nested buttons are invalid HTML. -->
+    <span class="inline-flex items-center rounded-md border border-g-gold/40 px-4 py-2 font-mono text-[12px] text-g-gold-text">
+      $ gaia agent install {agent.id}
+    </span>
+  </div>
+</a>

@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://hub.amd-gaia.ai/schemas/index.schema.json",
   "title": "GAIA Agent Hub Catalog Index",
-  "description": "Lightweight catalog served at GET /index.json. One entry per agent, summarising the latest published version. Field names mirror gaia-agent.yaml (see docs/spec/agent-hub-restructure.mdx).",
+  "description": "Lightweight catalog served at GET /index.json. One entry per agent, summarising the latest published version. Field names mirror gaia-agent.yaml (see docs/spec/agent-hub-restructure.mdx). This is the contract the website Hub pages build from (website/src/data/catalog.ts).",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "generated_at", "agents"],
@@ -37,8 +37,15 @@
         "author",
         "security_tier",
         "download_size_bytes",
+        "tags",
+        "tools_count",
+        "models",
+        "min_gaia_version",
+        "permissions",
+        "deprecated",
         "requirements",
-        "deprecated"
+        "readme",
+        "changelog"
       ],
       "properties": {
         "id": {
@@ -65,11 +72,42 @@
           "minimum": 0,
           "description": "Size of the latest version's artifact in bytes."
         },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "tools_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of tools the agent registers; 0 when the manifest omits it."
+        },
+        "models": { "type": "array", "items": { "type": "string" } },
+        "min_gaia_version": {
+          "type": "string",
+          "description": "Minimum GAIA version (SemVer); empty string when the manifest omits it."
+        },
+        "permissions": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Declared permission strings; empty array when the manifest omits them."
+        },
+        "deprecated": { "type": "boolean" },
+        "deprecation_message": {
+          "type": "string",
+          "description": "Only present when the latest version's manifest declares one."
+        },
         "requirements": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["platforms"],
+          "required": [
+            "min_memory_gb",
+            "min_disk_gb",
+            "min_context_size",
+            "platforms",
+            "npu",
+            "gpu_vram_gb"
+          ],
           "properties": {
+            "min_memory_gb": { "type": "number", "minimum": 0 },
+            "min_disk_gb": { "type": "number", "minimum": 0 },
+            "min_context_size": { "type": "number", "minimum": 0 },
             "platforms": {
               "type": "array",
               "items": {
@@ -83,10 +121,64 @@
                   "darwin-arm64"
                 ]
               }
-            }
+            },
+            "npu": {
+              "type": "string",
+              "enum": ["required", "optional"],
+              "description": "\"required\" when the manifest sets requirements.npu: true, else \"optional\"."
+            },
+            "gpu_vram_gb": { "type": "number", "minimum": 0 }
           }
         },
-        "deprecated": { "type": "boolean" }
+        "readme": {
+          "type": "string",
+          "description": "README.md markdown of the latest version; empty string if none was published."
+        },
+        "changelog": {
+          "type": "string",
+          "description": "CHANGELOG.md markdown of the latest version; empty string if none was published."
+        },
+        "spec": {
+          "type": "string",
+          "description": "SPEC.md (technical reference) markdown of the latest version; empty string if none was published."
+        },
+        "skill": {
+          "type": "string",
+          "description": "SKILL.md (AI-integration playbook) markdown of the latest version; empty string if none was published."
+        },
+        "npm_package": {
+          "type": "string",
+          "description": "npm package name when the agent is distributed via npm (e.g. \"@amd-gaia/agent-email\"); absent otherwise."
+        },
+        "playground_url": {
+          "type": "string",
+          "description": "Localhost playground URL served by the agent's sidecar; absent otherwise."
+        },
+        "package": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Whole-package download (all platform binaries + client + docs) as a single zip plus its file listing. Present only when a package_files manifest was published for the latest version.",
+          "required": ["filename", "size_bytes", "files"],
+          "properties": {
+            "filename": {
+              "type": "string",
+              "description": "Zip artifact filename under the version dir, e.g. \"agent-email-0.2.1.zip\"."
+            },
+            "size_bytes": { "type": "integer", "minimum": 0 },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "size_bytes"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "size_bytes": { "type": "integer", "minimum": 0 }
+                }
+              }
+            }
+          }
+        }
       }
     }
   }

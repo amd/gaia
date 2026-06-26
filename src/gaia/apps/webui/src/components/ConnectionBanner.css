@@ -35,9 +35,9 @@
 }
 
 [data-theme="dark"] .connection-banner--error {
-    background: rgba(237, 28, 36, 0.06);
+    background: rgba(229, 72, 77, 0.06);
     color: #fca5a5;
-    border-bottom: 1px solid rgba(237, 28, 36, 0.15);
+    border-bottom: 1px solid rgba(229, 72, 77, 0.15);
 }
 
 [data-theme="dark"] .connection-banner--warning {

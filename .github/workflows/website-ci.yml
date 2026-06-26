@@ -1,0 +1,64 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# PR + main CI for the marketing/hub website (website/, Astro). Catches the
+# website breaking BEFORE it ships — previously the only build was Railway's
+# post-merge deploy, so a broken page (type error, failed Astro build, broken
+# hub render) reached main and only failed at deploy time. This runs on every PR
+# that touches website/.
+#
+# The build needs a live catalog (website has NO bundled fixture fallback — see
+# website/src/data/catalog.ts), so HUB_CATALOG_URL points at the live Agent Hub
+# Worker, exactly like the Railway production build.
+
+name: Website CI
+
+on:
+  pull_request:
+    paths:
+      - 'website/**'
+      - '.github/workflows/website-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - '.github/workflows/website-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Type-check, test, build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    env:
+      # Same source the Railway production build uses; the live catalog is the
+      # real dependency (no fixture fallback). A hub outage fails the build loudly.
+      HUB_CATALOG_URL: https://hub.amd-gaia.ai
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check (astro check)
+        run: npx astro check
+
+      - name: Unit tests (vitest)
+        run: npm test
+
+      - name: Build (astro build from the live catalog)
+        run: npx astro build

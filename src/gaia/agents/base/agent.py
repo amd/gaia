@@ -268,6 +268,12 @@ class Agent(abc.ABC):
     # ``_TOOL_REGISTRY`` (backward compat for agents that don't snapshot).
     _instance_tools: Optional[Dict[str, Any]] = None
 
+    # Dynamic tool loader (#1449): the sorted subset of tool names to surface
+    # this turn, or ``None`` to render the full registry (legacy, byte-identical).
+    # Set by ``_select_tools_for_turn`` at the top of each query; consulted by
+    # both render paths and the ``_openai_tools`` property.
+    _active_tool_filter: Optional[List[str]] = None
+
     # Define state constants
     STATE_PLANNING = "PLANNING"
     STATE_EXECUTING_PLAN = "EXECUTING_PLAN"
@@ -503,8 +509,9 @@ Do NOT wrap conversational replies in JSON.
         # Initialize AgentSDK with proper configuration
         # Note: We don't set system_prompt in config, we pass it per request
         # Note: Context size is configured when starting Lemonade server, not here
-        # Use the configured default model (Gemma) when no explicit model_id
-        # is provided. The 0.5B model is too small for complex agent tasks.
+        # Default an agent with no explicit model_id to Qwen3.5-35B-A3B — small
+        # models are too weak for complex agent tasks. (This is the *agent* default;
+        # `gaia llm` defaults to DEFAULT_MODEL_NAME / Gemma-4-E4B via a separate path.)
         chat_config = AgentConfig(
             model=model_id or "Qwen3.5-35B-A3B-GGUF",
             use_claude=use_claude,
@@ -611,11 +618,21 @@ Do NOT wrap conversational replies in JSON.
         if custom:
             parts.append(custom)
 
-        # Add tool descriptions (if tools registered)
+        # When a dynamic tool filter is active, the tool block is volatile (it
+        # grows as new tools are selected), so it must come LAST — after the
+        # stable response-format template — to keep the KV-cache prefix warm on
+        # non-expansion turns. With no filter (``None``) we keep the legacy
+        # order (tools before the format template) so the composed prompt stays
+        # byte-identical for every existing agent.
+        tool_filter = self._active_tool_filter
+        tools_block = None
         if hasattr(self, "_format_tools_for_prompt"):
-            tools_description = self._format_tools_for_prompt()
+            tools_description = self._format_tools_for_prompt(filter_to=tool_filter)
             if tools_description:
-                parts.append(f"==== AVAILABLE TOOLS ====\n{tools_description}")
+                tools_block = f"==== AVAILABLE TOOLS ====\n{tools_description}"
+
+        if tool_filter is None and tools_block is not None:
+            parts.append(tools_block)
 
         # Add embedded-JSON response format only for models that don't support
         # native tool_calls. For tool_calling models we pass tools=[] instead,
@@ -625,6 +642,9 @@ Do NOT wrap conversational replies in JSON.
 
             if not is_tool_calling_model(getattr(self, "model_id", None)):
                 parts.append(self._response_format_template)
+
+        if tool_filter is not None and tools_block is not None:
+            parts.append(tools_block)
 
         return "\n\n".join(p for p in parts if p)
 
@@ -715,11 +735,24 @@ Do NOT wrap conversational replies in JSON.
         """
         self._instance_tools = dict(_TOOL_REGISTRY)
 
-    def _format_tools_for_prompt(self) -> str:
-        """Format the registered tools into a string for the prompt."""
+    def _format_tools_for_prompt(self, filter_to: Optional[List[str]] = None) -> str:
+        """Format the registered tools into a string for the prompt.
+
+        Args:
+            filter_to: When ``None`` (default), render every registered tool in
+                registry order — byte-identical to the legacy path. When a list,
+                render only those names, in the given (pre-sorted) order,
+                skipping any not present in the registry.
+        """
         tool_descriptions = []
 
-        for name, tool_info in self._tools_registry.items():
+        if filter_to is None:
+            items = list(self._tools_registry.items())
+        else:
+            registry = self._tools_registry
+            items = [(n, registry[n]) for n in filter_to if n in registry]
+
+        for name, tool_info in items:
             params_str = ", ".join(
                 [
                     f"{param_name}{'' if param_info['required'] else '?'}: {param_info['type']}"
@@ -745,8 +778,59 @@ Do NOT wrap conversational replies in JSON.
         from gaia.llm.lemonade_client import is_tool_calling_model
 
         if is_tool_calling_model(getattr(self, "model_id", None)):
-            return self._build_openai_tool_schemas() or None
+            return (
+                self._build_openai_tool_schemas(filter_to=self._active_tool_filter)
+                or None
+            )
         return None
+
+    def _select_tools_for_turn(  # pylint: disable=unused-argument
+        self, user_input: str
+    ) -> Optional[List[str]]:
+        """Return the sorted tool-name subset to surface this turn, or ``None``.
+
+        Default: ``None`` — render the full registry (legacy behavior). Agents
+        with a dynamic tool loader override this to return a selection.
+        """
+        return None
+
+    def _on_tool_invoked(self, tool_name: str) -> None:
+        """Hook called when a tool is about to execute (after registry lookup).
+
+        Default: no-op. Agents with a dynamic tool loader override this to
+        record tool-use recency. Execution itself always uses the full registry,
+        so this never gates execution.
+        """
+
+    def _refresh_active_tool_filter(self, user_input: str) -> None:
+        """Update the active tool filter for this turn, recomputing on change.
+
+        Calls ``_select_tools_for_turn`` and, **only when the selection
+        changes**, swaps ``_active_tool_filter`` and recomputes the cached
+        system prompt. Both filters are sorted lists (or ``None``), so ``!=`` is
+        a correct change test; a stable selection leaves the cached prompt — and
+        thus the backend's KV-cache prefix — untouched. ``None`` is the legacy
+        full-registry path. ``_openai_tools`` is a property, so all native
+        ``tools=`` call sites pick up the new filter automatically.
+        """
+        # The base hook returns None, but ChatAgent overrides it to return
+        # Optional[List[str]] — pylint's None-inference is wrong here.
+        # pylint: disable-next=assignment-from-none
+        new_filter = self._select_tools_for_turn(user_input)
+        if new_filter != self._active_tool_filter:
+            self._apply_tool_filter(new_filter)
+
+    def _apply_tool_filter(self, new_filter: Optional[List[str]]) -> None:
+        """Swap the active tool filter and recompute the cached system prompt.
+
+        The single place the "filter and prompt move together" invariant lives.
+        Called from :meth:`_refresh_active_tool_filter` (per user turn) and from
+        the ``load_tools`` escape-hatch handler (mid-loop), so a mid-query
+        expansion is visible to the very next model step — both render paths
+        (``system_prompt`` and ``_openai_tools``) read these live.
+        """
+        self._active_tool_filter = new_filter
+        self._system_prompt_cache = self._compose_system_prompt()
 
     def rebuild_system_prompt(self) -> None:
         """Rebuild system prompt with current tools from _TOOL_REGISTRY.
@@ -1210,8 +1294,15 @@ Do NOT wrap conversational replies in JSON.
 
         return json_response
 
-    def _build_openai_tool_schemas(self) -> list:
-        """Build OpenAI-format function-calling schemas from the tool registry."""
+    def _build_openai_tool_schemas(self, filter_to: Optional[List[str]] = None) -> list:
+        """Build OpenAI-format function-calling schemas from the tool registry.
+
+        Args:
+            filter_to: When ``None`` (default), build a schema for every
+                registered tool in registry order — byte-identical to the legacy
+                path. When a list, build only those names, in the given
+                (pre-sorted) order, skipping any not present in the registry.
+        """
 
         def _python_to_json_type(py_type: str) -> str:
             return {
@@ -1223,8 +1314,14 @@ Do NOT wrap conversational replies in JSON.
                 "dict": "object",
             }.get(py_type.lower().strip(), "string")
 
+        if filter_to is None:
+            items = list(self._tools_registry.items())
+        else:
+            registry = self._tools_registry
+            items = [(n, registry[n]) for n in filter_to if n in registry]
+
         schemas = []
-        for name, tool_info in self._tools_registry.items():
+        for name, tool_info in items:
             properties = {}
             required = []
             for param_name, param_info in tool_info["parameters"].items():
@@ -1875,6 +1972,13 @@ Do NOT wrap conversational replies in JSON.
                     "status": "denied",
                     "error": f"Tool '{tool_name}' was denied by the user.",
                 }
+
+        # Dynamic tool loader (#1449): record use for LRU recency. The name is
+        # fully resolved and confirmed in the registry here. Execution stays on
+        # the full registry — recording never gates it — so a model that names
+        # an unlisted tool still runs it (free non-tool-calling recovery), and
+        # the loader logs that as an escape-hatch signal.
+        self._on_tool_invoked(tool_name)
 
         tool = self._tools_registry[tool_name]["function"]
         sig = inspect.signature(tool)
@@ -2527,6 +2631,10 @@ Do NOT wrap conversational replies in JSON.
         # Store query for error context (used in _execute_tool for error formatting)
         self._current_query = user_input
         self._single_tool_done = False
+
+        # Dynamic tool selection (#1449): pick this turn's tool subset and
+        # recompute the cached system prompt only when it changes.
+        self._refresh_active_tool_filter(user_input)
 
         logger.debug(f"Processing query: {user_input}")
         conversation = []

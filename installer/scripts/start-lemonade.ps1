@@ -78,33 +78,36 @@ try {
     }
     Write-Host ""
 
-    # Check installation. v10.x splits the old single binary into:
-    #   - ``LemonadeServer.exe`` (PascalCase) -- the actual server, but
-    #     it appears to be a tray/launcher with a different CLI shape
-    #     than the legacy ``lemonade-server serve --port ...`` we rely on.
-    #   - ``lemonade-server.exe`` -- a deprecation shim that still
-    #     translates ``serve --no-tray --port N`` correctly into the new
-    #     server invocation (proven working in test_gaia_cli_windows.yml).
-    #   - ``lemonade.exe`` -- the v10.x CLI for non-server commands (pull
-    #     etc.). ``lemonade-server pull`` is fully removed; calling it
-    #     prints a deprecation message and exits non-zero.
-    #
-    # So we deliberately use the shim for ``serve`` (it handles the
-    # arg translation) and ``lemonade`` for ``pull``. The shim refuses
-    # ``--ctx-size`` -- pin context per-model via the /load API instead.
+    # Check installation. v10.x ships:
+    #   - ``LemonadeServer.exe`` -- the actual server. Launch it directly with a
+    #     bare ``--port N`` (there is no ``serve`` subcommand). ``--ctx-size`` is
+    #     not a launch arg -- pin context per-model via the /load API below.
+    #   - ``lemonade.exe`` -- the v10.x CLI for non-server commands (``pull`` etc.).
+    # The old ``lemonade-server`` shim was deprecated in v10.5 and is no longer
+    # installed, so we use LemonadeServer.exe for serving and ``lemonade`` for pull.
     Write-Host "=== Checking Installation ==="
+    # Resolve LemonadeServer.exe from LEMONADE_SERVER_PATH or the install dirs.
     $lemonadeServerExe = $null
-    $lemonadeServerCmd = Get-Command "lemonade-server" -ErrorAction SilentlyContinue
-    if ($lemonadeServerCmd) {
-        $lemonadeServerExe = $lemonadeServerCmd.Source
-        Write-Host "[OK] Found 'lemonade-server' on PATH: $lemonadeServerExe"
-    } elseif (Test-Path ".\.venv\Scripts\lemonade-server.exe") {
-        $lemonadeServerExe = ".\.venv\Scripts\lemonade-server.exe"
-        Write-Host "[OK] Found 'lemonade-server' in .venv: $lemonadeServerExe"
-    } else {
-        Write-Host "[ERROR] lemonade-server not found on PATH or in .venv"
+    foreach ($cand in @(
+        $env:LEMONADE_SERVER_PATH,
+        "$env:LOCALAPPDATA\lemonade_server\bin\LemonadeServer.exe",
+        "$env:ProgramFiles\Lemonade Server\bin\LemonadeServer.exe",
+        "${env:ProgramFiles(x86)}\Lemonade Server\bin\LemonadeServer.exe"
+    )) {
+        if ($cand -and (Test-Path $cand)) { $lemonadeServerExe = (Resolve-Path $cand).Path; break }
+    }
+    if (-not $lemonadeServerExe) {
+        $found = Get-ChildItem `
+            "C:\Users\*\AppData\Local\lemonade_server\bin\LemonadeServer.exe", `
+            "C:\Program Files*\Lemonade Server\bin\LemonadeServer.exe" `
+            -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($found) { $lemonadeServerExe = $found.FullName }
+    }
+    if (-not $lemonadeServerExe) {
+        Write-Host "[ERROR] LemonadeServer.exe not found (set LEMONADE_SERVER_PATH or install Lemonade Server)"
         exit 1
     }
+    Write-Host "[OK] Found server: $lemonadeServerExe"
 
     $lemonadeCli = $null
     $lemonadeCliCmd = Get-Command "lemonade" -ErrorAction SilentlyContinue
@@ -128,19 +131,15 @@ try {
         Write-Host ""
     }
 
-    # Start server via the ``lemonade-server`` shim. We deliberately
-    # don't call ``LemonadeServer.exe`` directly -- on v10.2.0 it appears
-    # to be a tray/GUI launcher with a different CLI shape that emits no
-    # console output and never binds to the requested port when invoked
-    # with the legacy ``serve --port N --no-tray`` args. The shim still
-    # translates that arg shape correctly (proven by test_gaia_cli_windows
-    # which uses the same incantation against the same v10.2.0 runner).
-    # ``--ctx-size`` is omitted because the shim refuses it in v10.x; the
-    # ctx_size is set per-model on the /api/v1/load call below.
+    # Start the server. v10.5 removed the `lemonade-server` shim, so launch
+    # LemonadeServer.exe directly with a bare `--port` (there is no `serve`
+    # subcommand in v10.x). `--ctx-size` is set per-model on the /api/v1/load
+    # call below. (Verified on the stx runner: `LemonadeServer.exe --port N`
+    # binds N -- the legacy `serve --port` shape is what never bound.)
     Write-Host "=== Starting Server ==="
     $env:GGML_VK_DISABLE_COOPMAT = "1"
     $serverProcess = Start-Process -FilePath $lemonadeServerExe `
-        -ArgumentList "serve", "--port", "$Port", "--no-tray" `
+        -ArgumentList "--port", "$Port" `
         -PassThru -WindowStyle Hidden `
         -RedirectStandardOutput "lemonade-server-stdout.log" `
         -RedirectStandardError "lemonade-server-stderr.log"

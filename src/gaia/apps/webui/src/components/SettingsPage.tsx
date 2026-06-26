@@ -8,9 +8,11 @@ import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../utils/constants';
 import { useModelActions } from '../hooks/useModelActions';
+import { useUpdateStatus } from '../hooks/useUpdateStatus';
 import type { SystemStatus, MCPServerStatus } from '../types';
 import { CustomAgentsSection } from './CustomAgentsSection';
 import { ConnectorsSection } from './ConnectorsSection';
+import { VersionPicker } from './VersionPicker';
 import './ConnectorsSection.css';
 import './SettingsModal.css';
 import './SettingsPage.css';
@@ -20,6 +22,8 @@ export function SettingsPage() {
     const [status, setStatus] = useState<SystemStatus | null>(null);
     const [loading, setLoading] = useState(true);
     const [mcpServers, setMcpServers] = useState<MCPServerStatus[]>([]);
+    const [showVersionPicker, setShowVersionPicker] = useState(false);
+    const updateStatus = useUpdateStatus();
 
     // Active Model override
     const [customModel, setCustomModel] = useState<string>('');
@@ -29,6 +33,12 @@ export function SettingsPage() {
     const [saveError, setSaveError] = useState<string | null>(null);
     const [justSaved, setJustSaved] = useState(false);
     const justSavedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // Dynamic Tools (Beta) toggle — #1798
+    const [dynamicTools, setDynamicTools] = useState(false);
+    const [dynamicToolsLocked, setDynamicToolsLocked] = useState(false);
+    const [savingDynamicTools, setSavingDynamicTools] = useState(false);
+    const [dynamicToolsError, setDynamicToolsError] = useState<string | null>(null);
 
     useEffect(() => {
         log.system.info('Checking system status...');
@@ -62,6 +72,8 @@ export function SettingsPage() {
                 const value = s.custom_model ?? '';
                 setCustomModel(value);
                 setSavedCustomModel(value);
+                setDynamicTools(s.dynamic_tools);
+                setDynamicToolsLocked(s.dynamic_tools_locked);
             })
             .catch((err) => {
                 log.system.error('Failed to load settings', err);
@@ -96,6 +108,30 @@ export function SettingsPage() {
             setSavingModel(false);
         }
     }, [customModel]);
+
+    const toggleDynamicTools = useCallback(async () => {
+        if (dynamicToolsLocked || savingDynamicTools) return;
+        const previous = dynamicTools;
+        const next = !previous;
+        setDynamicTools(next); // optimistic
+        setSavingDynamicTools(true);
+        setDynamicToolsError(null);
+        try {
+            log.system.info('Saving dynamic_tools setting', { dynamic_tools: next });
+            const updated = await api.updateSettings({ dynamic_tools: next });
+            // Trust the server's effective value (env override may win).
+            setDynamicTools(updated.dynamic_tools);
+            setDynamicToolsLocked(updated.dynamic_tools_locked);
+        } catch (err) {
+            // No silent fallback: revert the optimistic flip and surface the error.
+            const msg = err instanceof Error ? err.message : String(err);
+            log.system.error('Failed to save dynamic_tools', err);
+            setDynamicTools(previous);
+            setDynamicToolsError(msg);
+        } finally {
+            setSavingDynamicTools(false);
+        }
+    }, [dynamicTools, dynamicToolsLocked, savingDynamicTools]);
 
     const customModelDirty = customModel.trim() !== savedCustomModel.trim();
 
@@ -429,6 +465,46 @@ export function SettingsPage() {
                     </p>
                 </section>
 
+                {/* Dynamic Tools (Beta) — #1798 */}
+                <section className="settings-section">
+                    <h4>Dynamic Tools <span className="beta-badge">BETA</span></h4>
+                    <p className="model-override-desc">
+                        Trim each turn&rsquo;s tool list to a semantically-matched subset to
+                        speed up the first response. Currently affects the Doc Agent only.
+                    </p>
+                    {/* <label> wraps the row so a click on the text or the track
+                        forwards to the visually-hidden checkbox (matches the
+                        working connector/grant toggles). */}
+                    <label className="setting-row">
+                        <span>Enable dynamic tool loading</span>
+                        <span className="toggle-switch">
+                            <input
+                                type="checkbox"
+                                checked={dynamicTools}
+                                onChange={() => void toggleDynamicTools()}
+                                disabled={!settingsLoaded || savingDynamicTools || dynamicToolsLocked}
+                                aria-label={dynamicTools ? 'Disable dynamic tools' : 'Enable dynamic tools'}
+                            />
+                            <span className="toggle-track" />
+                        </span>
+                    </label>
+                    {dynamicToolsLocked && (
+                        <p className="model-status-hint">
+                            Controlled by <code>GAIA_DYNAMIC_TOOLS</code> &mdash; unset that
+                            environment variable to change this here.
+                        </p>
+                    )}
+                    {dynamicToolsError && (
+                        <div className="model-warning" role="alert">
+                            <AlertCircle size={14} />
+                            <div className="model-warning-content">
+                                <strong>Could not save</strong>
+                                <p>{dynamicToolsError}</p>
+                            </div>
+                        </div>
+                    )}
+                </section>
+
                 {/* Memory Warnings */}
                 {status && status.memory_available_gb != null && (() => {
                     const available = status.memory_available_gb;
@@ -498,8 +574,38 @@ export function SettingsPage() {
                     <div className="about-info">
                         <p>GAIA v{version} <span className="beta-badge">BETA</span></p>
                         <p className="about-sub">Privacy-first AI chat for AMD Ryzen AI PCs.</p>
+                        {updateStatus.pinnedVersion && (
+                            <p className="about-pinned-notice">
+                                Auto-update paused (pinned to {updateStatus.pinnedVersion}).{' '}
+                                <button
+                                    type="button"
+                                    className="about-resume-btn"
+                                    onClick={() => {
+                                        const bridge = (window as unknown as { gaiaUpdater?: { resumeUpdates: () => Promise<unknown> } }).gaiaUpdater;
+                                        void bridge?.resumeUpdates().catch((e) => {
+                                            log.system.error('Resume updates failed', e);
+                                        });
+                                    }}
+                                >
+                                    Resume updates
+                                </button>
+                            </p>
+                        )}
+                    </div>
+                    <div className="setting-actions">
+                        <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={() => setShowVersionPicker(true)}
+                        >
+                            Roll back to a previous version
+                        </button>
                     </div>
                 </section>
+
+                {showVersionPicker && (
+                    <VersionPicker onClose={() => setShowVersionPicker(false)} />
+                )}
 
                 {/* Privacy & Data */}
                 <section className="settings-section">

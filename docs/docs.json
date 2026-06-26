@@ -13,9 +13,20 @@
     "twitter:image": "https://amd-gaia.ai/assets/logo/dark.png"
   },
   "colors": {
-    "primary": "#ED1C24",
-    "light": "#F4484D",
-    "dark": "#C8171E"
+    "primary": "#A87B2D",
+    "light": "#E2A33E",
+    "dark": "#E2A33E"
+  },
+  "appearance": {
+    "default": "system"
+  },
+  "fonts": {
+    "heading": {
+      "family": "Inter"
+    },
+    "body": {
+      "family": "Inter"
+    }
   },
   "favicon": "/assets/favicon.ico",
   "navigation": {
@@ -42,6 +53,7 @@
               {
                 "group": "User Guides",
                 "pages": [
+                  "cpp/bash-agent",
                   "cpp/health-agent",
                   "cpp/wifi-agent",
                   "cpp/process-agent",
@@ -79,6 +91,7 @@
                   "guides/docker",
                   "guides/routing",
                   "guides/custom-agent",
+                  "guides/hub-publishing",
                   "guides/mcp/agent-ui",
                   "guides/mcp/client",
                   "guides/mcp/windows-system-health"
@@ -91,6 +104,7 @@
                   "connectors/google",
                   "connectors/microsoft",
                   "connectors/github",
+                  "connectors/tavily",
                   "security/connections",
                   "security/connectors"
                 ]
@@ -368,7 +382,8 @@
             "pages": [
               "integrations/vscode",
               "integrations/mcp",
-              "integrations/n8n"
+              "integrations/n8n",
+              "integrations/guard-proxy"
             ]
           },
           {
@@ -408,10 +423,12 @@
             "pages": [
               "plans/agent-hub",
               "plans/agent-hub-ui",
+              "plans/agent-ui-hub-publish",
               "plans/email-agent-packaging",
               "spec/agent-hub-restructure",
               "spec/agent-skills",
               "plans/skill-format",
+              "plans/skill-synthesis",
               "plans/oem-bundling"
             ]
           },
@@ -441,6 +458,7 @@
             "group": "Release Notes",
             "pages": [
               "releases/index",
+              "releases/v0.21.2",
               "releases/v0.21.1",
               "releases/v0.21.0",
               "releases/v0.20.1",
@@ -498,12 +516,12 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.21.1 \u00b7 Lemonade 10.2.0",
+        "label": "v0.21.2 \u00b7 Lemonade 10.7.0",
         "href": "https://github.com/amd/gaia/releases"
       },
       {
         "label": "Main Site",
-        "href": "https://gaia.amd.com"
+        "href": "https://amd-gaia.ai"
       }
     ],
     "primary": {
@@ -511,10 +529,6 @@
       "label": "Download",
       "href": "https://github.com/amd/gaia/releases"
     }
-  },
-  "modeToggle": {
-    "default": "dark",
-    "isHidden": true
   },
   "contextual": {
     "options": [

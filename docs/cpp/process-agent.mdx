@@ -181,7 +181,7 @@ The agent runs in two phases. On startup it auto-scans the system — no menu sh
 Conversation history is preserved across all actions so the LLM can reference any labeled item without re-scanning. Only **Reanalyze** clears history, because the system state has genuinely changed.
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'14px', 'lineColor':'#ED1C24', 'primaryTextColor':'#fff', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'fontSize':'14px', 'lineColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
 flowchart LR
     START["Startup\nAuto-scan"] --> CLASS["LLM classifies\nA · B · C"]
     CLASS --> MENU["Action Menu"]
@@ -191,10 +191,10 @@ flowchart LR
     MENU -->|"Monitor"| MON["Background Thread\nSilentConsole + diff alerts"]
     MON -.->|"alerts before prompt"| MENU
 
-    style START fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style CLASS fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style MENU fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style ACT fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style START fill:#2d2d2d,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style CLASS fill:#2d2d2d,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style MENU fill:#2d2d2d,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style ACT fill:#A87B2D,stroke:#E2A33E,stroke-width:2px,color:#fff
     style MON fill:#1565C0,stroke:#42A5F5,stroke-width:2px,color:#fff
 ```
 
@@ -510,7 +510,7 @@ These modify the system. The system prompt mandates user approval before the LLM
 ## Diagnostics Flow
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'14px', 'lineColor':'#ED1C24', 'primaryTextColor':'#fff', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'fontSize':'14px', 'lineColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
 flowchart TD
     START["Phase 1: DETECT<br/>(auto-runs on startup)"] --> SS["system_snapshot<br/>CPU, memory, disk, services"]
     SS --> LP["list_processes<br/>Top 30 memory, top 10 CPU"]
@@ -557,20 +557,20 @@ flowchart TD
 
     CLEAR --> START
 
-    style START fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style SS fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style LP fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style CLASS fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style START fill:#2d2d2d,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style SS fill:#2d2d2d,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style LP fill:#2d2d2d,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style CLASS fill:#2d2d2d,stroke:#E2A33E,stroke-width:2px,color:#fff
     style CONC1 fill:#2d8a2d,stroke:#4CAF50,stroke-width:2px,color:#fff
-    style MENU fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style EX fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style CONF_S fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style CONF_R fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style EX_Q fill:#2d2d2d,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style CONF_Q fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style KILL fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style RESTART fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style QUAR fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style MENU fill:#2d2d2d,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style EX fill:#2d2d2d,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style CONF_S fill:#A87B2D,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style CONF_R fill:#A87B2D,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style EX_Q fill:#2d2d2d,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style CONF_Q fill:#A87B2D,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style KILL fill:#A87B2D,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style RESTART fill:#A87B2D,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style QUAR fill:#A87B2D,stroke:#E2A33E,stroke-width:2px,color:#fff
     style CLEAR fill:#1565C0,stroke:#42A5F5,stroke-width:2px,color:#fff
     style MTOG fill:#1565C0,stroke:#42A5F5,stroke-width:2px,color:#fff
     style MSTART fill:#1565C0,stroke:#42A5F5,stroke-width:2px,color:#fff
@@ -578,7 +578,7 @@ flowchart TD
     style MSCAN fill:#2d2d2d,stroke:#42A5F5,stroke-width:2px,color:#fff
     style MDIFF fill:#2d2d2d,stroke:#42A5F5,stroke-width:2px,color:#fff
     style MALERT fill:#FF8F00,stroke:#FFA726,stroke-width:2px,color:#fff
-    style MBALLOON fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style MBALLOON fill:#A87B2D,stroke:#E2A33E,stroke-width:2px,color:#fff
     style MWAIT fill:#2d2d2d,stroke:#42A5F5,stroke-width:2px,color:#fff
     style ANS1 fill:#2d8a2d,stroke:#4CAF50,stroke-width:2px,color:#fff
     style ANS2 fill:#2d8a2d,stroke:#4CAF50,stroke-width:2px,color:#fff

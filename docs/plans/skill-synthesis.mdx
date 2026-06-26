@@ -1,0 +1,785 @@
+---
+title: "Skill Auto-Synthesis"
+description: "A procedural-memory layer over PR #606: cluster successful tool sequences, distill them into a SKILL.md, and recall the procedure during planning"
+icon: "wand-magic-sparkles"
+---
+
+<Info>
+  **Grounds on (exists today):** [`src/gaia/agents/base/memory_store.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py) (`MemoryStore`, `tool_history`, `knowledge`, the schema migration) · [`src/gaia/agents/base/memory.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py) (the embedder, FAISS index, Mem0-style prompts, the consolidation pass) · [`src/gaia/agents/base/agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py) (`_compose_system_prompt`, `_select_tools_for_turn`) · [`src/gaia/ui/routers/memory.py`](https://github.com/amd/gaia/blob/main/src/gaia/ui/routers/memory.py) (the `/api/memory/*` router the dashboard reads)
+
+  **Proposed runtime (not written yet):** `src/gaia/agents/base/skill_synthesis.py` and the new `procedures` table + `MemoryStore` skill methods. Every such symbol is marked **PROPOSED** where it appears.
+
+  **Sibling specs:** [Skill Format](/plans/skill-format) defines the `SKILL.md` field grammar this spec *emits*; [Dynamic Tool Loader](/plans/tool-loader) Part 3 *consumes* the `recall_skill` / `tools_required` contract.
+</Info>
+
+<Note>
+**Component:** the skill auto-synthesis pipeline — distil recurring successful tool sequences into procedural memory (issue [#887](https://github.com/amd/gaia/issues/887)).
+
+**Module:** `gaia.agents.base.skill_synthesis` — **PROPOSED, greenfield.** No pipeline, `procedures` table, or `recall_skill` exists in code. The contract is grounded on the live memory layer in `gaia.agents.base.memory` / `memory_store`.
+
+**Status:** **All PROPOSED — design, pending maintainer sign-off.** Nothing in this spec is implemented. PR [#606](https://github.com/amd/gaia/issues/606) (memory v2) is **merged** and provides every primitive the pipeline reuses; the `SKILL.md` format ([#691](https://github.com/amd/gaia/issues/691)) is **authored and locked**, so this spec references a settled format rather than inventing one.
+
+**Target agent (v1):** the base `MemoryMixin` (so `ChatAgent` and any memory-bearing agent inherit it). The on-disk default model is `Gemma-4-E4B-it-GGUF`; the embedder is `nomic-embed-text-v2-moe-GGUF` (768-dim), reused unchanged.
+</Note>
+
+---
+
+## Why this exists
+
+PR #606 gave GAIA a memory layer modelled on **CoALA — Cognitive Architectures
+for Language Agents** ([Sumers et al., 2024](https://arxiv.org/abs/2309.02427)),
+which types memory into *working / episodic / semantic / **procedural***. #606
+shipped the first three: a `MemoryStore` over SQLite, a `tool_history` table that
+records **every** tool call with its outcome and latency
+([`memory_store.py:241`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)),
+and a consolidation pass that distils old conversations into durable knowledge.
+The **procedural** tier was left for a follow-up. This spec is that tier.
+
+A *skill* in CoALA is procedural memory: a **generalized policy distilled from
+episodic traces**. The agent already keeps the episodic trace (`tool_history`).
+The missing loop is: notice that the same multi-step goal succeeded several times,
+distil it into a reusable Markdown procedure, store it, and surface it the next
+time a similar goal appears — so the agent stops re-deriving a solved task from
+scratch.
+
+Two design commitments follow from putting this in the memory layer rather than a
+new subsystem:
+
+1. **It is a learning loop, not a marketplace.** Synthesis *creates* skills from
+   the agent's own successful runs. Browsing, installing, and sharing skills is
+   distribution work and stays in the marketplace track ([#647](https://github.com/amd/gaia/issues/647)).
+   Splitting them lets the learning loop ship on the memory rails that already
+   exist.
+
+2. **No new infrastructure.** The same `MemoryStore` that holds episodic +
+   semantic memory holds procedural memory; the same embedder clusters goals; the
+   same Mem0-style LLM-in-the-loop pattern distils the procedure; the same memory
+   router exposes it. GAIA's contribution here is the **integration**, not a new
+   format or a new store.
+
+### Prior art (credit before contribution)
+
+The pipeline reuses a substantial body of public work — credited before claiming
+anything as GAIA's:
+
+| Source | What it contributes |
+|---|---|
+| **Mem0** ([mem0.ai](https://mem0.ai)) | LLM-in-the-loop extraction with an `ADD` / `UPDATE` / `DELETE` / `NOOP` decision — reused verbatim for the distil-and-reconcile step (minus `DELETE`, which synthesis never issues). |
+| **Zep / Graphiti** ([getzep.com](https://www.getzep.com/)) | Fact lineage — a v2 supersedes v1. Applied to skills: a procedure with a stronger track record supersedes the weaker one via the existing `superseded_by` column. |
+| **Hindsight** | Pairwise reconciliation — applied to detect two procedures for the same goal and keep the higher success rate. |
+| **ENGRAM** | Memory typing — #606 already types `knowledge` by category; this extends typing to the procedural tier. |
+| **CoALA** ([Sumers et al., 2024](https://arxiv.org/abs/2309.02427)) | The four-tier architecture #606 cites. This spec is its procedural tier. |
+| **Nous Research Hermes Agent** ([hermes-agent.nousresearch.com](https://hermes-agent.nousresearch.com)) | The auto-distillation-from-successful-runs paradigm, and the [agentskills.io](https://agentskills.io) format GAIA adopts for the emitted `SKILL.md`. |
+
+**GAIA's contribution** is the integration: procedural memory lives in the same
+`MemoryStore`, is distilled by the same Mem0-style pipeline, recalled through the
+same embedder, and exposed through the same memory router — no parallel subsystem.
+
+---
+
+## Decided design
+
+The pipeline is the maintainer's five-step loop
+([#887 technical-spec comment](https://github.com/amd/gaia/issues/887#issuecomment-4321407541)),
+landing in a new module `skill_synthesis.py` (PROPOSED) and hooked into the
+**existing** memory maintenance pass. All five steps reuse #606 primitives — no
+new model, no new store engine.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  #606 memory maintenance pass — _run_memory_post_init (memory.py)    │
+│  runs reconcile_memory + consolidate_old_sessions on first query     │
+└───────────────────────────────┬─────────────────────────────────────┘
+                                 │  NEW additive step: _synthesize_skills
+                                 ▼
+  1. DETECT   extract_sequences(store, since)                  PROPOSED
+     walk tool_history by session; keep successful spans
+     of ≥ MIN_STEPS tool calls
+                                 │
+                                 ▼
+  2. CLUSTER  cluster_by_goal(sequences, embedder)             PROPOSED
+     embed each user_goal with the #606 nomic-768 embedder;
+     agglomerate at cosine ≥ SIMILARITY_TAU; keep clusters
+     of ≥ MIN_OCCURRENCES
+                                 │
+                                 ▼
+  3. DISTILL  distill_cluster(cluster, llm) → Skill | None     PROPOSED
+     one low-temp LLM call per cluster (DISTILL_SYSTEM_PROMPT);
+     Skill.parse() validates; literal "SKIP" → None
+                                 │
+                                 ▼
+  4. STORE    reconcile_and_store(candidate, store)            PROPOSED
+     Mem0 ADD / UPDATE / NOOP; supersede when success_count
+     dominates (Zep lineage) → row in the procedures table
+                                 │
+                                 ▼
+  5. RECALL   recall_skill(goal, top_k=2)   (live path)        PROPOSED
+     vector search over procedures.embedding; inject the
+     matched procedure body into the planner's system context
+```
+
+### The synthesis pass hooks into the existing maintenance pass
+
+#606 already runs a maintenance pass on the first `process_query()` of a process —
+`_run_memory_post_init()`
+([`memory.py:1206`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)),
+which calls `reconcile_memory(max_pairs=20)`
+([`memory.py:1377`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py))
+and `consolidate_old_sessions(max_sessions=5)`
+([`memory.py:1233`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)).
+Synthesis is added as **one more additive step in that pass** — a proposed
+`_synthesize_skills()` after consolidation. It is off the hot path and bounded by
+`max_clusters_per_pass`.
+
+<Note>
+The maintainer's pseudocode names this hook `on_consolidation_pass()` calling
+`_consolidate_old_sessions / _reconcile_contradictions / _prune_stale`. Those exact
+method names do **not** exist on `main` — the real seam is `_run_memory_post_init`
+([`memory.py:1206`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)).
+The pseudocode is illustrative; this spec binds the hook to the real method. See
+[Correcting the original framing](#correcting-the-original-framing).
+</Note>
+
+### The proposed `procedures` table
+
+Procedural memory gets its **own table**, distinct from `knowledge`. The rationale
+is in [Why procedures is a separate table](#why-procedures-is-a-separate-table);
+the schema:
+
+```sql
+-- PROPOSED — additive v2→v3 migration in MemoryStore (mirrors the v1→v2 ADD COLUMN pattern)
+CREATE TABLE IF NOT EXISTS procedures (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,              -- kebab-case (→ SKILL.md frontmatter name)
+    when_to_use     TEXT NOT NULL,              -- trigger; embedded for recall (→ description)
+    markdown_body   TEXT NOT NULL,              -- full procedure incl. edge cases inline
+    tools_required  TEXT,                       -- JSON array — the tool-loader recipe contract
+    tool_sequence   TEXT,                       -- JSON — the distilled step pattern
+    success_count   INTEGER NOT NULL DEFAULT 0,
+    attempt_count   INTEGER NOT NULL DEFAULT 0, -- success_count / attempt_count = success rate
+    provenance      TEXT,                       -- JSON {source:'synthesized', from_sessions:[...]}
+    version         TEXT NOT NULL DEFAULT '1.0.0',
+    enabled         INTEGER NOT NULL DEFAULT 1, -- disable without delete (AC: blocks recall)
+    embedding       BLOB,                       -- over when_to_use; its OWN FAISS index
+    superseded_by   TEXT,                       -- set on supersede (higher success rate)
+    created_at      TEXT NOT NULL,
+    last_used_at    TEXT
+);
+```
+
+This honours the corpus name the tool-loader spec already published —
+`procedures.embedding`
+([`tool-loader.mdx:358`](https://github.com/amd/gaia/blob/main/docs/plans/tool-loader.mdx)) —
+and adds a **separate** FAISS index over it, distinct from the `knowledge`
+embedding index ([`memory.py:687`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)).
+Migration is additive only — a **v2→v3** migration mirroring `_migrate_schema_locked`
+([`memory_store.py:364`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)),
+which already grew `knowledge` from v1→v2 with `ADD COLUMN` statements
+([`memory_store.py:388`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)) —
+no existing row is rewritten.
+
+<Note>
+**Provenance is a best-effort audit trail, not a foreign key.** `provenance.from_sessions`
+is validated at synthesis time — every id resolves to a real `tool_history` session at
+the moment the procedure is distilled. It is **not** enforced afterward: #606's
+`tool_history` retention may later prune a referenced session, leaving a dangling id.
+That is acceptable and never blocks recall — the distilled `markdown_body` is already
+self-contained. An implementer must **not** add a foreign-key constraint or a
+"verify provenance on read" check that couples recall to `tool_history` longevity.
+</Note>
+
+### `recall_skill(goal, top_k=2)` is an internal method, not a sixth tool
+
+The issue's Scope C calls it a *"new tool"*, but the design keeps it a **plain
+`MemoryMixin`/`MemoryStore` method invoked programmatically by the planner** — not
+a sixth LLM-facing `@tool`. The matched procedure's body is injected into the
+system context assembled by `_compose_system_prompt`
+([`agent.py:591`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py)) —
+the same composition seam the dynamic tool-loader's per-turn `_select_tools_for_turn`
+hook ([`agent.py:786`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py))
+already uses. This:
+
+- **preserves the five-tool memory registry** (`remember`, `recall`,
+  `update_memory`, `forget`, `search_past_conversations` —
+  [`memory.py:1984`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py),
+  `:2067`, `:2250`, `:2335`, `:2344`); the agent gains a capability without
+  gaining a tool it must reason about choosing;
+- **matches the tool-loader's programmatic use** — Part 3 calls `recall_skill(goal)`
+  itself to union `tools_required` into selection
+  ([`tool-loader.mdx:350`](https://github.com/amd/gaia/blob/main/docs/plans/tool-loader.mdx)),
+  it does not wait for the model to call a tool.
+
+**Injection budget.** Each matched body lands in the planner's system prompt, so an
+unbounded body would both bloat the context on a small local model **and** defeat the
+tool-loader's cache-warm seam, which recomputes the system prompt only when the tool
+*selection* changes ([`tool-loader.mdx:294`](https://github.com/amd/gaia/blob/main/docs/plans/tool-loader.mdx)).
+The spec therefore caps the injection at a default **`MAX_RECALL_BODY_CHARS = 1500`
+per body** at `top_k = 2` — a ≤ 3 KB worst-case prompt addition. `DISTILL_SYSTEM_PROMPT`
+already targets short, single-screen procedures, so the cap is a guardrail rather than
+the common path; a body over the cap is truncated at injection with an explicit
+`… (truncated)` marker while the **full** body stays in the `procedures` row. The exact
+value is tunable against a small-model eval at PR.
+
+### Thresholds
+
+The five thresholds are the maintainer's chosen constants, surfaced as config (see
+[Open questions](#open-questions) for the config-location decision):
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `MIN_STEPS` | `3` | A span shorter than 3 tool calls is not worth distilling. |
+| `MIN_OCCURRENCES` | `3` | Need ≥3 similar successful runs before a cluster qualifies. |
+| `MIN_SUCCESS_RATE` | `0.80` | A cluster must be ≥80% successful. |
+| `SIMILARITY_TAU` | `0.82` | Cosine threshold on goal embeddings, for clustering **and** recall match. |
+| `max_clusters_per_pass` | `10` | Caps LLM calls per synthesis pass — bounds cost. |
+
+---
+
+## The format contract
+
+The pipeline *emits* a `SKILL.md`; it does **not** define the format. The format is
+[Skill Format](/plans/skill-format) (#691), now authored and locked. This spec
+**references** that schema and never redefines a field.
+
+The subtlety — and the single most important correctness point — is the split
+between **what the LLM emits** and **what `Skill.parse()` injects**. The guiding
+rule: **the LLM emits only the fields it *derives* from the learned procedure;
+fixed constants are injected, never emitted.** So `DISTILL_SYSTEM_PROMPT` asks the
+model for an **intermediate** frontmatter of four learned fields, and a
+deterministic `Skill.parse()` maps them to the canonical #691 document and adds the
+two constants:
+
+| Field | Origin | → Canonical `SKILL.md` (#691) | Why |
+|---|---|---|---|
+| `name` | **LLM (derived)** | `name` | Identity, derived from the cluster. Matches the rule at [`skill-format.mdx:150`](https://github.com/amd/gaia/blob/main/docs/plans/skill-format.mdx). |
+| `when_to_use` | **LLM (derived)** | `description` | **`when_to_use` is the LLM-emitted field on purpose** — it forces the model to *conclude the trigger boundaries* of the skill; `description` is too vague a label to constrain it. Its embedding is what `recall_skill(goal)` matches against. Maps to the required `description` ([`skill-format.mdx:151`](https://github.com/amd/gaia/blob/main/docs/plans/skill-format.mdx)). |
+| `tools_required` (top-level) | **LLM (derived)** | `metadata.gaia.tools_required` | The tool set the procedure actually used. #691 **locks** `tools_required` as the cross-spec recipe contract and nests it under `metadata.gaia` ([`skill-format.mdx:143`](https://github.com/amd/gaia/blob/main/docs/plans/skill-format.mdx), `:158`). |
+| `markdown_body` | **LLM (derived)** | body | The LLM writes the **full procedure — numbered steps *and* a `## Edge cases` section — inline**. `Skill.parse()` does not synthesize a separate edge-case section; the distilled body already carries it. |
+| `license: MIT`, `version: 1.0.0` | **`Skill.parse()` (fixed)** | `license`, `version` | **Fixed constants, not learned content — the LLM does *not* emit them.** `license` is always the repository license ([`skill-format.mdx:152`](https://github.com/amd/gaia/blob/main/docs/plans/skill-format.mdx)); a freshly synthesised skill is always `version: 1.0.0` (SemVer — [`skill-format.mdx:153`](https://github.com/amd/gaia/blob/main/docs/plans/skill-format.mdx)). Injecting them keeps the prompt's output surface purely dynamic and removes any chance the model emits a wrong version. |
+
+A synthesised recipe therefore emits a **bounded field set** — `name`,
+`description`, `license`, `version`, `metadata.gaia.tools_required`, and the body.
+It does **not** emit `security_tier`, `permissions`, `requirements`, or provided
+`tools` ([`skill-format.mdx:154`](https://github.com/amd/gaia/blob/main/docs/plans/skill-format.mdx)–`:157`):
+those are install-time trust and capability concerns owned by #691 / the
+marketplace (#647), explicitly **out of #887's scope**. Each is optional in #691,
+so the file still validates; an omitted `security_tier` defaults to the
+most-restrictive `experimental` at load time.
+
+This is the **one deliberate refinement** of the maintainer's pseudocode: his
+`DISTILL_SYSTEM_PROMPT` listed `version: 1.0.0` *inside* the LLM's required output
+([#887 technical-spec comment](https://github.com/amd/gaia/issues/887#issuecomment-4321407541));
+this spec moves `version` (and `license`) to `Skill.parse()` injection because both
+are fixed, not derived. The pipeline otherwise keeps the maintainer's prompt as
+written, and **(a)** treats the four learned fields as the intermediate shape,
+**(b)** specifies `Skill.parse()` as the translator to the locked schema, and
+**(c)** guarantees the emitted file validates under #691 — an explicit acceptance
+criterion (see [Acceptance criteria traceability](#acceptance-criteria-traceability)).
+
+### Two corpora, one format — the boundary with the loader/parser
+
+#887 and #691 own **different corpora** and do not conflict:
+
+- **#887 owns the internal, learned corpus.** Synthesised procedures live in the
+  `procedures` table, recalled via `recall_skill` over `procedures.embedding`.
+  #887 owns the `synthesize → procedures → optional SKILL.md export` path.
+- **#691 owns the external, installed corpus.** The proposed `gaia.skills` loader
+  (greenfield — [`skill-format.mdx:16`](https://github.com/amd/gaia/blob/main/docs/plans/skill-format.mdx))
+  loads installed `SKILL.md` files from `~/.gaia/skills/<name>/`
+  ([`agent-skills.mdx:193`](https://github.com/amd/gaia/blob/main/docs/spec/agent-skills.mdx)).
+
+They meet only at the **format**: an exported #887 procedure is a valid #691
+document, so it is installable like any other skill. They never share a table or a
+parser.
+
+---
+
+## The tool-loader contract
+
+[Dynamic Tool Loader](/plans/tool-loader) Part 3 is the named consumer. It is
+**gated on #887** and returns `[]` cleanly until this lands, so the contract must
+match its already-published wording byte-for-byte:
+
+- `recall_skill(goal)` is *"a vector search over `procedures.embedding`"* in the
+  same `MemoryStore`
+  ([`tool-loader.mdx:358`](https://github.com/amd/gaia/blob/main/docs/plans/tool-loader.mdx)) —
+  this spec's [`procedures` table](#decided-design) provides exactly that column
+  and index.
+- When a skill matches, the loader unions its `tools_required` **ahead of**
+  semantic results
+  ([`tool-loader.mdx:351`](https://github.com/amd/gaia/blob/main/docs/plans/tool-loader.mdx)) —
+  this spec emits `tools_required` (the locked #691 field) on every recipe
+  procedure.
+- The selection formula is `loaded = CORE ∪ SKILL ∪ SEMANTIC ∪ escape-hatch`,
+  precedence `CORE > SKILL > SEMANTIC`
+  ([`tool-loader.mdx:362`](https://github.com/amd/gaia/blob/main/docs/plans/tool-loader.mdx)).
+  #887 is the producer of the `SKILL` input; it adds nothing to and removes
+  nothing from that formula.
+
+**This spec is the *producer* side of a soft dependency.** It does not modify the
+loader. Until #887 ships, the loader's `SKILL` signal is `[]`; once it ships, the
+signal is non-empty for goals that match a stored procedure. Parts 0–2 of the
+loader are unaffected either way.
+
+---
+
+## Reuse of the memory v2 layer
+
+Every primitive the pipeline needs already exists in #606. The table below maps
+each reuse to its verified `file:line` on `main`.
+
+| # | Reused primitive | `file:line` |
+|---|---|---|
+| 1 | `MemoryStore` over `~/.gaia/memory.db` | [`memory_store.py:297`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py), `:300`, `:308` |
+| 2 | `tool_history` (`session_id, tool_name, args, result_summary, success, error, duration_ms, timestamp`) — the episodic trace `extract_sequences` walks | [`memory_store.py:241`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py) |
+| 3 | `nomic-embed-text-v2-moe-GGUF`, `EMBEDDING_DIM = 768` — reused to embed goals; **no new model** | [`memory.py:148`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py), `:151` |
+| 4 | FAISS `IndexFlatIP` over L2-normalized vectors = cosine — the index pattern `procedures.embedding` copies | [`memory.py:687`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py) |
+| 5 | Mem0-style `_EXTRACTION_PROMPT` (ADD/UPDATE/DELETE/NOOP) — the distil-and-reconcile pattern | [`memory.py:186`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py) |
+| 6 | `_CONSOLIDATION_PROMPT` / `_RECONCILIATION_PROMPT` — prior art for an LLM-in-the-loop maintenance prompt | [`memory.py:222`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py), `:235` |
+| 7 | The maintenance pass `_run_memory_post_init` → `reconcile_memory` + `consolidate_old_sessions` — the hook point | [`memory.py:1206`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py), `:1377`, `:1233` |
+| 8 | `superseded_by` column + additive `_migrate_schema_locked` — the supersede + migration patterns | [`memory_store.py:227`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py), `:364` |
+| 9 | `_compose_system_prompt` — where the matched procedure body is injected | [`agent.py:591`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py) |
+| 10 | `/api/memory/*` router + `X-Gaia-UI` CSRF guard — the surface the dashboard reads procedural data through | [`ui/routers/memory.py:26`](https://github.com/amd/gaia/blob/main/src/gaia/ui/routers/memory.py), `:29` |
+
+---
+
+## Why procedures is a separate table
+
+The maintainer's tech spec left the storage shape open — *"`procedures` (or
+`knowledge` with `kind='procedure'`)"*. This spec chooses a **separate
+`procedures` table**, because `knowledge` and procedures diverge on every
+lifecycle axis. `knowledge`
+([`memory_store.py:209`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py))
+stores **atomic beliefs**; procedures store **generalized multi-step policies**.
+
+| Axis | `knowledge` (fact / preference / note) | `procedures` (learned skill) |
+|---|---|---|
+| **Origin** | one conversation turn (Mem0 extraction) or the `remember()` tool | a **cluster of ≥3 successful runs** (`distill_cluster`), gated on occurrence + success-rate thresholds |
+| **Unit** | one sentence of `content` | a whole `SKILL.md` (frontmatter + multi-step body) |
+| **Quality signal** | `confidence` REAL ([`memory_store.py:215`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)) — a *belief strength* | `success_count` / `attempt_count` — an *empirical track record* |
+| **Removal** | confidence-pruned or `forget()` (deleted) | **`enabled` toggle** — kept, not deleted (AC: disabling blocks recall) |
+| **What's embedded** | the `content` (the fact text) | **`when_to_use`** (the goal/trigger) — a different corpus, for goal→procedure matching |
+| **Recipe contract** | none | **`tools_required`** consumed by the tool-loader (#1451) |
+| **Provenance** | single `source` enum ([`memory_store.py:214`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)) | a **list** of `from_sessions` distilled from `tool_history` |
+
+Two consequences make a shared table actively harmful:
+
+1. **Embedding-corpus mismatch.** `recall_skill` matches a *goal* against a
+   *trigger* embedding; `knowledge` recall matches a *query* against
+   *fact-content* embeddings. Mixing both in one FAISS index
+   ([`memory.py:687`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py))
+   pollutes both result sets — procedures need their **own** index over
+   `procedures.embedding`, exactly what the tool-loader spec promised
+   ([`tool-loader.mdx:358`](https://github.com/amd/gaia/blob/main/docs/plans/tool-loader.mdx)).
+2. **`category='skill'` is already taken for something else.**
+   `VALID_CATEGORIES` already contains `"skill"`
+   ([`memory_store.py:97`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)),
+   but that is a *user-told* skill fact ("I know vim"), not a synthesised
+   multi-step procedure. Reusing it would conflate two unrelated concepts, and
+   every procedure-only column (`success_count`, `tools_required`, `enabled`,
+   `provenance`) would be `NULL` on all of today's knowledge rows.
+
+Only `embedding` and `superseded_by` echo `knowledge`, and even those carry
+different semantics (goal vs content; success-rate vs contradiction). The choice
+is **confirm-at-PR-review**, not a pre-authoring blocker (see
+[Open questions](#open-questions)).
+
+---
+
+## Off-states as safe floors
+
+Every degraded condition lands on a conservative floor — the pipeline produces
+**no procedural signal**, never a broken recall or a silent wrong answer. The
+failure-mode rows are the maintainer's table, grounded against the real config
+surface.
+
+| Condition | Who triggers it | Floor behavior |
+|---|---|---|
+| **Memory disabled** (`GAIA_MEMORY_DISABLED=1`, [`memory.py:332`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)) | Deliberate user setting | No store → no synthesis, no recall. `recall_skill` returns `[]`; the loader's `SKILL` signal is `[]`. Identical to a build without this feature. |
+| **Synthesis disabled** (`enabled = false`) | Deliberate user setting | The maintenance pass **skips** `_synthesize_skills`, logged at INFO. Already-stored procedures remain recallable. |
+| **A specific procedure disabled** (`enabled = 0` on the row) | User (via the #606 dashboard track) | `recall_skill` **excludes** it — satisfies the AC *"disabling a skill prevents it from being recalled."* The row is kept, not deleted. |
+| **Lemonade down** during the distillation call | Failure | **Skip the whole synthesis pass**, log loudly. **No** silent downgrade to a smaller model. |
+| **Malformed `agentskills.io` output** from the LLM | Failure | Skip **that cluster**, log; no truncation, no auto-fix. |
+| **Embedder fails** | Failure | **Re-raise** — synthesis cannot proceed without embeddings (matches memory v2's embed-failure posture). |
+| **No matching procedure at recall** | Normal | `recall_skill` returns `[]`; the planner prompt is unchanged; the loader falls through to CORE + semantic. |
+
+This collapses the three *user-chosen* off-states (memory off, synthesis off, a
+disabled procedure) onto "no procedural signal" — a user can never lose a
+capability the agent had before — while the three *failure* states fail loudly per
+[`CLAUDE.md`](https://github.com/amd/gaia/blob/main/CLAUDE.md)'s no-silent-fallback
+rule. The distinction is in the *messaging* (silent-and-expected vs
+actionable-error), not the mechanism: all of them leave the agent on its
+pre-synthesis behavior.
+
+---
+
+## Trust boundary for injected bodies
+
+A synthesised procedure is **model-authored text that re-enters the planner's system
+prompt** through `recall_skill` → `_compose_system_prompt`. That makes it a trust
+boundary — and a self-reinforcing one: a procedure distilled from a run that itself
+followed an earlier weak procedure could entrench that weakness. Three rules keep the
+loop honest:
+
+- **Internal corpus only.** A body injected at planning time comes **only** from the
+  local `procedures` table — never a network source, an imported file, or an installed
+  `~/.gaia/skills/` document. The external corpus (#691) loads through a different path
+  and never crosses into the injection seam (see [The format contract](#the-format-contract)).
+- **No auto-export.** Synthesis writes to the `procedures` table only; it does **not**
+  auto-write a `SKILL.md` to disk or publish anywhere. Promoting a procedure to the
+  installable corpus is an explicit, user-initiated action on the marketplace track
+  (#647) — a human reviews before a synthesised procedure becomes shareable.
+- **Empirical gate, not just plausibility.** A procedure only exists because a cluster
+  of ≥ `MIN_OCCURRENCES` runs cleared `MIN_SUCCESS_RATE` at synthesis; once its track
+  record decays it is superseded (Zep lineage) or disabled, so a once-good policy that
+  starts failing stops being recalled. The distiller only ever reads the agent's own
+  `tool_history` — never raw network content.
+
+This is a **content-trust** statement, distinct from the install-time `security_tier` /
+`permissions` controls, which gate the *external* corpus and stay out of #887's scope
+(→ #691 / #647).
+
+---
+
+## Correcting the original framing
+
+The issue body and the maintainer's pseudocode predate #691 locking and the
+current code; these are the corrections an implementer must internalize.
+
+| Original framing | Reality on `main` | Consequence |
+|---|---|---|
+| `DISTILL_SYSTEM_PROMPT` emits `when_to_use` + top-level `tools_required` as the on-disk shape | #691 locks `description` + `metadata.gaia.tools_required` ([`skill-format.mdx:151`](https://github.com/amd/gaia/blob/main/docs/plans/skill-format.mdx), `:158`) | The prompt fields are the **intermediate** shape; `Skill.parse()` maps them. See [The format contract](#the-format-contract). |
+| Scope C: *"New **tool**: `recall_skill`"* | The memory registry is exactly five tools ([`memory.py:1984`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)+) and the planner calls recall programmatically | `recall_skill` is an **internal method**, not a sixth `@tool`. See [Decided design](#decided-design). |
+| Hook is `on_consolidation_pass` → `_consolidate_old_sessions / _reconcile_contradictions / _prune_stale` | Those names don't exist; the real pass is `_run_memory_post_init` → `reconcile_memory` + `consolidate_old_sessions` ([`memory.py:1206`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)) | Bind `_synthesize_skills` to the **real** maintenance method. |
+| Tunables in `~/.gaia/config.toml [memory.skill_synthesis]` | Memory is configured via `~/.gaia/memory_settings.json` ([`memory.py:57`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)) + `GAIA_MEMORY_DISABLED`; there is **no** `config.toml` `[memory]` section | Surface the thresholds on the **existing** memory-settings surface, not a new TOML section — see [Open questions](#open-questions). |
+| Storage: `procedures` *or* `knowledge` with `kind='procedure'` | `knowledge` has no `kind` column and `category='skill'` already means something else ([`memory_store.py:97`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)) | A **separate** `procedures` table. See [Why procedures is a separate table](#why-procedures-is-a-separate-table). |
+
+<Warning>
+**Retractions — do not build against these:**
+
+- **The intermediate frontmatter is not the on-disk schema.** A reader of the
+  maintainer's `DISTILL_SYSTEM_PROMPT` must not write `when_to_use` /
+  top-level `tools_required` to disk. The on-disk file is the #691 schema
+  (`description`, `metadata.gaia.tools_required`); `Skill.parse()` is the only
+  bridge.
+- **`recall_skill` is not an LLM tool.** Do not register a sixth memory `@tool`;
+  it would change the five-tool registry the rest of the system assumes.
+- **There is no `[memory.skill_synthesis]` TOML section to extend** — it does not
+  exist on `main`. Config rides the existing `memory_settings.json` surface (the
+  exact key location is an [open question](#open-questions)).
+</Warning>
+
+---
+
+## KPIs
+
+The pipeline is judged by **the acceptance criteria, gated by no-harm** — a loop
+that synthesises garbage or breaks recall is worse than no loop.
+
+| KPI | Type | Target |
+|---|---|---|
+| **Auto-synthesis fires** | Headline (the issue's first AC) | After ≥3 successful similar sequences (≥`MIN_SUCCESS_RATE`), a `SKILL.md` is created and discoverable via `recall_skill()`. |
+| **Tool-step reduction** | Outcome | The 4th attempt at a matched goal uses **fewer tool steps** than the unmatched baseline (measured against the tool-loader baseline harness). |
+| **Format validity** | Correctness / grounding | **100%** of synthesised `SKILL.md` validate under #691 (agentskills.io / Hermes reference parser) — round-tripped, not asserted. |
+| **No silent fallback** | Safety (hard guardrail) | Lemonade down → pass skipped + logged; malformed → cluster skipped + logged; embedder down → re-raise. **Never** a smaller-model swap. |
+| **Recall precision** | Quality | `recall_skill` returns a procedure only above `SIMILARITY_TAU`; a procedure with `enabled = 0` is **never** returned. |
+| **Provenance integrity** | Correctness | **At synthesis time**, every `procedures` row's `provenance.from_sessions` resolves to the real `tool_history` sessions it was distilled from. A best-effort audit trail, not a foreign key — later `tool_history` pruning may dangle an id, which never breaks recall. |
+
+---
+
+## Phased build
+
+Ship in reviewable phases; each phase holds the prior floor and earns its place
+with an eval run before merge (per [`CLAUDE.md`](https://github.com/amd/gaia/blob/main/CLAUDE.md)).
+
+### Phase 0 — `procedures` schema + additive migration (PROPOSED)
+
+Add the `procedures` table and a separate FAISS index over `procedures.embedding`;
+extend `MemoryStore` with `put_skill` / `search_skills` / `supersede_skill` /
+`iter_sessions` (all PROPOSED). Migration is additive only — a v2→v3 migration
+mirroring the v1→v2 `ADD COLUMN` pattern
+([`memory_store.py:364`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)).
+
+**Success criteria:**
+- A **fresh** DB and an **existing** v2 DB both open after the migration; the
+  `procedures` table is present; **no** `knowledge` / `tool_history` row is
+  altered (verified against a copied pre-migration DB).
+- The procedures FAISS index is independent of the knowledge index — building one
+  does not touch the other.
+
+### Phase 1 — Detect → cluster → distill → reconcile/store (PROPOSED)
+
+`skill_synthesis.py` with `extract_sequences` / `cluster_by_goal` /
+`distill_cluster` / `Skill.parse` / `reconcile_and_store`, hooked into the
+maintenance pass as `_synthesize_skills` after `consolidate_old_sessions`
+([`memory.py:1233`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)).
+Reuses the nomic-768 embedder ([`memory.py:148`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)).
+
+**Success criteria:**
+- After **3** successful similar sequences (≥`MIN_STEPS`, ≥`MIN_SUCCESS_RATE`), a
+  `procedures` row is created with a valid distilled body and correct
+  `provenance.from_sessions`.
+- **Fail-loud verified**: a stubbed Lemonade-down skips the whole pass + logs; a
+  malformed distill output skips that cluster + logs; an embedder failure
+  re-raises — no smaller-model fallback in any path.
+- Reconciliation issues `ADD` / `UPDATE` / `NOOP` only (never `DELETE`); a
+  higher-`success_count` candidate supersedes via `superseded_by`
+  ([`memory_store.py:227`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)).
+- `gaia eval agent` shows no regression on the affected category vs the committed
+  baseline (LLM-affecting change — eval required per `CLAUDE.md`).
+
+### Phase 2 — `recall_skill` + planner injection + disabled-flag (PROPOSED)
+
+`recall_skill(goal, top_k=2)` as an internal method (vector search over
+`procedures.embedding`); inject the matched body into the system context via
+`_compose_system_prompt` ([`agent.py:591`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py));
+honour `enabled = 0` in the recall path; emit `tools_required` for the tool-loader
+Part 3 union.
+
+**Success criteria:**
+- A matched goal injects the procedure body and the 4th attempt shows a
+  **measurable tool-step reduction** vs the unmatched baseline.
+- **Disabling a procedure** (`enabled = 0`) prevents it from being recalled (the
+  issue AC) — verified directly against the recall path.
+- A fixture procedure's `tools_required` are unioned **ahead of** semantic results
+  by the tool-loader, per [`tool-loader.mdx:369`](https://github.com/amd/gaia/blob/main/docs/plans/tool-loader.mdx)
+  — and with #887 absent the loader's `SKILL` signal is `[]` (regression test).
+
+### Deferred — Memory Dashboard "Procedures" tab (NOT #887)
+
+The dashboard tab is **explicitly out of #887** — the maintainer's tech spec lists
+it under *"What this issue does NOT do … part of the dashboard work in #606's
+deliverables; we just expose new data."* #887 **stores and exposes** the
+procedural data (count, last-used, provenance, `enabled`) through the existing
+`/api/memory/*` router pattern
+([`ui/routers/memory.py:26`](https://github.com/amd/gaia/blob/main/src/gaia/ui/routers/memory.py)),
+following the established three-tab dashboard shape (the `DashboardTab` union,
+[`MemoryDashboard.tsx:267`](https://github.com/amd/gaia/blob/main/src/gaia/apps/webui/src/components/MemoryDashboard.tsx)).
+**Rendering the "Procedures" tab and the "promote this conversation to a skill"
+button ride #606's dashboard track**, not this issue. The two dashboard ACs are
+deferred accordingly (see [Acceptance criteria traceability](#acceptance-criteria-traceability)).
+
+---
+
+## Examples
+
+All examples parse as YAML and validate under [Skill Format](/plans/skill-format).
+The recipe reuses `triage-support-ticket`
+([`skill-format.mdx:415`](https://github.com/amd/gaia/blob/main/docs/plans/skill-format.mdx))
+so its `tools_required` resolve to real registry tools.
+
+<AccordionGroup>
+<Accordion title="A. The synthesised SKILL.md (Skill.parse output — the on-disk #691 document)">
+
+What `Skill.parse()` writes after distillation — a valid #691 document. `name`,
+`description`, `license`, `version`, and `metadata.gaia.tools_required` are all the
+locked schema. Each `tools_required` name is a real registry tool (`query_documents`
+from `RAGToolsMixin`, `read_file` from `FileIOToolsMixin`, `remember` from the
+tool-loader CORE set, [`tool-loader.mdx:269`](https://github.com/amd/gaia/blob/main/docs/plans/tool-loader.mdx)).
+**No `security_tier` is emitted** — skill security tiers are explicitly out of
+#887's scope (→ #647); the field is optional in #691 and the loader defaults an
+omitted tier to the most-restrictive `experimental` ([`skill-format.mdx:154`](https://github.com/amd/gaia/blob/main/docs/plans/skill-format.mdx)).
+
+```yaml
+---
+name: triage-support-ticket
+description: Triage an inbound support ticket end to end. Use when the user pastes a support ticket or asks to triage one.
+license: MIT
+version: 1.0.0
+metadata:
+  gaia:
+    tools_required:
+      - query_documents
+      - read_file
+      - remember
+---
+
+# Triage a Support Ticket
+
+1. Pull matching policy docs with `query_documents`.
+2. Read any attached log with `read_file`.
+3. Record the disposition with `remember` for follow-up.
+
+## Edge cases
+- If no policy doc matches, escalate rather than guessing.
+- A ticket with no attached log skips step 2.
+```
+
+</Accordion>
+<Accordion title="B. The intermediate DISTILL_SYSTEM_PROMPT output (before Skill.parse)">
+
+What the LLM emits — **only the four learned fields**: top-level `name`,
+`when_to_use`, `tools_required`, and a body that already contains the
+`## Edge cases` section. No `version`, no `license` — those are fixed constants.
+`Skill.parse()` maps `when_to_use → description`, `tools_required →
+metadata.gaia.tools_required`, and **injects the fixed `license: MIT` and
+`version: 1.0.0`** to produce example A.
+
+```yaml
+---
+name: triage-support-ticket
+when_to_use: Triage an inbound support ticket end to end. Use when the user pastes a support ticket or asks to triage one.
+tools_required: [query_documents, read_file, remember]
+---
+
+# Triage a Support Ticket
+
+1. Pull matching policy docs with `query_documents`.
+2. Read any attached log with `read_file`.
+3. Record the disposition with `remember` for follow-up.
+
+## Edge cases
+- If no policy doc matches, escalate rather than guessing.
+- A ticket with no attached log skips step 2.
+```
+
+</Accordion>
+<Accordion title="C. A stored procedures row">
+
+The record as stored — one row of the [`procedures` table](#decided-design).
+`embedding` is the 768-float BLOB over `when_to_use`; `provenance` links back to
+the `tool_history` sessions it was distilled from; `success_count`/`attempt_count`
+is the empirical track record; `enabled = 1`.
+
+```json
+{
+  "id": "proc_01J9Z4F8K2",
+  "name": "triage-support-ticket",
+  "when_to_use": "Triage an inbound support ticket end to end. Use when the user pastes a support ticket or asks to triage one.",
+  "markdown_body": "# Triage a Support Ticket\n1. Pull matching policy docs with `query_documents`.\n2. Read any attached log with `read_file`.\n3. Record the disposition with `remember` for follow-up.\n## Edge cases\n- If no policy doc matches, escalate rather than guessing.\n- A ticket with no attached log skips step 2.",
+  "tools_required": "[\"query_documents\", \"read_file\", \"remember\"]",
+  "tool_sequence": "[{\"tool\": \"query_documents\"}, {\"tool\": \"read_file\"}, {\"tool\": \"remember\"}]",
+  "success_count": 4,
+  "attempt_count": 5,
+  "provenance": "{\"source\": \"synthesized\", \"from_sessions\": [\"sess_a1\", \"sess_b2\", \"sess_c3\", \"sess_d4\"]}",
+  "version": "1.0.0",
+  "enabled": 1,
+  "embedding": "<768-float BLOB over when_to_use>",
+  "superseded_by": null,
+  "created_at": "2026-06-17T12:00:00Z",
+  "last_used_at": null
+}
+```
+
+</Accordion>
+<Accordion title="D. recall_skill at planning time (the live contract surface)">
+
+`recall_skill` is called programmatically at turn start. The matched procedure's
+body is injected into the system context; its `tools_required` feed the
+tool-loader's `CORE ∪ SKILL ∪ SEMANTIC` union ahead of semantic results.
+
+```python
+# PROPOSED — at turn start, before tool selection (internal method, not an @tool)
+matches = self.recall_skill(user_goal, top_k=2)
+# matches → [
+#   Skill(
+#     name="triage-support-ticket",
+#     when_to_use="Triage an inbound support ticket end to end. ...",
+#     body="# Triage a Support Ticket\n1. ...\n## Edge cases\n- ...",
+#     tools_required=["query_documents", "read_file", "remember"],
+#   )
+# ]   # → [] when nothing matches above SIMILARITY_TAU, or when the row is enabled=0
+
+# 1. Planner injection — matched body added to the system context built by
+#    _compose_system_prompt (agent.py:591):
+#      "Past procedures: ### Relevant skill: triage-support-ticket  <body>"
+#
+# 2. Tool-loader Part 3 (the consumer) unions matches[i].tools_required AHEAD of
+#    semantic results, per tool-loader.mdx — loaded = CORE ∪ SKILL ∪ SEMANTIC.
+```
+
+</Accordion>
+</AccordionGroup>
+
+---
+
+## Open questions
+
+No blocking forks remain — the issue owner settled the design during planning. The
+items below are **confirm-at-PR-review**, not pre-authoring blockers; the
+maintainer said he will *"steer from the PR"*
+([#887 comment](https://github.com/amd/gaia/issues/887#issuecomment-4714974200)).
+
+1. **Config surface for the thresholds.** The maintainer's pseudocode puts tunables
+   in `~/.gaia/config.toml [memory.skill_synthesis]`, but that section does **not**
+   exist — memory is configured via `~/.gaia/memory_settings.json`
+   ([`memory.py:57`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py))
+   plus `GAIA_MEMORY_DISABLED`. This spec proposes surfacing the five thresholds on
+   the **existing** memory-settings surface (mirroring how the tool-loader dropped
+   its proposed `config.toml` section for `ChatAgentConfig` + env,
+   [`tool-loader.mdx:312`](https://github.com/amd/gaia/blob/main/docs/plans/tool-loader.mdx)).
+   Confirm the exact key location at PR.
+2. **`procedures` table vs `knowledge.kind`.** This spec chose a separate table
+   ([Why procedures is a separate table](#why-procedures-is-a-separate-table)); the
+   maintainer's tech spec left it open. Ratify the table choice at PR.
+3. **`recall_skill` injection-budget tuning.** The spec sets a default cap of
+   `MAX_RECALL_BODY_CHARS = 1500` per body at `top_k = 2` (see [Decided design](#decided-design)),
+   which bounds the prompt addition and protects the tool-loader's cache-warm seam
+   ([`tool-loader.mdx:294`](https://github.com/amd/gaia/blob/main/docs/plans/tool-loader.mdx)).
+   Confirm the exact value against a small-model eval at PR — a tuning question, no
+   longer an open design fork.
+4. **Synthesis cadence.** #606's maintenance pass runs once per process on the
+   first query ([`memory.py:1206`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)).
+   The issue also mentions *"daily background"*. Confirm whether v1 piggybacks on
+   the existing per-process pass only, or adds a scheduled cron.
+5. **Nav placement.** This doc registers under **Ecosystem** alongside
+   `skill-format` and `agent-skills`. Confirm it stays there given the in-flight
+   Agent-UI / Hub restructure (a placement check, not a design fork).
+
+---
+
+## Current state of the code
+
+The memory layer it builds on is real and merged; the synthesis pipeline is
+**entirely greenfield**.
+
+| Area | Symbol / fact | `file:line` | State |
+|---|---|---|---|
+| Memory store | `MemoryStore`, `~/.gaia/memory.db` | `memory_store.py:297`, `:308` | **Exists** (#606) |
+| Episodic trace | `tool_history` table | `memory_store.py:241` | **Exists** — synthesis input |
+| Embedder | `nomic-embed-text-v2-moe-GGUF`, `EMBEDDING_DIM = 768` | `memory.py:148`, `:151` | **Exists** — reused, no new model |
+| Vector index | FAISS `IndexFlatIP` | `memory.py:687` | **Exists** — pattern for `procedures.embedding` |
+| Maintenance pass | `_run_memory_post_init` → `reconcile_memory` + `consolidate_old_sessions` | `memory.py:1206`, `:1377`, `:1233` | **Exists** — the hook point |
+| Distillation prior art | `_EXTRACTION_PROMPT`, `_CONSOLIDATION_PROMPT` | `memory.py:186`, `:222` | **Exists** — Mem0 pattern |
+| Supersede + migration | `superseded_by`, `_migrate_schema_locked` | `memory_store.py:227`, `:364` | **Exists** — additive pattern |
+| Memory tools (five) | `remember`, `recall`, `update_memory`, `forget`, `search_past_conversations` | `memory.py:1984`, `:2067`, `:2250`, `:2335`, `:2344` | **Exists** — `recall_skill` is **not** one of them |
+| Prompt composition | `_compose_system_prompt`, `_select_tools_for_turn` | `agent.py:591`, `:786` | **Exists** — injection seam |
+| Memory REST + dashboard | `/api/memory/*`, `X-Gaia-UI` guard, three-tab dashboard | `ui/routers/memory.py:26`, `:29`; `MemoryDashboard.tsx:267` | **Exists** — exposes procedural data |
+| `category='skill'` (a fact, not a procedure) | `VALID_CATEGORIES` includes `"skill"` | `memory_store.py:97` | **Exists** — *different concept* |
+| **`skill_synthesis.py` / `procedures` table / `extract_sequences` / `cluster_by_goal` / `distill_cluster` / `Skill.parse` / `SkillProvenance` / `reconcile_and_store` / `recall_skill` / `_synthesize_skills` / `put_skill` / `search_skills` / `supersede_skill` / `iter_sessions`** | — | **NOT FOUND** (verified absent on `main`) | **Greenfield — PROPOSED** |
+
+---
+
+## Dependencies
+
+| Issue | Role | State | What #887 needs / gives |
+|---|---|---|---|
+| [#606](https://github.com/amd/gaia/issues/606) memory v2 | **Blocking dependency** | **merged** | The store, `tool_history`, the embedder, FAISS, the Mem0 pattern, the maintenance pass, the memory router — all reused (see [Reuse of the memory v2 layer](#reuse-of-the-memory-v2-layer)). |
+| [#691](https://github.com/amd/gaia/issues/691) Skill Format | **Format contract** | **authored / locked** | The `SKILL.md` schema #887 *emits*. #887 references it, never redefines a field (see [The format contract](#the-format-contract)). |
+| [#1451](https://github.com/amd/gaia/issues/1451) tool-loader Part 3 | **Consumer** (gated on #887) | open | The `recall_skill` + `tools_required` + `procedures.embedding` contract. #887 is the producer; the loader returns `[]` until #887 lands (see [The tool-loader contract](#the-tool-loader-contract)). |
+| [#553](https://github.com/amd/gaia/issues/553) self-improving agent | **Consumer** | open | #887 **is** the skill-extraction slice → **partially resolves** #553 (tool *generation* stays out of scope). |
+| [#647](https://github.com/amd/gaia/issues/647) marketplace | **Downstream** | open (v0.24.0) | A stable on-disk export path for synthesised `SKILL.md`. Marketplace UX is out of #887 scope. |
+| [#692](https://github.com/amd/gaia/issues/692) OpenClaw compat | **Downstream** | open (v0.24.0) | Format compliance only — inherited via #691. |
+| [#688](https://github.com/amd/gaia/issues/688) dynamic tool loading | **Adjacent** | open | The umbrella for the tool-loader; #1451 is its Part 3. |
+
+---
+
+## Acceptance-criteria traceability
+
+Every Scope item and acceptance criterion from
+[#887](https://github.com/amd/gaia/issues/887), mapped to its section and what it
+guarantees a consumer. Deferrals are explicit, with the track that owns them.
+
+| #887 scope / acceptance criterion | Section | Status / guarantee |
+|---|---|---|
+| **Scope A** — `procedures` table + additive migration | [Decided design](#decided-design), [Phase 0](#phased-build) | Separate `procedures` table; additive v2→v3 migration (ratify at PR). |
+| **Scope B** — synthesis loop on the consolidation pass (≥3 occ, ≥80%) | [Decided design](#decided-design), [Phase 1](#phased-build) | `_synthesize_skills` after `consolidate_old_sessions`; fail-loud failure modes. |
+| **Scope C** — `recall_skill(goal)` + planning injection | [Decided design](#decided-design), [Phase 2](#phased-build) | Internal method, `top_k = 2`, injected via `_compose_system_prompt`. |
+| **Scope D** — adopt the agentskills.io `SKILL.md` format | [The format contract](#the-format-contract) | Emits the locked #691 schema; resolves #691 **by reference**. |
+| **Scope E** — Dashboard "Procedures" tab + provenance + promote | [Phase 2 deferral](#phased-build) | **Tab build DEFERRED to #606's dashboard track**; #887 stores provenance + exposes the data. |
+| **AC** — after 3 successful similar sequences, auto-create a `SKILL.md` discoverable via `recall_skill()` | [KPIs](#kpis), [Phase 1](#phased-build) + [Phase 2](#phased-build) | The headline KPI. |
+| **AC** — recall measurably reduces tool-step count on the 4th attempt | [KPIs](#kpis), [Phase 2](#phased-build) | Measured vs the tool-loader baseline. |
+| **AC** — synthesised skills are valid agentskills.io documents (Hermes parser) | [The format contract](#the-format-contract), [Examples A–B](#examples) | `Skill.parse()` round-trip; 100% validity KPI. |
+| **AC** — Dashboard shows count / last-used / provenance | [Phase 2 deferral](#phased-build) | **Data exposed by #887**; *rendering* is #606's tab. |
+| **AC** — disabling a skill prevents recall | [Off-states](#off-states-as-safe-floors), [Phase 2](#phased-build) | The recall path honours `enabled = 0` (this **is** #887); the toggle UI is #606's tab. |
+| **Out of scope** — marketplace / tiers / OpenClaw shim | [Dependencies](#dependencies) | → #647 / #692. |

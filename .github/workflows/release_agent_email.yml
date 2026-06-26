@@ -1,0 +1,643 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Fully-automated, tag-triggered release for the @amd-gaia/agent-email package
+# (milestone #49, issue #1648). One namespaced tag does the WHOLE release:
+#
+#   1. build   — freeze the email REST sidecar into a native one-file binary on
+#                each of the 4 target platforms (no cross-compile), smoke-test it,
+#                compute SHA-256 + size, upload the binary + a meta sidecar.
+#   2. publish — POST every binary + gaia-agent.yaml to the Agent Hub Worker's
+#                /publish endpoint (Bearer auth), which stores each object
+#                immutably under agents/email/<ver>/ in the gaia-hub R2 bucket,
+#                computes the SHA-256 server-side, and rebuilds index.json;
+#                regenerate binaries.lock.json with the REAL hashes, verify every
+#                published object is fetchable + hash-matches via the real fetch
+#                CLI, then `npm publish` via npm trusted publishing (OIDC,
+#                provenance — NO npm token).
+#
+# Distribution model: the Agent Hub Worker (workers/agent-hub/) fronts the
+# gaia-hub R2 bucket at hub.amd-gaia.ai. Publishing goes through POST /publish
+# (so index.json is rebuilt + the upload is server-side checksummed); downloads
+# are a plain public GET at hub.amd-gaia.ai/agents/email/<ver>/<file>. The
+# SHA-256 in binaries.lock.json is the integrity gate the fetch CLI enforces.
+#
+# Atomic + idempotent: POST /publish is immutable per filename (re-publishing the
+# same bytes is a verified 409 no-op; different bytes under a published name fail
+# loudly); the post-upload fetch-verify is the release's real integrity gate and
+# fails if any object's bytes don't match the lock; npm publish is skipped if
+# that exact version already exists on the registry.
+#
+# Tag namespace: `agent-pkg-email-*` (NOT `v*`). This is the established Agent
+# Hub package-share namespace (see build_agent_package.yml) and deliberately
+# does NOT fire publish.yml (v* only) or the paused publish_agents.yml (no tag
+# trigger). Example: `git tag agent-pkg-email-v0.1.0 && git push origin --tags`.
+#
+# Maintainer setup (one-time):
+#   Environment:
+#     agent-publish         — create this GitHub environment (Settings →
+#                              Environments) with REQUIRED REVIEWERS and its
+#                              deployment branches/tags restricted to `main` AND
+#                              the `agent-pkg-*` tag pattern (the release trigger
+#                              is a tag push, so a main-only rule blocks the gate).
+#                              The publish job is bound to it, so a release pauses
+#                              for human approval before any hub/npm publish.
+#   Secrets:
+#     GAIA_HUB_TOKEN         — Agent Hub Bearer publish token; must match an entry
+#                              in the Worker's PUBLISH_TOKENS secret, scoped to the
+#                              `AMD` author (workers/agent-hub/README.md). Define it
+#                              as an ENVIRONMENT secret on `agent-publish` (NOT a
+#                              repo secret) so it's unreadable until the gate is
+#                              approved.
+#   Variables:
+#     GAIA_HUB_BASE_URL      — public Worker origin for downloads + the lock
+#                              baseUrl, default https://hub.amd-gaia.ai.
+#     GAIA_HUB_PUBLISH_URL   — origin CI POSTs uploads to. MUST be the Worker's
+#                              workers.dev URL: the free-plan managed WAF on the
+#                              proxied hub.amd-gaia.ai custom domain blocks large
+#                              binary uploads, but not GET downloads. Unset →
+#                              falls back to GAIA_HUB_BASE_URL (uploads will 403).
+#   npm trusted publisher for @amd-gaia/agent-email registered against THIS
+#   workflow file name: release_agent_email.yml (repo amd/gaia). The OIDC subject
+#   is tied to the exact filename — renaming this file breaks publish.
+
+name: Release Agent (email)
+
+on:
+  push:
+    tags:
+      - 'agent-pkg-email-*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (must match package.json + gaia-agent.yaml), e.g. 0.1.0'
+        required: true
+
+concurrency:
+  # Never cancel a half-done release — a partial publish must finish.
+  group: release-agent-email-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PKG_DIR: hub/agents/npm/agent-email
+  MANIFEST: hub/agents/python/email/gaia-agent.yaml
+  # Single canonical README for the agent: the npm client README (architecture
+  # diagram, install/usage, ./client) is the richer, actively-maintained one, so
+  # it's what gets published to the hub AND npm. The python-side README is being
+  # retired with the agent-structure reorg. (Takes effect on the NEXT release —
+  # the catalog snapshots the README at publish time.)
+  README: hub/agents/npm/agent-email/README.md
+  # Same canonical-doc story for the changelog: the npm CHANGELOG.md is what the
+  # hub renders as the agent's Changelog section (and ships in the npm tarball).
+  CHANGELOG: hub/agents/npm/agent-email/CHANGELOG.md
+  # SPEC.md (technical reference) + SKILL.md (AI-integration playbook) are rendered
+  # as their own doc tabs on the hub page (catalog entry's `spec` / `skill`).
+  SPEC: hub/agents/npm/agent-email/SPEC.md
+  SKILL: hub/agents/npm/agent-email/SKILL.md
+  FREEZE_DIST: hub/agents/python/email/packaging/dist
+  # Hub key prefix (mirrors the Worker's agents/<id> layout). The Worker owns the
+  # bucket binding; CI never talks to R2 directly — it POSTs to /publish.
+  HUB_PREFIX: agents/email
+
+jobs:
+  # ── Stage 1: native freeze on every platform ───────────────────────
+  build:
+    name: Freeze (${{ matrix.key }})
+    runs-on: ${{ matrix.os }}
+    # darwin-x64 (Intel) is BEST-EFFORT, built on macos-26-intel (the latest Intel
+    # image; macos-13 retired Dec 2025, Intel images supported through Aug 2027).
+    # TRADE-OFF: building on the newest macOS can raise the frozen binary's
+    # minimum-OS, so Intel-Mac users on older macOS may not be able to run it. If
+    # broad backward-compat matters more than a current toolchain, switch this to
+    # macos-15-intel (older OS → lower min-OS → runs on more Macs). PyInstaller
+    # can't cross-compile, so an Intel binary needs an Intel host. The leg may
+    # fail/time out without failing the job (continue-on-error + required:false);
+    # `publish` gates only on the 3 REQUIRED platforms. A miss is announced LOUDLY
+    # (::warning:: + job summary) and Intel users still fail loudly at install
+    # (fetch.ts rejects a missing / placeholder lock entry) — never silent.
+    continue-on-error: ${{ !matrix.required }}
+    timeout-minutes: ${{ matrix.required && 30 || 60 }}
+    strategy:
+      # Never let one slow/stuck leg cancel the others — each platform freezes
+      # independently and `publish` reconciles whatever arrived.
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win32-x64
+            key: win32-x64
+            artifact: email-agent-win32-x64.exe
+            frozen: email-agent.exe
+            required: true
+          - os: macos-14
+            platform: darwin-arm64
+            key: darwin-arm64
+            artifact: email-agent-darwin-arm64
+            frozen: email-agent
+            required: true
+          - os: ubuntu-latest
+            platform: linux-x64
+            key: linux-x64
+            artifact: email-agent-linux-x64
+            frozen: email-agent
+            required: true
+          # darwin-x64 (Intel) BEST-EFFORT — see the job-level comment above.
+          - os: macos-26-intel
+            platform: darwin-x64
+            key: darwin-x64
+            artifact: email-agent-darwin-x64
+            frozen: email-agent
+            required: false
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install deps + PyInstaller (frozen-binary env)
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv venv .venv-freeze --python 3.12
+          uv pip install --python .venv-freeze -e ".[api]" -e hub/agents/python/email pyinstaller
+
+      - name: Freeze one-file binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          PY=.venv-freeze/$([ "$RUNNER_OS" = "Windows" ] && echo Scripts || echo bin)/python
+          "$PY" hub/agents/python/email/packaging/freeze.py --onefile
+
+      - name: Smoke-test the frozen binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          PY=.venv-freeze/$([ "$RUNNER_OS" = "Windows" ] && echo Scripts || echo bin)/python
+          "$PY" hub/agents/python/email/packaging/smoke_test.py \
+            "${FREEZE_DIST}/${{ matrix.frozen }}"
+
+      - name: Stage artifact + compute SHA-256 / size
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p staging
+          cp "${FREEZE_DIST}/${{ matrix.frozen }}" "staging/${{ matrix.artifact }}"
+          python - "staging/${{ matrix.artifact }}" "${{ matrix.platform }}" "${{ matrix.artifact }}" "${{ matrix.frozen }}" <<'PY'
+          import hashlib, json, sys
+          path, platform, filename, frozen = sys.argv[1:5]
+          data = open(path, "rb").read()
+          meta = {
+              "platform": platform,
+              "filename": filename,
+              "executable": "email-agent.exe" if frozen.endswith(".exe") else "email-agent",
+              "sha256": hashlib.sha256(data).hexdigest(),
+              "size": len(data),
+          }
+          open(f"staging/{platform}.meta.json", "w").write(json.dumps([meta], indent=2))
+          print(json.dumps(meta, indent=2))
+          PY
+
+      - name: Upload platform artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: email-agent-${{ matrix.key }}
+          path: |
+            staging/${{ matrix.artifact }}
+            staging/${{ matrix.platform }}.meta.json
+          if-no-files-found: error
+
+  # ── Stage 1.5: prove the (macos-26-built) Intel binary runs on OLDER macOS ──
+  # We build darwin-x64 on the newest Intel image (macos-26) but must confirm the
+  # frozen binary still runs on an older macOS — backward-compat is the real risk
+  # (forward-compat is reliable). Best-effort, like the build leg: if darwin-x64
+  # wasn't built, this is a no-op; if it was built but FAILS here, `publish` drops
+  # it (ships 3 platforms) rather than shipping a binary broken on older Macs.
+  # continue-on-error so an Intel-runner hiccup can't block the whole release —
+  # `publish` only ships darwin-x64 when this explicitly reports ok=true.
+  verify-darwin-x64-compat:
+    name: Verify darwin-x64 on older macOS (macos-15-intel)
+    runs-on: macos-15-intel
+    needs: [build]
+    continue-on-error: true
+    timeout-minutes: 20
+    outputs:
+      ok: ${{ steps.smoke.outputs.ok }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Download the darwin-x64 binary (absent if its best-effort build skipped)
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: email-agent-darwin-x64
+          path: dl
+
+      - name: Smoke-test the macos-26-built binary on macOS 15
+        id: smoke
+        shell: bash
+        run: |
+          # NOT `-e`: a failed smoke test is captured into an output, not a job failure.
+          set -uo pipefail
+          BIN="dl/email-agent-darwin-x64"
+          if [ ! -f "$BIN" ]; then
+            echo "::notice::darwin-x64 binary absent — nothing to verify."
+            echo "ok=absent" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          chmod +x "$BIN"
+          if python hub/agents/python/email/packaging/smoke_test.py "$BIN"; then
+            echo "darwin-x64 binary (built on macos-26-intel) runs on macOS 15 ✓"
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::darwin-x64 binary (built on macos-26-intel) FAILED its smoke test on macOS 15 — it will be DROPPED from this release so older Intel Macs aren't shipped a broken binary. Build darwin-x64 on macos-15-intel for broader compatibility."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ── Stage 2: publish to the hub + npm (single atomic step) ─────────
+  publish:
+    name: Publish to Hub + npm
+    runs-on: ubuntu-latest
+    needs: [build, verify-darwin-x64-compat]
+    # Manual approval gate: the `agent-publish` environment is configured (repo
+    # Settings → Environments) with required reviewers, so this job pauses until a
+    # maintainer approves — the human backstop for an accidental/tampered release
+    # tag. GAIA_HUB_TOKEN lives as an ENVIRONMENT secret here, so the publish
+    # credential isn't even readable until approval. (Set the env + reviewers +
+    # move the secret in repo settings; restrict the env's deployment branches/tags
+    # to `main` + the `agent-pkg-*` tag pattern — the release is a tag push, so a
+    # main-only rule would block this gate.)
+    environment: agent-publish
+    permissions:
+      contents: read
+      id-token: write   # npm trusted publishing (OIDC) — no npm token
+      actions: write    # gh workflow run deploy_website.yml (redeploy on publish)
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # full history so the main-ancestry guard can resolve
+
+      # Publishing (hub + npm) is allowed ONLY from main. A tag must point at a
+      # commit on main; a workflow_dispatch must run on main. This blocks an
+      # accidental release from a feature branch (and keeps npm OIDC on main).
+      - name: Assert release is cut from main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          if git merge-base --is-ancestor "$(git rev-parse HEAD)" origin/main; then
+            echo "✓ release commit is on main"
+          else
+            echo "::error::Publishing is only allowed from main. The current ref '${GITHUB_REF_NAME}' ($(git rev-parse --short HEAD)) is not on main — merge to main, then tag or dispatch the release from main."
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      # Single-source version gate: every committed version reference (manifest,
+      # pyproject, package.json, the lock's agentVersion/baseUrl, README image
+      # URLs, the architecture.html badge) must match AGENT_VERSION before we
+      # publish. Stdlib-only; fails loudly on any drift so a release can't ship a
+      # stale static reference (e.g. a lock baseUrl still pointing at the prior
+      # version's hub directory). Mirrors the UI's bump-ui-version.mjs --check gate.
+      - name: Verify version references are in sync (single source of truth)
+        shell: bash
+        run: python hub/agents/python/email/packaging/stamp_version.py --check
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install deps (requests + PyYAML — needed from version-resolve on)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade requests pyyaml
+
+      - name: Resolve + validate release version
+        id: ver
+        shell: bash
+        # User-controlled inputs go through env (never inlined into the script)
+        # so a value can't inject shell — GitHub Actions script-injection
+        # hardening. The tag path uses GITHUB_REF_NAME (also env), and the
+        # version is still triple-checked against package.json + manifest below.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            TAG="${GITHUB_REF_NAME}"
+            VERSION="${TAG#agent-pkg-email-}"
+            VERSION="${VERSION#v}"
+          fi
+          PKG_VER="$(node -p "require('./${PKG_DIR}/package.json').version")"
+          MAN_VER="$(python -c "import yaml; print(yaml.safe_load(open('${MANIFEST}'))['version'])")"
+          echo "release version: ${VERSION} (package.json=${PKG_VER}, manifest=${MAN_VER})"
+          if [ "$VERSION" != "$PKG_VER" ] || [ "$VERSION" != "$MAN_VER" ]; then
+            echo "::error::version mismatch — tag/input=${VERSION}, package.json=${PKG_VER}, gaia-agent.yaml=${MAN_VER}. Align all three before tagging."
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "base_url=${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}/${HUB_PREFIX}/${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Assert hub publish token present
+        shell: bash
+        # Secret goes through env (never inlined into the script text) so a value
+        # with shell metacharacters can't break parsing or defeat log masking.
+        env:
+          GAIA_HUB_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GAIA_HUB_TOKEN:-}" ]; then
+            echo "::error::missing environment secret GAIA_HUB_TOKEN on the agent-publish environment — the Agent Hub Bearer publish token (must match the Worker's PUBLISH_TOKENS). See workers/agent-hub/README.md."
+            exit 1
+          fi
+
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: email-agent-*
+          path: artifacts
+
+      - name: Collect binaries + assert required platforms present
+        shell: bash
+        env:
+          # ok=true (built + verified on macOS 15) | false (built, failed on 15) |
+          # absent (not built) | "" (verify job errored — treat as not shippable).
+          DARWIN_X64_COMPAT: ${{ needs.verify-darwin-x64-compat.outputs.ok }}
+        run: |
+          set -euo pipefail
+          # Only the platform binaries are needed — the manifest is read from its
+          # repo path by publish_to_r2.py, and the lock is driven by published.json.
+          mkdir -p bins
+          find artifacts -type f -name 'email-agent-*' ! -name '*.meta.json' -exec cp {} bins/ \;
+          echo "=== collected ==="
+          ls -la bins/
+
+          # The 3 non-Intel platforms are REQUIRED — a missing one is a real build
+          # failure, not best-effort, so fail the release loudly here.
+          missing=()
+          for req in win32-x64 darwin-arm64 linux-x64; do
+            case "$req" in win32-x64) f="email-agent-win32-x64.exe" ;; *) f="email-agent-$req" ;; esac
+            [ -f "bins/$f" ] || missing+=("$req")
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::required platform binaries missing: ${missing[*]}. Their build leg failed — release cannot proceed. Re-run those build jobs."
+            exit 1
+          fi
+
+          # darwin-x64 (Intel) is BEST-EFFORT. Ship it ONLY if it built AND passed
+          # the older-macOS (macos-15) compat check; otherwise drop it loudly and
+          # release the other 3 platforms.
+          if [ -f "bins/email-agent-darwin-x64" ] && [ "${DARWIN_X64_COMPAT:-}" = "true" ]; then
+            echo "DARWIN_X64_PUBLISHED=true" >> "$GITHUB_ENV"
+            echo "darwin-x64 (Intel) binary present + verified on macOS 15 — full 4-platform release."
+          else
+            echo "DARWIN_X64_PUBLISHED=false" >> "$GITHUB_ENV"
+            rm -f bins/email-agent-darwin-x64   # never publish an absent/incompatible Intel binary
+            if [ "${DARWIN_X64_COMPAT:-}" = "false" ]; then
+              reason="built on macos-26-intel but FAILED its macOS 15 compat check"
+            else
+              reason="was not produced by its best-effort build (or its compat check could not run)"
+            fi
+            echo "::warning::darwin-x64 (Intel macOS) NOT published — it ${reason}. Releasing the other 3 platforms; Intel-mac users get a loud 'no binary for darwin-x64' error at install until an Intel binary is published for this version."
+            {
+              echo "### ⚠️ Intel macOS (darwin-x64) NOT published"
+              echo ""
+              echo "The darwin-x64 binary ${reason}, so this release ships **3 of 4** platforms."
+              echo "Intel-mac (\`darwin-x64\`) users will hit a loud install error until an Intel binary is published for this version."
+              echo ""
+              echo "**Follow-up:** re-run once the Intel binary builds + passes the macOS 15 check; \`POST /publish\` is immutable-per-filename, so adding the Intel binary to the *same* version is safe and idempotent."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Publish binaries to the Agent Hub (POST /publish)
+        shell: bash
+        env:
+          # The Worker reads the Bearer token from this env var only — never the
+          # command line or disk. The Worker computes the SHA-256 server-side,
+          # stores each object immutably under agents/email/<ver>/, and rebuilds
+          # index.json. publish_to_r2.py writes a summary the lock generator reads.
+          AGENT_HUB_PUBLISH_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
+          # Upload through GAIA_HUB_PUBLISH_URL (the Worker's workers.dev URL): the
+          # free-plan managed WAF on the proxied hub.amd-gaia.ai custom domain
+          # blocks large binary multipart uploads (the POST /publish path).
+          # workers.dev is a separate zone with no such ruleset and hits the same
+          # Worker + bucket. Downloads and the lock baseUrl stay on
+          # hub.amd-gaia.ai (GETs aren't blocked). Falls back to the public origin
+          # if the var is unset.
+          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
+          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
+        run: |
+          set -euo pipefail
+          args=()
+          # Publish only the binaries (the manifest rides along inside each POST).
+          for f in bins/email-agent-*; do
+            [ -f "$f" ] || continue
+            case "$f" in *.json) continue ;; esac
+            args+=(--artifact "$f")
+          done
+          python hub/agents/python/email/packaging/publish_to_r2.py \
+            --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
+            --manifest "${MANIFEST}" \
+            --readme "${README}" \
+            --changelog "${CHANGELOG}" \
+            --spec "${SPEC}" \
+            --skill "${SKILL}" \
+            "${args[@]}" \
+            --summary-out published.json
+          echo "=== publish summary ==="
+          cat published.json
+
+      - name: Regenerate binaries.lock.json with real hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The summary from POST /publish is the post-publish source of truth
+          # (each sha256 was verified against the Worker-computed value).
+          python hub/agents/python/email/packaging/gen_binaries_lock.py \
+            --base-url "${{ steps.ver.outputs.base_url }}" \
+            --version "${{ steps.ver.outputs.version }}" \
+            --lock "${PKG_DIR}/binaries.lock.json" \
+            --meta published.json
+
+          # gen_binaries_lock.py keeps the PRIOR entry for any platform absent from
+          # the metas. If Intel was skipped, that prior entry is the unpublished
+          # PENDING-1648 placeholder — drop it entirely so the shipped lock carries
+          # NO darwin-x64 entry. fetch.ts then emits a clear "no binary for
+          # platform 'darwin-x64' (available: …)" error instead of a placeholder
+          # one. Explicit absence beats a stale/placeholder hash.
+          if [ "${DARWIN_X64_PUBLISHED}" = "false" ]; then
+            python - "${PKG_DIR}/binaries.lock.json" <<'PY'
+          import json, sys
+          p = sys.argv[1]
+          lock = json.load(open(p))
+          removed = lock.get("binaries", {}).pop("darwin-x64", None)
+          if removed is not None:
+              print("[lock] dropped unpublished darwin-x64 entry (Intel best-effort skip)")
+          open(p, "w").write(json.dumps(lock, indent=2) + "\n")
+          PY
+          fi
+          echo "=== regenerated lock ==="
+          cat "${PKG_DIR}/binaries.lock.json"
+
+      - name: Build npm package
+        working-directory: ${{ env.PKG_DIR }}
+        run: |
+          npm ci
+          npm run build
+
+      - name: Assemble + publish the whole-package zip (all platforms + client + docs)
+        # DISABLED: the ~177 MB all-platforms zip exceeds Cloudflare's edge upload
+        # limit (POST returns 413). Revive via presigned-to-R2 or per-platform zips.
+        if: false
+        shell: bash
+        env:
+          AGENT_HUB_PUBLISH_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
+          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
+          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
+        run: |
+          set -euo pipefail
+          VER="${{ steps.ver.outputs.version }}"
+          STAGE="agent-email-${VER}"
+          rm -rf "${STAGE}" "agent-email-${VER}.zip" package-files.json
+          mkdir -p "${STAGE}/binaries" "${STAGE}/dist"
+          # All platform binaries (whatever was published this run — Intel may be absent).
+          cp bins/email-agent-* "${STAGE}/binaries/"
+          # npm client + docs + the real (post-publish) lock + manifest + license.
+          cp -r "${PKG_DIR}/dist/." "${STAGE}/dist/"
+          cp "${PKG_DIR}/README.md" "${PKG_DIR}/SPEC.md" "${PKG_DIR}/SKILL.md" \
+             "${PKG_DIR}/CHANGELOG.md" "${PKG_DIR}/binaries.lock.json" \
+             "${PKG_DIR}/LICENSE" "${STAGE}/"
+          cp "${MANIFEST}" "${STAGE}/gaia-agent.yaml"
+          # Deterministic zip (sorted, no extra metadata).
+          ( cd "${STAGE}/.." && zip -rX "agent-email-${VER}.zip" "agent-email-${VER}" >/dev/null )
+          # File listing for the hub's package file-list display.
+          python hub/agents/python/email/packaging/gen_package_files.py "${STAGE}" package-files.json
+          echo "=== package contents ===" && (cd "${STAGE}" && find . -type f | sort)
+          # Publish the zip as the version's package artifact + its file listing.
+          python hub/agents/python/email/packaging/publish_to_r2.py \
+            --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
+            --manifest "${MANIFEST}" \
+            --artifact "agent-email-${VER}.zip=package" \
+            --package-files package-files.json
+
+      - name: Verify every published object via the real fetch CLI
+        working-directory: ${{ env.PKG_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Atomicity gate: the public object's bytes must hash to the lock value
+          # for EVERY published platform before we publish the package that points
+          # at them. The platform set is the lock's own keys — exactly what was
+          # published this run (so a best-effort Intel skip isn't verified as if it
+          # were present, which would wrongly fail the release).
+          # Bounded retry: a just-uploaded object can briefly 404 / serve a stale
+          # negative cache at the Cloudflare edge (hub.amd-gaia.ai) before it
+          # propagates — that edge is separate from R2's read-after-write store.
+          # Explicit, caller-requested retry that still fails loudly once exhausted.
+          platforms="$(node -e "const l=require('./binaries.lock.json');process.stdout.write(Object.keys(l.binaries).join(' '))")"
+          echo "verifying published platforms: ${platforms}"
+          for plat in ${platforms}; do
+            echo "--- verifying $plat ---"
+            attempt=1; max=5
+            until node dist/cli.js fetch --out "/tmp/verify-$plat" --platform "$plat"; do
+              if [ "$attempt" -ge "$max" ]; then
+                echo "::error::fetch-verify failed for $plat after ${max} attempts — the published object never became fetchable/valid at the public origin."
+                exit 1
+              fi
+              echo "attempt ${attempt}/${max} failed; object may not have propagated to the edge yet — retrying in 10s."
+              attempt=$((attempt + 1)); sleep 10
+            done
+          done
+
+      - name: Verify the published package zip is fetchable at the edge
+        if: false  # disabled together with the whole-package zip publish above
+        shell: bash
+        env:
+          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
+        run: |
+          set -euo pipefail
+          # The package zip rides the `artifact` path (server- + locally-SHA-verified
+          # on upload by publish_to_r2.py), but it is NOT in binaries.lock.json, so the
+          # fetch CLI above doesn't cover it. Round-trip it through the public origin so
+          # a non-propagated / edge-blocked zip fails the release instead of shipping a
+          # 404 download button. Bytes were already proven on upload; here we gate on a
+          # 200 with a Content-Length matching the local zip. Same bounded edge retry.
+          VER="${{ steps.ver.outputs.version }}"
+          BASE="${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}"
+          ZIP="${GITHUB_WORKSPACE}/agent-email-${VER}.zip"
+          URL="${BASE}/agents/email/${VER}/agent-email-${VER}.zip"
+          local_size="$(stat -c%s "${ZIP}" 2>/dev/null || stat -f%z "${ZIP}")"
+          echo "verifying package zip: ${URL} (expecting ${local_size} bytes)"
+          attempt=1; max=5
+          while true; do
+            remote_size="$(curl -fsSL -o /dev/null -w '%{size_download}' "${URL}" || echo "")"
+            if [ "${remote_size}" = "${local_size}" ]; then
+              echo "package zip verified (${remote_size} bytes)."; break
+            fi
+            if [ "${attempt}" -ge "${max}" ]; then
+              echo "::error::package zip verify failed after ${max} attempts (got '${remote_size}', want ${local_size}) — the zip never became fetchable/correct at ${URL}."
+              exit 1
+            fi
+            echo "attempt ${attempt}/${max}: got '${remote_size}', want ${local_size} — retrying in 10s."
+            attempt=$((attempt + 1)); sleep 10
+          done
+
+      - name: Upgrade npm (trusted publishing support)
+        run: npm install -g npm@latest
+
+      - name: Publish to npm (OIDC trusted publishing, provenance)
+        working-directory: ${{ env.PKG_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          if npm view "@amd-gaia/agent-email@${VERSION}" version >/dev/null 2>&1; then
+            echo "@amd-gaia/agent-email@${VERSION} already on npm — skipping (idempotent)."
+            exit 0
+          fi
+          # --ignore-scripts: dist/ was already built by the "Build npm package"
+          # step, so no lifecycle script (prepublishOnly/prepare/prepack) needs to
+          # run here — and we don't want any package/dependency script executing in
+          # this OIDC-privileged job. Matches publish.yml.
+          npm publish --access public --provenance --ignore-scripts
+
+      - name: Redeploy the website to publish the new catalog entry
+        shell: bash
+        # The website builds its Agent Hub pages at deploy time from the live hub
+        # index.json (website/src/data/catalog.ts, HUB_CATALOG_URL), so a freshly
+        # published agent only appears after the site rebuilds. deploy_website.yml
+        # auto-triggers only on website/** changes — a hub publish touches no such
+        # file — so trigger it explicitly via workflow_dispatch. Least-privilege:
+        # uses this job's GITHUB_TOKEN (actions: write), no extra secret. A
+        # workflow_dispatch from GITHUB_TOKEN is exempt from the no-recursion rule,
+        # so the deploy job does run. NOTE: the deploy only reflects the new entry
+        # if Railway has HUB_CATALOG_URL=https://hub.amd-gaia.ai set.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run deploy_website.yml --ref main
+          echo "✓ requested website redeploy (deploy_website.yml on main)"

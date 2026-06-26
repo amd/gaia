@@ -36,14 +36,19 @@ You own the GAIA CLI. The entire user surface for `gaia <subcommand>` lives in `
 |--------|-------|---------|
 | `gaia` / `gaia-cli` | `gaia.cli:main` | Main dispatcher |
 | `gaia-mcp` | `gaia.mcp.mcp_bridge:main` | Standalone MCP bridge |
-| `gaia-code` | `gaia.agents.code.cli:main` | CodeAgent standalone |
-| `gaia-emr` | `gaia_agent_emr.cli:main` | Medical intake standalone (ships with the `gaia-agent-emr` hub package) |
+
+**Hub-package binaries** (NOT core `setup.py` entries — they ship from their own hub wheels under `hub/agents/python/<id>/`):
+
+| Script | Entry | Hub package |
+|--------|-------|-------------|
+| `gaia-code` | `gaia_agent_code.cli:main` | `gaia-agent-code` (`hub/agents/python/code/`) |
+| `gaia-emr` | `gaia_agent_emr.cli:main` | `gaia-agent-emr` (`hub/agents/python/emr/`) |
 
 ## Current top-level subcommands
 
 Verified via `grep subparsers.add_parser src/gaia/cli.py`:
 
-`prompt`, `chat`, `talk`, `summarize`, `blender`, `sd`, `jira`, `docker`, `api`, `download`, `llm`, `gt`, `template`, `eval` (with nested `fix-code`, `agent`), `report`, `visualize`, `perf-vis`, `generate`, `batch-exp`, `mcp` (with nested `start`, `stop`, `status`, `list`, `add`, `remove`, `tools`, `test`, `test-client`, `agent`, `docker`), `yt`, `kill`, `test`, plus setup helpers (`init`, `install`, `cache`).
+`prompt`, `chat`, `browse`, `analyze`, `talk`, `summarize`, `blender`, `sd`, `jira`, `email`, `docker`, `api`, `telegram`, `knowledge`, `connectors`, `download`, `llm`, `eval` (with nested `agent`, `benchmark`), `report`, `perf-vis`, `mcp` (with nested `start`, `stop`, `status`, `list`, `tools`, `test`, `test-client`, `agent`, `docker`, `serve`), `youtube`, `kill`, `test`, `stats`, `memory`, `diagnostics`, `agent` (with nested `export`, `import`), plus setup helpers (`init`, `install`, `cache`).
 
 Always run `gaia -h` or grep `cli.py` before assuming a command exists — the set evolves.
 
@@ -107,7 +112,7 @@ p.add_argument("--query", "-q", type=str)
 
 ## Nested subcommand pattern
 
-`gaia mcp start`, `gaia eval fix-code`, `gaia eval agent`:
+`gaia mcp start`, `gaia eval agent`, `gaia eval benchmark`:
 
 ```python
 mcp_parser = subparsers.add_parser("mcp", parents=[parent_parser])

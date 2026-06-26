@@ -161,6 +161,16 @@ class TestRequestShape:
         backend.untrash_message("m1")
         assert rec.requests[0].url.path.endswith("/messages/m1/untrash")
 
+    def test_untrash_readds_inbox_label(self):
+        # Quarantine/soft-delete undo must restore the inbox view: after the
+        # untrash POST, a modify re-adds INBOX so the message returns to where
+        # it started rather than All Mail (#1709).
+        backend, rec, _ = _backend(lambda r: _ok({"id": "m1", "labelIds": ["INBOX"]}))
+        backend.untrash_message("m1")
+        assert rec.requests[0].url.path.endswith("/messages/m1/untrash")
+        assert rec.requests[1].url.path.endswith("/messages/m1/modify")
+        assert json.loads(rec.requests[1].content) == {"addLabelIds": ["INBOX"]}
+
     def test_permanent_delete_uses_delete_method(self):
         backend, rec, _ = _backend(lambda r: httpx.Response(204))
         backend.permanent_delete("m1")

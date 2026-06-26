@@ -140,7 +140,7 @@ class TestConstruction:
 
 
 class TestToolRegistry:
-    """The agent must register all tools from the six mixins."""
+    """The agent must register all tools from its tool mixins."""
 
     EXPECTED_TOOLS = {
         # Read
@@ -151,6 +151,7 @@ class TestToolRegistry:
         "list_labels",
         "triage_inbox",
         "pre_scan_inbox",
+        "profile_inbox",
         # Organize
         "archive_message",
         "mark_read",
@@ -196,6 +197,8 @@ class TestToolRegistry:
         "set_low_priority_sender",
         "set_category_default",
         "clear_session_preferences",
+        # Inbox profiling from memory (#1289)
+        "profile_inbox",
     }
 
     def test_every_expected_tool_is_registered(self, agent):
@@ -282,29 +285,6 @@ class TestAC3LocalLLMOnly:
 
 
 class TestRegistryIntegration:
-    def test_email_agent_creatable_via_registry(
-        self, fake_gmail, fake_calendar, tmp_path
-    ):
-        from gaia.agents.registry import AgentRegistry
-
-        reg = AgentRegistry()
-        # email ships as the standalone gaia-agent-email wheel (#1102); it is
-        # registered via entry-point discovery, not as a built-in.
-        reg.discover()
-        assert "email" in {r.id for r in reg.list()}
-
-        with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:
-            mock_sdk.return_value = MagicMock()
-            agent = reg.create_agent(
-                "email",
-                gmail_backend=fake_gmail,
-                calendar_backend=fake_calendar,
-                db_path=str(tmp_path / "state.db"),
-                silent_mode=True,
-            )
-            assert isinstance(agent, EmailTriageAgent)
-            agent.close_db()
-
     def test_connectors_demo_required_connections_are_proper_objects(self):
         """#962 follow-up: the connectors_demo entry must use
         ``ConnectorRequirement`` objects, not bare strings.

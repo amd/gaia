@@ -24,6 +24,14 @@ DEFAULT_DB_PATH = Path.home() / ".gaia" / "chat" / "gaia_chat.db"
 # any code that reads session["model"] and falls back when the field is NULL.
 SESSION_DEFAULT_MODEL = "Gemma-4-E4B-it-GGUF"
 
+# Sentinel used by update_document_status to distinguish "caller passed None to clear
+# last_error" from "caller did not pass last_error at all" (leaving it unchanged).
+_UNSET = object()
+
+# Cap stored indexing error messages -- they are surfaced verbatim in a UI
+# tooltip and a raw traceback/exception string can be very large (#1749 review).
+_MAX_LAST_ERROR_LEN = 500
+
 SCHEMA_SQL = """
 -- Global document library
 CREATE TABLE IF NOT EXISTS documents (
@@ -34,7 +42,8 @@ CREATE TABLE IF NOT EXISTS documents (
     file_size INTEGER DEFAULT 0,
     chunk_count INTEGER DEFAULT 0,
     indexed_at TEXT DEFAULT (datetime('now')),
-    last_accessed_at TEXT
+    last_accessed_at TEXT,
+    last_error TEXT
 );
 
 -- Sessions (conversations)
@@ -208,6 +217,19 @@ class ChatDatabase:
                 logger.info("Migrated documents table: added file_mtime column")
         except Exception as e:
             logger.debug("Migration check for file_mtime: %s", e)
+
+        # Add last_error column for persisting indexing failure messages
+        try:
+            doc_cols = [
+                row[1]
+                for row in self._conn.execute("PRAGMA table_info(documents)").fetchall()
+            ]
+            if "last_error" not in doc_cols:
+                self._conn.execute("ALTER TABLE documents ADD COLUMN last_error TEXT")
+                self._conn.commit()
+                logger.info("Migrated documents table: added last_error column")
+        except Exception as e:
+            logger.debug("Migration check for last_error: %s", e)
 
         # Add private column to sessions for per-session incognito mode,
         # and agent_type column for per-session agent selection.
@@ -851,7 +873,11 @@ class ChatDatabase:
     # ── Document Status ────────────────────────────────────────────
 
     def update_document_status(
-        self, doc_id: str, status: str, chunk_count: int | None = None
+        self,
+        doc_id: str,
+        status: str,
+        chunk_count: int | None = None,
+        last_error: str | None = _UNSET,
     ) -> bool:
         """Update a document's indexing status and optionally its chunk count.
 
@@ -859,6 +885,10 @@ class ChatDatabase:
             doc_id: Document ID.
             status: New status ('pending', 'indexing', 'complete', 'failed', 'cancelled').
             chunk_count: If provided, also update the chunk count.
+            last_error: Controls the stored error message.
+                        Omit (default) to leave the existing value unchanged.
+                        Pass None to clear the column (SQL NULL).
+                        Pass a string to store that error message.
 
         Returns:
             True if the document was found and updated.
@@ -869,6 +899,19 @@ class ChatDatabase:
             if chunk_count is not None:
                 parts.append("chunk_count = ?")
                 params.append(chunk_count)
+            # Successful indexing always clears any prior error message.
+            # For other statuses, only write last_error when explicitly passed.
+            if status == "complete":
+                parts.append("last_error = ?")
+                params.append(None)
+            elif last_error is not _UNSET:
+                parts.append("last_error = ?")
+                if (
+                    isinstance(last_error, str)
+                    and len(last_error) > _MAX_LAST_ERROR_LEN
+                ):
+                    last_error = last_error[: _MAX_LAST_ERROR_LEN - 1] + "…"
+                params.append(last_error)
             parts.append("last_accessed_at = ?")
             params.append(self._now())
             params.append(doc_id)

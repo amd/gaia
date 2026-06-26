@@ -165,9 +165,12 @@ def pack(
 
     dist_name = _read_pyproject_name(pyproject) or f"gaia-agent-{parsed.id}"
 
-    # Snapshot existing wheels so we can identify exactly what this build adds —
-    # a stale wheel from a previous version must not be mistaken for the new one.
-    before = {p.name for p in out_dir.glob("*.whl")}
+    # Snapshot existing wheels (name -> mtime) so we can identify exactly what
+    # this build adds or rewrites — a stale wheel from a previous version must
+    # not be mistaken for the new one, while a same-version rebuild (e.g.
+    # 'gaia agent pack' then 'gaia agent publish') overwrites in place and
+    # still counts as produced by this build.
+    before = {p.name: p.stat().st_mtime_ns for p in out_dir.glob("*.whl")}
 
     cmd = [
         sys.executable,
@@ -204,9 +207,18 @@ def pack(
     )
 
 
-def _locate_wheel(out_dir: Path, before: set, dist_name: str, version: str) -> Path:
-    """Return the wheel this build produced, failing loudly if ambiguous."""
-    new_wheels = [p for p in out_dir.glob("*.whl") if p.name not in before]
+def _locate_wheel(out_dir: Path, before: dict, dist_name: str, version: str) -> Path:
+    """Return the wheel this build produced, failing loudly if ambiguous.
+
+    *before* maps pre-build wheel names to their mtime_ns; a wheel counts as
+    produced by this build if its name is new or its mtime changed (build
+    overwrites a same-version wheel in place).
+    """
+    new_wheels = [
+        p
+        for p in out_dir.glob("*.whl")
+        if p.name not in before or p.stat().st_mtime_ns != before[p.name]
+    ]
     stem = _normalize_wheel_stem(dist_name)
     expected_prefix = f"{stem}-{version}-"
 

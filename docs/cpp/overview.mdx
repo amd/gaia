@@ -39,7 +39,7 @@ The C++ framework focuses on the core agent loop and tool execution. Specialized
 ## Agent Execution Flow
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'16px', 'lineColor':'#ED1C24', 'primaryTextColor':'#fff', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis', 'nodeSpacing': 40, 'rankSpacing': 50}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'fontSize':'16px', 'lineColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis', 'nodeSpacing': 40, 'rankSpacing': 50}}}%%
 flowchart TD
     A["&nbsp;&nbsp;User Query&nbsp;&nbsp;"] --> B["&nbsp;&nbsp;gaia::Agent&nbsp;&nbsp;<br/>processQuery()"]
     B -->|"chat/completions"| C["&nbsp;&nbsp;LLM Server&nbsp;&nbsp;<br/>(Lemonade)"]
@@ -48,13 +48,13 @@ flowchart TD
     E -->|"result"| B
     D -->|"No"| F["&nbsp;&nbsp;Final Answer&nbsp;&nbsp;"]
 
-    style A fill:#ED1C24,stroke:#F4484D,stroke-width:2px,color:#fff
-    style B fill:#ED1C24,stroke:#F4484D,stroke-width:3px,color:#fff
-    style C fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style D fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style E fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style F fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
-    linkStyle default stroke:#ED1C24,stroke-width:2px
+    style A fill:#E2A33E,stroke:#EFC480,stroke-width:2px,color:#1a1a1a
+    style B fill:#E2A33E,stroke:#EFC480,stroke-width:3px,color:#1a1a1a
+    style C fill:#A87B2D,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style D fill:#8B1117,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style E fill:#EFC480,stroke:#E2A33E,stroke-width:2px,color:#1a1a1a
+    style F fill:#A87B2D,stroke:#E2A33E,stroke-width:2px,color:#fff
+    linkStyle default stroke:#E2A33E,stroke-width:2px
 ```
 
 1. User query enters `agent.processQuery()`
@@ -69,7 +69,7 @@ flowchart TD
 The agent is **not a script**. After every tool execution, the LLM is called again with the full conversation so far — including the tool's output. This lets the model reason about results and change course.
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'16px', 'lineColor':'#ED1C24', 'primaryTextColor':'#fff'}, 'flowchart': {'curve': 'basis', 'nodeSpacing': 40}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'fontSize':'16px', 'lineColor':'#E2A33E', 'primaryTextColor':'#1a1a1a'}, 'flowchart': {'curve': 'basis', 'nodeSpacing': 40}}}%%
 graph LR
     S["&nbsp;&nbsp;Start&nbsp;&nbsp;"] --> A["&nbsp;&nbsp;Call LLM&nbsp;&nbsp;"]
     A --> B{"&nbsp;&nbsp;Parse JSON&nbsp;&nbsp;"}
@@ -78,13 +78,13 @@ graph LR
     D --> A
     B -->|"has answer"| E["&nbsp;&nbsp;Done&nbsp;&nbsp;"]
 
-    style S fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style A fill:#ED1C24,stroke:#F4484D,stroke-width:2px,color:#fff
-    style B fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style C fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style D fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style E fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
-    linkStyle default stroke:#ED1C24,stroke-width:2px
+    style S fill:#A87B2D,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style A fill:#E2A33E,stroke:#EFC480,stroke-width:2px,color:#1a1a1a
+    style B fill:#8B1117,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style C fill:#A87B2D,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style D fill:#EFC480,stroke:#E2A33E,stroke-width:2px,color:#1a1a1a
+    style E fill:#A87B2D,stroke:#E2A33E,stroke-width:2px,color:#fff
+    linkStyle default stroke:#E2A33E,stroke-width:2px
 ```
 
 Each loop iteration: **LLM reasons → agent executes → result fed back → LLM reasons again**. The LLM can skip steps, add new ones, or pivot strategy at any point.
@@ -96,7 +96,7 @@ Each loop iteration: **LLM reasons → agent executes → result fed back → LL
 The `health_agent` demo is a [Windows System Health Agent](/guides/mcp/windows-system-health). It subclasses `gaia::Agent`, connects to the Windows MCP server on startup, then enters the planning loop.
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ED1C24', 'fontSize':'18px', 'lineColor':'#ED1C24', 'primaryTextColor':'#fff', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'fontSize':'18px', 'lineColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
 graph TB
     User("User query")
     Agent("WindowsSystemHealthAgent<br/>gaia::Agent subclass")
@@ -115,18 +115,18 @@ graph TB
     MCP --> FileWrite("mcp_windows_Shell<br/>Out-File report.txt")
     MCP --> Notepad("mcp_windows_Shell<br/>Start-Process notepad")
 
-    style User fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Agent fill:#ED1C24,stroke:#F4484D,stroke-width:3px,color:#fff
-    style LLM fill:#C8171E,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style MCP fill:#F4484D,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Shell1 fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Shell2 fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Shell3 fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Shell4 fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style FileWrite fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
-    style Notepad fill:#8B1117,stroke:#ED1C24,stroke-width:2px,color:#fff
+    style User fill:#A87B2D,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style Agent fill:#E2A33E,stroke:#EFC480,stroke-width:3px,color:#1a1a1a
+    style LLM fill:#A87B2D,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style MCP fill:#EFC480,stroke:#E2A33E,stroke-width:2px,color:#1a1a1a
+    style Shell1 fill:#8B1117,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style Shell2 fill:#8B1117,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style Shell3 fill:#8B1117,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style Shell4 fill:#8B1117,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style FileWrite fill:#8B1117,stroke:#E2A33E,stroke-width:2px,color:#fff
+    style Notepad fill:#8B1117,stroke:#E2A33E,stroke-width:2px,color:#fff
 
-    linkStyle default stroke:#ED1C24,stroke-width:2px
+    linkStyle default stroke:#E2A33E,stroke-width:2px
 ```
 
 ### Wi-Fi Troubleshooter Demo

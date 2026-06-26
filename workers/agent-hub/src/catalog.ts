@@ -9,6 +9,11 @@ import { compareSemver } from "./manifest";
 import {
   listAgentIds,
   readAgentManifest,
+  readChangelog,
+  readPackageFiles,
+  readReadme,
+  readSkill,
+  readSpec,
   writeIndex,
 } from "./storage";
 import type {
@@ -28,19 +33,32 @@ export function latestVersion(versions: string[]): string {
 /**
  * Produce an updated per-agent manifest with `newVersion` added.
  *
- * Caller must have already enforced immutability (the version must not exist).
- * The aggregate metadata (name/description/...) is refreshed from the manifest
- * of whatever version becomes `latest_version`, so the catalog reflects the
- * newest release's display fields.
+ * A version's artifact set is append-only per distinct filename: if the version
+ * already exists, the new artifact(s) are appended (the caller has already
+ * rejected duplicate filenames). The aggregate metadata (name/description/...)
+ * is refreshed from the manifest of whatever version becomes `latest_version`,
+ * so the catalog reflects the newest release's display fields.
  */
 export function upsertVersion(
   existing: AgentManifest | null,
   manifest: ParsedManifest,
   version: VersionEntry
 ): AgentManifest {
+  // If the version already exists, this publish adds another platform binary to
+  // it: append the new artifact(s), keep the original published_at/publisher and
+  // the primary artifact. The caller has already rejected duplicate filenames.
+  const prior = existing?.versions?.[version.version];
+  // Back-compat: a manifest written before `artifacts[]` existed has only the
+  // singular `artifact`. Treat that as the starting set so appending never
+  // dereferences an undefined array.
+  const priorArtifacts = prior ? (prior.artifacts ?? [prior.artifact]) : [];
+  const merged: VersionEntry = prior
+    ? { ...prior, artifacts: [...priorArtifacts, ...version.artifacts] }
+    : version;
+
   const versions: Record<string, VersionEntry> = {
     ...(existing?.versions ?? {}),
-    [version.version]: version,
+    [version.version]: merged,
   };
   const latest = latestVersion(Object.keys(versions));
 
@@ -63,17 +81,45 @@ export function upsertVersion(
     security_tier: base?.security_tier ?? existing?.security_tier ?? manifest.security_tier,
     min_gaia_version: base?.min_gaia_version ?? existing?.min_gaia_version,
     models: base?.models ?? existing?.models ?? manifest.models,
+    tools_count: base?.tools_count ?? existing?.tools_count ?? manifest.tools_count,
+    permissions: base?.permissions ?? existing?.permissions ?? manifest.permissions,
     requirements: base?.requirements ?? existing?.requirements ?? manifest.requirements,
     interfaces: base?.interfaces ?? existing?.interfaces ?? manifest.interfaces,
     latest_version: latest,
     deprecated: versions[latest].deprecated,
+    // Tracks the latest version exactly: if the new latest drops the message
+    // (e.g. un-deprecated), a stale message must not survive.
+    deprecation_message: useNew ? manifest.deprecation_message : existing?.deprecation_message,
+    npm_package: useNew ? manifest.npm_package : existing?.npm_package,
+    playground_url: useNew ? manifest.playground_url : existing?.playground_url,
     versions,
   };
 }
 
-/** Build the lightweight catalog entry for one agent manifest. */
-export function toIndexEntry(agent: AgentManifest): IndexEntry {
+/**
+ * Build the catalog entry for one agent manifest. `readme`/`changelog` are the
+ * latest version's markdown ("" if none was published); `packageFiles` is the
+ * whole-package zip's file listing (null if no package zip was published).
+ */
+export function toIndexEntry(
+  agent: AgentManifest,
+  readme: string,
+  changelog: string,
+  packageFiles: { files: { name: string; size_bytes: number }[] } | null,
+  spec = "",
+  skill = ""
+): IndexEntry {
   const latest = agent.versions[agent.latest_version];
+  const req = agent.requirements;
+  // The whole-package download is the published `.zip` artifact of the latest
+  // version, paired with its file listing. Only surface it when both exist.
+  const zip = (latest?.artifacts ?? [latest?.artifact]).find(
+    (a) => a && a.filename.toLowerCase().endsWith(".zip")
+  );
+  const pkg =
+    packageFiles && zip
+      ? { filename: zip.filename, size_bytes: zip.size_bytes, files: packageFiles.files }
+      : undefined;
   return {
     id: agent.id,
     name: agent.name,
@@ -85,8 +131,30 @@ export function toIndexEntry(agent: AgentManifest): IndexEntry {
     author: agent.author,
     security_tier: agent.security_tier,
     download_size_bytes: latest?.artifact.size_bytes ?? 0,
-    requirements: { platforms: agent.requirements.platforms ?? [] },
+    tags: agent.tags,
+    tools_count: agent.tools_count,
+    models: agent.models,
+    min_gaia_version: agent.min_gaia_version ?? "",
+    permissions: agent.permissions,
     deprecated: agent.deprecated,
+    // undefined serializes to "key absent" — only present when set.
+    deprecation_message: agent.deprecation_message,
+    requirements: {
+      min_memory_gb: req.min_memory_gb,
+      min_disk_gb: req.min_disk_gb,
+      min_context_size: req.min_context_size,
+      platforms: req.platforms,
+      npu: req.npu ? "required" : "optional",
+      gpu_vram_gb: req.gpu_vram_gb,
+    },
+    readme,
+    changelog,
+    spec,
+    skill,
+    // undefined serializes to "key absent" — only present when the manifest set it.
+    npm_package: agent.npm_package,
+    playground_url: agent.playground_url,
+    package: pkg,
   };
 }
 
@@ -102,7 +170,13 @@ export async function rebuildIndex(
   const entries: IndexEntry[] = [];
   for (const id of ids) {
     const agent = await readAgentManifest(bucket, id);
-    if (agent) entries.push(toIndexEntry(agent));
+    if (!agent) continue;
+    const readme = await readReadme(bucket, id, agent.latest_version);
+    const changelog = await readChangelog(bucket, id, agent.latest_version);
+    const packageFiles = await readPackageFiles(bucket, id, agent.latest_version);
+    const spec = await readSpec(bucket, id, agent.latest_version);
+    const skill = await readSkill(bucket, id, agent.latest_version);
+    entries.push(toIndexEntry(agent, readme, changelog, packageFiles, spec, skill));
   }
   entries.sort((a, b) => a.id.localeCompare(b.id));
 
@@ -128,5 +202,6 @@ export function makeVersionEntry(
     publisher,
     deprecated: manifest.deprecated,
     artifact,
+    artifacts: [artifact],
   };
 }

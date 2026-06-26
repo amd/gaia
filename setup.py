@@ -113,6 +113,7 @@ setup(
         "python-multipart>=0.0.9",
         # gaia connectors is a base CLI command; keyring is its OS credential store (OAuth tokens #915). #1621
         "keyring>=24.0.0,<26.0.0",
+        "tavily-python>=0.5.0",
     ],
     extras_require={
         "image": [

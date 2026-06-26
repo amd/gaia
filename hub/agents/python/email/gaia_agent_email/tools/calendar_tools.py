@@ -31,8 +31,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
-from gaia.agents.base.tools import tool
 from gaia_agent_email.verbose import log_tool_call
+
+from gaia.agents.base.tools import tool
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.formatting import format_connector_error
 from gaia.logger import get_logger
@@ -127,6 +128,9 @@ _INVITE_PHRASES = (
     "lets set up",
     "does that time work",
     "does that work for you",
+    "i'd like to schedule",
+    "would like to schedule",
+    "i want to schedule",
 )
 
 # Meeting nouns — only a positive signal when paired with a concrete time
@@ -183,9 +187,36 @@ _SOFT_PHRASES = (
     "sometime soon",
 )
 
+# Slot-proposal phrases — finding-a-time language that signals the sender is
+# actively trying to schedule a meeting.  These are only a high-confidence
+# positive when they co-occur with a concrete time/day token (_TIME_RE), which
+# distinguishes "here are some times: Mon 2pm" from generic "here are some
+# options".  Decision (#1709): a slot-proposal IS a meeting request.
+_SLOT_PROPOSAL_PHRASES = (
+    "here are some times",
+    "here are a few times",
+    "here are some options",
+    "propose several times",
+    "propose a few times",
+    "let me know what time works",
+    "let me know which time works",
+    "does that work for",
+    "does this work for",
+    "work for you",
+    "i'm available",
+    "i am available",
+)
+
 
 def detect_meeting_request_heuristic(subject: str, body: str) -> MeetingDetection:
     """Detect a meeting request via deterministic keyword + time rules.
+
+    A **slot-proposal** email — where the sender offers candidate times to find
+    a mutual slot (e.g. "Tue 10am PT / Wed 2pm PT — does either work?") — is
+    treated as a meeting request (#1709).  It is the start of scheduling, and
+    downstream calendar capabilities (conflict detection, RSVP, event creation)
+    should engage.  Slot-proposal phrases are matched as a high-confidence
+    positive when they co-occur with a concrete time/day token.
 
     Args:
         subject: The email subject line (may be empty).
@@ -223,7 +254,23 @@ def detect_meeting_request_heuristic(subject: str, body: str) -> MeetingDetectio
             ),
         )
 
-    # 3. Soft / vague scheduling language — ambiguous. Do NOT commit to a
+    # 3. Slot-proposal phrase + concrete time — high-confidence positive.
+    #    "Here are some times: Mon 10am / Wed 2pm" is the canonical case.
+    #    Requiring a time token keeps precision — generic "work for you" in a
+    #    non-scheduling context won't match without a day or clock reference.
+    slot_hits = [p for p in _SLOT_PROPOSAL_PHRASES if p in text]
+    if slot_hits and time_match:
+        return MeetingDetection(
+            is_meeting_request=True,
+            confidence="high",
+            signals=tuple(slot_hits) + (time_match.group(0),),
+            reason=(
+                f"slot-proposal phrase {slot_hits[0]!r} with concrete time "
+                f"{time_match.group(0)!r}"
+            ),
+        )
+
+    # 4. Soft / vague scheduling language — ambiguous. Do NOT commit to a
     #    positive; flag low confidence so the caller escalates to the LLM.
     soft_hits = [p for p in _SOFT_PHRASES if p in text]
     if soft_hits:
@@ -234,7 +281,7 @@ def detect_meeting_request_heuristic(subject: str, body: str) -> MeetingDetectio
             reason=f"soft scheduling language without a concrete time: {soft_hits[0]!r}",
         )
 
-    # 4. A bare meeting noun with no time and no invite phrase — still
+    # 5. A bare meeting noun with no time and no invite phrase — still
     #    ambiguous (could be "the meeting ran long" vs "set up the meeting").
     if noun_hits:
         return MeetingDetection(
@@ -244,7 +291,7 @@ def detect_meeting_request_heuristic(subject: str, body: str) -> MeetingDetectio
             reason=f"meeting noun {noun_hits[0]!r} without a concrete time or invite",
         )
 
-    # 5. No signal at all — confident negative.
+    # 6. No signal at all — confident negative.
     return MeetingDetection(
         is_meeting_request=False,
         confidence="high",

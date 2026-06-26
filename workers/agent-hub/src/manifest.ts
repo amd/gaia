@@ -64,8 +64,30 @@ function optBool(raw: unknown, field: string): boolean | undefined {
   return raw;
 }
 
+function optInt(raw: unknown, field: string): number | undefined {
+  if (raw == null) return undefined;
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 0) {
+    bad(`gaia-agent.yaml: ${field} must be an integer >= 0.`);
+  }
+  return raw;
+}
+
+function optStr(raw: unknown, field: string): string | undefined {
+  if (raw == null) return undefined;
+  if (typeof raw !== "string") bad(`gaia-agent.yaml: ${field} must be a string.`);
+  return raw;
+}
+
 function parseRequirements(raw: unknown): Requirements {
-  if (raw == null) return { platforms: [] };
+  const defaults: Requirements = {
+    platforms: [],
+    min_memory_gb: 0,
+    min_disk_gb: 0,
+    min_context_size: 0,
+    npu: false,
+    gpu_vram_gb: 0,
+  };
+  if (raw == null) return defaults;
   if (typeof raw !== "object" || Array.isArray(raw)) {
     bad("gaia-agent.yaml: requirements must be a mapping.");
   }
@@ -81,11 +103,11 @@ function parseRequirements(raw: unknown): Requirements {
   }
   return {
     platforms,
-    min_memory_gb: optNumber(r.min_memory_gb, "requirements.min_memory_gb"),
-    min_disk_gb: optNumber(r.min_disk_gb, "requirements.min_disk_gb"),
-    min_context_size: optNumber(r.min_context_size, "requirements.min_context_size"),
-    npu: optBool(r.npu, "requirements.npu"),
-    gpu_vram_gb: optNumber(r.gpu_vram_gb, "requirements.gpu_vram_gb"),
+    min_memory_gb: optNumber(r.min_memory_gb, "requirements.min_memory_gb") ?? 0,
+    min_disk_gb: optNumber(r.min_disk_gb, "requirements.min_disk_gb") ?? 0,
+    min_context_size: optNumber(r.min_context_size, "requirements.min_context_size") ?? 0,
+    npu: optBool(r.npu, "requirements.npu") ?? false,
+    gpu_vram_gb: optNumber(r.gpu_vram_gb, "requirements.gpu_vram_gb") ?? 0,
   };
 }
 
@@ -183,9 +205,14 @@ export function parseManifest(yamlText: string): ParsedManifest {
     security_tier: securityTier,
     min_gaia_version: (d.min_gaia_version as string) ?? undefined,
     models: strList(d.models, "models"),
+    tools_count: optInt(d.tools_count, "tools_count") ?? 0,
+    permissions: strList(d.permissions, "permissions"),
     requirements: parseRequirements(d.requirements),
     interfaces: parseInterfaces(d.interfaces),
     deprecated: optBool(d.deprecated, "deprecated") ?? false,
+    deprecation_message: optStr(d.deprecation_message, "deprecation_message"),
+    npm_package: optStr(d.npm_package, "npm_package"),
+    playground_url: optStr(d.playground_url, "playground_url"),
   };
 }
 

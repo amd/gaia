@@ -13,11 +13,15 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from gaia.agents.base.tools import tool
 from gaia_agent_email import action_store
+from gaia_agent_email.tools.read_tools import extract_sender_email
 from gaia_agent_email.verbose import log_tool_call
+
+from gaia.agents.base.tools import tool
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.formatting import format_connector_error
 from gaia.logger import get_logger
@@ -31,6 +35,66 @@ def _envelope_ok(data: Any) -> str:
 
 def _envelope_err(message: str) -> str:
     return json.dumps({"ok": False, "error": message})
+
+
+def _compute_reply_latency_seconds(original_msg: Dict[str, Any]) -> Optional[float]:
+    """Seconds between the original message's receipt and now (the reply time).
+
+    Accepts two receipt-anchor formats that the email backends use:
+
+    - **Gmail** ``internalDate``: numeric millis since Unix epoch (int or str),
+      e.g. ``"1717502400000"``.
+    - **Outlook** ``receivedDateTime`` (mapped to ``internalDate`` by the Outlook
+      backend): ISO-8601 string, e.g. ``"2026-06-04T12:00:00Z"``.
+
+    Returns ``None`` when no usable anchor is present or parsing fails — the
+    caller skips recording rather than fabricating a latency.
+    """
+    raw = original_msg.get("internalDate")
+    if raw in (None, ""):
+        return None
+    # Try numeric (Gmail millis) first.
+    try:
+        received_s = int(raw) / 1000.0
+        return time.time() - received_s
+    except (TypeError, ValueError):
+        pass
+    # Try ISO-8601 string (Outlook receivedDateTime). Handle trailing 'Z'
+    # which datetime.fromisoformat does not accept before Python 3.11.
+    try:
+        iso = str(raw).strip()
+        if iso.endswith("Z"):
+            iso = iso[:-1] + "+00:00"
+        received_s = datetime.fromisoformat(iso).astimezone(timezone.utc).timestamp()
+        return time.time() - received_s
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def _record_reply_observation(agent, original_msg: Dict[str, Any]) -> None:
+    """Record a reply-latency observation for the sender being replied to.
+
+    Memory-guarded inside ``_record_reply_interaction`` (skips when memory is
+    disabled). Skips silently when the original message has no receipt anchor
+    (``internalDate``) or no resolvable sender — we never fabricate a latency.
+    """
+    if agent is None:
+        return
+    record = getattr(agent, "_record_reply_interaction", None)
+    if record is None:
+        return
+    latency = _compute_reply_latency_seconds(original_msg)
+    if latency is None:
+        return
+    headers_dict = {
+        (h.get("name") or "").lower(): h.get("value", "")
+        for h in (original_msg.get("payload") or {}).get("headers", [])
+    }
+    sender = extract_sender_email(headers_dict.get("from", ""))
+    if not sender:
+        return
+    record(sender, latency_seconds=latency)
 
 
 def _build_threading_headers(original_msg: Dict[str, Any]) -> Dict[str, str]:
@@ -96,6 +160,10 @@ def draft_reply_impl(
             "to": to,
             "subject": subject,
             "body_preview": body[:200],
+            # The original message is returned so the caller can record a
+            # reply-latency observation (behavioral learning, #1290). Kept out
+            # of the user-facing envelope by the closure.
+            "_original_msg": original,
         }
 
 
@@ -245,6 +313,26 @@ class ReplyToolsMixin:
                 # Remember which mailbox holds this draft so send_draft routes
                 # back to the same backend.
                 agent._remember_draft_mailbox(result.get("draft_id"), provider)
+                # Behavioral learning (#1290): observe how fast the user replied
+                # to this sender, using the original message as the receipt
+                # anchor. Pop the internal field so it never reaches the user.
+                # The draft already succeeded — a bookkeeping failure here must
+                # not turn that success into an error the user might retry, so
+                # this specific post-commit write is logged, not raised.
+                original_msg = result.pop("_original_msg", None)
+                if original_msg is not None:
+                    try:
+                        _record_reply_observation(agent, original_msg)
+                    except (
+                        sqlite3.Error,
+                        json.JSONDecodeError,
+                        AttributeError,
+                    ) as obs_exc:
+                        log.warning(
+                            "draft_reply: reply observation failed (%s) — draft "
+                            "DID succeed; behavioral signal skipped",
+                            obs_exc,
+                        )
                 return _envelope_ok(result)
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))

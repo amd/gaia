@@ -106,8 +106,8 @@ description: Walk through a production incident postmortem. Use when the user me
 </Tab>
 <Tab title="Tool skill (GAIA extension)">
 
-Adds executable capability. The frontmatter declares `tools` (and the
-permissions/security those tools need); `tools.py` provides the
+Adds executable capability. Under `metadata.gaia`, the frontmatter declares
+`tools` (and the permissions/security those tools need); `tools.py` provides the
 `@tool`-decorated implementations. The Markdown body still ships — it tells the
 model *when and how* to call the tools.
 
@@ -116,12 +116,14 @@ model *when and how* to call the tools.
 name: web-research
 description: Search the web and fetch pages. Use when the user asks about current events or external facts.
 version: 1.0.0
-permissions: [network:read]
-security_tier: verified
-tools:
-  - name: search_web
-    description: Search the web for current information
-    parameters: { query: { type: string, required: true } }
+metadata:
+  gaia:
+    security_tier: verified
+    permissions: [network:read]
+    tools:
+      - name: search_web
+        description: Search the web for current information
+        parameters: { query: { type: string, required: true } }
 ---
 
 # Web Research
@@ -148,12 +150,19 @@ typed tools, security tier, requirements — defined in full in
 |-------|:---------------------:|:----:|----------------------|
 | `name` | required | required | — |
 | `description` | required | required | — |
-| `allowed-tools` / `disallowed-tools` | optional | optional → mapped to permission scoping | unrestricted within grant |
-| `version` | — | recommended | `0.0.0` (unversioned, blocks publishing) |
-| `permissions` | — | optional | none (instruction-only) |
-| `tools` | — | optional | none (instruction-only) |
-| `security_tier` | — | optional | `experimental` |
-| `requirements` | — | optional | no constraints |
+| `license` | optional | optional | `MIT` (GAIA skills are always MIT) |
+| `version` (top-level) | — | recommended (superset) | `0.0.0` (unversioned, blocks publishing) |
+| `metadata.gaia.permissions` | — | optional | none (instruction-only) |
+| `metadata.gaia.tools` | — | optional | none (instruction-only) |
+| `metadata.gaia.security_tier` | — | optional | `experimental` |
+| `metadata.gaia.requirements` | — | optional | no constraints |
+
+GAIA-specific fields are nested under `metadata.gaia` so a standard runtime
+ignores them losslessly — the full grammar is in
+[Skill Format](/plans/skill-format#the-metadatagaia-namespace). The standard's
+optional `compatibility` and `allowed-tools` keys are **not** part of GAIA's
+adopted base (they overlap `metadata.gaia`); a skill using them still parses, and
+GAIA ignores them.
 
 **The compatibility rule:** GAIA reads a bare standard `SKILL.md` as a valid
 instruction-only skill. Missing GAIA fields take conservative defaults —
@@ -162,12 +171,12 @@ permissions. A skill author adopts GAIA features incrementally; nothing is
 required to make an existing standard skill load.
 
 <Note>
-The [Skill Format](/plans/skill-format) plan refers to the external standard as
-"OpenClaw / ClawHub" — placeholder names from an earlier draft. The real
-standard is **Agent Skills** ([agentskills.io](https://agentskills.io)), as
-implemented by Claude Code. This spec is the source of truth for the
-compatibility surface; the plan's schema sections remain authoritative for the
-field grammar.
+**Division of authority:** this spec owns the **integration surface** (discovery,
+scoping, progressive disclosure); [Skill Format](/plans/skill-format) owns the
+**field grammar** (the `SKILL.md` schema, permission grammar, tiers). Both adopt
+**Agent Skills** ([agentskills.io](https://agentskills.io), as implemented by
+Claude Code) as the base standard, and treat Hermes and OpenClaw as compatible
+third-party formats nested under `metadata.<vendor>`.
 </Note>
 
 ## Discovery, loading, and scoping
@@ -240,9 +249,10 @@ exceed its tier ceiling, **fails loudly** — it does not load with a subset.
 
 Once a skill is in scope, it is triggered either by the **model** (description
 match — automatic) or **explicitly** by the user (`/web-research`, or
-`load_skill` in code). This matches Claude Code's dual-invocation model; GAIA
-honors the standard's `allowed-tools`/`disallowed-tools` and any
-invocation-control fields when importing a Claude Code skill.
+`load_skill` in code). This matches Claude Code's dual-invocation model. The
+standard's `allowed-tools`/`disallowed-tools` keys are parsed but **not** used as
+a permission mechanism (see [Skill Format](/plans/skill-format#adopted-base-agent-skills-standard)) —
+GAIA's permissions come from `metadata.gaia`.
 
 ## Permission & security model
 
@@ -254,13 +264,12 @@ carry the full risk of the code they run. The model gates both.
 `verified` / `community` / `experimental` (defaulting to `experimental`). The
 tier sets the permission ceiling and the grant behavior — auto-grant, prompt at
 install, or sandboxed — exactly as defined in
-[Skill Format §3–§4](/plans/skill-format). Highlights as they apply at the agent
-boundary:
+[Skill Format → Permission model and Security tiers](/plans/skill-format#permission-model).
+Highlights as they apply at the agent boundary:
 
 | Concern | How it's handled |
 |---------|------------------|
 | Tool permissions | Declared `permissions` (e.g. `network:read`, `filesystem:write:./out/**`) enforced by the skill sandbox; cannot exceed the tier ceiling |
-| `allowed-tools` (Claude Code) | Mapped to GAIA permission scoping — grants the listed tools without prompting *only* while the skill is active |
 | Per-agent least privilege | An agent receives a skill's tools only after the skill is both in scope **and** granted; no ambient activation |
 | Instruction-only bodies | Loaded as context, surfaced for review; treated as untrusted input, never as system-level instructions |
 | Untrusted imports | Skills imported from `.claude/skills/` or migrated from elsewhere default to `experimental` — sandboxed, explicit opt-in — regardless of any tier they claim |
@@ -277,8 +286,9 @@ agent packages from the [Agent Hub Restructure](/spec/agent-hub-restructure).
 **Distribution.** A skill ships one of two ways:
 
 - **Standalone** in the skill registry — installed with `gaia skill install
-  <name>`, lock-tracked in `~/.gaia/skills/skill-lock.json`. CLI and registry
-  API are specified in [Skill Format §6, §10](/plans/skill-format).
+  <name>`, lock-tracked in `~/.gaia/skills/skill-lock.json`. The CLI is specified
+  in [Skill Format → CLI](/plans/skill-format#cli); the registry/marketplace is
+  downstream ([#647](https://github.com/amd/gaia/issues/647)).
 - **Bundled** inside an agent package's `skills/` directory — version-pinned to
   that agent, no separate install.
 
@@ -341,7 +351,7 @@ ignored by runtimes that don't understand it rather than breaking the parse.
 | Typed tool declarations | — | `tools:` → `@tool` registry |
 | Granular permissions | coarse (`allowed-tools`) | `<domain>:<level>` scoped grants |
 | Security tiers | — | `verified` / `community` / `experimental` |
-| Signing / audit | — | per-tier (see Skill Format §4) |
+| Signing / audit | — | per-tier (see [Skill Format → Security tiers](/plans/skill-format#security-tiers)) |
 
 The principle: **be a strict superset of the open standard.** Anything that runs
 as an Agent Skills skill runs in GAIA; GAIA adds the enforcement and typing the

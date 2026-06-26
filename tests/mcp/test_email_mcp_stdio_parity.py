@@ -122,6 +122,28 @@ def _rest_triage(request: Dict[str, Any]) -> Dict[str, Any]:
     return resp.model_dump(mode="json")
 
 
+def _strip_runtime_usage(response: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop the whole ``usage`` block before a byte-for-byte parity compare.
+
+    ``usage`` (#1540) reuses the runtime AgentResponse.stats measurement read
+    from Lemonade's stateful ``/stats`` endpoint. None of its fields is
+    reproducible across two independent runs (REST in this process, MCP in a
+    subprocess): ``tokens_per_second`` is wall-clock-derived, and the token
+    counts come from whichever request ``/stats`` last recorded, so they too
+    drift between runs. Parity of the STRUCTURED triage decision (category,
+    summary, action items, draft, suggested_action) is the property under
+    test — not the reproducibility of a usage measurement, which each test
+    asserts is *present* on both surfaces separately.
+    """
+    import copy
+
+    out = copy.deepcopy(response)
+    result = out.get("result")
+    if isinstance(result, dict):
+        result.pop("usage", None)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # MCP stdio client helpers
 # ---------------------------------------------------------------------------
@@ -212,8 +234,8 @@ class TestEmailMcpStdioParity:
         """Single-email triage: MCP stdio output == REST service output."""
         rest = _rest_triage(SINGLE_REQUEST)
         mcp_out = anyio.run(_call_tool, "triage_email", SINGLE_REQUEST)
-        assert (
-            mcp_out == rest
+        assert _strip_runtime_usage(mcp_out) == _strip_runtime_usage(
+            rest
         ), "MCP stdio triage diverged from REST for the single-email fixture"
         # And it is a contract-valid response (extra='forbid' guards drift).
         parsed = parse_response(mcp_out)
@@ -222,16 +244,37 @@ class TestEmailMcpStdioParity:
         # The inbound sender gets a proposed reply.
         assert parsed.result.draft is not None
         assert parsed.result.draft.to[0].email == "bob@example.com"
+        # usage echoes on both surfaces (#1540): same token counts, present TPS.
+        assert parsed.result.usage is not None
+        assert parse_response(rest).result.usage is not None
 
     def test_thread_parity(self):
         """Thread triage: MCP stdio output == REST service output."""
         rest = _rest_triage(THREAD_REQUEST)
         mcp_out = anyio.run(_call_tool, "triage_email", THREAD_REQUEST)
-        assert (
-            mcp_out == rest
+        assert _strip_runtime_usage(mcp_out) == _strip_runtime_usage(
+            rest
         ), "MCP stdio triage diverged from REST for the thread fixture"
         parsed = parse_response(mcp_out)
         assert parsed.request_kind == "thread"
+
+    def test_suggested_action_present_on_both_surfaces(self):
+        """Schema 2.0: suggested_action must be present in both REST and MCP stdio (#1615)."""
+        rest = _rest_triage(SINGLE_REQUEST)
+        mcp_out = anyio.run(_call_tool, "triage_email", SINGLE_REQUEST)
+        # Both surfaces must carry suggested_action.
+        rest_parsed = parse_response(rest)
+        mcp_parsed = parse_response(mcp_out)
+        assert hasattr(
+            rest_parsed.result, "suggested_action"
+        ), "REST result missing suggested_action"
+        assert rest_parsed.result.suggested_action is not None
+        assert hasattr(
+            mcp_parsed.result, "suggested_action"
+        ), "MCP result missing suggested_action"
+        assert mcp_parsed.result.suggested_action is not None
+        # And they agree.
+        assert rest_parsed.result.suggested_action == mcp_parsed.result.suggested_action
 
 
 class TestEmailMcpSendGate:

@@ -41,7 +41,7 @@ src/gaia/apps/webui/
 ```bash
 cd src/gaia/apps/webui
 npm install
-npm run dev         # Vite dev server (http://localhost:5173)
+npm run dev         # Vite dev server (http://localhost:5174)
 npm run build       # Production bundle (required before `gaia chat --ui`)
 ```
 

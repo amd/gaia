@@ -21,7 +21,7 @@ from typing import Any, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from gaia.agents.base.agent import default_max_steps
-from gaia.connectors.api import connected_mailbox_providers
+from gaia.connectors.api import connected_mailbox_providers, get_connection
 
 
 class ConfigurationError(ValueError):
@@ -249,11 +249,17 @@ class EmailAgentConfig:
           - ``"google"`` / ``"microsoft"`` → only that provider, and only when
             it is actually connected.
 
-        Connector-derived: the connected set comes from
-        ``connected_mailbox_providers()`` (the keyring), in registry order
-        (google before microsoft). Fails loudly — an explicit filter naming an
-        unconnected provider, or nothing connected at all, raises
-        ``ConfigurationError`` rather than silently triaging one mailbox.
+        Connector-derived (intentional): the available set is the set of
+        CONNECTED providers, not the set of providers the agent is granted for.
+        Grant enforcement is the connectors layer's job — ``get_access_token_sync``
+        raises ``AuthRequiredError(AGENT_NOT_GRANTED)`` eagerly when the token is
+        fetched. The agent catches ``ConnectorsError`` per mailbox in
+        ``_triage_all_backends`` / ``_pre_scan_all_backends`` and surfaces a clean,
+        actionable per-mailbox notice rather than aborting the whole scan.
+
+        Fails loudly — an explicit filter naming an unconnected provider, or
+        nothing connected at all, raises ``ConfigurationError`` rather than
+        silently triaging one mailbox.
 
         The per-provider eval seam (``gmail_backend`` / ``outlook_backend``) is
         honored via ``_build_mail_backend``. An injected backend also marks its
@@ -298,27 +304,89 @@ class EmailAgentConfig:
     def resolve_calendar_backend(self) -> Any:
         """Return the calendar backend for the configured ``calendar_provider``.
 
-        Resolution order (mirrors ``resolve_mail_backend``):
+        Resolution order:
           1. An injected ``calendar_backend`` (eval/test seam) — always wins.
-          2. The live backend bound to the provider's grant-checked token
-             resolver.
+          2. Explicit ``calendar_provider`` config, if set — used directly
+             (trusted; no scope check).
+          3. Explicit ``mail_provider`` config, if set — calendar follows the
+             mailbox (a Microsoft-only user need not set ``calendar_provider``
+             separately; trusted; no scope check).
+          4. Connector discovery: query ``connected_mailbox_providers()`` and
+             pick the provider that is BOTH connected AND calendar-scoped.
+             "Calendar-scoped" means the stored connection includes at least one
+             of the provider's calendar scopes
+             (Google: calendar.events / calendar.readonly;
+             Microsoft: Calendars.ReadWrite).
+             If nothing is connected → actionable ``ConfigurationError``.
+             If connected but no provider is calendar-scoped → actionable
+             ``ConfigurationError`` naming the scopes to grant.
+             If exactly one calendar-scoped provider → use it.
+             If both are calendar-scoped → registry order (google first).
 
-        ``calendar_provider`` defaults to ``mail_provider`` when unset, so a
-        Microsoft-only user is not forced to set it twice. Both live backends
-        satisfy the ``CalendarBackend`` Protocol, so the agent's calendar tools
-        operate on Google and Outlook calendars interchangeably. An unknown
-        provider raises ``ConfigurationError`` (fail loudly — never silently
-        default to one calendar).
+        Both live backends satisfy the ``CalendarBackend`` Protocol, so the
+        agent's calendar tools operate on Google and Outlook calendars
+        interchangeably. An unsupported explicit provider raises
+        ``ConfigurationError`` (fail loudly).
+
+        Grant enforcement is the connectors layer's job — a calendar backend
+        whose agent grant has been revoked raises ``AuthRequiredError`` when the
+        first calendar tool call fetches the token. The existing per-tool
+        ``ConnectorsError`` handler in ``CalendarToolsMixin`` surfaces that as a
+        clean actionable envelope without requiring any grant reasoning here.
 
         Live backend imports are local to keep the module import graph free of
         the ``connectors`` dependency chain at ``config`` import time.
         """
         if self.calendar_backend is not None:
             return self.calendar_backend
-        # Default to the mail provider when calendar_provider is unset.
-        provider = (
-            (self.calendar_provider or self.mail_provider or "google").strip().lower()
-        )
+
+        # Steps 2–3: explicit config is trusted and bypasses scope discovery.
+        explicit = (self.calendar_provider or self.mail_provider or "").strip().lower()
+        if explicit:
+            provider = explicit
+        else:
+            # Step 4: scope-aware discovery — pick the connected + calendar-scoped provider.
+            from gaia_agent_email.outlook_scopes import OUTLOOK_CALENDAR_SCOPES
+            from gaia_agent_email.scopes import CALENDAR_SCOPES
+
+            _PROVIDER_CALENDAR_SCOPES = {
+                "google": set(CALENDAR_SCOPES),
+                "microsoft": set(OUTLOOK_CALENDAR_SCOPES),
+            }
+
+            connected = connected_mailbox_providers()
+            if not connected:
+                raise ConfigurationError(
+                    "No calendar provider connected. Connect Google (grant "
+                    "calendar.events / calendar.readonly) or Microsoft (grant "
+                    "Calendars.ReadWrite) in Settings → Connectors, then retry."
+                )
+
+            # A provider is calendar-scoped iff its stored connection includes one
+            # of its calendar scopes. NOTE: get_connection() returns None while a
+            # provider's re-auth tripwire is active, so a genuinely scoped provider
+            # can be transiently treated as unscoped here — re-auth is required
+            # anyway, and the actionable error below still names the scope to grant.
+            scoped = [
+                p
+                for p in connected
+                if p in _PROVIDER_CALENDAR_SCOPES
+                and _PROVIDER_CALENDAR_SCOPES[p].intersection(
+                    (get_connection(p) or {}).get("scopes", [])
+                )
+            ]
+
+            if not scoped:
+                raise ConfigurationError(
+                    "Connected providers have no calendar scope. "
+                    "Grant calendar.events or calendar.readonly for Google, "
+                    "or Calendars.ReadWrite for Microsoft, "
+                    "in Settings → Connectors, then retry."
+                )
+
+            # First in registry order (google before microsoft) wins when both are scoped.
+            provider = scoped[0]
+
         if provider == "google":
             from gaia_agent_email.calendar_backend import (
                 LiveCalendarBackend,

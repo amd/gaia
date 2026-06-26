@@ -207,7 +207,8 @@ void CleanConsole::startProgress(const std::string& /*message*/) {}
 
 void CleanConsole::stopProgress() {}
 
-void CleanConsole::printFinalAnswer(const std::string& answer) {
+void CleanConsole::printFinalAnswer(const std::string& answer,
+                                    const UsageStats& /*usage*/) {
     if (answer.empty()) return;
 
     // Extract clean text from the LLM's final response.

@@ -3,33 +3,29 @@
 """
 Pre-LLM triage heuristics for the Email Triage Agent.
 
-Heuristic rules adapted from PR #916 (Inbox Zero prototype). The prototype
-operated on MBOX ``X-Gmail-Labels`` headers (human strings like
-``"Promotions"``); this module operates on Gmail API v1 ``labelIds``
-(system IDs like ``CATEGORY_PROMOTIONS``). The categories are also
-re-mapped from PR #916's five-bucket scheme
-(``URGENT/NEEDS_RESPONSE/FYI/PROMOTIONAL/PERSONAL``) onto the four-bucket
-taxonomy used by the synthetic eval dataset (#848):
+Heuristic rules adapted from PR #916 (Inbox Zero prototype). Schema 2.0 (#1615).
+Five-bucket taxonomy: URGENT, NEEDS_RESPONSE, FYI, PROMOTIONAL, PERSONAL.
 
-  - ``urgent``         — needs the user's attention right now
-  - ``actionable``     — requires a reply / decision in the near term
-  - ``informational``  — useful context, no action
-  - ``low priority``   — newsletters, promotions, low-signal updates
+  - ``URGENT``          -- needs the user's attention right now
+  - ``NEEDS_RESPONSE``  -- requires a reply / decision in the near term
+  - ``FYI``             -- useful context, no action
+  - ``PROMOTIONAL``     -- newsletters, promotions, low-signal updates
+  - ``PERSONAL``        -- personal correspondence, no action needed
 
 Plus two boolean fields surfaced separately so the eval harness can score
-them independently of the four-way classification:
+them independently of the five-way classification:
 
-  - ``is_spam``        — Gmail's SPAM label OR keyword heuristics suggest spam
-  - ``is_phishing``    — heuristics suggest credential-harvesting (separate
-                          from generic spam — the agent should refuse to act
+  - ``is_spam``        -- Gmail's SPAM label OR keyword heuristics suggest spam
+  - ``is_phishing``    -- heuristics suggest credential-harvesting (separate
+                          from generic spam -- the agent should refuse to act
                           on links from a phishing message even if the user
                           says "do as it asks")
 
 The heuristic exists to save an LLM round-trip on obviously-low-priority
 mail (newsletters, promotions, automated security alerts that are clearly
-informational). Everything that doesn't match a high-confidence keyword
+FYI/PROMOTIONAL). Everything that doesn't match a high-confidence keyword
 or system-label rule falls through to the LLM. This module never decides
-on its own that an email is ``actionable`` or ``urgent`` — those require
+on its own that an email is ``NEEDS_RESPONSE`` or ``URGENT`` -- those require
 the LLM's reading of the body and are intentionally not heuristic-gated.
 """
 
@@ -44,7 +40,7 @@ from typing import Iterable, List
 # ---------------------------------------------------------------------------
 # The Gmail REST API returns these as opaque strings on every message. The
 # user-defined labels look like ``Label_12345`` and cannot be matched by
-# keyword — the heuristic fast-path therefore covers ONLY the built-in
+# keyword -- the heuristic fast-path therefore covers ONLY the built-in
 # system labels. (Source: Gmail API v1 docs, ``users.messages.list`` →
 # ``labelIds`` field.)
 
@@ -61,19 +57,34 @@ LABEL_CATEGORY_FORUMS = "CATEGORY_FORUMS"
 LABEL_CATEGORY_PERSONAL = "CATEGORY_PERSONAL"
 
 
-# Categories emitted by the heuristic. MUST agree with #848's eval-time
-# taxonomy — any drift breaks AC4.
-CATEGORY_URGENT = "urgent"
-CATEGORY_ACTIONABLE = "actionable"
-CATEGORY_INFORMATIONAL = "informational"
-CATEGORY_LOW_PRIORITY = "low priority"
+# Categories emitted by the heuristic. MUST agree with the contract's
+# EmailCategory enum -- any drift breaks AC4. Schema 2.0 (#1615).
+# Precedence: URGENT > NEEDS_RESPONSE > PROMOTIONAL > PERSONAL > FYI(default)
+CATEGORY_URGENT = "URGENT"
+CATEGORY_NEEDS_RESPONSE = "NEEDS_RESPONSE"
+CATEGORY_FYI = "FYI"
+CATEGORY_PROMOTIONAL = "PROMOTIONAL"
+CATEGORY_PERSONAL = "PERSONAL"
 
 ALL_CATEGORIES: tuple[str, ...] = (
     CATEGORY_URGENT,
-    CATEGORY_ACTIONABLE,
-    CATEGORY_INFORMATIONAL,
-    CATEGORY_LOW_PRIORITY,
+    CATEGORY_NEEDS_RESPONSE,
+    CATEGORY_FYI,
+    CATEGORY_PROMOTIONAL,
+    CATEGORY_PERSONAL,
 )
+
+
+def default_action_for(category: str) -> str:
+    """Return the default suggested_action for a triage category.
+
+    Precedence: URGENT/NEEDS_RESPONSE -> reply, PROMOTIONAL -> archive, others -> none.
+    """
+    if category in (CATEGORY_URGENT, CATEGORY_NEEDS_RESPONSE):
+        return "reply"
+    if category == CATEGORY_PROMOTIONAL:
+        return "archive"
+    return "none"  # FYI, PERSONAL, or unknown
 
 
 @dataclass(frozen=True)
@@ -84,7 +95,7 @@ class HeuristicResult:
     category without LLM consultation. ``confident=False`` means the
     heuristic returned a best-guess fallback (e.g., ``informational``)
     and the caller should escalate to the LLM. The ``reason`` field is
-    the source-of-truth for verbose-mode logging — it tells the operator
+    the source-of-truth for verbose-mode logging -- it tells the operator
     exactly which rule fired.
     """
 
@@ -96,10 +107,10 @@ class HeuristicResult:
     matched_label_ids: tuple[str, ...] = field(default_factory=tuple)
 
 
-# Phishing heuristics — *very* conservative. The cost of a false negative
+# Phishing heuristics -- *very* conservative. The cost of a false negative
 # (real phishing missed) is higher than a false positive (legitimate
 # password-reset flagged), but the heuristic must NEVER auto-act on phishing.
-# The flag is informational only — the LLM gets the same message and
+# The flag is informational only -- the LLM gets the same message and
 # decides what to do, with the heuristic flag as a *signal* in its prompt.
 _PHISHING_KEYWORD_PAIRS = (
     ("verify your account", "click"),
@@ -118,7 +129,7 @@ _PHISHING_SINGLE_PHRASES = (
 
 # Spam-keyword fallback for the case where Gmail did NOT flag SPAM but the
 # subject screams marketing.
-# NOTE: "newsletter" is intentionally omitted — company-internal newsletters
+# NOTE: "newsletter" is intentionally omitted -- company-internal newsletters
 # (e.g. all-hands recaps, digest emails from colleagues) appear with the word
 # "newsletter" in the subject and should be classified by the LLM, not killed
 # as low-priority by the heuristic. External marketing newsletters are caught
@@ -150,7 +161,7 @@ _AUTOMATED_SENDER_KEYWORDS = (
 
 # Subject-line patterns that signal genuine urgency even from automated senders.
 # When any of these appear in the subject, the automated-sender heuristic must
-# NOT commit confident=informational — the LLM must read the body to decide.
+# NOT commit confident=informational -- the LLM must read the body to decide.
 # These cover the primary miss class (#1266): DevOps/IT alerts with [SEV1],
 # credential-rotation advisories, and compliance deadlines sent by noreply/alerts@.
 _URGENT_SUBJECT_PATTERNS = (
@@ -190,7 +201,7 @@ def classify_category_heuristic(
             (``"Alice <alice@example.com>"``).
         label_ids: System label IDs from ``labelIds`` on the message
             payload. User-defined labels (opaque ``Label_*`` ids) are
-            ignored — they cannot be classified by name.
+            ignored -- they cannot be classified by name.
         body: Plain-text body or snippet (any length; empty string
             disables body-level signals). Callers that have already decoded
             the full body should pass it; callers in the fast bulk-triage
@@ -206,16 +217,16 @@ def classify_category_heuristic(
     sender_lower = (sender or "").lower()
 
     # Phishing is a *signal* layered on top of every category, never a
-    # category itself — compute once up front so spam/phishing can co-fire.
+    # category itself -- compute once up front so spam/phishing can co-fire.
     # detect_phishing covers subject + sender-domain + body; the body channel
     # uses whatever text the caller provides (snippet or full decode).
     is_phishing = detect_phishing(subject, sender, body)
 
-    # 1. Spam — confident, label-driven. Gmail's spam classifier is more
+    # 1. Spam -- confident, label-driven. Gmail's spam classifier is more
     #    accurate than anything we'd build ad-hoc.
     if LABEL_SPAM in label_id_set:
         return HeuristicResult(
-            category=CATEGORY_LOW_PRIORITY,
+            category=CATEGORY_PROMOTIONAL,
             is_spam=True,
             is_phishing=is_phishing,
             confident=True,
@@ -223,71 +234,81 @@ def classify_category_heuristic(
             matched_label_ids=(LABEL_SPAM,),
         )
 
-    # 2. Promotions — confident, label-driven.
+    # 2. Promotions -- confident, label-driven.
     if LABEL_CATEGORY_PROMOTIONS in label_id_set:
         return HeuristicResult(
-            category=CATEGORY_LOW_PRIORITY,
+            category=CATEGORY_PROMOTIONAL,
             confident=True,
             reason="Gmail CATEGORY_PROMOTIONS label set",
             matched_label_ids=(LABEL_CATEGORY_PROMOTIONS,),
         )
 
-    # 3. Social — confident, label-driven. Notifications, "X liked your
+    # 3. Social -- confident, label-driven. Notifications, "X liked your
     #    post", etc.
     if LABEL_CATEGORY_SOCIAL in label_id_set:
         return HeuristicResult(
-            category=CATEGORY_LOW_PRIORITY,
+            category=CATEGORY_PROMOTIONAL,
             confident=True,
             reason="Gmail CATEGORY_SOCIAL label set",
             matched_label_ids=(LABEL_CATEGORY_SOCIAL,),
         )
 
-    # 4. Updates — confident, label-driven. Receipts, shipping
+    # 4. Updates -- confident, label-driven. Receipts, shipping
     #    confirmations, calendar updates: useful context, no reply needed.
     if LABEL_CATEGORY_UPDATES in label_id_set:
         return HeuristicResult(
-            category=CATEGORY_INFORMATIONAL,
+            category=CATEGORY_FYI,
             confident=True,
             reason="Gmail CATEGORY_UPDATES label set",
             matched_label_ids=(LABEL_CATEGORY_UPDATES,),
         )
 
-    # 5. Subject-keyword promo fallback — fires when Gmail didn't tag
+    # 5. Personal -- confident, label-driven.
+    if LABEL_CATEGORY_PERSONAL in label_id_set:
+        return HeuristicResult(
+            category=CATEGORY_PERSONAL,
+            is_phishing=is_phishing,
+            confident=True,
+            reason="Gmail CATEGORY_PERSONAL label set",
+            matched_label_ids=(LABEL_CATEGORY_PERSONAL,),
+        )
+
+    # 6. Subject-keyword promo fallback -- fires when Gmail didn't tag
     #    promotions but the marketing language is unmistakable.
     for kw in _PROMO_SUBJECT_KEYWORDS:
         if kw in subject_lower:
             return HeuristicResult(
-                category=CATEGORY_LOW_PRIORITY,
+                category=CATEGORY_PROMOTIONAL,
                 is_phishing=is_phishing,
                 confident=True,
                 reason=f"subject contains promotional keyword '{kw}'",
             )
 
-    # 6. Automated-sender fallback — newsletters, alert bots, etc.
+    # 7. Automated-sender fallback -- newsletters, alert bots, etc.
     #    Exception: if the subject contains high-urgency signals (e.g. [SEV1],
     #    "rotate credentials", "compliance due by EOD"), the heuristic MUST
-    #    NOT commit confident=informational — these are DevOps/IT alerts that
+    #    NOT commit confident=informational -- these are DevOps/IT alerts that
     #    require a human to act and must be reviewed by the LLM (#1266).
     for kw in _AUTOMATED_SENDER_KEYWORDS:
         if kw in sender_lower:
             if _subject_has_urgent_signal(subject_lower):
                 return HeuristicResult(
-                    category=CATEGORY_INFORMATIONAL,
+                    category=CATEGORY_FYI,
                     is_phishing=is_phishing,
                     confident=False,
                     reason=(
                         f"sender contains automated-sender keyword '{kw}' but "
-                        "subject has urgent signal — escalating to LLM"
+                        "subject has urgent signal -- escalating to LLM"
                     ),
                 )
             return HeuristicResult(
-                category=CATEGORY_INFORMATIONAL,
+                category=CATEGORY_FYI,
                 is_phishing=is_phishing,
                 confident=True,
                 reason=f"sender contains automated-sender keyword '{kw}'",
             )
 
-    # 7. Built-in IMPORTANT / STARRED labels — Gmail has decided this is
+    # 8. Built-in IMPORTANT / STARRED labels -- Gmail has decided this is
     #    significant; we down-rank but do NOT classify (urgent vs.
     #    actionable depends on body, which the LLM reads). Return
     #    confident=False so the caller escalates.
@@ -298,19 +319,19 @@ def classify_category_heuristic(
         matched.append(LABEL_STARRED)
     if matched:
         return HeuristicResult(
-            category=CATEGORY_ACTIONABLE,
+            category=CATEGORY_NEEDS_RESPONSE,
             is_phishing=is_phishing,
             confident=False,
-            reason=f"Gmail flagged as {', '.join(matched)} — escalating to LLM",
+            reason=f"Gmail flagged as {', '.join(matched)} -- escalating to LLM",
             matched_label_ids=tuple(matched),
         )
 
-    # 8. No high-confidence heuristic matched — escalate.
+    # 9. No high-confidence heuristic matched -- escalate.
     return HeuristicResult(
-        category=CATEGORY_INFORMATIONAL,
+        category=CATEGORY_FYI,
         is_phishing=is_phishing,
         confident=False,
-        reason="no heuristic match — escalating to LLM",
+        reason="no heuristic match -- escalating to LLM",
     )
 
 
@@ -330,7 +351,7 @@ def _looks_phishing(subject_lower: str) -> bool:
 
     Returns True only when at least one paired indicator OR a singleton
     high-signal phrase fires. Single common words like ``"verify"`` on
-    their own are not enough — too many false positives for legitimate
+    their own are not enough -- too many false positives for legitimate
     account-management mail.
     """
     for required, also in _PHISHING_KEYWORD_PAIRS:
@@ -348,7 +369,7 @@ def _looks_phishing(subject_lower: str) -> bool:
 # ``detect_phishing`` augments the subject-only ``_looks_phishing`` with
 # sender-domain and body signals for use by the block/quarantine tool and
 # the precision CI gate.  The design is precision-first: each signal is
-# high-specificity and conservative.  Recall is secondary — it is better
+# high-specificity and conservative.  Recall is secondary -- it is better
 # to miss a phishing message than to flag a legit onboarding email.
 # ---------------------------------------------------------------------------
 
@@ -402,7 +423,7 @@ _SUSPICIOUS_TLDS: frozenset[str] = frozenset({"tk", "xyz", "ml", "ga", "cf"})
 # longer SLD), indicate impersonation.
 #
 # Short brands (<= _SHORT_BRAND_MAX_LEN chars, e.g. "irs", "dhl", "hsbc",
-# "uber") are matched on a WORD-TOKEN boundary, never as a raw substring —
+# "uber") are matched on a WORD-TOKEN boundary, never as a raw substring --
 # otherwise "irs" fires inside legit domains like ``firstservice.com`` /
 # ``firstalert.com`` and "uber" inside ``uberflip.com``. Longer brands are
 # matched as substrings (their collision risk against real words is
@@ -488,7 +509,7 @@ def _domain_has_impersonation_brand(full_domain: str, sld: str) -> bool:
     """Return True when a known brand keyword is present in the domain.
 
     Short brands (``<= _SHORT_BRAND_MAX_LEN``) match only as a standalone
-    word token of the SLD — never as a substring — so e.g. ``"irs"`` does
+    word token of the SLD -- never as a substring -- so e.g. ``"irs"`` does
     not fire inside ``firstservice`` / ``firstalert`` and ``"uber"`` does
     not fire inside ``uberflip``. Longer brands match as a substring of the
     hyphen-collapsed domain (so ``dropbox-security-alert`` still matches
@@ -539,7 +560,7 @@ def _suspicious_sender_domain(sender_lower: str) -> bool:
     if tld in _SUSPICIOUS_TLDS:
         return True
 
-    # Tier 3: common TLD (.com / .net) — require brand + impersonation signal.
+    # Tier 3: common TLD (.com / .net) -- require brand + impersonation signal.
     if not _domain_has_impersonation_brand(full_domain, sld):
         return False
 
@@ -578,8 +599,8 @@ def detect_phishing(
     """Multi-signal phishing detector used by both the heuristic triage path and
     the quarantine tool.
 
-    Evaluates three independent channels — subject keyword pairs, suspicious
-    sender domain, and body-level signals — and returns ``True`` when any one
+    Evaluates three independent channels -- subject keyword pairs, suspicious
+    sender domain, and body-level signals -- and returns ``True`` when any one
     channel fires.  Each channel is conservative (precision-first).
 
     ``classify_category_heuristic`` calls this function to set ``is_phishing``
@@ -622,7 +643,7 @@ def group_by_category(triage_results: list[dict]) -> dict:
         msg_id = item.get("id")
         if msg_id is None:
             continue
-        cat = item.get("category", CATEGORY_INFORMATIONAL)
+        cat = item.get("category", CATEGORY_FYI)
         buckets.setdefault(cat, []).append(msg_id)
         if item.get("is_spam"):
             spam.append(msg_id)
@@ -637,21 +658,23 @@ def group_by_category(triage_results: list[dict]) -> dict:
 
 
 # Backwards-compat alias for callers that imported the PR #916 spelling.
-# Kept private — new code should use the canonical names.
+# Kept private -- new code should use the canonical names.
 _classify = classify_category_heuristic
 
 
 __all__ = [
     "ALL_CATEGORIES",
     "CATEGORY_URGENT",
-    "CATEGORY_ACTIONABLE",
-    "CATEGORY_INFORMATIONAL",
-    "CATEGORY_LOW_PRIORITY",
+    "CATEGORY_NEEDS_RESPONSE",
+    "CATEGORY_FYI",
+    "CATEGORY_PROMOTIONAL",
+    "CATEGORY_PERSONAL",
     "HeuristicResult",
     "classify_category_heuristic",
+    "default_action_for",
     "detect_phishing",
     "group_by_category",
-    # System label ID constants — exported so callers can match without
+    # System label ID constants -- exported so callers can match without
     # repeating string literals.
     "LABEL_INBOX",
     "LABEL_SPAM",
