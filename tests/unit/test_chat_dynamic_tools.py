@@ -95,6 +95,39 @@ def test_env_toggle_overrides_config(monkeypatch):
     assert a._maybe_build_tool_loader() is None
 
 
+def test_env_override_helper_none_when_unset(monkeypatch):
+    """``dynamic_tools_env_override`` returns ``None`` so callers fall back to
+    the persisted/config value — the single source of truth the UI router and
+    the agent resolver both read (#1798)."""
+    from gaia.agents.chat.agent import dynamic_tools_env_override
+
+    monkeypatch.delenv("GAIA_DYNAMIC_TOOLS", raising=False)
+    assert dynamic_tools_env_override() is None
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("1", True),
+        ("true", True),
+        ("TRUE", True),
+        ("yes", True),
+        ("on", True),
+        ("0", False),
+        ("false", False),
+        ("no", False),
+        ("", False),
+    ],
+)
+def test_env_override_helper_parses_truthy_set(monkeypatch, raw, expected):
+    """Same truthy set the resolver used to inline — pinned so the UI toggle
+    and the agent never disagree on what counts as "on"."""
+    from gaia.agents.chat.agent import dynamic_tools_env_override
+
+    monkeypatch.setenv("GAIA_DYNAMIC_TOOLS", raw)
+    assert dynamic_tools_env_override() is expected
+
+
 def test_env_threshold_and_max_overrides(monkeypatch):
     a = _bare_agent(config=ChatAgentConfig(prompt_profile="doc", dynamic_tools=True))
     monkeypatch.setenv("GAIA_DYNAMIC_TOOLS_TAU", "0.42")

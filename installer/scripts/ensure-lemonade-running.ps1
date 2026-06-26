@@ -4,10 +4,11 @@
 
 .DESCRIPTION
     GitHub Actions terminates any process a job spawns when the job ends, so a
-    server started inline never survives to the next job. This launches the
-    version-matched LemonadeServer.exe as a Windows **Scheduled Task** instead --
-    the Task Scheduler owns it, not the job, so it persists across jobs and
-    reboots. The task also auto-starts at boot.
+    server started inline never survives to the next job. This launches
+    LemonadeServer.exe with `--port $Port` (so it binds $Port regardless of a
+    stale config.json) as a Windows **Scheduled Task** instead: the Task Scheduler
+    owns it, not the job, so it persists across jobs and reboots. The task also
+    auto-starts at boot.
 
     Idempotent + self-healing:
       - If a healthy server is already on $Port, returns immediately.
@@ -41,7 +42,13 @@ if (-not $ForceRestart -and (Test-Health)) {
     exit 0
 }
 
-# Resolve the server binary.
+# Resolve the server binary. In v10.x the server is LemonadeServer.exe; the
+# legacy `lemonade-server` shim was deprecated in v10.5 and is no longer
+# installed, so we launch LemonadeServer.exe directly. There is no `serve`
+# subcommand -- the listen port lives in config.json, and a stale config in this
+# profile (e.g. a pre-v10.1 default of 8000) is what pins the server to the wrong
+# port. We pass `--port` to override it AND clear the stale config so the 13305
+# default regenerates. Cross-check installer/scripts/start-lemonade.ps1.
 if (-not $ServerExe -or -not (Test-Path $ServerExe)) {
     $ServerExe = (Get-ChildItem `
         "C:\Users\*\AppData\Local\lemonade_server\bin\LemonadeServer.exe", `
@@ -52,10 +59,21 @@ if (-not $ServerExe -or -not (Test-Path $ServerExe)) {
 if (-not $ServerExe) { Write-Host "ERROR: LemonadeServer.exe not found on the runner."; exit 1 }
 Write-Host "Server binary: $ServerExe"
 
+# Clear any stale config.json so it can't keep pinning the server to an old port.
+# The SYSTEM scheduled task reads the SYSTEM profile cache. --port below also
+# overrides, but a clean config is the documented path back to the 13305 default.
+# Best-effort: missing files are expected and fine.
+foreach ($cfg in @(
+    "C:\windows\system32\config\systemprofile\.cache\lemonade\config.json",
+    "C:\windows\system32\config\systemprofile\AppData\Local\lemonade_server\config.json"
+)) {
+    if (Test-Path $cfg) { Write-Host "Removing stale config: $cfg"; Remove-Item $cfg -Force -ErrorAction SilentlyContinue }
+}
+
 # (Re)register a Scheduled Task that runs the server as SYSTEM, auto-starting at
 # boot and restarting on failure. Force overwrites any prior definition.
 try {
-    $action    = New-ScheduledTaskAction -Execute $ServerExe
+    $action    = New-ScheduledTaskAction -Execute $ServerExe -Argument "--port $Port"
     $trigger   = New-ScheduledTaskTrigger -AtStartup
     $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
     $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
@@ -74,7 +92,8 @@ $healthy = $false
 for ($attempt = 1; $attempt -le 4 -and -not $healthy; $attempt++) {
     Write-Host "--- start attempt $attempt ---"
     Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    Get-Process LemonadeServer -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Get-Process LemonadeServer, lemonade-server, lemonade, llama-server, llama-server-dev, lemonade-server-dev `
+        -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 4
     Start-ScheduledTask -TaskName $TaskName
     for ($i = 0; $i -lt 20; $i++) {

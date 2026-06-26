@@ -361,6 +361,10 @@ export interface Settings {
     model_status: ModelStatus | null;
     /** Persisted context window size override (tokens). null = use default 32768. */
     context_size: number | null;
+    /** Beta dynamic tool loader (#1798). Effective value: GAIA_DYNAMIC_TOOLS wins when set, else the persisted setting. */
+    dynamic_tools: boolean;
+    /** True when GAIA_DYNAMIC_TOOLS locks the value — the toggle reflects the effective value and disables. */
+    dynamic_tools_locked: boolean;
 }
 
 /** Status of the GAIA Agent UI MCP server (exposes UI tools to Claude Code etc.). */
