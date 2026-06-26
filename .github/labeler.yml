@@ -64,6 +64,11 @@ jira:
   - changed-files:
     - any-glob-to-any-file: ['src/gaia/agents/jira_agent.py', 'src/gaia/apps/jira/**/*', 'docs/guides/jira.md', 'docs/spec/jira-agent.md']
 
+# Email agent changes (hub package: frozen Python sidecar + npm client)
+agent::email:
+  - changed-files:
+    - any-glob-to-any-file: ['hub/agents/python/email/**/*', 'hub/agents/npm/agent-email/**/*', 'docs/guides/email.mdx']
+
 # Evaluation framework changes
 eval:
   - changed-files:
