@@ -42,21 +42,21 @@ recipe:
   config:
     harness: gaia eval benchmark
     model: Gemma-4-E4B-it-GGUF
-    limit: 25
+    limit: 220
 results:
-  test_cases_run: 25
+  test_cases_run: 100
   metrics:
     - name: category_accuracy
-      value: 0.40
+      value: 0.46
       weight: 1.0
 aggregate:
   name: weighted_accuracy
   formula: "round(100 * sum(weight_i * value_i) / sum(weight_i), 2)"
   components:
     - metric: category_accuracy
-      value: 0.40
+      value: 0.46
       weight: 1.0
-  value: 40.0
+  value: 46.0
 generated_at: "2026-06-26T16:47:13+00:00"
 inherited_from: null
 ---
@@ -178,13 +178,13 @@ gaia eval benchmark \
   --model Gemma-4-E4B-it-GGUF \
   --mbox-path tests/fixtures/email/synthetic_inbox.mbox \
   --ground-truth tests/fixtures/email/ground_truth.json \
-  --limit 25 \
+  --limit 220 \
   --output-dir /tmp/email-eval
 
 PYTHONPATH="$(pwd)" \
 python hub/agents/python/email/packaging/gen_scorecard.py \
   --benchmark-dir /tmp/email-eval \
-  --limit 25
+  --limit 220
 ```
 
 This writes `hub/agents/npm/agent-email/SCORECARD.md` in place.

@@ -49,11 +49,11 @@ PYTHONPATH="$(pwd)" \
     --model Gemma-4-E4B-it-GGUF \
     --mbox-path tests/fixtures/email/synthetic_inbox.mbox \
     --ground-truth tests/fixtures/email/ground_truth.json \
-    --limit 25 --output-dir <persistent-dir>
+    --limit 220 --output-dir <persistent-dir>
 
 PYTHONPATH="$(pwd)" \
 <venv>/bin/python hub/agents/python/email/packaging/gen_scorecard.py \
-    --benchmark-dir <persistent-dir> --limit 25
+    --benchmark-dir <persistent-dir> --limit 220
 # → writes hub/agents/npm/agent-email/SCORECARD.md in place
 ```
 

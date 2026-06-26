@@ -22,7 +22,7 @@ Usage::
     python hub/agents/python/email/packaging/gen_scorecard.py \\
         --benchmark-dir /tmp/email-eval \\
         [--ground-truth tests/fixtures/email/ground_truth.json] \\
-        [--limit 25]
+        [--limit 220]
 
 The ``--ground-truth`` path defaults to the canonical fixture in the repository.
 """
@@ -166,12 +166,24 @@ def build_payload(benchmark_dir: Path, ground_truth_path: Path, limit=None):
             f"Benchmark dir: {benchmark_dir}"
         )
 
-    # Aggregate metrics from judged scenarios
-    category_accuracy = sum(
-        s["quality"]["category_accuracy"] for s in judged
-    ) / len(judged)
-
+    # Weight each scenario's accuracy by the emails it scored, so the headline
+    # value is the true per-email accuracy over test_cases_run. An unweighted
+    # scenario mean misreports the number (and the gate that compares it) when
+    # judged scenarios have unequal sizes.
     test_cases_run = sum(int(s.get("total_emails", 0)) for s in judged)
+    if test_cases_run <= 0:
+        raise ValueError(
+            f"Judged scenarios in {scorecard_path} report no emails "
+            f"(total_emails sums to {test_cases_run}); cannot compute a "
+            f"per-email accuracy. Check the benchmark output."
+        )
+    category_accuracy = (
+        sum(
+            float(s["quality"]["category_accuracy"]) * int(s.get("total_emails", 0))
+            for s in judged
+        )
+        / test_cases_run
+    )
 
     # Dataset size = labeled entries in ground_truth.json (excluding _meta key)
     if not ground_truth_path.exists():
