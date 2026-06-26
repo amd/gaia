@@ -30,7 +30,8 @@ logger = logging.getLogger(__name__)
 # These are the "models" exposed in /v1/models and selectable in VSCode
 AGENT_MODELS = {
     "gaia-code": {
-        "class_name": "gaia.agents.routing.agent.RoutingAgent",
+        # RoutingAgent ships as the standalone gaia-agent-routing wheel (#1102).
+        "class_name": "gaia_agent_routing.agent.RoutingAgent",
         "init_params": {
             "api_mode": True,  # Skip interactive questions, use defaults/best-guess
             "silent_mode": True,
@@ -98,7 +99,7 @@ class AgentRegistry:
         Dynamically load agent class from module path.
 
         Args:
-            class_path: Full module path (e.g., "gaia.agents.routing.agent.RoutingAgent")
+            class_path: Full module path (e.g., "gaia_agent_routing.agent.RoutingAgent")
 
         Returns:
             Agent class
@@ -156,7 +157,19 @@ class AgentRegistry:
             return agent_class(**init_params)
         except ImportError as e:
             logger.error(f"Failed to load agent {model_id}: {e}")
-            raise ValueError(f"Agent {model_id} not available: {e}")
+            hint = ""
+            if model_id == "gaia-code":
+                # gaia-code routes through the standalone gaia-agent-routing wheel
+                # (#1102), which in turn needs gaia-agent-code. Fail loudly with
+                # an install hint rather than degrading silently.
+                hint = (
+                    " The 'gaia-code' model routes through RoutingAgent, which "
+                    "ships as the 'gaia-agent-routing' wheel. Install it with "
+                    "'pip install gaia-agent-routing gaia-agent-code' (or "
+                    "'pip install amd-gaia[agents]'). See "
+                    "docs/spec/agent-hub-restructure.mdx."
+                )
+            raise ValueError(f"Agent {model_id} not available: {e}.{hint}") from e
 
     def list_models(self) -> List[Dict[str, Any]]:
         """

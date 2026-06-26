@@ -279,6 +279,36 @@ class TestInitProfiles(unittest.TestCase):
             for key in required_keys:
                 self.assertIn(key, profile, f"Profile '{name}' missing key '{key}'")
 
+    def test_email_profile_defined(self):
+        """`gaia init --profile email` downloads the email triage model."""
+        from gaia.installer.init_command import INIT_PROFILES
+
+        self.assertIn("email", INIT_PROFILES)
+        email = INIT_PROFILES["email"]
+        self.assertEqual(email["agent"], "email")
+        self.assertIn("Gemma-4-E4B-it-GGUF", email["models"])
+
+    def test_email_profile_min_version_locksteps_with_agent(self):
+        """The email init profile's min Lemonade version must match the email
+        agent's runtime minimum — readiness (/v1/email/init) and the installer
+        must agree on what 'compatible' means."""
+        from gaia.installer.init_command import INIT_PROFILES
+
+        try:
+            from gaia_agent_email.version import MIN_LEMONADE_VERSION
+        except ImportError:
+            self.skipTest("gaia_agent_email (standalone email wheel) not installed")
+        self.assertEqual(
+            INIT_PROFILES["email"]["min_lemonade_version"], MIN_LEMONADE_VERSION
+        )
+
+    def test_email_profile_is_a_cli_choice(self):
+        """The init subparser must accept --profile email (argparse choices)."""
+        from gaia.cli import build_parser
+
+        ns = build_parser().parse_args(["init", "--profile", "email"])
+        self.assertEqual(ns.profile, "email")
+
 
 class TestRemoteAutoDetection(unittest.TestCase):
     """Test auto-detection of remote mode from LEMONADE_BASE_URL."""

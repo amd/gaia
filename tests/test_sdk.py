@@ -1246,8 +1246,12 @@ class TestRoutingAgent:
         """Verify RoutingAgent imports cleanly and exposes process_query.
 
         We don't instantiate — RoutingAgent.__init__ constructs a LemonadeClient.
+
+        RoutingAgent ships as the standalone gaia-agent-routing wheel (#1102);
+        skip when a framework-only env lacks it.
         """
-        from gaia.agents.routing.agent import RoutingAgent
+        pytest.importorskip("gaia_agent_routing")
+        from gaia_agent_routing.agent import RoutingAgent
 
         assert hasattr(RoutingAgent, "process_query")
 
