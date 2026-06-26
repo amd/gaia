@@ -51,6 +51,428 @@
         "title": "ActionItem",
         "type": "object"
       },
+      "CalendarCreateEventRequest": {
+        "additionalProperties": false,
+        "description": "Create a calendar event. Shared by the preview (token-mint) and create\n(token-consume) endpoints.\n\nCreating an event is a Tier-2 (externally visible) mutation, so it is gated\nby the same single-use confirmation-token handshake as ``/v1/email/send``:\nPOST this to ``/calendar/events/preview`` to mint a token bound to the exact\nevent, then echo the token in ``confirmation_token`` to ``/calendar/events``.",
+        "properties": {
+          "attendees": {
+            "description": "Attendee email addresses to invite (may be empty).",
+            "items": {
+              "type": "string"
+            },
+            "title": "Attendees",
+            "type": "array"
+          },
+          "confirmation_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Confirmation token from POST /v1/email/calendar/events/preview. Ignored by preview; required by create — a create without a valid token bound to this exact event is rejected (403).",
+            "title": "Confirmation Token"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional event description / body.",
+            "title": "Description"
+          },
+          "end": {
+            "$ref": "#/components/schemas/CalendarEventDateTime",
+            "description": "Event end (after start)."
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional free-text location.",
+            "title": "Location"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional provider binding ('google' or 'microsoft'). When set on preview, the confirmation token binds to this provider so the create routes to the right calendar even with multiple accounts connected.",
+            "title": "Provider"
+          },
+          "schema_version": {
+            "default": "2.1",
+            "description": "Contract version. Mismatch lets a consumer fail loudly.",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "start": {
+            "$ref": "#/components/schemas/CalendarEventDateTime",
+            "description": "Event start."
+          },
+          "summary": {
+            "description": "Event title / summary (non-empty).",
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "summary",
+          "start",
+          "end"
+        ],
+        "title": "CalendarCreateEventRequest",
+        "type": "object"
+      },
+      "CalendarEvent": {
+        "additionalProperties": false,
+        "description": "A calendar event as returned by the view endpoint (display-flattened).\n\n``start`` / ``end`` are the raw provider strings (an RFC 3339 ``dateTime``\nfor timed events or a ``YYYY-MM-DD`` ``date`` for all-day events) — flattened\nfor display rather than re-modeled, matching what the agent's calendar tools\nsurface.",
+        "properties": {
+          "end": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "End instant ('dateTime') or all-day 'date'.",
+            "title": "End"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Provider event id (opaque).",
+            "title": "Id"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Free-text location, or null when none.",
+            "title": "Location"
+          },
+          "organizer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Organizer email, or null when not reported.",
+            "title": "Organizer"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Start instant ('dateTime') or all-day 'date'.",
+            "title": "Start"
+          },
+          "summary": {
+            "default": "",
+            "description": "Event title / summary.",
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "title": "CalendarEvent",
+        "type": "object"
+      },
+      "CalendarEventDateTime": {
+        "additionalProperties": false,
+        "description": "One endpoint (start or end) of a calendar event.\n\nProvide EXACTLY ONE of:\n  - ``date_time`` — a timed event, RFC 3339 (e.g. ``2026-07-01T14:00:00Z``\n    or ``2026-07-01T14:00:00-07:00``); or\n  - ``date`` — an all-day event, ``YYYY-MM-DD``.\n\n``time_zone`` is an optional IANA name (e.g. ``America/Los_Angeles``).\nNote: when ``time_zone`` is omitted on a timed event, the Microsoft Graph\n(Outlook) calendar backend attaches a default of ``UTC`` (Graph rejects a\nbare ``dateTime`` without a paired time zone). For Google, supply either a\nUTC offset inside ``date_time`` or an explicit ``time_zone``.",
+        "properties": {
+          "date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "All-day date, 'YYYY-MM-DD'. Mutually exclusive with 'date_time'.",
+            "title": "Date"
+          },
+          "date_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Timed-event instant, RFC 3339. Mutually exclusive with 'date'.",
+            "title": "Date Time"
+          },
+          "time_zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "IANA time zone (e.g. 'America/Los_Angeles'). Optional; the Outlook backend defaults a missing time zone to 'UTC' for timed events.",
+            "title": "Time Zone"
+          }
+        },
+        "title": "CalendarEventDateTime",
+        "type": "object"
+      },
+      "CalendarEventPreviewResponse": {
+        "additionalProperties": false,
+        "description": "The normalized event echo plus a single-use confirmation token bound to\nit. Returned by POST /v1/email/calendar/events/preview.",
+        "properties": {
+          "attendees": {
+            "description": "Attendees to invite.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Attendees",
+            "type": "array"
+          },
+          "confirmation_token": {
+            "description": "Echo this back to POST /v1/email/calendar/events to authorize creating exactly this event. Single-use; bound to the event payload.",
+            "title": "Confirmation Token",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional description.",
+            "title": "Description"
+          },
+          "end": {
+            "$ref": "#/components/schemas/CalendarEventDateTime",
+            "description": "Event end."
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional location.",
+            "title": "Location"
+          },
+          "schema_version": {
+            "default": "2.1",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "start": {
+            "$ref": "#/components/schemas/CalendarEventDateTime",
+            "description": "Event start."
+          },
+          "summary": {
+            "description": "The event title to be created.",
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "summary",
+          "start",
+          "end",
+          "confirmation_token"
+        ],
+        "title": "CalendarEventPreviewResponse",
+        "type": "object"
+      },
+      "CalendarEventResponse": {
+        "additionalProperties": false,
+        "description": "Result of POST /v1/email/calendar/events (create — confirmation-gated).",
+        "properties": {
+          "created": {
+            "default": true,
+            "description": "Always true on success.",
+            "title": "Created",
+            "type": "boolean"
+          },
+          "event_id": {
+            "description": "Provider id of the created event.",
+            "title": "Event Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "default": "2.1",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "summary": {
+            "description": "Title of the created event.",
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "event_id",
+          "summary"
+        ],
+        "title": "CalendarEventResponse",
+        "type": "object"
+      },
+      "CalendarEventsResponse": {
+        "additionalProperties": false,
+        "description": "Result of GET /v1/email/calendar/events (read-only view).",
+        "properties": {
+          "events": {
+            "description": "Matching events, ordered by start time.",
+            "items": {
+              "$ref": "#/components/schemas/CalendarEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "schema_version": {
+            "default": "2.1",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "title": "CalendarEventsResponse",
+        "type": "object"
+      },
+      "CalendarRespondRequest": {
+        "additionalProperties": false,
+        "description": "RSVP to an existing calendar invite (POST /v1/email/calendar/events/respond).\n\nResponding to an invite is an explicit, user-initiated action surfaced by the\nUI's accept/decline controls, so it is not separately token-gated. ``status``\nis the RSVP verb; ``attendee_email`` is the principal's own address (used by\nthe Google backend to locate the attendee row; ignored by the Outlook backend,\nwhich RSVPs on the authenticated ``/me`` calendar).",
+        "properties": {
+          "attendee_email": {
+            "description": "The principal's own email (the attendee responding). Used by the Google backend; ignored by Outlook (RSVPs on /me).",
+            "title": "Attendee Email",
+            "type": "string"
+          },
+          "event_id": {
+            "description": "Provider event id to RSVP to.",
+            "title": "Event Id",
+            "type": "string"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional provider binding ('google' or 'microsoft').",
+            "title": "Provider"
+          },
+          "schema_version": {
+            "default": "2.1",
+            "description": "Contract version. Mismatch lets a consumer fail loudly.",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "status": {
+            "description": "RSVP response: accept, decline, or tentatively accept.",
+            "enum": [
+              "accepted",
+              "declined",
+              "tentative"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "event_id",
+          "status",
+          "attendee_email"
+        ],
+        "title": "CalendarRespondRequest",
+        "type": "object"
+      },
+      "CalendarRespondResponse": {
+        "additionalProperties": false,
+        "description": "Result of POST /v1/email/calendar/events/respond (RSVP).",
+        "properties": {
+          "event_id": {
+            "description": "The event that was responded to.",
+            "title": "Event Id",
+            "type": "string"
+          },
+          "responded": {
+            "default": true,
+            "description": "Always true on success.",
+            "title": "Responded",
+            "type": "boolean"
+          },
+          "schema_version": {
+            "default": "2.1",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "status": {
+            "description": "The RSVP response that was recorded.",
+            "enum": [
+              "accepted",
+              "declined",
+              "tentative"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "event_id",
+          "status"
+        ],
+        "title": "CalendarRespondResponse",
+        "type": "object"
+      },
       "DraftReply": {
         "additionalProperties": false,
         "description": "A drafted reply the agent proposes. Never sent without confirmation\n(#1264) — this is a proposal, not an action.",
@@ -955,6 +1377,212 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/v1/email/calendar/events": {
+      "get": {
+        "description": "View calendar events on the primary calendar (read-only).\n\n``time_min`` / ``time_max`` are optional RFC 3339 bounds. ``provider``\n(google|microsoft) is required only when more than one account is connected;\nwith exactly one, it is inferred. Reaches whichever calendar the user\nconnected. Fails loudly (403 + reconnect CTA) if the calendar scope is missing.",
+        "operationId": "list_calendar_events_v1_email_calendar_events_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "time_min",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Time Min"
+            }
+          },
+          {
+            "in": "query",
+            "name": "time_max",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Time Max"
+            }
+          },
+          {
+            "in": "query",
+            "name": "provider",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Provider"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarEventsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Calendar Events",
+        "tags": [
+          "email"
+        ]
+      },
+      "post": {
+        "description": "Create a calendar event — gated on explicit confirmation (#1780).\n\nMirrors the send gate: a request without a valid, payload-bound confirmation\ntoken (from POST /calendar/events/preview) is rejected with HTTP 403 before\nany backend call. Creating an event is externally visible to attendees, so it\nis never performed without explicit confirmation.",
+        "operationId": "create_calendar_event_v1_email_calendar_events_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalendarCreateEventRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarEventResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Calendar Event",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/calendar/events/preview": {
+      "post": {
+        "description": "Mint a single-use confirmation token bound to the proposed event.\n\nThe calendar analogue of POST /v1/email/draft: it creates nothing and reads\nno calendar — it only returns the normalized event plus a ``confirmation_token``\nthe caller echoes to POST /v1/email/calendar/events to authorize the create.",
+        "operationId": "preview_calendar_event_v1_email_calendar_events_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalendarCreateEventRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarEventPreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Calendar Event",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/calendar/events/respond": {
+      "post": {
+        "description": "RSVP accept / decline / tentative to an existing calendar invite.\n\nAn explicit, user-initiated action (the UI's accept/decline controls), so it\nis not separately token-gated. ``attendee_email`` is the principal's own\naddress (used by the Google backend; ignored by Outlook, which RSVPs on /me).",
+        "operationId": "respond_calendar_event_v1_email_calendar_events_respond_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalendarRespondRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarRespondResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Respond Calendar Event",
+        "tags": [
+          "email"
+        ]
+      }
+    },
     "/v1/email/draft": {
       "post": {
         "description": "Propose a reply and mint a confirmation token bound to its payload.\n\nThe returned token must be echoed to :func:`send_email` to authorize\nsending exactly this ``(to, subject, body)``. This is the explicit\nuser-confirmation step — the consuming app surfaces the draft to the\nuser, and only a user-approved send echoes the token back.",

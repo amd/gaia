@@ -331,11 +331,13 @@ def test_result_summary_required():
 
 
 def test_schema_version_unchanged_by_multi_inbox():
-    """Schema 2.1 (#1781) is the current frozen contract version.
+    """Schema 2.1 is the current frozen contract version.
 
-    2.1 added the read-only inbox-search surface — additive, no triage shape
-    change. If this fails, someone changed the version unexpectedly; that
-    requires an explicit version negotiation, not a drive-by edit.
+    2.1 is additive over the 2.0 5-bucket taxonomy (no triage shape change): it
+    added inbox search (#1781), mailbox actions (#1779), the calendar surface
+    (#1780), and inbox pre-scan (#1778). If this fails, someone changed the
+    version unexpectedly; that requires an explicit version negotiation, not a
+    drive-by edit.
     """
     assert SCHEMA_VERSION == "2.1"
 

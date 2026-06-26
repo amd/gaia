@@ -29,6 +29,14 @@ Contract bumped to `SCHEMA_VERSION` **2.1** — additive, no triage shape change
   folder-move its label-based undo can't reverse. New client methods:
   `confirmAction`, `archive`, `unarchive`, `quarantine`, `unquarantine`.
   Contract `SCHEMA_VERSION` bumps `2.0` → `2.1` (additive — triage-shape unchanged).
+- **Calendar surface on the REST contract (`SCHEMA_VERSION` 2.0 → 2.1, #1780).**
+  Restores view / create / respond for calendar events through the packaged
+  sidecar so the Agent UI gets it back without the in-process agent. New client
+  methods: `listCalendarEvents`, `previewCalendarEvent`, `createCalendarEvent`,
+  `respondToCalendarEvent` (+ `Calendar*` types). Create is confirmation-gated
+  exactly like `send` — mint a token with `previewCalendarEvent`, echo it to
+  `createCalendarEvent`; without a valid payload-bound token the create is
+  rejected (403). Additive and same-major (2.x), so a 2.0 client keeps working.
 
 ## 0.2.5
 

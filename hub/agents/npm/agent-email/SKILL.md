@@ -87,14 +87,20 @@ The interface:
 | `unarchive(req)` | A connected mailbox | Restores within the 30s window (ungated — pass `batch_id`); expired/unknown → 409. |
 | `quarantine(req)` | `confirm` token + a connected **Gmail** mailbox | Applies `GAIA_PHISHING_QUARANTINE` + archives a phishing message. Refuses `is_phishing:false` → 400; Gmail-only (Outlook → 400). |
 | `unquarantine(req)` | A connected mailbox | Restores prior labels within the 30s window (ungated — pass `action_id`); expired/unknown → 409. |
+| `listCalendarEvents(opts?)` | Connected mailbox + calendar scope | Read-only view of the primary calendar. Optional `timeMin`/`timeMax`; `provider` only when >1 account. Missing scope → 403 + reconnect CTA. |
+| `previewCalendarEvent(req)` | Nothing external | Mints a single-use confirmation token bound to the event (calendar analogue of `draft`). |
+| `createCalendarEvent(req)` | Preview token + connected calendar | Token gate fires first: no/invalid token → 403, then the calendar checks. |
+| `respondToCalendarEvent(req)` | Connected calendar | RSVP `accepted`/`declined`/`tentative` to an existing invite. |
 
-**Build the `triage` / `draft` / `confirmAction` flow with zero connector setup**;
-`search` / `send` / `archive` / `quarantine` (and their reversals) need a connected
-mailbox (`search` reads the live inbox but takes no token). Mint the gate token with
-`draft` (for `send`) or `confirmAction` (for `archive` / `quarantine`); `archive` and
-`quarantine` are reversible inside a 30s window via the ungated `unarchive` /
-`unquarantine`. Every non-2xx response throws `HttpError` (`status`, `url`, `bodyText`)
-— handle it; there is no silent null.
+**Build the standalone surface (`triage`, `draft`, `confirmAction`,
+`previewCalendarEvent`) with zero connector setup.** `search` reads the live inbox (a
+connected mailbox, no token); `send`, the mailbox actions (`archive` / `quarantine`),
+and the calendar actions (view / create / respond) need a connected mailbox whose
+relevant scope was granted. Mint the gate token with `draft` (for `send`),
+`confirmAction` (for `archive` / `quarantine`), or `previewCalendarEvent` (for
+`createCalendarEvent`); `archive` and `quarantine` are reversible inside a 30s window
+via the ungated `unarchive` / `unquarantine`. Every non-2xx response throws
+`HttpError` (`status`, `url`, `bodyText`) — handle it; there is no silent null.
 
 ## 5. From a renderer (Electron / browser)
 

@@ -720,6 +720,236 @@ class EmailUnquarantineResponse(_Strict):
 
 
 # ---------------------------------------------------------------------------
+# CALENDAR — view / create / respond (schema 2.1, #1780)
+# ---------------------------------------------------------------------------
+#
+# Restores the agent's calendar capability on the REST contract so the Agent UI
+# can view, create, and RSVP to events through the packaged sidecar. The Google
+# and Microsoft (Outlook) calendar backends both satisfy the same backend
+# Protocol, so a single contract reaches either connected provider.
+
+
+class CalendarEventDateTime(_Strict):
+    """One endpoint (start or end) of a calendar event.
+
+    Provide EXACTLY ONE of:
+      - ``date_time`` — a timed event, RFC 3339 (e.g. ``2026-07-01T14:00:00Z``
+        or ``2026-07-01T14:00:00-07:00``); or
+      - ``date`` — an all-day event, ``YYYY-MM-DD``.
+
+    ``time_zone`` is an optional IANA name (e.g. ``America/Los_Angeles``).
+    Note: when ``time_zone`` is omitted on a timed event, the Microsoft Graph
+    (Outlook) calendar backend attaches a default of ``UTC`` (Graph rejects a
+    bare ``dateTime`` without a paired time zone). For Google, supply either a
+    UTC offset inside ``date_time`` or an explicit ``time_zone``.
+    """
+
+    date_time: Optional[str] = Field(
+        default=None,
+        description="Timed-event instant, RFC 3339. Mutually exclusive with 'date'.",
+    )
+    date: Optional[str] = Field(
+        default=None,
+        description="All-day date, 'YYYY-MM-DD'. Mutually exclusive with 'date_time'.",
+    )
+    time_zone: Optional[str] = Field(
+        default=None,
+        description=(
+            "IANA time zone (e.g. 'America/Los_Angeles'). Optional; the Outlook "
+            "backend defaults a missing time zone to 'UTC' for timed events."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _exactly_one_endpoint(self) -> "CalendarEventDateTime":
+        has_dt = bool((self.date_time or "").strip())
+        has_date = bool((self.date or "").strip())
+        if has_dt == has_date:
+            raise ValueError(
+                "provide exactly one of 'date_time' (timed) or 'date' (all-day)"
+            )
+        return self
+
+
+class CalendarEvent(_Strict):
+    """A calendar event as returned by the view endpoint (display-flattened).
+
+    ``start`` / ``end`` are the raw provider strings (an RFC 3339 ``dateTime``
+    for timed events or a ``YYYY-MM-DD`` ``date`` for all-day events) — flattened
+    for display rather than re-modeled, matching what the agent's calendar tools
+    surface.
+    """
+
+    id: Optional[str] = Field(default=None, description="Provider event id (opaque).")
+    summary: str = Field(default="", description="Event title / summary.")
+    start: Optional[str] = Field(
+        default=None, description="Start instant ('dateTime') or all-day 'date'."
+    )
+    end: Optional[str] = Field(
+        default=None, description="End instant ('dateTime') or all-day 'date'."
+    )
+    location: Optional[str] = Field(
+        default=None, description="Free-text location, or null when none."
+    )
+    organizer: Optional[str] = Field(
+        default=None, description="Organizer email, or null when not reported."
+    )
+
+
+class CalendarEventsResponse(_Strict):
+    """Result of GET /v1/email/calendar/events (read-only view)."""
+
+    schema_version: str = Field(
+        default=SCHEMA_VERSION, description="Echoes the contract version."
+    )
+    events: List[CalendarEvent] = Field(
+        default_factory=list, description="Matching events, ordered by start time."
+    )
+
+
+class CalendarCreateEventRequest(_Strict):
+    """Create a calendar event. Shared by the preview (token-mint) and create
+    (token-consume) endpoints.
+
+    Creating an event is a Tier-2 (externally visible) mutation, so it is gated
+    by the same single-use confirmation-token handshake as ``/v1/email/send``:
+    POST this to ``/calendar/events/preview`` to mint a token bound to the exact
+    event, then echo the token in ``confirmation_token`` to ``/calendar/events``.
+    """
+
+    schema_version: str = Field(
+        default=SCHEMA_VERSION,
+        description="Contract version. Mismatch lets a consumer fail loudly.",
+    )
+    summary: str = Field(..., description="Event title / summary (non-empty).")
+    start: CalendarEventDateTime = Field(..., description="Event start.")
+    end: CalendarEventDateTime = Field(..., description="Event end (after start).")
+    attendees: List[str] = Field(
+        default_factory=list,
+        description="Attendee email addresses to invite (may be empty).",
+    )
+    location: Optional[str] = Field(
+        default=None, description="Optional free-text location."
+    )
+    description: Optional[str] = Field(
+        default=None, description="Optional event description / body."
+    )
+    provider: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional provider binding ('google' or 'microsoft'). When set on "
+            "preview, the confirmation token binds to this provider so the create "
+            "routes to the right calendar even with multiple accounts connected."
+        ),
+    )
+    confirmation_token: Optional[str] = Field(
+        default=None,
+        description=(
+            "Confirmation token from POST /v1/email/calendar/events/preview. "
+            "Ignored by preview; required by create — a create without a valid "
+            "token bound to this exact event is rejected (403)."
+        ),
+    )
+
+    @field_validator("summary")
+    @classmethod
+    def _summary_nonempty(cls, v: str) -> str:
+        if not (v or "").strip():
+            raise ValueError("event summary must be non-empty")
+        return v
+
+
+class CalendarEventPreviewResponse(_Strict):
+    """The normalized event echo plus a single-use confirmation token bound to
+    it. Returned by POST /v1/email/calendar/events/preview.
+    """
+
+    schema_version: str = Field(
+        default=SCHEMA_VERSION, description="Echoes the contract version."
+    )
+    summary: str = Field(..., description="The event title to be created.")
+    start: CalendarEventDateTime = Field(..., description="Event start.")
+    end: CalendarEventDateTime = Field(..., description="Event end.")
+    attendees: List[str] = Field(
+        default_factory=list, description="Attendees to invite."
+    )
+    location: Optional[str] = Field(default=None, description="Optional location.")
+    description: Optional[str] = Field(
+        default=None, description="Optional description."
+    )
+    confirmation_token: str = Field(
+        ...,
+        description=(
+            "Echo this back to POST /v1/email/calendar/events to authorize "
+            "creating exactly this event. Single-use; bound to the event payload."
+        ),
+    )
+
+
+class CalendarEventResponse(_Strict):
+    """Result of POST /v1/email/calendar/events (create — confirmation-gated)."""
+
+    schema_version: str = Field(
+        default=SCHEMA_VERSION, description="Echoes the contract version."
+    )
+    event_id: str = Field(..., description="Provider id of the created event.")
+    summary: str = Field(..., description="Title of the created event.")
+    created: bool = Field(default=True, description="Always true on success.")
+
+
+class CalendarRespondRequest(_Strict):
+    """RSVP to an existing calendar invite (POST /v1/email/calendar/events/respond).
+
+    Responding to an invite is an explicit, user-initiated action surfaced by the
+    UI's accept/decline controls, so it is not separately token-gated. ``status``
+    is the RSVP verb; ``attendee_email`` is the principal's own address (used by
+    the Google backend to locate the attendee row; ignored by the Outlook backend,
+    which RSVPs on the authenticated ``/me`` calendar).
+    """
+
+    schema_version: str = Field(
+        default=SCHEMA_VERSION,
+        description="Contract version. Mismatch lets a consumer fail loudly.",
+    )
+    event_id: str = Field(..., description="Provider event id to RSVP to.")
+    status: Literal["accepted", "declined", "tentative"] = Field(
+        ..., description="RSVP response: accept, decline, or tentatively accept."
+    )
+    attendee_email: str = Field(
+        ...,
+        description=(
+            "The principal's own email (the attendee responding). Used by the "
+            "Google backend; ignored by Outlook (RSVPs on /me)."
+        ),
+    )
+    provider: Optional[str] = Field(
+        default=None,
+        description="Optional provider binding ('google' or 'microsoft').",
+    )
+
+    @field_validator("attendee_email")
+    @classmethod
+    def _attendee_email_plausible(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v or "@" not in v:
+            raise ValueError(f"not a valid email address: {v!r}")
+        return v
+
+
+class CalendarRespondResponse(_Strict):
+    """Result of POST /v1/email/calendar/events/respond (RSVP)."""
+
+    schema_version: str = Field(
+        default=SCHEMA_VERSION, description="Echoes the contract version."
+    )
+    event_id: str = Field(..., description="The event that was responded to.")
+    status: Literal["accepted", "declined", "tentative"] = Field(
+        ..., description="The RSVP response that was recorded."
+    )
+    responded: bool = Field(default=True, description="Always true on success.")
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -775,6 +1005,15 @@ __all__ = [
     "EmailQuarantineResponse",
     "EmailUnquarantineRequest",
     "EmailUnquarantineResponse",
+    # Calendar surface (schema 2.1, #1780).
+    "CalendarEventDateTime",
+    "CalendarEvent",
+    "CalendarEventsResponse",
+    "CalendarCreateEventRequest",
+    "CalendarEventPreviewResponse",
+    "CalendarEventResponse",
+    "CalendarRespondRequest",
+    "CalendarRespondResponse",
     "parse_request",
     "parse_response",
 ]

@@ -48,11 +48,19 @@ import hmac
 import re
 import secrets
 import threading
-from typing import Any, List, Literal, Optional
+from typing import Any, Dict, List, Literal, NoReturn, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from gaia_agent_email.contract import (
+    CalendarCreateEventRequest,
+    CalendarEvent,
+    CalendarEventDateTime,
+    CalendarEventPreviewResponse,
+    CalendarEventResponse,
+    CalendarEventsResponse,
+    CalendarRespondRequest,
+    CalendarRespondResponse,
     ActionItem,
     DraftReply,
     EmailActionConfirmRequest,
@@ -1029,6 +1037,157 @@ def _undo_window_seconds() -> int:
 
 
 # ---------------------------------------------------------------------------
+# Calendar-backend dependency + helpers (#1780)
+# ---------------------------------------------------------------------------
+
+
+def _build_calendar_backend(provider: str):
+    """Construct the live calendar backend for a connected provider.
+
+    Google and Microsoft both satisfy the same ``CalendarBackend`` Protocol, so
+    the routes operate on either interchangeably. The per-provider token
+    resolvers raise loudly (``AuthRequiredError`` / ``ScopeMismatchError``) when
+    the calendar scope was never granted — surfaced as a 403 reconnect CTA at the
+    route, never a silent empty calendar.
+    """
+    if provider == "google":
+        from gaia_agent_email.calendar_backend import (
+            LiveCalendarBackend,
+            _get_calendar_token,
+        )
+
+        return LiveCalendarBackend(_get_calendar_token)
+    if provider == "microsoft":
+        from gaia_agent_email.outlook_calendar_backend import (
+            LiveOutlookCalendarBackend,
+            _get_outlook_calendar_token,
+        )
+
+        return LiveOutlookCalendarBackend(_get_outlook_calendar_token)
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            f"Connected provider '{provider}' has no calendar backend. "
+            "Expected 'google' or 'microsoft'."
+        ),
+    )
+
+
+def get_calendar_backend():
+    """Resolve the calendar backend from the connected OAuth account.
+
+    Mirrors :func:`get_send_backend`: fail loudly when the count is ambiguous —
+    never silently choose or fall back:
+
+      - 0 connected → HTTP 503 (actionable: go connect Google/Microsoft)
+      - 2+ connected → HTTP 400 (actionable: pass ``provider`` to disambiguate)
+      - exactly 1 → build the matching live calendar backend
+    """
+    providers = connected_mailbox_providers()
+    if not providers:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No calendar account connected — connect Google or Microsoft in "
+                "Settings → Connectors before using the calendar."
+            ),
+        )
+    if len(providers) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Multiple accounts connected ({', '.join(providers)}); the "
+                "calendar API can't choose. Pass 'provider' (google|microsoft) "
+                "to select which calendar to use."
+            ),
+        )
+    return _build_calendar_backend(providers[0])
+
+
+# Module-level indirection the read/respond handlers call. Tests swap this
+# (``monkeypatch.setattr(email_routes, "resolve_calendar_backend", lambda:
+# FakeCalendarBackend())``) to inject a fake without touching live calendars.
+resolve_calendar_backend = get_calendar_backend
+
+
+def _resolve_calendar_backend_for_provider(provider: Optional[str]):
+    """Resolve a calendar backend for a specific provider (or the single
+    connected one when ``provider is None``).
+
+    Validates the provider is in the connected set before building — fail loud if
+    not. ``provider=None`` falls through to the count-based resolver (which is the
+    module-level ``resolve_calendar_backend`` so tests can inject a fake).
+    """
+    if provider is None:
+        return resolve_calendar_backend()
+    connected = connected_mailbox_providers()
+    if provider not in connected:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Account '{provider}' is not connected. Connect it via "
+                "Settings → Connectors, or omit 'provider' to use the single "
+                f"connected account. Connected: {connected or '(none)'}."
+            ),
+        )
+    return _build_calendar_backend(provider)
+
+
+def _calendar_dt_to_backend(dt: CalendarEventDateTime) -> Dict[str, str]:
+    """Convert a contract :class:`CalendarEventDateTime` into the Google-shaped
+    start/end dict the calendar backends consume (``{"dateTime"|"date"[, "timeZone"]}``).
+
+    No time-zone defaulting happens here — the Outlook backend attaches its own
+    default when a timed event omits ``time_zone`` (see CalendarEventDateTime docs).
+    """
+    if dt.date and dt.date.strip():
+        return {"date": dt.date}
+    out: Dict[str, str] = {"dateTime": dt.date_time or ""}
+    if dt.time_zone and dt.time_zone.strip():
+        out["timeZone"] = dt.time_zone
+    return out
+
+
+def _calendar_event_fingerprint(req: CalendarCreateEventRequest) -> str:
+    """A stable fingerprint of the exact event a confirmation token authorizes.
+
+    Binds the token to the event payload (summary/start/end/attendees/location/
+    description) so a token minted for one event cannot create a different one.
+    The provider is bound separately on the token (like send), so it is excluded.
+    """
+    start = _calendar_dt_to_backend(req.start)
+    end = _calendar_dt_to_backend(req.end)
+    attendees = ",".join(sorted(a.strip().lower() for a in req.attendees if a.strip()))
+    material = "\x1f".join(
+        [
+            req.summary,
+            json.dumps(start, sort_keys=True),
+            json.dumps(end, sort_keys=True),
+            attendees,
+            req.location or "",
+            req.description or "",
+        ]
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _raise_calendar_connector_http(exc: ConnectorsError) -> NoReturn:
+    """Translate a connector exception into the right HTTP status (fail loud).
+
+    ``NoReturn`` documents the always-raises contract the call sites rely on (the
+    handlers read ``data``/``result`` after the ``except`` arm — safe only because
+    this never returns). Mirrors the send handler's except-ladder: auth/scope/
+    revoke → 403 (with the reconnect CTA the connector error already carries),
+    configuration → 503, any other connector failure → 502.
+    """
+    if isinstance(exc, (AuthRequiredError, ScopeMismatchError, ConnectionRevokedError)):
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if isinstance(exc, ConfigurationError):
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
 # Send / draft request & response models (LOCAL — contract.py is frozen and
 # triage-only; the send handshake is not part of the #1262 contract).
 # ---------------------------------------------------------------------------
@@ -1529,6 +1688,156 @@ async def email_version() -> VersionResponse:
     return VersionResponse(apiVersion=API_VERSION, agentVersion=AGENT_VERSION)
 
 
+# ---------------------------------------------------------------------------
+# Calendar endpoints (#1780) — view (read-only), create (confirmation-gated),
+# respond (RSVP). Reach either the Google or Microsoft calendar backend through
+# one contract. All operate on the user's primary calendar (matching the agent).
+# ---------------------------------------------------------------------------
+
+
+@router.get("/calendar/events", response_model=CalendarEventsResponse)
+async def list_calendar_events(
+    time_min: Optional[str] = None,
+    time_max: Optional[str] = None,
+    provider: Optional[str] = None,
+) -> CalendarEventsResponse:
+    """View calendar events on the primary calendar (read-only).
+
+    ``time_min`` / ``time_max`` are optional RFC 3339 bounds. ``provider``
+    (google|microsoft) is required only when more than one account is connected;
+    with exactly one, it is inferred. Reaches whichever calendar the user
+    connected. Fails loudly (403 + reconnect CTA) if the calendar scope is missing.
+    """
+    from gaia_agent_email.tools.calendar_tools import list_calendar_events_impl
+
+    backend = _resolve_calendar_backend_for_provider(provider)
+    try:
+        data = await asyncio.to_thread(
+            list_calendar_events_impl, backend, time_min=time_min, time_max=time_max
+        )
+    except ConnectorsError as e:
+        _raise_calendar_connector_http(e)
+    events = [
+        CalendarEvent(
+            id=e.get("id"),
+            summary=e.get("summary", "") or "",
+            start=e.get("start"),
+            end=e.get("end"),
+            location=e.get("location"),
+            organizer=e.get("organizer"),
+        )
+        for e in data.get("events", [])
+    ]
+    return CalendarEventsResponse(events=events)
+
+
+@router.post("/calendar/events/preview", response_model=CalendarEventPreviewResponse)
+async def preview_calendar_event(
+    request: CalendarCreateEventRequest,
+) -> CalendarEventPreviewResponse:
+    """Mint a single-use confirmation token bound to the proposed event.
+
+    The calendar analogue of POST /v1/email/draft: it creates nothing and reads
+    no calendar — it only returns the normalized event plus a ``confirmation_token``
+    the caller echoes to POST /v1/email/calendar/events to authorize the create.
+    """
+    fingerprint = _calendar_event_fingerprint(request)
+    token = confirmation_store.issue(fingerprint, provider=request.provider)
+    return CalendarEventPreviewResponse(
+        summary=request.summary,
+        start=request.start,
+        end=request.end,
+        attendees=request.attendees,
+        location=request.location,
+        description=request.description,
+        confirmation_token=token,
+    )
+
+
+@router.post("/calendar/events", response_model=CalendarEventResponse)
+async def create_calendar_event(
+    request: CalendarCreateEventRequest,
+) -> CalendarEventResponse:
+    """Create a calendar event — gated on explicit confirmation (#1780).
+
+    Mirrors the send gate: a request without a valid, payload-bound confirmation
+    token (from POST /calendar/events/preview) is rejected with HTTP 403 before
+    any backend call. Creating an event is externally visible to attendees, so it
+    is never performed without explicit confirmation.
+    """
+    from gaia_agent_email.tools.calendar_tools import (
+        NoEventDateTimeError,
+        create_event_from_email_impl,
+    )
+
+    fingerprint = _calendar_event_fingerprint(request)
+    gate_ok, bound_provider = confirmation_store.consume_with_provider(
+        request.confirmation_token or "", fingerprint
+    )
+    if not gate_ok:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Create rejected: missing or invalid confirmation token for this "
+                "event. Call POST /v1/email/calendar/events/preview to obtain a "
+                "confirmation token bound to this exact event, then echo it in "
+                "'confirmation_token'. Events are never created without explicit "
+                "confirmation."
+            ),
+        )
+
+    backend = _resolve_calendar_backend_for_provider(bound_provider or request.provider)
+    start = _calendar_dt_to_backend(request.start)
+    end = _calendar_dt_to_backend(request.end)
+    attendees = [a.strip() for a in request.attendees if a.strip()] or None
+    try:
+        result = await asyncio.to_thread(
+            create_event_from_email_impl,
+            backend,
+            summary=request.summary,
+            start=start,
+            end=end,
+            attendees=attendees,
+            location=request.location,
+            description=request.description,
+        )
+    except (NoEventDateTimeError, ValueError) as e:
+        # Bad caller input (no usable time / inverted window) — actionable 400.
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except ConnectorsError as e:
+        _raise_calendar_connector_http(e)
+    return CalendarEventResponse(
+        event_id=result.get("event_id") or "",
+        summary=result.get("summary") or request.summary,
+    )
+
+
+@router.post("/calendar/events/respond", response_model=CalendarRespondResponse)
+async def respond_calendar_event(
+    request: CalendarRespondRequest,
+) -> CalendarRespondResponse:
+    """RSVP accept / decline / tentative to an existing calendar invite.
+
+    An explicit, user-initiated action (the UI's accept/decline controls), so it
+    is not separately token-gated. ``attendee_email`` is the principal's own
+    address (used by the Google backend; ignored by Outlook, which RSVPs on /me).
+    """
+    from gaia_agent_email.tools.calendar_tools import update_rsvp_impl
+
+    backend = _resolve_calendar_backend_for_provider(request.provider)
+    try:
+        await asyncio.to_thread(
+            update_rsvp_impl,
+            backend,
+            event_id=request.event_id,
+            user_email=request.attendee_email,
+            status=request.status,
+        )
+    except ConnectorsError as e:
+        _raise_calendar_connector_http(e)
+    return CalendarRespondResponse(event_id=request.event_id, status=request.status)
+
+
 @router.get("/spec", response_class=HTMLResponse, include_in_schema=False)
 async def email_spec() -> HTMLResponse:
     """Serve the self-contained HTML endpoint spec page.
@@ -1580,6 +1889,8 @@ __all__ = [
     "confirmation_store",
     "get_send_backend",
     "get_search_backend",
+    "get_calendar_backend",
+    "resolve_calendar_backend",
     "get_action_db",
     "resolve_action_db",
     "_resolve_mutate_backend",

@@ -172,6 +172,18 @@ Senders you reply to quickly are automatically promoted to priority on the next 
 
 `list_calendar_events`, `accept_invite`, `decline_invite`, `create_event_from_email`
 
+**On the REST contract** (schema 2.1, for the Agent UI): calendar view / create / respond
+are exposed alongside triage/draft/send:
+
+- `GET /v1/email/calendar/events` — view events on the primary calendar (read-only).
+- `POST /v1/email/calendar/events/preview` → `POST /v1/email/calendar/events` — create
+  an event, gated by the same single-use confirmation-token handshake as `/v1/email/send`
+  (mint a token with `/preview`, echo it to create; no/invalid token → **HTTP 403**).
+- `POST /v1/email/calendar/events/respond` — RSVP accepted/declined/tentative to an invite.
+
+Each reaches whichever calendar (Google or Microsoft) the user connected; a missing
+`calendar.events` scope fails loud with **HTTP 403** and the reconnect CTA.
+
 ## Sending email — safety
 
 **The agent never sends email on its own. A send always requires your explicit confirmation, and this holds no matter how you drive the agent.** Drafting a reply is harmless and unconfirmed; turning a draft into a sent message is the only step that asks for your approval, and it always asks.

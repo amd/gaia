@@ -385,6 +385,145 @@ def test_send_invalid_payload_returns_422(client):
 
 
 # ---------------------------------------------------------------------------
+# 5b. Calendar surface (#1780) — view / preview / create (gated) / respond
+# ---------------------------------------------------------------------------
+
+
+class _FakeCalendarBackend:
+    """In-memory calendar backend (CalendarBackend Protocol) for conformance."""
+
+    def list_events(
+        self, *, calendar_id="primary", time_min=None, time_max=None, max_results=25
+    ):
+        return {
+            "items": [
+                {
+                    "id": "evt-conf-1",
+                    "summary": "Conformance sync",
+                    "start": {"dateTime": "2026-07-01T10:00:00Z"},
+                    "end": {"dateTime": "2026-07-01T10:30:00Z"},
+                    "location": None,
+                    "organizer": {"email": "host@example.com"},
+                }
+            ]
+        }
+
+    def create_event(
+        self,
+        *,
+        calendar_id="primary",
+        summary,
+        start,
+        end,
+        attendees=None,
+        location=None,
+        description=None,
+    ):
+        return {"id": "evt-conf-created", "summary": summary}
+
+    def update_event_rsvp(
+        self, *, calendar_id="primary", event_id, attendee_email, response_status
+    ):
+        return {"id": event_id, "responseStatus": response_status}
+
+
+@pytest.fixture
+def fake_calendar(monkeypatch):
+    from gaia_agent_email import api_routes as email_routes
+
+    backend = _FakeCalendarBackend()
+    monkeypatch.setattr(email_routes, "resolve_calendar_backend", lambda: backend)
+    return backend
+
+
+def _calendar_event_body(**overrides) -> dict:
+    body = {
+        "summary": "Conformance meeting",
+        "start": {"date_time": "2026-07-01T14:00:00Z"},
+        "end": {"date_time": "2026-07-01T15:00:00Z"},
+        "attendees": ["alice@example.com"],
+    }
+    body.update(overrides)
+    return body
+
+
+def test_calendar_view_conforms_to_spec(client, committed_spec, fake_calendar):
+    resp = client.get("/v1/email/calendar/events")
+    assert resp.status_code == 200
+    schema_name = _schema_name_from_response(
+        committed_spec, "get", "/v1/email/calendar/events"
+    )
+    required = _required_keys(committed_spec, schema_name)
+    body = resp.json()
+    for key in required:
+        assert key in body, f"required key {key!r} missing from calendar view response"
+    assert body["events"][0]["id"] == "evt-conf-1"
+
+
+def test_calendar_create_without_token_returns_403(client, fake_calendar):
+    """A create without a confirmation token is a documented 403 (gate)."""
+    resp = client.post("/v1/email/calendar/events", json=_calendar_event_body())
+    assert resp.status_code == 403
+    detail = resp.json()["detail"].lower()
+    assert "confirmation_token" in detail or "preview" in detail
+
+
+def test_calendar_preview_then_create_conforms(client, committed_spec, fake_calendar):
+    preview = client.post(
+        "/v1/email/calendar/events/preview", json=_calendar_event_body()
+    )
+    assert preview.status_code == 200
+    token = preview.json()["confirmation_token"]
+
+    resp = client.post(
+        "/v1/email/calendar/events",
+        json=_calendar_event_body(confirmation_token=token),
+    )
+    assert resp.status_code == 200, resp.text
+    schema_name = _schema_name_from_response(
+        committed_spec, "post", "/v1/email/calendar/events"
+    )
+    required = _required_keys(committed_spec, schema_name)
+    body = resp.json()
+    for key in required:
+        assert (
+            key in body
+        ), f"required key {key!r} missing from calendar create response"
+    assert body["event_id"] == "evt-conf-created"
+
+
+def test_calendar_respond_conforms_to_spec(client, committed_spec, fake_calendar):
+    resp = client.post(
+        "/v1/email/calendar/events/respond",
+        json={
+            "event_id": "evt-conf-1",
+            "status": "declined",
+            "attendee_email": "me@example.com",
+        },
+    )
+    assert resp.status_code == 200
+    schema_name = _schema_name_from_response(
+        committed_spec, "post", "/v1/email/calendar/events/respond"
+    )
+    required = _required_keys(committed_spec, schema_name)
+    body = resp.json()
+    for key in required:
+        assert (
+            key in body
+        ), f"required key {key!r} missing from calendar respond response"
+    assert body["status"] == "declined"
+
+
+def test_calendar_create_invalid_payload_returns_422(client):
+    """A start with neither date_time nor date is a documented validation error."""
+    resp = client.post(
+        "/v1/email/calendar/events/preview",
+        json=_calendar_event_body(start={}, end={}),
+    )
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
 # 6. All documented paths are covered
 # ---------------------------------------------------------------------------
 
@@ -407,6 +546,11 @@ def test_all_documented_paths_covered(committed_spec):
         ("post", "/v1/email/send"),
         ("get", "/v1/email/health"),
         ("get", "/v1/email/version"),
+        # Calendar surface (schema 2.1, #1780).
+        ("get", "/v1/email/calendar/events"),
+        ("post", "/v1/email/calendar/events"),
+        ("post", "/v1/email/calendar/events/preview"),
+        ("post", "/v1/email/calendar/events/respond"),
     }
     assert documented == expected, (
         f"Spec has routes not covered by conformance tests: "

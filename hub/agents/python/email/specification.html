@@ -3,7 +3,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <script>(function(){try{var t=localStorage.getItem('amd-site-theme');if(!t)t=(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();</script>
-<title>Email Agent — Capability &amp; API Specification · v2.0</title>
+<title>Email Agent — Capability &amp; API Specification · v2.1</title>
 <link rel="icon" href="data:image/svg+xml,&lt;svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'&gt;&lt;rect width='32' height='32' rx='5' fill='%23111114'/&gt;&lt;g fill='none' stroke='%23c9a24a' stroke-width='2.4' stroke-linecap='round'&gt;&lt;path d='M8 9 L15 16 L8 23'/&gt;&lt;path d='M16 9 L23 16 L16 23'/&gt;&lt;/g&gt;&lt;/svg&gt;">
 <style>
   /* Self-hosted latin webfonts, base64-embedded so this spec is a single
@@ -289,16 +289,16 @@
     <h1 style="margin-top:24px">The Email Agent,<br><span class="c1">Defined End to End</span></h1>
     <p class="lead">GAIA's Email Agent reads, triages, drafts, sends, organizes, and schedules your mail — running <em>locally on Ryzen&nbsp;AI</em>, so nothing leaves the device. This spec walks through how to integrate it (REST, MCP, or the full agent), its seventeen capabilities and the guardrails that gate them, the workflows that chain them, the personalization and always-on tracks, the evaluation dataset, and the contract reference — with examples throughout.</p>
     <div class="chips">
-      <div class="chip"><div class="k">Implemented</div><div class="v">schema 1.0</div></div>
-      <div class="chip"><div class="k">Proposed</div><div class="v g">schema 2.0</div></div>
+      <div class="chip"><div class="k">Implemented</div><div class="v">schema 2.1</div></div>
+      <div class="chip"><div class="k">New in 2.1</div><div class="v g">REST calendar</div></div>
       <div class="chip"><div class="k">Capabilities</div><div class="v g">17</div></div>
       <div class="chip"><div class="k">Personalization</div><div class="v">5</div></div>
       <div class="chip"><div class="k">Workflows</div><div class="v">10</div></div>
       <div class="chip"><div class="k">Inference</div><div class="v">100% on-device</div></div>
       <div class="chip"><div class="k">Milestone</div><div class="v g"><a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a></div></div>
     </div>
-    <div style="margin-top:30px;font-family:'JetBrains Mono',monospace;font-size:13px;letter-spacing:.04em;color:var(--faint)">Spec <b style="color:var(--c1)">v2.0</b> &nbsp;·&nbsp; updated <b style="color:var(--ink)">2026-06-11</b> &nbsp;·&nbsp; <b style="color:var(--ink)">schema 1.0</b> implemented · <b style="color:var(--ink)">2.0</b> proposed &nbsp;·&nbsp; status as of <b style="color:var(--ink)"><a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (<a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a>)</b></div>
-    <div style="margin-top:10px;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.03em;color:var(--faint);max-width:900px;line-height:1.6">The contract reference documents the <b style="color:var(--ink)">implemented schema 1.0</b> (4-bucket triage). <b style="color:var(--ink)">Schema 2.0</b> — a 5-bucket taxonomy plus a <code>suggested_action</code> verb — is proposed (see the API reference); it is breaking, so consumers opt in.</div>
+    <div style="margin-top:30px;font-family:'JetBrains Mono',monospace;font-size:13px;letter-spacing:.04em;color:var(--faint)">Spec <b style="color:var(--c1)">v2.1</b> &nbsp;·&nbsp; updated <b style="color:var(--ink)">2026-06-26</b> &nbsp;·&nbsp; contract <b style="color:var(--ink)">schema 2.1</b> implemented &nbsp;·&nbsp; status as of <b style="color:var(--ink)"><a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (<a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a>)</b></div>
+    <div style="margin-top:10px;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.03em;color:var(--faint);max-width:900px;line-height:1.6">The contract reference documents the <b style="color:var(--ink)">implemented schema 2.1</b>: a 5-bucket triage taxonomy plus a <code>suggested_action</code> verb (schema 2.0), and the calendar surface — view / create / respond on the REST contract (schema 2.1, <a class="iss" href="https://github.com/amd/gaia/issues/1780" target="_blank" rel="noopener">#1780</a>).</div>
   </div>
 </section>
 
@@ -388,7 +388,7 @@
     </div>
 
     <h3 style="margin-top:40px">Capability → surface</h3>
-    <p class="body-t">REST and MCP expose the <b>analysis + reply + send</b> core (capabilities 1–4, 6, 7). <b>REST</b> additionally exposes the reversible mailbox mutations <b>archive</b> and <b>phishing-quarantine</b> (capabilities 8, 9) — each gated on a single-use confirmation token like <code>/send</code>, each reversible within a 30-second undo window (MCP does not surface these; they otherwise run through the full agent). The remaining mailbox/calendar capabilities run through the <b>full agent</b>, which acts via a forwarded connection.</p>
+    <p class="body-t">REST and MCP expose the <b>analysis + reply + send</b> core (capabilities 1–4, 6, 7). As of <b>schema 2.1</b> the <b>REST</b> surface additionally exposes the reversible mailbox mutations <b>archive</b> and <b>phishing-quarantine</b> (capabilities 8, 9) — each gated on a single-use confirmation token like <code>/send</code>, each reversible within a 30-second undo window — plus <b>calendar view / create / respond</b> (<a class="iss" href="https://github.com/amd/gaia/issues/1780" target="_blank" rel="noopener">#1780</a>; calendar <i>detect</i> and <i>conflicts</i> remain agent-only). MCP does not surface these. The remaining mailbox/calendar capabilities run through the <b>full agent</b>, which acts via a forwarded connection.</p>
     <table class="tbl">
       <thead><tr><th>Capability</th><th>REST</th><th>MCP</th><th>Agent</th></tr></thead>
       <tbody>
@@ -401,7 +401,8 @@
         <tr><td><b>8</b> · Archive (+ undo)</td><td>✓ <code>/v1/email/archive</code> · <code>/unarchive</code></td><td>—</td><td>✓ <code>archive_message</code></td></tr>
         <tr><td><b>9</b> · Quarantine (+ undo)</td><td>✓ <code>/v1/email/quarantine</code> · <code>/unquarantine</code> <span class="opt">(Gmail)</span></td><td>—</td><td>✓ <code>quarantine_phishing_message</code></td></tr>
         <tr><td>Inbox search <span class="opt">(read-only, <a class="iss" href="https://github.com/amd/gaia/issues/1781" target="_blank" rel="noopener">#1781</a>)</span></td><td>✓ <code>/v1/email/search</code></td><td>—</td><td>✓ <code>search_messages</code></td></tr>
-        <tr><td><b>5, 10–12</b> · pre-scan, calendar &nbsp;·&nbsp; <b>13–17</b> planned &nbsp;·&nbsp; <b>P1–P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
+        <tr><td>Calendar · view / create / respond <span class="opt">(of capability <b>12</b>)</span></td><td>✓ <code>/v1/email/calendar/*</code> <span class="opt">(2.1)</span></td><td>—</td><td>✓</td></tr>
+        <tr><td><b>5</b> · pre-scan &nbsp;·&nbsp; calendar <b>detect / conflicts</b> (10–11) &nbsp;·&nbsp; <b>13–17</b> planned &nbsp;·&nbsp; <b>P1–P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
       </tbody>
     </table>
 
@@ -747,8 +748,8 @@ quarantine_phishing_message → { "ok": true, "data": {
       <div class="cap-head"><span class="num">12</span><h3>Calendar — create</h3><span class="pill wip">Wired</span><span class="pill t2">Tier 2 · confirm + no-time refusal</span></div>
       <div class="field"><div class="fl">Use-case</div><div class="fv">Turn the meeting described in an email into a real calendar event — title from the subject, attendee from the sender, time from the detected date/time — in one confirmed action. It refuses to invent a time: if no concrete date/time can be resolved it raises <code>NoEventDateTimeError</code> and asks the user to confirm one, and it rejects inverted or zero-length windows. Creation is confirmation-gated, as are accepting and declining invites.</div></div>
       <div class="field"><div class="fl">Why it matters</div><div class="fv">Turns "let's meet Thursday 2pm" into a real event in one confirmed action.</div></div>
-      <div class="field"><div class="fl">Backed by</div><div class="fv"><code>create_event_from_email(summary, start, end, attendees, …)</code>; <code>extract_event_details</code> derives title + attendees + <code>has_datetime</code>.</div></div>
-      <div class="field"><div class="fl">Guardrails</div><div class="fv"><b>Tier 2</b> (as are <code>accept_invite</code> / <code>decline_invite</code>). Fail-loud: raises <code>NoEventDateTimeError</code> when no resolvable time exists (never invents one); rejects inverted/zero-length windows.</div></div>
+      <div class="field"><div class="fl">Backed by</div><div class="fv"><code>create_event_from_email(summary, start, end, attendees, …)</code>; <code>extract_event_details</code> derives title + attendees + <code>has_datetime</code>. On REST (schema 2.1): <a class="eplink" href="#ep-cal-preview"><code>POST /v1/email/calendar/events/preview</code></a> → <a class="eplink" href="#ep-cal-create"><code>POST /v1/email/calendar/events</code></a>; view via <a class="eplink" href="#ep-cal-view"><code>GET /v1/email/calendar/events</code></a> and RSVP via <a class="eplink" href="#ep-cal-respond"><code>POST .../respond</code></a>.</div></div>
+      <div class="field"><div class="fl">Guardrails</div><div class="fv"><b>Tier 2</b> (as are <code>accept_invite</code> / <code>decline_invite</code>). Fail-loud: raises <code>NoEventDateTimeError</code> when no resolvable time exists (never invents one); rejects inverted/zero-length windows. On REST, create is gated by the same single-use confirmation-token handshake as <a class="eplink" href="#ep-send"><code>/send</code></a>; RSVP (<a class="eplink" href="#ep-cal-respond"><code>respond</code></a>) is an explicit, reversible action and is not separately token-gated.</div></div>
       <div class="field"><div class="fl">Example</div><div class="fv"><pre class="code">// create_event_from_email(summary="Numbers walkthrough",
 //   start={"dateTime":"2026-06-18T14:00:00Z"}, end={"dateTime":"2026-06-18T14:30:00Z"},
 //   attendees=["pm@co.com"])
@@ -1146,7 +1147,7 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
     <p class="body-t" style="margin-top:14px"><b>Example set.</b> A complete dataset covers the roles your integration serves, and should add personas the base set lacks — external / customer correspondents, out-of-office &amp; auto-reply, multilingual, and adversarial / injection senders.</p>
 
     <h3 style="margin-top:40px">Label taxonomy &amp; mapping</h3>
-    <p class="body-t">A labelled dataset's <code>category</code> + <code>suggested_action</code> <b>are the schema 2.0 fields</b> (5-bucket category + action verb), so fixtures are schema-2.0-native and need no relabeling. The threat flags derive from <code>promotional_subtype</code> (<code>spam</code> → <code>is_spam</code>; <code>adversarial</code> → review for <code>is_phishing</code>). To test today's shipped <b>schema 1.0</b> (4-bucket), apply the mapping below; under schema 2.0 <code>category</code> and <code>suggested_action</code> pass through unchanged.</p>
+    <p class="body-t">A labelled dataset's <code>category</code> + <code>suggested_action</code> <b>are the schema 2.0 fields</b> (5-bucket category + action verb), so fixtures are schema-2.0-native and need no relabeling. The threat flags derive from <code>promotional_subtype</code> (<code>spam</code> → <code>is_spam</code>; <code>adversarial</code> → review for <code>is_phishing</code>). To map onto the legacy <b>schema 1.0</b> (4-bucket) contract, apply the mapping below; under the shipped schema 2.x <code>category</code> and <code>suggested_action</code> pass through unchanged.</p>
     <table class="tbl">
       <thead><tr><th>Corpus <code>category</code></th><th><code>suggested_action</code></th><th>Schema 1.0 <code>category</code></th><th>Flags</th></tr></thead>
       <tbody>
@@ -1465,6 +1466,71 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
       </tbody></table>
     </div>
 
+    <h3 style="margin-top:40px">Calendar endpoints <span class="pill t0" style="vertical-align:middle">schema 2.1 · <a class="iss" href="https://github.com/amd/gaia/issues/1780" target="_blank" rel="noopener">#1780</a></span></h3>
+    <p class="body-t">View, create, and RSVP to calendar events through the same REST surface — reaching whichever calendar (Google or Microsoft) the user connected. Create is a Tier-2 mutation, gated by the same single-use confirmation-token handshake as <a class="eplink" href="#ep-send"><code>/send</code></a>: mint a token at <a class="eplink" href="#ep-cal-preview"><code>/calendar/events/preview</code></a>, then echo it to <a class="eplink" href="#ep-cal-create"><code>/calendar/events</code></a>. A missing calendar scope fails loud (403) with the reconnect CTA. All operate on the primary calendar.</p>
+
+    <div class="endpoint" id="ep-cal-view">
+      <span class="badge">GET</span><span class="path">/v1/email/calendar/events</span>
+      <p class="desc">View events on the primary calendar (read-only). Optional RFC 3339 query params <code>time_min</code> / <code>time_max</code> bound the window; <code>provider</code> (<code>google</code> / <code>microsoft</code>) is required only when more than one account is connected.</p>
+      <h4>Response body — CalendarEventsResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>schema_version</code></td><td>string</td><td>Echoes the contract version.</td></tr>
+        <tr><td><code>events</code></td><td>list[CalendarEvent]</td><td>Matching events, ordered by start time. Each carries <code>id</code>, <code>summary</code>, <code>start</code>, <code>end</code>, <code>location</code>, <code>organizer</code> (start/end are the raw <code>dateTime</code> or all-day <code>date</code> strings).</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="endpoint" id="ep-cal-preview">
+      <span class="badge">POST</span><span class="path">/v1/email/calendar/events/preview</span>
+      <p class="desc">Mint a single-use confirmation token bound to a proposed event — the calendar analogue of <a class="eplink" href="#ep-draft"><code>/draft</code></a>. Creates nothing and reads no calendar.</p>
+      <h4>Request body — CalendarCreateEventRequest</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>summary</code></td><td>string <span class="req">required</span></td><td>Event title (non-empty).</td></tr>
+        <tr><td><code>start</code></td><td>CalendarEventDateTime <span class="req">required</span></td><td>Provide exactly one of <code>date_time</code> (timed, RFC 3339) or <code>date</code> (all-day). <code>time_zone</code> is optional — the Outlook backend defaults a missing zone to <code>UTC</code> for timed events.</td></tr>
+        <tr><td><code>end</code></td><td>CalendarEventDateTime <span class="req">required</span></td><td>Event end (after start).</td></tr>
+        <tr><td><code>attendees</code></td><td>list[string] <span class="opt">optional</span></td><td>Attendee email addresses to invite.</td></tr>
+        <tr><td><code>location</code></td><td>string <span class="opt">optional</span></td><td>Free-text location.</td></tr>
+        <tr><td><code>description</code></td><td>string <span class="opt">optional</span></td><td>Event description / body.</td></tr>
+        <tr><td><code>provider</code></td><td>string <span class="opt">optional</span></td><td>Provider binding (<code>"google"</code> / <code>"microsoft"</code>). Binds the minted token so the create routes to the right calendar.</td></tr>
+      </tbody></table>
+      <h4>Response body — CalendarEventPreviewResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>summary</code> / <code>start</code> / <code>end</code> / <code>attendees</code> / <code>location</code> / <code>description</code></td><td>—</td><td>The normalized event echo.</td></tr>
+        <tr><td><code>confirmation_token</code></td><td>string</td><td>Echo to <a class="eplink" href="#ep-cal-create"><code>/calendar/events</code></a> to authorize creating exactly this event. Single-use; payload-bound.</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="endpoint" id="ep-cal-create">
+      <span class="badge">POST</span><span class="path">/v1/email/calendar/events</span>
+      <p class="desc">Create a calendar event — gated on confirmation (<a class="iss" href="https://github.com/amd/gaia/issues/1780" target="_blank" rel="noopener">#1780</a>). The gate is evaluated first: a request without a valid, payload-bound token (from <a class="eplink" href="#ep-cal-preview"><code>/preview</code></a>) is rejected with <b>403</b> before any backend call. Never auto-confirms.</p>
+      <h4>Request body — CalendarCreateEventRequest</h4>
+      <p class="body-t">Same shape as <a class="eplink" href="#ep-cal-preview"><code>/preview</code></a>, plus <code>confirmation_token</code> (<span class="req">required here</span>) — the token minted by preview for this exact event.</p>
+      <h4>Response body — CalendarEventResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>schema_version</code></td><td>string</td><td>Echoes the contract version.</td></tr>
+        <tr><td><code>event_id</code></td><td>string</td><td>Provider id of the created event.</td></tr>
+        <tr><td><code>summary</code></td><td>string</td><td>Title of the created event.</td></tr>
+        <tr><td><code>created</code></td><td>bool</td><td>Always true on success.</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="endpoint" id="ep-cal-respond">
+      <span class="badge">POST</span><span class="path">/v1/email/calendar/events/respond</span>
+      <p class="desc">RSVP <code>accepted</code> / <code>declined</code> / <code>tentative</code> to an existing invite. An explicit, user-initiated action (the UI's accept/decline controls), so it is not separately token-gated.</p>
+      <h4>Request body — CalendarRespondRequest</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>event_id</code></td><td>string <span class="req">required</span></td><td>Provider event id to RSVP to.</td></tr>
+        <tr><td><code>status</code></td><td>"accepted" | "declined" | "tentative" <span class="req">required</span></td><td>The RSVP response.</td></tr>
+        <tr><td><code>attendee_email</code></td><td>string <span class="req">required</span></td><td>The principal's own email. Used by the Google backend; ignored by Outlook (RSVPs on <code>/me</code>).</td></tr>
+        <tr><td><code>provider</code></td><td>string <span class="opt">optional</span></td><td>Provider binding (<code>"google"</code> / <code>"microsoft"</code>).</td></tr>
+      </tbody></table>
+      <h4>Response body — CalendarRespondResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>event_id</code></td><td>string</td><td>The event that was responded to.</td></tr>
+        <tr><td><code>status</code></td><td>"accepted" | "declined" | "tentative"</td><td>The RSVP response recorded.</td></tr>
+        <tr><td><code>responded</code></td><td>bool</td><td>Always true on success.</td></tr>
+      </tbody></table>
+    </div>
+
     <h3 style="margin-top:40px">Errors &amp; status codes</h3>
     <p class="body-t">All endpoints return JSON. Errors use the standard <code>{ "detail": "…" }</code> shape with an HTTP status; the message names what failed and how to fix it.</p>
     <table class="tbl">
@@ -1564,12 +1630,12 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
 <footer class="footer">
   <div class="wrap">
     <p>
-      GAIA Email Agent — Capability &amp; API Specification &nbsp;·&nbsp; <b>v2.0</b> &nbsp;·&nbsp; updated <b>2026-06-11</b> &nbsp;·&nbsp; documents contract <b>schema 1.0</b> (schema 2.0 proposed) &nbsp;·&nbsp; status as of <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (<a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a>)<br>
+      GAIA Email Agent — Capability &amp; API Specification &nbsp;·&nbsp; <b>v2.1</b> &nbsp;·&nbsp; updated <b>2026-06-26</b> &nbsp;·&nbsp; documents contract <b>schema 2.1</b> (5-bucket triage + REST calendar) &nbsp;·&nbsp; status as of <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (<a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a>)<br>
       Source of truth:
       <a href="https://github.com/amd/gaia/blob/main/hub/agents/python/email/gaia_agent_email/contract.py" target="_blank" rel="noopener">contract.py</a> ·
       <a href="https://github.com/amd/gaia/blob/main/hub/agents/python/email/gaia_agent_email/api_routes.py" target="_blank" rel="noopener">api_routes.py</a> ·
       <a href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a><br>
-      The contract reference reflects the current schema 1.0 models; the capability, guardrail,
+      The contract reference reflects the current schema 2.1 models; the capability, guardrail,
       and workflow sections describe intended behaviour.
     </p>
   </div>

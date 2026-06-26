@@ -144,19 +144,26 @@ example above). Every non-2xx response throws `HttpError` (with `status`, `url`,
 | `unarchive(req)` | A connected mailbox | Restores an archived message within the 30s window (ungated — pass the `batch_id`). |
 | `quarantine(req)` | A connected **Gmail** mailbox + the token | Applies the `GAIA_PHISHING_QUARANTINE` label + archives a phishing message. Refuses `is_phishing: false`; Gmail-only (an Outlook mailbox → 400, since label-undo can't reverse a folder move). |
 | `unquarantine(req)` | A connected mailbox | Restores a quarantined message's prior labels within the 30s window (ungated — pass the `action_id`). |
+| `listCalendarEvents(opts?)` | A connected mailbox + calendar scope | Views events on the primary calendar (read-only). Optional `timeMin`/`timeMax` RFC 3339 bounds; `provider` only when >1 account is connected. |
+| `previewCalendarEvent(req)` | Nothing external | Mints a single-use confirmation token bound to a proposed event — the calendar analogue of `draft`. |
+| `createCalendarEvent(req)` | A connected mailbox + calendar scope + the token | Creates the event. Requires the token from `previewCalendarEvent`; a missing/invalid token is rejected with **403** before any backend call. |
+| `respondToCalendarEvent(req)` | A connected mailbox + calendar scope | RSVPs `accepted`/`declined`/`tentative` to an existing invite. |
 
-**`triage`, `draft`, and `confirmAction` are standalone** — you can build and verify
-that flow with zero connector setup. `search` needs a connected mailbox (it reads the
-live inbox) but **no** confirmation token, since it only lists. `send`, `archive`, and
-`quarantine` are different on two counts: each requires a single-use confirmation token
-(call `draft` for `send`, or `confirmAction` for `archive`/`quarantine`; a
-missing/invalid token is rejected with **403** before anything else), and each acts on
-the mailbox **connected in GAIA on the host** (under *Settings → Connectors*) — so even
-with a valid token, a headless server returns **HTTP 503** until a mailbox is connected.
-`archive`/`quarantine` are reversible within a 30-second window via
-`unarchive`/`unquarantine` (which are *not* gated — they restore, never destroy). For a
-server integration, treat `triage`, `draft`, and `confirmAction` as your standalone
-surface and handle the mailbox-mutating calls where a connector is available.
+**`triage`, `draft`, `confirmAction`, and `previewCalendarEvent` are standalone** — you
+can build and verify those flows with zero connector setup. `search` needs a connected
+mailbox (it reads the live inbox) but **no** confirmation token, since it only lists.
+The mutating calls — `send`, `archive`, `quarantine`, and `createCalendarEvent` — are
+different on two counts: each requires a single-use confirmation token (call `draft` for
+`send`, `confirmAction` for `archive`/`quarantine`, or `previewCalendarEvent` for
+`createCalendarEvent`; a missing/invalid token is rejected with **403** before anything
+else), and each acts on the mailbox **connected in GAIA on the host** (under *Settings →
+Connectors*) — so even with a valid token, a headless server returns **HTTP 503** until a
+mailbox is connected. `archive`/`quarantine` are reversible within a 30-second window via
+`unarchive`/`unquarantine` (which are *not* gated — they restore, never destroy); the
+calendar actions additionally need the account's calendar scope (a missing scope fails
+loud with **403** and the reconnect CTA). For a server integration, treat the standalone
+calls as your surface and handle the mailbox/calendar-mutating calls where a connector is
+available.
 
 ### Lifecycle
 
@@ -172,9 +179,11 @@ When you need finer control, the steps are exported individually:
 | `checkVersion(client)` | Throw if the sidecar's contract MAJOR differs from the client's. |
 | `shutdown(sidecar)` | Kill the whole process tree. |
 
-Inbox **search** is read-only and exposed via `search`. Mailbox and calendar
-**mutations** beyond send (archive, label, RSVP, create events) are part of the
-full agent but not yet exposed through this package — see
+As of `SCHEMA_VERSION` 2.1 this package exposes inbox **search** (read-only),
+the **archive** / phishing-**quarantine** mailbox actions (+ their undo), and
+calendar **view / create / respond**. The remaining mailbox **actions** (label,
+move, mark read/unread) are part of the full agent but not yet exposed through
+this package — see
 [`SPEC.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md) for the complete surface.
 
 ## Running in production

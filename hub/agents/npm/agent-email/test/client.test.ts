@@ -12,6 +12,10 @@ import type {
   EmailDraftResponse,
   EmailSearchResponse,
   EmailSendResponse,
+  CalendarEventsResponse,
+  CalendarEventPreviewResponse,
+  CalendarEventResponse,
+  CalendarRespondResponse,
 } from "../src/types.js";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -270,6 +274,133 @@ describe("EmailClient", () => {
     await expect(client.archive({ message_id: "m1" })).rejects.toMatchObject({
       status: 403,
     });
+  });
+
+  it("lists calendar events with optional query params (GET)", async () => {
+    const calResponse: CalendarEventsResponse = {
+      schema_version: "2.1",
+      events: [
+        {
+          id: "evt-1",
+          summary: "Standup",
+          start: "2026-07-01T09:00:00Z",
+          end: "2026-07-01T09:15:00Z",
+          location: "Zoom",
+          organizer: "lead@example.com",
+        },
+      ],
+    };
+    let seenUrl = "";
+    const fetchImpl = vi.fn(async (url, init) => {
+      seenUrl = String(url);
+      expect(init?.method).toBe("GET");
+      return jsonResponse(calResponse);
+    }) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://127.0.0.1:8131", fetchImpl });
+    const res = await client.listCalendarEvents({
+      timeMin: "2026-07-01T00:00:00Z",
+      timeMax: "2026-07-02T00:00:00Z",
+      provider: "google",
+    });
+    expect(res.events[0]?.id).toBe("evt-1");
+    expect(seenUrl).toContain("/v1/email/calendar/events?");
+    expect(seenUrl).toContain("time_min=2026-07-01T00%3A00%3A00Z");
+    expect(seenUrl).toContain("time_max=2026-07-02T00%3A00%3A00Z");
+    expect(seenUrl).toContain("provider=google");
+  });
+
+  it("omits the query string when no calendar filters are given", async () => {
+    let seenUrl = "";
+    const fetchImpl = vi.fn(async (url) => {
+      seenUrl = String(url);
+      return jsonResponse({ schema_version: "2.1", events: [] });
+    }) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    await client.listCalendarEvents();
+    expect(seenUrl).toBe("http://x/v1/email/calendar/events");
+  });
+
+  it("calendar preview → create round-trip (confirmation token)", async () => {
+    const previewRes: CalendarEventPreviewResponse = {
+      schema_version: "2.1",
+      summary: "Project sync",
+      start: { date_time: "2026-07-01T14:00:00Z" },
+      end: { date_time: "2026-07-01T15:00:00Z" },
+      attendees: ["alice@example.com"],
+      confirmation_token: "cal-tok-1",
+    };
+    const createRes: CalendarEventResponse = {
+      schema_version: "2.1",
+      event_id: "evt-created-1",
+      summary: "Project sync",
+      created: true,
+    };
+    const seenPaths: string[] = [];
+    let call = 0;
+    const fetchImpl = vi.fn(async (url, init) => {
+      seenPaths.push(String(url));
+      expect(init?.method).toBe("POST");
+      return jsonResponse(call++ === 0 ? previewRes : createRes);
+    }) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    const preview = await client.previewCalendarEvent({
+      summary: "Project sync",
+      start: { date_time: "2026-07-01T14:00:00Z" },
+      end: { date_time: "2026-07-01T15:00:00Z" },
+      attendees: ["alice@example.com"],
+    });
+    expect(preview.confirmation_token).toBe("cal-tok-1");
+    const created = await client.createCalendarEvent({
+      summary: "Project sync",
+      start: { date_time: "2026-07-01T14:00:00Z" },
+      end: { date_time: "2026-07-01T15:00:00Z" },
+      attendees: ["alice@example.com"],
+      confirmation_token: preview.confirmation_token,
+    });
+    expect(created.event_id).toBe("evt-created-1");
+    expect(created.created).toBe(true);
+    expect(seenPaths).toEqual([
+      "http://x/v1/email/calendar/events/preview",
+      "http://x/v1/email/calendar/events",
+    ]);
+  });
+
+  it("create without a token raises HttpError 403 (no silent fallback)", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ detail: "Create rejected: missing confirmation_token" }, 403),
+    ) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    await expect(
+      client.createCalendarEvent({
+        summary: "x",
+        start: { date_time: "2026-07-01T14:00:00Z" },
+        end: { date_time: "2026-07-01T15:00:00Z" },
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("responds to a calendar invite (RSVP)", async () => {
+    const respondRes: CalendarRespondResponse = {
+      schema_version: "2.1",
+      event_id: "evt-1",
+      status: "accepted",
+      responded: true,
+    };
+    const fetchImpl = vi.fn(async (url, init) => {
+      expect(String(url)).toBe("http://x/v1/email/calendar/events/respond");
+      const parsed = JSON.parse(String(init?.body));
+      expect(parsed.status).toBe("accepted");
+      expect(parsed.attendee_email).toBe("me@example.com");
+      return jsonResponse(respondRes);
+    }) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    const res = await client.respondToCalendarEvent({
+      event_id: "evt-1",
+      status: "accepted",
+      attendee_email: "me@example.com",
+    });
+    expect(res.responded).toBe(true);
+    expect(res.status).toBe("accepted");
   });
 
   it("raises HttpError on a non-2xx (no silent fallback)", async () => {
