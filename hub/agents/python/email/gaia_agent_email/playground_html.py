@@ -624,23 +624,34 @@ async function disconnectProvider(provider, btn){
 function populateSend(connected){
   const sel = $("send-from"); if(!sel) return;
   sel.textContent = "";
-  if(!connected.length){
-    const o = document.createElement("option"); o.value = ""; o.textContent = "— no mailbox connected —";
+  // Only providers that are connected AND have mail-send access in their grant.
+  const sendable = connected.filter((p) => p.can_send);
+  if(!sendable.length){
+    const o = document.createElement("option"); o.value = ""; o.textContent = "— no mailbox ready to send —";
     sel.appendChild(o);
   } else {
     // Alphabetical by provider; the browser selects the first option. No
     // remembered selection, no "default" — deterministic and simple.
-    const sorted = connected.slice().sort((a, b) => a.provider.localeCompare(b.provider));
+    const sorted = sendable.slice().sort((a, b) => a.provider.localeCompare(b.provider));
     for(const p of sorted){
       const o = document.createElement("option"); o.value = p.provider;
       o.textContent = (p.label || p.provider) + (p.account_email ? (" · " + p.account_email) : "");
       sel.appendChild(o);
     }
   }
-  const has = connected.length > 0;
-  if($("do-send")) $("do-send").disabled = !has;
-  if($("send-stat")) $("send-stat").style.display = has ? "inline-block" : "none";
-  if($("send-note")) $("send-note").textContent = has ? "" : "Connect a mailbox in the Connectors panel above.";
+  const hasConnected = connected.length > 0;
+  const hasSendable = sendable.length > 0;
+  if($("do-send")) $("do-send").disabled = !hasSendable;
+  if($("send-stat")) $("send-stat").style.display = hasSendable ? "inline-block" : "none";
+  if($("send-note")){
+    if(hasSendable){
+      $("send-note").textContent = "";
+    } else if(hasConnected){
+      $("send-note").textContent = "Connected, but missing mail-send access — reconnect to enable sending.";
+    } else {
+      $("send-note").textContent = "Connect a mailbox in the Connectors panel above.";
+    }
+  }
 }
 async function doSend(){
   const out = $("send-out"); out.className = "out show"; out.textContent = "Drafting…";
