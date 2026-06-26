@@ -115,48 +115,17 @@ jobs:
                   throw "Server failed to start"
               }
 
-              # Pull required model for API tests
-              Write-Host "`n=== Pulling Required Models ==="
-              Write-Host "Pulling Qwen3-0.6B-GGUF..."
-              try {
-                  $body = @{ model_name = "Qwen3-0.6B-GGUF" } | ConvertTo-Json
-                  $response = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/pull" `
-                      -Method POST -ContentType "application/json" -Body $body -TimeoutSec 600
-                  Write-Host "   [OK] Qwen3-0.6B-GGUF pull initiated"
-              } catch {
-                  Write-Host "   [WARN] Pull may have failed: $($_.Exception.Message)"
-              }
-
-              # Wait for model to be available
-              Write-Host "Waiting 5 seconds for model files to sync..."
-              Start-Sleep -Seconds 5
-
-              # Load the model into Lemonade (required for inference)
-              Write-Host "`n=== Loading LLM Model ==="
-              try {
-                  $loadRequest = @{ model_name = "Qwen3-0.6B-GGUF" } | ConvertTo-Json
-                  Write-Host "Loading model: Qwen3-0.6B-GGUF"
-                  $loadResponse = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/load" `
-                      -Method POST -Body $loadRequest -ContentType "application/json" -TimeoutSec 120
-                  Write-Host "[OK] Model loaded successfully: $($loadResponse | ConvertTo-Json -Compress)"
-              } catch {
-                  Write-Host "[ERROR] Model load failed: $($_.Exception.Message)"
-                  if ($_.ErrorDetails) {
-                      Write-Host "Error details: $($_.ErrorDetails.Message)"
+              # Pull + load + verify the LLM via GAIA's LemonadeClient so CI
+              # validates our interface to Lemonade (incl. the model-load retry),
+              # not raw REST.
+              Write-Host "`n=== Pull + load + verify LLM via LemonadeClient ==="
+              uv run python tests/ci_lemonade_check.py --model Qwen3-0.6B-GGUF --chat
+              if ($LASTEXITCODE -ne 0) {
+                  if ($env:LEMONADE_JOB_ID) {
+                      Write-Host "Server output:"
+                      Receive-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
                   }
-              }
-
-              # Wait for llamacpp backend initialization
-              Write-Host "Waiting 10 seconds for llamacpp backend initialization..."
-              Start-Sleep -Seconds 10
-
-              # Verify models
-              try {
-                  $models = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/models" -Method GET
-                  Write-Host "`n[OK] Available models:"
-                  $models.data | ForEach-Object { Write-Host "   - $($_.id)" }
-              } catch {
-                  Write-Host "[WARN] Could not list models: $($_.Exception.Message)"
+                  throw "LLM setup/verify via LemonadeClient failed"
               }
 
               # Start API server using gaia CLI (runs on default port 8080)
