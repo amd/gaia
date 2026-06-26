@@ -64,7 +64,7 @@
 | **DockerAgent** | `DockerAgent(MCPAgent)` | `agents/docker/agent.py` | Docker container management via MCP |
 | **SDAgent** | `SDAgent(Agent, SDToolsMixin, VLMToolsMixin)` | `agents/sd/agent.py` | Image generation + visual analysis |
 | **MedicalIntakeAgent** | `MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin)` | `hub/agents/python/emr/gaia_agent_emr/agent.py` | Medical form processing with VLM |
-| **RoutingAgent** | `RoutingAgent` | `agents/routing/agent.py` | Intelligent agent selection |
+| **RoutingAgent** | `RoutingAgent` | `hub/agents/python/routing/gaia_agent_routing/agent.py` | Intelligent agent selection |
 | **SummarizerAgent** | `SummarizerAgent(Agent)` | `agents/summarize/agent.py` | Document summarization |
 
 ### 1.2 ChatAgent Tools (Current — What the Agent UI Uses)
@@ -122,7 +122,7 @@
 | **MCP Bridge** | `gaia/mcp/mcp_bridge.py` | External tool integration via MCP |
 | **Database** | `gaia/database/` | `DatabaseMixin` for persistent storage |
 | **Multi-provider LLM** | `gaia/llm/providers/` | Claude, OpenAI, Lemonade backends |
-| **Agent Routing** | `agents/routing/agent.py` | Intelligent multi-agent routing |
+| **Agent Routing** | `hub/agents/python/routing/gaia_agent_routing/agent.py` | Intelligent multi-agent routing |
 
 ---
 
