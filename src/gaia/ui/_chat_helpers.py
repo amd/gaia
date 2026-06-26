@@ -1228,7 +1228,14 @@ async def _get_chat_response(
                 agent_type,
             )
         elif agent_type == "chat":
-            from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+            try:
+                from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+            except ImportError as e:
+                raise RuntimeError(
+                    "The chat agent is not installed. Run "
+                    "`pip install gaia-agent-chat` (or `pip install "
+                    '"amd-gaia[agents]"`), then restart the server.'
+                ) from e
 
             logger.info(
                 "chat: Creating new chat agent (ChatAgent) for session %s",
@@ -1637,7 +1644,17 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
                 elif agent_type == "chat":
                     # -- Cache miss: ChatAgent --
-                    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+                    try:
+                        from gaia_agent_chat.agent import (
+                            ChatAgent,
+                            ChatAgentConfig,
+                        )
+                    except ImportError as e:
+                        raise RuntimeError(
+                            "The chat agent is not installed. Run "
+                            "`pip install gaia-agent-chat` (or `pip install "
+                            '"amd-gaia[agents]"`), then restart the server.'
+                        ) from e
 
                     logger.info(
                         "chat: Creating new chat agent (ChatAgent) for session %s",

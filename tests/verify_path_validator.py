@@ -13,7 +13,12 @@ sys.path.append(os.path.join(os.getcwd(), "src"))
 # (e.g. ``hub/agents/python/code/tests/test_file_io_guardrails.py``). The
 # chat/rag cases below still exercise the shared PathValidator contract here.
 # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102).
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+try:
+    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+except ImportError:
+    raise SystemExit(
+        "gaia-agent-chat is not installed — run: pip install gaia-agent-chat"
+    )
 
 from gaia.rag.sdk import RAGSDK, RAGConfig
 from gaia.security import PathValidator

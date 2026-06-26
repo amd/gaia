@@ -330,7 +330,14 @@ class AgentLoop:
             try:
                 # Run the heavier sync work inline (we're in a thread).
                 # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102).
-                from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+                try:
+                    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+                except ImportError as e:
+                    raise RuntimeError(
+                        "The chat agent is not installed. Run "
+                        "`pip install gaia-agent-chat` (or `pip install "
+                        '"amd-gaia[agents]"`), then restart the server.'
+                    ) from e
 
                 import gaia.ui._chat_helpers as _helpers
 
