@@ -385,3 +385,85 @@ class TestConfigPathEnvOverride:
         finally:
             monkeypatch.delenv("GAIA_CONFIG_DIR", raising=False)
             importlib.reload(config_mod)
+
+
+# ── `--config PATH` flag points at an explicit config file ────────────────
+
+
+class TestConfigFlag:
+    def test_set_get_show_use_custom_path(self, monkeypatch, tmp_path, capsys):
+        custom = tmp_path / "custom.json"
+
+        _run_main(
+            [
+                "config",
+                "set",
+                "default_model",
+                "Flag-Path-GGUF",
+                "--config",
+                str(custom),
+            ],
+            monkeypatch,
+            tmp_path,
+        )
+        # Written to the --config path, NOT the default location.
+        assert json.loads(custom.read_text())["default_model"] == "Flag-Path-GGUF"
+        assert not (tmp_path / "config.json").exists()
+
+        _run_main(
+            ["config", "get", "default_model", "--config", str(custom)],
+            monkeypatch,
+            tmp_path,
+        )
+        assert "Flag-Path-GGUF" in capsys.readouterr().out
+
+        _run_main(["config", "show", "--config", str(custom)], monkeypatch, tmp_path)
+        assert str(custom) in capsys.readouterr().out
+
+    def test_flag_injects_model_for_prompt(self, monkeypatch, tmp_path):
+        from gaia import config as config_mod
+        from gaia.config import GaiaConfig
+
+        # Custom file has the model; the *default* location is empty, so the
+        # injected model can only have come from --config.
+        custom = tmp_path / "custom.json"
+        GaiaConfig(default_model="Flag-Path-GGUF").save(custom)
+        monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", tmp_path / "default.json")
+        monkeypatch.setattr(config_mod, "GAIA_CONFIG_DIR", tmp_path)
+
+        captured = {}
+
+        def fake_run_cli(action, **kwargs):
+            captured["kwargs"] = kwargs
+
+        monkeypatch.setattr("gaia.cli.run_cli", fake_run_cli)
+        monkeypatch.setattr(
+            sys, "argv", ["gaia", "prompt", "hi", "--config", str(custom)]
+        )
+        from gaia.cli import main
+
+        main()
+        assert captured["kwargs"].get("model") == "Flag-Path-GGUF"
+        # --config is consumed for resolution, not forwarded as a runtime param.
+        assert "config" not in captured["kwargs"]
+
+    def test_flag_overrides_env_and_default(self, monkeypatch, tmp_path, capsys):
+        # --config wins over GAIA_CONFIG_FILE for `gaia config` operations.
+        from gaia import config as config_mod
+        from gaia.config import GaiaConfig
+
+        env_file = tmp_path / "env.json"
+        GaiaConfig(default_model="Env-GGUF").save(env_file)
+        custom = tmp_path / "flag.json"
+        GaiaConfig(default_model="Flag-GGUF").save(custom)
+        monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", env_file)
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["gaia", "config", "get", "default_model", "--config", str(custom)],
+        )
+        from gaia.cli import main
+
+        main()
+        assert "Flag-GGUF" in capsys.readouterr().out

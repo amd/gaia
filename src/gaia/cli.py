@@ -1242,6 +1242,17 @@ def build_parser():
         default="INFO",
         help="Set the logging level (default: INFO)",
     )
+    # Shared --config flag. Attached only to commands that read the persistent
+    # config (chat/llm/prompt + the `gaia config` subcommands) — NOT to
+    # parent_parser, since `gaia summarize` already defines its own --config.
+    config_path_parser = argparse.ArgumentParser(add_help=False)
+    config_path_parser.add_argument(
+        "--config",
+        default=None,
+        metavar="PATH",
+        help="Path to a GAIA config file (default: ~/.gaia/config.json or "
+        "$GAIA_CONFIG_FILE). Used to resolve default_model.",
+    )
 
     # Generic LLM backend options (available to all agents)
     parent_parser.add_argument(
@@ -1312,7 +1323,9 @@ def build_parser():
 
     # Add prompt-specific options
     prompt_parser = subparsers.add_parser(
-        "prompt", help="Send a single prompt to Gaia", parents=[parent_parser]
+        "prompt",
+        help="Send a single prompt to Gaia",
+        parents=[parent_parser, config_path_parser],
     )
     prompt_parser.add_argument(
         "message",
@@ -1334,7 +1347,7 @@ def build_parser():
     chat_parser = subparsers.add_parser(
         "chat",
         help="Interactive chat with RAG, file search, and shell execution",
-        parents=[parent_parser],
+        parents=[parent_parser, config_path_parser],
     )
     chat_parser.add_argument(
         "--query",
@@ -2115,7 +2128,7 @@ Available agents: chat, code, talk, rag, blender, jira, docker, vlm, minimal, mc
     llm_parser = subparsers.add_parser(
         "llm",
         help="Run simple LLM queries using LLMClient wrapper",
-        parents=[parent_parser],
+        parents=[parent_parser, config_path_parser],
     )
     llm_parser.add_argument("query", help="The query/prompt to send to the LLM")
     llm_parser.add_argument(
@@ -2814,15 +2827,20 @@ Examples:
         dest="config_action", help="Config action"
     )
     config_subparsers.add_parser(
-        "show", help="Show current config and the config file path"
+        "show",
+        help="Show current config and the config file path",
+        parents=[config_path_parser],
     )
     config_get_parser = config_subparsers.add_parser(
-        "get", help="Get a config value, e.g. `gaia config get default_model`"
+        "get",
+        help="Get a config value, e.g. `gaia config get default_model`",
+        parents=[config_path_parser],
     )
     config_get_parser.add_argument("key", help="Config key to read")
     config_set_parser = config_subparsers.add_parser(
         "set",
         help="Set a config value, e.g. `gaia config set default_model Qwen3.5-35B-A3B-GGUF`",
+        parents=[config_path_parser],
     )
     config_set_parser.add_argument("key", help="Config key to set")
     config_set_parser.add_argument("value", help="Value to assign")
@@ -2969,7 +2987,7 @@ def main():
         from gaia.config import GaiaConfig, GaiaConfigError
 
         try:
-            _cfg = GaiaConfig.load()
+            _cfg = GaiaConfig.load(getattr(args, "config", None))
         except GaiaConfigError as e:
             print(f"❌ {e}", file=sys.stderr)
             sys.exit(1)
@@ -3095,6 +3113,9 @@ def main():
         kwargs = {
             k: v for k, v in vars(args).items() if v is not None and k != "action"
         }
+        # --config is only an input to model resolution (already applied to
+        # args.model above); it's not a runtime parameter for the agents.
+        kwargs.pop("config", None)
         log.debug(f"Executing {args.action} with parameters: {kwargs}")
         try:
             result = run_cli(args.action, **kwargs)
@@ -5270,7 +5291,10 @@ def handle_knowledge_command(args):
 
 def handle_config_command(args):
     """Handle `gaia config show|get|set` (persistent ~/.gaia/config.json)."""
-    from gaia.config import GAIA_CONFIG_FILE, GaiaConfig, GaiaConfigError
+    from gaia.config import GaiaConfig, GaiaConfigError
+
+    path = getattr(args, "config", None)
+    config_file = GaiaConfig.config_path(path)
 
     action = getattr(args, "config_action", None)
     if not action:
@@ -5281,14 +5305,14 @@ def handle_config_command(args):
         sys.exit(1)
 
     try:
-        cfg = GaiaConfig.load()
+        cfg = GaiaConfig.load(path)
     except GaiaConfigError as e:
         print(f"❌ {e}", file=sys.stderr)
         sys.exit(1)
 
     if action == "show":
-        exists = GAIA_CONFIG_FILE.exists()
-        print(f"Config file: {GAIA_CONFIG_FILE}")
+        exists = config_file.exists()
+        print(f"Config file: {config_file}")
         print(
             "  (file exists)"
             if exists
@@ -5314,9 +5338,9 @@ def handle_config_command(args):
         except GaiaConfigError as e:
             print(f"❌ {e}", file=sys.stderr)
             sys.exit(1)
-        cfg.save()
+        cfg.save(path)
         print(f"✅ Set {args.key} = {args.value}")
-        print(f"   Saved to {GAIA_CONFIG_FILE}")
+        print(f"   Saved to {config_file}")
         return
 
 

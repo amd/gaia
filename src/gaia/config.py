@@ -60,22 +60,32 @@ class GaiaConfig:
         """Return the configurable field names (drives the CLI ``config`` cmd)."""
         return [f.name for f in fields(cls)]
 
+    @staticmethod
+    def config_path(path: Optional[Path] = None) -> Path:
+        """Resolve the config file path.
+
+        An explicit ``path`` (e.g. from ``--config``) wins; otherwise the
+        module default (``GAIA_CONFIG_FILE``, itself env-overridable).
+        """
+        return Path(path) if path else GAIA_CONFIG_FILE
+
     @classmethod
-    def load(cls) -> "GaiaConfig":
-        """Load config from ~/.gaia/config.json.
+    def load(cls, path: Optional[Path] = None) -> "GaiaConfig":
+        """Load config from the resolved config file.
 
         Returns defaults when the file does not exist (a fresh install is not
         an error). Raises :class:`GaiaConfigError` when the file exists but is
         unreadable or not valid JSON — a corrupt config must fail loudly with
         an actionable message, not silently degrade to defaults.
         """
+        config_file = cls.config_path(path)
         try:
-            text = GAIA_CONFIG_FILE.read_text(encoding="utf-8")
+            text = config_file.read_text(encoding="utf-8")
         except FileNotFoundError:
             return cls()
         except OSError as e:
             raise GaiaConfigError(
-                f"Cannot read GAIA config at {GAIA_CONFIG_FILE}: {e}. "
+                f"Cannot read GAIA config at {config_file}: {e}. "
                 f"Check file permissions, or delete it to reset to defaults."
             ) from e
 
@@ -83,14 +93,14 @@ class GaiaConfig:
             data = json.loads(text)
         except json.JSONDecodeError as e:
             raise GaiaConfigError(
-                f"GAIA config at {GAIA_CONFIG_FILE} is not valid JSON: {e}. "
+                f"GAIA config at {config_file} is not valid JSON: {e}. "
                 f"Fix the file by hand, or delete it to reset to defaults "
                 f"(then re-apply with `gaia config set ...`)."
             ) from e
 
         if not isinstance(data, dict):
             raise GaiaConfigError(
-                f"GAIA config at {GAIA_CONFIG_FILE} must be a JSON object, "
+                f"GAIA config at {config_file} must be a JSON object, "
                 f"got {type(data).__name__}. Delete it to reset to defaults."
             )
 
@@ -98,17 +108,18 @@ class GaiaConfig:
         kwargs = {k: v for k, v in data.items() if k in known}
         return cls(**kwargs)
 
-    def save(self) -> None:
-        """Write config to ~/.gaia/config.json."""
-        # Create the file's own parent — GAIA_CONFIG_FILE can be overridden
-        # independently of GAIA_CONFIG_DIR via env vars.
-        GAIA_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    def save(self, path: Optional[Path] = None) -> None:
+        """Write config to the resolved config file."""
+        config_file = self.config_path(path)
+        # Create the file's own parent — the path can be overridden via the
+        # --config flag or GAIA_CONFIG_FILE, independent of GAIA_CONFIG_DIR.
+        config_file.parent.mkdir(parents=True, exist_ok=True)
         payload = {f.name: getattr(self, f.name) for f in fields(self)}
-        GAIA_CONFIG_FILE.write_text(
+        config_file.write_text(
             json.dumps(payload, indent=2) + "\n",
             encoding="utf-8",
         )
-        log.info(f"Saved GAIA config to {GAIA_CONFIG_FILE}")
+        log.info(f"Saved GAIA config to {config_file}")
 
     def get(self, key: str) -> Any:
         """Return the value of a config field, raising on an unknown key."""

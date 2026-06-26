@@ -1522,16 +1522,21 @@ to recover, rather than silently reverting to defaults.
 
 ### Using a custom config file
 
-Point GAIA at a config file anywhere on disk with `GAIA_CONFIG_FILE` (or set
-just the directory with `GAIA_CONFIG_DIR`). This is handy for per-project
-configs or keeping work and personal defaults separate — every `gaia` command,
-including `gaia config` itself, honors it:
+Point GAIA at a config file anywhere on disk — handy for per-project configs or
+keeping work and personal defaults separate. Two equivalent ways:
 
 ```bash
-# Write to and read from a custom location
+# 1. The --config flag (on `gaia config`, `gaia chat`, `gaia llm`, `gaia prompt`)
+gaia config set default_model Qwen3.5-35B-A3B-GGUF --config ./project.gaia.json
+gaia llm "hello" --config ./project.gaia.json          # uses that file's default_model
+
+# 2. The GAIA_CONFIG_FILE env var (or GAIA_CONFIG_DIR for just the directory)
 GAIA_CONFIG_FILE=./project.gaia.json gaia config set default_model Qwen3.5-35B-A3B-GGUF
-GAIA_CONFIG_FILE=./project.gaia.json gaia llm "hello"   # uses that file's default_model
+GAIA_CONFIG_FILE=./project.gaia.json gaia llm "hello"
 ```
+
+When both are given, `--config` wins over `GAIA_CONFIG_FILE`, which wins over the
+default `~/.gaia/config.json`.
 
 ---
 
