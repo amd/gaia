@@ -68,14 +68,22 @@ def main() -> int:
         resp = client.chat_completions(
             messages=[{"role": "user", "content": "Reply with the word OK."}],
             model=args.model,
-            max_tokens=8,
+            max_tokens=32,
             stream=False,
         )
-        text = resp["choices"][0]["message"]["content"]
-        if not text:
-            print("[ci] ERROR: empty chat completion", flush=True)
+        # Verify the LLM round-trips through the client: a successful response
+        # with a choices array. Don't require non-empty content -- reasoning
+        # models can spend the token budget on thinking and return empty
+        # content, which is not a failure of the round-trip.
+        choices = resp.get("choices") or []
+        if not choices:
+            print("[ci] ERROR: chat completion returned no choices", flush=True)
             return 1
-        print("[ci] chat OK (%r)" % text[:40], flush=True)
+        text = (choices[0].get("message") or {}).get("content") or ""
+        print(
+            "[ci] chat OK (choices=%d, content=%r)" % (len(choices), text[:40]),
+            flush=True,
+        )
 
     print("[ci] OK", flush=True)
     return 0
