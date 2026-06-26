@@ -82,11 +82,19 @@ The interface:
 | `search(req)` | A connected mailbox | Read-only inbox search by `query`/`labels`; returns message metadata (id, subject, sender, snippet, labels), no body. No token. No mailbox → 503, two+ → 400. |
 | `draft(req)` | Nothing external | Returns a single-use confirmation token. |
 | `send(req)` | Draft token + a connected mailbox | Gate fires first: no/invalid `draft` token → 403; valid token but no mailbox connected on the host → 503. |
+| `confirmAction(req)` | Nothing external | Mints a single-use token for `"archive"`/`"quarantine"`, bound to the `(action, message_id)`. |
+| `archive(req)` | `confirm` token + a connected mailbox | Removes from inbox. Gate fires first (no/invalid token → 403). Returns a `batch_id` undo handle (+ `post_archive_id` for the Outlook id change). |
+| `unarchive(req)` | A connected mailbox | Restores within the 30s window (ungated — pass `batch_id`); expired/unknown → 409. |
+| `quarantine(req)` | `confirm` token + a connected **Gmail** mailbox | Applies `GAIA_PHISHING_QUARANTINE` + archives a phishing message. Refuses `is_phishing:false` → 400; Gmail-only (Outlook → 400). |
+| `unquarantine(req)` | A connected mailbox | Restores prior labels within the 30s window (ungated — pass `action_id`); expired/unknown → 409. |
 
-**Build `triage` and `draft` with zero connector setup** (`search`/`send` need a
-connected mailbox). Every non-2xx
-response throws `HttpError` (`status`, `url`, `bodyText`) — handle it; there is no
-silent null.
+**Build the `triage` / `draft` / `confirmAction` flow with zero connector setup**;
+`search` / `send` / `archive` / `quarantine` (and their reversals) need a connected
+mailbox (`search` reads the live inbox but takes no token). Mint the gate token with
+`draft` (for `send`) or `confirmAction` (for `archive` / `quarantine`); `archive` and
+`quarantine` are reversible inside a 30s window via the ungated `unarchive` /
+`unquarantine`. Every non-2xx response throws `HttpError` (`status`, `url`, `bodyText`)
+— handle it; there is no silent null.
 
 ## 5. From a renderer (Electron / browser)
 
@@ -137,6 +145,12 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
 - **`send` needs the draft `confirmation_token`** (missing/invalid → 403), but it
   takes **no OAuth token** — the mailbox is resolved from the host's GAIA connector
   store (no mailbox connected → 503). Triage and draft need no connector.
+- **`archive` / `quarantine` are gated like `send`**, but their token comes from
+  `confirmAction` (not `draft`) and is bound to the `(action, message_id)` — a token
+  for one can't authorize the other. Undo with `unarchive` (pass the returned
+  `batch_id`) / `unquarantine` (pass the `action_id`) **within 30s**; past the window
+  the reversal returns **409** (restore manually in the mail client). For Outlook,
+  use the `post_archive_id` from the archive response — the folder move changes the id.
 - **Cleanup is automatic by default** — the sidecar is reaped on exit/crash/signal;
   only `autoCleanup: false` (or a hard `SIGKILL` of your process) can orphan the
   child. `shutdown` stays the graceful stop.

@@ -139,17 +139,24 @@ example above). Every non-2xx response throws `HttpError` (with `status`, `url`,
 | `search(req)` | A connected Gmail/Outlook mailbox | Searches the connected inbox (**read-only**) by Gmail-style `query`/`labels` and returns message metadata — id, subject, sender, snippet, labels. No message is read in full or modified; no confirmation token needed. |
 | `draft(req)` | Nothing external | Proposes a reply (`to` is a list of `{ email }` objects, not strings) and returns a single-use confirmation token. |
 | `send(req)` | A connected Gmail/Outlook mailbox + the token | Actually transmits the mail. |
+| `confirmAction(req)` | Nothing external | Mints a single-use token for a destructive action (`"archive"` / `"quarantine"`), bound to that exact `(action, message_id)`. |
+| `archive(req)` | A connected mailbox + the token | Removes the message from the inbox. Returns a `batch_id` undo handle. |
+| `unarchive(req)` | A connected mailbox | Restores an archived message within the 30s window (ungated — pass the `batch_id`). |
+| `quarantine(req)` | A connected **Gmail** mailbox + the token | Applies the `GAIA_PHISHING_QUARANTINE` label + archives a phishing message. Refuses `is_phishing: false`; Gmail-only (an Outlook mailbox → 400, since label-undo can't reverse a folder move). |
+| `unquarantine(req)` | A connected mailbox | Restores a quarantined message's prior labels within the 30s window (ungated — pass the `action_id`). |
 
-**`triage` and `draft` are standalone** — you can build and verify them with zero
-connector setup. `search` needs a connected mailbox (it reads the live inbox) but
-**no** confirmation token, since it only lists. `send` is different on two counts:
-it requires the
-single-use confirmation token from `draft` (call `draft` first; a missing/invalid
-token is rejected with **403** before anything else), and it transmits through the
-mailbox **connected in GAIA on the host** (under *Settings → Connectors*) — so even
-with a valid token, a headless server returns **HTTP 503** until a mailbox is
-connected. For a server integration, treat `triage` and `draft` as your surface and
-handle sending out of band.
+**`triage`, `draft`, and `confirmAction` are standalone** — you can build and verify
+that flow with zero connector setup. `search` needs a connected mailbox (it reads the
+live inbox) but **no** confirmation token, since it only lists. `send`, `archive`, and
+`quarantine` are different on two counts: each requires a single-use confirmation token
+(call `draft` for `send`, or `confirmAction` for `archive`/`quarantine`; a
+missing/invalid token is rejected with **403** before anything else), and each acts on
+the mailbox **connected in GAIA on the host** (under *Settings → Connectors*) — so even
+with a valid token, a headless server returns **HTTP 503** until a mailbox is connected.
+`archive`/`quarantine` are reversible within a 30-second window via
+`unarchive`/`unquarantine` (which are *not* gated — they restore, never destroy). For a
+server integration, treat `triage`, `draft`, and `confirmAction` as your standalone
+surface and handle the mailbox-mutating calls where a connector is available.
 
 ### Lifecycle
 
@@ -220,9 +227,10 @@ timeout surfaces as `HttpError` with `status === 0` (not an HTTP code).
 |---------|---------|--------|
 | `HttpError` 502 (from `triage`) | Lemonade is down or the model is cold/missing | **Yes** — transient; back off and retry |
 | `HttpError` 0 (network/timeout) | Sidecar not reachable / crashed | **Yes** — after re-spawning the sidecar |
-| `HttpError` 403 (from `send`) | Missing/invalid confirmation token | **No** — call `draft` first and pass its token |
-| `HttpError` 503 (from `send`) | No mailbox connected on the host | **No** — configuration, not transient |
-| `HttpError` 400 | Bad request, or 2+ mailboxes connected for `send` | **No** — fix the call/config |
+| `HttpError` 403 (from `send` / `archive` / `quarantine`) | Missing/invalid confirmation token | **No** — call `draft` (for `send`) or `confirmAction` (for `archive`/`quarantine`) first and pass its token |
+| `HttpError` 503 (from `send` / `archive` / `quarantine`) | No mailbox connected on the host | **No** — configuration, not transient |
+| `HttpError` 409 (from `unarchive` / `unquarantine`) | Undo window expired or handle unknown | **No** — past the 30s window; restore manually in the mail client |
+| `HttpError` 400 | Bad request, 2+ mailboxes connected without a provider, or `quarantine` with `is_phishing: false` | **No** — fix the call/config |
 | `HealthTimeoutError` / `VersionMismatchError` / `IntegrityError` | Startup faults (port taken, contract mismatch, bad binary) | **No** — fail fast at boot |
 
 ## Playground

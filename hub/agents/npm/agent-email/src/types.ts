@@ -21,7 +21,12 @@
  *
  * Schema 2.0: five-bucket EmailCategory, suggested_action, TriageUsage, typed
  * ActionItem (type/url discriminator).
- * Schema 2.1: adds the read-only inbox-search surface (POST /v1/email/search).
+ * Schema 2.1 (additive; triage shapes unchanged) bundles several new surfaces:
+ *   - read-only inbox search (POST /v1/email/search, #1781)
+ *   - mailbox actions: archive / phishing-quarantine + their reversal and the
+ *     confirm-token handshake (#1779)
+ *   - calendar view/create/respond (#1780)
+ *   - inbox pre-scan (#1778)
  */
 
 /** Frozen contract version echoed by the server's `/version` endpoint. */
@@ -312,6 +317,154 @@ export interface VersionResponse {
   apiVersion: string;
   /** Package build version. */
   agentVersion: string;
+}
+
+// ---------------------------------------------------------------------------
+// Mailbox actions — archive / quarantine + reversal (contract.py, schema 2.1,
+// #1779). MUTATING actions gate on a single-use confirmation token minted by
+// POST /v1/email/confirm; their reversal endpoints are ungated (they restore).
+// ---------------------------------------------------------------------------
+
+/** The destructive actions a confirmation token can authorize (contract.py: EmailActionType). */
+export type EmailActionType = "archive" | "quarantine";
+
+/** Request a confirmation token for a destructive action (contract.py: EmailActionConfirmRequest). */
+export interface EmailActionConfirmRequest {
+  /** The action to authorize: "archive" or "quarantine". */
+  action: EmailActionType;
+  /** Provider message id the action will mutate. */
+  message_id: string;
+  /** Optional provider binding ("google" / "microsoft"). */
+  provider?: string | null;
+}
+
+/** A single-use token bound to (action, message_id) (contract.py: EmailActionConfirmResponse). */
+export interface EmailActionConfirmResponse {
+  /** Echoes the contract version. */
+  schema_version: string;
+  /** Echo to /archive or /quarantine to authorize this exact action. Single-use. */
+  confirmation_token: string;
+  /** The authorized action. */
+  action: EmailActionType;
+  /** The message the token authorizes. */
+  message_id: string;
+}
+
+/** Archive a message — requires a confirmation token (contract.py: EmailArchiveRequest). */
+export interface EmailArchiveRequest {
+  /** Provider message id to archive. */
+  message_id: string;
+  /** Token from POST /v1/email/confirm (action="archive"). Required for a real archive. */
+  confirmation_token?: string | null;
+  /** Optional provider fallback ("google" / "microsoft"). */
+  provider?: string | null;
+}
+
+/** Result of an archive — carries the undo handle (contract.py: EmailArchiveResponse). */
+export interface EmailArchiveResponse {
+  /** Echoes the contract version. */
+  schema_version: string;
+  /** The message that was archived. */
+  message_id: string;
+  /** Action-log id for this archive. */
+  action_id: string;
+  /** Undo handle: pass to POST /v1/email/unarchive within the window. */
+  batch_id: string;
+  /**
+   * The id valid AFTER the archive. Folder backends (Outlook) mint a new id on
+   * the move; Gmail keeps the request id. Surfaced to track the message after.
+   */
+  post_archive_id: string;
+  /** Seconds the unarchive handle stays valid. */
+  undo_window_seconds: number;
+  /** Always true on success. */
+  archived: boolean;
+}
+
+/** Reverse an archive within the undo window — ungated (contract.py: EmailUnarchiveRequest). */
+export interface EmailUnarchiveRequest {
+  /** The undo handle returned by POST /v1/email/archive. */
+  batch_id: string;
+  /** Optional provider; omit to route by the mailbox recorded at archive time. */
+  provider?: string | null;
+}
+
+/** One message restored to the inbox (contract.py: UnarchivedMessage). */
+export interface UnarchivedMessage {
+  message_id: string;
+  action_id: string;
+}
+
+/** One message that failed to restore (contract.py: UnarchiveFailure). */
+export interface UnarchiveFailure {
+  message_id: string;
+  error: string;
+}
+
+/** Result of an unarchive — partial success reported, never silent (contract.py: EmailUnarchiveResponse). */
+export interface EmailUnarchiveResponse {
+  /** Echoes the contract version. */
+  schema_version: string;
+  /** The undo handle that was processed. */
+  batch_id: string;
+  /** Count of messages restored to inbox. */
+  restored: number;
+  /** Each restored message. */
+  messages: UnarchivedMessage[];
+  /** Messages that could not be restored (with reasons). */
+  failed: UnarchiveFailure[];
+  /** True when at least one message was restored. */
+  undone: boolean;
+}
+
+/** Quarantine a phishing message — requires a confirmation token (contract.py: EmailQuarantineRequest). */
+export interface EmailQuarantineRequest {
+  /** Provider message id to quarantine. */
+  message_id: string;
+  /** Must be true — the action refuses non-phishing mail (safety gate). */
+  is_phishing: boolean;
+  /** Token from POST /v1/email/confirm (action="quarantine"). Required for a real quarantine. */
+  confirmation_token?: string | null;
+  /** Optional provider fallback ("google" / "microsoft"). */
+  provider?: string | null;
+}
+
+/** Result of a quarantine — carries the undo handle (contract.py: EmailQuarantineResponse). */
+export interface EmailQuarantineResponse {
+  /** Echoes the contract version. */
+  schema_version: string;
+  /** The message that was quarantined. */
+  message_id: string;
+  /** Undo handle: pass to POST /v1/email/unquarantine within the window. */
+  action_id: string;
+  /** Id of the GAIA_PHISHING_QUARANTINE label that was applied. */
+  quarantine_label_id: string;
+  /** The label set restored on undo (recorded pre-quarantine). */
+  prior_labels: string[];
+  /** Seconds the unquarantine handle stays valid. */
+  undo_window_seconds: number;
+  /** Always true on success. */
+  quarantined: boolean;
+}
+
+/** Reverse a quarantine within the undo window — ungated (contract.py: EmailUnquarantineRequest). */
+export interface EmailUnquarantineRequest {
+  /** The action id returned by POST /v1/email/quarantine. */
+  action_id: string;
+  /** Optional provider; omit to route by the mailbox recorded at quarantine time. */
+  provider?: string | null;
+}
+
+/** Result of an unquarantine (contract.py: EmailUnquarantineResponse). */
+export interface EmailUnquarantineResponse {
+  /** Echoes the contract version. */
+  schema_version: string;
+  /** The action id that was undone. */
+  action_id: string;
+  /** The restored message id. */
+  message_id: string;
+  /** Always true on success. */
+  restored: boolean;
 }
 
 /**

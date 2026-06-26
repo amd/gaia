@@ -22,15 +22,25 @@ from gaia_agent_email.contract import (
     SCHEMA_VERSION,
     ActionItem,
     DraftReply,
+    EmailActionConfirmRequest,
+    EmailActionConfirmResponse,
     EmailAddress,
+    EmailArchiveRequest,
+    EmailArchiveResponse,
     EmailCategory,
     EmailMessage,
+    EmailQuarantineRequest,
+    EmailQuarantineResponse,
     EmailSearchRequest,
     EmailSearchResponse,
     EmailSearchResultItem,
     EmailTriageRequest,
     EmailTriageResponse,
     EmailTriageResult,
+    EmailUnarchiveRequest,
+    EmailUnarchiveResponse,
+    EmailUnquarantineRequest,
+    EmailUnquarantineResponse,
     SingleEmailInput,
     ThreadInput,
 )
@@ -406,6 +416,69 @@ def render_endpoint_spec_html() -> str:
         response_sections=[("EmailSendResponse", EmailSendResponse)],
     )
 
+    # Mailbox actions — archive / quarantine + reversal (schema 2.1, #1779).
+    # Built from the contract models so the tables track the live shapes.
+    confirm_block = _endpoint_block(
+        path="/v1/email/confirm",
+        description=(
+            "Mint a single-use confirmation token for a destructive mailbox "
+            "action (archive / quarantine), bound to that exact (action, "
+            "message_id). The action analogue of /v1/email/draft — nothing "
+            "mutates here. Echo the token to /archive or /quarantine."
+        ),
+        request_sections=[("EmailActionConfirmRequest", EmailActionConfirmRequest)],
+        response_sections=[("EmailActionConfirmResponse", EmailActionConfirmResponse)],
+    )
+
+    archive_block = _endpoint_block(
+        path="/v1/email/archive",
+        description=(
+            "Archive a message — gated on confirmation, reversible for 30s. The "
+            "gate fires FIRST: no valid token for this (action='archive', "
+            "message_id) is rejected with HTTP 403 before any backend call. "
+            "Returns a batch_id undo handle and the post_archive_id (the id a "
+            "folder-based backend like Outlook mints on the move, #1738)."
+        ),
+        request_sections=[("EmailArchiveRequest", EmailArchiveRequest)],
+        response_sections=[("EmailArchiveResponse", EmailArchiveResponse)],
+    )
+
+    unarchive_block = _endpoint_block(
+        path="/v1/email/unarchive",
+        description=(
+            "Reverse an archive within the undo window. NOT gated — it restores. "
+            "Routes by the mailbox recorded at archive time and uses the "
+            "post_archive_id so Outlook can find the moved message. Fails loudly "
+            "with HTTP 409 when the window has expired or the batch_id is unknown."
+        ),
+        request_sections=[("EmailUnarchiveRequest", EmailUnarchiveRequest)],
+        response_sections=[("EmailUnarchiveResponse", EmailUnarchiveResponse)],
+    )
+
+    quarantine_block = _endpoint_block(
+        path="/v1/email/quarantine",
+        description=(
+            "Quarantine a phishing message — gated on confirmation, reversible "
+            "for 30s. Applies the GAIA_PHISHING_QUARANTINE label and removes the "
+            "message from the inbox. The gate fires FIRST (HTTP 403 without a "
+            "valid token). Refuses is_phishing=false with HTTP 400."
+        ),
+        request_sections=[("EmailQuarantineRequest", EmailQuarantineRequest)],
+        response_sections=[("EmailQuarantineResponse", EmailQuarantineResponse)],
+    )
+
+    unquarantine_block = _endpoint_block(
+        path="/v1/email/unquarantine",
+        description=(
+            "Reverse a quarantine within the undo window. NOT gated — it restores "
+            "the exact prior label set and removes the quarantine label. Fails "
+            "loudly with HTTP 409 when the window has expired or the action_id is "
+            "unknown/already undone."
+        ),
+        request_sections=[("EmailUnquarantineRequest", EmailUnquarantineRequest)],
+        response_sections=[("EmailUnquarantineResponse", EmailUnquarantineResponse)],
+    )
+
     body = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -436,6 +509,25 @@ def render_endpoint_spec_html() -> str:
 {draft_block}
 
 {send_block}
+
+<h2>Mailbox actions — archive &amp; quarantine (schema 2.1)</h2>
+<p class="subtitle">
+  Reversible mailbox mutations exposed on the contract (#1779). Each acts on the
+  mailbox connected in GAIA on the host and is gated on a single-use confirmation
+  token from <code>/v1/email/confirm</code> — the same explicit-confirmation rule as
+  <code>/v1/email/send</code>. Both are reversible within a 30-second undo window via
+  the ungated <code>/unarchive</code> · <code>/unquarantine</code>.
+</p>
+
+{confirm_block}
+
+{archive_block}
+
+{unarchive_block}
+
+{quarantine_block}
+
+{unquarantine_block}
 
 <h2>Convenience pages</h2>
 

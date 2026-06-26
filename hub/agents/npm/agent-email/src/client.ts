@@ -8,6 +8,11 @@
  *   POST /v1/email/search     (read-only inbox search)
  *   POST /v1/email/draft      (mint a confirmation token)
  *   POST /v1/email/send       (send — gated on a valid token)
+ *   POST /v1/email/confirm    (mint an action confirmation token)
+ *   POST /v1/email/archive    (archive — gated on a valid token)
+ *   POST /v1/email/unarchive  (reverse an archive — ungated, within 30s)
+ *   POST /v1/email/quarantine (quarantine phishing — gated on a valid token)
+ *   POST /v1/email/unquarantine (reverse a quarantine — ungated, within 30s)
  *   GET  /health              (root liveness — what the standalone sidecar serves)
  *   GET  /version             (root apiVersion / agentVersion)
  *   GET  /v1/email/health     (router-scoped liveness — for the mounted-on-app case)
@@ -29,14 +34,24 @@ import { HttpError } from "./errors.js";
 import { createLogger } from "./logger.js";
 import { stripTrailingSlashes } from "./url.js";
 import type {
+  EmailActionConfirmRequest,
+  EmailActionConfirmResponse,
+  EmailArchiveRequest,
+  EmailArchiveResponse,
   EmailDraftRequest,
   EmailDraftResponse,
+  EmailQuarantineRequest,
+  EmailQuarantineResponse,
   EmailSearchRequest,
   EmailSearchResponse,
   EmailSendRequest,
   EmailSendResponse,
   EmailTriageRequest,
   EmailTriageResponse,
+  EmailUnarchiveRequest,
+  EmailUnarchiveResponse,
+  EmailUnquarantineRequest,
+  EmailUnquarantineResponse,
   HealthResponse,
   OpenApiDocument,
   VersionResponse,
@@ -103,6 +118,62 @@ export class EmailClient {
   /** Send a reply — requires a valid confirmation token (POST /v1/email/send). */
   async send(request: EmailSendRequest): Promise<EmailSendResponse> {
     return this.post<EmailSendResponse>("/v1/email/send", request);
+  }
+
+  /**
+   * Mint a single-use confirmation token for a destructive mailbox action
+   * (POST /v1/email/confirm). The token authorizes exactly one
+   * `(action, message_id)` — echo it to `archive`/`quarantine`. This is the
+   * action analogue of `draft` for sends; nothing mutates here.
+   */
+  async confirmAction(
+    request: EmailActionConfirmRequest,
+  ): Promise<EmailActionConfirmResponse> {
+    return this.post<EmailActionConfirmResponse>("/v1/email/confirm", request);
+  }
+
+  /**
+   * Archive a message — requires a valid confirmation token (POST /v1/email/archive).
+   * Returns a `batch_id` undo handle; pass it to `unarchive` within
+   * `undo_window_seconds` to restore the message to the inbox.
+   */
+  async archive(request: EmailArchiveRequest): Promise<EmailArchiveResponse> {
+    return this.post<EmailArchiveResponse>("/v1/email/archive", request);
+  }
+
+  /**
+   * Reverse an archive within the undo window (POST /v1/email/unarchive).
+   * NOT gated — it restores. Routes by the mailbox recorded at archive time and
+   * uses the post-archive id so Outlook can find the moved message.
+   */
+  async unarchive(
+    request: EmailUnarchiveRequest,
+  ): Promise<EmailUnarchiveResponse> {
+    return this.post<EmailUnarchiveResponse>("/v1/email/unarchive", request);
+  }
+
+  /**
+   * Quarantine a phishing message — requires a valid confirmation token
+   * (POST /v1/email/quarantine). Applies the GAIA_PHISHING_QUARANTINE label and
+   * archives. Refuses `is_phishing: false`. Reverse with `unquarantine`.
+   */
+  async quarantine(
+    request: EmailQuarantineRequest,
+  ): Promise<EmailQuarantineResponse> {
+    return this.post<EmailQuarantineResponse>("/v1/email/quarantine", request);
+  }
+
+  /**
+   * Reverse a quarantine within the undo window (POST /v1/email/unquarantine).
+   * NOT gated — it restores the message's prior labels.
+   */
+  async unquarantine(
+    request: EmailUnquarantineRequest,
+  ): Promise<EmailUnquarantineResponse> {
+    return this.post<EmailUnquarantineResponse>(
+      "/v1/email/unquarantine",
+      request,
+    );
   }
 
   /**
