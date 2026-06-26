@@ -81,10 +81,17 @@ The interface:
 | `triage(req)` | Local LLM only | Classify / summarize / extract action items + phishing signals on the message you pass. No mailbox read. |
 | `draft(req)` | Nothing external | Returns a single-use confirmation token. |
 | `send(req)` | Draft token + a connected mailbox | Gate fires first: no/invalid `draft` token → 403; valid token but no mailbox connected on the host → 503. |
+| `listCalendarEvents(opts?)` | Connected mailbox + calendar scope | Read-only view of the primary calendar. Optional `timeMin`/`timeMax`; `provider` only when >1 account. Missing scope → 403 + reconnect CTA. |
+| `previewCalendarEvent(req)` | Nothing external | Mints a single-use confirmation token bound to the event (calendar analogue of `draft`). |
+| `createCalendarEvent(req)` | Preview token + connected calendar | Token gate fires first: no/invalid token → 403, then the calendar checks. |
+| `respondToCalendarEvent(req)` | Connected calendar | RSVP `accepted`/`declined`/`tentative` to an existing invite. |
 
-**Build everything except `send` with zero connector setup.** Every non-2xx
-response throws `HttpError` (`status`, `url`, `bodyText`) — handle it; there is no
-silent null.
+**Build the standalone surface (`triage`, `draft`, `previewCalendarEvent`) with
+zero connector setup.** `send` and the calendar **actions** (view / create /
+respond) need a connected mailbox whose relevant scope was granted. Calendar create
+is confirmation-gated exactly like `send`: call `previewCalendarEvent` first, then
+echo its `confirmation_token` to `createCalendarEvent`. Every non-2xx response
+throws `HttpError` (`status`, `url`, `bodyText`) — handle it; there is no silent null.
 
 ## 5. From a renderer (Electron / browser)
 

@@ -388,7 +388,7 @@
     </div>
 
     <h3 style="margin-top:40px">Capability → surface</h3>
-    <p class="body-t">REST and MCP expose the <b>analysis + reply + send</b> core (capabilities 1–4, 6, 7). Capabilities that mutate the mailbox or calendar run through the <b>full agent</b>, which acts via a forwarded connection.</p>
+    <p class="body-t">REST and MCP expose the <b>analysis + reply + send</b> core (capabilities 1–4, 6, 7); as of <b>schema 2.1</b> the REST surface also exposes <b>calendar view / create / respond</b> (capabilities 10–12, <a class="iss" href="https://github.com/amd/gaia/issues/1780" target="_blank" rel="noopener">#1780</a>). The remaining mailbox-mutating capabilities run through the <b>full agent</b>, which acts via a forwarded connection.</p>
     <table class="tbl">
       <thead><tr><th>Capability</th><th>REST</th><th>MCP</th><th>Agent</th></tr></thead>
       <tbody>
@@ -398,7 +398,8 @@
         <tr><td><b>4</b> · Phishing detection</td><td>✓ <span class="opt">(flag in triage)</span></td><td>✓</td><td>✓ <span class="opt">(+ quarantine)</span></td></tr>
         <tr><td><b>6</b> · Full-thread comprehension</td><td>✓ <span class="opt">(thread payload)</span></td><td>✓</td><td>✓</td></tr>
         <tr><td><b>7</b> · Send a reply</td><td>✓ <code>/v1/email/send</code></td><td>✓ <code>send_email</code></td><td>✓</td></tr>
-        <tr><td><b>5, 8, 9, 10–12</b> · pre-scan, organize, calendar &nbsp;·&nbsp; <b>13–17</b> planned &nbsp;·&nbsp; <b>P1–P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
+        <tr><td><b>10–12</b> · Calendar view / create / respond</td><td>✓ <code>/v1/email/calendar/*</code> <span class="opt">(2.1)</span></td><td>—</td><td>✓</td></tr>
+        <tr><td><b>5, 8, 9</b> · pre-scan, organize &nbsp;·&nbsp; <b>13–17</b> planned &nbsp;·&nbsp; <b>P1–P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
       </tbody>
     </table>
 
@@ -1344,6 +1345,71 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
         <tr><td><code>to</code></td><td>list[EmailAddress]</td><td>Recipients sent to.</td></tr>
         <tr><td><code>subject</code></td><td>string</td><td>Subject of the sent message.</td></tr>
         <tr><td><code>sent</code></td><td>bool</td><td>Always true on success.</td></tr>
+      </tbody></table>
+    </div>
+
+    <h3 style="margin-top:40px">Calendar endpoints <span class="pill t0" style="vertical-align:middle">schema 2.1 · <a class="iss" href="https://github.com/amd/gaia/issues/1780" target="_blank" rel="noopener">#1780</a></span></h3>
+    <p class="body-t">View, create, and RSVP to calendar events through the same REST surface — reaching whichever calendar (Google or Microsoft) the user connected. Create is a Tier-2 mutation, gated by the same single-use confirmation-token handshake as <a class="eplink" href="#ep-send"><code>/send</code></a>: mint a token at <a class="eplink" href="#ep-cal-preview"><code>/calendar/events/preview</code></a>, then echo it to <a class="eplink" href="#ep-cal-create"><code>/calendar/events</code></a>. A missing calendar scope fails loud (403) with the reconnect CTA. All operate on the primary calendar.</p>
+
+    <div class="endpoint" id="ep-cal-view">
+      <span class="badge">GET</span><span class="path">/v1/email/calendar/events</span>
+      <p class="desc">View events on the primary calendar (read-only). Optional RFC 3339 query params <code>time_min</code> / <code>time_max</code> bound the window; <code>provider</code> (<code>google</code> / <code>microsoft</code>) is required only when more than one account is connected.</p>
+      <h4>Response body — CalendarEventsResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>schema_version</code></td><td>string</td><td>Echoes the contract version.</td></tr>
+        <tr><td><code>events</code></td><td>list[CalendarEvent]</td><td>Matching events, ordered by start time. Each carries <code>id</code>, <code>summary</code>, <code>start</code>, <code>end</code>, <code>location</code>, <code>organizer</code> (start/end are the raw <code>dateTime</code> or all-day <code>date</code> strings).</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="endpoint" id="ep-cal-preview">
+      <span class="badge">POST</span><span class="path">/v1/email/calendar/events/preview</span>
+      <p class="desc">Mint a single-use confirmation token bound to a proposed event — the calendar analogue of <a class="eplink" href="#ep-draft"><code>/draft</code></a>. Creates nothing and reads no calendar.</p>
+      <h4>Request body — CalendarCreateEventRequest</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>summary</code></td><td>string <span class="req">required</span></td><td>Event title (non-empty).</td></tr>
+        <tr><td><code>start</code></td><td>CalendarEventDateTime <span class="req">required</span></td><td>Provide exactly one of <code>date_time</code> (timed, RFC 3339) or <code>date</code> (all-day). <code>time_zone</code> is optional — the Outlook backend defaults a missing zone to <code>UTC</code> for timed events.</td></tr>
+        <tr><td><code>end</code></td><td>CalendarEventDateTime <span class="req">required</span></td><td>Event end (after start).</td></tr>
+        <tr><td><code>attendees</code></td><td>list[string] <span class="opt">optional</span></td><td>Attendee email addresses to invite.</td></tr>
+        <tr><td><code>location</code></td><td>string <span class="opt">optional</span></td><td>Free-text location.</td></tr>
+        <tr><td><code>description</code></td><td>string <span class="opt">optional</span></td><td>Event description / body.</td></tr>
+        <tr><td><code>provider</code></td><td>string <span class="opt">optional</span></td><td>Provider binding (<code>"google"</code> / <code>"microsoft"</code>). Binds the minted token so the create routes to the right calendar.</td></tr>
+      </tbody></table>
+      <h4>Response body — CalendarEventPreviewResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>summary</code> / <code>start</code> / <code>end</code> / <code>attendees</code> / <code>location</code> / <code>description</code></td><td>—</td><td>The normalized event echo.</td></tr>
+        <tr><td><code>confirmation_token</code></td><td>string</td><td>Echo to <a class="eplink" href="#ep-cal-create"><code>/calendar/events</code></a> to authorize creating exactly this event. Single-use; payload-bound.</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="endpoint" id="ep-cal-create">
+      <span class="badge">POST</span><span class="path">/v1/email/calendar/events</span>
+      <p class="desc">Create a calendar event — gated on confirmation (<a class="iss" href="https://github.com/amd/gaia/issues/1780" target="_blank" rel="noopener">#1780</a>). The gate is evaluated first: a request without a valid, payload-bound token (from <a class="eplink" href="#ep-cal-preview"><code>/preview</code></a>) is rejected with <b>403</b> before any backend call. Never auto-confirms.</p>
+      <h4>Request body — CalendarCreateEventRequest</h4>
+      <p class="body-t">Same shape as <a class="eplink" href="#ep-cal-preview"><code>/preview</code></a>, plus <code>confirmation_token</code> (<span class="req">required here</span>) — the token minted by preview for this exact event.</p>
+      <h4>Response body — CalendarEventResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>schema_version</code></td><td>string</td><td>Echoes the contract version.</td></tr>
+        <tr><td><code>event_id</code></td><td>string</td><td>Provider id of the created event.</td></tr>
+        <tr><td><code>summary</code></td><td>string</td><td>Title of the created event.</td></tr>
+        <tr><td><code>created</code></td><td>bool</td><td>Always true on success.</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="endpoint" id="ep-cal-respond">
+      <span class="badge">POST</span><span class="path">/v1/email/calendar/events/respond</span>
+      <p class="desc">RSVP <code>accepted</code> / <code>declined</code> / <code>tentative</code> to an existing invite. An explicit, user-initiated action (the UI's accept/decline controls), so it is not separately token-gated.</p>
+      <h4>Request body — CalendarRespondRequest</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>event_id</code></td><td>string <span class="req">required</span></td><td>Provider event id to RSVP to.</td></tr>
+        <tr><td><code>status</code></td><td>"accepted" | "declined" | "tentative" <span class="req">required</span></td><td>The RSVP response.</td></tr>
+        <tr><td><code>attendee_email</code></td><td>string <span class="req">required</span></td><td>The principal's own email. Used by the Google backend; ignored by Outlook (RSVPs on <code>/me</code>).</td></tr>
+        <tr><td><code>provider</code></td><td>string <span class="opt">optional</span></td><td>Provider binding (<code>"google"</code> / <code>"microsoft"</code>).</td></tr>
+      </tbody></table>
+      <h4>Response body — CalendarRespondResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>event_id</code></td><td>string</td><td>The event that was responded to.</td></tr>
+        <tr><td><code>status</code></td><td>"accepted" | "declined" | "tentative"</td><td>The RSVP response recorded.</td></tr>
+        <tr><td><code>responded</code></td><td>bool</td><td>Always true on success.</td></tr>
       </tbody></table>
     </div>
 

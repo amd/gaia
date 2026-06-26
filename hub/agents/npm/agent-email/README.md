@@ -138,15 +138,23 @@ example above). Every non-2xx response throws `HttpError` (with `status`, `url`,
 | `triage(req)` | Local LLM only | Classifies the message you pass, summarizes it, and extracts action items + spam/phishing signals. No mailbox is read. |
 | `draft(req)` | Nothing external | Proposes a reply (`to` is a list of `{ email }` objects, not strings) and returns a single-use confirmation token. |
 | `send(req)` | A connected Gmail/Outlook mailbox + the token | Actually transmits the mail. |
+| `listCalendarEvents(opts?)` | A connected mailbox + calendar scope | Views events on the primary calendar (read-only). Optional `timeMin`/`timeMax` RFC 3339 bounds; `provider` only when >1 account is connected. |
+| `previewCalendarEvent(req)` | Nothing external | Mints a single-use confirmation token bound to a proposed event — the calendar analogue of `draft`. |
+| `createCalendarEvent(req)` | A connected mailbox + calendar scope + the token | Creates the event. Requires the token from `previewCalendarEvent`; a missing/invalid token is rejected with **403** before any backend call. |
+| `respondToCalendarEvent(req)` | A connected mailbox + calendar scope | RSVPs `accepted`/`declined`/`tentative` to an existing invite. |
 
-**Everything except `send` is standalone** — you can build and verify the whole
-flow with zero connector setup. `send` is different on two counts: it requires the
-single-use confirmation token from `draft` (call `draft` first; a missing/invalid
-token is rejected with **403** before anything else), and it transmits through the
-mailbox **connected in GAIA on the host** (under *Settings → Connectors*) — so even
-with a valid token, a headless server returns **HTTP 503** until a mailbox is
-connected. For a server integration, treat `triage` and `draft` as your surface and
-handle sending out of band.
+**Everything except `send` and the calendar *actions* is standalone** — you can
+build and verify triage, draft, and `previewCalendarEvent` with zero connector
+setup. `send` is different on two counts: it requires the single-use confirmation
+token from `draft` (call `draft` first; a missing/invalid token is rejected with
+**403** before anything else), and it transmits through the mailbox **connected in
+GAIA on the host** (under *Settings → Connectors*) — so even with a valid token, a
+headless server returns **HTTP 503** until a mailbox is connected. The calendar
+endpoints follow the same rules: `createCalendarEvent` is token-gated like `send`,
+and view/create/respond need a connected account whose calendar scope was granted
+(a missing scope fails loud with **403** and the reconnect CTA). For a server
+integration, treat `triage`, `draft`, and `previewCalendarEvent` as your standalone
+surface and handle the live-mailbox actions out of band.
 
 ### Lifecycle
 
@@ -162,8 +170,10 @@ When you need finer control, the steps are exported individually:
 | `checkVersion(client)` | Throw if the sidecar's contract MAJOR differs from the client's. |
 | `shutdown(sidecar)` | Kill the whole process tree. |
 
-Mailbox and calendar **actions** beyond send (read, archive, label, RSVP, create
-events) are part of the full agent but not yet exposed through this package — see
+Calendar **view / create / respond** are exposed through this package as of
+`SCHEMA_VERSION` 2.1 (the `*CalendarEvent*` methods above). The remaining mailbox
+**actions** (read, archive, label) are part of the full agent but not yet exposed
+through this package — see
 [`SPEC.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md) for the complete surface.
 
 ## Running in production

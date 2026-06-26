@@ -21,10 +21,11 @@
  *
  * Schema 2.0: five-bucket EmailCategory, suggested_action, TriageUsage, typed
  * ActionItem (type/url discriminator).
+ * Schema 2.1: calendar surface (view / create / respond) — additive.
  */
 
 /** Frozen contract version echoed by the server's `/version` endpoint. */
-export const SCHEMA_VERSION = "2.0" as const;
+export const SCHEMA_VERSION = "2.1" as const;
 
 /**
  * The five-bucket triage taxonomy (schema 2.0 — contract.py: EmailCategory).
@@ -237,6 +238,147 @@ export interface EmailSendResponse {
   subject: string;
   /** Always true on success. */
   sent: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Calendar surface (contract.py — schema 2.1, #1780). View / create / respond
+// reach either the Google or Microsoft calendar backend through one contract.
+// ---------------------------------------------------------------------------
+
+/**
+ * One endpoint (start or end) of a calendar event (contract.py: CalendarEventDateTime).
+ * Provide EXACTLY ONE of `date_time` (timed, RFC 3339) or `date` (all-day, YYYY-MM-DD).
+ * `time_zone` is optional; the Outlook backend defaults a missing zone to "UTC"
+ * for timed events (Google: include a UTC offset in `date_time` or set `time_zone`).
+ */
+export interface CalendarEventDateTime {
+  /** Timed-event instant, RFC 3339. Mutually exclusive with `date`. */
+  date_time?: string | null;
+  /** All-day date, "YYYY-MM-DD". Mutually exclusive with `date_time`. */
+  date?: string | null;
+  /** IANA time zone, e.g. "America/Los_Angeles". Optional. */
+  time_zone?: string | null;
+}
+
+/** A calendar event returned by the view endpoint (contract.py: CalendarEvent). */
+export interface CalendarEvent {
+  /** Provider event id (opaque). */
+  id?: string | null;
+  /** Event title / summary. */
+  summary: string;
+  /** Start instant ("dateTime") or all-day "date" string. */
+  start?: string | null;
+  /** End instant ("dateTime") or all-day "date" string. */
+  end?: string | null;
+  /** Free-text location, or null. */
+  location?: string | null;
+  /** Organizer email, or null. */
+  organizer?: string | null;
+}
+
+/** Result of `GET /v1/email/calendar/events` (contract.py: CalendarEventsResponse). */
+export interface CalendarEventsResponse {
+  /** Echoes the contract version. */
+  schema_version: string;
+  /** Matching events, ordered by start time. */
+  events: CalendarEvent[];
+}
+
+/**
+ * Create a calendar event (contract.py: CalendarCreateEventRequest). Shared by
+ * the preview (token-mint) and create (token-consume) endpoints. Creating is a
+ * confirmation-gated mutation — see `previewCalendarEvent` / `createCalendarEvent`.
+ */
+export interface CalendarCreateEventRequest {
+  /** Contract version. Defaults to SCHEMA_VERSION server-side. */
+  schema_version?: string;
+  /** Event title / summary (non-empty). */
+  summary: string;
+  /** Event start. */
+  start: CalendarEventDateTime;
+  /** Event end (after start). */
+  end: CalendarEventDateTime;
+  /** Attendee email addresses to invite (may be empty). */
+  attendees?: string[];
+  /** Optional free-text location. */
+  location?: string | null;
+  /** Optional event description / body. */
+  description?: string | null;
+  /** Optional provider binding ("google" or "microsoft"). */
+  provider?: string | null;
+  /**
+   * Confirmation token from POST /v1/email/calendar/events/preview. Ignored by
+   * preview; required by create — a create without a valid token bound to this
+   * exact event is rejected (403).
+   */
+  confirmation_token?: string | null;
+}
+
+/**
+ * The normalized event echo plus a single-use confirmation token bound to it
+ * (contract.py: CalendarEventPreviewResponse).
+ */
+export interface CalendarEventPreviewResponse {
+  /** Echoes the contract version. */
+  schema_version: string;
+  /** The event title to be created. */
+  summary: string;
+  /** Event start. */
+  start: CalendarEventDateTime;
+  /** Event end. */
+  end: CalendarEventDateTime;
+  /** Attendees to invite. */
+  attendees: string[];
+  /** Optional location. */
+  location?: string | null;
+  /** Optional description. */
+  description?: string | null;
+  /** Echo to POST /v1/email/calendar/events to authorize this exact event. Single-use. */
+  confirmation_token: string;
+}
+
+/** Result of `POST /v1/email/calendar/events` (contract.py: CalendarEventResponse). */
+export interface CalendarEventResponse {
+  /** Echoes the contract version. */
+  schema_version: string;
+  /** Provider id of the created event. */
+  event_id: string;
+  /** Title of the created event. */
+  summary: string;
+  /** Always true on success. */
+  created: boolean;
+}
+
+/** RSVP status verb (contract.py: CalendarRespondRequest.status). */
+export type CalendarRsvpStatus = "accepted" | "declined" | "tentative";
+
+/** RSVP to an existing invite (contract.py: CalendarRespondRequest). */
+export interface CalendarRespondRequest {
+  /** Contract version. Defaults to SCHEMA_VERSION server-side. */
+  schema_version?: string;
+  /** Provider event id to RSVP to. */
+  event_id: string;
+  /** RSVP response: accept, decline, or tentatively accept. */
+  status: CalendarRsvpStatus;
+  /**
+   * The principal's own email (the attendee responding). Used by the Google
+   * backend; ignored by Outlook (RSVPs on /me).
+   */
+  attendee_email: string;
+  /** Optional provider binding ("google" or "microsoft"). */
+  provider?: string | null;
+}
+
+/** Result of `POST /v1/email/calendar/events/respond` (contract.py: CalendarRespondResponse). */
+export interface CalendarRespondResponse {
+  /** Echoes the contract version. */
+  schema_version: string;
+  /** The event that was responded to. */
+  event_id: string;
+  /** The RSVP response that was recorded. */
+  status: CalendarRsvpStatus;
+  /** Always true on success. */
+  responded: boolean;
 }
 
 // ---------------------------------------------------------------------------

@@ -23,6 +23,14 @@ from pydantic import BaseModel
 from gaia_agent_email.contract import (
     SCHEMA_VERSION,
     ActionItem,
+    CalendarCreateEventRequest,
+    CalendarEvent,
+    CalendarEventDateTime,
+    CalendarEventPreviewResponse,
+    CalendarEventResponse,
+    CalendarEventsResponse,
+    CalendarRespondRequest,
+    CalendarRespondResponse,
     DraftReply,
     EmailAddress,
     EmailCategory,
@@ -289,16 +297,21 @@ def _endpoint_block(
     request_sections: List[Tuple[str, Type[BaseModel]]],
     response_sections: List[Tuple[str, Type[BaseModel]]],
     extra_html: str = "",
+    method: str = "POST",
 ) -> str:
     req_html = "".join(_model_table(m, t) for t, m in request_sections)
     resp_html = "".join(_model_table(m, t) for t, m in response_sections)
+    # A GET (read-only) endpoint has no request body — show query params (if any)
+    # via the request_sections heading text instead of a "Request body" header.
+    req_heading = "Query parameters" if method.upper() == "GET" else "Request body"
+    req_block = f"<h3>{req_heading}</h3>{req_html}" if req_html else ""
     return (
         f'<div class="endpoint-block">'
-        f'<span class="method-badge">POST</span>'
+        f'<span class="method-badge">{_esc(method.upper())}</span>'
         f'<span class="path">{_esc(path)}</span>'
         f'<p class="desc">{_esc(description)}</p>'
         f"{extra_html}"
-        f"<h3>Request body</h3>{req_html}"
+        f"{req_block}"
         f"<h3>Response body</h3>{resp_html}"
         f"</div>"
     )
@@ -388,6 +401,64 @@ def render_endpoint_spec_html() -> str:
         response_sections=[("EmailSendResponse", EmailSendResponse)],
     )
 
+    # Calendar surface (schema 2.1, #1780) — view / preview / create / respond.
+    # Reaches either the Google or Microsoft calendar backend through one contract.
+    calendar_view_block = _endpoint_block(
+        path="/v1/email/calendar/events",
+        method="GET",
+        description=(
+            "View events on the primary calendar (read-only). Optional RFC 3339 "
+            "query params time_min / time_max bound the window; provider "
+            "(google|microsoft) is required only when more than one account is "
+            "connected. Fails loudly (403 + reconnect CTA) if the calendar scope "
+            "is missing."
+        ),
+        request_sections=[],
+        response_sections=[
+            ("CalendarEventsResponse", CalendarEventsResponse),
+            ("CalendarEvent", CalendarEvent),
+        ],
+    )
+
+    calendar_preview_block = _endpoint_block(
+        path="/v1/email/calendar/events/preview",
+        description=(
+            "Mint a single-use confirmation token bound to a proposed event — the "
+            "calendar analogue of /v1/email/draft. Creates nothing; echo the "
+            "returned confirmation_token to POST /v1/email/calendar/events."
+        ),
+        request_sections=[("CalendarCreateEventRequest", CalendarCreateEventRequest)],
+        response_sections=[
+            ("CalendarEventPreviewResponse", CalendarEventPreviewResponse),
+            ("CalendarEventDateTime", CalendarEventDateTime),
+        ],
+    )
+
+    calendar_create_block = _endpoint_block(
+        path="/v1/email/calendar/events",
+        description=(
+            "Create a calendar event — gated on explicit confirmation (#1780). "
+            "Like /send, the gate fires FIRST: a request without a valid, "
+            "payload-bound confirmation token (from .../preview) is rejected with "
+            "HTTP 403 before any backend call. Events are externally visible to "
+            "attendees, so they are never created without confirmation."
+        ),
+        request_sections=[("CalendarCreateEventRequest", CalendarCreateEventRequest)],
+        response_sections=[("CalendarEventResponse", CalendarEventResponse)],
+    )
+
+    calendar_respond_block = _endpoint_block(
+        path="/v1/email/calendar/events/respond",
+        description=(
+            "RSVP accept / decline / tentative to an existing invite. An explicit, "
+            "user-initiated action (the UI's accept/decline controls), so it is not "
+            "separately token-gated. attendee_email is the principal's own address "
+            "(used by Google; ignored by Outlook, which RSVPs on /me)."
+        ),
+        request_sections=[("CalendarRespondRequest", CalendarRespondRequest)],
+        response_sections=[("CalendarRespondResponse", CalendarRespondResponse)],
+    )
+
     body = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -416,6 +487,21 @@ def render_endpoint_spec_html() -> str:
 {draft_block}
 
 {send_block}
+
+<h2>Calendar</h2>
+<p class="subtitle">
+  View, create, and RSVP to calendar events through the same contract — reaching
+  whichever calendar (Google or Microsoft) the user connected. Added in
+  schema_version 2.1 (#1780).
+</p>
+
+{calendar_view_block}
+
+{calendar_preview_block}
+
+{calendar_create_block}
+
+{calendar_respond_block}
 
 <h2>Convenience pages</h2>
 
