@@ -101,7 +101,7 @@ Email proxy agent + tools  (chat agent tool layer — NEW; replaces in-process a
    ▼
 EmailSidecarManager  (Python, in the UI backend — NEW; spawn/health/shutdown/port)
    │  reads GAIA_EMAIL_AGENT_MODE
-   ├─ user mode → frozen binary   (lazy-fetched on first email use via npm pkg CLI)
+   ├─ user mode → frozen binary   (lazy-fetched on first email use; Python verified download, NO Node)
    └─ dev  mode → uvicorn --reload (local Python source)
         │
         ▼  both serve the identical contract
@@ -122,7 +122,7 @@ in-process/out-of-process divergence).
 |------|------|----------------|
 | `EmailSidecarManager` | `src/gaia/ui/` (Python backend) | mode select; lazy-spawn binary/uvicorn on first email use; health-poll; tree-kill on shutdown; own an ephemeral per-instance port |
 | Email proxy agent + tools | chat agent tool layer (`agent_type=email`) | forward triage/draft/send/pre-scan/etc. to the sidecar; return the existing envelopes unchanged |
-| Binary fetch | **npm pkg CLI** (`npx @amd-gaia/agent-email fetch`) as a subprocess | keep the SHA-256/lock-file integrity check in its canonical TS impl (`fetch.ts`) — **do not re-implement the security boundary in Python** |
+| Binary fetch | **Python**, in the UI backend — **no Node** | download the current platform's binary from R2/`ASSETS_BASE_URL`, **verify SHA-256 against `binaries.lock.json`** (the security boundary), cache in `~/.gaia`. The npm `fetch.ts` remains the *external Node-integrator* channel — a separate consumer, not the UI's path |
 | Mode config | `GAIA_EMAIL_AGENT_MODE` env (`user` default / `dev`) | select backend |
 
 ## Resolved design decisions
@@ -164,10 +164,12 @@ imported, fail loudly with `uv pip install -e hub/agents/python/email` — no si
 auto-install, no fallback. Dev mode is source-checkout only.
 
 ## Lifecycle, port & ownership (review fixes)
-- **Reuse, don't reinvent:** `lifecycle.ts`/`fetch.ts` already implement
-  SHA-verified fetch, tree-kill, health-poll, version-check, auto-reap. User-mode
-  fetch goes through the npm CLI; Python owns only spawn + health + tree-kill (not a
-  security boundary).
+- **No Node.js in the Agent UI.** The sidecar is a self-contained HTTP binary; the
+  Python backend fetches (verified download), spawns, health-checks, proxies to, and
+  tree-kills it directly — no Node runtime, no npm package in the UI's path. This is
+  the precise answer to #1767's objection (below). The npm `lifecycle.ts`/`fetch.ts`
+  stay as the *external Node-integrator* channel; they are reference implementations
+  for the Python port of the SHA-verify + tree-kill logic, which has unit tests.
 - **Port:** a fixed `8131` breaks two concurrent `gaia chat --ui` instances. The
   manager binds an **ephemeral port per backend instance** and passes it to the
   proxy agent. **Never 4001.**
@@ -218,15 +220,21 @@ auto-install, no fallback. Dev mode is source-checkout only.
 5. Tests (incl. the dogfood/product check) + a short dev-mode doc.
 
 ## Relationship to epic #1767 (must reconcile before build)
-#1767 **chose the in-process router mount** and **explicitly rejected the
-frozen-binary sidecar for the UI**; its capstone PR #1785 was **closed unmerged on
-2026-06-26**, so the in-process path is abandoned in code but the *decision* stands
-on paper. This plan **pivots to the sidecar**, justified by product validation +
-lightweight core + isolation (above). Its variant also answers #1767's stated
-objection — #1767 rejected the sidecar as "needs a Node host / breaks browser mode,"
-but here the **Python backend** spawns it, so it works in browser mode with no Node
-host. **Action: get maintainer + @itomek sign-off to supersede #1767's in-process
-decision before implementation.**
+#1767 (epic) and its capstone PR #1785 were **closed unmerged on 2026-06-26**.
+@itomek's closing rationale was explicit: *"Given the nature of Agent UI having a
+Python backend, mixing in an npm package that requires Node.js would make it too
+dirty. This will get replaced by a future issue."*
+
+This plan **is that future issue's design**, and it removes the exact thing itomek
+objected to: **there is no npm package and no Node.js in the Agent UI's path.** The
+sidecar is a language-agnostic, self-contained HTTP binary; the Python backend
+fetches it (verified download), spawns it as a subprocess, and proxies to it over
+HTTP. The npm package stays purely as the *external Node-integrator* distribution —
+never imported or executed by the UI. The sidecar is justified over an in-process
+mount by product validation (the UI runs the exact Hub-published artifact),
+lightweight core (no email deps; lazy per-agent download), and crash isolation.
+**Action: get @itomek + maintainer sign-off on this Node-free sidecar direction
+before implementation.**
 
 ## Remaining decision for sign-off
 - Confirm removal of the #1768 in-process `/v1/email` external mount once the UI is
