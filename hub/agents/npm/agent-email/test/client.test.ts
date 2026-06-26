@@ -120,6 +120,109 @@ describe("EmailClient", () => {
     expect(s.sent_id).toBe("sent-1");
   });
 
+  it("confirm → archive → unarchive round-trip (paths + payloads)", async () => {
+    const seen: string[] = [];
+    const fetchImpl = vi.fn(async (url, init) => {
+      const path = String(url);
+      seen.push(path);
+      if (path.endsWith("/v1/email/confirm")) {
+        const parsed = JSON.parse(String(init?.body));
+        expect(parsed.action).toBe("archive");
+        expect(parsed.message_id).toBe("m1");
+        return jsonResponse({
+          schema_version: "2.1",
+          confirmation_token: "atok",
+          action: "archive",
+          message_id: "m1",
+        });
+      }
+      if (path.endsWith("/v1/email/archive")) {
+        expect(JSON.parse(String(init?.body)).confirmation_token).toBe("atok");
+        return jsonResponse({
+          schema_version: "2.1",
+          message_id: "m1",
+          action_id: "act-1",
+          batch_id: "batch-1",
+          post_archive_id: "m1",
+          undo_window_seconds: 30,
+          archived: true,
+        });
+      }
+      // unarchive
+      expect(JSON.parse(String(init?.body)).batch_id).toBe("batch-1");
+      return jsonResponse({
+        schema_version: "2.1",
+        batch_id: "batch-1",
+        restored: 1,
+        messages: [{ message_id: "m1", action_id: "act-1" }],
+        failed: [],
+        undone: true,
+      });
+    }) as unknown as typeof fetch;
+
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    const c = await client.confirmAction({ action: "archive", message_id: "m1" });
+    expect(c.confirmation_token).toBe("atok");
+    const a = await client.archive({
+      message_id: "m1",
+      confirmation_token: c.confirmation_token,
+    });
+    expect(a.archived).toBe(true);
+    expect(a.batch_id).toBe("batch-1");
+    expect(a.post_archive_id).toBe("m1");
+    const u = await client.unarchive({ batch_id: a.batch_id });
+    expect(u.restored).toBe(1);
+    expect(u.messages[0]?.message_id).toBe("m1");
+    expect(seen).toEqual([
+      "http://x/v1/email/confirm",
+      "http://x/v1/email/archive",
+      "http://x/v1/email/unarchive",
+    ]);
+  });
+
+  it("quarantine + unquarantine paths and types", async () => {
+    let call = 0;
+    const fetchImpl = vi.fn(async (url) => {
+      call += 1;
+      if (String(url).endsWith("/v1/email/quarantine")) {
+        return jsonResponse({
+          schema_version: "2.1",
+          message_id: "m2",
+          action_id: "act-9",
+          quarantine_label_id: "Label_3",
+          prior_labels: ["INBOX"],
+          undo_window_seconds: 30,
+          quarantined: true,
+        });
+      }
+      return jsonResponse({
+        schema_version: "2.1",
+        action_id: "act-9",
+        message_id: "m2",
+        restored: true,
+      });
+    }) as unknown as typeof fetch;
+
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    const q = await client.quarantine({ message_id: "m2", is_phishing: true });
+    expect(q.quarantined).toBe(true);
+    expect(q.quarantine_label_id).toBe("Label_3");
+    const uq = await client.unquarantine({ action_id: q.action_id });
+    expect(uq.restored).toBe(true);
+    expect(uq.message_id).toBe("m2");
+    expect(call).toBe(2);
+  });
+
+  it("archive without a token surfaces the 403 gate as HttpError", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ detail: "archive rejected: missing confirmation token" }, 403),
+    ) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    await expect(client.archive({ message_id: "m1" })).rejects.toMatchObject({
+      status: 403,
+    });
+  });
+
   it("raises HttpError on a non-2xx (no silent fallback)", async () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse({ detail: "send rejected: missing token" }, 403),

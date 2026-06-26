@@ -5,6 +5,22 @@ follows [SemVer](https://semver.org/): the **MAJOR** of the on-the-wire
 `SCHEMA_VERSION` is what `checkVersion` enforces at startup, so a contract MAJOR
 bump is always at least a package MINOR bump with a migration note.
 
+## Unreleased (2.1)
+
+- **Archive + phishing-quarantine are now on the REST contract (#1779).** The Agent
+  UI lost these in the #1653 in-process rip-out — they ran only in the agent loop.
+  They're back **through the package**: `POST /v1/email/{archive,quarantine}` (and
+  their `unarchive`/`unquarantine` reversals), plus `POST /v1/email/confirm` to mint
+  the gate token. Both mutating actions are confirmation-token-gated exactly like
+  `send` (a missing/invalid token → **403** before any backend call); both are
+  reversible inside the 30s undo window (the reversal endpoints are ungated — they
+  restore). Archive returns a `batch_id` undo handle and the `post_archive_id` so
+  Outlook undo survives the folder-move id change (#1738). Quarantine is
+  Gmail-only — an Outlook mailbox is refused with 400 rather than shipping a
+  folder-move its label-based undo can't reverse. New client methods:
+  `confirmAction`, `archive`, `unarchive`, `quarantine`, `unquarantine`.
+  Contract `SCHEMA_VERSION` bumps `2.0` → `2.1` (additive — triage-shape unchanged).
+
 ## 0.2.5
 
 Sending from a mailbox connected with identity-only scopes now returns an

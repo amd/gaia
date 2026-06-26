@@ -348,7 +348,7 @@
         <tr><td><b>6</b></td><td><b>Full-thread comprehension</b></td><td><span class="dot wip"></span>Wired</td><td>Gist of a long back-and-forth, categorized on the last inbound</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>7</b></td><td><b>Send a reply via agent</b></td><td><span class="dot wip"></span>Wired</td><td>Post a reply through the agent (draft → confirm → send)</td><td><span class="pill t2">Tier 2</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>8</b></td><td><b>Batch archive</b></td><td><span class="dot wip"></span>Wired</td><td>Archive 20+ messages in one reversible action</td><td><span class="pill t1">Tier 1</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
-        <tr><td><b>9</b></td><td><b>Quarantine + undo</b></td><td><span class="dot wip"></span>Wired</td><td>30-second reversibility on bulk / destructive ops</td><td><span class="pill t1">Tier 1</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
+        <tr><td><b>9</b></td><td><b>Quarantine + undo</b></td><td><span class="dot ok"></span>Validated · on REST</td><td>30-second reversibility on bulk / destructive ops</td><td><span class="pill t1">Tier 1</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>10</b></td><td><b>Calendar — detect</b></td><td><span class="dot wip"></span>Wired</td><td>Spot meeting requests inside email bodies</td><td><span class="pill t0">Tier 0</span></td><td><span style="color:var(--soft)">New&nbsp;mail</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>11</b></td><td><b>Calendar — conflicts</b></td><td><span class="dot wip"></span>Wired</td><td>Check the calendar in-line for overlaps</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>12</b></td><td><b>Calendar — create</b></td><td><span class="dot wip"></span>Wired</td><td>Create events from email context</td><td><span class="pill t2">Tier 2</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
@@ -388,7 +388,7 @@
     </div>
 
     <h3 style="margin-top:40px">Capability → surface</h3>
-    <p class="body-t">REST and MCP expose the <b>analysis + reply + send</b> core (capabilities 1–4, 6, 7). Capabilities that mutate the mailbox or calendar run through the <b>full agent</b>, which acts via a forwarded connection.</p>
+    <p class="body-t">REST and MCP expose the <b>analysis + reply + send</b> core (capabilities 1–4, 6, 7) plus the reversible mailbox mutations <b>archive</b> and <b>phishing-quarantine</b> (capabilities 8, 9) — each gated on a single-use confirmation token like <code>/send</code>, each reversible within a 30-second undo window. The remaining mailbox/calendar capabilities run through the <b>full agent</b>, which acts via a forwarded connection.</p>
     <table class="tbl">
       <thead><tr><th>Capability</th><th>REST</th><th>MCP</th><th>Agent</th></tr></thead>
       <tbody>
@@ -398,7 +398,9 @@
         <tr><td><b>4</b> · Phishing detection</td><td>✓ <span class="opt">(flag in triage)</span></td><td>✓</td><td>✓ <span class="opt">(+ quarantine)</span></td></tr>
         <tr><td><b>6</b> · Full-thread comprehension</td><td>✓ <span class="opt">(thread payload)</span></td><td>✓</td><td>✓</td></tr>
         <tr><td><b>7</b> · Send a reply</td><td>✓ <code>/v1/email/send</code></td><td>✓ <code>send_email</code></td><td>✓</td></tr>
-        <tr><td><b>5, 8, 9, 10–12</b> · pre-scan, organize, calendar &nbsp;·&nbsp; <b>13–17</b> planned &nbsp;·&nbsp; <b>P1–P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
+        <tr><td><b>8</b> · Archive (+ undo)</td><td>✓ <code>/v1/email/archive</code> · <code>/unarchive</code></td><td>✓ <code>archive_message</code></td><td>✓</td></tr>
+        <tr><td><b>9</b> · Quarantine (+ undo)</td><td>✓ <code>/v1/email/quarantine</code> · <code>/unquarantine</code></td><td>✓ <code>quarantine_phishing_message</code></td><td>✓</td></tr>
+        <tr><td><b>5, 10–12</b> · pre-scan, calendar &nbsp;·&nbsp; <b>13–17</b> planned &nbsp;·&nbsp; <b>P1–P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
       </tbody>
     </table>
 
@@ -697,10 +699,10 @@ quarantine_phishing_message → { "ok": true, "data": {
 
     <!-- 9 -->
     <div class="cap">
-      <div class="cap-head"><span class="num">9</span><h3>Quarantine + undo</h3><span class="pill wip">Wired</span><span class="pill t1">undo · T1</span></div>
+      <div class="cap-head"><span class="num">9</span><h3>Quarantine + undo</h3><span class="pill ok">Validated · on REST</span><span class="pill t1">undo · T1</span></div>
       <div class="field"><div class="fl">Use-case</div><div class="fv">Give every reversible mutation a safety net. <b>Trash and batch operations</b> are written to a local action log and undone within a <b>30-second window</b> (<code>restore_message</code>, <code>undo_archive_batch</code>), restoring the exact prior label set; nothing is hard-deleted, and undo past the window fails loudly with manual-recovery instructions. <b>Phishing quarantine</b> is separate — auto-applied when enabled (see capability 4); its <code>unquarantine_message</code> undo restores the exact prior labels within the same window, and past it the quarantine label still preserves the message for manual restore, like spam. This is what lets the user — and the agent — act decisively.</div></div>
       <div class="field"><div class="fl">Why it matters</div><div class="fv">The user acts decisively because every action is recoverable for 30 seconds — the safety net that makes automation trustworthy.</div></div>
-      <div class="field"><div class="fl">Backed by</div><div class="fv">A local action log. <code>trash_message</code> ↔ <code>restore_message</code> and batch archive ↔ undo within 30s; <code>quarantine_phishing_message</code> ↔ <code>unquarantine_message</code> within the same window; past it, the quarantine label preserves the message for manual restore.</div></div>
+      <div class="field"><div class="fl">Backed by</div><div class="fv">A local action log. <code>trash_message</code> ↔ <code>restore_message</code> and batch archive ↔ undo within 30s; <code>quarantine_phishing_message</code> ↔ <code>unquarantine_message</code> within the same window; past it, the quarantine label preserves the message for manual restore. <b>Now on the REST contract</b> (schema 2.1, <a class="iss" href="https://github.com/amd/gaia/issues/1779" target="_blank" rel="noopener">#1779</a>): <a class="eplink" href="#ep-archive"><code>POST /v1/email/archive</code></a> · <a class="eplink" href="#ep-quarantine"><code>/quarantine</code></a> and their <code>/unarchive</code> · <code>/unquarantine</code> reversals — confirmation-gated, so the Agent UI drives them through the package.</div></div>
       <div class="field"><div class="fl">Guardrails</div><div class="fv">Trash / archive / batch are <b>Tier 1</b> — reversible within 30s, never hard-delete; undo outside the window fails loudly. Phishing quarantine is opt-in auto; undo follows the same window, and the quarantine label keeps the message recoverable manually anytime (capability 4).</div></div>
       <div class="field"><div class="fl">Example</div><div class="fv"><pre class="code">// within 30s: unquarantine_message(action_id="act-55")
 { "ok": true, "data": { "action_id": "act-55", "message_id": "m-2002", "restored": true } }
@@ -1347,17 +1349,110 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
       </tbody></table>
     </div>
 
+    <div class="endpoint" id="ep-confirm">
+      <span class="badge">POST</span><span class="path">/v1/email/confirm</span>
+      <p class="desc">Mint a single-use confirmation token for a destructive mailbox action (<a class="iss" href="https://github.com/amd/gaia/issues/1779" target="_blank" rel="noopener">#1779</a>). Nothing mutates — this is the action analogue of <a class="eplink" href="#ep-draft"><code>/draft</code></a>. The token authorizes exactly one <code>(action, message_id)</code>.</p>
+      <h4>Request body — EmailActionConfirmRequest</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>action</code></td><td>"archive" | "quarantine" <span class="req">required</span></td><td>The action the token will authorize.</td></tr>
+        <tr><td><code>message_id</code></td><td>string <span class="req">required</span></td><td>The message the token is bound to.</td></tr>
+        <tr><td><code>provider</code></td><td>string <span class="opt">optional</span></td><td>Provider binding (<code>"google"</code> / <code>"microsoft"</code>); routes the action when several mailboxes are connected.</td></tr>
+      </tbody></table>
+      <h4>Response body — EmailActionConfirmResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>confirmation_token</code></td><td>string</td><td>Echo to <a class="eplink" href="#ep-archive"><code>/archive</code></a> or <a class="eplink" href="#ep-quarantine"><code>/quarantine</code></a>. Single-use; bound to the action.</td></tr>
+        <tr><td><code>action</code></td><td>"archive" | "quarantine"</td><td>The authorized action.</td></tr>
+        <tr><td><code>message_id</code></td><td>string</td><td>The message the token authorizes.</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="endpoint" id="ep-archive">
+      <span class="badge">POST</span><span class="path">/v1/email/archive</span>
+      <p class="desc">Archive a message — gated on confirmation, reversible for 30s. The gate fires first: no valid token for this <code>(action='archive', message_id)</code> → <b>403</b> before any backend call. Returns a <code>batch_id</code> undo handle and the <code>post_archive_id</code> so a folder-based backend (Outlook) can be tracked after the move changes its id (<a class="iss" href="https://github.com/amd/gaia/issues/1738" target="_blank" rel="noopener">#1738</a>).</p>
+      <h4>Request body — EmailArchiveRequest</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>message_id</code></td><td>string <span class="req">required</span></td><td>Provider message id to archive.</td></tr>
+        <tr><td><code>confirmation_token</code></td><td>string <span class="opt">optional</span></td><td>Token from <a class="eplink" href="#ep-confirm"><code>/confirm</code></a>. Missing/invalid for this exact action → 403.</td></tr>
+        <tr><td><code>provider</code></td><td>string <span class="opt">optional</span></td><td>Fallback provider, used only when the token carries no binding.</td></tr>
+      </tbody></table>
+      <h4>Response body — EmailArchiveResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>message_id</code></td><td>string</td><td>The message that was archived.</td></tr>
+        <tr><td><code>action_id</code></td><td>string</td><td>Action-log id for this archive.</td></tr>
+        <tr><td><code>batch_id</code></td><td>string</td><td>Undo handle — pass to <a class="eplink" href="#ep-unarchive"><code>/unarchive</code></a> within the window.</td></tr>
+        <tr><td><code>post_archive_id</code></td><td>string</td><td>The id valid AFTER the archive (Outlook mints a new one; Gmail keeps the request id).</td></tr>
+        <tr><td><code>undo_window_seconds</code></td><td>int</td><td>Seconds the undo handle stays valid (default 30).</td></tr>
+        <tr><td><code>archived</code></td><td>bool</td><td>Always true on success.</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="endpoint" id="ep-unarchive">
+      <span class="badge">POST</span><span class="path">/v1/email/unarchive</span>
+      <p class="desc">Reverse an archive within the undo window. <b>Not gated</b> — it restores. Routes each row to the mailbox it was archived from and uses the recorded <code>post_archive_id</code> so Outlook can find the moved message. Fails loudly (<b>409</b>) when the window has expired or the <code>batch_id</code> has no undoable rows.</p>
+      <h4>Request body — EmailUnarchiveRequest</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>batch_id</code></td><td>string <span class="req">required</span></td><td>The undo handle from <a class="eplink" href="#ep-archive"><code>/archive</code></a>.</td></tr>
+        <tr><td><code>provider</code></td><td>string <span class="opt">optional</span></td><td>Omit to route by the mailbox recorded at archive time.</td></tr>
+      </tbody></table>
+      <h4>Response body — EmailUnarchiveResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>batch_id</code></td><td>string</td><td>The undo handle processed.</td></tr>
+        <tr><td><code>restored</code></td><td>int</td><td>Count of messages restored to the inbox.</td></tr>
+        <tr><td><code>messages</code></td><td>list[{message_id, action_id}]</td><td>Each restored message.</td></tr>
+        <tr><td><code>failed</code></td><td>list[{message_id, error}]</td><td>Messages that could not be restored, with reasons (partial success is reported, never silent).</td></tr>
+        <tr><td><code>undone</code></td><td>bool</td><td>True when at least one message was restored.</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="endpoint" id="ep-quarantine">
+      <span class="badge">POST</span><span class="path">/v1/email/quarantine</span>
+      <p class="desc">Quarantine a phishing message — gated on confirmation, reversible for 30s. Applies the <code>GAIA_PHISHING_QUARANTINE</code> label and removes the message from the inbox (capability #9). The gate fires first (403 without a valid token). Refuses <code>is_phishing=false</code> with <b>400</b> — only phishing-flagged mail may be quarantined. <b>Gmail-only:</b> the label-based quarantine and its undo don't map onto Outlook's folder moves, so a request resolving to an Outlook mailbox is refused with <b>400</b> rather than performing a move undo can't reverse (<a class="iss" href="https://github.com/amd/gaia/issues/1738" target="_blank" rel="noopener">#1738</a>).</p>
+      <h4>Request body — EmailQuarantineRequest</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>message_id</code></td><td>string <span class="req">required</span></td><td>Provider message id to quarantine.</td></tr>
+        <tr><td><code>is_phishing</code></td><td>bool <span class="req">required</span></td><td>Must be true — safety gate, never silently bypassed.</td></tr>
+        <tr><td><code>confirmation_token</code></td><td>string <span class="opt">optional</span></td><td>Token from <a class="eplink" href="#ep-confirm"><code>/confirm</code></a> (action='quarantine'). Missing/invalid → 403.</td></tr>
+        <tr><td><code>provider</code></td><td>string <span class="opt">optional</span></td><td>Fallback provider, used only when the token carries no binding.</td></tr>
+      </tbody></table>
+      <h4>Response body — EmailQuarantineResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>message_id</code></td><td>string</td><td>The message that was quarantined.</td></tr>
+        <tr><td><code>action_id</code></td><td>string</td><td>Undo handle — pass to <a class="eplink" href="#ep-unquarantine"><code>/unquarantine</code></a> within the window.</td></tr>
+        <tr><td><code>quarantine_label_id</code></td><td>string</td><td>Id of the applied <code>GAIA_PHISHING_QUARANTINE</code> label.</td></tr>
+        <tr><td><code>prior_labels</code></td><td>list[string]</td><td>The label set restored on undo (recorded pre-quarantine).</td></tr>
+        <tr><td><code>undo_window_seconds</code></td><td>int</td><td>Seconds the undo handle stays valid (default 30).</td></tr>
+        <tr><td><code>quarantined</code></td><td>bool</td><td>Always true on success.</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="endpoint" id="ep-unquarantine">
+      <span class="badge">POST</span><span class="path">/v1/email/unquarantine</span>
+      <p class="desc">Reverse a quarantine within the undo window. <b>Not gated</b> — it restores the exact label set recorded at quarantine time and removes the quarantine label. Fails loudly (<b>409</b>) when the window has expired or the <code>action_id</code> is unknown/already undone.</p>
+      <h4>Request body — EmailUnquarantineRequest</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>action_id</code></td><td>string <span class="req">required</span></td><td>The action id from <a class="eplink" href="#ep-quarantine"><code>/quarantine</code></a>.</td></tr>
+        <tr><td><code>provider</code></td><td>string <span class="opt">optional</span></td><td>Omit to route by the mailbox recorded at quarantine time.</td></tr>
+      </tbody></table>
+      <h4>Response body — EmailUnquarantineResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>action_id</code></td><td>string</td><td>The action id that was undone.</td></tr>
+        <tr><td><code>message_id</code></td><td>string</td><td>The restored message id.</td></tr>
+        <tr><td><code>restored</code></td><td>bool</td><td>Always true on success.</td></tr>
+      </tbody></table>
+    </div>
+
     <h3 style="margin-top:40px">Errors &amp; status codes</h3>
     <p class="body-t">All endpoints return JSON. Errors use the standard <code>{ "detail": "…" }</code> shape with an HTTP status; the message names what failed and how to fix it.</p>
     <table class="tbl">
       <thead><tr><th>Status</th><th>Meaning</th><th>When</th></tr></thead>
       <tbody>
         <tr><td><code>200</code></td><td>OK</td><td>Successful triage / draft / send.</td></tr>
-        <tr><td><code>400</code></td><td>Ambiguous provider</td><td>Two mailboxes are connected and neither the confirmation token nor the request names a provider. Pass <code>provider</code> on <a class="eplink" href="#ep-draft"><code>/draft</code></a> (binding the token) or on <a class="eplink" href="#ep-send"><code>/send</code></a>.</td></tr>
-        <tr><td><code>403</code></td><td>Forbidden — send gate</td><td><a class="eplink" href="#ep-send"><code>/v1/email/send</code></a> called without a valid, payload-bound <code>confirmation_token</code>. Mint one with <a class="eplink" href="#ep-draft"><code>/v1/email/draft</code></a>.</td></tr>
+        <tr><td><code>400</code></td><td>Ambiguous provider / bad request</td><td>Two mailboxes are connected and neither the token nor the request names a provider (<a class="eplink" href="#ep-send"><code>/send</code></a>, <a class="eplink" href="#ep-archive"><code>/archive</code></a>, <a class="eplink" href="#ep-quarantine"><code>/quarantine</code></a>); or <a class="eplink" href="#ep-quarantine"><code>/quarantine</code></a> was called with <code>is_phishing=false</code>. Pass <code>provider</code> (binding the token) or fix the request.</td></tr>
+        <tr><td><code>403</code></td><td>Forbidden — confirmation gate</td><td>A mutating action (<a class="eplink" href="#ep-send"><code>/send</code></a>, <a class="eplink" href="#ep-archive"><code>/archive</code></a>, <a class="eplink" href="#ep-quarantine"><code>/quarantine</code></a>) called without a valid, bound <code>confirmation_token</code>. Mint one with <a class="eplink" href="#ep-draft"><code>/draft</code></a> (send) or <a class="eplink" href="#ep-confirm"><code>/confirm</code></a> (archive/quarantine).</td></tr>
+        <tr><td><code>409</code></td><td>Undo window expired</td><td><a class="eplink" href="#ep-unarchive"><code>/unarchive</code></a> or <a class="eplink" href="#ep-unquarantine"><code>/unquarantine</code></a> called past the 30s window, or the handle is unknown/already undone. Restore manually in the mail client.</td></tr>
         <tr><td><code>422</code></td><td>Validation error</td><td>Request violates the contract — unknown field, missing required field, or malformed address. The contract is strict (extra fields are rejected).</td></tr>
-        <tr><td><code>502</code></td><td>Upstream error</td><td><code>/triage</code>: the local-LLM triage call failed. <code>/send</code>: the mail backend accepted the send but returned no message id.</td></tr>
-        <tr><td><code>503</code></td><td>Backend unavailable</td><td>The mailbox account isn't connected. Connect the provider before sending.</td></tr>
+        <tr><td><code>502</code></td><td>Upstream error</td><td><code>/triage</code>: the local-LLM triage call failed. <code>/send</code> · <code>/archive</code> · <code>/quarantine</code>: the mail backend errored (or send returned no message id).</td></tr>
+        <tr><td><code>503</code></td><td>Backend unavailable</td><td>The mailbox account isn't connected. Connect the provider before sending, archiving, or quarantining.</td></tr>
       </tbody>
     </table>
 

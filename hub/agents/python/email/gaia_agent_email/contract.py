@@ -57,7 +57,12 @@ CATEGORY_PERSONAL = "PERSONAL"
 # Bump on ANY breaking change to the shapes below. Echoed in both request and
 # response so a consumer can detect a mismatch loudly instead of silently
 # mis-parsing. The first frozen revision is "1.0".
-SCHEMA_VERSION = "2.0"
+#
+# 2.1 (#1779): additive — exposes the archive + phishing-quarantine mailbox
+# actions (and their reversal) on the REST contract so the Agent UI can drive
+# them through the package instead of an in-process agent. No triage-shape
+# change, so 2.0 consumers keep working.
+SCHEMA_VERSION = "2.1"
 
 
 class _Strict(BaseModel):
@@ -364,6 +369,248 @@ class EmailTriageResponse(_Strict):
 
 
 # ---------------------------------------------------------------------------
+# Mailbox actions — archive + phishing-quarantine (schema 2.1, #1779)
+# ---------------------------------------------------------------------------
+#
+# These are MUTATING operations on the live mailbox, so — like /send — every
+# one is gated on a single-use confirmation token (minted by the confirm step
+# below). Both are reversible inside a 30s undo window via their reversal
+# endpoints; the reversal path is itself NOT gated (it restores, never
+# destroys). The shapes preserve the two #1738 gotchas: archive returns the
+# ``batch_id`` undo handle AND the ``post_archive_id`` (the id a folder-based
+# backend like Outlook mints on the archive move), so undo can find the message
+# after its id changes.
+
+# The destructive actions a confirmation token can authorize. Quarantine is the
+# phishing-quarantine of capability #9 (applies the GAIA_PHISHING_QUARANTINE
+# label + archives); reversal endpoints are ungated and so are not listed here.
+EmailActionType = Literal["archive", "quarantine"]
+
+
+class EmailActionConfirmRequest(_Strict):
+    """Request a single-use confirmation token for a destructive mailbox action.
+
+    Mirrors the draft→send handshake (#1264): nothing mutates here — this only
+    mints a token bound to *this* ``(action, message_id)`` that the matching
+    ``/archive`` or ``/quarantine`` call must echo back. A token minted for one
+    action/message cannot authorize a different one.
+    """
+
+    action: EmailActionType = Field(
+        ..., description="The action to authorize: 'archive' or 'quarantine'."
+    )
+    message_id: str = Field(
+        ..., description="Provider message id the action will mutate."
+    )
+    provider: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional provider binding ('google' / 'microsoft'). When set, the "
+            "minted token is bound to this mailbox so the action routes correctly "
+            "even when more than one mailbox is connected."
+        ),
+    )
+
+
+class EmailActionConfirmResponse(_Strict):
+    """A single-use confirmation token bound to the requested action+message."""
+
+    schema_version: str = Field(
+        default=SCHEMA_VERSION, description="Echoes the contract version."
+    )
+    confirmation_token: str = Field(
+        ...,
+        description=(
+            "Echo to POST /v1/email/archive or /v1/email/quarantine to authorize "
+            "exactly this (action, message_id). Single-use; bound to the action."
+        ),
+    )
+    action: EmailActionType = Field(..., description="The authorized action.")
+    message_id: str = Field(..., description="The message the token authorizes.")
+
+
+class EmailArchiveRequest(_Strict):
+    """Archive a message (remove it from the inbox). Requires a confirmation
+    token minted by POST /v1/email/confirm for ``action='archive'``."""
+
+    message_id: str = Field(..., description="Provider message id to archive.")
+    confirmation_token: Optional[str] = Field(
+        default=None,
+        description=(
+            "Token from POST /v1/email/confirm. An archive without a valid token "
+            "for this exact (action='archive', message_id) is rejected (403)."
+        ),
+    )
+    provider: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional provider ('google' / 'microsoft'), used only when the token "
+            "carries no binding. A token's bound provider always wins; with two "
+            "mailboxes connected and neither set, the call is rejected (400)."
+        ),
+    )
+
+
+class EmailArchiveResponse(_Strict):
+    """Result of an archive — carries the undo handle for the 30s window."""
+
+    schema_version: str = Field(
+        default=SCHEMA_VERSION, description="Echoes the contract version."
+    )
+    message_id: str = Field(..., description="The message that was archived.")
+    action_id: str = Field(..., description="Action-log id for this archive.")
+    batch_id: str = Field(
+        ...,
+        description=(
+            "Undo handle: pass to POST /v1/email/unarchive within the undo window "
+            "to restore the message to the inbox."
+        ),
+    )
+    post_archive_id: str = Field(
+        ...,
+        description=(
+            "The message id valid AFTER the archive. For folder-based backends "
+            "(Outlook) the archive move mints a new id; for Gmail it equals the "
+            "request id. Surfaced so a caller can track the message post-archive."
+        ),
+    )
+    undo_window_seconds: int = Field(
+        ..., description="Seconds the unarchive handle stays valid."
+    )
+    archived: bool = Field(default=True, description="Always true on success.")
+
+
+class EmailUnarchiveRequest(_Strict):
+    """Reverse an archive within the undo window. NOT gated — it restores."""
+
+    batch_id: str = Field(
+        ..., description="The undo handle returned by POST /v1/email/archive."
+    )
+    provider: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional provider ('google' / 'microsoft'). Omit to route by the "
+            "mailbox recorded at archive time (the default and correct choice)."
+        ),
+    )
+
+
+class UnarchivedMessage(_Strict):
+    """One message restored to the inbox by an unarchive."""
+
+    message_id: str = Field(..., description="The restored message id.")
+    action_id: str = Field(..., description="Action-log id that was undone.")
+
+
+class UnarchiveFailure(_Strict):
+    """One message in the batch that failed to restore."""
+
+    message_id: str = Field(..., description="The message that failed to restore.")
+    error: str = Field(..., description="Actionable failure reason.")
+
+
+class EmailUnarchiveResponse(_Strict):
+    """Result of an unarchive — partial success is reported, never silent."""
+
+    schema_version: str = Field(
+        default=SCHEMA_VERSION, description="Echoes the contract version."
+    )
+    batch_id: str = Field(..., description="The undo handle that was processed.")
+    restored: int = Field(..., description="Count of messages restored to inbox.")
+    messages: List[UnarchivedMessage] = Field(
+        default_factory=list, description="Each restored message."
+    )
+    failed: List[UnarchiveFailure] = Field(
+        default_factory=list,
+        description="Messages that could not be restored (with reasons).",
+    )
+    undone: bool = Field(default=True, description="True when at least one restored.")
+
+
+class EmailQuarantineRequest(_Strict):
+    """Quarantine a phishing message (apply GAIA_PHISHING_QUARANTINE + archive).
+    Requires a confirmation token for ``action='quarantine'``.
+
+    Gmail-only: the label-based quarantine and its reversible undo don't map onto
+    Outlook's folder moves, so a request that resolves to an Outlook mailbox is
+    rejected with 400 rather than performing a move undo can't reverse (#1738)."""
+
+    message_id: str = Field(..., description="Provider message id to quarantine.")
+    is_phishing: bool = Field(
+        ...,
+        description=(
+            "Must be true. The action refuses to quarantine a message not flagged "
+            "as phishing — a safety gate, never silently bypassed."
+        ),
+    )
+    confirmation_token: Optional[str] = Field(
+        default=None,
+        description=(
+            "Token from POST /v1/email/confirm. A quarantine without a valid token "
+            "for this exact (action='quarantine', message_id) is rejected (403)."
+        ),
+    )
+    provider: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional provider ('google' / 'microsoft'), used only when the token "
+            "carries no binding (see EmailArchiveRequest.provider)."
+        ),
+    )
+
+
+class EmailQuarantineResponse(_Strict):
+    """Result of a quarantine — carries the action id for the 30s undo."""
+
+    schema_version: str = Field(
+        default=SCHEMA_VERSION, description="Echoes the contract version."
+    )
+    message_id: str = Field(..., description="The message that was quarantined.")
+    action_id: str = Field(
+        ...,
+        description=(
+            "Undo handle: pass to POST /v1/email/unquarantine within the undo "
+            "window to restore the message's prior labels."
+        ),
+    )
+    quarantine_label_id: str = Field(
+        ..., description="Id of the GAIA_PHISHING_QUARANTINE label that was applied."
+    )
+    prior_labels: List[str] = Field(
+        default_factory=list,
+        description="The label set restored on undo (recorded pre-quarantine).",
+    )
+    undo_window_seconds: int = Field(
+        ..., description="Seconds the unquarantine handle stays valid."
+    )
+    quarantined: bool = Field(default=True, description="Always true on success.")
+
+
+class EmailUnquarantineRequest(_Strict):
+    """Reverse a quarantine within the undo window. NOT gated — it restores."""
+
+    action_id: str = Field(
+        ..., description="The action id returned by POST /v1/email/quarantine."
+    )
+    provider: Optional[str] = Field(
+        default=None,
+        description="Optional provider ('google' / 'microsoft'); omit to route by "
+        "the mailbox recorded at quarantine time.",
+    )
+
+
+class EmailUnquarantineResponse(_Strict):
+    """Result of an unquarantine."""
+
+    schema_version: str = Field(
+        default=SCHEMA_VERSION, description="Echoes the contract version."
+    )
+    action_id: str = Field(..., description="The action id that was undone.")
+    message_id: str = Field(..., description="The restored message id.")
+    restored: bool = Field(default=True, description="Always true on success.")
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -402,6 +649,20 @@ __all__ = [
     "TriageUsage",
     "EmailTriageResult",
     "EmailTriageResponse",
+    # Mailbox actions (schema 2.1, #1779)
+    "EmailActionType",
+    "EmailActionConfirmRequest",
+    "EmailActionConfirmResponse",
+    "EmailArchiveRequest",
+    "EmailArchiveResponse",
+    "EmailUnarchiveRequest",
+    "UnarchivedMessage",
+    "UnarchiveFailure",
+    "EmailUnarchiveResponse",
+    "EmailQuarantineRequest",
+    "EmailQuarantineResponse",
+    "EmailUnquarantineRequest",
+    "EmailUnquarantineResponse",
     "parse_request",
     "parse_response",
 ]

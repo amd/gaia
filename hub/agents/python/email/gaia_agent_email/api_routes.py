@@ -55,15 +55,27 @@ from fastapi.responses import HTMLResponse
 from gaia_agent_email.contract import (
     ActionItem,
     DraftReply,
+    EmailActionConfirmRequest,
+    EmailActionConfirmResponse,
     EmailAddress,
+    EmailArchiveRequest,
+    EmailArchiveResponse,
     EmailCategory,
     EmailMessage,
+    EmailQuarantineRequest,
+    EmailQuarantineResponse,
     EmailTriageRequest,
     EmailTriageResponse,
     EmailTriageResult,
+    EmailUnarchiveRequest,
+    EmailUnarchiveResponse,
+    EmailUnquarantineRequest,
+    EmailUnquarantineResponse,
     SingleEmailInput,
     ThreadInput,
     TriageUsage,
+    UnarchivedMessage,
+    UnarchiveFailure,
 )
 from gaia_agent_email.tools.llm_triage import LLMTriageError
 from gaia_agent_email.tools.summarize_tools import EmailSummarizeError
@@ -78,8 +90,8 @@ from gaia.connectors.api import connected_mailbox_providers
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
-    ConnectorsError,
     ConnectionRevokedError,
+    ConnectorsError,
     ScopeMismatchError,
 )
 from gaia.logger import get_logger
@@ -264,6 +276,7 @@ class EmailTriageService:
         real chat call, where their messages are specific).
         """
         import requests
+
         from gaia.llm.lemonade_client import _get_lemonade_config
 
         if base_url:
@@ -592,6 +605,18 @@ def _payload_fingerprint(to: List[EmailAddress], subject: str, body: str) -> str
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
+def _action_fingerprint(action: str, message_id: str) -> str:
+    """Fingerprint a destructive mailbox action (archive / quarantine).
+
+    Binding the confirmation token to ``(action, message_id)`` means a token
+    minted to archive message A cannot be replayed to quarantine it, nor to
+    archive a different message — the same anti-bait-and-switch property the
+    send gate gets from :func:`_payload_fingerprint`.
+    """
+    material = "\x1f".join(["action", action, message_id])
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
 class ConfirmationStore:
     """Single-use confirmation tokens bound to a message fingerprint.
 
@@ -764,6 +789,127 @@ def _resolve_backend_for_provider(provider: Optional[str]):
             "Expected 'google' or 'microsoft'."
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# Mailbox-action backend + action-log DB (archive / quarantine, #1779)
+# ---------------------------------------------------------------------------
+
+
+def _resolve_mutate_backend(provider: Optional[str]):
+    """Resolve a mailbox backend for a mutating action and return it WITH the
+    resolved provider string.
+
+    Archive/quarantine need the provider name too (recorded as the action's
+    ``mailbox`` so a cross-mailbox undo routes to the right account, #1603).
+    Same fail-loud rules as :func:`get_send_backend` — never silently chooses:
+
+      - 0 connected → 503 (connect a mailbox first)
+      - provider=None and 2+ connected → 400 (ambiguous; name the provider)
+      - provider given but not connected → 400 (connect it / omit it)
+    """
+    connected = connected_mailbox_providers()
+    if not connected:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No mailbox connected — connect Google or Microsoft in "
+                "Settings → Connectors before archiving or quarantining."
+            ),
+        )
+    if provider is None:
+        if len(connected) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Multiple mailboxes connected ({', '.join(connected)}); the "
+                    "action API can't choose. Pass 'provider' (or mint the "
+                    "confirmation token with a provider binding) to specify which "
+                    "mailbox to act on."
+                ),
+            )
+        provider = connected[0]
+    # Reuses the connected-check + live-backend build of the send path.
+    backend = _resolve_backend_for_provider(provider)
+    return backend, provider
+
+
+def _require_gmail_quarantine(provider: str) -> None:
+    """Quarantine is a Gmail-label feature — refuse it loudly on Outlook.
+
+    ``quarantine_phishing_message`` applies the ``GAIA_PHISHING_QUARANTINE``
+    *label* and restores by re-adding labels on undo. Outlook archives by a
+    *folder move* that mints a new message id and isn't reversed by label edits,
+    so quarantining an Outlook message would perform a destructive move its 30s
+    undo cannot reverse (#1738). We reject it up front instead of shipping a
+    silently-irreversible path — no silent fallback.
+    """
+    if provider != "google":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Phishing quarantine is supported only for Gmail (provider "
+                f"'google'), not '{provider}'. The GAIA_PHISHING_QUARANTINE label "
+                "model and its reversible undo don't apply to Outlook's folder "
+                "moves. Use the mail client to handle Outlook phishing for now."
+            ),
+        )
+
+
+# Process-wide action-log DB for the REST surface. Archive/quarantine record a
+# reversible row here (the same ``email_actions`` table the agent uses) so the
+# undo endpoints can reverse them within the 30s window. Lazily built so import
+# stays cheap and tests can override ``resolve_action_db`` before first use.
+_action_db = None
+_action_db_lock = threading.Lock()
+
+
+def get_action_db():
+    """Build (once) and return the DatabaseMixin holding the action log.
+
+    Uses the same SQLite the agent uses (``EmailAgentConfig.resolved_db_path``)
+    so a REST-driven archive and an agent-driven one share one undo log.
+
+    Thread-safety: every action handler hits this one connection from the
+    ``asyncio.to_thread`` pool. The action-log writes are single statements,
+    safe under SQLite's serialized mode (``check_same_thread=False``). Do NOT
+    wrap these handlers' DB work in a multi-statement transaction — ``_in_tx``
+    is shared instance state, not thread-local, so concurrent transactions on
+    this shared connection would corrupt each other.
+    """
+    global _action_db
+    with _action_db_lock:
+        if _action_db is None:
+            from pathlib import Path
+
+            from gaia_agent_email import action_store
+            from gaia_agent_email.config import EmailAgentConfig
+
+            from gaia.database.mixin import DatabaseMixin
+
+            class _ActionDB(DatabaseMixin):
+                pass
+
+            db = _ActionDB()
+            path = EmailAgentConfig().resolved_db_path()
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            db.init_db(path)
+            action_store.init_schema(db)
+            _action_db = db
+        return _action_db
+
+
+# Module-level indirection the action handlers call. Tests swap this
+# (``monkeypatch.setattr(email_routes, "resolve_action_db", lambda: fake_db)``)
+# to inject an in-memory DB without writing to ``~/.gaia``.
+resolve_action_db = get_action_db
+
+
+def _undo_window_seconds() -> int:
+    """The undo window the action log honors (default 30s, #1738)."""
+    from gaia_agent_email.config import EmailAgentConfig
+
+    return int(EmailAgentConfig().undo_window_seconds)
 
 
 # ---------------------------------------------------------------------------
@@ -954,7 +1100,10 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
         backend = _resolve_backend_for_provider(bound_provider or request.provider)
         to_header = ", ".join(_format_address(a) for a in request.to)
         result = await asyncio.to_thread(
-            backend.send_message, to=to_header, subject=request.subject, body=request.body
+            backend.send_message,
+            to=to_header,
+            subject=request.subject,
+            body=request.body,
         )
     except (AuthRequiredError, ScopeMismatchError, ConnectionRevokedError) as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
@@ -973,6 +1122,240 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
         )
     logger.info("email send: id=%s to=%s", sent_id, to_header)
     return EmailSendResponse(sent_id=sent_id, to=request.to, subject=request.subject)
+
+
+# ---------------------------------------------------------------------------
+# Mailbox actions — archive / quarantine + their reversal (#1779)
+# ---------------------------------------------------------------------------
+
+_GATE_DETAIL = (
+    "{action} rejected: missing or invalid confirmation token for this message. "
+    "Call POST /v1/email/confirm with action='{action}' and this message_id to "
+    "mint a single-use token bound to it, then echo it in 'confirmation_token'. "
+    "Destructive mailbox actions are never performed without explicit confirmation."
+)
+
+
+@router.post("/confirm", response_model=EmailActionConfirmResponse)
+async def confirm_action(
+    request: EmailActionConfirmRequest,
+) -> EmailActionConfirmResponse:
+    """Mint a single-use confirmation token for a destructive mailbox action.
+
+    The token authorizes exactly one ``(action, message_id)`` — the archive or
+    quarantine call must echo it back. Nothing mutates here; this is the
+    explicit user-confirmation step (the action analogue of POST /v1/email/draft
+    for sends). When ``provider`` is set the token carries that binding so the
+    action routes to the right mailbox.
+    """
+    fingerprint = _action_fingerprint(request.action, request.message_id)
+    token = confirmation_store.issue(fingerprint, provider=request.provider)
+    return EmailActionConfirmResponse(
+        confirmation_token=token,
+        action=request.action,
+        message_id=request.message_id,
+    )
+
+
+@router.post("/archive", response_model=EmailArchiveResponse)
+async def archive_email(request: EmailArchiveRequest) -> EmailArchiveResponse:
+    """Archive a message — gated on confirmation, reversible for 30s.
+
+    The gate fires FIRST: a request without a valid token for this exact
+    ``(action='archive', message_id)`` is rejected with 403 before any backend
+    call. On success a ``batch_id`` undo handle is returned; pass it to
+    POST /v1/email/unarchive within the window to restore the message. The
+    response also surfaces ``post_archive_id`` (the id a folder backend mints on
+    the move) so a caller can track the message after Outlook changes its id.
+    """
+    fingerprint = _action_fingerprint("archive", request.message_id)
+    gate_ok, bound_provider = confirmation_store.consume_with_provider(
+        request.confirmation_token or "", fingerprint
+    )
+    if not gate_ok:
+        raise HTTPException(
+            status_code=403, detail=_GATE_DETAIL.format(action="archive")
+        )
+
+    from gaia_agent_email.tools.organize_tools import archive_message_impl
+
+    try:
+        backend, provider = _resolve_mutate_backend(bound_provider or request.provider)
+        db = resolve_action_db()
+        batch_id = secrets.token_hex(16)
+        result = await asyncio.to_thread(
+            archive_message_impl,
+            backend,
+            db,
+            message_id=request.message_id,
+            mailbox=provider,
+            batch_id=batch_id,
+        )
+    except (AuthRequiredError, ScopeMismatchError, ConnectionRevokedError) as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ConfigurationError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except ConnectorsError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    logger.info("email archive: id=%s provider=%s", request.message_id, provider)
+    return EmailArchiveResponse(
+        message_id=request.message_id,
+        action_id=result["action_id"],
+        batch_id=batch_id,
+        post_archive_id=result["post_archive_id"],
+        undo_window_seconds=_undo_window_seconds(),
+    )
+
+
+@router.post("/unarchive", response_model=EmailUnarchiveResponse)
+async def unarchive_email(request: EmailUnarchiveRequest) -> EmailUnarchiveResponse:
+    """Reverse an archive within the undo window (NOT gated — it restores).
+
+    Routes each row to the mailbox it was archived from and uses the recorded
+    ``post_archive_id`` so a folder-based backend (Outlook) can find the message
+    after its id changed (#1738). Fails loudly (409) when the window has expired
+    or the ``batch_id`` has no undoable rows — never a silent no-op.
+    """
+    from gaia_agent_email.tools.organize_tools import undo_archive_batch_impl
+
+    def _resolve_for_row(row):
+        return _resolve_backend_for_provider(row.get("mailbox") or request.provider)
+
+    try:
+        db = resolve_action_db()
+        result = await asyncio.to_thread(
+            undo_archive_batch_impl,
+            _resolve_for_row,
+            db,
+            batch_id=request.batch_id,
+            window_seconds=_undo_window_seconds(),
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except (AuthRequiredError, ScopeMismatchError, ConnectionRevokedError) as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ConfigurationError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except ConnectorsError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    return EmailUnarchiveResponse(
+        batch_id=result["batch_id"],
+        restored=result["restored"],
+        messages=[UnarchivedMessage(**m) for m in result["messages"]],
+        failed=[UnarchiveFailure(**f) for f in result["failed"]],
+        undone=result["restored"] > 0,
+    )
+
+
+@router.post("/quarantine", response_model=EmailQuarantineResponse)
+async def quarantine_email(
+    request: EmailQuarantineRequest,
+) -> EmailQuarantineResponse:
+    """Quarantine a phishing message — gated on confirmation, reversible for 30s.
+
+    Applies the ``GAIA_PHISHING_QUARANTINE`` label and removes the message from
+    the inbox (capability #9). The gate fires FIRST (403 without a valid token
+    for this ``(action='quarantine', message_id)``). The action refuses
+    ``is_phishing=False`` (400) — only phishing-flagged mail may be quarantined.
+    Reverse with POST /v1/email/unquarantine using the returned ``action_id``.
+    """
+    fingerprint = _action_fingerprint("quarantine", request.message_id)
+    gate_ok, bound_provider = confirmation_store.consume_with_provider(
+        request.confirmation_token or "", fingerprint
+    )
+    if not gate_ok:
+        raise HTTPException(
+            status_code=403, detail=_GATE_DETAIL.format(action="quarantine")
+        )
+
+    from gaia_agent_email.tools.phishing_tools import quarantine_phishing_impl
+
+    try:
+        backend, provider = _resolve_mutate_backend(bound_provider or request.provider)
+        _require_gmail_quarantine(provider)
+        db = resolve_action_db()
+        result = await asyncio.to_thread(
+            quarantine_phishing_impl,
+            backend,
+            db,
+            message_id=request.message_id,
+            is_phishing=request.is_phishing,
+            mailbox=provider,
+        )
+    except ValueError as e:
+        # Safety gate: refused because is_phishing was False.
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except (AuthRequiredError, ScopeMismatchError, ConnectionRevokedError) as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ConfigurationError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except ConnectorsError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    logger.info("email quarantine: id=%s", request.message_id)
+    return EmailQuarantineResponse(
+        message_id=result["message_id"],
+        action_id=result["action_id"],
+        quarantine_label_id=result["quarantine_label_id"],
+        prior_labels=list(result.get("prior_labels", [])),
+        undo_window_seconds=_undo_window_seconds(),
+    )
+
+
+@router.post("/unquarantine", response_model=EmailUnquarantineResponse)
+async def unquarantine_email(
+    request: EmailUnquarantineRequest,
+) -> EmailUnquarantineResponse:
+    """Reverse a quarantine within the undo window (NOT gated — it restores).
+
+    Restores the exact label set recorded at quarantine time and removes the
+    quarantine label. Fails loudly (409) when the window has expired or the
+    ``action_id`` is unknown/already undone — never a silent no-op.
+    """
+    from gaia_agent_email import action_store
+    from gaia_agent_email.tools.phishing_tools import unquarantine_impl
+
+    db = resolve_action_db()
+    window = _undo_window_seconds()
+    # Route by the mailbox recorded at quarantine time so a multi-mailbox setup
+    # undoes against the right account without the caller having to name it
+    # (mirrors /unarchive). If the row is gone (expired/unknown), short-circuit
+    # the 409 rather than 400 on an ambiguous backend the action never used.
+    row = action_store.fetch_undoable(
+        db, action_id=request.action_id, window_seconds=window
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"undo window has expired ({window} s) or action_id "
+                f"{request.action_id!r} is unknown or already undone. The "
+                "message remains in the quarantine label — move it manually."
+            ),
+        )
+    try:
+        backend, provider = _resolve_mutate_backend(
+            row.get("mailbox") or request.provider
+        )
+        _require_gmail_quarantine(provider)
+        result = await asyncio.to_thread(
+            unquarantine_impl,
+            backend,
+            db,
+            action_id=request.action_id,
+            window_seconds=window,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except (AuthRequiredError, ScopeMismatchError, ConnectionRevokedError) as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ConfigurationError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except ConnectorsError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    return EmailUnquarantineResponse(
+        action_id=result["action_id"],
+        message_id=result["message_id"],
+    )
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -1046,6 +1429,10 @@ __all__ = [
     "ConfirmationStore",
     "confirmation_store",
     "get_send_backend",
+    "get_action_db",
+    "resolve_action_db",
+    "_resolve_mutate_backend",
+    "_action_fingerprint",
     "EmailDraftRequest",
     "EmailDraftResponse",
     "EmailSendRequest",

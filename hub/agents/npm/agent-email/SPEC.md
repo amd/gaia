@@ -2,7 +2,7 @@
 
 Detailed reference for `@amd-gaia/agent-email`. For a quick start, see
 [`README.md`](./README.md); for an AI-assisted integration walkthrough, see
-[`SKILL.md`](./SKILL.md). The contract version is `SCHEMA_VERSION` **2.0**.
+[`SKILL.md`](./SKILL.md). The contract version is `SCHEMA_VERSION` **2.1**.
 
 ## Architecture
 
@@ -50,6 +50,11 @@ result.
 | `POST /v1/email/triage` | `triage()` | **Standalone** | Local Lemonade LLM only. Categorizes / summarizes / extracts action items + spam/phishing **signals** on the message you send in. *No mailbox is read.* |
 | `POST /v1/email/draft` | `draft()` | **Standalone** | Nothing external — wraps your `(to, subject, body)` and returns a single-use confirmation token. |
 | `POST /v1/email/send` | `send()` | **Connector** | A valid `draft` confirmation token **and** a connected Google/Microsoft mailbox. The token gate fires first: no/invalid token → `403`; then `503` if no mailbox is connected, `400` if 2+ are. |
+| `POST /v1/email/confirm` | `confirmAction()` | **Standalone** | Nothing external — mints a single-use token for `"archive"`/`"quarantine"`, bound to that exact `(action, message_id)`. |
+| `POST /v1/email/archive` | `archive()` | **Connector** | A valid `confirm` token (`action="archive"`) **and** a connected mailbox. Gate fires first (no/invalid token → `403`); returns a `batch_id` undo handle + `post_archive_id`. |
+| `POST /v1/email/unarchive` | `unarchive()` | **Connector** | A connected mailbox + the `batch_id`. **Ungated** (it restores). Window expired / unknown handle → `409`. |
+| `POST /v1/email/quarantine` | `quarantine()` | **Connector (Gmail)** | A valid `confirm` token (`action="quarantine"`) **and** a connected **Gmail** mailbox. Applies `GAIA_PHISHING_QUARANTINE` + archives; refuses `is_phishing: false` → `400`; refuses an Outlook mailbox → `400` (label-undo can't reverse a folder move, #1738). |
+| `POST /v1/email/unquarantine` | `unquarantine()` | **Connector** | A connected mailbox + the `action_id`. **Ungated** (it restores prior labels). Window expired / unknown → `409`. |
 | `GET /health` | `health()` | **Standalone** | Liveness only — does **not** check Lemonade/model. |
 | `GET /version` | `version()` | **Standalone** | Version negotiation. |
 | `GET /v1/email/health` | `emailHealth()` | **Standalone** | Router-scoped liveness (mounted-on-app case). |
@@ -58,8 +63,40 @@ result.
 | `GET /openapi.json` | `openapi()` | **Standalone** | Machine-readable OpenAPI document. |
 
 `GET /docs` (Swagger UI) and `GET /redoc` are also served but are browser UIs, not
-wrapped by the client. **Everything except `send` is standalone** — integrate and
-verify the whole surface with zero connector setup.
+wrapped by the client. **The standalone surface is `triage`, `draft`, and
+`confirmAction`** — integrate and verify that whole flow with zero connector setup.
+The mailbox-mutating calls (`send`, `archive`, `quarantine`) and their reversals need
+a connected mailbox on the host.
+
+### Mailbox actions (archive / quarantine, schema 2.1)
+
+`archive` and `quarantine` mutate the live mailbox, so each is gated on a single-use
+token exactly like `send` — but minted by `confirmAction` (not `draft`), bound to the
+`(action, message_id)`. A token for one action/message cannot authorize a different
+one. Both are reversible inside the 30s undo window:
+
+```ts
+// Archive (gated) → undo within the window (ungated):
+const { confirmation_token } = await client.confirmAction({
+  action: "archive",
+  message_id: "msg-123",
+});
+const { batch_id, post_archive_id } = await client.archive({
+  message_id: "msg-123",
+  confirmation_token,
+});
+// post_archive_id is the id valid NOW — Outlook mints a new one on the folder move.
+await client.unarchive({ batch_id }); // restores to inbox; 409 if the window lapsed
+
+// Quarantine a phishing message (Gmail-only; refuses is_phishing:false and Outlook), then undo by action_id:
+const t = await client.confirmAction({ action: "quarantine", message_id: "msg-9" });
+const q = await client.quarantine({
+  message_id: "msg-9",
+  is_phishing: true,
+  confirmation_token: t.confirmation_token,
+});
+await client.unquarantine({ action_id: q.action_id });
+```
 
 ### Readiness vs liveness
 
@@ -215,7 +252,8 @@ editors autocomplete but your code never imports them.
 
 TypeScript types in `src/types.ts` mirror two Python sources of truth:
 
-- `contract.py` — the triage request/response contract (`SCHEMA_VERSION = "2.0"`).
+- `contract.py` — the triage request/response contract plus the mailbox-action
+  models (archive / quarantine + reversal, schema 2.1) (`SCHEMA_VERSION = "2.1"`).
 - `api_routes.py` — the local draft/send confirmation handshake models.
 
 They are hand-written (vs. generated from `/openapi.json`) because the contract is

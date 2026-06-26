@@ -83,6 +83,82 @@
         "title": "DraftReply",
         "type": "object"
       },
+      "EmailActionConfirmRequest": {
+        "additionalProperties": false,
+        "description": "Request a single-use confirmation token for a destructive mailbox action.\n\nMirrors the draft→send handshake (#1264): nothing mutates here — this only\nmints a token bound to *this* ``(action, message_id)`` that the matching\n``/archive`` or ``/quarantine`` call must echo back. A token minted for one\naction/message cannot authorize a different one.",
+        "properties": {
+          "action": {
+            "description": "The action to authorize: 'archive' or 'quarantine'.",
+            "enum": [
+              "archive",
+              "quarantine"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "message_id": {
+            "description": "Provider message id the action will mutate.",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional provider binding ('google' / 'microsoft'). When set, the minted token is bound to this mailbox so the action routes correctly even when more than one mailbox is connected.",
+            "title": "Provider"
+          }
+        },
+        "required": [
+          "action",
+          "message_id"
+        ],
+        "title": "EmailActionConfirmRequest",
+        "type": "object"
+      },
+      "EmailActionConfirmResponse": {
+        "additionalProperties": false,
+        "description": "A single-use confirmation token bound to the requested action+message.",
+        "properties": {
+          "action": {
+            "description": "The authorized action.",
+            "enum": [
+              "archive",
+              "quarantine"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "confirmation_token": {
+            "description": "Echo to POST /v1/email/archive or /v1/email/quarantine to authorize exactly this (action, message_id). Single-use; bound to the action.",
+            "title": "Confirmation Token",
+            "type": "string"
+          },
+          "message_id": {
+            "description": "The message the token authorizes.",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "default": "2.1",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "confirmation_token",
+          "action",
+          "message_id"
+        ],
+        "title": "EmailActionConfirmResponse",
+        "type": "object"
+      },
       "EmailAddress": {
         "additionalProperties": false,
         "description": "A single email participant. ``name`` is optional (many headers carry a\nbare address); ``email`` is required and must look like an address.",
@@ -109,6 +185,98 @@
           "email"
         ],
         "title": "EmailAddress",
+        "type": "object"
+      },
+      "EmailArchiveRequest": {
+        "additionalProperties": false,
+        "description": "Archive a message (remove it from the inbox). Requires a confirmation\ntoken minted by POST /v1/email/confirm for ``action='archive'``.",
+        "properties": {
+          "confirmation_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Token from POST /v1/email/confirm. An archive without a valid token for this exact (action='archive', message_id) is rejected (403).",
+            "title": "Confirmation Token"
+          },
+          "message_id": {
+            "description": "Provider message id to archive.",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional provider ('google' / 'microsoft'), used only when the token carries no binding. A token's bound provider always wins; with two mailboxes connected and neither set, the call is rejected (400).",
+            "title": "Provider"
+          }
+        },
+        "required": [
+          "message_id"
+        ],
+        "title": "EmailArchiveRequest",
+        "type": "object"
+      },
+      "EmailArchiveResponse": {
+        "additionalProperties": false,
+        "description": "Result of an archive — carries the undo handle for the 30s window.",
+        "properties": {
+          "action_id": {
+            "description": "Action-log id for this archive.",
+            "title": "Action Id",
+            "type": "string"
+          },
+          "archived": {
+            "default": true,
+            "description": "Always true on success.",
+            "title": "Archived",
+            "type": "boolean"
+          },
+          "batch_id": {
+            "description": "Undo handle: pass to POST /v1/email/unarchive within the undo window to restore the message to the inbox.",
+            "title": "Batch Id",
+            "type": "string"
+          },
+          "message_id": {
+            "description": "The message that was archived.",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "post_archive_id": {
+            "description": "The message id valid AFTER the archive. For folder-based backends (Outlook) the archive move mints a new id; for Gmail it equals the request id. Surfaced so a caller can track the message post-archive.",
+            "title": "Post Archive Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "default": "2.1",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "undo_window_seconds": {
+            "description": "Seconds the unarchive handle stays valid.",
+            "title": "Undo Window Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "message_id",
+          "action_id",
+          "batch_id",
+          "post_archive_id",
+          "undo_window_seconds"
+        ],
+        "title": "EmailArchiveResponse",
         "type": "object"
       },
       "EmailCategory": {
@@ -269,6 +437,106 @@
         "title": "EmailMessage",
         "type": "object"
       },
+      "EmailQuarantineRequest": {
+        "additionalProperties": false,
+        "description": "Quarantine a phishing message (apply GAIA_PHISHING_QUARANTINE + archive).\nRequires a confirmation token for ``action='quarantine'``.\n\nGmail-only: the label-based quarantine and its reversible undo don't map onto\nOutlook's folder moves, so a request that resolves to an Outlook mailbox is\nrejected with 400 rather than performing a move undo can't reverse (#1738).",
+        "properties": {
+          "confirmation_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Token from POST /v1/email/confirm. A quarantine without a valid token for this exact (action='quarantine', message_id) is rejected (403).",
+            "title": "Confirmation Token"
+          },
+          "is_phishing": {
+            "description": "Must be true. The action refuses to quarantine a message not flagged as phishing — a safety gate, never silently bypassed.",
+            "title": "Is Phishing",
+            "type": "boolean"
+          },
+          "message_id": {
+            "description": "Provider message id to quarantine.",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional provider ('google' / 'microsoft'), used only when the token carries no binding (see EmailArchiveRequest.provider).",
+            "title": "Provider"
+          }
+        },
+        "required": [
+          "message_id",
+          "is_phishing"
+        ],
+        "title": "EmailQuarantineRequest",
+        "type": "object"
+      },
+      "EmailQuarantineResponse": {
+        "additionalProperties": false,
+        "description": "Result of a quarantine — carries the action id for the 30s undo.",
+        "properties": {
+          "action_id": {
+            "description": "Undo handle: pass to POST /v1/email/unquarantine within the undo window to restore the message's prior labels.",
+            "title": "Action Id",
+            "type": "string"
+          },
+          "message_id": {
+            "description": "The message that was quarantined.",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "prior_labels": {
+            "description": "The label set restored on undo (recorded pre-quarantine).",
+            "items": {
+              "type": "string"
+            },
+            "title": "Prior Labels",
+            "type": "array"
+          },
+          "quarantine_label_id": {
+            "description": "Id of the GAIA_PHISHING_QUARANTINE label that was applied.",
+            "title": "Quarantine Label Id",
+            "type": "string"
+          },
+          "quarantined": {
+            "default": true,
+            "description": "Always true on success.",
+            "title": "Quarantined",
+            "type": "boolean"
+          },
+          "schema_version": {
+            "default": "2.1",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "undo_window_seconds": {
+            "description": "Seconds the unquarantine handle stays valid.",
+            "title": "Undo Window Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "message_id",
+          "action_id",
+          "quarantine_label_id",
+          "undo_window_seconds"
+        ],
+        "title": "EmailQuarantineResponse",
+        "type": "object"
+      },
       "EmailSendRequest": {
         "additionalProperties": false,
         "description": "Send a reply. Requires a valid confirmation token for this payload.",
@@ -396,7 +664,7 @@
             "title": "Payload"
           },
           "schema_version": {
-            "default": "2.0",
+            "default": "2.1",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -426,7 +694,7 @@
             "description": "The structured analysis."
           },
           "schema_version": {
-            "default": "2.0",
+            "default": "2.1",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -523,6 +791,146 @@
           "summary"
         ],
         "title": "EmailTriageResult",
+        "type": "object"
+      },
+      "EmailUnarchiveRequest": {
+        "additionalProperties": false,
+        "description": "Reverse an archive within the undo window. NOT gated — it restores.",
+        "properties": {
+          "batch_id": {
+            "description": "The undo handle returned by POST /v1/email/archive.",
+            "title": "Batch Id",
+            "type": "string"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional provider ('google' / 'microsoft'). Omit to route by the mailbox recorded at archive time (the default and correct choice).",
+            "title": "Provider"
+          }
+        },
+        "required": [
+          "batch_id"
+        ],
+        "title": "EmailUnarchiveRequest",
+        "type": "object"
+      },
+      "EmailUnarchiveResponse": {
+        "additionalProperties": false,
+        "description": "Result of an unarchive — partial success is reported, never silent.",
+        "properties": {
+          "batch_id": {
+            "description": "The undo handle that was processed.",
+            "title": "Batch Id",
+            "type": "string"
+          },
+          "failed": {
+            "description": "Messages that could not be restored (with reasons).",
+            "items": {
+              "$ref": "#/components/schemas/UnarchiveFailure"
+            },
+            "title": "Failed",
+            "type": "array"
+          },
+          "messages": {
+            "description": "Each restored message.",
+            "items": {
+              "$ref": "#/components/schemas/UnarchivedMessage"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "restored": {
+            "description": "Count of messages restored to inbox.",
+            "title": "Restored",
+            "type": "integer"
+          },
+          "schema_version": {
+            "default": "2.1",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "undone": {
+            "default": true,
+            "description": "True when at least one restored.",
+            "title": "Undone",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "batch_id",
+          "restored"
+        ],
+        "title": "EmailUnarchiveResponse",
+        "type": "object"
+      },
+      "EmailUnquarantineRequest": {
+        "additionalProperties": false,
+        "description": "Reverse a quarantine within the undo window. NOT gated — it restores.",
+        "properties": {
+          "action_id": {
+            "description": "The action id returned by POST /v1/email/quarantine.",
+            "title": "Action Id",
+            "type": "string"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional provider ('google' / 'microsoft'); omit to route by the mailbox recorded at quarantine time.",
+            "title": "Provider"
+          }
+        },
+        "required": [
+          "action_id"
+        ],
+        "title": "EmailUnquarantineRequest",
+        "type": "object"
+      },
+      "EmailUnquarantineResponse": {
+        "additionalProperties": false,
+        "description": "Result of an unquarantine.",
+        "properties": {
+          "action_id": {
+            "description": "The action id that was undone.",
+            "title": "Action Id",
+            "type": "string"
+          },
+          "message_id": {
+            "description": "The restored message id.",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "restored": {
+            "default": true,
+            "description": "Always true on success.",
+            "title": "Restored",
+            "type": "boolean"
+          },
+          "schema_version": {
+            "default": "2.1",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action_id",
+          "message_id"
+        ],
+        "title": "EmailUnquarantineResponse",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -703,6 +1111,50 @@
         "title": "TriageUsage",
         "type": "object"
       },
+      "UnarchiveFailure": {
+        "additionalProperties": false,
+        "description": "One message in the batch that failed to restore.",
+        "properties": {
+          "error": {
+            "description": "Actionable failure reason.",
+            "title": "Error",
+            "type": "string"
+          },
+          "message_id": {
+            "description": "The message that failed to restore.",
+            "title": "Message Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message_id",
+          "error"
+        ],
+        "title": "UnarchiveFailure",
+        "type": "object"
+      },
+      "UnarchivedMessage": {
+        "additionalProperties": false,
+        "description": "One message restored to the inbox by an unarchive.",
+        "properties": {
+          "action_id": {
+            "description": "Action-log id that was undone.",
+            "title": "Action Id",
+            "type": "string"
+          },
+          "message_id": {
+            "description": "The restored message id.",
+            "title": "Message Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message_id",
+          "action_id"
+        ],
+        "title": "UnarchivedMessage",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -770,10 +1222,94 @@
   "info": {
     "description": "REST surface for the GAIA Email Triage agent (/v1/email/*). Cross-implementation contract for the npm client and native builds.",
     "title": "GAIA Email Agent API",
-    "version": "2.0"
+    "version": "2.1"
   },
   "openapi": "3.1.0",
   "paths": {
+    "/v1/email/archive": {
+      "post": {
+        "description": "Archive a message — gated on confirmation, reversible for 30s.\n\nThe gate fires FIRST: a request without a valid token for this exact\n``(action='archive', message_id)`` is rejected with 403 before any backend\ncall. On success a ``batch_id`` undo handle is returned; pass it to\nPOST /v1/email/unarchive within the window to restore the message. The\nresponse also surfaces ``post_archive_id`` (the id a folder backend mints on\nthe move) so a caller can track the message after Outlook changes its id.",
+        "operationId": "archive_email_v1_email_archive_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailArchiveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailArchiveResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Archive Email",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/confirm": {
+      "post": {
+        "description": "Mint a single-use confirmation token for a destructive mailbox action.\n\nThe token authorizes exactly one ``(action, message_id)`` — the archive or\nquarantine call must echo it back. Nothing mutates here; this is the\nexplicit user-confirmation step (the action analogue of POST /v1/email/draft\nfor sends). When ``provider`` is set the token carries that binding so the\naction routes to the right mailbox.",
+        "operationId": "confirm_action_v1_email_confirm_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailActionConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailActionConfirmResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Confirm Action",
+        "tags": [
+          "email"
+        ]
+      }
+    },
     "/v1/email/draft": {
       "post": {
         "description": "Propose a reply and mint a confirmation token bound to its payload.\n\nThe returned token must be echoed to :func:`send_email` to authorize\nsending exactly this ``(to, subject, body)``. This is the explicit\nuser-confirmation step — the consuming app surfaces the draft to the\nuser, and only a user-approved send echoes the token back.",
@@ -833,6 +1369,48 @@
           }
         },
         "summary": "Email Health",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/quarantine": {
+      "post": {
+        "description": "Quarantine a phishing message — gated on confirmation, reversible for 30s.\n\nApplies the ``GAIA_PHISHING_QUARANTINE`` label and removes the message from\nthe inbox (capability #9). The gate fires FIRST (403 without a valid token\nfor this ``(action='quarantine', message_id)``). The action refuses\n``is_phishing=False`` (400) — only phishing-flagged mail may be quarantined.\nReverse with POST /v1/email/unquarantine using the returned ``action_id``.",
+        "operationId": "quarantine_email_v1_email_quarantine_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailQuarantineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailQuarantineResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Quarantine Email",
         "tags": [
           "email"
         ]
@@ -917,6 +1495,90 @@
           }
         },
         "summary": "Triage Email",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/unarchive": {
+      "post": {
+        "description": "Reverse an archive within the undo window (NOT gated — it restores).\n\nRoutes each row to the mailbox it was archived from and uses the recorded\n``post_archive_id`` so a folder-based backend (Outlook) can find the message\nafter its id changed (#1738). Fails loudly (409) when the window has expired\nor the ``batch_id`` has no undoable rows — never a silent no-op.",
+        "operationId": "unarchive_email_v1_email_unarchive_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailUnarchiveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailUnarchiveResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unarchive Email",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/unquarantine": {
+      "post": {
+        "description": "Reverse a quarantine within the undo window (NOT gated — it restores).\n\nRestores the exact label set recorded at quarantine time and removes the\nquarantine label. Fails loudly (409) when the window has expired or the\n``action_id`` is unknown/already undone — never a silent no-op.",
+        "operationId": "unquarantine_email_v1_email_unquarantine_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailUnquarantineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailUnquarantineResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unquarantine Email",
         "tags": [
           "email"
         ]
