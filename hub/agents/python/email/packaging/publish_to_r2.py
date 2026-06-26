@@ -279,7 +279,7 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--eval-scorecard",
         type=Path,
-        help="Path to the eval scorecard markdown (e.g. scorecards/0.2.4.md) to "
+        help="Path to the eval scorecard markdown (e.g. SCORECARD.md) to "
         "publish as the agent's catalog eval score and scorecard URL "
         "(POSTed as the multipart 'eval_scorecard' part the Worker accepts). "
         "Absent = publish without an eval scorecard.",

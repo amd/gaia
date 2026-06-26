@@ -53,7 +53,7 @@ export function skillKey(id: string, version: string): string {
 }
 
 export function evalScorecardKey(id: string, version: string): string {
-  return `${versionDir(id, version)}eval-scorecard.md`;
+  return `${versionDir(id, version)}SCORECARD.md`;
 }
 
 export function packageFilesKey(id: string, version: string): string {

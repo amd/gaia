@@ -6,7 +6,7 @@
 # Answers "how does a PR that changes the agent keep the scorecard honest?":
 # when the email agent's LLM-affecting code (or the eval corpus) changes, this
 # re-runs the REAL eval, regenerates the scorecard, and then:
-#   - score IMPROVED or held  -> commits the refreshed scorecard to the branch
+#   - score IMPROVED or held  -> commits the refreshed SCORECARD.md to the branch
 #   - score REGRESSED          -> fails the job (the worse card is NOT committed)
 #
 # `gaia eval benchmark` needs Lemonade on AMD hardware, so this runs ONLY on the
@@ -15,9 +15,10 @@
 # hosted-CI backstop (it parses committed files only, no eval).
 #
 # Two regression checks run here:
-#   1. SAME-VERSION: fresh aggregate vs the currently-committed card for this
-#      version — stops a noisy/worse re-run from silently overwriting a good score.
-#   2. CROSS-VERSION: `gaia.eval.scorecard_gate` — fresh card vs the prior version.
+#   1. SAME-VERSION: fresh aggregate vs the currently-committed SCORECARD.md —
+#      stops a noisy/worse re-run from silently overwriting a good score.
+#   2. CROSS-VERSION (best-effort): fresh SCORECARD.md vs the prior version tag
+#      via --baseline-ref.
 #
 # Auto-commit needs `contents: write` and only works on the repo's own branches;
 # a fork PR's GITHUB_TOKEN is read-only — for forks, run the eval locally / on AMD
@@ -55,7 +56,7 @@ permissions:
   contents: write   # auto-commit the refreshed scorecard to the branch
 
 env:
-  SCORECARD_DIR: hub/agents/npm/agent-email/scorecards
+  SCORECARD: hub/agents/npm/agent-email/SCORECARD.md
   MANIFEST: hub/agents/python/email/gaia-agent.yaml
   LIMIT: ${{ github.event.inputs.limit || '25' }}
   MODEL: ${{ github.event.inputs.model || 'Gemma-4-E4B-it-GGUF' }}
@@ -70,6 +71,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ github.head_ref || github.ref_name }}
+          fetch-depth: 0   # full history for git describe (cross-version baseline)
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -90,16 +92,20 @@ jobs:
           set -euo pipefail
           VERSION=$(python -c "import yaml; print(yaml.safe_load(open('${MANIFEST}'))['version'])")
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          CARD="${SCORECARD_DIR}/${VERSION}.md"
-          # Aggregate of the card as committed on this branch (empty if new).
-          if git cat-file -e "HEAD:${CARD}" 2>/dev/null; then
-            git show "HEAD:${CARD}" > /tmp/committed_card.md
-            COMMITTED=$(python -c "from gaia.eval.release_scorecard import parse_scorecard; print(parse_scorecard(__import__('pathlib').Path('/tmp/committed_card.md'))['aggregate']['value'])")
+          # Aggregate of the SCORECARD.md as committed on this branch (empty if new).
+          if git cat-file -e "HEAD:${SCORECARD}" 2>/dev/null; then
+            git show "HEAD:${SCORECARD}" > /tmp/committed_scorecard.md
+            COMMITTED=$(python -c "from gaia.eval.release_scorecard import parse_scorecard; print(parse_scorecard(__import__('pathlib').Path('/tmp/committed_scorecard.md'))['aggregate']['value'])")
           else
             COMMITTED=""
           fi
           echo "committed=${COMMITTED}" >> "$GITHUB_OUTPUT"
-          echo "Version ${VERSION}; committed aggregate: ${COMMITTED:-<none>}"
+          # Resolve the previous release tag for the cross-version check.
+          PREV="$(git describe --tags --abbrev=0 \
+            --match 'agent-pkg-email-*' \
+            "HEAD^" 2>/dev/null || true)"
+          echo "prev_tag=${PREV}" >> "$GITHUB_OUTPUT"
+          echo "Version ${VERSION}; committed aggregate: ${COMMITTED:-<none>}; prev tag: ${PREV:-<none>}"
 
       - name: Run the email-triage benchmark (real eval)
         env:
@@ -120,7 +126,7 @@ jobs:
             --limit "${LIMIT}" \
             --output-dir eval-out
 
-      - name: Regenerate the scorecard from the real run
+      - name: Regenerate SCORECARD.md from the real run
         run: |
           set -euo pipefail
           python hub/agents/python/email/packaging/gen_scorecard.py \
@@ -129,34 +135,38 @@ jobs:
       - name: Same-version regression check (reject a worse re-run)
         run: |
           set -euo pipefail
-          VERSION="${{ steps.pre.outputs.version }}"
           COMMITTED="${{ steps.pre.outputs.committed }}"
-          CARD="${SCORECARD_DIR}/${VERSION}.md"
-          FRESH=$(python -c "from gaia.eval.release_scorecard import parse_scorecard; print(parse_scorecard(__import__('pathlib').Path('${CARD}'))['aggregate']['value'])")
+          FRESH=$(python -c "from gaia.eval.release_scorecard import parse_scorecard; print(parse_scorecard(__import__('pathlib').Path('${SCORECARD}'))['aggregate']['value'])")
           echo "fresh aggregate: ${FRESH} | committed: ${COMMITTED:-<none>}"
           if [ -n "${COMMITTED}" ] && python -c "import sys; sys.exit(0 if float('${FRESH}') < float('${COMMITTED}') else 1)"; then
-            echo "::error::Scorecard regression for v${VERSION}: re-run scored ${FRESH} < committed ${COMMITTED}. Not committing the worse card. Investigate, or override intentionally via --allow-regression in a manual commit."
-            git checkout -- "${CARD}" || true
+            echo "::error::Scorecard regression: re-run scored ${FRESH} < committed ${COMMITTED}. Not committing the worse card. Investigate, or override intentionally via --allow-regression in a manual commit."
+            git checkout -- "${SCORECARD}" || true
             exit 1
           fi
           echo "No same-version regression — fresh score is >= committed."
 
-      - name: Cross-version gate (fresh card vs prior version)
+      - name: Cross-version gate (fresh SCORECARD.md vs prior version tag, best-effort)
         run: |
           set -euo pipefail
-          python -m gaia.eval.scorecard_gate \
-            --scorecards-dir "${SCORECARD_DIR}" \
-            --manifest "${MANIFEST}"
+          PREV="${{ steps.pre.outputs.prev_tag }}"
+          if [ -n "${PREV}" ]; then
+            python -m gaia.eval.scorecard_gate \
+              --scorecard "${SCORECARD}" \
+              --baseline-ref "${PREV}"
+          else
+            python -m gaia.eval.scorecard_gate \
+              --scorecard "${SCORECARD}"
+          fi
 
-      - name: Commit the refreshed scorecard (only if it changed for the better/equal)
+      - name: Commit the refreshed SCORECARD.md (only if it changed for the better/equal)
         run: |
           set -euo pipefail
-          if git diff --quiet -- "${SCORECARD_DIR}"; then
-            echo "Scorecard unchanged — nothing to commit."
+          if git diff --quiet -- "${SCORECARD}"; then
+            echo "SCORECARD.md unchanged — nothing to commit."
             exit 0
           fi
           git config user.name  "${{ github.actor }}"
           git config user.email "${{ github.actor }}@users.noreply.github.com"
-          git add "${SCORECARD_DIR}"
+          git add "${SCORECARD}"
           git commit -m "eval(email): refresh v${{ steps.pre.outputs.version }} scorecard from benchmark run"
           git push origin "HEAD:${{ github.head_ref || github.ref_name }}"

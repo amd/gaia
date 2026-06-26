@@ -176,7 +176,7 @@ export async function handlePublish(
   const skillText = await optionalMarkdownPart(form, "skill", "SKILL.md");
   // Optional eval scorecard markdown (the agent's benchmark results, rendered on
   // the hub listing as an aggregate score + link). Per-version, first-POST semantics.
-  const evalScorecardText = await optionalMarkdownPart(form, "eval_scorecard", "eval-scorecard.md");
+  const evalScorecardText = await optionalMarkdownPart(form, "eval_scorecard", "SCORECARD.md");
   // Optional whole-package file listing (the zip's contents, for the hub's file
   // list). The zip itself rides in as a normal `artifact`; this is just the
   // manifest of what's inside it.

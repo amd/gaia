@@ -272,16 +272,43 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # full history so git describe can find previous tags
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Install core + PyYAML
         run: pip install -e . pyyaml
-      - name: Run scorecard gate
+      - name: Resolve previous release tag (best-effort baseline)
+        id: prev_tag
+        shell: bash
         run: |
-          python -m gaia.eval.scorecard_gate \
-            --scorecards-dir hub/agents/npm/agent-email/scorecards \
-            --manifest hub/agents/python/email/gaia-agent.yaml
+          set -uo pipefail
+          # Find the most recent agent-pkg-email-* tag strictly before the
+          # current ref. On workflow_dispatch the current ref is a branch, not
+          # a tag, so we look for the latest tag of the right pattern overall.
+          PREV="$(git describe --tags --abbrev=0 \
+            --match 'agent-pkg-email-*' \
+            "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+          echo "prev_tag=${PREV}" >> "$GITHUB_OUTPUT"
+          if [ -n "${PREV}" ]; then
+            echo "Baseline tag: ${PREV}"
+          else
+            echo "No previous release tag found — presence-only check."
+          fi
+      - name: Run scorecard gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          PREV="${{ steps.prev_tag.outputs.prev_tag }}"
+          if [ -n "${PREV}" ]; then
+            python -m gaia.eval.scorecard_gate \
+              --scorecard hub/agents/npm/agent-email/SCORECARD.md \
+              --baseline-ref "${PREV}"
+          else
+            python -m gaia.eval.scorecard_gate \
+              --scorecard hub/agents/npm/agent-email/SCORECARD.md
+          fi
 
   # ── Stage 2: publish to the hub + npm (single atomic step) ─────────
   publish:
@@ -477,7 +504,7 @@ jobs:
           done
           VER="${{ steps.ver.outputs.version }}"
           scorecard_args=()
-          SCORECARD="hub/agents/npm/agent-email/scorecards/${VER}.md"
+          SCORECARD="hub/agents/npm/agent-email/SCORECARD.md"
           if [ -f "${SCORECARD}" ]; then
             scorecard_args+=(--eval-scorecard "${SCORECARD}")
           fi

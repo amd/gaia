@@ -118,7 +118,7 @@ describe("eval scorecard in catalog", () => {
     const body = (await res.json()) as any;
     const entry = body.agents[0];
     expect(entry.eval_score).toBe(87.5);
-    expect(entry.eval_scorecard_url).toMatch(/\/agents\/chat\/0\.1\.0\/eval-scorecard\.md$/);
+    expect(entry.eval_scorecard_url).toMatch(/\/agents\/chat\/0\.1\.0\/SCORECARD\.md$/);
   });
 
   it("omits eval_score and eval_scorecard_url when no scorecard is published", async () => {
