@@ -64,10 +64,72 @@ jira:
   - changed-files:
     - any-glob-to-any-file: ['src/gaia/agents/jira_agent.py', 'src/gaia/apps/jira/**/*', 'docs/guides/jira.md', 'docs/spec/jira-agent.md']
 
+# ---------------------------------------------------------------------------
+# Hub agents (hub/agents/python/<id>, hub/agents/npm/<id>). One label per
+# packaged agent so a PR touching a single agent's sources is labelled for it.
+# ---------------------------------------------------------------------------
+
 # Email agent changes (hub package: frozen Python sidecar + npm client)
 agent::email:
   - changed-files:
     - any-glob-to-any-file: ['hub/agents/python/email/**/*', 'hub/agents/npm/agent-email/**/*', 'docs/guides/email.mdx']
+
+agent::analyst:
+  - changed-files:
+    - any-glob-to-any-file: ['hub/agents/python/analyst/**/*', 'docs/guides/analyze.mdx']
+
+agent::blender:
+  - changed-files:
+    - any-glob-to-any-file: ['hub/agents/python/blender/**/*', 'docs/guides/blender.mdx']
+
+agent::browser:
+  - changed-files:
+    - any-glob-to-any-file: ['hub/agents/python/browser/**/*', 'docs/guides/browse.mdx']
+
+agent::code:
+  - changed-files:
+    - any-glob-to-any-file: ['hub/agents/python/code/**/*', 'docs/guides/code.mdx']
+
+agent::connectors-demo:
+  - changed-files:
+    - any-glob-to-any-file: ['hub/agents/python/connectors-demo/**/*']
+
+agent::docker:
+  - changed-files:
+    - any-glob-to-any-file: ['hub/agents/python/docker/**/*', 'docs/guides/docker.mdx']
+
+agent::docqa:
+  - changed-files:
+    - any-glob-to-any-file: ['hub/agents/python/docqa/**/*']
+
+agent::emr:
+  - changed-files:
+    - any-glob-to-any-file: ['hub/agents/python/emr/**/*', 'docs/guides/emr.mdx']
+
+agent::fileio:
+  - changed-files:
+    - any-glob-to-any-file: ['hub/agents/python/fileio/**/*']
+
+agent::jira:
+  - changed-files:
+    - any-glob-to-any-file: ['hub/agents/python/jira/**/*', 'docs/guides/jira.mdx']
+
+agent::routing:
+  - changed-files:
+    - any-glob-to-any-file: ['hub/agents/python/routing/**/*', 'docs/guides/routing.mdx']
+
+agent::sd:
+  - changed-files:
+    - any-glob-to-any-file: ['hub/agents/python/sd/**/*']
+
+agent::summarize:
+  - changed-files:
+    - any-glob-to-any-file: ['hub/agents/python/summarize/**/*']
+
+# Tutorial / reference example agents (hello-world, word-count, doc-search)
+agent::examples:
+  - changed-files:
+    - any-glob-to-any-file: ['hub/agents/python/hello-world/**/*', 'hub/agents/python/word-count/**/*', 'hub/agents/python/doc-search/**/*']
 
 # Evaluation framework changes
 eval:
