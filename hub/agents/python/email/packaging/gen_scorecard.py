@@ -212,28 +212,32 @@ def build_payload(benchmark_dir: Path, ground_truth_path: Path, limit=None):
 
     import datetime
 
-    # Construct an exact reproduction command using the supplied arguments, so any
-    # reader can reproduce the scorecard result from scratch.
-    limit_flag = f" --limit {limit}" if limit is not None else ""
+    # Construct a portable, exact reproduction command so any reader can reproduce
+    # this scorecard from scratch. Use repo-relative paths and a generic output dir
+    # only — never a local absolute path (this ships in a published artifact).
+    limit_flag = f" \\\n    --limit {limit}" if limit is not None else ""
     ground_truth_rel = (
         str(ground_truth_path.relative_to(_REPO_ROOT))
         if str(ground_truth_path).startswith(str(_REPO_ROOT))
         else ground_truth_path.name
     )
-    benchmark_dir_display = str(benchmark_dir)
     reproduction_command = (
-        "# Step 1: run the benchmark (requires a running Lemonade Server on :13305)\n"
-        f"PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \\\n"
-        f"GAIA_AGENT_TOOL_TIMEOUT=120 \\\n"
-        f"PYTHONPATH=\"$(pwd)\" \\\n"
-        f"gaia eval benchmark{limit_flag}\n\n"
-        "# Step 2: generate the scorecard from the benchmark output\n"
-        f"PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \\\n"
-        f"PYTHONPATH=\"$(pwd)\" \\\n"
-        f"python hub/agents/python/email/packaging/gen_scorecard.py \\\n"
-        f"    --benchmark-dir {benchmark_dir_display} \\\n"
+        "# Step 1: run the benchmark (requires a Lemonade Server with the model "
+        "loaded; AMD Ryzen AI / Strix Halo recommended)\n"
+        "PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \\\n"
+        "GAIA_AGENT_TOOL_TIMEOUT=900 \\\n"
+        'PYTHONPATH="$(pwd)" \\\n'
+        "gaia eval benchmark \\\n"
+        f"    --model {model} \\\n"
+        "    --mbox-path tests/fixtures/email/synthetic_inbox.mbox \\\n"
+        f"    --ground-truth {ground_truth_rel}{limit_flag} \\\n"
+        "    --output-dir /tmp/email-eval\n\n"
+        "# Step 2: generate this scorecard from the benchmark output\n"
+        'PYTHONPATH="$(pwd)" \\\n'
+        "python hub/agents/python/email/packaging/gen_scorecard.py \\\n"
+        "    --benchmark-dir /tmp/email-eval \\\n"
         f"    --ground-truth {ground_truth_rel}"
-        + (f" \\\n    --limit {limit}" if limit is not None else "")
+        + (f"{limit_flag}" if limit is not None else "")
     )
 
     return ResultPayload(
