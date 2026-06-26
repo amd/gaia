@@ -1,12 +1,18 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-Per-agent / per-version eval scorecard: generator, parser, validator, and versioning helpers.
+Per-agent eval scorecard: generator, parser, validator, and versioning helpers.
 
 **Distinct from** ``src/gaia/eval/scorecard.py`` — that module is the per-eval-run
 scenario PASS/FAIL aggregator (``build_scorecard``). This module produces the
-outward-facing *release artifact*: a versioned Markdown file with YAML front matter
-holding measured accuracy metrics, the eval recipe, and a deterministic aggregate score.
+outward-facing *release artifact*: a single ``SCORECARD.md`` file (updated in
+place per release, versioned via the publish snapshot — the same way README.md
+works) with YAML front matter holding measured accuracy metrics, the eval recipe,
+a deterministic aggregate score, and a Reproduction section.
+
+Storage convention: ``<agent-npm-root>/SCORECARD.md``  (NOT ``scorecards/<ver>.md``).
+Per-version uniqueness comes from the publish snapshot in R2 (the hub stores every
+doc per version at ``agents/<id>/<version>/SCORECARD.md``).
 
 Intentionally harness-agnostic: this module imports ONLY stdlib + PyYAML.
 No other loader is permitted — ``yaml.safe_load`` only.
@@ -63,6 +69,9 @@ class ResultPayload:
         generated_at: ISO-8601 timestamp string; informational only.
         inherited_from: If this is a patch carry-forward, the prior version string;
             otherwise None.
+        reproduction_command: Optional exact shell command(s) to reproduce this
+            scorecard run.  Rendered in the ``## Reproduction`` section.  If None,
+            a generic pointer to the docs/skill is rendered instead.
     """
 
     agent_name: str
@@ -77,6 +86,7 @@ class ResultPayload:
     aggregate_name: str = "weighted_accuracy"
     generated_at: str = ""
     inherited_from: Optional[str] = None
+    reproduction_command: Optional[str] = None
 
 
 def compute_aggregate(metrics: list) -> tuple:
@@ -121,7 +131,8 @@ def render_scorecard(payload: ResultPayload) -> str:
     """Render a scorecard as Markdown with YAML front matter.
 
     The front matter is machine-readable; the body is a human-readable summary
-    that includes the aggregate formula and a worked recomputation example.
+    that includes the aggregate formula, a worked recomputation example, and a
+    Reproduction section so any reader can reproduce the result from scratch.
 
     Args:
         payload: Populated :class:`ResultPayload`.
@@ -182,6 +193,22 @@ def render_scorecard(payload: ResultPayload) -> str:
     total_w = sum(c["weight"] for c in components)
     worked = " + ".join(f"({c['value']:.4f} × {c['weight']:.1f})" for c in components)
 
+    # Reproduction section
+    if payload.reproduction_command:
+        repro_body = (
+            "Run the following commands from the repository root:\n\n"
+            f"```sh\n{payload.reproduction_command}\n```\n\n"
+            "See [eval-scorecard docs](https://amd-gaia.ai/docs/reference/eval-scorecard) "
+            "and the [`adding-eval-scorecard` skill](.claude/skills/adding-eval-scorecard/SKILL.md) "
+            "for the full setup guide."
+        )
+    else:
+        repro_body = (
+            "See the [eval-scorecard docs](https://amd-gaia.ai/docs/reference/eval-scorecard) "
+            "and the [`adding-eval-scorecard` skill](.claude/skills/adding-eval-scorecard/SKILL.md) "
+            "for the full reproduction recipe."
+        )
+
     body = f"""# {payload.agent_name} — Eval Scorecard v{payload.agent_version}
 
 **Aggregate score: {agg_value}** (out of 100)
@@ -212,6 +239,10 @@ round(100 × ({worked}) / {total_w:.1f}, 2) = {agg_value}
 
 A reader can reproduce this value from the `aggregate.components` in the front
 matter alone — no eval-harness access needed.
+
+## Reproduction
+
+{repro_body}
 """
 
     if payload.inherited_from:
@@ -372,66 +403,19 @@ def _assert_valid_version(version: str) -> None:
         )
 
 
-def _assert_safe_path(scorecards_dir: Path, version: str) -> Path:
-    """Return ``scorecards_dir / f"{version}.md"`` after path-traversal guard."""
-    _assert_valid_version(version)
-    scorecards_dir = scorecards_dir.resolve()
-    candidate = (scorecards_dir / f"{version}.md").resolve()
-    if not str(candidate).startswith(str(scorecards_dir)):
-        raise ValueError(
-            f"Resolved scorecard path {candidate} is not inside "
-            f"scorecards dir {scorecards_dir} — possible path traversal."
-        )
-    return candidate
+def carry_forward(prev_scorecard_path: Path, new_version: str) -> ResultPayload:
+    """Carry forward a prior SCORECARD.md's results to a new patch version.
 
+    Reads the single ``SCORECARD.md`` (the agent's one scorecard file, updated
+    in place per release), copies all results verbatim, and sets
+    ``inherited_from`` to the prior version string recorded in the front matter.
 
-def latest_version_below(scorecards_dir: Path, version: str) -> Optional[str]:
-    """Return the greatest version in ``scorecards_dir`` strictly less than ``version``.
-
-    Only files whose stem matches the anchored semver regex ``^\\d+\\.\\d+\\.\\d+$``
-    are considered. Non-matching filenames (README.md, .gitkeep, etc.) are silently
-    skipped.
+    Only patch bumps are allowed: if the prior scorecard's ``agent.version``
+    differs in major or minor from ``new_version``, the caller must re-run the
+    eval to generate fresh results.
 
     Args:
-        scorecards_dir: Directory to scan for ``*.md`` scorecards.
-        version: The candidate version string (must be valid semver).
-
-    Returns:
-        The greatest matching version string strictly below ``version``, or ``None``
-        if no such version exists.
-
-    Raises:
-        ValueError: If ``version`` is not a valid semver string.
-    """
-    _assert_valid_version(version)
-    target_tuple = _semver_tuple(version)
-    scorecards_dir = Path(scorecards_dir)
-
-    candidates: list[tuple] = []
-    if scorecards_dir.is_dir():
-        for p in scorecards_dir.glob("*.md"):
-            m = _SEMVER_RE.match(p.stem)
-            if not m:
-                continue  # silently skip non-semver filenames
-            t = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
-            if t < target_tuple:
-                candidates.append(t)
-
-    if not candidates:
-        return None
-
-    best = max(candidates)
-    return f"{best[0]}.{best[1]}.{best[2]}"
-
-
-def carry_forward(prev_path: Path, new_version: str) -> ResultPayload:
-    """Carry forward a prior scorecard's results to a new patch version.
-
-    Reads the prior scorecard, copies all results verbatim, and sets
-    ``inherited_from`` to the prior version string.
-
-    Args:
-        prev_path: Path to the prior version's scorecard ``.md`` file.
+        prev_scorecard_path: Path to the prior ``SCORECARD.md`` file.
         new_version: The new version string (must be a patch bump of the prior).
 
     Returns:
@@ -444,8 +428,18 @@ def carry_forward(prev_path: Path, new_version: str) -> ResultPayload:
         ValueError: If the prior scorecard cannot be parsed.
     """
     _assert_valid_version(new_version)
-    prev_path = Path(prev_path)
-    prev_version = prev_path.stem  # e.g. "0.2.3" from "0.2.3.md"
+    prev_scorecard_path = Path(prev_scorecard_path)
+
+    parsed = parse_scorecard(prev_scorecard_path)
+
+    # Extract prior version from front matter (agent.version)
+    agent = parsed.get("agent", {})
+    prev_version = str(agent.get("version", ""))
+    if not prev_version:
+        raise ValueError(
+            f"Cannot read prior version from {prev_scorecard_path}: "
+            "missing 'agent.version' field in front matter."
+        )
 
     prev_tuple = _semver_tuple(prev_version)
     new_tuple = _semver_tuple(new_version)
@@ -458,10 +452,7 @@ def carry_forward(prev_path: Path, new_version: str) -> ResultPayload:
             f"generate fresh results for this release."
         )
 
-    parsed = parse_scorecard(prev_path)
-
     # Extract fields from the parsed front matter
-    agent = parsed.get("agent", {})
     recipe = parsed.get("recipe", {})
     dataset = recipe.get("dataset", {})
     results = parsed.get("results", {})
@@ -480,6 +471,6 @@ def carry_forward(prev_path: Path, new_version: str) -> ResultPayload:
         test_cases_run=results.get("test_cases_run", 0),
         metrics=metrics_raw,
         aggregate_name=parsed.get("aggregate", {}).get("name", "weighted_accuracy"),
-        generated_at=datetime.datetime.utcnow().isoformat(),
+        generated_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
         inherited_from=prev_version,
     )

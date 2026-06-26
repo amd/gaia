@@ -14,7 +14,6 @@ from gaia.eval.release_scorecard import (
     ResultPayload,
     carry_forward,
     compute_aggregate,
-    latest_version_below,
     parse_scorecard,
     render_scorecard,
     validate_scorecard,
@@ -42,7 +41,7 @@ def _make_payload(version="1.0.0", accuracy=0.5):
         test_cases_run=10,
         metrics=metrics,
         aggregate_name="weighted_accuracy",
-        generated_at=datetime.datetime.utcnow().isoformat(),
+        generated_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
         inherited_from=None,
     )
 
@@ -202,6 +201,24 @@ class TestGeneratorRoundTrip:
         errors = validate_scorecard(parsed)
         assert errors == []
 
+    def test_body_contains_reproduction_section(self):
+        payload = _make_payload()
+        text = render_scorecard(payload)
+        assert "## Reproduction" in text
+
+    def test_reproduction_section_includes_custom_command(self):
+        payload = _make_payload()
+        payload.reproduction_command = "gaia eval benchmark --limit 25"
+        text = render_scorecard(payload)
+        assert "gaia eval benchmark --limit 25" in text
+
+    def test_reproduction_section_generic_when_no_command(self):
+        payload = _make_payload()
+        # No reproduction_command (default None)
+        text = render_scorecard(payload)
+        assert "## Reproduction" in text
+        assert "eval-scorecard" in text
+
 
 # ---------------------------------------------------------------------------
 # 4. Two counts distinct as separate fields
@@ -278,14 +295,14 @@ class TestMarkdownStructure:
 
 
 # ---------------------------------------------------------------------------
-# 7. Versioning — patch carry-forward
+# 7. Versioning — patch carry-forward (SCORECARD.md is a single file)
 # ---------------------------------------------------------------------------
 
 
 class TestCarryForwardPatch:
     def test_carry_forward_sets_inherited_from(self, tmp_path):
         src = _make_payload(version="0.2.3", accuracy=0.75)
-        card_path = tmp_path / "0.2.3.md"
+        card_path = tmp_path / "SCORECARD.md"
         card_path.write_text(render_scorecard(src))
 
         result = carry_forward(card_path, "0.2.4")
@@ -293,11 +310,22 @@ class TestCarryForwardPatch:
 
     def test_carry_forward_copies_metrics_verbatim(self, tmp_path):
         src = _make_payload(version="0.2.3", accuracy=0.75)
-        card_path = tmp_path / "0.2.3.md"
+        card_path = tmp_path / "SCORECARD.md"
         card_path.write_text(render_scorecard(src))
 
         result = carry_forward(card_path, "0.2.4")
         assert result.metrics == src.metrics
+
+    def test_carry_forward_reads_version_from_front_matter(self, tmp_path):
+        # The new carry_forward reads agent.version from front matter, NOT filename.
+        src = _make_payload(version="0.2.3", accuracy=0.75)
+        # Use a different filename to confirm it's not read from stem
+        card_path = tmp_path / "SCORECARD.md"
+        card_path.write_text(render_scorecard(src))
+
+        result = carry_forward(card_path, "0.2.4")
+        assert result.agent_version == "0.2.4"
+        assert result.inherited_from == "0.2.3"
 
 
 # ---------------------------------------------------------------------------
@@ -308,7 +336,7 @@ class TestCarryForwardPatch:
 class TestCarryForwardMinorBumpRefuses:
     def test_minor_bump_raises_value_error(self, tmp_path):
         src = _make_payload(version="0.2.3", accuracy=0.75)
-        card_path = tmp_path / "0.2.3.md"
+        card_path = tmp_path / "SCORECARD.md"
         card_path.write_text(render_scorecard(src))
 
         with pytest.raises(ValueError, match="re-run"):
@@ -316,7 +344,7 @@ class TestCarryForwardMinorBumpRefuses:
 
     def test_major_bump_raises_value_error(self, tmp_path):
         src = _make_payload(version="0.2.3", accuracy=0.75)
-        card_path = tmp_path / "0.2.3.md"
+        card_path = tmp_path / "SCORECARD.md"
         card_path.write_text(render_scorecard(src))
 
         with pytest.raises(ValueError, match="re-run"):
@@ -343,42 +371,48 @@ class TestInheritedFromNone:
 
 
 # ---------------------------------------------------------------------------
-# 10. latest_version_below
+# 10. Gate integration: second-agent generalization (no fabricated artifacts)
 # ---------------------------------------------------------------------------
 
 
-class TestLatestVersionBelow:
-    def _seed_dir(self, tmp_path):
-        for name in (
-            "0.1.0.md",
-            "0.2.3.md",
-            "0.10.0.md",
-            "README.md",
-            "not-a-version.md",
-        ):
-            (tmp_path / name).write_text("# placeholder")
-        return tmp_path
+class TestSecondAgentGeneralization:
+    """Prove the generator + gate work for an agent OTHER than email-triage."""
 
-    def test_returns_closest_below(self, tmp_path):
-        self._seed_dir(tmp_path)
-        result = latest_version_below(tmp_path, "0.2.4")
-        assert result == "0.2.3"
+    def test_second_agent_scorecard_validates_and_gate_passes(self, tmp_path):
+        from gaia.eval.scorecard_gate import main as gate_main
 
-    def test_none_when_nothing_below(self, tmp_path):
-        self._seed_dir(tmp_path)
-        result = latest_version_below(tmp_path, "0.1.0")
-        assert result is None
+        # Build a ResultPayload for a different agent
+        metrics = [{"name": "accuracy", "value": 0.75, "weight": 1.0}]
+        payload = ResultPayload(
+            agent_name="Hello World Agent",
+            agent_version="0.1.0",
+            dataset_reference="tests/fixtures/hello/ground_truth.json",
+            dataset_description="Hello world evaluation dataset",
+            dataset_size=50,
+            methodology="exact match accuracy",
+            config={"model": "Gemma-4-E4B-it-GGUF", "limit": 20},
+            test_cases_run=20,
+            metrics=metrics,
+            aggregate_name="weighted_accuracy",
+            generated_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            inherited_from=None,
+            reproduction_command="gaia eval agent --category hello",
+        )
 
-    def test_integer_comparison_not_string(self, tmp_path):
-        self._seed_dir(tmp_path)
-        result = latest_version_below(tmp_path, "0.10.1")
-        assert result == "0.10.0"
+        scorecard_path = tmp_path / "SCORECARD.md"
+        from gaia.eval.release_scorecard import write_scorecard
 
-    def test_non_version_files_silently_skipped(self, tmp_path):
-        self._seed_dir(tmp_path)
-        # Should not raise even with README.md and not-a-version.md present
-        result = latest_version_below(tmp_path, "0.2.4")
-        assert result == "0.2.3"
+        write_scorecard(payload, scorecard_path)
+
+        # Validate the written scorecard
+        text = scorecard_path.read_text()
+        parsed = parse_scorecard(text)
+        errors = validate_scorecard(parsed)
+        assert errors == [], f"Second-agent scorecard should be valid, got: {errors}"
+
+        # Gate should pass (no baseline → presence-only)
+        result = gate_main(["--scorecard", str(scorecard_path)])
+        assert result == 0, "Gate should pass for a valid second-agent SCORECARD.md"
 
 
 # ---------------------------------------------------------------------------
@@ -500,3 +534,25 @@ class TestEmailAdapter:
 
         with pytest.raises(ValueError):
             mod.build_payload(benchmark_dir, gt_path)
+
+    def test_build_payload_includes_reproduction_command(self, tmp_path):
+        mod = self._load_gen_scorecard()
+
+        benchmark_dir = tmp_path / "benchmark"
+        benchmark_dir.mkdir()
+        scorecard_dest = benchmark_dir / "email_benchmark_scorecard.json"
+        scorecard_dest.write_text(EMAIL_BENCHMARK_FIXTURE.read_text())
+
+        ground_truth = {
+            "_meta": {"count": 3},
+            "email1": {"label": "spam"},
+            "email2": {"label": "promo"},
+        }
+        gt_path = tmp_path / "ground_truth.json"
+        gt_path.write_text(json.dumps(ground_truth))
+
+        payload = mod.build_payload(benchmark_dir, gt_path, limit=25)
+        assert payload.reproduction_command is not None
+        assert "gaia eval benchmark" in payload.reproduction_command
+        assert "gen_scorecard.py" in payload.reproduction_command
+        assert "PYTHON_KEYRING_BACKEND" in payload.reproduction_command

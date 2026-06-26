@@ -7,7 +7,8 @@ Email-agent adapter: generate a release scorecard from a ``gaia eval benchmark``
 Reads the benchmark ``--output-dir`` (looks for a JSON file containing a
 ``scenarios`` key — ``scorecard.json`` in a real run, or any ``*scorecard*.json``
 fixture) and the ground-truth JSON, builds a :class:`ResultPayload`, and writes the
-scorecard to ``hub/agents/npm/agent-email/scorecards/<version>.md``.
+scorecard to ``hub/agents/npm/agent-email/SCORECARD.md`` (a single file, updated
+in place — versioned via the publish snapshot, the same way README.md works).
 
 This adapter imports ``gaia.eval.release_scorecard`` (core generator) but never
 imports the eval harness (``gaia.eval.benchmark``) or the email-agent package —
@@ -15,9 +16,13 @@ the loose-coupling spine is preserved.
 
 Usage::
 
+    PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \\
+    GAIA_AGENT_TOOL_TIMEOUT=120 \\
+    PYTHONPATH="$(pwd)" \\
     python hub/agents/python/email/packaging/gen_scorecard.py \\
         --benchmark-dir /tmp/email-eval \\
-        [--ground-truth tests/fixtures/email/ground_truth.json]
+        [--ground-truth tests/fixtures/email/ground_truth.json] \\
+        [--limit 25]
 
 The ``--ground-truth`` path defaults to the canonical fixture in the repository.
 """
@@ -41,6 +46,9 @@ _DEFAULT_GT = _REPO_ROOT / "tests" / "fixtures" / "email" / "ground_truth.json"
 
 # Canonical benchmark scorecard filename (written by gaia eval benchmark)
 _SCORECARD_FILENAME = "scorecard.json"
+
+# Output filename: single SCORECARD.md per agent package, updated in place.
+_OUTPUT_FILENAME = "SCORECARD.md"
 
 
 def _find_benchmark_scorecard(benchmark_dir: Path) -> Path:
@@ -204,6 +212,30 @@ def build_payload(benchmark_dir: Path, ground_truth_path: Path, limit=None):
 
     import datetime
 
+    # Construct an exact reproduction command using the supplied arguments, so any
+    # reader can reproduce the scorecard result from scratch.
+    limit_flag = f" --limit {limit}" if limit is not None else ""
+    ground_truth_rel = (
+        str(ground_truth_path.relative_to(_REPO_ROOT))
+        if str(ground_truth_path).startswith(str(_REPO_ROOT))
+        else ground_truth_path.name
+    )
+    benchmark_dir_display = str(benchmark_dir)
+    reproduction_command = (
+        "# Step 1: run the benchmark (requires a running Lemonade Server on :13305)\n"
+        f"PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \\\n"
+        f"GAIA_AGENT_TOOL_TIMEOUT=120 \\\n"
+        f"PYTHONPATH=\"$(pwd)\" \\\n"
+        f"gaia eval benchmark{limit_flag}\n\n"
+        "# Step 2: generate the scorecard from the benchmark output\n"
+        f"PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \\\n"
+        f"PYTHONPATH=\"$(pwd)\" \\\n"
+        f"python hub/agents/python/email/packaging/gen_scorecard.py \\\n"
+        f"    --benchmark-dir {benchmark_dir_display} \\\n"
+        f"    --ground-truth {ground_truth_rel}"
+        + (f" \\\n    --limit {limit}" if limit is not None else "")
+    )
+
     return ResultPayload(
         agent_name="Email Triage",
         agent_version=version,
@@ -227,11 +259,7 @@ def build_payload(benchmark_dir: Path, ground_truth_path: Path, limit=None):
             "corpus": "tests/fixtures/email/synthetic_inbox.mbox",
             # Store a repo-relative path — never leak a local absolute path into
             # a committed/published artifact.
-            "ground_truth": (
-                str(ground_truth_path.relative_to(_REPO_ROOT))
-                if str(ground_truth_path).startswith(str(_REPO_ROOT))
-                else ground_truth_path.name
-            ),
+            "ground_truth": ground_truth_rel,
             "limit": limit,
         },
         test_cases_run=test_cases_run,
@@ -239,6 +267,7 @@ def build_payload(benchmark_dir: Path, ground_truth_path: Path, limit=None):
         aggregate_name="weighted_accuracy",
         generated_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
         inherited_from=None,
+        reproduction_command=reproduction_command,
     )
 
 
@@ -268,7 +297,7 @@ def main(argv=None) -> int:
         default=None,
         help=(
             "Override the scorecard output directory "
-            "(default: hub/agents/npm/agent-email/scorecards/)."
+            f"(default: hub/agents/npm/agent-email/, writes {_OUTPUT_FILENAME})."
         ),
     )
     parser.add_argument(
@@ -296,12 +325,12 @@ def main(argv=None) -> int:
     from gaia.eval.release_scorecard import write_scorecard
 
     if args.output_dir:
-        scorecards_dir = Path(args.output_dir)
+        out_dir = Path(args.output_dir)
     else:
-        scorecards_dir = _NPM_ROOT / "scorecards"
+        out_dir = _NPM_ROOT
 
-    scorecards_dir.mkdir(parents=True, exist_ok=True)
-    out_path = scorecards_dir / f"{payload.agent_version}.md"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / _OUTPUT_FILENAME
     write_scorecard(payload, out_path)
 
     print(

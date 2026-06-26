@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""TDD tests for gaia.eval.scorecard_gate — written before implementation exists."""
+"""TDD tests for gaia.eval.scorecard_gate — new single-file SCORECARD.md interface."""
 
 import datetime
 from pathlib import Path
@@ -33,14 +33,22 @@ def _make_payload(version="1.0.0", accuracy=0.5):
         test_cases_run=10,
         metrics=metrics,
         aggregate_name="weighted_accuracy",
-        generated_at=datetime.datetime.utcnow().isoformat(),
+        generated_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
         inherited_from=None,
     )
 
 
 def _write_card(directory: Path, version: str, accuracy: float) -> Path:
+    """Write a valid SCORECARD.md to directory/SCORECARD.md."""
     payload = _make_payload(version=version, accuracy=accuracy)
-    path = directory / f"{version}.md"
+    path = directory / "SCORECARD.md"
+    path.write_text(render_scorecard(payload))
+    return path
+
+
+def _write_card_named(path: Path, version: str, accuracy: float) -> Path:
+    """Write a valid SCORECARD.md to an explicit path."""
+    payload = _make_payload(version=version, accuracy=accuracy)
     path.write_text(render_scorecard(payload))
     return path
 
@@ -52,45 +60,77 @@ def _write_card(directory: Path, version: str, accuracy: float) -> Path:
 
 class TestMissingCard:
     def test_missing_card_returns_1(self, tmp_path):
-        result = main(["--scorecards-dir", str(tmp_path), "--version", "1.0.0"])
+        scorecard = tmp_path / "SCORECARD.md"
+        result = main(["--scorecard", str(scorecard)])
         assert result == 1
 
 
 # ---------------------------------------------------------------------------
-# Case (b) — strict regression → exit 1
+# Case (b) — strict regression with --baseline-file → exit 1
 # ---------------------------------------------------------------------------
 
 
 class TestStrictRegression:
     def test_regression_returns_1(self, tmp_path):
-        _write_card(tmp_path, "0.2.3", accuracy=0.8)
-        _write_card(tmp_path, "0.2.4", accuracy=0.5)
-        result = main(["--scorecards-dir", str(tmp_path), "--version", "0.2.4"])
+        baseline_dir = tmp_path / "baseline"
+        baseline_dir.mkdir()
+        baseline = _write_card(baseline_dir, "0.2.3", accuracy=0.8)
+
+        candidate_dir = tmp_path / "candidate"
+        candidate_dir.mkdir()
+        candidate = _write_card(candidate_dir, "0.2.4", accuracy=0.5)
+
+        result = main(["--scorecard", str(candidate), "--baseline-file", str(baseline)])
         assert result == 1
 
 
 # ---------------------------------------------------------------------------
-# Case (c) — no prior → exit 0
+# Case (c) — no baseline → presence-only pass → exit 0
 # ---------------------------------------------------------------------------
 
 
 class TestNoPrior:
     def test_first_adoption_returns_0(self, tmp_path):
-        _write_card(tmp_path, "1.0.0", accuracy=0.6)
-        result = main(["--scorecards-dir", str(tmp_path), "--version", "1.0.0"])
+        candidate = _write_card(tmp_path, "1.0.0", accuracy=0.6)
+        result = main(["--scorecard", str(candidate)])
         assert result == 0
 
 
 # ---------------------------------------------------------------------------
-# Case (d) — equal score (carry-forward) → exit 0
+# Case (d) — equal score (carry-forward) with --baseline-file → exit 0
 # ---------------------------------------------------------------------------
 
 
 class TestEqualScore:
     def test_equal_score_returns_0(self, tmp_path):
-        _write_card(tmp_path, "0.2.3", accuracy=0.5)
-        _write_card(tmp_path, "0.2.4", accuracy=0.5)
-        result = main(["--scorecards-dir", str(tmp_path), "--version", "0.2.4"])
+        baseline_dir = tmp_path / "baseline"
+        baseline_dir.mkdir()
+        baseline = _write_card(baseline_dir, "0.2.3", accuracy=0.5)
+
+        candidate_dir = tmp_path / "candidate"
+        candidate_dir.mkdir()
+        candidate = _write_card(candidate_dir, "0.2.4", accuracy=0.5)
+
+        result = main(["--scorecard", str(candidate), "--baseline-file", str(baseline)])
+        assert result == 0
+
+
+# ---------------------------------------------------------------------------
+# Case (e) — improved score → exit 0
+# ---------------------------------------------------------------------------
+
+
+class TestImprovedScore:
+    def test_improved_score_returns_0(self, tmp_path):
+        baseline_dir = tmp_path / "baseline"
+        baseline_dir.mkdir()
+        baseline = _write_card(baseline_dir, "0.2.3", accuracy=0.5)
+
+        candidate_dir = tmp_path / "candidate"
+        candidate_dir.mkdir()
+        candidate = _write_card(candidate_dir, "0.2.4", accuracy=0.8)
+
+        result = main(["--scorecard", str(candidate), "--baseline-file", str(baseline)])
         assert result == 0
 
 
@@ -101,28 +141,36 @@ class TestEqualScore:
 
 class TestAllowRegression:
     def test_allow_regression_flag_returns_0(self, tmp_path):
-        _write_card(tmp_path, "0.2.3", accuracy=0.8)
-        _write_card(tmp_path, "0.2.4", accuracy=0.5)
+        baseline_dir = tmp_path / "baseline"
+        baseline_dir.mkdir()
+        baseline = _write_card(baseline_dir, "0.2.3", accuracy=0.8)
+
+        candidate_dir = tmp_path / "candidate"
+        candidate_dir.mkdir()
+        candidate = _write_card(candidate_dir, "0.2.4", accuracy=0.5)
+
         result = main(
             [
-                "--scorecards-dir",
-                str(tmp_path),
-                "--version",
-                "0.2.4",
+                "--scorecard", str(candidate),
+                "--baseline-file", str(baseline),
                 "--allow-regression",
             ]
         )
         assert result == 0
 
     def test_allow_regression_prints_warning_line(self, tmp_path, capsys):
-        _write_card(tmp_path, "0.2.3", accuracy=0.8)
-        _write_card(tmp_path, "0.2.4", accuracy=0.5)
+        baseline_dir = tmp_path / "baseline"
+        baseline_dir.mkdir()
+        baseline = _write_card(baseline_dir, "0.2.3", accuracy=0.8)
+
+        candidate_dir = tmp_path / "candidate"
+        candidate_dir.mkdir()
+        candidate = _write_card(candidate_dir, "0.2.4", accuracy=0.5)
+
         main(
             [
-                "--scorecards-dir",
-                str(tmp_path),
-                "--version",
-                "0.2.4",
+                "--scorecard", str(candidate),
+                "--baseline-file", str(baseline),
                 "--allow-regression",
             ]
         )
@@ -131,74 +179,71 @@ class TestAllowRegression:
 
 
 # ---------------------------------------------------------------------------
-# --manifest reads version
+# --baseline-file missing → exit 1
 # ---------------------------------------------------------------------------
 
 
-class TestManifestFlag:
-    def test_manifest_reads_version(self, tmp_path):
-        scorecards_dir = tmp_path / "scorecards"
-        scorecards_dir.mkdir()
-        _write_card(scorecards_dir, "1.2.3", accuracy=0.6)
-
-        manifest_path = tmp_path / "gaia-agent.yaml"
-        manifest_path.write_text("version: 1.2.3\nname: test-agent\n")
-
+class TestBaselineFileMissing:
+    def test_missing_baseline_file_returns_1(self, tmp_path):
+        candidate = _write_card(tmp_path, "1.0.0", accuracy=0.6)
         result = main(
             [
-                "--scorecards-dir",
-                str(scorecards_dir),
-                "--manifest",
-                str(manifest_path),
-            ]
-        )
-        assert result == 0
-
-    def test_manifest_with_regression(self, tmp_path):
-        scorecards_dir = tmp_path / "scorecards"
-        scorecards_dir.mkdir()
-        _write_card(scorecards_dir, "1.2.2", accuracy=0.9)
-        _write_card(scorecards_dir, "1.2.3", accuracy=0.3)
-
-        manifest_path = tmp_path / "gaia-agent.yaml"
-        manifest_path.write_text("version: 1.2.3\nname: test-agent\n")
-
-        result = main(
-            [
-                "--scorecards-dir",
-                str(scorecards_dir),
-                "--manifest",
-                str(manifest_path),
+                "--scorecard", str(candidate),
+                "--baseline-file", str(tmp_path / "nonexistent-SCORECARD.md"),
             ]
         )
         assert result == 1
 
 
 # ---------------------------------------------------------------------------
-# Invalid prior → exit 1
+# Invalid candidate (corrupt YAML front matter) → exit 1
+# ---------------------------------------------------------------------------
+
+
+class TestInvalidCandidate:
+    def test_corrupt_candidate_returns_1(self, tmp_path):
+        corrupt_path = tmp_path / "SCORECARD.md"
+        corrupt_path.write_text("this is not valid yaml front matter at all\ngarbage\n")
+        result = main(["--scorecard", str(corrupt_path)])
+        assert result == 1
+
+    def test_empty_candidate_returns_1(self, tmp_path):
+        empty_path = tmp_path / "SCORECARD.md"
+        empty_path.write_text("")
+        result = main(["--scorecard", str(empty_path)])
+        assert result == 1
+
+
+# ---------------------------------------------------------------------------
+# Invalid baseline → exit 1
 # ---------------------------------------------------------------------------
 
 
 class TestInvalidPrior:
-    def test_corrupt_prior_returns_1(self, tmp_path):
-        # Write corrupt/invalid prior card
-        corrupt_path = tmp_path / "0.2.3.md"
-        corrupt_path.write_text("this is not valid yaml front matter at all\ngarbage\n")
+    def test_corrupt_baseline_returns_1(self, tmp_path):
+        baseline_dir = tmp_path / "baseline"
+        baseline_dir.mkdir()
+        corrupt = baseline_dir / "SCORECARD.md"
+        corrupt.write_text("this is not valid yaml front matter at all\ngarbage\n")
 
-        # Write a valid candidate card
-        _write_card(tmp_path, "0.2.4", accuracy=0.9)
+        candidate_dir = tmp_path / "candidate"
+        candidate_dir.mkdir()
+        candidate = _write_card(candidate_dir, "0.2.4", accuracy=0.9)
 
-        result = main(["--scorecards-dir", str(tmp_path), "--version", "0.2.4"])
+        result = main(["--scorecard", str(candidate), "--baseline-file", str(corrupt)])
         assert result == 1
 
-    def test_empty_prior_returns_1(self, tmp_path):
-        # Prior exists but is empty
-        empty_path = tmp_path / "0.2.3.md"
-        empty_path.write_text("")
+    def test_empty_baseline_returns_1(self, tmp_path):
+        baseline_dir = tmp_path / "baseline"
+        baseline_dir.mkdir()
+        empty = baseline_dir / "SCORECARD.md"
+        empty.write_text("")
 
-        _write_card(tmp_path, "0.2.4", accuracy=0.9)
+        candidate_dir = tmp_path / "candidate"
+        candidate_dir.mkdir()
+        candidate = _write_card(candidate_dir, "0.2.4", accuracy=0.9)
 
-        result = main(["--scorecards-dir", str(tmp_path), "--version", "0.2.4"])
+        result = main(["--scorecard", str(candidate), "--baseline-file", str(empty)])
         assert result == 1
 
 
@@ -238,10 +283,17 @@ class TestWorkflowYaml:
 
 
 class TestCliErrorHandling:
-    def test_missing_scorecards_dir_flag_returns_1(self):
-        result = main(["--version", "1.0.0"])
+    def test_missing_scorecard_flag_returns_1(self):
+        result = main([])
         assert result == 1
 
-    def test_missing_version_and_manifest_returns_1(self, tmp_path):
-        result = main(["--scorecards-dir", str(tmp_path)])
+    def test_baseline_file_and_ref_mutually_exclusive(self, tmp_path):
+        candidate = _write_card(tmp_path, "1.0.0", accuracy=0.6)
+        result = main(
+            [
+                "--scorecard", str(candidate),
+                "--baseline-file", str(candidate),
+                "--baseline-ref", "v1.0.0",
+            ]
+        )
         assert result == 1
