@@ -489,7 +489,7 @@ class AutoIndexAgent(Agent):
 
 ### Extraction from ChatAgent (Completed)
 
-`FileChangeHandler` was originally embedded in `src/gaia/agents/chat/agent.py` as a tightly-coupled inner class. It has been extracted to `src/gaia/utils/file_watcher.py` as a generic, callback-based implementation. ChatAgent now imports it from there:
+`FileChangeHandler` was originally embedded in `src/hub/agents/python/chat/gaia_agent_chat/agent.py` as a tightly-coupled inner class. It has been extracted to `src/gaia/utils/file_watcher.py` as a generic, callback-based implementation. ChatAgent now imports it from there:
 
 ```python
 from gaia.utils.file_watcher import FileChangeHandler

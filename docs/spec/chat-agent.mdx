@@ -3,12 +3,12 @@ title: "ChatAgent"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/agents/chat/agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/agent.py)
+  **Source Code:** [`src/hub/agents/python/chat/gaia_agent_chat/agent.py`](https://github.com/amd/gaia/blob/main/src/hub/agents/python/chat/gaia_agent_chat/agent.py)
 </Info>
 
 <Note>
 **Component:** ChatAgent - Reference Conversational AI Implementation
-**Module:** `gaia.agents.chat.agent`
+**Module:** `gaia_agent_chat.agent`
 **Inherits:** Agent, RAGToolsMixin, FileToolsMixin, ShellToolsMixin, FileSearchToolsMixin, FileIOToolsMixin, VLMToolsMixin, ScreenshotToolsMixin, SDToolsMixin, MCPClientMixin
 
 > **Upcoming rename (v0.20.0):** `ChatAgent` will be renamed to `GaiaAgent` as part of the broader branding update (#696). The import path and class name will change; all other behavior remains the same.
@@ -422,7 +422,7 @@ chat = [
 ### Example 1: Basic Chat with RAG
 
 ```python
-from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
 # Configure agent
 config = ChatAgentConfig(

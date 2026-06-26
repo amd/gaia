@@ -249,11 +249,11 @@ def _generate_search_keys(self, query: str) -> List[str]:
         },
         # 👇 Your new agent
         "doc-qa": {
-            "class_name": "gaia.agents.chat.agent.ChatAgent",
+            "class_name": "gaia_agent_chat.agent.ChatAgent",
             "init_params": {
                 "silent_mode": True,
                 # Only kwargs recognised by ChatAgentConfig will be applied;
-                # see ChatAgentConfig in src/gaia/agents/chat/agent.py.
+                # see ChatAgentConfig in src/hub/agents/python/chat/gaia_agent_chat/agent.py.
                 "rag_documents": ["./company_docs"],
             },
             "description": "Document Q&A agent backed by RAG",
@@ -320,7 +320,7 @@ def _generate_search_keys(self, query: str) -> List[str]:
     ```python title="cli.py"
     #!/usr/bin/env python3
     import sys
-    from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
     def main():
         if len(sys.argv) < 2:
@@ -674,15 +674,15 @@ def _generate_search_keys(self, query: str) -> List[str]:
 ## Source Code Reference
 
 <CardGroup cols={2}>
-  <Card title="ChatAgent" icon="code" href="https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/agent.py">
+  <Card title="ChatAgent" icon="code" href="https://github.com/amd/gaia/blob/main/src/hub/agents/python/chat/gaia_agent_chat/agent.py">
     Main agent implementation with session management and file monitoring
   </Card>
 
-  <Card title="RAGToolsMixin" icon="database" href="https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/tools/rag_tools.py">
+  <Card title="RAGToolsMixin" icon="database" href="https://github.com/amd/gaia/blob/main/src/gaia/agents/tools/rag_tools.py">
     Document indexing and query tools
   </Card>
 
-  <Card title="FileToolsMixin" icon="folder" href="https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/tools/file_tools.py">
+  <Card title="FileToolsMixin" icon="folder" href="https://github.com/amd/gaia/blob/main/src/gaia/agents/tools/file_monitor_tools.py">
     Directory monitoring implementation
   </Card>
 

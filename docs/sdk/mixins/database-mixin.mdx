@@ -47,7 +47,7 @@ class MyAgent(DatabaseAgent):
 
 ```python
 from gaia import DatabaseAgent
-from gaia.agents.chat.tools import RAGToolsMixin, FileToolsMixin
+from gaia.agents.tools import RAGToolsMixin, FileToolsMixin
 
 class MyAgent(DatabaseAgent, RAGToolsMixin, FileToolsMixin):
     """Agent with database, RAG, and file tools."""

@@ -783,8 +783,8 @@ The following security measures are already implemented in the codebase:
 
 | Measure | Location | Description |
 |---------|----------|-------------|
-| Shell command whitelist | `src/gaia/agents/chat/tools/shell_tools.py` | `ALLOWED_COMMANDS` set restricts CLI tool to read-only commands |
-| Git command whitelist | `src/gaia/agents/chat/tools/shell_tools.py` | Only read-only git subcommands (`status`, `log`, `diff`, etc.) |
+| Shell command whitelist | `src/gaia/agents/tools/shell_tools.py` | `ALLOWED_COMMANDS` set restricts CLI tool to read-only commands |
+| Git command whitelist | `src/gaia/agents/tools/shell_tools.py` | Only read-only git subcommands (`status`, `log`, `diff`, etc.) |
 | Localhost-only MCP bridge | `src/gaia/mcp/mcp.json` | `GAIA_MCP_HOST` defaults to `localhost` |
 | Subprocess timeout | `src/gaia/mcp/external_services.py` | `timeout=30` on MCP subprocess calls |
 | Tool registry validation | `src/gaia/agents/base/agent.py` | Rejects unregistered tool names |
