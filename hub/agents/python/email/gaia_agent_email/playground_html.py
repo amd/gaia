@@ -624,34 +624,39 @@ async function disconnectProvider(provider, btn){
 function populateSend(connected){
   const sel = $("send-from"); if(!sel) return;
   sel.textContent = "";
-  // Only providers that are connected AND have mail-send access in their grant.
-  const sendable = connected.filter((p) => p.can_send);
-  if(!sendable.length){
-    const o = document.createElement("option"); o.value = ""; o.textContent = "— no mailbox ready to send —";
+  // List every connected mailbox so it's always selectable — send-capability is
+  // surfaced per selection (and a send to a mailbox without mail-send access
+  // returns an actionable error) rather than hiding the mailbox here.
+  const canSendById = {};
+  const sorted = connected.slice().sort((a, b) => a.provider.localeCompare(b.provider));
+  for(const p of sorted){
+    canSendById[p.provider] = !!p.can_send;
+    const o = document.createElement("option"); o.value = p.provider;
+    o.textContent = (p.label || p.provider) + (p.account_email ? (" · " + p.account_email) : "")
+      + (p.can_send ? "" : " · needs mail access");
     sel.appendChild(o);
-  } else {
-    // Alphabetical by provider; the browser selects the first option. No
-    // remembered selection, no "default" — deterministic and simple.
-    const sorted = sendable.slice().sort((a, b) => a.provider.localeCompare(b.provider));
-    for(const p of sorted){
-      const o = document.createElement("option"); o.value = p.provider;
-      o.textContent = (p.label || p.provider) + (p.account_email ? (" · " + p.account_email) : "");
-      sel.appendChild(o);
+  }
+  if(!connected.length){
+    const o = document.createElement("option"); o.value = ""; o.textContent = "— no mailbox connected —";
+    sel.appendChild(o);
+  }
+  function refresh(){
+    const canSend = !!canSendById[sel.value];
+    const hasConnected = connected.length > 0;
+    if($("do-send")) $("do-send").disabled = !hasConnected;
+    if($("send-stat")) $("send-stat").style.display = canSend ? "inline-block" : "none";
+    if($("send-note")){
+      if(!hasConnected){
+        $("send-note").textContent = "Connect a mailbox in the Connectors panel above.";
+      } else if(canSend){
+        $("send-note").textContent = "";
+      } else {
+        $("send-note").textContent = "This mailbox is missing mail-send access — reconnect to enable sending.";
+      }
     }
   }
-  const hasConnected = connected.length > 0;
-  const hasSendable = sendable.length > 0;
-  if($("do-send")) $("do-send").disabled = !hasSendable;
-  if($("send-stat")) $("send-stat").style.display = hasSendable ? "inline-block" : "none";
-  if($("send-note")){
-    if(hasSendable){
-      $("send-note").textContent = "";
-    } else if(hasConnected){
-      $("send-note").textContent = "Connected, but missing mail-send access — reconnect to enable sending.";
-    } else {
-      $("send-note").textContent = "Connect a mailbox in the Connectors panel above.";
-    }
-  }
+  sel.onchange = refresh;
+  refresh();
 }
 async function doSend(){
   const out = $("send-out"); out.className = "out show"; out.textContent = "Drafting…";
