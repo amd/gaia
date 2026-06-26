@@ -1,0 +1,98 @@
+<!--
+  GAIA Presentation Builder — slide pattern library.
+  Compose decks by copying these <section class="slide"> blocks and filling real content.
+  Tier tags: [both] [technical] [executive]. NEVER invent values — use a .placeholder span
+  (and add class "has-draft" + a .draft-banner to any slide that contains one).
+-->
+
+<!-- BLOCK: title [both] -->
+<section class="slide slide--surface">
+  <header class="tab"><div class="mark"><svg class="chev" viewBox="0 0 30 20"><path d="M2 2 L12 10 L2 18" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/><path d="M14 2 L24 10 L14 18" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg><span>GAIA</span></div><div class="meta">{{SUBTITLE}}</div></header>
+  <div class="body center">
+    <div class="eyebrow"><span class="bar"></span>{{EYEBROW}}</div>
+    <h1>{{TITLE_HTML}}</h1>
+    <p class="lead">{{LEAD}}</p>
+  </div>
+</section>
+
+<!-- BLOCK: bullets [both] -->
+<section class="slide">
+  <header class="tab"><div class="mark"><span>GAIA</span></div><div class="meta">{{SECTION}}</div></header>
+  <div class="body">
+    <div class="eyebrow"><span class="bar"></span>{{EYEBROW}}</div>
+    <h2>{{HEADING}}</h2>
+    <ul class="points"><li>{{POINT_1}}</li><li>{{POINT_2}}</li><li>{{POINT_3}}</li></ul>
+  </div>
+</section>
+
+<!-- BLOCK: metrics [both — values MUST be sourced/user-supplied/placeholder] -->
+<section class="slide">
+  <header class="tab"><div class="mark"><span>GAIA</span></div><div class="meta">{{SECTION}}</div></header>
+  <div class="body">
+    <div class="eyebrow"><span class="bar"></span>{{EYEBROW}}</div>
+    <h2>{{HEADING}}</h2>
+    <div class="metrics">
+      <div class="metric"><div class="n">{{VALUE}}</div><div class="k">{{LABEL}}</div><div class="src">{{SOURCE_REF}}</div></div>
+      <div class="metric"><div class="n"><span class="placeholder">PLACEHOLDER</span></div><div class="k">{{LABEL}}</div><div class="src">provide value</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- BLOCK: chart [technical — inline SVG only, axes/values from source] -->
+<section class="slide">
+  <header class="tab"><div class="mark"><span>GAIA</span></div><div class="meta">{{SECTION}}</div></header>
+  <div class="body">
+    <div class="eyebrow"><span class="bar"></span>{{EYEBROW}}</div>
+    <h2>{{HEADING}}</h2>
+    <svg viewBox="0 0 600 240" width="600" height="240" role="img" aria-label="{{ALT}}">
+      <!-- bars: x,width fixed; height/value from source. Replace rects below. -->
+      <rect x="40"  y="80"  width="60" height="120" fill="#9c7518"/>
+      <rect x="140" y="40"  width="60" height="160" fill="#9c7518"/>
+      <line x1="20" y1="200" x2="580" y2="200" stroke="#d9d4c7"/>
+    </svg>
+  </div>
+</section>
+
+<!-- BLOCK: code [technical only — never in executive] -->
+<section class="slide">
+  <header class="tab"><div class="mark"><span>GAIA</span></div><div class="meta">{{SECTION}}</div></header>
+  <div class="body">
+    <div class="eyebrow"><span class="bar"></span>{{EYEBROW}}</div>
+    <h2>{{HEADING}}</h2>
+    <pre class="code">{{CODE_OR_CONTRACT_SNIPPET}}</pre>
+  </div>
+</section>
+
+<!-- BLOCK: timeline [both] -->
+<section class="slide">
+  <header class="tab"><div class="mark"><span>GAIA</span></div><div class="meta">{{SECTION}}</div></header>
+  <div class="body">
+    <div class="eyebrow"><span class="bar"></span>{{EYEBROW}}</div>
+    <h2>{{HEADING}}</h2>
+    <div class="chips">
+      <div class="chip"><div class="k">{{WHEN}}</div><div class="n">{{MILESTONE}}</div><div class="d">{{DETAIL}}</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- BLOCK: quote/outcome [executive-friendly] -->
+<section class="slide slide--surface">
+  <header class="tab"><div class="mark"><span>GAIA</span></div><div class="meta">{{SECTION}}</div></header>
+  <div class="body center">
+    <div class="eyebrow"><span class="bar"></span>{{EYEBROW}}</div>
+    <h2 style="max-width:24ch">{{OUTCOME_STATEMENT}}</h2>
+    <p class="lead sm">{{SUPPORT}}</p>
+  </div>
+</section>
+
+<!-- BLOCK: close [both] -->
+<section class="slide slide--surface">
+  <div class="body center">
+    <div class="eyebrow"><span class="bar"></span>{{EYEBROW}}</div>
+    <h1>{{CLOSING_HTML}}</h1>
+    <p class="lead">{{CALL_TO_ACTION}}</p>
+  </div>
+</section>
+
+<!-- SNIPPET: draft banner — add to <section class="slide has-draft …"> when it holds a placeholder -->
+<!-- <div class="draft-banner">Draft — contains placeholders</div> -->
