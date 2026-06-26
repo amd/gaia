@@ -1,12 +1,10 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
-# TEMPORARY diagnostic: prove whether killing stray llama-server processes and
-# clearing the stale llama.cpp backend cache fixes the nomic-embed-text-v2-moe
-# "llama-server failed to start" failure on a specific runner. The reconcile in
-# install-lemonade only clears that cache on a VERSION CHANGE, so a
-# version-matched runner (e.g. sjlab-stx-1 already on the pinned version) keeps
-# a stale/locked backend. Targets one machine by label. Delete when done.
+# TEMPORARY diagnostic: force a COLD embedding-model load on each stx machine
+# (kill strays + clear backend cache), then capture the REAL llama-server error.
+# Matrix runs both stx-1 and stx-3 so we can tell "bad machine" from
+# "fleet-wide". Delete this branch + workflow when done.
 name: Diag Embed Cleanup
 
 on:
@@ -18,25 +16,26 @@ permissions:
 
 jobs:
   diag-cleanup:
-    name: Cleanup + embedding load on sjlab-stx-1
-    # Pin to the failing machine (label must exist on that runner).
-    runs-on: [ self-hosted, sjlab-stx-1 ]
+    name: Cold embed load on ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ sjlab-stx-1, sjlab-stx-3 ]
+    runs-on: [ self-hosted, "${{ matrix.runner }}" ]
     steps:
       - uses: actions/checkout@v6
 
-      - name: Show runner + pre-clean (kill strays, clear backend cache)
+      - name: Pre-clean (kill strays, clear backend cache)
         shell: powershell
         run: |
           [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
           Write-Host "RUNNER_NAME = $env:RUNNER_NAME"
-
           Write-Host "=== Killing stray lemonade / llama-server processes ==="
           Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match 'llama|lemonade' } | ForEach-Object {
             Write-Host ("  killing " + $_.ProcessName + " PID " + $_.Id)
             Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
           }
           Start-Sleep -Seconds 5
-
           Write-Host "=== Clearing stale llama.cpp backend cache ==="
           $roots = @("$env:USERPROFILE\.cache\lemonade", "C:\windows\system32\config\systemprofile\.cache\lemonade")
           foreach ($root in $roots) {
@@ -44,7 +43,7 @@ jobs:
             if (Test-Path $bin) {
               Write-Host ("  removing " + $bin)
               Remove-Item $bin -Recurse -Force -ErrorAction SilentlyContinue
-              if (Test-Path $bin) { Write-Host "  [WARN] still present (locked by a stray process?)" } else { Write-Host "  [OK] cleared" }
+              if (Test-Path $bin) { Write-Host "  [WARN] still present (locked?)" } else { Write-Host "  [OK] cleared" }
             } else {
               Write-Host ("  (absent) " + $bin)
             }
@@ -60,14 +59,14 @@ jobs:
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
 
-      - name: Start server + load embedding model (with COOPMAT + log dump)
+      - name: Cold-load embedding model + capture real error
         shell: powershell
         env:
           GGML_VK_DISABLE_COOPMAT: "1"
         run: |
           [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
           $ErrorActionPreference = 'Continue'
-          Write-Host "RUNNER_NAME = $env:RUNNER_NAME  (post-cleanup load test)"
+          Write-Host "RUNNER=$env:RUNNER_NAME  (cold-load test, COOPMAT=$env:GGML_VK_DISABLE_COOPMAT)"
 
           $serveOut = Join-Path $env:RUNNER_TEMP "serve.out.log"
           $serveErr = Join-Path $env:RUNNER_TEMP "serve.err.log"
@@ -92,23 +91,35 @@ jobs:
           try {
             $b = @{ model_name = "nomic-embed-text-v2-moe-GGUF" } | ConvertTo-Json
             $r = Invoke-RestMethod "http://localhost:13305/api/v1/load" -Method POST -ContentType "application/json" -Body $b -TimeoutSec 120
-            Write-Host "LOAD: SUCCESS -> $($r | ConvertTo-Json -Compress)"
             $tb = @{ input = @("hello"); model = "nomic-embed-text-v2-moe-GGUF" } | ConvertTo-Json
             $er = Invoke-RestMethod "http://localhost:13305/api/v1/embeddings" -Method POST -ContentType "application/json" -Body $tb -TimeoutSec 120
-            Write-Host "EMBEDDINGS: OK (dim=$($er.data[0].embedding.Count))"
+            Write-Host "LOAD+EMBED: SUCCESS (dim=$($er.data[0].embedding.Count))"
             $ok = $true
           } catch {
-            Write-Host "LOAD/EMBED: FAILURE -> $($_.Exception.Message)"
+            Write-Host "LOAD+EMBED: FAILURE -> $($_.Exception.Message)"
             if ($_.ErrorDetails) { Write-Host "Error details: $($_.ErrorDetails.Message)" }
-            foreach ($root in @((Join-Path $env:LOCALAPPDATA "lemonade_server"), (Join-Path $env:USERPROFILE ".cache\lemonade"))) {
-              Get-ChildItem -Path $root -Recurse -Include *.log -ErrorAction SilentlyContinue | ForEach-Object {
-                Write-Host "----- $($_.FullName) (tail 120) -----"; Get-Content $_.FullName -Tail 120 -ErrorAction SilentlyContinue
-              }
-            }
           }
 
+          # Capture the REAL llama-server error: dump the FRESHEST logs (by mtime),
+          # not the stale install_*.log files, plus the server's own stdout/stderr.
+          Start-Sleep -Seconds 3
+          $dirs = @("$env:LOCALAPPDATA\lemonade_server", "$env:USERPROFILE\.cache\lemonade", "C:\windows\system32\config\systemprofile\.cache\lemonade")
+          $logs = @()
+          foreach ($d in $dirs) { if (Test-Path $d) { $logs += Get-ChildItem $d -Recurse -Include *.log -ErrorAction SilentlyContinue } }
+          Write-Host "`n===== Freshest Lemonade logs (top 6 by modified time) ====="
+          $logs | Sort-Object LastWriteTime -Descending | Select-Object -First 6 | ForEach-Object {
+            Write-Host "----- $($_.FullName)  (modified $($_.LastWriteTime)) -----"
+            Get-Content $_.FullName -Tail 150 -ErrorAction SilentlyContinue
+          }
+          Write-Host "`n===== lemonade-server stdout/stderr ====="
+          if (Test-Path $serveOut) { Get-Content $serveOut -Tail 120 }
+          if (Test-Path $serveErr) { Get-Content $serveErr -Tail 120 }
+          Write-Host "`n===== grep vulkan/ggml/error across freshest logs ====="
+          $logs | Sort-Object LastWriteTime -Descending | Select-Object -First 12 |
+            Select-String -Pattern "vulkan|ggml|coopmat|cooperative|abort|assert|exception|device lost|out of memory|VRAM|failed to start|llama_" |
+            Select-Object -Last 60 | ForEach-Object { Write-Host ("LOG> " + $_.Line) }
+
           try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch { }
-          Write-Host "`n================ RESULT ================"
           $verdict = "FAILURE"; if ($ok) { $verdict = "SUCCESS" }
-          Write-Host "RUNNER=$env:RUNNER_NAME  POST_CLEANUP_EMBED=$verdict"
+          Write-Host "`n================ RESULT: $env:RUNNER_NAME COLD_EMBED=$verdict ================"
           if (-not $ok) { exit 1 }
