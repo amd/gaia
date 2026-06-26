@@ -691,17 +691,23 @@ def rebuild_embeddings() -> Dict:
         from gaia.agents.base.memory import EMBEDDING_MODEL
         from gaia.llm.providers.lemonade import LemonadeProvider
 
-        provider = LemonadeProvider(model=EMBEDDING_MODEL)
+        store = _get_store()
+        # Re-embed with the embedder that produced the stored vectors, not a
+        # hardcoded default. On the NPU profile that is the FLM-native embedder;
+        # using nomic here would mix vector spaces in one table and reload a
+        # Vulkan GGUF embedder that evicts the FLM chat model (#1744).
+        embedder_model = store.get_embedder_id() or EMBEDDING_MODEL
+        provider = LemonadeProvider(model=embedder_model)
 
         def _embed_fn(text: str) -> bytes:
-            results = provider.embed([text], model=EMBEDDING_MODEL)
+            results = provider.embed([text], model=embedder_model)
             vec = np.array(results[0], dtype=np.float32)
             norm = np.linalg.norm(vec)
             if norm > 0:
                 vec = vec / norm
             return vec.astype(np.float32).tobytes()
 
-        result = _get_store().backfill_embeddings(_embed_fn)
+        result = store.backfill_embeddings(_embed_fn)
         return result
     except Exception as exc:
         logger.error("[memory router] rebuild-embeddings failed: %s", exc)
@@ -757,7 +763,7 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
         except ImportError:
             raise HTTPException(503, "faiss not installed — run: pip install faiss-cpu")
 
-        from gaia.agents.base.memory import EMBEDDING_DIM, _blob_to_embedding
+        from gaia.agents.base.memory import _blob_to_embedding
         from gaia.llm import create_client
 
         store = _get_store()
@@ -766,15 +772,21 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
         if len(items) < 2:
             return result  # Not enough items with embeddings
 
-        # Build id list and vector matrix
+        # Dimension is derived from the stored vectors, not a hardcoded constant
+        # — the active embedder (e.g. the NPU FLM embedder) may differ from the
+        # nomic default (#1744). The first valid vector sets the expected dim;
+        # any vector of a different dim (a stale pre-switch embedding) is skipped.
         ids: List[str] = []
         vectors: List[np.ndarray] = []
         item_map: Dict[str, Any] = {}
+        expected_dim: Optional[int] = None
 
         for item in items:
             try:
                 vec = _blob_to_embedding(item["embedding"])
-                if vec.shape[0] != EMBEDDING_DIM:
+                if expected_dim is None:
+                    expected_dim = int(vec.shape[0])
+                if vec.shape[0] != expected_dim:
                     continue
                 norm = np.linalg.norm(vec)
                 if norm > 0:
@@ -785,11 +797,11 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
             except Exception:
                 continue
 
-        if len(vectors) < 2:
+        if len(vectors) < 2 or expected_dim is None:
             return result
 
         mat = np.stack(vectors).astype(np.float32)
-        index = faiss.IndexFlatIP(EMBEDDING_DIM)
+        index = faiss.IndexFlatIP(expected_dim)
         index.add(mat)
 
         n_neighbors = min(5, len(vectors))
