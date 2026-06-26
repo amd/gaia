@@ -342,3 +342,67 @@ def test_calendar_create_rejects_all_day_without_time_loudly(client):
     bad = _event_payload(start={}, end={})
     resp = client.post("/v1/email/calendar/events/preview", json=bad)
     assert resp.status_code == 422
+
+
+def test_calendar_view_missing_scope_fails_loud_with_reconnect_cta(client, monkeypatch):
+    """AC2 (#1780/#1770): a missing calendar.events scope → 403 + reconnect CTA.
+
+    The token resolver raises ``ScopeMismatchError`` (a ``ConnectorsError``) when
+    the connected account never granted the calendar scope; the route must map it
+    to HTTP 403 and surface the actionable reconnect message, not a silent empty
+    calendar or an opaque 500.
+    """
+    from gaia.connectors.errors import ScopeMismatchError
+
+    from gaia_agent_email import api_routes as email_routes
+
+    class _ScopeDeniedCalendar:
+        def list_events(
+            self, *, calendar_id="primary", time_min=None, time_max=None, max_results=25
+        ):
+            raise ScopeMismatchError(
+                required=["https://www.googleapis.com/auth/calendar.events"],
+                granted=[],
+                provider="google",
+            )
+
+    monkeypatch.setattr(
+        email_routes, "resolve_calendar_backend", lambda: _ScopeDeniedCalendar()
+    )
+    resp = client.get("/v1/email/calendar/events")
+    assert resp.status_code == 403
+    detail = resp.json()["detail"].lower()
+    assert "scope" in detail and "reconnect" in detail
+
+
+def test_calendar_create_config_error_is_503(client, monkeypatch):
+    """A ConfigurationError from the backend maps to 503 (after the gate passes)."""
+    from gaia.connectors.errors import ConfigurationError
+
+    from gaia_agent_email import api_routes as email_routes
+
+    class _MisconfiguredCalendar:
+        def create_event(
+            self,
+            *,
+            calendar_id="primary",
+            summary,
+            start,
+            end,
+            attendees=None,
+            location=None,
+            description=None,
+        ):
+            raise ConfigurationError("calendar connector is not configured")
+
+    monkeypatch.setattr(
+        email_routes, "resolve_calendar_backend", lambda: _MisconfiguredCalendar()
+    )
+    token = client.post(
+        "/v1/email/calendar/events/preview", json=_event_payload()
+    ).json()["confirmation_token"]
+    resp = client.post(
+        "/v1/email/calendar/events",
+        json=_event_payload(confirmation_token=token),
+    )
+    assert resp.status_code == 503
