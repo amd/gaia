@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Unit tests for DocumentQAAgent (gaia.agents.docqa).
+"""Unit tests for DocumentQAAgent (gaia_agent_docqa).
 
 The agent constructs a RAGSDK at init (no network/model load at construction)
 and registers RAG + file tools. ``skip_lemonade=True`` is hardcoded, so no
@@ -14,7 +14,7 @@ import unittest
 
 class TestDocumentQAAgentImport(unittest.TestCase):
     def test_can_import(self):
-        from gaia.agents.docqa.agent import DocumentQAAgent, DocumentQAAgentConfig
+        from gaia_agent_docqa.agent import DocumentQAAgent, DocumentQAAgentConfig
 
         self.assertIsNotNone(DocumentQAAgent)
         self.assertIsNotNone(DocumentQAAgentConfig)
@@ -23,7 +23,7 @@ class TestDocumentQAAgentImport(unittest.TestCase):
 class TestDocumentQAAgentConfig(unittest.TestCase):
     def test_defaults(self):
         from gaia.agents.base.agent import default_max_steps
-        from gaia.agents.docqa.agent import DocumentQAAgentConfig
+        from gaia_agent_docqa.agent import DocumentQAAgentConfig
 
         cfg = DocumentQAAgentConfig()
         self.assertFalse(cfg.use_claude)
@@ -34,7 +34,7 @@ class TestDocumentQAAgentConfig(unittest.TestCase):
 
 class TestDocumentQAAgentInit(unittest.TestCase):
     def _make(self):
-        from gaia.agents.docqa.agent import DocumentQAAgent, DocumentQAAgentConfig
+        from gaia_agent_docqa.agent import DocumentQAAgent, DocumentQAAgentConfig
 
         return DocumentQAAgent(DocumentQAAgentConfig())
 

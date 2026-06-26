@@ -10,7 +10,9 @@ authors = [{ name = "AMD" }]
 license = { text = "MIT" }
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["amd-gaia>=0.20.0"]
+# gaia-agent-routing: the `gaia-code` query path routes through RoutingAgent
+# for language/project-type detection (#1102).
+dependencies = ["amd-gaia>=0.20.0", "gaia-agent-routing>=0.1.0"]
 
 [project.entry-points."gaia.agent"]
 code = "gaia_agent_code:build_registration"

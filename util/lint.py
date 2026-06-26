@@ -358,7 +358,8 @@ def check_imports() -> CheckResult:
         ("from", "gaia_agent_jira", "JiraAgent", "Jira agent", True),
         ("from", "gaia_agent_docker", "DockerAgent", "Docker agent", True),
         ("from", "gaia_agent_blender", "BlenderAgent", "Blender agent", True),
-        ("from", "gaia.agents.routing", "RoutingAgent", "Routing agent", False),
+        ("from", "gaia_agent_routing", "RoutingAgent", "Routing agent", True),
+        ("from", "gaia_agent_docqa", "DocumentQAAgent", "Document Q&A agent", True),
         # Migrated to standalone wheels (#1102) — optional so a framework-only
         # env (no gaia-agent-<id> installed) skips rather than fails.
         ("from", "gaia_agent_sd", "SDAgent", "SD agent", True),

@@ -22,7 +22,6 @@ FRAMEWORK_PATHS: Set[str] = {
     "gaia/agents/code",
     "gaia/agents/docker",
     "gaia/agents/jira",
-    "gaia/agents/routing",
     "gaia/agents/tools",
     "site-packages/",
 }

@@ -13,7 +13,7 @@ on:
     paths:
       - 'hub/agents/python/code/**'
       - 'src/gaia/agents/base/**'
-      - 'src/gaia/agents/routing/**'
+      - 'hub/agents/python/routing/**'
       - 'setup.py'
       - '.github/workflows/test_code_agent.yml'
   pull_request:
@@ -22,7 +22,7 @@ on:
     paths:
       - 'hub/agents/python/code/**'
       - 'src/gaia/agents/base/**'
-      - 'src/gaia/agents/routing/**'
+      - 'hub/agents/python/routing/**'
       - 'setup.py'
       - '.github/workflows/test_code_agent.yml'
   merge_group:
@@ -59,6 +59,10 @@ jobs:
       - name: Install dependencies
         run: |
           uv pip install --system -e .[dev]
+          # gaia-agent-code depends on gaia-agent-routing, which isn't published
+          # to PyPI — install the local hub package first so the dependency
+          # resolves locally instead of hitting the registry (#1102).
+          uv pip install --system -e hub/agents/python/routing
           # CodeAgent ships as the standalone gaia-agent-code wheel (#1397, #1102)
           uv pip install --system -e hub/agents/python/code
           # Install optional dependencies for code agent
