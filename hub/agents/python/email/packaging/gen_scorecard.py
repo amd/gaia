@@ -210,19 +210,31 @@ def build_payload(benchmark_dir: Path, ground_truth_path: Path, limit=None):
         dataset_reference="tests/fixtures/email/ground_truth.json",
         dataset_description=(
             "Synthetic email corpus for GAIA email-triage evaluation "
-            "(FakeGmailBackend, 5-category classification)"
+            "(FakeGmailBackend, 4-category priority labels: "
+            "informational / actionable / urgent / low priority)"
         ),
         dataset_size=dataset_size,
         methodology=(
             "gaia eval benchmark — category classification accuracy "
-            "(case-insensitive exact match) over a synthetic labeled corpus "
-            "via FakeGmailBackend; no LLM judge required"
+            "(case-insensitive exact match of the agent's triage label vs the "
+            "ground-truth priority label) over a synthetic labeled corpus via "
+            "FakeGmailBackend; no LLM judge. NOTE: the agent's triage taxonomy "
+            "(fyi / needs_response / promotional / urgent) and the corpus "
+            "priority labels currently overlap only on 'urgent', so this "
+            "exact-match metric understates triage usefulness — taxonomy "
+            "calibration is tracked in amd/gaia#1266"
         ),
         config={
             "harness": "gaia eval benchmark",
             "model": model,
             "corpus": "tests/fixtures/email/synthetic_inbox.mbox",
-            "ground_truth": str(ground_truth_path),
+            # Store a repo-relative path — never leak a local absolute path into
+            # a committed/published artifact.
+            "ground_truth": (
+                str(ground_truth_path.relative_to(_REPO_ROOT))
+                if str(ground_truth_path).startswith(str(_REPO_ROOT))
+                else ground_truth_path.name
+            ),
             "limit": limit,
         },
         test_cases_run=test_cases_run,

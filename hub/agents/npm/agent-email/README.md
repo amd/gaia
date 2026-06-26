@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/@amd-gaia/agent-email?label=version)](https://www.npmjs.com/package/@amd-gaia/agent-email) · contract `SCHEMA_VERSION` **2.0** · last updated **2026-06-24**
 
-**Eval scorecard:** see [`./scorecards/0.2.4.md`](./scorecards/0.2.4.md) for the per-version accuracy metrics, dataset details, and aggregate score for v0.2.4.
+**Eval scorecard (v0.2.4): aggregate 4.0 / 100** — `category_accuracy` 0.04 over 25 of 220 labeled emails ([`./scorecards/0.2.4.md`](./scorecards/0.2.4.md)). The low value reflects strict 4-way exact-match against a different label vocabulary, not triage quality — taxonomy calibration is tracked in [#1266](https://github.com/amd/gaia/issues/1266). The linked scorecard carries the full recipe, metrics, and a worked recomputation of the aggregate.
 
 Embed the **GAIA email agent** in your JS/TS app. It triages, organizes, replies
 to, and schedules from Gmail and Outlook — with every email body analyzed
