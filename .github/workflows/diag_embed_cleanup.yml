@@ -1,0 +1,116 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# TEMPORARY diagnostic: prove whether killing stray llama-server processes and
+# clearing the stale llama.cpp backend cache fixes the nomic-embed-text-v2-moe
+# "llama-server failed to start" failure on a specific runner. The reconcile in
+# install-lemonade only clears that cache on a VERSION CHANGE, so a
+# version-matched runner (e.g. sjlab-stx-1 already on the pinned version) keeps
+# a stale/locked backend. Targets one machine by label. Delete when done.
+name: Diag Embed Cleanup
+
+on:
+  push:
+    branches: [ ci/embed-test-hardening ]
+
+permissions:
+  contents: read
+
+jobs:
+  diag-cleanup:
+    name: Cleanup + embedding load on sjlab-stx-1
+    # Pin to the failing machine (label must exist on that runner).
+    runs-on: [ self-hosted, sjlab-stx-1 ]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Show runner + pre-clean (kill strays, clear backend cache)
+        shell: powershell
+        run: |
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          Write-Host "RUNNER_NAME = $env:RUNNER_NAME"
+
+          Write-Host "`n=== Killing stray lemonade / llama-server processes ==="
+          Get-Process -ErrorAction SilentlyContinue |
+            Where-Object { $_.ProcessName -match 'llama|lemonade' } |
+            ForEach-Object {
+              Write-Host "  killing $($_.ProcessName) (PID $($_.Id))"
+              Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+            }
+          Start-Sleep -Seconds 5
+
+          Write-Host "`n=== Clearing stale llama.cpp backend cache ==="
+          foreach ($root in @("$env:USERPROFILE\.cache\lemonade",
+                              "C:\windows\system32\config\systemprofile\.cache\lemonade")) {
+            $bin = Join-Path $root "bin"
+            if (Test-Path $bin) {
+              Write-Host "  removing $bin"
+              try { Remove-Item $bin -Recurse -Force -ErrorAction Stop; Write-Host "  [OK] cleared" }
+              catch { Write-Host "  [ERROR] could not clear ($($_.Exception.Message)) — a stray llama-server may hold a lock" }
+            } else {
+              Write-Host "  (absent) $bin"
+            }
+          }
+
+      - name: Setup Python environment
+        uses: ./.github/actions/setup-venv
+        with:
+          python-version: '3.12'
+          install-package: '.[dev,rag]'
+          extra-index-url: 'https://download.pytorch.org/whl/cpu'
+
+      - name: Install Lemonade Server
+        uses: ./.github/actions/install-lemonade
+
+      - name: Start server + load embedding model (with COOPMAT + log dump)
+        shell: powershell
+        env:
+          GGML_VK_DISABLE_COOPMAT: "1"
+        run: |
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $ErrorActionPreference = 'Continue'
+          Write-Host "RUNNER_NAME = $env:RUNNER_NAME  (post-cleanup load test)"
+
+          $serveOut = Join-Path $env:RUNNER_TEMP "serve.out.log"
+          $serveErr = Join-Path $env:RUNNER_TEMP "serve.err.log"
+          $proc = Start-Process -FilePath "lemonade-server" `
+            -ArgumentList "serve","--host","localhost","--port","13305","--no-tray" `
+            -RedirectStandardOutput $serveOut -RedirectStandardError $serveErr -PassThru -NoNewWindow
+          Write-Host "lemonade-server PID: $($proc.Id)"
+
+          $ready = $false
+          for ($i = 0; $i -lt 45 -and -not $ready; $i++) {
+            Start-Sleep -Seconds 2
+            try { Invoke-RestMethod "http://localhost:13305/api/v1/health" -TimeoutSec 5 | Out-Null; $ready = $true } catch { }
+          }
+          Write-Host "Server ready: $ready"
+
+          try {
+            $b = @{ model_name = "nomic-embed-text-v2-moe-GGUF" } | ConvertTo-Json
+            Invoke-RestMethod "http://localhost:13305/api/v1/pull" -Method POST -ContentType "application/json" -Body $b -TimeoutSec 600 | Out-Null
+          } catch { Write-Host "Pull warn: $($_.Exception.Message)" }
+
+          $ok = $false
+          try {
+            $b = @{ model_name = "nomic-embed-text-v2-moe-GGUF" } | ConvertTo-Json
+            $r = Invoke-RestMethod "http://localhost:13305/api/v1/load" -Method POST -ContentType "application/json" -Body $b -TimeoutSec 120
+            Write-Host "LOAD: SUCCESS -> $($r | ConvertTo-Json -Compress)"
+            $tb = @{ input = @("hello"); model = "nomic-embed-text-v2-moe-GGUF" } | ConvertTo-Json
+            $er = Invoke-RestMethod "http://localhost:13305/api/v1/embeddings" -Method POST -ContentType "application/json" -Body $tb -TimeoutSec 120
+            Write-Host "EMBEDDINGS: OK (dim=$($er.data[0].embedding.Count))"
+            $ok = $true
+          } catch {
+            Write-Host "LOAD/EMBED: FAILURE -> $($_.Exception.Message)"
+            if ($_.ErrorDetails) { Write-Host "Error details: $($_.ErrorDetails.Message)" }
+            foreach ($root in @((Join-Path $env:LOCALAPPDATA "lemonade_server"), (Join-Path $env:USERPROFILE ".cache\lemonade"))) {
+              Get-ChildItem -Path $root -Recurse -Include *.log -ErrorAction SilentlyContinue | ForEach-Object {
+                Write-Host "----- $($_.FullName) (tail 120) -----"; Get-Content $_.FullName -Tail 120 -ErrorAction SilentlyContinue
+              }
+            }
+          }
+
+          try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch { }
+          Write-Host "`n================ RESULT ================"
+          $verdict = "FAILURE"; if ($ok) { $verdict = "SUCCESS" }
+          Write-Host "RUNNER=$env:RUNNER_NAME  POST_CLEANUP_EMBED=$verdict"
+          if (-not $ok) { exit 1 }
