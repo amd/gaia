@@ -33,3 +33,24 @@ class SidecarSpawnError(SidecarError):
 
 class RouteNotAvailableError(SidecarError):
     """A UI capability whose REST route does not exist on the sidecar yet."""
+
+
+class SidecarHTTPError(SidecarError):
+    """The sidecar answered with a non-2xx status.
+
+    Carries the status code and the sidecar's own actionable ``detail`` message
+    (e.g. ``502 local LLM triage failed: Lemonade not reachable``) so the loud,
+    fixable error the sidecar produced is preserved instead of being flattened
+    into a generic ``HTTPError``.
+    """
+
+    def __init__(self, status_code: int, detail: str, *, path: str = ""):
+        self.status_code = status_code
+        self.detail = detail
+        self.path = path
+        where = f" from {path}" if path else ""
+        super().__init__(f"email sidecar returned HTTP {status_code}{where}: {detail}")
+
+
+class VersionMismatchError(SidecarError):
+    """The running sidecar speaks a different MAJOR contract version than expected."""

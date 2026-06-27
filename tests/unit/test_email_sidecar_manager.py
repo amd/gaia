@@ -95,6 +95,117 @@ def test_spawn_port_4001_rejected(monkeypatch, tmp_path):
         m.build_spawn_command(port=4001)
 
 
+class _FakeProc:
+    def __init__(self, pid=4242):
+        self.pid = pid
+        self.returncode = None
+
+    def poll(self):
+        return None  # still running
+
+
+class _FakeResp:
+    def __init__(self, payload, status=200):
+        self._payload, self.status_code = payload, status
+        self.text = str(payload)
+
+    def json(self):
+        return self._payload
+
+
+def _install_fake_spawn(monkeypatch, tmp_path, *, version_payload=None):
+    """Wire a manager with a fake Popen + fake HTTP so start() runs without a
+    real subprocess. Returns (manager, captured) where captured records calls."""
+    monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
+    src = tmp_path / "email"
+    (src / "packaging").mkdir(parents=True)
+    captured = {"popen_kwargs": None, "atexit": []}
+
+    def _fake_popen(argv, **kwargs):
+        captured["popen_kwargs"] = kwargs
+        captured["argv"] = argv
+        return _FakeProc()
+
+    monkeypatch.setattr(mgr.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(
+        mgr.atexit, "register", lambda fn: captured["atexit"].append(fn)
+    )
+    monkeypatch.setattr(mgr.atexit, "unregister", lambda fn: None)
+
+    m = mgr.EmailSidecarManager(
+        email_src_dir=src, cache_dir=tmp_path, log_dir=tmp_path / "logs"
+    )
+
+    vp = version_payload or {"apiVersion": "1.0", "agentVersion": "0.2.2"}
+
+    def _fake_http_get(url, timeout):
+        if url.endswith("/health"):
+            return _FakeResp({"status": "ok"})
+        if url.endswith("/version"):
+            return _FakeResp(vp)
+        raise AssertionError(url)
+
+    monkeypatch.setattr(m, "_http_get", _fake_http_get)
+    return m, captured
+
+
+def test_spawn_redirects_output_to_logfile_not_pipe(monkeypatch, tmp_path):
+    # The deadlock fix: stdout must go to a real file (has fileno), stderr merged
+    # — NOT subprocess.PIPE, which would deadlock once the buffer fills.
+    m, captured = _install_fake_spawn(monkeypatch, tmp_path)
+    m.start()
+    kwargs = captured["popen_kwargs"]
+    assert kwargs["stdout"] is not mgr.subprocess.PIPE
+    assert hasattr(kwargs["stdout"], "fileno")  # an open file object
+    assert kwargs["stderr"] == mgr.subprocess.STDOUT
+    assert (tmp_path / "logs").is_dir()
+
+
+def test_start_registers_atexit_reaper(monkeypatch, tmp_path):
+    m, captured = _install_fake_spawn(monkeypatch, tmp_path)
+    m.start()
+    assert m.shutdown in captured["atexit"]
+
+
+def test_start_captures_version(monkeypatch, tmp_path):
+    m, captured = _install_fake_spawn(
+        monkeypatch,
+        tmp_path,
+        version_payload={"apiVersion": "1.3", "agentVersion": "0.9"},
+    )
+    m.start()
+    assert m.api_version == "1.3"
+    assert m.agent_version == "0.9"
+
+
+def test_version_major_mismatch_raises(monkeypatch, tmp_path):
+    from gaia.ui.email_sidecar.errors import VersionMismatchError
+
+    monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
+    src = tmp_path / "email"
+    (src / "packaging").mkdir(parents=True)
+    monkeypatch.setattr(mgr.subprocess, "Popen", lambda argv, **kw: _FakeProc())
+    monkeypatch.setattr(mgr.atexit, "register", lambda fn: None)
+
+    m = mgr.EmailSidecarManager(
+        email_src_dir=src,
+        cache_dir=tmp_path,
+        log_dir=tmp_path / "logs",
+        expected_api_version="2.0",
+    )
+    # shutdown is called on failure; stub it so the fake proc isn't tree-killed.
+    monkeypatch.setattr(m, "shutdown", lambda *a, **k: None)
+    monkeypatch.setattr(
+        m,
+        "_http_get",
+        lambda url, timeout: _FakeResp(
+            {"status": "ok"} if url.endswith("/health") else {"apiVersion": "1.0"}
+        ),
+    )
+    with pytest.raises(VersionMismatchError, match="major"):
+        m.start()
+
+
 @pytest.mark.skipif(
     importlib.util.find_spec("gaia_agent_email") is None
     or importlib.util.find_spec("uvicorn") is None,

@@ -6,16 +6,19 @@ import importlib.util
 
 import pytest
 
-from gaia.ui.email_sidecar.errors import RouteNotAvailableError
+from gaia.ui.email_sidecar.errors import RouteNotAvailableError, SidecarHTTPError
 from gaia.ui.email_sidecar.proxy import EmailSidecarProxy
 
 
 class _Resp:
-    def __init__(self, payload, status=200):
+    def __init__(self, payload, status=200, *, raw_text=None, json_raises=False):
         self._payload, self.status_code = payload, status
-        self.text = str(payload)
+        self.text = raw_text if raw_text is not None else str(payload)
+        self._json_raises = json_raises
 
     def json(self):
+        if self._json_raises:
+            raise ValueError("not json")
         return self._payload
 
     def raise_for_status(self):
@@ -24,18 +27,22 @@ class _Resp:
 
 
 class _Session:
-    def __init__(self, payload):
+    def __init__(self, payload, *, resp=None):
         self._payload = payload
+        self._resp = resp  # pre-built _Resp to return (overrides payload)
         self.posts = []
         self.gets = []
 
+    def _make(self):
+        return self._resp if self._resp is not None else _Resp(self._payload)
+
     def post(self, url, json=None, timeout=None):
         self.posts.append((url, json))
-        return _Resp(self._payload)
+        return self._make()
 
     def get(self, url, timeout=None):
         self.gets.append(url)
-        return _Resp(self._payload)
+        return self._make()
 
 
 def test_triage_forwards_and_returns_envelope_unchanged():
@@ -75,6 +82,43 @@ def test_health_and_version_get_routes():
         "http://127.0.0.1:9100/health",
         "http://127.0.0.1:9100/version",
     ]
+
+
+def test_non_2xx_with_json_detail_raises_actionable_error():
+    # The sidecar's actionable detail (e.g. Lemonade down) must survive, not be
+    # flattened into a generic HTTPError.
+    err = _Resp(
+        {"detail": "local LLM triage failed: Lemonade not reachable"}, status=502
+    )
+    sess = _Session(None, resp=err)
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    with pytest.raises(SidecarHTTPError) as ei:
+        proxy.triage({"payload": {}})
+    assert ei.value.status_code == 502
+    assert "Lemonade not reachable" in ei.value.detail
+    assert "/v1/email/triage" in str(ei.value)
+
+
+def test_non_2xx_non_json_body_uses_text():
+    err = _Resp(None, status=500, raw_text="Internal Server Error", json_raises=True)
+    sess = _Session(None, resp=err)
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    with pytest.raises(SidecarHTTPError) as ei:
+        proxy.send({"to": []})
+    assert ei.value.status_code == 500
+    assert "Internal Server Error" in ei.value.detail
+
+
+def test_403_send_gate_detail_preserved():
+    err = _Resp(
+        {"detail": "Send rejected: missing or invalid confirmation token"}, status=403
+    )
+    sess = _Session(None, resp=err)
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    with pytest.raises(SidecarHTTPError) as ei:
+        proxy.send({"to": []})
+    assert ei.value.status_code == 403
+    assert "confirmation token" in ei.value.detail
 
 
 @pytest.mark.parametrize(

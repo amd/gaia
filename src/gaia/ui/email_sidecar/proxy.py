@@ -12,9 +12,26 @@ tracking issue rather than silently no-op — no fallback, no fake success.
 from __future__ import annotations
 
 from gaia.logger import get_logger
-from gaia.ui.email_sidecar.errors import RouteNotAvailableError
+from gaia.ui.email_sidecar.errors import RouteNotAvailableError, SidecarHTTPError
 
 logger = get_logger(__name__)
+
+
+def _extract_detail(resp) -> str:
+    """Pull the sidecar's actionable message from a non-2xx response.
+
+    FastAPI puts the actionable text under ``detail``; fall back to the raw body
+    so nothing is ever swallowed.
+    """
+    try:
+        body = resp.json()
+    except Exception:  # noqa: BLE001 - non-JSON body, use text below
+        body = None
+    if isinstance(body, dict) and body.get("detail"):
+        detail = body["detail"]
+        return detail if isinstance(detail, str) else str(detail)
+    text = getattr(resp, "text", "") or ""
+    return text.strip() or f"(no response body; HTTP {resp.status_code})"
 
 
 class EmailSidecarProxy:
@@ -27,16 +44,22 @@ class EmailSidecarProxy:
             session = requests.Session()
         self._session = session
 
+    def _raise_for_status(self, resp, path: str) -> None:
+        # Translate the boundary loudly: keep the sidecar's own actionable detail
+        # (e.g. "502 local LLM triage failed: ...") instead of a generic HTTPError.
+        if resp.status_code >= 400:
+            raise SidecarHTTPError(resp.status_code, _extract_detail(resp), path=path)
+
     def _post(self, path: str, payload: dict) -> dict:
         resp = self._session.post(
             f"{self.base_url}{path}", json=payload, timeout=self.timeout
         )
-        resp.raise_for_status()
+        self._raise_for_status(resp, path)
         return resp.json()
 
     def _get(self, path: str) -> dict:
         resp = self._session.get(f"{self.base_url}{path}", timeout=self.timeout)
-        resp.raise_for_status()
+        self._raise_for_status(resp, path)
         return resp.json()
 
     # -- Routes that exist today --------------------------------------------

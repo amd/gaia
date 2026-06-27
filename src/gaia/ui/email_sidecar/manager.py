@@ -19,6 +19,7 @@ spawns a uvicorn child that a plain kill would orphan).
 
 from __future__ import annotations
 
+import atexit
 import os
 import socket
 import subprocess
@@ -29,7 +30,11 @@ from typing import Optional
 
 from gaia.logger import get_logger
 from gaia.ui.email_sidecar import fetch
-from gaia.ui.email_sidecar.errors import HealthTimeoutError, SidecarSpawnError
+from gaia.ui.email_sidecar.errors import (
+    HealthTimeoutError,
+    SidecarSpawnError,
+    VersionMismatchError,
+)
 
 logger = get_logger(__name__)
 
@@ -56,6 +61,16 @@ def _default_email_src_dir() -> Path:
     return Path(__file__).resolve().parents[4] / "hub" / "agents" / "python" / "email"
 
 
+def _major(version: str) -> int:
+    """Parse the MAJOR component of a dotted version ('1.3' -> 1)."""
+    try:
+        return int(str(version).split(".")[0])
+    except (ValueError, IndexError) as e:
+        raise VersionMismatchError(
+            f"cannot parse a MAJOR version from '{version}'"
+        ) from e
+
+
 class EmailSidecarManager:
     def __init__(
         self,
@@ -65,7 +80,9 @@ class EmailSidecarManager:
         lock_path: Optional[Path] = None,
         cache_dir: Optional[Path] = None,
         email_src_dir: Optional[Path] = None,
+        log_dir: Optional[Path] = None,
         health_timeout: float = 30.0,
+        expected_api_version: Optional[str] = None,
     ):
         self._mode_override = mode
         self.host = host
@@ -74,10 +91,17 @@ class EmailSidecarManager:
         self.email_src_dir = (
             Path(email_src_dir) if email_src_dir else _default_email_src_dir()
         )
+        self.log_dir = Path(log_dir) if log_dir else fetch.default_cache_dir() / "logs"
         self.health_timeout = health_timeout
+        self.expected_api_version = expected_api_version
         self._proc: Optional[subprocess.Popen] = None
+        self._log_handle = None
+        self._log_path: Optional[Path] = None
+        self._atexit_registered = False
         self.port: Optional[int] = None
         self.base_url: Optional[str] = None
+        self.api_version: Optional[str] = None
+        self.agent_version: Optional[str] = None
 
     @property
     def mode(self) -> str:
@@ -132,6 +156,31 @@ class EmailSidecarManager:
         ]
         return argv, {"cwd": str(self.email_src_dir)}
 
+    def _http_get(self, url: str, timeout: float):
+        """Single seam for the readiness/version probes (monkeypatched in tests)."""
+        import requests
+
+        return requests.get(url, timeout=timeout)
+
+    def _open_log(self, port: int):
+        # Redirect the sidecar's stdout+stderr to a per-port file. A plain PIPE
+        # that is never drained deadlocks the child once the OS buffer (~64KB)
+        # fills — uvicorn logs an access line per request, so that WOULD happen
+        # under normal use. A file has no such ceiling and stays debuggable.
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self._log_path = self.log_dir / f"sidecar-{port}.log"
+        self._log_handle = open(self._log_path, "wb")
+        return self._log_handle
+
+    def _read_log_tail(self, limit: int = 2000) -> str:
+        if not self._log_path:
+            return ""
+        try:
+            data = self._log_path.read_bytes()
+        except OSError:
+            return ""
+        return data[-limit:].decode("utf-8", "replace")
+
     def start(self) -> str:
         if self.is_running:
             return self.base_url
@@ -144,22 +193,31 @@ class EmailSidecarManager:
             creationflags = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
         else:
             start_new_session = True  # own process group for tree-kill
+        log_handle = self._open_log(self.port)
         try:
             self._proc = subprocess.Popen(
                 argv,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
                 start_new_session=start_new_session,
                 creationflags=creationflags,
                 **popen_kwargs,
             )
         except OSError as e:
+            self._close_log()
             raise SidecarSpawnError(
                 f"failed to launch the email sidecar ({argv[0]}): {e}"
             ) from e
+        # Reap the sidecar if the backend exits without calling shutdown() — a
+        # detached child otherwise survives a crash/Ctrl-C and holds its port +
+        # a loaded LLM. atexit covers normal exit + uncaught exceptions.
+        if not self._atexit_registered:
+            atexit.register(self.shutdown)
+            self._atexit_registered = True
         self.base_url = f"http://{self.host}:{self.port}"
         try:
             self._wait_for_health()
+            self._check_version()
         except Exception:
             self.shutdown()
             raise
@@ -173,13 +231,12 @@ class EmailSidecarManager:
         last_err = ""
         while time.monotonic() < deadline:
             if self._proc.poll() is not None:
-                stderr = (self._proc.stderr.read() or b"").decode("utf-8", "replace")
                 raise SidecarSpawnError(
                     f"email sidecar exited early (code {self._proc.returncode}) before "
-                    f"becoming healthy. Last stderr:\n{stderr[-2000:]}"
+                    f"becoming healthy. Last log output:\n{self._read_log_tail()}"
                 )
             try:
-                r = requests.get(url, timeout=interval * 4)
+                r = self._http_get(url, timeout=interval * 4)
                 if r.status_code == 200 and r.json().get("status") == "ok":
                     logger.info("email sidecar healthy at %s", self.base_url)
                     return
@@ -190,15 +247,63 @@ class EmailSidecarManager:
         raise HealthTimeoutError(
             f"email sidecar at {self.base_url} did not become healthy within "
             f"{self.health_timeout}s. Last probe error: {last_err}. Check the process "
-            "launched and the port is free."
+            f"launched and the port is free. Sidecar log:\n{self._read_log_tail()}"
         )
 
+    def _check_version(self) -> None:
+        """Capture the sidecar's contract version; gate on a MAJOR mismatch.
+
+        Always records ``api_version``/``agent_version`` for diagnostics. When an
+        ``expected_api_version`` was provided, a differing MAJOR is a breaking
+        contract change and fails loudly (no silent mismatch). The expected
+        version is supplied by the caller rather than imported, so core stays
+        free of the email wheel.
+        """
+        try:
+            r = self._http_get(f"{self.base_url}/version", timeout=5.0)
+            info = r.json()
+        except Exception as e:  # noqa: BLE001 - surface as a loud spawn failure
+            raise SidecarSpawnError(
+                f"email sidecar did not answer /version at {self.base_url}: {e}"
+            ) from e
+        self.api_version = info.get("apiVersion")
+        self.agent_version = info.get("agentVersion")
+        logger.info(
+            "email sidecar contract: apiVersion=%s agentVersion=%s",
+            self.api_version,
+            self.agent_version,
+        )
+        if self.expected_api_version and self.api_version:
+            if _major(self.api_version) != _major(self.expected_api_version):
+                raise VersionMismatchError(
+                    f"email sidecar apiVersion '{self.api_version}' has a different "
+                    f"MAJOR than expected '{self.expected_api_version}'. A major bump "
+                    "is a breaking contract change — upgrade the sidecar binary or "
+                    "the host to matching versions."
+                )
+
+    def _close_log(self) -> None:
+        if self._log_handle is not None:
+            try:
+                self._log_handle.close()
+            except OSError:
+                pass
+            self._log_handle = None
+
     def shutdown(self, timeout: float = 5.0) -> None:
+        if self._atexit_registered:
+            try:
+                atexit.unregister(self.shutdown)
+            except Exception:  # noqa: BLE001 - unregister is best-effort
+                pass
+            self._atexit_registered = False
         proc = self._proc
         if proc is None:
+            self._close_log()
             return
         if proc.poll() is not None:
             self._proc = None
+            self._close_log()
             return
         pid = proc.pid
         logger.info("email sidecar: tree-killing pid=%s", pid)
@@ -230,4 +335,5 @@ class EmailSidecarManager:
             except subprocess.TimeoutExpired:
                 pass
         self._proc = None
+        self._close_log()
         logger.info("email sidecar: shut down")
