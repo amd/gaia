@@ -17,6 +17,8 @@ from gaia.ui.email_sidecar.errors import (
     SidecarError,
     SidecarSpawnError,
 )
+from gaia.ui.email_sidecar.manager import EmailSidecarManager
+from gaia.ui.email_sidecar.proxy import EmailSidecarProxy
 
 __all__ = [
     "SidecarError",
@@ -26,4 +28,6 @@ __all__ = [
     "HealthTimeoutError",
     "SidecarSpawnError",
     "RouteNotAvailableError",
+    "EmailSidecarManager",
+    "EmailSidecarProxy",
 ]
