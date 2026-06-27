@@ -158,3 +158,61 @@ def test_live_proxy_health_and_version_roundtrip(monkeypatch):
         assert "apiVersion" in version and "agentVersion" in version
     finally:
         m.shutdown()
+
+
+def _lemonade_up() -> bool:
+    try:
+        import requests
+
+        from gaia.llm.lemonade_client import _get_lemonade_config
+
+        _, _, base = _get_lemonade_config()
+        return requests.get(base.rstrip("/") + "/health", timeout=2).status_code == 200
+    except Exception:  # noqa: BLE001
+        return False
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("gaia_agent_email") is None
+    or importlib.util.find_spec("uvicorn") is None,
+    reason="email agent + uvicorn required for live triage round-trip",
+)
+def test_live_triage_roundtrip_through_manager_proxy(monkeypatch):
+    # End-to-end 'the call is valid' proof: real dev sidecar + the manager-owned
+    # proxy + the FROZEN triage contract. With Lemonade up we get a structured
+    # result; with it down we get the sidecar's actionable 502 surfaced verbatim
+    # via SidecarHTTPError. Either outcome proves the wire + error path, not a mock.
+    from gaia_agent_email.contract import (
+        EmailAddress,
+        EmailMessage,
+        EmailTriageRequest,
+        SingleEmailInput,
+    )
+
+    from gaia.ui.email_sidecar.errors import SidecarHTTPError
+    from gaia.ui.email_sidecar.manager import EmailSidecarManager
+
+    payload = SingleEmailInput(
+        message=EmailMessage(
+            message_id="msg-roundtrip-1",
+            subject="Team lunch tomorrow?",
+            from_=EmailAddress(email="alice@example.com"),
+            body="Hey, are you joining us for lunch tomorrow at noon? Please reply by EOD.",
+        ),
+        principal=EmailAddress(email="bob@example.com"),
+    )
+    body = EmailTriageRequest(payload=payload).model_dump(by_alias=True, mode="json")
+
+    monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
+    with EmailSidecarManager(health_timeout=60.0) as m:
+        proxy = m.proxy(timeout=180.0)
+        if _lemonade_up():
+            result = proxy.triage(body)
+            assert result["request_kind"] == "single"
+            assert "category" in result["result"]
+            assert result["result"]["summary"]
+        else:
+            with pytest.raises(SidecarHTTPError) as ei:
+                proxy.triage(body)
+            assert ei.value.status_code == 502
+            assert "triage failed" in ei.value.detail.lower()

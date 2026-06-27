@@ -133,6 +133,28 @@ class EmailSidecarManager:
     def is_running(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
 
+    def proxy(self, **kwargs):
+        """Return an :class:`EmailSidecarProxy` bound to this running sidecar.
+
+        The manager owns the ephemeral port; the proxy is the request surface.
+        Raises if the sidecar has not been started yet (no silent unbound proxy).
+        """
+        from gaia.ui.email_sidecar.errors import SidecarError
+        from gaia.ui.email_sidecar.proxy import EmailSidecarProxy
+
+        if not self.base_url or not self.is_running:
+            raise SidecarError(
+                "email sidecar is not started — call start() before proxy()."
+            )
+        return EmailSidecarProxy(self.base_url, **kwargs)
+
+    def __enter__(self) -> "EmailSidecarManager":
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.shutdown()
+
     def build_spawn_command(self, *, port: int):
         if port == _RESERVED_PORT:
             raise ValueError("port 4001 is reserved and must never be used")

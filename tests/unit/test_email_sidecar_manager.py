@@ -212,6 +212,40 @@ def test_version_major_mismatch_raises(monkeypatch, tmp_path):
         m.start()
 
 
+def test_proxy_requires_started(tmp_path):
+    from gaia.ui.email_sidecar.errors import SidecarError
+
+    m = mgr.EmailSidecarManager(email_src_dir=tmp_path)
+    with pytest.raises(SidecarError, match="not started"):
+        m.proxy()
+
+
+def test_proxy_bound_to_base_url(monkeypatch, tmp_path):
+    from gaia.ui.email_sidecar.proxy import EmailSidecarProxy
+
+    m, _ = _install_fake_spawn(monkeypatch, tmp_path)
+    m.start()
+    proxy = m.proxy()
+    assert isinstance(proxy, EmailSidecarProxy)
+    assert proxy.base_url == m.base_url
+
+
+def test_context_manager_starts_and_shuts_down(monkeypatch, tmp_path):
+    m, captured = _install_fake_spawn(monkeypatch, tmp_path)
+    shut = {"called": 0}
+    real_shutdown = m.shutdown
+
+    def _spy(*a, **k):
+        shut["called"] += 1
+        return real_shutdown(*a, **k)
+
+    monkeypatch.setattr(m, "shutdown", _spy)
+    with m as started:
+        assert started is m
+        assert m.is_running
+    assert shut["called"] >= 1
+
+
 def test_health_rejects_foreign_server_on_port(monkeypatch, tmp_path):
     # A non-GAIA server returning {"status":"ok"} must NOT be accepted as our
     # sidecar — require the service identity.
