@@ -1402,6 +1402,37 @@ git commit -m "docs(email): document dev/user sidecar modes (GAIA_EMAIL_AGENT_MO
   pipeline (`release_agent_email.yml`); until then user-mode fetch refuses the
   placeholder loudly and dev mode is the working path.
 
+## Hardening addendum (post-implementation adversarial review)
+
+After the six tasks landed, an adversarial self-review + a `code-reviewer` pass
+found and fixed runtime issues the happy-path tests missed:
+
+- **Pipe-buffer deadlock → log file.** Sidecar stdout/stderr go to
+  `~/.gaia/agents/email/logs/sidecar-<port>.log` (pruned to the newest
+  `_MAX_SIDECAR_LOGS`), not an undrained `PIPE` that would hang the child once the
+  ~64KB OS buffer filled (uvicorn logs a line per request). Failures report the
+  log tail.
+- **Orphan reaping.** `atexit` reaper tree-kills the sidecar if the backend exits
+  without `shutdown()`; unregistered on clean shutdown.
+- **Actionable errors preserved.** `EmailSidecarProxy` raises `SidecarHTTPError`
+  carrying the sidecar's own `detail` (e.g. `502 local LLM triage failed`) instead
+  of a generic `HTTPError`.
+- **Contract handshake.** `/version` is read on start; `apiVersion`/`agentVersion`
+  captured; a MAJOR mismatch (when a host pins `expected_api_version`) or a missing
+  `apiVersion` under a pin fails loudly.
+- **Port-race retry.** `start()` retries only the fast early-exit failure on a
+  fresh port; a genuine health timeout fails once.
+- **Identity check.** Health requires `service == "gaia-agent-email"`, rejecting a
+  foreign process that grabbed the ephemeral port.
+- **Concurrency.** `start()`/`shutdown()` are serialized by a reentrant lock so a
+  concurrent lazy "first email use" spawns exactly one sidecar.
+- **Integration seam.** `EmailSidecarManager.proxy()` returns a port-bound proxy;
+  the manager is a context manager (`with EmailSidecarManager() as m:`) that
+  guarantees shutdown. A live test round-trips a real LLM triage through the
+  manager+proxy against the frozen contract.
+- **Single app build** in the freeze entrypoint; **async-safety** documented (run
+  the sync manager/proxy off the UI event loop via a worker thread).
+
 ## Self-Review notes
 
 - Spec coverage: dev-mode enabler (Task 1), `EmailSidecarManager` (Task 4), Python

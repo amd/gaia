@@ -212,6 +212,22 @@ def test_version_major_mismatch_raises(monkeypatch, tmp_path):
         m.start()
 
 
+def test_old_sidecar_logs_are_pruned(monkeypatch, tmp_path):
+    # Per-port log files accumulate across restarts (ephemeral ports differ).
+    # Opening a new log prunes the oldest, keeping only the most recent few.
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    for p in range(9000, 9000 + 10):
+        (logs / f"sidecar-{p}.log").write_text("old")
+    m, _ = _install_fake_spawn(monkeypatch, tmp_path)
+    m.log_dir = logs
+    m.start()
+    remaining = sorted(logs.glob("sidecar-*.log"))
+    assert len(remaining) <= mgr._MAX_SIDECAR_LOGS
+    # The just-opened log for the live port must survive the prune.
+    assert (logs / f"sidecar-{m.port}.log").exists()
+
+
 def test_proxy_requires_started(tmp_path):
     from gaia.ui.email_sidecar.errors import SidecarError
 

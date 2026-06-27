@@ -53,6 +53,9 @@ _VALID_MODES = ("user", "dev")
 # HealthResponse). Used to confirm the process answering our ephemeral port is
 # actually the email sidecar and not some unrelated server.
 _SERVICE_ID = "gaia-agent-email"
+# Keep only the most recent N per-port sidecar logs; ephemeral ports mean a new
+# file per restart, which would otherwise accumulate without bound.
+_MAX_SIDECAR_LOGS = 5
 
 
 def find_free_port(host: str = _HOST) -> int:
@@ -206,9 +209,26 @@ class EmailSidecarManager:
         # fills — uvicorn logs an access line per request, so that WOULD happen
         # under normal use. A file has no such ceiling and stays debuggable.
         self.log_dir.mkdir(parents=True, exist_ok=True)
+        self._prune_old_logs()
         self._log_path = self.log_dir / f"sidecar-{port}.log"
         self._log_handle = open(self._log_path, "wb")
         return self._log_handle
+
+    def _prune_old_logs(self) -> None:
+        # Keep the newest _MAX_SIDECAR_LOGS-1 so this run's new file lands within
+        # the cap. Best-effort: a failed unlink never blocks a start.
+        try:
+            existing = sorted(
+                self.log_dir.glob("sidecar-*.log"),
+                key=lambda p: p.stat().st_mtime,
+            )
+        except OSError:
+            return
+        for stale in existing[: -(_MAX_SIDECAR_LOGS - 1) or None]:
+            try:
+                stale.unlink()
+            except OSError:
+                pass
 
     def _read_log_tail(self, limit: int = 2000) -> str:
         if not self._log_path:
