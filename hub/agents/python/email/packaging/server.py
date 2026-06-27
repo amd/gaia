@@ -79,6 +79,14 @@ def build_app():
     return app
 
 
+# Module-level app for uvicorn's import-string form (dev mode's `--reload`).
+# Loaded as the TOP-LEVEL module `server` via `uvicorn server:app --app-dir
+# <this dir>` — NOT `packaging.server:app`, which would resolve to the PyPI
+# `packaging` library (this dir has no __init__.py by design). main() builds its
+# own app, so this attribute is dev-surface only.
+app = build_app()
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description="GAIA Email Triage REST sidecar (frozen binary entrypoint)."
