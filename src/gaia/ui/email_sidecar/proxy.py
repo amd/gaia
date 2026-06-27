@@ -63,17 +63,17 @@ class EmailSidecarProxy:
             "that route lands. This is gated deliberately — no fallback."
         )
 
-    def pre_scan_inbox(self, *args, **kwargs):
+    def pre_scan_inbox(self, *_args, **_kwargs):
         self._pending("inbox pre-scan", "the inbox pre-scan REST route")
 
-    def search_inbox(self, *args, **kwargs):
+    def search_inbox(self, *_args, **_kwargs):
         self._pending("inbox search", "#1781")
 
-    def archive(self, *args, **kwargs):
+    def archive(self, *_args, **_kwargs):
         self._pending("archive", "#1779")
 
-    def quarantine(self, *args, **kwargs):
+    def quarantine(self, *_args, **_kwargs):
         self._pending("quarantine", "#1779")
 
-    def calendar(self, *args, **kwargs):
+    def calendar(self, *_args, **_kwargs):
         self._pending("calendar", "#1780")

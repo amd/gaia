@@ -225,6 +225,35 @@ When the calendar tools run (`list_calendar_events`, `accept_invite`, `decline_i
 (Google calendar scope was skipped during consent). Without an explicit provider setting the
 agent used to pick Google and fail. It now picks Outlook correctly.
 
+## Dev mode: run the email agent from source
+
+The Agent UI talks to the email agent as an out-of-process **sidecar** — a
+self-contained HTTP service the Python backend spawns, health-checks, proxies to,
+and tree-kills. No Node.js is involved. Two modes, selected by
+`GAIA_EMAIL_AGENT_MODE`:
+
+- `user` (default) — runs the published frozen binary, fetched on first email use
+  and verified against `binaries.lock.json` (SHA-256 is the integrity gate). A
+  tampered or unpublished binary fails loudly; there is no fallback to dev mode.
+- `dev` — runs the agent from your local source with hot reload, so prompt/tool
+  edits show up live without a freeze → publish cycle:
+
+  ```bash
+  uv pip install -e hub/agents/python/email   # once
+  GAIA_EMAIL_AGENT_MODE=dev gaia chat --ui
+  ```
+
+The sidecar binds an ephemeral local port (never 4001). Dev mode loads
+`packaging/server.py` as the top-level module `server`
+(`uvicorn server:app --app-dir hub/agents/python/email/packaging`) so the
+package's `packaging/` directory does not collide with the PyPI `packaging`
+library. If the source package is missing, dev mode fails loudly with the
+`uv pip install -e` remedy — it never silently falls back to the binary.
+
+This path is additive and gated behind `GAIA_EMAIL_AGENT_MODE`; the existing
+in-process email path is unchanged until the supersede decision
+([#1767](https://github.com/amd/gaia/issues/1767)) lands.
+
 ## Troubleshooting
 
 ### "AGENT_NOT_GRANTED — Email agent needs additional Google permissions"

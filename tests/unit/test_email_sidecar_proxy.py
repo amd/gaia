@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: MIT
 """EmailSidecarProxy: forward live routes unchanged; gate not-yet-built routes."""
 
+import importlib.util
+
 import pytest
 
 from gaia.ui.email_sidecar.errors import RouteNotAvailableError
@@ -89,3 +91,26 @@ def test_future_routes_gated(method, issue):
     proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=_Session({}))
     with pytest.raises(RouteNotAvailableError, match=issue):
         getattr(proxy, method)()
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("gaia_agent_email") is None
+    or importlib.util.find_spec("uvicorn") is None,
+    reason="email agent + uvicorn required for live proxy round-trip",
+)
+def test_live_proxy_health_and_version_roundtrip(monkeypatch):
+    # Boundary check (mocks prove 'we called it', not 'the call is valid'): spawn
+    # a real dev-mode sidecar and round-trip /health + /version through the proxy
+    # over real HTTP to prove the wire contract holds.
+    from gaia.ui.email_sidecar.manager import EmailSidecarManager
+
+    monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
+    m = EmailSidecarManager(health_timeout=60.0)
+    base = m.start()
+    try:
+        proxy = EmailSidecarProxy(base, timeout=10.0)
+        assert proxy.health()["status"] == "ok"
+        version = proxy.version()
+        assert "apiVersion" in version and "agentVersion" in version
+    finally:
+        m.shutdown()

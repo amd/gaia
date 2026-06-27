@@ -35,7 +35,7 @@ class BinaryLock:
     schema_version: str
     agent_version: str
     base_url: str
-    binaries: dict
+    binaries: "dict[str, LockEntry]"
 
 
 def current_platform_key(plat: Optional[str] = None, arch: Optional[str] = None) -> str:
