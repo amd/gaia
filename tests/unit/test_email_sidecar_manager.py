@@ -144,7 +144,7 @@ def _install_fake_spawn(monkeypatch, tmp_path, *, version_payload=None):
 
     def _fake_http_get(url, timeout):
         if url.endswith("/health"):
-            return _FakeResp({"status": "ok"})
+            return _FakeResp({"status": "ok", "service": "gaia-agent-email"})
         if url.endswith("/version"):
             return _FakeResp(vp)
         raise AssertionError(url)
@@ -203,11 +203,127 @@ def test_version_major_mismatch_raises(monkeypatch, tmp_path):
         m,
         "_http_get",
         lambda url, timeout: _FakeResp(
-            {"status": "ok"} if url.endswith("/health") else {"apiVersion": "1.0"}
+            {"status": "ok", "service": "gaia-agent-email"}
+            if url.endswith("/health")
+            else {"apiVersion": "1.0"}
         ),
     )
     with pytest.raises(VersionMismatchError, match="major"):
         m.start()
+
+
+def test_health_rejects_foreign_server_on_port(monkeypatch, tmp_path):
+    # A non-GAIA server returning {"status":"ok"} must NOT be accepted as our
+    # sidecar — require the service identity.
+    from gaia.ui.email_sidecar.errors import HealthTimeoutError
+
+    monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
+    src = tmp_path / "email"
+    (src / "packaging").mkdir(parents=True)
+    monkeypatch.setattr(mgr.subprocess, "Popen", lambda argv, **kw: _FakeProc())
+    monkeypatch.setattr(mgr.atexit, "register", lambda fn: None)
+    monkeypatch.setattr(mgr.atexit, "unregister", lambda fn: None)
+    monkeypatch.setattr(mgr.os, "killpg", lambda *a: None)
+    monkeypatch.setattr(mgr.os, "getpgid", lambda pid: pid)
+    m = mgr.EmailSidecarManager(
+        email_src_dir=src,
+        cache_dir=tmp_path,
+        log_dir=tmp_path / "logs",
+        health_timeout=0.3,
+    )
+    # Foreign server: status ok but no/wrong service identity.
+    monkeypatch.setattr(
+        m,
+        "_http_get",
+        lambda url, timeout: _FakeResp({"status": "ok", "service": "nginx"}),
+    )
+    with pytest.raises(HealthTimeoutError):
+        m.start()
+
+
+def test_pinned_version_with_missing_apiversion_fails(monkeypatch, tmp_path):
+    from gaia.ui.email_sidecar.errors import VersionMismatchError
+
+    monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
+    src = tmp_path / "email"
+    (src / "packaging").mkdir(parents=True)
+    monkeypatch.setattr(mgr.subprocess, "Popen", lambda argv, **kw: _FakeProc())
+    monkeypatch.setattr(mgr.atexit, "register", lambda fn: None)
+    monkeypatch.setattr(mgr.atexit, "unregister", lambda fn: None)
+    monkeypatch.setattr(mgr.os, "killpg", lambda *a: None)
+    monkeypatch.setattr(mgr.os, "getpgid", lambda pid: pid)
+    m = mgr.EmailSidecarManager(
+        email_src_dir=src,
+        cache_dir=tmp_path,
+        log_dir=tmp_path / "logs",
+        expected_api_version="1.0",
+    )
+    monkeypatch.setattr(m, "shutdown", lambda *a, **k: None)
+    monkeypatch.setattr(
+        m,
+        "_http_get",
+        lambda url, timeout: _FakeResp(
+            {"status": "ok", "service": "gaia-agent-email"}
+            if url.endswith("/health")
+            else {"agentVersion": "0.2"}  # apiVersion intentionally absent
+        ),
+    )
+    with pytest.raises(VersionMismatchError, match="apiVersion"):
+        m.start()
+
+
+def test_concurrent_start_spawns_only_one_sidecar(monkeypatch, tmp_path):
+    import threading
+    import time as _t
+
+    monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
+    src = tmp_path / "email"
+    (src / "packaging").mkdir(parents=True)
+    spawn_count = {"n": 0}
+
+    def _fake_popen(argv, **kwargs):
+        spawn_count["n"] += 1
+        return _FakeProc()
+
+    # Widen the pre-spawn window so both threads would race past the is_running
+    # check if start() were not serialized — the lock must collapse it to one.
+    def _slow_free_port(host="127.0.0.1"):
+        _t.sleep(0.2)
+        return 50000 + spawn_count["n"]
+
+    monkeypatch.setattr(mgr, "find_free_port", _slow_free_port)
+    monkeypatch.setattr(mgr.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(mgr.atexit, "register", lambda fn: None)
+    monkeypatch.setattr(mgr.atexit, "unregister", lambda fn: None)
+    m = mgr.EmailSidecarManager(
+        email_src_dir=src, cache_dir=tmp_path, log_dir=tmp_path / "logs"
+    )
+    monkeypatch.setattr(
+        m,
+        "_http_get",
+        lambda url, timeout: _FakeResp(
+            {"status": "ok", "service": "gaia-agent-email"}
+            if url.endswith("/health")
+            else {"apiVersion": "1.0", "agentVersion": "0.2"}
+        ),
+    )
+
+    results = []
+
+    def _run():
+        try:
+            results.append(m.start())
+        except Exception as e:  # noqa: BLE001
+            results.append(e)
+
+    t1, t2 = threading.Thread(target=_run), threading.Thread(target=_run)
+    t1.start()
+    t2.start()
+    t1.join(10)
+    t2.join(10)
+    # Only one spawn despite two concurrent start() calls; both got the base_url.
+    assert spawn_count["n"] == 1, spawn_count
+    assert all(isinstance(r, str) for r in results), results
 
 
 class _ExitedProc:
@@ -252,7 +368,9 @@ def test_start_retries_on_early_exit_then_succeeds(monkeypatch, tmp_path):
         m,
         "_http_get",
         lambda url, timeout: _FakeResp(
-            {"status": "ok"} if url.endswith("/health") else {"apiVersion": "1.0"}
+            {"status": "ok", "service": "gaia-agent-email"}
+            if url.endswith("/health")
+            else {"apiVersion": "1.0"}
         ),
     )
     base = m.start()

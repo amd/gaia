@@ -31,6 +31,7 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -48,6 +49,10 @@ logger = get_logger(__name__)
 _HOST = "127.0.0.1"
 _RESERVED_PORT = 4001
 _VALID_MODES = ("user", "dev")
+# The sidecar's stable service identifier (server.py /health + api_routes
+# HealthResponse). Used to confirm the process answering our ephemeral port is
+# actually the email sidecar and not some unrelated server.
+_SERVICE_ID = "gaia-agent-email"
 
 
 def find_free_port(host: str = _HOST) -> int:
@@ -105,6 +110,10 @@ class EmailSidecarManager:
         self._log_handle = None
         self._log_path: Optional[Path] = None
         self._atexit_registered = False
+        # Serializes start()/shutdown() so a concurrent lazy "first email use"
+        # from two UI worker threads spawns exactly one sidecar, not two.
+        # Reentrant: start() calls shutdown() on its own failure path.
+        self._lock = threading.RLock()
         self.port: Optional[int] = None
         self.base_url: Optional[str] = None
         self.api_version: Optional[str] = None
@@ -225,6 +234,10 @@ class EmailSidecarManager:
         each time. A genuine hang (``HealthTimeoutError``) is NOT retried — that
         would just multiply the wait — and surfaces loudly on the first attempt.
         """
+        with self._lock:
+            return self._start_locked(max_attempts)
+
+    def _start_locked(self, max_attempts: int) -> str:
         if self.is_running:
             return self.base_url
         last_exit_err: Optional[SidecarSpawnError] = None
@@ -283,10 +296,27 @@ class EmailSidecarManager:
                 )
             try:
                 r = self._http_get(url, timeout=interval * 4)
-                if r.status_code == 200 and r.json().get("status") == "ok":
+                body = r.json() if r.status_code == 200 else {}
+                # Require the service identity, not just status==ok: a foreign
+                # process that happened to grab this ephemeral port must not be
+                # mistaken for our sidecar.
+                if (
+                    r.status_code == 200
+                    and body.get("status") == "ok"
+                    and body.get("service") == _SERVICE_ID
+                ):
                     logger.info("email sidecar healthy at %s", self.base_url)
                     return
-                last_err = f"status={r.status_code} body={r.text[:200]}"
+                if r.status_code == 200 and body.get("service") not in (
+                    None,
+                    _SERVICE_ID,
+                ):
+                    last_err = (
+                        f"a different service ('{body.get('service')}') is serving "
+                        f"{self.base_url} — not the email sidecar"
+                    )
+                else:
+                    last_err = f"status={r.status_code} body={r.text[:200]}"
             except requests.exceptions.RequestException as e:
                 last_err = f"{type(e).__name__}: {e}"
             time.sleep(interval)
@@ -319,7 +349,13 @@ class EmailSidecarManager:
             self.api_version,
             self.agent_version,
         )
-        if self.expected_api_version and self.api_version:
+        if self.expected_api_version:
+            if not self.api_version:
+                raise VersionMismatchError(
+                    f"email sidecar /version omitted 'apiVersion' but the host pins "
+                    f"'{self.expected_api_version}'. Cannot confirm contract "
+                    "compatibility — refusing to proceed."
+                )
             if _major(self.api_version) != _major(self.expected_api_version):
                 raise VersionMismatchError(
                     f"email sidecar apiVersion '{self.api_version}' has a different "
@@ -337,6 +373,10 @@ class EmailSidecarManager:
             self._log_handle = None
 
     def shutdown(self, timeout: float = 5.0) -> None:
+        with self._lock:
+            self._shutdown_locked(timeout)
+
+    def _shutdown_locked(self, timeout: float = 5.0) -> None:
         if self._atexit_registered:
             try:
                 atexit.unregister(self.shutdown)
