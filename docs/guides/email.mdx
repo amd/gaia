@@ -264,9 +264,24 @@ library. If the source package is missing, dev mode fails loudly with the
 - If the backend exits without a clean shutdown, an `atexit` reaper tree-kills the
   sidecar so it never leaks its port or a loaded model.
 
-This path is additive and gated behind `GAIA_EMAIL_AGENT_MODE`; the existing
-in-process email path is unchanged until the supersede decision
-([#1767](https://github.com/amd/gaia/issues/1767)) lands.
+### What the sidecar serves today
+
+When `GAIA_EMAIL_AGENT_MODE` is set, the UI backend serves the **`/v1/email/*`
+REST surface** (triage / draft / send / health / version) from the sidecar
+instead of importing the email agent in-process — no email dependencies in the
+core backend, and a crash in email tooling can't take down chat. The sidecar is
+spawned lazily on the first `/v1/email` request and tree-killed on backend
+shutdown. Only those five endpoints are proxied; the sidecar's connector OAuth
+**write** routes are never exposed to the UI (all grant writes stay on the
+backend's single-writer path).
+
+When the flag is **unset** (the default), the in-process mount is used, so
+existing installs keep working until the frozen binary is published.
+
+The chat inbox **pre-scan card** still runs through the in-process agent — it
+depends on an inbox-scan REST route the sidecar does not expose yet
+([pre-scan](https://github.com/amd/gaia/issues/1781) and friends). That swap is
+sequenced behind those routes.
 
 ## Troubleshooting
 
