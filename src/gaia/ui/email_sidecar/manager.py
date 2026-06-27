@@ -15,6 +15,13 @@ Both serve the identical ``/v1/email/*`` contract; the mode only swaps which
 process answers. The manager binds an ephemeral per-instance port (NEVER 4001)
 and tree-kills the whole process group on shutdown (a PyInstaller one-file build
 spawns a uvicorn child that a plain kill would orphan).
+
+Threading note: ``start()`` (health-poll, lazy binary fetch) and the proxy's HTTP
+calls are **synchronous and blocking**. The Agent UI backend is async, so callers
+MUST invoke them off the event loop (``await asyncio.to_thread(...)`` /
+``run_in_executor``) — exactly as the existing email agent path already runs agent
+work in a worker thread. Calling ``start()`` directly from an async route would
+stall the whole UI backend for up to ``health_timeout`` seconds.
 """
 
 from __future__ import annotations
@@ -181,19 +188,14 @@ class EmailSidecarManager:
             return ""
         return data[-limit:].decode("utf-8", "replace")
 
-    def start(self) -> str:
-        if self.is_running:
-            return self.base_url
-        self.port = find_free_port(self.host)
-        argv, popen_kwargs = self.build_spawn_command(port=self.port)
-        logger.info("email sidecar: spawning (%s mode) %s", self.mode, " ".join(argv))
+    def _spawn_process(self, argv, popen_kwargs, port: int) -> None:
         creationflags = 0
         start_new_session = False
         if os.name == "nt":
             creationflags = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
         else:
             start_new_session = True  # own process group for tree-kill
-        log_handle = self._open_log(self.port)
+        log_handle = self._open_log(port)
         try:
             self._proc = subprocess.Popen(
                 argv,
@@ -214,9 +216,53 @@ class EmailSidecarManager:
         if not self._atexit_registered:
             atexit.register(self.shutdown)
             self._atexit_registered = True
-        self.base_url = f"http://{self.host}:{self.port}"
+
+    def start(self, max_attempts: int = 3) -> str:
+        """Spawn + health-check + version-handshake the sidecar; return base_url.
+
+        Retries only the FAST early-exit failure (e.g. the sidecar lost the
+        ephemeral-port race and uvicorn failed to bind), picking a fresh port
+        each time. A genuine hang (``HealthTimeoutError``) is NOT retried — that
+        would just multiply the wait — and surfaces loudly on the first attempt.
+        """
+        if self.is_running:
+            return self.base_url
+        last_exit_err: Optional[SidecarSpawnError] = None
+        for attempt in range(1, max_attempts + 1):
+            self.port = find_free_port(self.host)
+            argv, popen_kwargs = self.build_spawn_command(port=self.port)
+            logger.info(
+                "email sidecar: spawning (%s mode, attempt %d/%d) %s",
+                self.mode,
+                attempt,
+                max_attempts,
+                " ".join(argv),
+            )
+            self._spawn_process(argv, popen_kwargs, self.port)
+            self.base_url = f"http://{self.host}:{self.port}"
+            try:
+                self._wait_for_health()
+                break
+            except SidecarSpawnError as e:
+                # Early exit — could be a port race; reap and retry on a new port.
+                self.shutdown()
+                last_exit_err = e
+                logger.warning(
+                    "email sidecar attempt %d/%d exited early; retrying: %s",
+                    attempt,
+                    max_attempts,
+                    e,
+                )
+                continue
+            except Exception:
+                self.shutdown()
+                raise
+        else:
+            raise SidecarSpawnError(
+                f"email sidecar failed to start after {max_attempts} attempts. "
+                f"Last failure: {last_exit_err}"
+            )
         try:
-            self._wait_for_health()
             self._check_version()
         except Exception:
             self.shutdown()

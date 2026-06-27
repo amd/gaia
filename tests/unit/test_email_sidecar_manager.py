@@ -103,6 +103,10 @@ class _FakeProc:
     def poll(self):
         return None  # still running
 
+    def wait(self, timeout=None):
+        self.returncode = 0
+        return 0
+
 
 class _FakeResp:
     def __init__(self, payload, status=200):
@@ -204,6 +208,97 @@ def test_version_major_mismatch_raises(monkeypatch, tmp_path):
     )
     with pytest.raises(VersionMismatchError, match="major"):
         m.start()
+
+
+class _ExitedProc:
+    """A proc that exited early (e.g. uvicorn lost a port race on bind)."""
+
+    def __init__(self, pid=1, code=1):
+        self.pid = pid
+        self.returncode = code
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+
+def test_start_retries_on_early_exit_then_succeeds(monkeypatch, tmp_path):
+    # Port-race mitigation: if the sidecar exits early (bind failure), start()
+    # retries with a fresh port instead of surfacing a spurious failure.
+    monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
+    src = tmp_path / "email"
+    (src / "packaging").mkdir(parents=True)
+    procs = [_ExitedProc(), _FakeProc()]  # first dies, second lives
+    ports = []
+
+    def _fake_popen(argv, **kwargs):
+        # capture the --port chosen this attempt
+        ports.append(argv[argv.index("--port") + 1])
+        return procs.pop(0)
+
+    monkeypatch.setattr(mgr.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(mgr.atexit, "register", lambda fn: None)
+    monkeypatch.setattr(mgr.atexit, "unregister", lambda fn: None)
+    # killpg must be a no-op for the fake procs on the early-exit shutdown.
+    monkeypatch.setattr(mgr.os, "killpg", lambda *a: None)
+    monkeypatch.setattr(mgr.os, "getpgid", lambda pid: pid)
+
+    m = mgr.EmailSidecarManager(
+        email_src_dir=src, cache_dir=tmp_path, log_dir=tmp_path / "logs"
+    )
+    monkeypatch.setattr(
+        m,
+        "_http_get",
+        lambda url, timeout: _FakeResp(
+            {"status": "ok"} if url.endswith("/health") else {"apiVersion": "1.0"}
+        ),
+    )
+    base = m.start()
+    assert base.startswith("http://127.0.0.1:")
+    assert m.api_version == "1.0"
+    assert len(ports) == 2  # retried once with a fresh port
+
+
+def test_start_does_not_retry_on_health_timeout(monkeypatch, tmp_path):
+    # A genuine hang (process alive but never healthy) must NOT be retried —
+    # retrying a 30s timeout would multiply latency. Fail loudly, once.
+    from gaia.ui.email_sidecar.errors import HealthTimeoutError
+
+    monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
+    src = tmp_path / "email"
+    (src / "packaging").mkdir(parents=True)
+    spawns = []
+
+    def _fake_popen(argv, **kwargs):
+        spawns.append(argv)
+        return _FakeProc()
+
+    monkeypatch.setattr(mgr.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(mgr.atexit, "register", lambda fn: None)
+    monkeypatch.setattr(mgr.atexit, "unregister", lambda fn: None)
+    monkeypatch.setattr(mgr.os, "killpg", lambda *a: None)
+    monkeypatch.setattr(mgr.os, "getpgid", lambda pid: pid)
+
+    m = mgr.EmailSidecarManager(
+        email_src_dir=src,
+        cache_dir=tmp_path,
+        log_dir=tmp_path / "logs",
+        health_timeout=0.3,
+    )
+
+    class _Boom:
+        status_code = 503
+        text = "starting"
+
+        def json(self):
+            return {"status": "starting"}
+
+    monkeypatch.setattr(m, "_http_get", lambda url, timeout: _Boom())
+    with pytest.raises(HealthTimeoutError):
+        m.start()
+    assert len(spawns) == 1  # no retry on timeout
 
 
 @pytest.mark.skipif(

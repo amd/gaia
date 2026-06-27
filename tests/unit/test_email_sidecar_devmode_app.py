@@ -47,3 +47,33 @@ def test_server_app_dir_import_string_resolves_to_fastapi_app():
     )
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
     assert "OK" in result.stdout
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("gaia_agent_email") is None,
+    reason="email agent wheel not installed",
+)
+def test_server_main_serves_the_single_module_app_openapi():
+    # The frozen `main()` must reuse the module-level `app` (no second build).
+    # Assert both that --print-openapi works and that its schema matches the
+    # module-level app's, proving they are the same app instance's contract.
+    code = (
+        "import sys, io, json, contextlib;"
+        "sys.path.insert(0, sys.argv[1]);"
+        "import server;"
+        "buf=io.StringIO();"
+        "ctx=contextlib.redirect_stdout(buf); ctx.__enter__();"
+        "rc=server.main(['--print-openapi']);"
+        "ctx.__exit__(None,None,None);"
+        "printed=json.loads(buf.getvalue());"
+        "assert rc==0, rc;"
+        "assert printed==server.app.openapi(), 'main() built a different app';"
+        "print('OK')"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(PACKAGING_DIR)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    assert "OK" in result.stdout

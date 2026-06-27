@@ -250,6 +250,20 @@ package's `packaging/` directory does not collide with the PyPI `packaging`
 library. If the source package is missing, dev mode fails loudly with the
 `uv pip install -e` remedy — it never silently falls back to the binary.
 
+**Operational behavior:**
+- The backend spawns the sidecar with its stdout/stderr redirected to
+  `~/.gaia/agents/email/logs/sidecar-<port>.log` — check that file first when a
+  sidecar won't start (a failed start surfaces the log tail in the error too).
+- On every start the backend reads the sidecar's `/version` and records the
+  contract `apiVersion`/`agentVersion`; a major-version mismatch (when a host
+  pins an expected version) fails loudly rather than sending requests the sidecar
+  would mishandle.
+- A sidecar HTTP error (e.g. Lemonade down → `502 local LLM triage failed`) is
+  surfaced verbatim with its actionable message, not flattened into a generic
+  error.
+- If the backend exits without a clean shutdown, an `atexit` reaper tree-kills the
+  sidecar so it never leaks its port or a loaded model.
+
 This path is additive and gated behind `GAIA_EMAIL_AGENT_MODE`; the existing
 in-process email path is unchanged until the supersede decision
 ([#1767](https://github.com/amd/gaia/issues/1767)) lands.
