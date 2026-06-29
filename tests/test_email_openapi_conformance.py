@@ -580,11 +580,17 @@ def test_unquarantine_invalid_payload_returns_422(client):
 # ---------------------------------------------------------------------------
 
 
-def test_prescan_without_mailbox_returns_503(client):
+def test_prescan_without_mailbox_returns_503(client, in_memory_keyring):
     """POST /prescan with no mailbox connected fails loud with the documented 503.
 
     Pre-scan reads the live inbox, so its backend dependency resolves first and
     rejects an unconnected host with 503 (never a silent empty card).
+
+    Unlike the other endpoints, this test exercises the real
+    ``connected_mailbox_providers()`` path (no dependency override), so it needs
+    the in-memory keyring — Linux CI runners ship without a system credential
+    store, and the real backend would otherwise raise instead of reporting an
+    empty (zero-mailbox) state.
     """
     resp = client.post("/v1/email/prescan", json={"max_messages": 5})
     assert resp.status_code == 503
