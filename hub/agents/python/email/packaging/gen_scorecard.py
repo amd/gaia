@@ -31,8 +31,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
+from typing import Optional
 
 # Derive repo root the same way stamp_version.py does:
 # packaging/ -> email/ -> python/ -> agents/ -> hub/ -> repo root
@@ -125,7 +130,75 @@ def _is_judged(scenario: dict) -> bool:
     return 0.0 <= f <= 1.0 and math.isfinite(f)
 
 
-def build_payload(benchmark_dir: Path, ground_truth_path: Path, limit=None):
+def _compute_breakdown(judged: list) -> Optional[dict]:
+    """Aggregate per-category accuracy and top confusion pairs across judged scenarios.
+
+    Only scenarios carrying ``quality.categorization.rows`` contribute. Returns
+    ``None`` if no scenario has rows (e.g. older benchmark runs without this field).
+
+    Args:
+        judged: List of judged scenario dicts (already filtered by :func:`_is_judged`).
+
+    Returns:
+        Dict with ``per_category`` (sorted by name) and ``top_confusions`` (top 5),
+        or ``None`` when no rows are present.
+    """
+    # Aggregate (expected, predicted) pairs across all scenarios with rows.
+    cat_totals: dict[str, int] = {}
+    cat_correct: dict[str, int] = {}
+    confusion_counts: dict[tuple[str, str], int] = {}
+
+    has_rows = False
+    for scenario in judged:
+        rows = scenario.get("quality", {}).get("categorization", {}).get("rows", [])
+        if not rows:
+            continue
+        has_rows = True
+        for row in rows:
+            expected = str(row.get("expected", "")).strip().lower()
+            predicted = str(row.get("predicted", "")).strip().lower()
+            if not expected:
+                continue
+            cat_totals[expected] = cat_totals.get(expected, 0) + 1
+            if row.get("category_correct"):
+                cat_correct[expected] = cat_correct.get(expected, 0) + 1
+            if predicted != expected:
+                pair = (expected, predicted)
+                confusion_counts[pair] = confusion_counts.get(pair, 0) + 1
+
+    if not has_rows:
+        return None
+
+    per_category = sorted(
+        [
+            {
+                "category": cat,
+                "total": cat_totals[cat],
+                "correct": cat_correct.get(cat, 0),
+                "accuracy": round(cat_correct.get(cat, 0) / cat_totals[cat], 4),
+            }
+            for cat in cat_totals
+        ],
+        key=lambda r: r["category"],
+    )
+
+    top_confusions = sorted(
+        [
+            {"expected": exp, "predicted": pred, "count": cnt}
+            for (exp, pred), cnt in confusion_counts.items()
+        ],
+        key=lambda c: -c["count"],
+    )[:5]
+
+    return {"per_category": per_category, "top_confusions": top_confusions}
+
+
+def build_payload(
+    benchmark_dir: Path,
+    ground_truth_path: Path,
+    limit=None,
+    environment=None,
+):
     """Build a :class:`~gaia.eval.release_scorecard.ResultPayload` from benchmark output.
 
     A scenario is **judged** iff it has a ``quality`` dict AND
@@ -138,6 +211,8 @@ def build_payload(benchmark_dir: Path, ground_truth_path: Path, limit=None):
         limit: The ``--limit`` value used for the eval run, recorded in
             ``config["limit"]`` for cross-version comparability. The benchmark
             ``scorecard.json`` does not persist this, so it must be passed in.
+        environment: Optional dict of environment metadata (commit, version, model,
+            hardware, …). Embedded verbatim in the payload; assembled by ``main()``.
 
     Returns:
         Populated :class:`~gaia.eval.release_scorecard.ResultPayload`.
@@ -207,9 +282,7 @@ def build_payload(benchmark_dir: Path, ground_truth_path: Path, limit=None):
 
     version = str(agent_data.get("version", ""))
     if not version:
-        raise ValueError(
-            f"No 'version:' field found in {agent_yaml_path}."
-        )
+        raise ValueError(f"No 'version:' field found in {agent_yaml_path}.")
 
     # Model id: benchmark output records it as the per-scenario `category`.
     # Fall back to the manifest's first declared model.
@@ -220,7 +293,9 @@ def build_payload(benchmark_dir: Path, ground_truth_path: Path, limit=None):
     metrics = [
         {"name": "category_accuracy", "value": float(category_accuracy), "weight": 1.0}
     ]
-    compute_aggregate(metrics)  # validate metrics; aggregate embedded in render_scorecard
+    compute_aggregate(
+        metrics
+    )  # validate metrics; aggregate embedded in render_scorecard
 
     import datetime
 
@@ -237,7 +312,9 @@ def build_payload(benchmark_dir: Path, ground_truth_path: Path, limit=None):
         "# Step 1: run the benchmark (requires a Lemonade Server with the model "
         "loaded; AMD Ryzen AI / Strix Halo recommended)\n"
         "PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \\\n"
-        "GAIA_AGENT_TOOL_TIMEOUT=900 \\\n"
+        # Full-corpus triage is one tool call (~17 min on a 4B local model); a
+        # lower timeout abandons it mid-run and scores 0 emails.
+        "GAIA_AGENT_TOOL_TIMEOUT=1800 \\\n"
         'PYTHONPATH="$(pwd)" \\\n'
         "gaia eval benchmark \\\n"
         f"    --model {model} \\\n"
@@ -251,6 +328,8 @@ def build_payload(benchmark_dir: Path, ground_truth_path: Path, limit=None):
         f"    --ground-truth {ground_truth_rel}"
         + (f"{limit_flag}" if limit is not None else "")
     )
+
+    breakdown = _compute_breakdown(judged)
 
     return ResultPayload(
         agent_name="Email Triage",
@@ -284,7 +363,70 @@ def build_payload(benchmark_dir: Path, ground_truth_path: Path, limit=None):
         generated_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
         inherited_from=None,
         reproduction_command=reproduction_command,
+        breakdown=breakdown,
+        environment=environment,
     )
+
+
+def _capture_gaia_commit() -> str:
+    """Return the short git commit hash at repo root.
+
+    Raises:
+        RuntimeError: If git is unavailable or the repo root cannot be resolved.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(
+            f"Cannot determine gaia_commit: git failed in {_REPO_ROOT}: {exc}. "
+            "Ensure git is installed and the working tree is inside a git repository."
+        ) from exc
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Cannot determine gaia_commit: 'git rev-parse --short HEAD' exited "
+            f"{result.returncode} in {_REPO_ROOT}: {result.stderr.strip()}. "
+            "Ensure the working tree is inside a git repository."
+        )
+    return result.stdout.strip()
+
+
+def _query_lemonade_version(base_url: str) -> str:
+    """Query the Lemonade Server health endpoint and return its version string.
+
+    Args:
+        base_url: Base URL of the running Lemonade Server, e.g.
+            ``http://localhost:13305``.
+
+    Returns:
+        Version string from ``/api/v1/health``.
+
+    Raises:
+        RuntimeError: If the endpoint is unreachable or the response lacks a version.
+    """
+    url = base_url.rstrip("/") + "/api/v1/health"
+    try:
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.URLError as exc:
+        raise RuntimeError(
+            f"Cannot determine lemonade_version: health endpoint unreachable at "
+            f"{url}: {exc}. "
+            "Start the Lemonade Server or pass --lemonade-version explicitly."
+        ) from exc
+    version = data.get("version") if isinstance(data, dict) else None
+    if not version:
+        raise RuntimeError(
+            f"Cannot determine lemonade_version: health endpoint at {url} "
+            f"returned no 'version' field (response: {data!r}). "
+            "Pass --lemonade-version explicitly."
+        )
+    return str(version)
 
 
 def main(argv=None) -> int:
@@ -326,14 +468,77 @@ def main(argv=None) -> int:
             "(the benchmark output does not persist it)."
         ),
     )
+    parser.add_argument(
+        "--lemonade-version",
+        default=None,
+        help=(
+            "Lemonade Server version used for this run (e.g. '10.8.0'). "
+            "If omitted, queried from the running server's /api/v1/health endpoint. "
+            "The server URL defaults to LEMONADE_BASE_URL or http://localhost:13305."
+        ),
+    )
+    parser.add_argument(
+        "--hardware",
+        default="AMD Ryzen AI MAX+ (Strix Halo)",
+        help=(
+            "Hardware class descriptor recorded in the environment block "
+            "(default: 'AMD Ryzen AI MAX+ (Strix Halo)'). "
+            "Use a class description, never a hostname."
+        ),
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=None,
+        help="Sampling temperature used for the eval run, if applicable.",
+    )
 
     args = parser.parse_args(argv)
 
     benchmark_dir = Path(args.benchmark_dir).resolve()
     gt_path = Path(args.ground_truth).resolve()
 
+    # Capture the model id early so we can include it in the environment block.
+    # build_payload resolves the model from the benchmark output; we replicate the
+    # same lightweight read here to avoid splitting build_payload's pure interface.
     try:
-        payload = build_payload(benchmark_dir, gt_path, limit=args.limit)
+        _sc_path = _find_benchmark_scorecard(benchmark_dir)
+        _sc_data = json.loads(_sc_path.read_text(encoding="utf-8"))
+        _scenarios = _sc_data.get("scenarios", [])
+        _model = _scenarios[0].get("category") if _scenarios else None
+    except (FileNotFoundError, ValueError, json.JSONDecodeError):
+        _model = None
+
+    # Resolve lemonade_version: flag wins, then live query.
+    lemonade_version: Optional[str] = args.lemonade_version
+    if not lemonade_version:
+        base_url = os.environ.get("LEMONADE_BASE_URL", "http://localhost:13305")
+        try:
+            lemonade_version = _query_lemonade_version(base_url)
+        except RuntimeError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+
+    # Capture the git commit at repo root — always required.
+    try:
+        gaia_commit = _capture_gaia_commit()
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    environment: dict = {
+        "gaia_commit": gaia_commit,
+        "lemonade_version": lemonade_version,
+        **({"model": _model} if _model else {}),
+        "hardware": args.hardware,
+    }
+    if args.temperature is not None:
+        environment["temperature"] = args.temperature
+
+    try:
+        payload = build_payload(
+            benchmark_dir, gt_path, limit=args.limit, environment=environment
+        )
     except (ValueError, FileNotFoundError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

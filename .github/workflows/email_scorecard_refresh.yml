@@ -112,9 +112,10 @@ jobs:
           # The agent's calendar-connector resolution blocks on the OS keyring in
           # a headless context — disable it so construction doesn't hang.
           PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
-          # Triage of N emails is one tool call; the 180s default abandons it on a
-          # slow backend and yields a degenerate 0-email run.
-          GAIA_AGENT_TOOL_TIMEOUT: '900'
+          # Triage of the full corpus is one tool call (~17 min for 220 emails on a
+          # 4B local model); a lower timeout abandons it mid-run and yields a
+          # degenerate 0-email run, so pin a margin above the observed time.
+          GAIA_AGENT_TOOL_TIMEOUT: '1800'
           PYTHONPATH: ${{ github.workspace }}
         run: |
           set -euo pipefail

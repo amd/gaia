@@ -609,3 +609,647 @@ class TestEmailAdapter:
         assert "gaia eval benchmark" in payload.reproduction_command
         assert "gen_scorecard.py" in payload.reproduction_command
         assert "PYTHON_KEYRING_BACKEND" in payload.reproduction_command
+
+
+# ---------------------------------------------------------------------------
+# 11. Task 1: breakdown round-trip (release_scorecard core)
+# ---------------------------------------------------------------------------
+
+
+class TestBreakdownRoundTrip:
+    """breakdown field: render→parse round-trip, absence, aggregate invariant."""
+
+    def _make_breakdown(self):
+        return {
+            "per_category": [
+                {"category": "fyi", "total": 50, "correct": 30, "accuracy": 0.6},
+                {"category": "spam", "total": 20, "correct": 18, "accuracy": 0.9},
+            ],
+            "top_confusions": [
+                {"expected": "fyi", "predicted": "needs_response", "count": 12},
+                {"expected": "spam", "predicted": "fyi", "count": 2},
+            ],
+        }
+
+    def test_breakdown_present_in_front_matter(self):
+        payload = _make_payload()
+        payload.breakdown = self._make_breakdown()
+        text = render_scorecard(payload)
+        parsed = parse_scorecard(text)
+        assert (
+            "breakdown" in parsed["results"]
+        ), "'breakdown' must appear under results in front matter when set"
+        bd = parsed["results"]["breakdown"]
+        assert "per_category" in bd
+        cats = [r["category"] for r in bd["per_category"]]
+        assert cats == ["fyi", "spam"]
+
+    def test_breakdown_absent_when_none(self):
+        payload = _make_payload()
+        # default breakdown is None
+        text = render_scorecard(payload)
+        parsed = parse_scorecard(text)
+        assert "breakdown" not in parsed.get(
+            "results", {}
+        ), "'breakdown' must not appear in front matter when payload.breakdown is None"
+
+    def test_breakdown_body_section_rendered_when_present(self):
+        payload = _make_payload()
+        payload.breakdown = self._make_breakdown()
+        text = render_scorecard(payload)
+        assert "## Category breakdown" in text
+
+    def test_breakdown_body_section_absent_when_none(self):
+        payload = _make_payload()
+        text = render_scorecard(payload)
+        assert "## Category breakdown" not in text
+
+    def test_breakdown_body_table_has_correct_columns(self):
+        payload = _make_payload()
+        payload.breakdown = self._make_breakdown()
+        text = render_scorecard(payload)
+        assert "Category" in text
+        assert "Total" in text
+        assert "Correct" in text
+        assert "Accuracy" in text
+
+    def test_breakdown_body_contains_top_confusions(self):
+        payload = _make_payload()
+        payload.breakdown = self._make_breakdown()
+        text = render_scorecard(payload)
+        assert "fyi" in text
+        assert "needs_response" in text
+        assert "12" in text
+
+    def test_breakdown_validate_still_passes(self):
+        payload = _make_payload()
+        payload.breakdown = self._make_breakdown()
+        text = render_scorecard(payload)
+        parsed = parse_scorecard(text)
+        errors = validate_scorecard(parsed)
+        assert errors == [], f"validate_scorecard failed with breakdown set: {errors}"
+
+    def test_breakdown_not_in_required_fields(self):
+        assert (
+            "breakdown" not in REQUIRED_FIELDS
+        ), "'breakdown' must remain optional (not in REQUIRED_FIELDS)"
+
+    def test_aggregate_value_unchanged_with_breakdown(self):
+        """Breakdown must not affect aggregate.value — descriptive only."""
+        base = _make_payload(accuracy=0.46)
+        base_text = render_scorecard(base)
+        base_parsed = parse_scorecard(base_text)
+        base_agg = base_parsed["aggregate"]["value"]
+
+        with_bd = _make_payload(accuracy=0.46)
+        with_bd.breakdown = {
+            "per_category": [
+                {"category": "fyi", "total": 10, "correct": 5, "accuracy": 0.5}
+            ],
+            "top_confusions": [],
+        }
+        bd_text = render_scorecard(with_bd)
+        bd_parsed = parse_scorecard(bd_text)
+        bd_agg = bd_parsed["aggregate"]["value"]
+
+        assert (
+            base_agg == bd_agg
+        ), f"Aggregate changed when breakdown was added: {base_agg} → {bd_agg}"
+
+
+# ---------------------------------------------------------------------------
+# 12. Task 2: environment round-trip (release_scorecard core)
+# ---------------------------------------------------------------------------
+
+
+class TestEnvironmentRoundTrip:
+    """environment field: render→parse round-trip, absence, validate invariant."""
+
+    def _make_env(self):
+        return {
+            "gaia_commit": "abc1234",
+            "lemonade_version": "10.8.0",
+            "model": "Gemma-4-E4B-it-GGUF",
+            "hardware": "AMD Ryzen AI MAX+ (Strix Halo)",
+        }
+
+    def test_environment_present_in_front_matter(self):
+        payload = _make_payload()
+        payload.environment = self._make_env()
+        text = render_scorecard(payload)
+        parsed = parse_scorecard(text)
+        assert "environment" in parsed.get(
+            "recipe", {}
+        ), "'environment' must appear under recipe in front matter when set"
+        env = parsed["recipe"]["environment"]
+        assert env["gaia_commit"] == "abc1234"
+        assert env["model"] == "Gemma-4-E4B-it-GGUF"
+
+    def test_environment_absent_when_none(self):
+        payload = _make_payload()
+        text = render_scorecard(payload)
+        parsed = parse_scorecard(text)
+        assert "environment" not in parsed.get(
+            "recipe", {}
+        ), "'environment' must not appear in front matter when payload.environment is None"
+
+    def test_environment_body_section_rendered_when_present(self):
+        payload = _make_payload()
+        payload.environment = self._make_env()
+        text = render_scorecard(payload)
+        assert "## Environment" in text
+
+    def test_environment_body_section_absent_when_none(self):
+        payload = _make_payload()
+        text = render_scorecard(payload)
+        assert "## Environment" not in text
+
+    def test_environment_body_table_has_field_value_columns(self):
+        payload = _make_payload()
+        payload.environment = self._make_env()
+        text = render_scorecard(payload)
+        assert "| Field" in text or "| field" in text.lower()
+        assert "| Value" in text or "| value" in text.lower()
+
+    def test_environment_validate_still_passes(self):
+        payload = _make_payload()
+        payload.environment = self._make_env()
+        text = render_scorecard(payload)
+        parsed = parse_scorecard(text)
+        errors = validate_scorecard(parsed)
+        assert errors == [], f"validate_scorecard failed with environment set: {errors}"
+
+    def test_environment_not_in_required_fields(self):
+        assert (
+            "environment" not in REQUIRED_FIELDS
+        ), "'environment' must remain optional (not in REQUIRED_FIELDS)"
+
+    def test_environment_round_trips_all_keys(self):
+        env = self._make_env()
+        env["temperature"] = 0.0
+        payload = _make_payload()
+        payload.environment = env
+        parsed = parse_scorecard(render_scorecard(payload))
+        recovered = parsed["recipe"]["environment"]
+        assert recovered["temperature"] == 0.0
+        assert recovered["hardware"] == "AMD Ryzen AI MAX+ (Strix Halo)"
+
+
+# ---------------------------------------------------------------------------
+# 13. Task 1 adapter: breakdown computation (gen_scorecard.py)
+# ---------------------------------------------------------------------------
+
+
+_RICHER_SCORECARD = {
+    "run_id": "breakdown-fixture",
+    "scenarios": [
+        {
+            "category": "Gemma-4-E4B-it-GGUF",
+            "status": "PASS",
+            "total_emails": 10,
+            "quality": {
+                "category_accuracy": 0.6,
+                "categorization": {
+                    "axis": "needs_attention",
+                    "rows": [
+                        # 6 correct fyi, 2 correct spam, 2 wrong (fyi→needs_response)
+                        {
+                            "id": "e1",
+                            "predicted": "fyi",
+                            "expected": "fyi",
+                            "category_correct": True,
+                        },
+                        {
+                            "id": "e2",
+                            "predicted": "fyi",
+                            "expected": "fyi",
+                            "category_correct": True,
+                        },
+                        {
+                            "id": "e3",
+                            "predicted": "fyi",
+                            "expected": "fyi",
+                            "category_correct": True,
+                        },
+                        {
+                            "id": "e4",
+                            "predicted": "needs_response",
+                            "expected": "fyi",
+                            "category_correct": False,
+                        },
+                        {
+                            "id": "e5",
+                            "predicted": "needs_response",
+                            "expected": "fyi",
+                            "category_correct": False,
+                        },
+                        {
+                            "id": "e6",
+                            "predicted": "spam",
+                            "expected": "spam",
+                            "category_correct": True,
+                        },
+                        {
+                            "id": "e7",
+                            "predicted": "spam",
+                            "expected": "spam",
+                            "category_correct": True,
+                        },
+                        {
+                            "id": "e8",
+                            "predicted": "fyi",
+                            "expected": "fyi",
+                            "category_correct": True,
+                        },
+                        {
+                            "id": "e9",
+                            "predicted": "fyi",
+                            "expected": "fyi",
+                            "category_correct": True,
+                        },
+                        {
+                            "id": "e10",
+                            "predicted": "fyi",
+                            "expected": "fyi",
+                            "category_correct": True,
+                        },
+                    ],
+                    "false_positives": [],
+                    "false_negatives": ["e4", "e5"],
+                    "summary": {},
+                },
+            },
+        },
+        {
+            "category": "Gemma-4-E4B-it-GGUF",
+            "status": "PASS",
+            "total_emails": 20,
+            "quality": {
+                "category_accuracy": 0.75,
+                "categorization": {
+                    "axis": "needs_attention",
+                    "rows": [
+                        # 15 correct: 10 fyi correct, 5 spam correct; 5 wrong: spam→fyi
+                        {
+                            "id": "f1",
+                            "predicted": "fyi",
+                            "expected": "fyi",
+                            "category_correct": True,
+                        },
+                        {
+                            "id": "f2",
+                            "predicted": "fyi",
+                            "expected": "fyi",
+                            "category_correct": True,
+                        },
+                        {
+                            "id": "f3",
+                            "predicted": "fyi",
+                            "expected": "fyi",
+                            "category_correct": True,
+                        },
+                        {
+                            "id": "f4",
+                            "predicted": "fyi",
+                            "expected": "fyi",
+                            "category_correct": True,
+                        },
+                        {
+                            "id": "f5",
+                            "predicted": "fyi",
+                            "expected": "fyi",
+                            "category_correct": True,
+                        },
+                        {
+                            "id": "f6",
+                            "predicted": "fyi",
+                            "expected": "fyi",
+                            "category_correct": True,
+                        },
+                        {
+                            "id": "f7",
+                            "predicted": "fyi",
+                            "expected": "fyi",
+                            "category_correct": True,
+                        },
+                        {
+                            "id": "f8",
+                            "predicted": "fyi",
+                            "expected": "fyi",
+                            "category_correct": True,
+                        },
+                        {
+                            "id": "f9",
+                            "predicted": "fyi",
+                            "expected": "fyi",
+                            "category_correct": True,
+                        },
+                        {
+                            "id": "f10",
+                            "predicted": "fyi",
+                            "expected": "fyi",
+                            "category_correct": True,
+                        },
+                        {
+                            "id": "f11",
+                            "predicted": "spam",
+                            "expected": "spam",
+                            "category_correct": True,
+                        },
+                        {
+                            "id": "f12",
+                            "predicted": "spam",
+                            "expected": "spam",
+                            "category_correct": True,
+                        },
+                        {
+                            "id": "f13",
+                            "predicted": "spam",
+                            "expected": "spam",
+                            "category_correct": True,
+                        },
+                        {
+                            "id": "f14",
+                            "predicted": "spam",
+                            "expected": "spam",
+                            "category_correct": True,
+                        },
+                        {
+                            "id": "f15",
+                            "predicted": "spam",
+                            "expected": "spam",
+                            "category_correct": True,
+                        },
+                        {
+                            "id": "f16",
+                            "predicted": "fyi",
+                            "expected": "spam",
+                            "category_correct": False,
+                        },
+                        {
+                            "id": "f17",
+                            "predicted": "fyi",
+                            "expected": "spam",
+                            "category_correct": False,
+                        },
+                        {
+                            "id": "f18",
+                            "predicted": "fyi",
+                            "expected": "spam",
+                            "category_correct": False,
+                        },
+                        {
+                            "id": "f19",
+                            "predicted": "fyi",
+                            "expected": "spam",
+                            "category_correct": False,
+                        },
+                        {
+                            "id": "f20",
+                            "predicted": "fyi",
+                            "expected": "spam",
+                            "category_correct": False,
+                        },
+                    ],
+                    "false_positives": [],
+                    "false_negatives": [],
+                    "summary": {},
+                },
+            },
+        },
+    ],
+}
+
+
+class TestBreakdownAdapter:
+    """Adapter tests for build_payload breakdown computation."""
+
+    def _load_gen_scorecard(self):
+        adapter_path = (
+            Path(__file__).parents[3]
+            / "hub"
+            / "agents"
+            / "python"
+            / "email"
+            / "packaging"
+            / "gen_scorecard.py"
+        )
+        spec = importlib.util.spec_from_file_location("gen_scorecard", adapter_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def _make_benchmark_dir(self, tmp_path, scorecard_data):
+        benchmark_dir = tmp_path / "benchmark"
+        benchmark_dir.mkdir()
+        (benchmark_dir / "scorecard.json").write_text(json.dumps(scorecard_data))
+        return benchmark_dir
+
+    def _make_gt(self, tmp_path):
+        gt = {"a": {"label": "x"}, "b": {"label": "y"}}
+        gt_path = tmp_path / "ground_truth.json"
+        gt_path.write_text(json.dumps(gt))
+        return gt_path
+
+    def test_per_category_accuracy_fyi(self, tmp_path):
+        """fyi: 6+10=16 total, 6+10=16 correct in scenario1+2 combined."""
+        mod = self._load_gen_scorecard()
+        bd = tmp_path / "bdir"
+        bd.mkdir()
+        (bd / "scorecard.json").write_text(json.dumps(_RICHER_SCORECARD))
+        gt_path = self._make_gt(tmp_path)
+        payload = mod.build_payload(bd, gt_path)
+
+        assert payload.breakdown is not None
+        cats = {r["category"]: r for r in payload.breakdown["per_category"]}
+        assert "fyi" in cats
+        # scenario1: 8 fyi total (e1-e3,e8-e10,e4,e5 → 3 correct from the True rows + 3=6 fyi→correct)
+        # Actually counting: e1,e2,e3,e8,e9,e10 = 6 correct fyi; e4,e5 = 2 wrong (expected fyi)
+        # scenario1 fyi: total=8 (e1-e5,e8-e10), correct=6
+        # scenario2 fyi: total=10 (f1-f10), correct=10
+        # combined fyi: total=18, correct=16
+        assert cats["fyi"]["total"] == 18
+        assert cats["fyi"]["correct"] == 16
+        assert cats["fyi"]["accuracy"] == pytest.approx(round(16 / 18, 4))
+
+    def test_per_category_accuracy_spam(self, tmp_path):
+        """spam: scenario1 has 2 correct spam; scenario2 has 5 correct + 5 wrong."""
+        mod = self._load_gen_scorecard()
+        bd = tmp_path / "bdir"
+        bd.mkdir()
+        (bd / "scorecard.json").write_text(json.dumps(_RICHER_SCORECARD))
+        gt_path = self._make_gt(tmp_path)
+        payload = mod.build_payload(bd, gt_path)
+
+        cats = {r["category"]: r for r in payload.breakdown["per_category"]}
+        # scenario1 spam: e6,e7 = 2 total, 2 correct
+        # scenario2 spam: f11-f20 = 10 total (5 correct spam, 5 wrong→predicted fyi)
+        # combined spam: total=12, correct=7
+        assert cats["spam"]["total"] == 12
+        assert cats["spam"]["correct"] == 7
+        assert cats["spam"]["accuracy"] == pytest.approx(round(7 / 12, 4))
+
+    def test_top_confusions_populated(self, tmp_path):
+        """Top confusions must include the (fyi, needs_response) pair from scenario1."""
+        mod = self._load_gen_scorecard()
+        bd = tmp_path / "bdir"
+        bd.mkdir()
+        (bd / "scorecard.json").write_text(json.dumps(_RICHER_SCORECARD))
+        gt_path = self._make_gt(tmp_path)
+        payload = mod.build_payload(bd, gt_path)
+
+        confusions = payload.breakdown["top_confusions"]
+        # (expected=fyi, predicted=needs_response): 2 in scenario1
+        fyi_to_needs = next(
+            (
+                c
+                for c in confusions
+                if c["expected"] == "fyi" and c["predicted"] == "needs_response"
+            ),
+            None,
+        )
+        assert (
+            fyi_to_needs is not None
+        ), "Expected fyi→needs_response confusion not found"
+        assert fyi_to_needs["count"] == 2
+
+    def test_headline_accuracy_unchanged_with_breakdown(self, tmp_path):
+        """Weighted headline category_accuracy must be unaffected by breakdown."""
+        mod = self._load_gen_scorecard()
+        bd = tmp_path / "bdir"
+        bd.mkdir()
+        (bd / "scorecard.json").write_text(json.dumps(_RICHER_SCORECARD))
+        gt_path = self._make_gt(tmp_path)
+        payload = mod.build_payload(bd, gt_path)
+
+        # Weighted: (0.6*10 + 0.75*20) / 30 = (6 + 15) / 30 = 0.7
+        assert payload.metrics[0]["value"] == pytest.approx(0.7)
+
+    def test_breakdown_totals_reconcile_with_test_cases_run(self, tmp_path):
+        """Per-category totals must sum to test_cases_run — the breakdown
+        accounts for exactly the judged emails, no more, no fewer."""
+        mod = self._load_gen_scorecard()
+        bd = tmp_path / "bdir"
+        bd.mkdir()
+        (bd / "scorecard.json").write_text(json.dumps(_RICHER_SCORECARD))
+        gt_path = self._make_gt(tmp_path)
+        payload = mod.build_payload(bd, gt_path)
+
+        total = sum(r["total"] for r in payload.breakdown["per_category"])
+        assert total == payload.test_cases_run
+
+    def test_breakdown_none_when_no_categorization_rows(self, tmp_path):
+        """If no judged scenario has categorization.rows, breakdown must be None."""
+        mod = self._load_gen_scorecard()
+        benchmark_dir = tmp_path / "benchmark"
+        benchmark_dir.mkdir()
+        # Minimal scorecard without categorization
+        scorecard = {
+            "run_id": "no-rows",
+            "scenarios": [
+                {
+                    "category": "m",
+                    "status": "PASS",
+                    "total_emails": 10,
+                    "quality": {"category_accuracy": 0.5},
+                }
+            ],
+        }
+        (benchmark_dir / "scorecard.json").write_text(json.dumps(scorecard))
+        gt_path = self._make_gt(tmp_path)
+        payload = mod.build_payload(benchmark_dir, gt_path)
+
+        assert (
+            payload.breakdown is None
+        ), "breakdown must be None when no scenario carries categorization.rows"
+
+    def test_per_category_sorted_alphabetically(self, tmp_path):
+        """per_category entries must be sorted by category name."""
+        mod = self._load_gen_scorecard()
+        bd = tmp_path / "bdir"
+        bd.mkdir()
+        (bd / "scorecard.json").write_text(json.dumps(_RICHER_SCORECARD))
+        gt_path = self._make_gt(tmp_path)
+        payload = mod.build_payload(bd, gt_path)
+
+        names = [r["category"] for r in payload.breakdown["per_category"]]
+        assert names == sorted(names), f"per_category not sorted: {names}"
+
+
+# ---------------------------------------------------------------------------
+# 14. Task 2 adapter: environment embedding (gen_scorecard.py)
+# ---------------------------------------------------------------------------
+
+
+class TestEnvironmentAdapter:
+    """Adapter tests: build_payload embeds a passed-in environment dict verbatim."""
+
+    def _load_gen_scorecard(self):
+        adapter_path = (
+            Path(__file__).parents[3]
+            / "hub"
+            / "agents"
+            / "python"
+            / "email"
+            / "packaging"
+            / "gen_scorecard.py"
+        )
+        spec = importlib.util.spec_from_file_location("gen_scorecard", adapter_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def _make_benchmark_dir(self, tmp_path):
+        benchmark_dir = tmp_path / "benchmark"
+        benchmark_dir.mkdir()
+        scorecard = {
+            "run_id": "env-fixture",
+            "scenarios": [
+                {
+                    "category": "Gemma-4-E4B-it-GGUF",
+                    "status": "PASS",
+                    "total_emails": 10,
+                    "quality": {"category_accuracy": 0.5},
+                }
+            ],
+        }
+        (benchmark_dir / "scorecard.json").write_text(json.dumps(scorecard))
+        gt = {"a": {"label": "x"}}
+        gt_path = tmp_path / "gt.json"
+        gt_path.write_text(json.dumps(gt))
+        return benchmark_dir, gt_path
+
+    def test_environment_embedded_verbatim(self, tmp_path):
+        mod = self._load_gen_scorecard()
+        bd, gt = self._make_benchmark_dir(tmp_path)
+        env = {
+            "gaia_commit": "deadbeef",
+            "lemonade_version": "10.9.0",
+            "model": "Gemma-4-E4B-it-GGUF",
+            "hardware": "AMD Ryzen AI MAX+ (Strix Halo)",
+        }
+        payload = mod.build_payload(bd, gt, environment=env)
+        assert payload.environment == env
+
+    def test_environment_none_when_not_passed(self, tmp_path):
+        mod = self._load_gen_scorecard()
+        bd, gt = self._make_benchmark_dir(tmp_path)
+        payload = mod.build_payload(bd, gt)
+        assert payload.environment is None
+
+    def test_environment_round_trips_through_scorecard(self, tmp_path):
+        mod = self._load_gen_scorecard()
+        bd, gt = self._make_benchmark_dir(tmp_path)
+        env = {
+            "gaia_commit": "abc1234",
+            "lemonade_version": "10.8.0",
+            "model": "Gemma-4-E4B-it-GGUF",
+            "hardware": "AMD Ryzen AI MAX+ (Strix Halo)",
+            "temperature": 0.0,
+        }
+        payload = mod.build_payload(bd, gt, environment=env)
+        text = render_scorecard(payload)
+        parsed = parse_scorecard(text)
+        recovered = parsed["recipe"]["environment"]
+        assert recovered["gaia_commit"] == "abc1234"
+        assert recovered["temperature"] == 0.0

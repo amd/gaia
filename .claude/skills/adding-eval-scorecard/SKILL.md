@@ -31,6 +31,7 @@ Copy `hub/agents/python/email/packaging/gen_scorecard.py` as the template. The a
 - records **dataset size** (total labeled examples) and **test_cases_run** (subset executed) as DISTINCT fields;
 - stores **repo-relative** paths only (never a local absolute path — it ships in a published artifact);
 - records the eval `limit`/config so future regression checks are comparable;
+- optionally populates `environment` (`gaia_commit`, `lemonade_version`, `model`, `hardware` — a class descriptor, never a hostname) and `breakdown` (`per_category` accuracy + `top_confusions`) — additive blocks that pin the run and explain the misses without ever affecting `aggregate.value`. Capture live environment (git SHA, server health version) in `main()`, not `build_payload`, so the payload builder stays pure and unit-testable;
 - writes to `<doc-root>/SCORECARD.md` (the single file; `--output-dir` overrides to a directory, but the filename is always `SCORECARD.md`).
 
 Add an offline unit test against a committed sample harness-output fixture (see `tests/fixtures/eval/email_benchmark_scorecard.json` + `tests/unit/eval/test_release_scorecard.py::TestEmailAdapter`) so the adapter is testable without a live model.

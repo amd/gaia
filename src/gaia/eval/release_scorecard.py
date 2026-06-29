@@ -88,6 +88,18 @@ class ResultPayload:
     generated_at: str = ""
     inherited_from: Optional[str] = None
     reproduction_command: Optional[str] = None
+    breakdown: Optional[dict] = None
+    environment: Optional[dict] = None
+
+
+def _md_cell(value) -> str:
+    """Escape a value for safe inclusion in a single Markdown table cell.
+
+    Pipes would split the cell and newlines would break the row, so a stray
+    one in a caller-supplied value (e.g. an unusual version/hardware string)
+    would silently corrupt the rendered table.
+    """
+    return str(value).replace("|", "\\|").replace("\n", " ")
 
 
 def compute_aggregate(metrics: list) -> tuple:
@@ -160,6 +172,7 @@ def render_scorecard(payload: ResultPayload) -> str:
             },
             "methodology": payload.methodology,
             "config": payload.config,
+            **({"environment": payload.environment} if payload.environment else {}),
         },
         "results": {
             "test_cases_run": payload.test_cases_run,
@@ -171,6 +184,7 @@ def render_scorecard(payload: ResultPayload) -> str:
                 }
                 for m in payload.metrics
             ],
+            **({"breakdown": payload.breakdown} if payload.breakdown else {}),
         },
         "aggregate": {
             "name": payload.aggregate_name,
@@ -245,6 +259,37 @@ matter alone — no eval-harness access needed.
 
 {repro_body}
 """
+
+    if payload.environment:
+        env_rows = "\n".join(
+            f"| {_md_cell(k)} | {_md_cell(v)} |" for k, v in payload.environment.items()
+        )
+        body += (
+            f"\n## Environment\n\n| Field | Value |\n|-------|-------|\n{env_rows}\n"
+        )
+
+    if payload.breakdown:
+        per_cat = payload.breakdown.get("per_category", [])
+        cat_rows = "\n".join(
+            f"| {_md_cell(r['category'])} | {r['total']} | {r['correct']} "
+            f"| {r['accuracy']:.4f} |"
+            for r in per_cat
+        )
+        breakdown_section = (
+            "\n## Category breakdown\n\n"
+            "| Category | Total | Correct | Accuracy |\n"
+            "|----------|-------|---------|----------|\n"
+            f"{cat_rows}\n"
+        )
+        top_conf = payload.breakdown.get("top_confusions", [])
+        if top_conf:
+            conf_lines = "\n".join(
+                f"  - {_md_cell(c['expected'])} → {_md_cell(c['predicted'])}: "
+                f"{c['count']}"
+                for c in top_conf
+            )
+            breakdown_section += f"\n**Top confusions:**\n\n{conf_lines}\n"
+        body += breakdown_section
 
     if payload.inherited_from:
         body += f"\n> **Inherited from {payload.inherited_from}** — results carried forward verbatim (patch release).\n"

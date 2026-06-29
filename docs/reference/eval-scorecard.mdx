@@ -32,7 +32,7 @@ Scorecard files are **Markdown with YAML front matter** (`.md`). The front matte
 schema_version: 1
 agent:
   name: Email Triage
-  version: 0.2.4
+  version: 0.2.5
 recipe:
   dataset:
     reference: tests/fixtures/email/ground_truth.json
@@ -47,23 +47,23 @@ results:
   test_cases_run: 100
   metrics:
     - name: category_accuracy
-      value: 0.46
+      value: 0.42
       weight: 1.0
 aggregate:
   name: weighted_accuracy
   formula: "round(100 * sum(weight_i * value_i) / sum(weight_i), 2)"
   components:
     - metric: category_accuracy
-      value: 0.46
+      value: 0.42
       weight: 1.0
-  value: 46.0
+  value: 42.0
 generated_at: "2026-06-26T16:47:13+00:00"
 inherited_from: null
 ---
 
-# Email Triage — Eval Scorecard v0.2.4
+# Email Triage — Eval Scorecard v0.2.5
 
-**Aggregate score: 40.0** (out of 100)
+**Aggregate score: 42.0** (out of 100)
 ...
 
 ## Reproduction
@@ -92,6 +92,33 @@ A scorecard missing any of these is **invalid** and will be rejected by the rele
 | `aggregate.formula` | Human-readable formula string |
 | `aggregate.components` | List of `{metric, value, weight}` dicts |
 | `aggregate.value` | The computed aggregate float |
+
+### Optional fields
+
+Two blocks are **optional and additive** — a scorecard is valid with or without them, and neither ever affects `aggregate.value`. They add reviewer-facing detail about *how* the number was produced and *where* the misses are:
+
+| Field | Description |
+|-------|-------------|
+| `recipe.environment` | What produced the numbers: `gaia_commit`, `lemonade_version`, `model`, `hardware` (a class descriptor — never a hostname), and an optional `temperature`. |
+| `results.breakdown` | Where the score comes from: `per_category` (per-label `total` / `correct` / `accuracy`) and `top_confusions` (the most frequent `expected → predicted` mistakes). |
+
+```yaml
+recipe:
+  environment:
+    gaia_commit: a1b2c3d
+    lemonade_version: 10.8.0
+    model: Gemma-4-E4B-it-GGUF
+    hardware: AMD Ryzen AI MAX+ (Strix Halo)
+results:
+  breakdown:
+    per_category:
+      - {category: fyi, total: 88, correct: 54, accuracy: 0.6136}
+      - {category: needs_response, total: 44, correct: 17, accuracy: 0.3864}
+    top_confusions:
+      - {expected: fyi, predicted: needs_response, count: 28}
+```
+
+The email-triage adapter fills both in automatically. For a new agent, set `ResultPayload.environment` / `ResultPayload.breakdown` when your harness exposes the data, and omit them otherwise.
 
 ### Two counts — defined distinctly
 
