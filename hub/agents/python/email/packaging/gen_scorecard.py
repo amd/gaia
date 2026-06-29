@@ -17,7 +17,7 @@ the loose-coupling spine is preserved.
 Usage::
 
     PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \\
-    GAIA_AGENT_TOOL_TIMEOUT=120 \\
+    GAIA_AGENT_TOOL_TIMEOUT=1800 \\
     PYTHONPATH="$(pwd)" \\
     python hub/agents/python/email/packaging/gen_scorecard.py \\
         --benchmark-dir /tmp/email-eval \\

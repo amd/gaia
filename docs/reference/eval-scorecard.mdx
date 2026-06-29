@@ -199,7 +199,7 @@ For a **minor or major bump**, `carry_forward()` raises `ValueError` with a "re-
 
 ```bash
 PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \
-GAIA_AGENT_TOOL_TIMEOUT=120 \
+GAIA_AGENT_TOOL_TIMEOUT=1800 \
 PYTHONPATH="$(pwd)" \
 gaia eval benchmark \
   --model Gemma-4-E4B-it-GGUF \

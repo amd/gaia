@@ -43,7 +43,7 @@ The accuracy number must come from an actual run. For the email agent:
 ```bash
 # Real eval needs Lemonade + the model. Prefer AMD hardware (Strix Halo / Ryzen AI);
 # the [self-hosted, lemonade-eval] runner is the canonical environment.
-GAIA_AGENT_TOOL_TIMEOUT=900 \
+GAIA_AGENT_TOOL_TIMEOUT=1800 \
 PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \
 PYTHONPATH="$(pwd)" \
   <venv>/bin/gaia eval benchmark \
@@ -61,7 +61,7 @@ PYTHONPATH="$(pwd)" \
 **Headless gotchas (see memory `project-email-benchmark-headless-gotchas`):**
 - `PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring` — the email agent's calendar-connector resolution blocks forever on the macOS Keychain (and can stall on Linux SecretService) in non-interactive contexts. Without this it hangs at 0% CPU during agent construction.
 - `PYTHONPATH="$(pwd)"` — the benchmark imports `tests.fixtures.email.*`; the console script doesn't add the repo root.
-- `GAIA_AGENT_TOOL_TIMEOUT=900` — triage of N emails is one tool call; the 180s default abandons it on slow backends, yielding a degenerate 0-email FAIL run.
+- `GAIA_AGENT_TOOL_TIMEOUT=1800` — triage of the full corpus is one tool call (~17 min for ~100 emails on a 4B model); a lower timeout (the 180s default, or even 900s) abandons it mid-run, yielding a degenerate 0-email FAIL run.
 - Write `--output-dir` to a **persistent** dir, not `/tmp` (cleared on session resume).
 - Record honestly: if the metric is low for a known reason (e.g. a taxonomy/label mismatch), put the explanation in the adapter's `methodology` string and link the tracking issue — never inflate the number.
 
