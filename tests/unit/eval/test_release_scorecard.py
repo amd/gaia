@@ -333,6 +333,31 @@ class TestCarryForwardPatch:
         result = carry_forward(card_path, "0.2.4")
         assert result.metrics == src.metrics
 
+    def test_carry_forward_preserves_breakdown_and_environment(self, tmp_path):
+        # "Carried forward verbatim" must include the optional blocks — a patch
+        # release should not silently shed the breakdown or run environment.
+        src = _make_payload(version="0.2.3", accuracy=0.75)
+        src.breakdown = {
+            "per_category": [
+                {"category": "fyi", "total": 6, "correct": 4, "accuracy": 0.6667}
+            ],
+            "top_confusions": [
+                {"expected": "fyi", "predicted": "needs_response", "count": 2}
+            ],
+        }
+        src.environment = {
+            "gaia_commit": "abc1234",
+            "lemonade_version": "10.7.0",
+            "model": "Gemma-4-E4B-it-GGUF",
+            "hardware": "AMD Ryzen AI MAX+ (Strix Halo)",
+        }
+        card_path = tmp_path / "SCORECARD.md"
+        card_path.write_text(render_scorecard(src))
+
+        result = carry_forward(card_path, "0.2.4")
+        assert result.breakdown == src.breakdown
+        assert result.environment == src.environment
+
     def test_carry_forward_reads_version_from_front_matter(self, tmp_path):
         # The new carry_forward reads agent.version from front matter, NOT filename.
         src = _make_payload(version="0.2.3", accuracy=0.75)

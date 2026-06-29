@@ -515,6 +515,11 @@ def carry_forward(prev_scorecard_path: Path, new_version: str) -> ResultPayload:
     dataset = recipe.get("dataset", {})
     results = parsed.get("results", {})
     metrics_raw = results.get("metrics", [])
+    # Carry the optional blocks verbatim too — a patch release must not silently
+    # shed the per-category breakdown or the run environment (the docstring/docs
+    # promise "carried forward verbatim").
+    breakdown = results.get("breakdown")
+    environment = recipe.get("environment")
 
     import datetime
 
@@ -531,4 +536,6 @@ def carry_forward(prev_scorecard_path: Path, new_version: str) -> ResultPayload:
         aggregate_name=parsed.get("aggregate", {}).get("name", "weighted_accuracy"),
         generated_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
         inherited_from=prev_version,
+        breakdown=breakdown,
+        environment=environment,
     )
