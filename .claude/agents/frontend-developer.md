@@ -19,7 +19,7 @@ You work on GAIA frontends. The primary surface is the Agent UI (`src/gaia/apps/
 - Type-first TypeScript code or `.d.ts` design → `typescript-developer`
 - UI/UX research and wireframing → `ui-ux-designer`
 - Backend routers/SSE in `src/gaia/ui/` → `python-developer`
-- Installer/packaging → see `docs/plans/installer.mdx`
+- Installer/packaging → see `docs/plans/desktop-installer.mdx`
 
 ## Agent UI (primary) — `src/gaia/apps/webui/`
 
@@ -45,7 +45,7 @@ uv run python -m gaia.ui.server --debug       # port 4200
 # Frontend (terminal 2)
 cd src/gaia/apps/webui
 npm install
-npm run dev                                    # Vite dev server on 5173
+npm run dev                                    # Vite dev server on 5174
 ```
 
 **Build & package:**
@@ -108,7 +108,7 @@ Jest tests for Electron apps live in `tests/electron/`.
 
 ## Common pitfalls
 
-- **Vite dev server vs Electron** — for Electron dev mode, point Electron at `http://localhost:5173`, not a file URL
+- **Vite dev server vs Electron** — for Electron dev mode, point Electron at `http://localhost:5174`, not a file URL
 - **Forgot `npm run build` before `gaia chat --ui`** — UI loads a blank page
 - **SSE hanging** — the FastAPI SSE handler yields events; don't buffer in a proxy
 - **Missing CORS during local dev** — add dev origins in `src/gaia/ui/server.py`

@@ -54,24 +54,31 @@ def _purge_custom_agent_modules():
 
 
 class TestBuiltinRegistration:
-    def test_chat_always_registered(self):
+    # chat/doc/file ship as the standalone gaia-agent-chat wheel (#1102),
+    # discovered via the gaia.agent entry point. The chat-specific tests below
+    # importorskip the wheel so a framework-only env tolerates its absence.
+    def test_chat_registered_when_wheel_installed(self):
+        pytest.importorskip("gaia_agent_chat")
         registry = AgentRegistry()
         registry.discover()
         assert registry.get("chat") is not None
 
-    def test_chat_source_is_builtin(self):
+    def test_chat_source_is_installed(self):
+        pytest.importorskip("gaia_agent_chat")
         registry = AgentRegistry()
         registry.discover()
         reg = registry.get("chat")
-        assert reg.source == "builtin"
+        assert reg.source == "installed"
 
     def test_chat_has_conversation_starters(self):
+        pytest.importorskip("gaia_agent_chat")
         registry = AgentRegistry()
         registry.discover()
         reg = registry.get("chat")
         assert len(reg.conversation_starters) > 0
 
     def test_list_returns_all_builtins(self):
+        pytest.importorskip("gaia_agent_chat")
         registry = AgentRegistry()
         registry.discover()
         ids = [r.id for r in registry.list()]
@@ -107,11 +114,11 @@ class TestBuiltinRegistration:
     # gaia-lite were collapsed into a "lite" model TIER of the single base
     # agent. The old IDs survive only as legacy aliases.
 
-    # chat/doc/file are ChatAgent profiles still resident in the framework
-    # wheel. data (AnalystAgent) and web (BrowserAgent) now ship as the
-    # standalone gaia-agent-analyst / gaia-agent-browser wheels (#1102); their
-    # full+lite tiers are verified in those packages' own tests, so the
-    # framework-only suite asserts tiers on the resident profiles only.
+    # chat/doc/file (ChatAgent profiles), data (AnalystAgent) and web
+    # (BrowserAgent) all now ship as standalone hub wheels (#1102); their
+    # full+lite tiers are verified in those packages' own tests. The
+    # framework-only suite asserts tiers on chat/doc/file only when the
+    # gaia-agent-chat wheel is installed (importorskip below).
     _BASE_AGENTS = ["chat", "doc", "file"]
     _LEGACY_LITE_IDS = [
         "chat-lite",
@@ -131,6 +138,7 @@ class TestBuiltinRegistration:
             assert legacy not in ids, f"{legacy} must no longer be its own card"
 
     def test_base_agents_declare_full_and_lite_tiers(self):
+        pytest.importorskip("gaia_agent_chat")
         registry = AgentRegistry()
         registry.discover()
         for agent_id in self._BASE_AGENTS:
@@ -171,9 +179,10 @@ class TestBuiltinRegistration:
 
     def test_legacy_chat_lite_create_agent_uses_lite_tier(self):
         """``create_agent('chat-lite')`` builds chat with the ~4B preset."""
+        pytest.importorskip("gaia_agent_chat")
         registry = AgentRegistry()
         registry.discover()
-        with patch("gaia.agents.chat.agent.ChatAgent") as mock_agent:
+        with patch("gaia_agent_chat.agent.ChatAgent") as mock_agent:
             registry.create_agent("chat-lite")
         mock_agent.assert_called_once()
         config = mock_agent.call_args.kwargs["config"]
@@ -182,9 +191,10 @@ class TestBuiltinRegistration:
 
     def test_legacy_gaia_lite_create_agent_uses_doc_profile(self):
         """gaia-lite resolves to the doc agent on the lite tier."""
+        pytest.importorskip("gaia_agent_chat")
         registry = AgentRegistry()
         registry.discover()
-        with patch("gaia.agents.chat.agent.ChatAgent") as mock_agent:
+        with patch("gaia_agent_chat.agent.ChatAgent") as mock_agent:
             registry.create_agent("gaia-lite")
         config = mock_agent.call_args.kwargs["config"]
         assert config.model_id == _EXPECTED_PRIMARY
@@ -192,27 +202,30 @@ class TestBuiltinRegistration:
 
     def test_explicit_model_id_overrides_lite_tier(self):
         """A caller-pinned ``model_id`` wins over the alias's lite preset."""
+        pytest.importorskip("gaia_agent_chat")
         registry = AgentRegistry()
         registry.discover()
-        with patch("gaia.agents.chat.agent.ChatAgent") as mock_agent:
+        with patch("gaia_agent_chat.agent.ChatAgent") as mock_agent:
             registry.create_agent("chat-lite", model_id="Custom-Model-Override")
         config = mock_agent.call_args.kwargs["config"]
         assert config.model_id == "Custom-Model-Override"
 
     def test_explicit_model_tier_selects_lite_on_base_id(self):
         """The base id + ``model_tier='lite'`` selects the ~4B preset (#1162)."""
+        pytest.importorskip("gaia_agent_chat")
         registry = AgentRegistry()
         registry.discover()
-        with patch("gaia.agents.chat.agent.ChatAgent") as mock_agent:
+        with patch("gaia_agent_chat.agent.ChatAgent") as mock_agent:
             registry.create_agent("chat", model_tier="lite")
         config = mock_agent.call_args.kwargs["config"]
         assert config.model_id == _EXPECTED_PRIMARY
 
     def test_base_chat_create_agent_uses_default_model(self):
         """Plain ``chat`` (full tier) leaves model_id unset for the agent default."""
+        pytest.importorskip("gaia_agent_chat")
         registry = AgentRegistry()
         registry.discover()
-        with patch("gaia.agents.chat.agent.ChatAgent") as mock_agent:
+        with patch("gaia_agent_chat.agent.ChatAgent") as mock_agent:
             registry.create_agent("chat")
         config = mock_agent.call_args.kwargs["config"]
         assert config.model_id is None
@@ -224,6 +237,7 @@ class TestBuiltinRegistration:
         still resolve to the 4B preset even though the base ``chat`` agent
         carries no top-level ``models`` preference (#1162).
         """
+        pytest.importorskip("gaia_agent_chat")
         registry = AgentRegistry()
         registry.discover()
         resolved = registry.resolve_model(
@@ -233,6 +247,7 @@ class TestBuiltinRegistration:
         assert resolved == _EXPECTED_PRIMARY
 
     def test_legacy_gaia_lite_resolve_model_returns_4b(self):
+        pytest.importorskip("gaia_agent_chat")
         registry = AgentRegistry()
         registry.discover()
         resolved = registry.resolve_model(
@@ -243,6 +258,7 @@ class TestBuiltinRegistration:
 
     def test_base_chat_resolve_model_returns_none(self):
         """The full tier defers to the agent default — resolve_model is None."""
+        pytest.importorskip("gaia_agent_chat")
         registry = AgentRegistry()
         registry.discover()
         resolved = registry.resolve_model("chat", available_models=[_EXPECTED_PRIMARY])
@@ -262,6 +278,7 @@ class TestBuiltinRegistration:
 
     def test_chat_has_no_memory_requirement_by_default(self):
         """Chat (full tier) leaves min_memory_gb unset — existing behaviour."""
+        pytest.importorskip("gaia_agent_chat")
         registry = AgentRegistry()
         registry.discover()
         reg = registry.get("chat")

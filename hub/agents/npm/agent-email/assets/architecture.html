@@ -1,0 +1,154 @@
+<!doctype html>
+<!--
+  Source for architecture.webp (rendered at 2x, downscaled to 1600w, → webp q88).
+  The "v0.2.0" badge below is the package version — keep it in sync with the
+  package version (a version-stamp script should update it, then re-render).
+
+  Render (headless Chrome):
+    python3 -m http.server 8138   # serve this dir
+    "Google Chrome" --headless=new --force-device-scale-factor=2 \
+      --window-size=1240,560 --screenshot=arch2x.png http://127.0.0.1:8138/architecture.html
+    cwebp -q 88 -resize 1600 0 arch2x.png -o architecture.webp
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0a0a0b; --surface:#111113; --code:#0d0d0f; --border:#1f1f22;
+    --text:#f0f0ee; --muted:#8e8e92; --gold:#e2a33e;
+    --soft:rgba(226,163,62,.12); --line:rgba(226,163,62,.35);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#0a0a0b;font-family:Inter,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .mono{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace}
+  .card{
+    width:1180px; background:radial-gradient(120% 70% at 50% -10%,rgba(226,163,62,.06) 0%,transparent 55%),var(--bg);
+    border:1px solid var(--border); border-radius:18px; padding:34px 40px 38px; position:relative; overflow:hidden;
+  }
+  .card::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;
+    background:linear-gradient(90deg,transparent,#e2a33e 30%,#f0c476 50%,#e2a33e 70%,transparent);opacity:.85}
+
+  .head{display:flex;align-items:baseline;gap:14px;margin-bottom:4px}
+  .pkg{font-family:"JetBrains Mono",monospace;font-size:18px;font-weight:600;color:var(--gold)}
+  .tag{font-size:12px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  .ver{font-family:"JetBrains Mono",monospace;font-size:12px;font-weight:600;color:var(--gold);
+    background:var(--soft);border:1px solid var(--line);border-radius:999px;padding:3px 11px;align-self:center}
+  .install{display:inline-flex;align-items:center;gap:9px;margin:14px 0 28px;
+    background:var(--code);border:1px solid var(--border);border-radius:9px;padding:9px 14px}
+  .install .p{color:var(--gold)}
+  .install code{font-family:"JetBrains Mono",monospace;font-size:13.5px;color:var(--text)}
+
+  .flow{display:flex;align-items:stretch;gap:0;margin-bottom:6px}
+  .node{flex:1;background:var(--surface);border:1px solid var(--border);border-radius:13px;padding:15px 17px}
+  .node.owned{border-color:var(--line);box-shadow:0 0 0 1px var(--line),0 0 26px rgba(226,163,62,.18)}
+  .node .n-top{display:flex;align-items:center;gap:9px}
+  .node .ico{width:30px;height:30px;border-radius:8px;background:var(--soft);border:1px solid var(--line);
+    display:flex;align-items:center;justify-content:center;font-size:15px}
+  .node .name{font-size:15px;font-weight:650;color:var(--text)}
+  .node .addr{font-family:"JetBrains Mono",monospace;font-size:11.5px;color:var(--gold);margin-top:9px}
+  .node .desc{font-size:12px;color:var(--muted);margin-top:6px;line-height:1.45}
+  .eps{margin-top:9px;display:flex;flex-direction:column;gap:2px}
+  .eps span{font-family:"JetBrains Mono",monospace;font-size:10.5px;color:var(--muted)}
+  .eps b{color:var(--text);font-weight:500}
+
+  .edge{flex:0 0 116px;display:flex;flex-direction:column;align-items:center;justify-content:center;position:relative;padding:0 4px}
+  .edge .lbl{font-size:11px;font-weight:600;color:var(--gold);text-align:center;line-height:1.3;margin-bottom:7px}
+  .edge .bar{display:flex;align-items:center;width:100%}
+  .edge .ln{height:2px;flex:1;background:linear-gradient(90deg,rgba(226,163,62,.4),var(--gold))}
+  .edge .hd{width:0;height:0;border-top:5px solid transparent;border-bottom:5px solid transparent;border-left:8px solid var(--gold)}
+  .edge .proto{font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--muted);margin-top:7px}
+
+  .panels{display:flex;gap:18px;margin-top:30px}
+  .panel{flex:1;background:var(--code);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+  .panel .bar2{display:flex;align-items:center;gap:8px;padding:9px 14px;border-bottom:1px solid var(--border);background:rgba(255,255,255,.015)}
+  .panel .bar2 .dot{width:9px;height:9px;border-radius:50%}
+  .panel .bar2 .t{margin-left:6px;font-size:12px;color:var(--muted)}
+  .panel .bar2 .t b{color:var(--text);font-weight:600}
+  .panel .ent{margin-left:auto;font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--gold)}
+  pre{margin:0;padding:15px 17px;font-family:"JetBrains Mono",monospace;font-size:12.5px;line-height:1.65;color:var(--text);white-space:pre}
+  .k{color:#e2a33e}
+  .s{color:#9ecb8a}
+  .c{color:#6b6b70}
+  .dim{color:var(--muted)}
+
+  .req{margin-top:24px;font-family:"JetBrains Mono",monospace;font-size:12px;color:var(--muted);text-align:center}
+  .req b{color:var(--gold);font-weight:500}
+</style>
+</head>
+<body>
+  <div class="card" id="card">
+    <div class="head">
+      <span class="pkg">@amd-gaia/agent-email</span>
+      <span class="ver" id="ver">v0.3.0</span>
+      <span class="tag">architecture</span>
+    </div>
+    <div class="install"><span class="p mono">$</span><code>npm i @amd-gaia/agent-email</code></div>
+
+    <div class="flow">
+      <div class="node">
+        <div class="n-top"><div class="ico">📦</div><div class="name">Your code</div></div>
+        <div class="addr">Node ≥ 18</div>
+        <div class="desc">imports the <span class="mono" style="color:var(--gold)">"."</span> entry; fetches + spawns the binary</div>
+      </div>
+
+      <div class="edge">
+        <div class="lbl">spawn,<br>then drive</div>
+        <div class="bar"><div class="ln"></div><div class="hd"></div></div>
+        <div class="proto">child_process · HTTP</div>
+      </div>
+
+      <div class="node owned">
+        <div class="n-top"><div class="ico">⚡</div><div class="name">email-agent sidecar</div></div>
+        <div class="addr">127.0.0.1:8131</div>
+        <div class="eps">
+          <span><b>POST</b> /v1/email/triage · /draft · /send</span>
+          <span><b>GET</b>&nbsp;&nbsp;/health · /version</span>
+        </div>
+        <div class="desc">frozen FastAPI binary — no Python on host</div>
+      </div>
+
+      <div class="edge">
+        <div class="lbl">LLM call</div>
+        <div class="bar"><div class="ln"></div><div class="hd"></div></div>
+        <div class="proto">HTTP</div>
+      </div>
+
+      <div class="node">
+        <div class="n-top"><div class="ico">🍋</div><div class="name">Lemonade Server</div></div>
+        <div class="addr">local LLM</div>
+        <div class="desc">runs triage inference · unreachable → <span class="mono" style="color:var(--gold)">502</span></div>
+      </div>
+    </div>
+
+    <div class="panels">
+      <div class="panel">
+        <div class="bar2"><span class="dot" style="background:#e2a33e"></span><span class="t"><b>Node host</b> — spawn &amp; drive</span><span class="ent">"."</span></div>
+<pre><span class="k">import</span> { fetchBinary, startSidecar, shutdown }
+  <span class="k">from</span> <span class="s">"@amd-gaia/agent-email"</span>;
+
+<span class="k">const</span> { binaryPath } = <span class="k">await</span> fetchBinary({ outDir: <span class="s">"resources"</span> });
+<span class="k">const</span> sc = <span class="k">await</span> startSidecar({ binaryPath, port: <span class="k">8131</span> });
+<span class="k">const</span> { result } = <span class="k">await</span> sc.client.triage({ payload });
+<span class="k">await</span> shutdown(sc);</pre>
+      </div>
+
+      <div class="panel">
+        <div class="bar2"><span class="dot" style="background:#6b6b70"></span><span class="t"><b>Browser / Electron renderer</b> — HTTP only</span><span class="ent">"./client"</span></div>
+<pre><span class="c">// no node:fs / child_process — bundles for a renderer</span>
+<span class="k">import</span> { EmailClient } <span class="k">from</span> <span class="s">"@amd-gaia/agent-email/client"</span>;
+
+<span class="k">const</span> client = <span class="k">new</span> EmailClient({
+  baseUrl: <span class="s">"http://127.0.0.1:8131"</span>,   <span class="c">// a running sidecar</span>
+});
+<span class="k">const</span> { result } = <span class="k">await</span> client.triage({ payload });</pre>
+      </div>
+    </div>
+
+    <div class="req">Node ≥ 18 &nbsp;·&nbsp; <b>ESM-only</b> (no <span class="mono">require</span>) &nbsp;·&nbsp; ships compiled JS, TypeScript optional</div>
+  </div>
+</body>
+</html>

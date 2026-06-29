@@ -50,7 +50,7 @@ You design GAIA's human surfaces: the Agent UI (`src/gaia/apps/webui/`), standal
 - Usability test scripts + success metrics
 - Rationale: why this choice over alternatives
 
-Drop written outputs under `docs/plans/` or attach to issues/PRs. Images under `docs/img/`.
+Drop written outputs under `docs/plans/` or attach to issues/PRs. Images under `docs/assets/img/`.
 
 ## Accessibility checklist
 

@@ -47,9 +47,11 @@ from uuid import uuid4
 import numpy as np
 
 from gaia.agents.base.memory_store import (
+    EXTRACTABLE_CATEGORIES,
     MAX_CONTENT_LENGTH,
     VALID_CATEGORIES,
 )
+from gaia.agents.base.procedural_memory import ProceduralMemoryMixin
 
 logger = logging.getLogger(__name__)
 
@@ -291,7 +293,7 @@ def _blob_to_embedding(blob: bytes) -> np.ndarray:
     return np.frombuffer(blob, dtype=np.float32).copy()
 
 
-class MemoryMixin:
+class MemoryMixin(ProceduralMemoryMixin):
     """
     Mixin that gives any Agent persistent memory across sessions (v2).
 
@@ -342,6 +344,10 @@ class MemoryMixin:
             self._embedder = None
             self._faiss_index = None
             self._faiss_id_map = []
+            self._proc_faiss_index = None
+            self._proc_faiss_id_map = []
+            self._recalled_skill_prompt = ""
+            self._recalled_skills = []
             self._memory_post_init_pending = False
             self._memory_session_id = str(uuid4())
             return
@@ -364,6 +370,24 @@ class MemoryMixin:
         # FAISS index state
         self._faiss_index = None
         self._faiss_id_map: List[str] = []  # faiss_position -> knowledge_id
+
+        # Procedures FAISS index state — a SEPARATE index over
+        # procedures.embedding (the when_to_use trigger vector), distinct from
+        # the knowledge index above so goal→procedure recall never pollutes, or
+        # is polluted by, knowledge search (#887 procedural memory).
+        self._proc_faiss_index = None
+        self._proc_faiss_id_map: List[str] = []  # faiss_position -> procedure_id
+
+        # Per-turn recalled-skill injection (#887 RECALL).  Holds the rendered
+        # procedure body(ies) recall_skill matched for the current goal; the
+        # auto-discovered get_recalled_skills_system_prompt() contributes it to
+        # the composed system prompt.  Empty string = no recall = the system
+        # prompt stays byte-identical to a build without procedural memory.
+        self._recalled_skill_prompt = ""
+        # The matched Skill objects from the same per-turn recall (#1451): the
+        # tool loader reads their tools_required via _recalled_skill_tools as the
+        # SKILL signal.  Empty list = no recall = no SKILL signal this turn.
+        self._recalled_skills = []
 
         # Step 2: Validate Lemonade embedding service connectivity.
         #
@@ -415,6 +439,11 @@ class MemoryMixin:
 
         # Step 4: Rebuild FAISS index from stored embeddings
         self._rebuild_faiss_index()
+
+        # Step 4b: Rebuild the SEPARATE procedures FAISS index (#887). Empty
+        # until skill synthesis stores procedures, so this is a no-op cost for
+        # users without procedural memory yet.
+        self._rebuild_proc_faiss_index()
 
         # Step 5: apply_confidence_decay()
         self._memory_store.apply_confidence_decay()
@@ -1102,8 +1131,16 @@ class MemoryMixin:
                     continue
                 op_type = op["op"]
                 if op_type == "add" and "content" in op and "category" in op:
-                    if op["category"] in VALID_CATEGORIES:
+                    if op["category"] in EXTRACTABLE_CATEGORIES:
                         valid_ops.append(op)
+                    elif op["category"] in VALID_CATEGORIES:
+                        # Privileged category (system/profile/permission): only
+                        # explicit tools may write these — never the extractor.
+                        logger.debug(
+                            "[MemoryMixin] dropped extracted op with privileged "
+                            "category %r (extractor cannot write it)",
+                            op["category"],
+                        )
                 elif op_type == "update" and "knowledge_id" in op and "content" in op:
                     valid_ops.append(op)
                 elif op_type == "delete" and "knowledge_id" in op:
@@ -1208,7 +1245,8 @@ class MemoryMixin:
 
         Called automatically on the first process_query() invocation, by which
         time Agent.__init__() has completed and self.chat is available.
-        Steps: reconcile_memory (max 20 pairs) + consolidate_old_sessions (max 5).
+        Steps: reconcile_memory (max 20 pairs), consolidate_old_sessions (max 5),
+        then _synthesize_skills (procedural memory, #887).
         """
         # Step 6: reconcile_memory() (max 20 pairs)
         try:
@@ -1225,6 +1263,18 @@ class MemoryMixin:
                 logger.info("[MemoryMixin] post-init consolidation: %s", consol)
         except Exception as e:
             logger.warning("[MemoryMixin] post-init consolidation failed: %s", e)
+
+        # Step 8: _synthesize_skills() — procedural memory (#887).  Boundary
+        # translation only: _synthesize_skills is fail-loud internally (embedder
+        # failure re-raises, no smaller-model fallback); this wrapper keeps a
+        # background synthesis error from crashing the user's first query, the
+        # same posture as the reconcile / consolidate steps above.
+        try:
+            synth = self._synthesize_skills()
+            if synth.get("stored", 0) > 0:
+                logger.info("[MemoryMixin] post-init skill synthesis: %s", synth)
+        except Exception as e:
+            logger.warning("[MemoryMixin] post-init skill synthesis failed: %s", e)
 
     # ==================================================================
     # Conversation Consolidation
@@ -1318,14 +1368,23 @@ class MemoryMixin:
                         vec = self._embed_text(summary)
                         store.store_embedding(summary_id, _embedding_to_blob(vec))
                         self._faiss_add(summary_id, vec)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        # Non-fatal: the row is stored; the vector is backfilled
+                        # on the next init. Logged so the gap is never silent.
+                        logger.debug(
+                            "[MemoryMixin] consolidation summary embed failed "
+                            "(id=%s, backfilled on restart): %s",
+                            summary_id,
+                            e,
+                        )
 
                 # Store extracted knowledge items
                 knowledge_items = data.get("knowledge", [])
                 for ki in knowledge_items:
                     if isinstance(ki, dict) and "content" in ki and "category" in ki:
-                        if ki["category"] in VALID_CATEGORIES:
+                        # EXTRACTABLE_CATEGORIES, not VALID_CATEGORIES: a session
+                        # summary must not mint a system/profile/permission row.
+                        if ki["category"] in EXTRACTABLE_CATEGORIES:
                             try:
                                 kid = store.store(
                                     category=ki["category"],
@@ -1340,8 +1399,16 @@ class MemoryMixin:
                                     vec = self._embed_text(ki["content"])
                                     store.store_embedding(kid, _embedding_to_blob(vec))
                                     self._faiss_add(kid, vec)
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    # Non-fatal: row stored; vector backfilled on
+                                    # next init. Logged so the gap is not silent.
+                                    logger.debug(
+                                        "[MemoryMixin] consolidation item embed "
+                                        "failed (id=%s, backfilled on restart): "
+                                        "%s",
+                                        kid,
+                                        e,
+                                    )
                                 result["extracted_items"] += 1
                             except Exception as e:
                                 logger.debug(
@@ -1561,8 +1628,16 @@ class MemoryMixin:
                     reconciled_b.append(id_a)
                     merged_b["reconciled_with"] = reconciled_b
                     store.update(id_b, metadata=merged_b)
-                except Exception:
-                    pass
+                except Exception as e:
+                    # Loud: a failed mark means this pair is re-examined (and
+                    # re-sent to the LLM) on every startup until it succeeds.
+                    logger.warning(
+                        "[MemoryMixin] failed to mark pair %s/%s reconciled — "
+                        "it will be re-checked next startup: %s",
+                        id_a[:8],
+                        id_b[:8],
+                        e,
+                    )
 
             except json.JSONDecodeError:
                 logger.debug(
@@ -1778,6 +1853,11 @@ class MemoryMixin:
 
         # Save original so _after_process_query stores the clean user text
         self._original_user_input = user_input
+
+        # Refresh the recalled-procedure injection for this goal (#887 RECALL).
+        # Uses the clean goal (not the dynamic-context-augmented message) and
+        # recomposes the system prompt only when the recalled set changes.
+        self._refresh_recalled_skills(user_input)
 
         # Prepend dynamic context to the user message
         dynamic = self.get_memory_dynamic_context()
@@ -2349,6 +2429,25 @@ class MemoryMixin:
             time_to: str = "",
         ) -> dict:
             """Search past conversations. Use query for keywords, days for time range, time_from/time_to for ISO 8601 boundaries, or combinations."""
+            # Smaller models often emit numeric args as JSON strings ("7", "10");
+            # coerce before any comparison so clamping below doesn't raise TypeError.
+            for _name, _value in (("days", days), ("limit", limit)):
+                if isinstance(_value, str):
+                    _stripped = _value.strip()
+                    if not _stripped:
+                        continue  # empty string -> keep the int default
+                    try:
+                        _coerced = int(_stripped)
+                    except ValueError:
+                        return {
+                            "status": "error",
+                            "message": f"Invalid '{_name}': expected an integer, got {_value!r}.",
+                        }
+                    if _name == "days":
+                        days = _coerced
+                    else:
+                        limit = _coerced
+
             if not query and not days and not time_from and not time_to:
                 return {
                     "status": "error",

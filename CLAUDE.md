@@ -151,6 +151,35 @@ URL literal in `src/gaia/`; dropping `/docs/` from a runtime string is a CI fail
 not a cleanup. Only the site root and install scripts (`/install.ps1`, `/install.sh`)
 are allowlisted without the prefix.
 
+#### IMPORTANT: A functional change must update EVERY doc that describes it — not just one
+
+When a change alters an agent's behavior, public API, request/response contract,
+defaults, lifecycle, or error codes, the same claim is almost always repeated
+across several **bundled** docs. Update them **together** in the same change, or the
+package ships documentation that contradicts itself — and the contradiction goes
+live the moment that version publishes.
+
+For a hub agent package (`hub/agents/{npm,python}/<id>/`), the doc surfaces that
+must stay in sync are:
+
+- **`README.md`** — the canonical, integrator-facing doc (rendered on the hub + npm)
+- **`SPEC.md`** — the full technical reference
+- **`SKILL.md`** — the AI-assistant integration playbook (Claude Code, etc.)
+- **`CHANGELOG.md`** — the version entry describing the change
+- any runtime/contract spec it ships — `spec_html.py`, `specification.html`,
+  `openapi.*.json`
+
+**Before calling the change done, grep the old claim/symbol/status-code across all
+of these.** A behavior described in three docs must be corrected in three docs; the
+CHANGELOG must name it. The same rule applies to the doc *site* (`docs/`) when the
+change touches a documented surface.
+
+Canonical miss (#1841): an agent gained auto-reap of its sidecar on parent exit and
+the PR updated `README.md` to "cleanup is automatic" — but left `SPEC.md` and
+`SKILL.md` still saying "always call `shutdown` or the child is orphaned." Both were
+slated to publish in the same release, so the package would have shipped
+self-contradicting lifecycle docs.
+
 ### Code Reuse and Base Classes
 
 **Always extend existing base classes and reuse core functionality.** The `src/gaia/agents/base/` directory provides foundational components:
@@ -397,26 +426,14 @@ cd src/gaia/apps/webui && npm run dev      # Terminal 2: frontend (port 5174)
 ```
 gaia/
 ├── src/gaia/           # Main source code
-│   ├── agents/         # Agent implementations
-│   │   ├── base/       # Base Agent class, MCPAgent, ApiAgent
-│   │   ├── tools/      # Cross-agent tool mixins (file search, filesystem, scratchpad, browser, screenshot)
-│   │   ├── chat/       # ChatAgent (chat/doc/file profiles) with RAG and shell tools
-│   │   ├── code/       # CodeAgent with orchestration, validators, file_io tools
+│   ├── agents/         # Agent framework + in-core agents
+│   │   ├── base/       # Base Agent class, MCPAgent, ApiAgent mixins
+│   │   ├── tools/      # Cross-agent tool mixins (rag, file, shell, browser, scratchpad, screenshot…)
+│   │   ├── chat/, builder/   # in-core agents
 │   │   ├── code_index/ # CodeIndexToolsMixin — semantic code search (FAISS)
-│   │   ├── analyst/    # AnalystAgent — structured data analysis (CSV/Excel, scratchpad SQL)
-│   │   ├── browser/    # BrowserAgent — web research (search, fetch, download)
-│   │   ├── docqa/      # DocumentQAAgent — standalone document Q&A with RAG
-│   │   ├── fileio/     # FileIOAgent — file read/write/edit operations
-│   │   ├── email/      # EmailTriageAgent — email triage and summarization
-│   │   ├── builder/    # BuilderAgent — scaffolds new agents from templates
-│   │   ├── summarize/  # SummarizerAgent — document/text summarization
-│   │   ├── blender/    # BlenderAgent for 3D automation
-│   │   ├── jira/       # JiraAgent for issue management
-│   │   ├── docker/     # DockerAgent for containerization
-│   │   ├── routing/    # RoutingAgent for intelligent agent selection
-│   │   ├── sd/         # SDAgent for Stable Diffusion image generation
-│   │   ├── connectors_demo/ # ConnectorsDemoAgent — per-agent connector activation demo
 │   │   └── registry.py # Agent registry + KNOWN_TOOLS map
+│   │   #   Packaged agents (code, analyst, browser, fileio, email, summarize, jira,
+│   │   #   blender, docker, sd, emr, connectors-demo, docqa, routing) live in hub/agents/python/<id>/.
 │   ├── api/            # OpenAI-compatible REST API server
 │   ├── apps/           # Standalone applications
 │   │   ├── webui/      # Agent UI frontend (React/Vite/Electron)
@@ -503,26 +520,31 @@ The `gaia-emr` console script now ships with the standalone `gaia-agent-emr` hub
 
 ### Agent Implementations
 
-| Agent | Location | Description | Default Model |
-|-------|----------|-------------|---------------|
-| **ChatAgent** | `agents/chat/agent.py` | Multi-profile conversation (chat/doc/file) with RAG | Gemma-4-E4B |
-| **DocumentQAAgent** | `agents/docqa/agent.py` | Standalone document Q&A with RAG | Qwen3.5-35B-A3B |
-| **AnalystAgent** | `agents/analyst/agent.py` | Structured data analysis (CSV/Excel, scratchpad SQL) | Qwen3.5-35B-A3B |
-| **BrowserAgent** | `agents/browser/agent.py` | Web research — search, fetch pages, download | Qwen3.5-35B-A3B |
-| **FileIOAgent** | `agents/fileio/agent.py` | File read/write/edit operations | Qwen3.5-35B-A3B |
-| **EmailTriageAgent** | `agents/email/agent.py` | Email triage for Gmail — local inference, needs the Google connector | Gemma-4-E4B |
-| **CodeAgent** | `agents/code/agent.py` | Code generation with orchestration | Qwen3.5-35B-A3B |
-| **BuilderAgent** | `agents/builder/agent.py` | Scaffolds new agents from templates | Qwen3.5-35B-A3B |
-| **SummarizerAgent** | `agents/summarize/agent.py` | Document/text summarization | Qwen3-4B-Instruct-2507 |
-| **JiraAgent** | `agents/jira/agent.py` | Jira issue management | Qwen3.5-35B-A3B |
-| **BlenderAgent** | `agents/blender/agent.py` | 3D scene automation | Qwen3.5-35B-A3B |
-| **DockerAgent** | `agents/docker/agent.py` | Container management | Qwen3.5-35B-A3B |
-| **MedicalIntakeAgent** | `hub/agents/python/emr/gaia_agent_emr/agent.py` | Medical form processing (VLM) | Gemma-4-E4B |
-| **RoutingAgent** | `agents/routing/agent.py` | Intelligent agent selection | Qwen3.5-35B-A3B (`AGENT_ROUTING_MODEL`) |
-| **SDAgent** | `agents/sd/agent.py` | Stable Diffusion image generation | SDXL-Turbo |
-| **ConnectorsDemoAgent** | `agents/connectors_demo/agent.py` | Per-agent connector activation demo | Qwen3.5-35B-A3B |
+In-core agents live under `src/gaia/agents/`; the rest have moved to standalone hub
+packages under `hub/agents/python/<id>/`. The authoritative registry is
+[`src/gaia/agents/registry.py`](src/gaia/agents/registry.py); each agent's default model
+is set in its own `agent.py` (see [Default Models](#default-models)).
 
-`gaia browse` and `gaia analyze` invoke BrowserAgent and AnalystAgent respectively (see [`src/gaia/cli.py`](src/gaia/cli.py)). `gaia telegram` is a messaging adapter, not an agent. Internal building-block agents (DocumentQAAgent, FileIOAgent, ConnectorsDemoAgent) live under `src/gaia/agents/` but aren't standalone CLI commands.
+| Agent | Description |
+|-------|-------------|
+| **ChatAgent** | Multi-profile conversation (chat/doc/file) with RAG — in-core (`chat/`) |
+| **BuilderAgent** | Scaffolds new agents from templates — in-core (`builder/`) |
+| **DocumentQAAgent** | Standalone document Q&A with RAG — hub (`docqa/`) |
+| **RoutingAgent** | Intelligent agent selection (`AGENT_ROUTING_MODEL`) — hub (`routing/`) |
+| **CodeAgent** | Code generation with orchestration |
+| **AnalystAgent** | Structured data analysis (CSV/Excel, scratchpad SQL) |
+| **BrowserAgent** | Web research — search, fetch pages, download |
+| **FileIOAgent** | File read/write/edit operations |
+| **EmailTriageAgent** | Email triage for Gmail (local inference; needs the Google connector) |
+| **SummarizerAgent** | Document/text summarization |
+| **JiraAgent** | Jira issue management |
+| **BlenderAgent** | 3D scene automation |
+| **DockerAgent** | Container management |
+| **SDAgent** | Stable Diffusion image generation |
+| **MedicalIntakeAgent** | Medical form processing (VLM) — `hub/agents/python/emr/` |
+| **ConnectorsDemoAgent** | Per-agent connector activation demo |
+
+`gaia browse` and `gaia analyze` invoke BrowserAgent and AnalystAgent (see [`src/gaia/cli.py`](src/gaia/cli.py)); `gaia telegram` is a messaging adapter, not an agent. DocumentQAAgent, FileIOAgent, and ConnectorsDemoAgent are internal building-block agents (not standalone CLI commands). DocumentQAAgent and RoutingAgent now ship as standalone `gaia-agent-docqa` / `gaia-agent-routing` hub wheels (`hub/agents/python/`).
 
 ### Agent Registry & Tool Mixins
 
@@ -545,9 +567,10 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can compose it by name.
 
 ### Default Models
-- Default for most agents and `gaia llm`: `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME` in [`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py))
-- Code-heavy agents (Code, Builder, Jira): `Qwen3.5-35B-A3B-GGUF` (hardcoded per agent)
-- Vision tasks: `Gemma-4-E4B-it-GGUF` is the default VLM (VLM mixin and EMR agent); `Qwen3-VL-4B-Instruct-GGUF` is also supported
+- `gaia llm` default: `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME` in [`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py)). ChatAgent and EmailTriageAgent explicitly use it too.
+- Agents that leave `model_id` unset fall back to `Qwen3.5-35B-A3B-GGUF` — the base `Agent.__init__` default (`model_id or "Qwen3.5-35B-A3B-GGUF"`). That covers Analyst, Browser, FileIO, plus Code/Builder/Jira/Docker/Routing/DocumentQA which also hardcode it.
+- Summarizer: `Qwen3-4B-Instruct-2507-GGUF`
+- Vision: `Gemma-4-E4B-it-GGUF` is the default VLM (VLM mixin + EMR agent); `Qwen3-VL-4B-Instruct-GGUF` also supported
 - Image generation (SD): `SDXL-Turbo`
 
 ## CLI Commands
@@ -562,16 +585,14 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia prompt "<text>"` - Single prompt to LLM (with system-prompt support)
 - `gaia llm "<text>"` - Simple LLM queries
 - `gaia browse` - Web research (search, fetch pages, download)
+- `gaia knowledge {search|extract|usage}` - Web knowledge via Tavily (search/extract)
 - `gaia analyze` - Structured data analysis with scratchpad tables
-- `gaia email` - Email triage and summarization
+- `gaia email` - Email triage for Gmail (local inference; needs the Google connector)
 - `gaia summarize` - Document summarization
 - `gaia blender` - Blender 3D agent
 - `gaia sd` - Stable Diffusion image generation
 - `gaia jira` - Jira integration
 - `gaia docker` - Docker management
-- `gaia browse` - Web research agent (search, page fetch, download)
-- `gaia analyze` - Structured data analysis agent (scratchpad tables)
-- `gaia email` - Email triage for Gmail (local inference; needs the Google connector)
 
 **Servers & infrastructure:**
 - `gaia api` - OpenAI-compatible API server
@@ -604,74 +625,21 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 
 ## Documentation Index
 
-All documentation uses `.mdx` format (Markdown + JSX for Mintlify).
+All docs are `.mdx` (Mintlify). [`docs/docs.json`](docs/docs.json) is the authoritative
+navigation — consult it rather than a hand-maintained copy here. Where things live:
 
-**User Guides:**
-- [`docs/guides/chat.mdx`](docs/guides/chat.mdx) - Chat with RAG
-- [`docs/guides/agent-ui.mdx`](docs/guides/agent-ui.mdx) - Agent UI (desktop chat)
-- [`docs/guides/browse.mdx`](docs/guides/browse.mdx) - Web research (`gaia browse`)
-- [`docs/guides/analyze.mdx`](docs/guides/analyze.mdx) - Structured data analysis (`gaia analyze`)
-- [`docs/guides/email.mdx`](docs/guides/email.mdx) - Email triage (`gaia email`)
-- [`docs/guides/talk.mdx`](docs/guides/talk.mdx) - Voice interaction
-- [`docs/guides/code.mdx`](docs/guides/code.mdx) - Code generation
-- [`docs/guides/blender.mdx`](docs/guides/blender.mdx) - 3D automation
-- [`docs/guides/jira.mdx`](docs/guides/jira.mdx) - Jira integration
-- [`docs/guides/docker.mdx`](docs/guides/docker.mdx) - Docker management
-- [`docs/guides/routing.mdx`](docs/guides/routing.mdx) - Agent routing
-- [`docs/guides/emr.mdx`](docs/guides/emr.mdx) - Medical intake
-- [`docs/guides/telegram-adapter.mdx`](docs/guides/telegram-adapter.mdx) - Telegram messaging adapter
-- [`docs/guides/memory.mdx`](docs/guides/memory.mdx) - Agent memory
-- [`docs/guides/install.mdx`](docs/guides/install.mdx) - Installation
-- [`docs/guides/custom-agent.mdx`](docs/guides/custom-agent.mdx) - Build a custom agent
-- [`docs/guides/hardware-advisor.mdx`](docs/guides/hardware-advisor.mdx) - Hardware advisor
-- [`docs/guides/npu.mdx`](docs/guides/npu.mdx) - NPU setup
-
-**SDK Reference:**
-- [`docs/sdk/core/agent-system.mdx`](docs/sdk/core/agent-system.mdx) - Agent framework
-- [`docs/sdk/core/tools.mdx`](docs/sdk/core/tools.mdx) - Tool decorator
-- [`docs/sdk/core/console.mdx`](docs/sdk/core/console.mdx) - Console output
-- [`docs/sdk/sdks/chat.mdx`](docs/sdk/sdks/chat.mdx) - Agent SDK (formerly Chat SDK)
-- [`docs/sdk/sdks/agent-ui.mdx`](docs/sdk/sdks/agent-ui.mdx) - Agent UI SDK
-- [`docs/sdk/sdks/rag.mdx`](docs/sdk/sdks/rag.mdx) - RAG SDK
-- [`docs/sdk/sdks/llm.mdx`](docs/sdk/sdks/llm.mdx) - LLM clients
-- [`docs/sdk/sdks/vlm.mdx`](docs/sdk/sdks/vlm.mdx) - Vision LLM clients
-- [`docs/sdk/sdks/audio.mdx`](docs/sdk/sdks/audio.mdx) - Audio (ASR/TTS)
-- [`docs/sdk/infrastructure/mcp.mdx`](docs/sdk/infrastructure/mcp.mdx) - MCP protocol
-- [`docs/sdk/infrastructure/api-server.mdx`](docs/sdk/infrastructure/api-server.mdx) - API server
-
-**Reference:**
-- [`docs/reference/cli.mdx`](docs/reference/cli.mdx) - CLI reference
-- [`docs/reference/dev.mdx`](docs/reference/dev.mdx) - Development guide
-- [`docs/reference/faq.mdx`](docs/reference/faq.mdx) - FAQ
-- [`docs/reference/troubleshooting.mdx`](docs/reference/troubleshooting.mdx) - Troubleshooting
-
-**Deployment:**
-- [`docs/deployment/ui.mdx`](docs/deployment/ui.mdx) - Electron UI
-
-**Specifications:** See `docs/spec/` for 40+ technical specifications.
+- **Guides** (`docs/guides/`) — one per feature: chat, agent-ui, browse, analyze, email, talk, code, blender, jira, docker, routing, emr, memory, install, custom-agent, hardware-advisor, npu.
+- **SDK** (`docs/sdk/`) — `core/` (agent-system, tools, console), `sdks/` (chat, agent-ui, rag, llm, vlm, audio), `infrastructure/` (mcp, api-server).
+- **Reference** (`docs/reference/`) — cli, dev, faq, troubleshooting, eval.
+- **Specs** (`docs/spec/`), **Deployment** (`docs/deployment/`), **Integrations** (`docs/integrations/`).
 
 ## Roadmap & Plans
 
-The roadmap is at [`docs/roadmap.mdx`](docs/roadmap.mdx) ([live site](https://amd-gaia.ai/roadmap)). Plan documents are in `docs/plans/`:
-
-**Agent UI:**
-- [`docs/plans/agent-ui.mdx`](docs/plans/agent-ui.mdx) - GaiaAgent comprehensive plan (Phases A-D)
-- [`docs/plans/setup-wizard.mdx`](docs/plans/setup-wizard.mdx) - First-run onboarding and system scanner
-- [`docs/plans/security-model.mdx`](docs/plans/security-model.mdx) - Guardrails, audit trail, credential vault
-- [`docs/plans/email-calendar-integration.mdx`](docs/plans/email-calendar-integration.mdx) - Email triage, calendar, meeting notes
-- [`docs/plans/messaging-integrations-plan.mdx`](docs/plans/messaging-integrations-plan.mdx) - Signal, Discord, Slack, Telegram adapters
-- [`docs/plans/autonomy-engine.mdx`](docs/plans/autonomy-engine.mdx) - Heartbeat, scheduler, background service
-
-**Ecosystem:**
-- [`docs/plans/agent-hub.mdx`](docs/plans/agent-hub.mdx) - Agent marketplace and community hub
-- [`docs/plans/skill-format.mdx`](docs/plans/skill-format.mdx) - SKILL.md specification
-- [`docs/plans/oem-bundling.mdx`](docs/plans/oem-bundling.mdx) - OEM hardware pre-configuration
-
-**Infrastructure:**
-- [`docs/plans/desktop-installer.mdx`](docs/plans/desktop-installer.mdx) - Desktop installer
-- [`docs/plans/mcp-docs.mdx`](docs/plans/mcp-docs.mdx) - MCP integration
-- [`docs/plans/cua.mdx`](docs/plans/cua.mdx) - Computer Use Agent
-- [`docs/plans/docker-containers.mdx`](docs/plans/docker-containers.mdx) - Docker deployment
+The roadmap is at [`docs/roadmap.mdx`](docs/roadmap.mdx) ([live site](https://amd-gaia.ai/roadmap)).
+Plan documents live in [`docs/plans/`](docs/plans/) (run `ls docs/plans/` for the full
+set — Agent UI, setup-wizard, security-model, email/calendar, messaging, autonomy-engine,
+agent-hub, skill-format, OEM bundling, desktop-installer, MCP, CUA, Docker, and more).
+Browse the directory rather than a partial list here.
 
 **Key architectural decisions (April 2026):**
 - **GaiaAgent** rename planned (#696) — not yet landed; the chat agent class is still `ChatAgent` (`src/gaia/agents/chat/agent.py`)
@@ -684,6 +652,10 @@ The roadmap is at [`docs/roadmap.mdx`](docs/roadmap.mdx) ([live site](https://am
 ## Issue Response Guidelines
 
 When responding to GitHub issues and pull requests, follow these guidelines:
+
+**Automated PR-review policy lives in [`REVIEW.md`](REVIEW.md)** (the tunable review rubric:
+correctness-first severity, the nit cap, skip rules, and length caps). This section sets the
+shared tone/format the rubric builds on; keep the two consistent when editing either.
 
 ### Documentation Structure
 
@@ -711,7 +683,7 @@ The documentation is organized in [`docs/docs.json`](docs/docs.json) with the fo
 2. **Check for duplicates:** Search existing issues/PRs to avoid redundant responses
 
 3. **Reference specific files:** Use precise file references with line numbers when possible
-   - Agent implementations: `src/gaia/agents/` (base/, tools/, chat/, code/, code_index/, analyst/, browser/, docqa/, fileio/, email/, builder/, summarize/, blender/, jira/, docker/, emr/, routing/, sd/, connectors_demo/, registry.py)
+   - Agent implementations: `src/gaia/agents/` (in-core: base/, tools/, chat/, builder/, code_index/, registry.py) and `hub/agents/python/<id>/` (packaged agents: code, analyst, browser, email, jira, docker, sd, emr, docqa, routing, …)
    - CLI commands: `src/gaia/cli.py`
    - MCP integration: `src/gaia/mcp/`
    - LLM backend: `src/gaia/llm/` (+ `providers/` for Claude/OpenAI)
@@ -757,6 +729,23 @@ The documentation is organized in [`docs/docs.json`](docs/docs.json) with the fo
 - **Specific:** Reference actual files with line numbers (e.g., `src/gaia/agents/base/agent.py:123`) — but AFTER the finding, not before it
 - **Helpful:** Provide next steps, code examples, or links to documentation
 - **Honest:** If you don't know something, say so and suggest escalation to @kovtcharov-amd
+
+#### Comment Format — Lead Human, Add Technical Depth When It Helps
+
+PR reviews and issue/PR replies serve two readers at once: a **human** skimming for the verdict, and an **AI agent / engineer** who needs `file:line`-level depth to act on it. Lead with a plain-language summary for the human; put the technical depth below for whoever has to act. This mirrors the `claude.yml` bot prompts. The aim is whatever is most effective and actionable for both readers — not a fixed template.
+
+- **Human summary (lead with this):** plain language, minimal jargon — the verdict / answer / diagnosis, the bottom line, and the headline issues in plain words (what's wrong + what to do, not how). Keep it short.
+- **Technical details (add when there is real depth):** `file.py:line` refs, symbols, ```suggestion blocks, reasoning. When that depth runs more than a couple of lines, collapse it under a `<details>` block so the summary stays scannable — the blank line after `</summary>` is required for GitHub to render the markdown inside:
+
+   ```
+   <details>
+   <summary>🔍 Technical details</summary>
+
+   …depth here…
+   </details>
+   ```
+
+Use discretion — this is a guide, not a ritual. Many comments are a single plain-language part with no technical block at all; adding an empty `<details>`, a boilerplate test plan, or a security note where none is warranted is just noise. Add each section only where it genuinely helps. The one firm rule: when a 🔒 security concern or an auto-fix **Test plan** *does* apply, keep it visible — never bury it inside `<details>`.
 
 #### Security Handling Protocol (CRITICAL)
 
@@ -828,7 +817,7 @@ Interesting idea! GAIA doesn't currently have built-in Slack integration, but yo
 
 1. The Agent SDK (docs/sdk/sdks/chat.mdx) for message handling
 2. The MCP protocol (docs/sdk/infrastructure/mcp.mdx) for Slack connectivity
-3. Similar pattern to our Jira agent (src/gaia/agents/jira/agent.py)
+3. Similar pattern to our Jira agent (hub/agents/python/jira/)
 
 For AMD optimization: Consider using the local LLM backend (src/gaia/llm/) to keep conversations private and leverage Ryzen AI NPU acceleration.
 
@@ -913,6 +902,9 @@ When a task fits a Superpowers skill (e.g. `superpowers:brainstorming`, `superpo
 
 ## Learned Skills
 
-**Read these before starting related tasks:**
+**Read the matching skill before starting related work.** `.claude/skills/` is the
+authoritative set (run `ls .claude/skills/`); invoke them with the `Skill` tool. Current:
 
-- `.claude/skills/lemonade-client-patterns.md` - Patterns, gotchas, and conventions for modifying LemonadeClient and threading changes through its callers (providers, VLM, UI routers, agent base). Covers: deferred import patch targets, assertLogs child logger levels, SSE test hang prevention, 401 error safety, openai.AuthenticationError ordering. (tags: lemonade, authentication, env-vars, testing, httpx, openai-sdk, tdd)
+- `lemonade-client-patterns` — modifying LemonadeClient and threading changes through its callers (providers, VLM, UI routers, agent base): deferred-import patch targets, assertLogs child-logger levels, SSE test-hang prevention, 401 error safety, `openai.AuthenticationError` ordering.
+- `gaia-release` — cut a GAIA core release end-to-end (draft notes, release PR, pre-tag verification, push the tag, monitor the publish pipeline).
+- `gaia-testing` — GAIA testing workflows, fixtures, and conventions.

@@ -14,6 +14,7 @@ on:
     branches: [ main ]
     paths:
       - 'hub/agents/python/email/**'
+      - 'hub/agents/npm/agent-email/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/connectors/**'
       - 'src/gaia/eval/**'
@@ -30,6 +31,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'hub/agents/python/email/**'
+      - 'hub/agents/npm/agent-email/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/connectors/**'
       - 'src/gaia/eval/**'
@@ -72,6 +74,13 @@ jobs:
 
       - name: Install uv
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      # Catch version drift on the PR, long before release. AGENT_VERSION in
+      # version.py is the one source of truth; this fails loudly if any committed
+      # reference (manifest/pyproject/package.json/lock baseUrl+agentVersion/README
+      # images/architecture.html badge) disagrees. Stdlib-only — no install needed.
+      - name: Verify version references are in sync (single source of truth)
+        run: python hub/agents/python/email/packaging/stamp_version.py --check
 
       - name: Install dependencies
         run: |

@@ -54,7 +54,7 @@ In the AgentUI:
 - ✅ Settings → Connections renders, Connect button works.
 - ✅ OAuth PKCE flow completes; refresh token lands in OS keychain.
 - ✅ Loopback `127.0.0.1:<ephemeral>/callback` round-trips.
-- ✅ SSE event `connection.connected` updates AgentUI in <2s.
+- ✅ SSE event `connection.connected` updates AgentUI in &lt;2s.
 - ✅ `REQUIRED_CONNECTORS` declared by the custom agent surfaces in
   the consent dialog with plain-language scope text.
 - ✅ Per-agent grant gates `get_access_token_sync` (first call without

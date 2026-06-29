@@ -399,6 +399,7 @@ def _scaffold_python(pkg_dir: Path, names: _Names) -> None:
     (pkg_dir / "README.md").write_text(
         _render_readme(names, description), encoding="utf-8"
     )
+    (pkg_dir / "CHANGELOG.md").write_text(_render_changelog(names), encoding="utf-8")
     (code_dir / "__init__.py").write_text(
         _format_python_source(_render_init_py(names, description)), encoding="utf-8"
     )
@@ -450,6 +451,7 @@ def _scaffold_cpp(pkg_dir: Path, names: _Names) -> None:
         _render_readme(names, f"{names.display_name} — a native GAIA agent"),
         encoding="utf-8",
     )
+    (pkg_dir / "CHANGELOG.md").write_text(_render_changelog(names), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -545,6 +547,18 @@ def _run_lint_gates(pkg_dir: Path) -> None:
         # Without a valid manifest the remaining language-specific gates are
         # meaningless — fail loudly now.
         raise AgentWorkflowError("lint failed:\n  - " + "\n  - ".join(failures))
+
+    # Gate: documentation present. A WARNING, not a failure — an agent can
+    # publish without these, but its hub page would have an empty Overview /
+    # Changelog (both are rendered from these files), so nudge the author.
+    for doc in ("README.md", "CHANGELOG.md"):
+        if (pkg_dir / doc).exists():
+            _ok(f"{doc} present")
+        else:
+            _warn(
+                f"{doc} not found — the hub agent page renders it as documentation; "
+                f"add one so your listing isn't empty."
+            )
 
     if parsed.language == "python":
         _lint_python(pkg_dir, parsed, failures)
@@ -1124,6 +1138,10 @@ def _bad(label: str) -> None:
     print(f"  [FAIL] {label}")
 
 
+def _warn(label: str) -> None:
+    print(f"  [WARN] {label}")
+
+
 # ---------------------------------------------------------------------------
 # YAML scalar read/replace (line-oriented, preserves formatting)
 # ---------------------------------------------------------------------------
@@ -1326,6 +1344,23 @@ gaia agent version patch  # 0.1.0 -> 0.1.1
 gaia agent version minor  # 0.1.0 -> 0.2.0
 gaia agent version major  # 0.1.0 -> 1.0.0
 ```
+
+Add a matching `CHANGELOG.md` entry with each release — the hub agent page
+renders it as the agent's Changelog section.
+"""
+
+
+def _render_changelog(names: _Names) -> str:
+    return f"""\
+# Changelog
+
+All notable changes to `{names.dist_name}` are documented here, following
+[Keep a Changelog](https://keepachangelog.com/) and [SemVer](https://semver.org/).
+This file is published with the agent and rendered on its hub page.
+
+## 0.1.0
+
+- Initial release of the {names.display_name} agent.
 """
 
 

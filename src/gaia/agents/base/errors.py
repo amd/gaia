@@ -18,12 +18,14 @@ from typing import List, Optional, Set
 FRAMEWORK_PATHS: Set[str] = {
     "gaia/agents/base",
     "gaia/agents/blender",
-    "gaia/agents/chat",
     "gaia/agents/code",
     "gaia/agents/docker",
     "gaia/agents/jira",
-    "gaia/agents/routing",
     "gaia/agents/tools",
+    # Hub-migrated agents (#1102): wheel installs land under site-packages
+    # (covered below); editable hub checkouts show as hub/agents/python/<id>.
+    "hub/agents/python/",
+    "gaia_agent_chat",
     "site-packages/",
 }
 

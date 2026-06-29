@@ -208,7 +208,7 @@ gaia chat --index document.pdf --debug
 
 ```python Python Debug
 # Python SDK with debug — ChatAgent takes a single ChatAgentConfig
-from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
 config = ChatAgentConfig(
     rag_documents=['document.pdf'],
@@ -316,11 +316,13 @@ first-turn prompt and speeds up the first reply.
 
 It activates only on the `doc` profile (the registered `doc` agent, the SDK with
 `ChatAgentConfig(prompt_profile="doc")`, or `gaia eval agent --agent-type doc`).
-Turn it on with the config field or an environment variable — the env var wins,
-which is handy for the eval harness:
+Turn it on with the config field, an environment variable, or the Agent UI
+**Settings → Dynamic Tools (Beta)** toggle. The env var wins over both — when it
+is set, the UI toggle reflects the effective value and disables itself — which is
+handy for the eval harness:
 
 ```python
-from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
 agent = ChatAgent(ChatAgentConfig(prompt_profile="doc", dynamic_tools=True))
 ```

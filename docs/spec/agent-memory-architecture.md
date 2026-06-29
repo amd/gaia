@@ -377,7 +377,7 @@ RRF score = 0.6 / (60 + rank_vector) + 0.4 / (60 + rank_bm25)
 
 After RRF fusion, a lightweight cross-encoder rescores each candidate by jointly encoding (query, document) pairs. This catches semantic matches that both vector and BM25 underrank individually.
 
-Model: `cross-encoder/ms-marco-MiniLM-L-6-v2` (~22MB, runs on CPU in <50ms for 10 candidates)
+Model: `cross-encoder/ms-marco-MiniLM-L-6-v2` (~22MB, runs on CPU in &lt;50ms for 10 candidates)
 
 Why this matters: RRF fusion combines two independent rankings. The cross-encoder sees query and document together, enabling it to catch fine-grained relevance signals (negation, qualification, context-dependent meaning) that independent encoders miss. Hindsight (91.4% LongMemEval) attributes a significant portion of its retrieval precision to this step.
 

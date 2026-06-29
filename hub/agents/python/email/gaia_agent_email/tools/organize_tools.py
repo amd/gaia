@@ -49,6 +49,7 @@ def archive_message_impl(
     message_id: str,
     prior: Optional[Dict[str, Any]] = None,
     mailbox: Optional[str] = None,
+    batch_id: Optional[str] = None,
     debug: bool = False,
 ) -> Dict[str, Any]:
     with log_tool_call(
@@ -66,16 +67,23 @@ def archive_message_impl(
         # the move returns a new id; for label-based backends (Gmail) it
         # equals the pre-archive id.
         post_archive_id = (result or {}).get("id") or message_id
+        # ``batch_id`` lets a single archive be undone via ``undo_archive_batch``
+        # (the REST surface mints one per archive so the UI gets an undo handle).
         action_id = action_store.record_action(
             db,
             action_type="archive",
             message_id=message_id,
             thread_id=prior.get("threadId"),
             payload={"prior_labels": prior_labels, "post_archive_id": post_archive_id},
+            batch_id=batch_id,
             mailbox=mailbox,
         )
         st["result_summary"] = {"action_id": action_id}
-        return {"action_id": action_id, "message_id": message_id}
+        return {
+            "action_id": action_id,
+            "message_id": message_id,
+            "post_archive_id": post_archive_id,
+        }
 
 
 def mark_read_impl(

@@ -328,10 +328,18 @@ class AgentLoop:
 
         def _run_agent() -> None:
             try:
-                import gaia.ui._chat_helpers as _helpers
+                # Run the heavier sync work inline (we're in a thread).
+                # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102).
+                try:
+                    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+                except ImportError as e:
+                    raise RuntimeError(
+                        "The chat agent is not installed. Run "
+                        "`pip install gaia-agent-chat` (or `pip install "
+                        '"amd-gaia[agents]"`), then restart the server.'
+                    ) from e
 
-                # Run the heavier sync work inline (we're in a thread)
-                from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+                import gaia.ui._chat_helpers as _helpers
 
                 # Reuse cached agent if available; build fresh if not.
                 # We bypass the full _stream_chat_response pipeline to avoid
@@ -353,6 +361,12 @@ class AgentLoop:
                         db, session.get("document_ids", [])
                     )
                     allowed = _helpers._compute_allowed_paths(rag_paths + lib_paths)
+                    # Beta dynamic tool loader (#1798). Inert here: autonomous
+                    # ticks use the default "full" prompt profile and the loader
+                    # only activates on the "doc" profile — wired for future-
+                    # proofing so this path stays in lock-step with server.py's
+                    # scheduled-prompt build if that ever changes.
+                    dynamic_tools = db.get_setting("dynamic_tools", "false") == "true"
                     config = ChatAgentConfig(
                         model_id=model_id,
                         streaming=False,
@@ -360,6 +374,7 @@ class AgentLoop:
                         debug=False,
                         allowed_paths=allowed,
                         ui_session_id=session_id,
+                        dynamic_tools=dynamic_tools,
                     )
                     agent = ChatAgent(config)
                     _helpers._register_agent_memory_ops(agent)

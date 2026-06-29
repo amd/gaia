@@ -1,9 +1,14 @@
 id: email
 name: Email Triage
-version: 0.1.0
+version: 0.3.0
 description: "GAIA email triage agent — read, triage, organize, and reply to Gmail/Outlook locally"
 author: AMD
 license: MIT
+
+# Distributed as an npm client + frozen sidecar (not a PyPI wheel). These drive
+# the hub page's install method and the playground launcher.
+npm_package: "@amd-gaia/agent-email"
+playground_url: "http://127.0.0.1:8131/v1/email/playground"
 
 category: productivity
 tags: [email, gmail, calendar, triage]

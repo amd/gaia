@@ -1,0 +1,178 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Manual-only maintenance workflow for the self-hosted AMD (Strix) CI runner.
+#
+# Why this exists: the runner's AMD Vulkan stack intermittently enters a
+# multi-minute window where the MoE embedding model aborts llama-server
+# startup ("llama-server failed to start"), failing the embedder-loading CI
+# checks (Test Lemonade Embeddings API, RAG Integration). Upstream:
+# llama.cpp #16301 / lemonade #612. A newer GPU driver may close or shorten
+# that window. This workflow lets a maintainer update the driver remotely.
+#
+# It NEVER runs automatically -- workflow_dispatch only. Default action is
+# "check-only" (report current + available driver, change nothing). Installing
+# and/or rebooting must be explicitly selected at dispatch time.
+#
+# NOTE: a forced reboot under "update-and-reboot" takes the runner offline. The
+# runner reconnects after boot only if the GitHub Actions runner is registered
+# as a Windows service (auto-start). If it runs interactively, someone must
+# restart it by hand. The dispatched job itself may report as failed/cancelled
+# once the box reboots -- that is expected, not a real failure.
+
+name: STX Driver Update (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: 'Self-hosted runner label to target'
+        type: choice
+        options:
+          - stx
+          - stx-test
+        default: stx
+      action:
+        description: 'What to do on the runner'
+        type: choice
+        options:
+          - check-only          # report current + available driver, change nothing
+          - update              # install matching driver update(s), no reboot
+          - update-and-reboot   # install, then force-restart the machine
+        default: check-only
+      driver_filter:
+        description: 'Regex matched against update titles to pick the GPU driver'
+        type: string
+        default: 'AMD|Radeon|Display'
+
+concurrency:
+  group: stx-driver-update
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  driver-update:
+    name: Driver update (${{ inputs.action }})
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 60
+    env:
+      ACTION: ${{ inputs.action }}
+      DRIVER_FILTER: ${{ inputs.driver_filter }}
+
+    steps:
+      - name: Report current GPU driver
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          Write-Host "=== Current display adapters / drivers ==="
+          Get-CimInstance Win32_VideoController |
+            Select-Object Name, DriverVersion, DriverDate, Status, PNPDeviceID |
+            Format-List
+          Write-Host "=== OS / build ==="
+          Get-CimInstance Win32_OperatingSystem |
+            Select-Object Caption, Version, BuildNumber, LastBootUpTime |
+            Format-List
+
+      - name: Check privileges
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $principal = New-Object Security.Principal.WindowsPrincipal($id)
+          $isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+          Write-Host "Running as: $($id.Name)  (admin=$isAdmin)"
+          if (-not $isAdmin -and $env:ACTION -ne "check-only") {
+              Write-Host "[ERROR] Driver install/reboot requires Administrator."
+              Write-Host "  What to do: run the GitHub Actions runner service as an"
+              Write-Host "  administrator (or LocalSystem) on this machine, or perform the"
+              Write-Host "  driver update manually via AMD Adrenalin on the box."
+              throw "Insufficient privileges for action '$($env:ACTION)'"
+          }
+
+      - name: Search and optionally install driver updates
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          $filter = $env:DRIVER_FILTER
+          Write-Host "Driver title filter: '$filter'"
+
+          # Use the native Windows Update COM API (no third-party module).
+          $session = New-Object -ComObject Microsoft.Update.Session
+          $searcher = $session.CreateUpdateSearcher()
+
+          # Include the Microsoft Update service so optional third-party (AMD)
+          # driver updates are visible, not just the default WU catalog.
+          $muServiceId = "7971f918-a847-4430-9279-4a52d1efe18d"
+          try {
+              $mgr = New-Object -ComObject Microsoft.Update.ServiceManager
+              $mgr.AddService2($muServiceId, 7, "") | Out-Null
+              $searcher.ServerSelection = 3   # ssOthers
+              $searcher.ServiceID = $muServiceId
+              Write-Host "Querying Microsoft Update for driver-class updates..."
+          } catch {
+              Write-Host "[WARN] Could not register Microsoft Update service: $($_.Exception.Message)"
+              Write-Host "Falling back to the default Windows Update catalog."
+          }
+
+          $result = $searcher.Search("IsInstalled=0 and Type='Driver'")
+          $all = @($result.Updates)
+          Write-Host "Driver-class updates offered: $($all.Count)"
+          foreach ($u in $all) { Write-Host "  - $($u.Title)" }
+
+          $matched = @($all | Where-Object { $_.Title -match $filter })
+          Write-Host "Updates matching filter '$filter': $($matched.Count)"
+          foreach ($u in $matched) { Write-Host "  * $($u.Title)" }
+
+          if ($matched.Count -eq 0) {
+              Write-Host "No newer matching driver available -- nothing to install."
+              exit 0
+          }
+
+          if ($env:ACTION -eq "check-only") {
+              Write-Host "check-only: a newer matching driver IS available but will NOT be installed."
+              exit 0
+          }
+
+          # Accept EULAs and collect into an update collection.
+          $toInstall = New-Object -ComObject Microsoft.Update.UpdateColl
+          foreach ($u in $matched) {
+              if (-not $u.EulaAccepted) { $u.AcceptEula() }
+              $toInstall.Add($u) | Out-Null
+          }
+
+          Write-Host "Downloading $($toInstall.Count) driver update(s)..."
+          $downloader = $session.CreateUpdateDownloader()
+          $downloader.Updates = $toInstall
+          $dl = $downloader.Download()
+          Write-Host "Download result code: $($dl.ResultCode) (2 = succeeded)"
+          if ($dl.ResultCode -ne 2) {
+              throw "Driver download failed with result code $($dl.ResultCode)"
+          }
+
+          Write-Host "Installing driver update(s)..."
+          $installer = $session.CreateUpdateInstaller()
+          $installer.Updates = $toInstall
+          $inst = $installer.Install()
+          Write-Host "Install result code: $($inst.ResultCode) (2 = succeeded)"
+          Write-Host "Reboot required by installer: $($inst.RebootRequired)"
+          if ($inst.ResultCode -ne 2) {
+              throw "Driver install failed with result code $($inst.ResultCode)"
+          }
+
+          Write-Host "=== Driver after install ==="
+          Get-CimInstance Win32_VideoController |
+            Select-Object Name, DriverVersion, DriverDate | Format-List
+
+      - name: Force restart runner
+        if: ${{ inputs.action == 'update-and-reboot' }}
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          Write-Host "Scheduling forced restart in 30 seconds so this job can report first."
+          Write-Host "The runner will reconnect after boot only if it runs as an auto-start service."
+          # /r restart, /t delay, /f force-close apps, /c comment
+          shutdown /r /t 30 /f /c "GAIA CI: AMD driver-update reboot"
+          Write-Host "Restart scheduled."

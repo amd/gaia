@@ -1,0 +1,115 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Lets ANY contributor self-assign an open issue by commenting `.take` on it.
+# The assignment is performed by GITHUB_TOKEN (the Actions bot), not the
+# commenter — so a read-only external contributor can claim work without being
+# granted any repository role. This replaces the manual comment-then-maintainer-
+# assigns workflow that did not scale.
+#
+# Logic is inline github-script (no third-party action) to keep it auditable and
+# free of supply-chain risk.
+
+name: Self-assign issue
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+
+# Serialize per issue so two near-simultaneous `.take` comments don't both read
+# an empty assignees list and double-assign.
+concurrency:
+  group: self-assign-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  self-assign:
+    # Gate loosely here to skip PRs and most comments; the exact `.take`
+    # match (with trimming) happens in the script — Actions expressions have
+    # no trim() function.
+    if: >-
+      github.event.issue.pull_request == null &&
+      github.event.comment.user.type != 'Bot' &&
+      contains(github.event.comment.body, '.take')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v9
+        with:
+          script: |
+            // Require the comment to START with `.take` (a command), not merely
+            // mention it in prose. Allow a trailing reason after the command.
+            // Case-insensitive to match the loose `if` gate's contains() (which
+            // is case-insensitive) — otherwise `.Take`/`.TAKE` pass the gate,
+            // burn a runner, then silently no-op here.
+            const cmd = context.payload.comment.body.trim().toLowerCase();
+            if (cmd !== '.take' && !cmd.startsWith('.take ') && !cmd.startsWith('.take\n')) {
+              return;
+            }
+
+            const issueNumber = context.payload.issue.number;
+            const commenter = context.payload.comment.user.login;
+
+            // Read assignees/state LIVE rather than from the event payload —
+            // the payload is a snapshot from comment-creation time, so the
+            // concurrency guard only prevents double-assign if we re-fetch the
+            // current state here after serialization.
+            const { data: issue } = await github.rest.issues.get({
+              ...context.repo,
+              issue_number: issueNumber,
+            });
+            const assignees = issue.assignees || [];
+
+            if (issue.state === 'closed') {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: issueNumber,
+                body: `@${commenter} this issue is closed, so it can't be assigned. Find an open issue to \`.take\`.`,
+              });
+              return;
+            }
+
+            if (assignees.some((a) => a.login === commenter)) {
+              await github.rest.reactions.createForIssueComment({
+                ...context.repo,
+                comment_id: context.payload.comment.id,
+                content: '+1',
+              });
+              return;
+            }
+
+            if (assignees.length > 0) {
+              const taken = assignees.map((a) => `@${a.login}`).join(', ');
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: issueNumber,
+                body: `@${commenter} this issue is already assigned to ${taken}. If they've stalled, comment here and a maintainer can reassign it.`,
+              });
+              return;
+            }
+
+            // addAssignees silently ignores a user it can't assign (still 200),
+            // so confirm the commenter actually landed before reacting success.
+            const result = await github.rest.issues.addAssignees({
+              ...context.repo,
+              issue_number: issueNumber,
+              assignees: [commenter],
+            });
+            const assigned = (result.data.assignees || []).some(
+              (a) => a.login === commenter
+            );
+            if (!assigned) {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: issueNumber,
+                body: `@${commenter} I couldn't assign this to you automatically — GitHub only auto-assigns users it already recognizes as repo contributors. A maintainer can assign you manually; just comment here and we'll sort it out.`,
+              });
+              return;
+            }
+            await github.rest.reactions.createForIssueComment({
+              ...context.repo,
+              comment_id: context.payload.comment.id,
+              content: '+1',
+            });

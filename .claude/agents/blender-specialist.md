@@ -9,7 +9,7 @@ You work on the GAIA Blender agent and its MCP server. Blender integration runs 
 
 ## When to use
 
-- Editing `src/gaia/agents/blender/agent.py` or `agent_simple.py`
+- Editing `hub/agents/python/blender/gaia_agent_blender/agent.py` or `agent_simple.py`
 - Editing the MCP server/client pair (`src/gaia/mcp/blender_mcp_server.py`, `blender_mcp_client.py`)
 - Adding procedural modeling, material, lighting, animation, or rendering tools
 - Updating the workshop tutorial (`workshop/blender.ipynb`)
@@ -25,10 +25,10 @@ You work on the GAIA Blender agent and its MCP server. Blender integration runs 
 
 | File | Purpose |
 |------|---------|
-| `src/gaia/agents/blender/agent.py` | Main `BlenderAgent` with full tool set |
-| `src/gaia/agents/blender/agent_simple.py` | Minimal variant for quickstart |
-| `src/gaia/agents/blender/app.py` | Standalone entry |
-| `src/gaia/agents/blender/core/` | Shared Blender operation helpers |
+| `hub/agents/python/blender/gaia_agent_blender/agent.py` | Main `BlenderAgent` with full tool set |
+| `hub/agents/python/blender/gaia_agent_blender/agent_simple.py` | Minimal variant for quickstart |
+| `hub/agents/python/blender/gaia_agent_blender/app.py` | Standalone entry |
+| `hub/agents/python/blender/gaia_agent_blender/core/` | Shared Blender operation helpers |
 | `src/gaia/mcp/blender_mcp_server.py` | Runs inside Blender, exposes `bpy` over MCP |
 | `src/gaia/mcp/blender_mcp_client.py` | Client side used by the agent |
 | `workshop/blender.ipynb` | Tutorial notebook |
@@ -37,7 +37,7 @@ You work on the GAIA Blender agent and its MCP server. Blender integration runs 
 ## Architecture
 
 ```
-gaia blender  ──►  BlenderAgent (agent.py)  ──►  blender_mcp_client  ──MCP──►  Blender process running blender_mcp_server  ──►  bpy.ops.*
+gaia blender  ──►  BlenderAgent (gaia_agent_blender/agent.py)  ──►  blender_mcp_client  ──MCP──►  Blender process running blender_mcp_server  ──►  bpy.ops.*
 ```
 
 The MCP server is launched inside Blender (as an add-on or startup script). Your agent tools call the client, not `bpy` directly — this keeps the Python process that runs the LLM separate from Blender's embedded Python.

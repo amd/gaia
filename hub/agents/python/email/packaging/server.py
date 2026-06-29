@@ -43,10 +43,19 @@ DEFAULT_HOST = "127.0.0.1"
 
 
 def build_app():
-    """Build the minimal FastAPI app hosting the email REST surface."""
+    """Build the minimal FastAPI app hosting the email REST surface.
+
+    Also mounts the playground's mailbox-connector routes
+    (``/v1/email/connectors*``) so the always-served playground page can connect
+    Gmail/Outlook and exercise live send. They reuse GAIA's connector framework
+    (already linked in via the send path) and are excluded from the OpenAPI
+    contract — a playground convenience, not part of the frozen email REST
+    contract.
+    """
     from fastapi import FastAPI
     from gaia_agent_email import __version__ as agent_version
     from gaia_agent_email.api_routes import router as email_router
+    from gaia_agent_email.connector_routes import router as connector_router
     from gaia_agent_email.contract import SCHEMA_VERSION
 
     app = FastAPI(
@@ -66,6 +75,7 @@ def build_app():
         return {"apiVersion": SCHEMA_VERSION, "agentVersion": agent_version}
 
     app.include_router(email_router)
+    app.include_router(connector_router)
     return app
 
 
