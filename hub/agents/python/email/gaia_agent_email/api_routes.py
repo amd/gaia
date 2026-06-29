@@ -54,6 +54,10 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
 from gaia_agent_email.contract import (
     ActionItem,
+    BatchItemError,
+    BatchItemResult,
+    BatchTriageRequest,
+    BatchTriageResponse,
     DraftReply,
     EmailAddress,
     EmailCategory,
@@ -219,6 +223,47 @@ class EmailTriageService:
                 detail=f"Unsupported payload kind: {getattr(payload, 'kind', '?')!r}",
             )
         return EmailTriageResponse(request_kind=kind, result=result)
+
+    def triage_batch(
+        self,
+        request: BatchTriageRequest,
+        chat: Optional[Any] = None,
+    ) -> BatchTriageResponse:
+        """Triage a batch of emails/threads into a per-item result array (#1887).
+
+        The pre-loop Lemonade probe runs ONCE — if it raises ``LLMTriageError``
+        (server unreachable), the whole request fails with a 502; that error is
+        intentionally NOT caught here. Per-item failures (``LLMTriageError``,
+        ``EmailSummarizeError``) are caught inside the loop and surfaced as a
+        ``BatchItemResult.error`` for that index while remaining items continue.
+
+        Args:
+            request: The batch request envelope (1..MAX_BATCH_SIZE items).
+            chat:    Pre-built chat client. When None a local Lemonade client
+                     is constructed via :meth:`_build_llm_chat` (probe once).
+        """
+        # Pre-loop probe: fail fast if Lemonade is unreachable before spending
+        # time on any item. Raises LLMTriageError → propagates as 502.
+        resolved_chat = chat or self._build_llm_chat()
+        context = request.context
+        results: List[BatchItemResult] = []
+        for index, item in enumerate(request.items):
+            try:
+                if isinstance(item, SingleEmailInput):
+                    res = self._triage_single_llm(item, resolved_chat, context=context)
+                elif isinstance(item, ThreadInput):
+                    res = self._triage_thread_llm(item, resolved_chat, context=context)
+                else:  # pragma: no cover — discriminated union guarantees one of the two
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Unsupported item kind: {getattr(item, 'kind', '?')!r}",
+                    )
+                results.append(BatchItemResult(index=index, result=res))
+            except (LLMTriageError, EmailSummarizeError) as e:
+                results.append(
+                    BatchItemResult(index=index, error=BatchItemError(message=str(e)))
+                )
+        return BatchTriageResponse(results=results)
 
     def _build_llm_chat(self, base_url: Optional[str] = None) -> Any:
         """Build a local Lemonade chat client for LLM triage/summarise.
@@ -896,6 +941,28 @@ async def triage_email(request: EmailTriageRequest) -> EmailTriageResponse:
     try:
         return await asyncio.to_thread(_service.triage_request, request)
     except (LLMTriageError, EmailSummarizeError) as e:
+        raise HTTPException(
+            status_code=502, detail=f"local LLM triage failed: {e}"
+        ) from e
+
+
+@router.post("/triage/batch", response_model=BatchTriageResponse)
+async def triage_email_batch(request: BatchTriageRequest) -> BatchTriageResponse:
+    """Triage an array of emails or threads in a single request (#1887).
+
+    Accepts a ``BatchTriageRequest`` (1..MAX_BATCH_SIZE ``EmailInput`` items)
+    and returns a ``BatchTriageResponse`` — one ``BatchItemResult`` per item,
+    order-preserved. Per-item failures surface as ``BatchItemResult.error``
+    (HTTP 200 with all items errored is valid — inspect each result). A 502
+    means Lemonade was unreachable before any item was processed. No mail is
+    read or sent; this analyzes only the items in the request.
+    """
+    try:
+        return await asyncio.to_thread(_service.triage_batch, request)
+    except LLMTriageError as e:
+        # Only LLMTriageError can escape triage_batch — it is raised by the
+        # pre-loop Lemonade probe when the server is unreachable. Per-item
+        # EmailSummarizeError/LLMTriageError are caught inside triage_batch.
         raise HTTPException(
             status_code=502, detail=f"local LLM triage failed: {e}"
         ) from e

@@ -34,6 +34,7 @@ pytest.importorskip("gaia_agent_email")
 
 from fastapi.testclient import TestClient  # noqa: E402
 from gaia_agent_email.contract import (  # noqa: E402
+    BatchTriageResponse,
     EmailCategory,
     EmailTriageResponse,
     EmailTriageResult,
@@ -286,7 +287,100 @@ def test_send_invalid_payload_returns_422(client):
 
 
 # ---------------------------------------------------------------------------
-# 6. All documented paths are covered
+# 6. /triage/batch — conformance (LLM mocked; real HTTP layer running, #1887)
+# ---------------------------------------------------------------------------
+
+
+def _minimal_batch_payload() -> dict:
+    """Minimal valid BatchTriageRequest body for POST /triage/batch."""
+    return {
+        "schema_version": "2.0",
+        "items": [
+            {
+                "kind": "single",
+                "principal": {"email": "bob@example.com"},
+                "message": {
+                    "message_id": "msg-batch-001",
+                    "subject": "Batch test",
+                    "from": {"email": "alice@example.com"},
+                    "body": "Can you review this before Monday?",
+                },
+            }
+        ],
+    }
+
+
+def _canned_batch_response() -> BatchTriageResponse:
+    """Return a valid BatchTriageResponse for LLM mock use."""
+    from gaia_agent_email.contract import BatchItemResult
+
+    result = EmailTriageResult(
+        category=EmailCategory.NEEDS_RESPONSE,
+        is_spam=False,
+        is_phishing=False,
+        summary="Review request for Monday.",
+        action_items=[],
+        draft=None,
+    )
+    return BatchTriageResponse(results=[BatchItemResult(index=0, result=result)])
+
+
+def test_triage_batch_conforms_to_spec(client, committed_spec):
+    """POST /triage/batch with a mocked LLM returns a body conforming to the spec."""
+    canned = _canned_batch_response()
+
+    with patch(
+        "gaia_agent_email.api_routes.EmailTriageService.triage_batch",
+        return_value=canned,
+    ):
+        resp = client.post("/v1/email/triage/batch", json=_minimal_batch_payload())
+
+    assert resp.status_code == 200
+
+    schema_name = _schema_name_from_response(
+        committed_spec, "post", "/v1/email/triage/batch"
+    )
+    required = _required_keys(committed_spec, schema_name)
+    body = resp.json()
+
+    for key in required:
+        assert key in body, f"required key {key!r} missing from /triage/batch response"
+
+    assert body.get("schema_version") == "2.0"
+    assert "results" in body
+    assert len(body["results"]) == 1
+    assert body["results"][0]["index"] == 0
+    assert "result" in body["results"][0]
+
+
+def test_triage_batch_invalid_payload_returns_422(client):
+    """POST /triage/batch with empty items returns 422."""
+    resp = client.post("/v1/email/triage/batch", json={"items": []})
+    assert resp.status_code == 422
+
+
+def test_triage_batch_payload_shape_returns_422(client):
+    """POST /triage/batch with the single-email 'payload' shape returns 422."""
+    resp = client.post(
+        "/v1/email/triage/batch",
+        json={
+            "payload": {
+                "kind": "single",
+                "principal": {"email": "alice@example.com"},
+                "message": {
+                    "message_id": "msg-x",
+                    "from": {"email": "bob@example.com"},
+                    "subject": "Wrong shape",
+                    "body": "This belongs on /triage, not /triage/batch.",
+                },
+            }
+        },
+    )
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# 7. All documented paths are covered
 # ---------------------------------------------------------------------------
 
 
@@ -303,6 +397,7 @@ def test_all_documented_paths_covered(committed_spec):
     }
     expected = {
         ("post", "/v1/email/triage"),
+        ("post", "/v1/email/triage/batch"),  # #1887 additive
         ("post", "/v1/email/draft"),
         ("post", "/v1/email/send"),
         ("get", "/v1/email/health"),

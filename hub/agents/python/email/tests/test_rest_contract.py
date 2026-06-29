@@ -34,6 +34,8 @@ from gaia_agent_email import __version__ as package_version  # noqa: E402
 from gaia_agent_email import export_openapi  # noqa: E402
 from gaia_agent_email.contract import (  # noqa: E402
     SCHEMA_VERSION,
+    BatchTriageRequest,
+    BatchTriageResponse,
     EmailTriageRequest,
     EmailTriageResponse,
 )
@@ -43,6 +45,7 @@ from gaia_agent_email.version import AGENT_VERSION, API_VERSION  # noqa: E402
 # Maps (method, path) -> the component schema name the handler declares.
 _EXPECTED_RESPONSE_MODELS = {
     ("post", "/v1/email/triage"): "EmailTriageResponse",
+    ("post", "/v1/email/triage/batch"): "BatchTriageResponse",  # #1887 additive
     ("post", "/v1/email/draft"): "EmailDraftResponse",
     ("post", "/v1/email/send"): "EmailSendResponse",
     ("get", "/v1/email/health"): "HealthResponse",
@@ -96,11 +99,22 @@ def test_spec_info_version_is_api_version(spec):
 
 def test_contract_models_present_in_spec(spec):
     schemas = spec["components"]["schemas"]
-    for name in ("EmailTriageRequest", "EmailTriageResponse", "EmailTriageResult"):
+    for name in (
+        "EmailTriageRequest",
+        "EmailTriageResponse",
+        "EmailTriageResult",
+        # Batch models (#1887 additive)
+        "BatchTriageRequest",
+        "BatchTriageResponse",
+        "BatchItemResult",
+    ):
         assert name in schemas, f"{name} missing from exported OpenAPI components"
 
 
-@pytest.mark.parametrize("model", [EmailTriageRequest, EmailTriageResponse])
+@pytest.mark.parametrize(
+    "model",
+    [EmailTriageRequest, EmailTriageResponse, BatchTriageRequest, BatchTriageResponse],
+)
 def test_spec_schema_matches_contract_model(spec, model):
     """Field names + required set in the exported spec must match the pydantic
     contract model — drift between contract.py and the published spec fails."""
