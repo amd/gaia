@@ -593,12 +593,19 @@ class InitCommand:
 
             # Persist profile choice to ~/.gaia/config.json
             try:
-                from gaia.config import GaiaConfig
+                from gaia.config import GaiaConfig, GaiaConfigError
 
-                config = GaiaConfig(
-                    profile=self.profile,
-                    default_device="npu" if self.profile == "npu" else "gpu",
-                )
+                # Load-then-update so a user-set default_model (or any future
+                # field) survives re-running `gaia init`. init is also the
+                # natural recovery path, so if the existing file is corrupt,
+                # reset to a fresh config rather than leaving the bad file.
+                try:
+                    config = GaiaConfig.load()
+                except GaiaConfigError as e:
+                    log.warning(f"Resetting corrupt config: {e}")
+                    config = GaiaConfig()
+                config.profile = self.profile
+                config.default_device = "npu" if self.profile == "npu" else "gpu"
                 config.save()
             except Exception as e:
                 log.warning(f"Failed to save config: {e}")

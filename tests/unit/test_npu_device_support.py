@@ -115,6 +115,7 @@ class TestGaiaConfig:
         cfg = GaiaConfig()
         assert cfg.profile == "chat"
         assert cfg.default_device == "gpu"
+        assert cfg.default_model is None
 
     def test_save_and_load(self, tmp_path):
         from gaia.config import GaiaConfig
@@ -146,13 +147,18 @@ class TestGaiaConfig:
             assert cfg.default_device == "gpu"
 
     def test_load_corrupt_file(self, tmp_path):
-        from gaia.config import GaiaConfig
+        # A corrupt config must fail loudly (no silent fallback to defaults).
+        import pytest
+
+        from gaia.config import GaiaConfig, GaiaConfigError
 
         bad_file = tmp_path / "config.json"
         bad_file.write_text("not valid json{{{")
         with patch("gaia.config.GAIA_CONFIG_FILE", bad_file):
-            cfg = GaiaConfig.load()
-            assert cfg.profile == "chat"  # falls back to defaults
+            with pytest.raises(GaiaConfigError) as exc:
+                GaiaConfig.load()
+            # Error names the file and how to recover.
+            assert str(bad_file) in str(exc.value)
 
 
 # ── LemonadeClient backend methods ───────────────────────────────────────
