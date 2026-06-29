@@ -290,9 +290,7 @@ def test_no_truncated_list_label_in_html():
     # so we require a ']' before the next '<' (HTML tag) — never an unclosed run.
     html = _html()
     for m in re.finditer(r"list\[([^\]<]*)(.?)", html):
-        assert m.group(2) == "]", (
-            f"Unclosed list[ label near: {m.group(0)!r}"
-        )
+        assert m.group(2) == "]", f"Unclosed list[ label near: {m.group(0)!r}"
 
 
 # ---------------------------------------------------------------------------

@@ -115,9 +115,7 @@ def _batch_request(*item_dicts) -> BatchTriageRequest:
 
 def test_three_item_array_all_succeed():
     """A 3-item request returns 3 BatchItemResults, each with a result set."""
-    req = _batch_request(
-        _single_item_dict(), _thread_item_dict(), _single_item_dict()
-    )
+    req = _batch_request(_single_item_dict(), _thread_item_dict(), _single_item_dict())
     fake = _CountingFakeChat()
     service = EmailTriageService()
     response = service.triage_batch(req, chat=fake)
@@ -129,7 +127,9 @@ def test_three_item_array_all_succeed():
         assert isinstance(item_result, BatchItemResult)
         assert item_result.index == i, f"item {i}: wrong index {item_result.index}"
         assert item_result.result is not None, f"item {i}: result is None"
-        assert item_result.error is None, f"item {i}: unexpected error {item_result.error}"
+        assert (
+            item_result.error is None
+        ), f"item {i}: unexpected error {item_result.error}"
 
 
 # ---------------------------------------------------------------------------
@@ -139,9 +139,7 @@ def test_three_item_array_all_succeed():
 
 def test_per_item_isolation_failure_at_item_1():
     """A failure on item index 1 sets its error; items 0 and 2 still have results."""
-    req = _batch_request(
-        _single_item_dict(), _single_item_dict(), _single_item_dict()
-    )
+    req = _batch_request(_single_item_dict(), _single_item_dict(), _single_item_dict())
     # Each item makes 2 calls: item0→calls1+2, item1→calls3+4, item2→calls5+6.
     # Failing call 3 triggers an error on item index 1.
     fake = _CountingFakeChat(fail_on_call=3)
@@ -169,14 +167,13 @@ def test_per_item_isolation_failure_at_item_1():
 def test_empty_items_returns_422():
     """POST {"items": []} to /triage/batch is rejected with HTTP 422."""
     from fastapi.testclient import TestClient
-
     from gaia_agent_email.export_openapi import build_app
 
     client = TestClient(build_app())
     resp = client.post("/v1/email/triage/batch", json={"items": []})
-    assert resp.status_code == 422, (
-        f"expected 422 for empty items list, got {resp.status_code}"
-    )
+    assert (
+        resp.status_code == 422
+    ), f"expected 422 for empty items list, got {resp.status_code}"
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +184,6 @@ def test_empty_items_returns_422():
 def test_old_payload_shape_on_batch_returns_422():
     """A schema-2.0 {payload: …} body POSTed to /triage/batch is rejected with 422."""
     from fastapi.testclient import TestClient
-
     from gaia_agent_email.export_openapi import build_app
 
     client = TestClient(build_app())
@@ -204,9 +200,9 @@ def test_old_payload_shape_on_batch_returns_422():
         }
     }
     resp = client.post("/v1/email/triage/batch", json=old_shape)
-    assert resp.status_code == 422, (
-        f"expected 422 for 'payload' shape on batch endpoint, got {resp.status_code}"
-    )
+    assert (
+        resp.status_code == 422
+    ), f"expected 422 for 'payload' shape on batch endpoint, got {resp.status_code}"
 
 
 # ---------------------------------------------------------------------------
@@ -217,15 +213,14 @@ def test_old_payload_shape_on_batch_returns_422():
 def test_over_max_batch_size_returns_422():
     """POST with 101 items to /triage/batch is rejected with HTTP 422."""
     from fastapi.testclient import TestClient
-
     from gaia_agent_email.export_openapi import build_app
 
     client = TestClient(build_app())
     items = [_single_item_dict() for _ in range(101)]
     resp = client.post("/v1/email/triage/batch", json={"items": items})
-    assert resp.status_code == 422, (
-        f"expected 422 for 101 items (over MAX_BATCH_SIZE), got {resp.status_code}"
-    )
+    assert (
+        resp.status_code == 422
+    ), f"expected 422 for 101 items (over MAX_BATCH_SIZE), got {resp.status_code}"
 
 
 # ---------------------------------------------------------------------------
@@ -253,7 +248,6 @@ def test_lemonade_unreachable_returns_502_via_test_client(monkeypatch):
     """The /v1/email/triage/batch endpoint surfaces a Lemonade failure as HTTP 502."""
     import requests as requests_mod
     from fastapi.testclient import TestClient
-
     from gaia_agent_email.export_openapi import build_app
 
     def _fake_get(url, *args, **kwargs):
@@ -266,9 +260,9 @@ def test_lemonade_unreachable_returns_502_via_test_client(monkeypatch):
         "/v1/email/triage/batch",
         json={"items": [_single_item_dict()]},
     )
-    assert resp.status_code == 502, (
-        f"expected 502 for unreachable Lemonade, got {resp.status_code}"
-    )
+    assert (
+        resp.status_code == 502
+    ), f"expected 502 for unreachable Lemonade, got {resp.status_code}"
 
 
 # ---------------------------------------------------------------------------
@@ -282,21 +276,17 @@ def test_single_triage_endpoint_unchanged_regression(monkeypatch):
     This proves the additive guarantee: the existing single-email endpoint
     is untouched by the batch addition.
     """
-    import types as types_mod2
-    import json as json_mod
-    import requests as requests_mod
-
     from fastapi.testclient import TestClient
-    from gaia_agent_email.export_openapi import build_app
 
-    # Patch out the Lemonade probe so TestClient doesn't need a running server.
-    # We override triage_request on the service singleton to return a fixed response.
+    # Override triage_request on the service to return a fixed response, so the
+    # TestClient exercises the route shape without a running Lemonade server.
     from gaia_agent_email import api_routes as ar_mod
     from gaia_agent_email.contract import (
+        EmailCategory,
         EmailTriageResponse,
         EmailTriageResult,
-        EmailCategory,
     )
+    from gaia_agent_email.export_openapi import build_app
 
     _fake_result = EmailTriageResult(
         category=EmailCategory.NEEDS_RESPONSE,
@@ -314,7 +304,9 @@ def test_single_triage_endpoint_unchanged_regression(monkeypatch):
     def _patched_triage_request(self, request, chat=None):
         return _fake_response
 
-    monkeypatch.setattr(ar_mod.EmailTriageService, "triage_request", _patched_triage_request)
+    monkeypatch.setattr(
+        ar_mod.EmailTriageService, "triage_request", _patched_triage_request
+    )
 
     client = TestClient(build_app())
     payload = {
@@ -331,14 +323,16 @@ def test_single_triage_endpoint_unchanged_regression(monkeypatch):
         },
     }
     resp = client.post("/v1/email/triage", json=payload)
-    assert resp.status_code == 200, (
-        f"single /triage endpoint returned {resp.status_code}: {resp.text}"
-    )
+    assert (
+        resp.status_code == 200
+    ), f"single /triage endpoint returned {resp.status_code}: {resp.text}"
     body = resp.json()
     # Must have request_kind and result — the schema-2.0 shape
-    assert "request_kind" in body, f"'request_kind' missing from /triage response: {body}"
+    assert (
+        "request_kind" in body
+    ), f"'request_kind' missing from /triage response: {body}"
     assert "result" in body, f"'result' missing from /triage response: {body}"
     # Must NOT have a 'results' key (that's the batch shape)
-    assert "results" not in body, (
-        f"single /triage returned batch 'results' key — endpoint was broken: {body}"
-    )
+    assert (
+        "results" not in body
+    ), f"single /triage returned batch 'results' key — endpoint was broken: {body}"

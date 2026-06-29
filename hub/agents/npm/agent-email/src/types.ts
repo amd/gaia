@@ -189,6 +189,55 @@ export interface EmailTriageResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Batch triage (#1887) — ADDITIVE beside the single-email triage above.
+// POST /v1/email/triage/batch: an items array in, a results array out. The
+// single triage() / EmailTriageRequest / EmailTriageResponse are unchanged.
+// ---------------------------------------------------------------------------
+
+/** Maximum number of items in one batch request (contract.py: MAX_BATCH_SIZE). */
+export const MAX_BATCH_SIZE = 100 as const;
+
+/** Why one batch item could not be triaged (contract.py: BatchItemError). */
+export interface BatchItemError {
+  /** Actionable failure reason for this item. */
+  message: string;
+}
+
+/**
+ * One item's outcome in a batch triage (contract.py: BatchItemResult).
+ * Exactly one of `result` or `error` is set, correlated by 0-based `index`.
+ */
+export interface BatchItemResult {
+  /** 0-based position in the request `items` array. */
+  index: number;
+  /** Set when the item succeeded. */
+  result?: EmailTriageResult | null;
+  /** Set when the item failed. */
+  error?: BatchItemError | null;
+}
+
+/** Top-level batch triage request envelope (contract.py: BatchTriageRequest). */
+export interface BatchTriageRequest {
+  /** Contract version. Defaults to SCHEMA_VERSION; mismatch fails loudly. */
+  schema_version?: string;
+  /** 1..MAX_BATCH_SIZE single-email or thread inputs to triage. */
+  items: EmailInput[];
+  /** Optional context applied to ALL items. */
+  context?: TriageContext | null;
+}
+
+/** Top-level batch triage response envelope (contract.py: BatchTriageResponse). */
+export interface BatchTriageResponse {
+  /** Echoes the contract version. */
+  schema_version: string;
+  /**
+   * One entry per request item, order-preserved, 1:1 with `items`. HTTP 200
+   * with every item errored is valid — inspect each `results[].error`.
+   */
+  results: BatchItemResult[];
+}
+
+// ---------------------------------------------------------------------------
 // Draft / send handshake (api_routes.py — LOCAL, not part of the frozen triage
 // contract; the send-confirmation gate).
 // ---------------------------------------------------------------------------

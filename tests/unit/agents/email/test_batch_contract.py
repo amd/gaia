@@ -83,9 +83,9 @@ def _minimal_triage_result() -> EmailTriageResult:
 
 def test_schema_version_is_still_2_0():
     """The additive batch endpoint must NOT bump SCHEMA_VERSION."""
-    assert SCHEMA_VERSION == "2.0", (
-        f"SCHEMA_VERSION is {SCHEMA_VERSION!r}; additive change must NOT bump it"
-    )
+    assert (
+        SCHEMA_VERSION == "2.0"
+    ), f"SCHEMA_VERSION is {SCHEMA_VERSION!r}; additive change must NOT bump it"
 
 
 # ---------------------------------------------------------------------------
@@ -235,20 +235,20 @@ def test_batch_triage_request_rejects_unknown_field():
 
 def test_email_triage_request_still_has_payload_field():
     """Additive guarantee: the single-email EmailTriageRequest.payload is unchanged."""
-    assert "payload" in EmailTriageRequest.model_fields, (
-        "EmailTriageRequest lost its 'payload' field — the additive contract was broken"
-    )
+    assert (
+        "payload" in EmailTriageRequest.model_fields
+    ), "EmailTriageRequest lost its 'payload' field — the additive contract was broken"
 
 
 def test_email_triage_response_still_has_request_kind():
     """Additive guarantee: EmailTriageResponse.request_kind is unchanged."""
-    assert "request_kind" in EmailTriageResponse.model_fields, (
-        "EmailTriageResponse lost 'request_kind' — the additive contract was broken"
-    )
+    assert (
+        "request_kind" in EmailTriageResponse.model_fields
+    ), "EmailTriageResponse lost 'request_kind' — the additive contract was broken"
 
 
 def test_email_triage_response_still_has_result():
     """Additive guarantee: EmailTriageResponse.result is unchanged."""
-    assert "result" in EmailTriageResponse.model_fields, (
-        "EmailTriageResponse lost 'result' — the additive contract was broken"
-    )
+    assert (
+        "result" in EmailTriageResponse.model_fields
+    ), "EmailTriageResponse lost 'result' — the additive contract was broken"

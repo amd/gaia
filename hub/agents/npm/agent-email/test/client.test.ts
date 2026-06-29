@@ -7,6 +7,8 @@ import { describe, expect, it, vi } from "vitest";
 import { EmailClient } from "../src/client.js";
 import { HttpError } from "../src/errors.js";
 import type {
+  BatchTriageRequest,
+  BatchTriageResponse,
   EmailTriageRequest,
   EmailTriageResponse,
   EmailDraftResponse,
@@ -70,6 +72,58 @@ describe("EmailClient", () => {
     expect(res.result.action_items[0]?.type).toBe("text");
     expect(res.result.suggested_action).toBe("reply");
     expect(res.result.usage?.total_tokens).toBe(160);
+  });
+
+  it("sends a typed batch triage request to /triage/batch and parses results", async () => {
+    const batchResponse: BatchTriageResponse = {
+      schema_version: "2.0",
+      results: [
+        { index: 0, result: triageResponse.result },
+        { index: 1, error: { message: "injected failure" } },
+      ],
+    };
+    const fetchImpl = vi.fn(async (url, init) => {
+      // The batch method must POST to the batch path with an `items` array.
+      expect(String(url)).toContain("/v1/email/triage/batch");
+      expect(init?.method).toBe("POST");
+      const parsed = JSON.parse(String(init?.body));
+      expect(Array.isArray(parsed.items)).toBe(true);
+      expect(parsed.items).toHaveLength(2);
+      expect(parsed.items[0].kind).toBe("single");
+      return jsonResponse(batchResponse);
+    }) as unknown as typeof fetch;
+
+    const client = new EmailClient({ baseUrl: "http://127.0.0.1:8131", fetchImpl });
+    const req: BatchTriageRequest = {
+      items: [
+        {
+          kind: "single",
+          principal: { email: "me@example.com" },
+          message: {
+            message_id: "m1",
+            from: { email: "sarah@example.com" },
+            subject: "Prod incident follow-up",
+            body: "Please review by Friday.",
+          },
+        },
+        {
+          kind: "single",
+          principal: { email: "me@example.com" },
+          message: {
+            message_id: "m2",
+            from: { email: "promo@shop.example" },
+            subject: "Sale",
+            body: "Shop now.",
+          },
+        },
+      ],
+    };
+    const res = await client.triageBatch(req);
+    expect(res.results).toHaveLength(2);
+    expect(res.results[0]?.index).toBe(0);
+    expect(res.results[0]?.result?.category).toBe("NEEDS_RESPONSE");
+    expect(res.results[1]?.error?.message).toBe("injected failure");
+    expect(res.results[1]?.result ?? null).toBeNull();
   });
 
   it("normalizes a trailing slash in baseUrl", async () => {
