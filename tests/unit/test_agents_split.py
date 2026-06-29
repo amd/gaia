@@ -166,7 +166,6 @@ def test_get_mcp_status_report_does_not_raise(tmp_path):
     from gaia_agent_docqa.agent import DocumentQAAgent
     from gaia_agent_fileio.agent import FileIOAgent
 
-
     agents = [
         BrowserAgent(),
         AnalystAgent(AnalystAgentConfig(scratchpad_db_path=str(tmp_path / "s.db"))),
