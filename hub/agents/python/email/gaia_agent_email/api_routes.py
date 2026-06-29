@@ -75,6 +75,13 @@ from gaia_agent_email.version import AGENT_VERSION, API_VERSION
 from pydantic import BaseModel, ConfigDict, Field
 
 from gaia.connectors.api import connected_mailbox_providers
+from gaia.connectors.errors import (
+    AuthRequiredError,
+    ConfigurationError,
+    ConnectorsError,
+    ConnectionRevokedError,
+    ScopeMismatchError,
+)
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -943,11 +950,18 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
     # Provider precedence: the token's bound provider (D5) always wins; only an
     # unbound token falls back to request.provider; with neither, the
     # count-based resolver decides (and 400s when 2+ are connected).
-    backend = _resolve_backend_for_provider(bound_provider or request.provider)
-    to_header = ", ".join(_format_address(a) for a in request.to)
-    result = await asyncio.to_thread(
-        backend.send_message, to=to_header, subject=request.subject, body=request.body
-    )
+    try:
+        backend = _resolve_backend_for_provider(bound_provider or request.provider)
+        to_header = ", ".join(_format_address(a) for a in request.to)
+        result = await asyncio.to_thread(
+            backend.send_message, to=to_header, subject=request.subject, body=request.body
+        )
+    except (AuthRequiredError, ScopeMismatchError, ConnectionRevokedError) as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ConfigurationError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except ConnectorsError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
     sent_id = result.get("id") or ""
     # Graph sendMail returns 202 with no body → no id, but result["sent"]=True
     # signals a successful send. Gmail raises on failure, so no-id + no-sent

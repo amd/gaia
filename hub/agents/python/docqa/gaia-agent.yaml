@@ -1,0 +1,35 @@
+id: docqa
+name: Document Q&A
+version: 0.1.0
+description: "GAIA Document Q&A agent — RAG document Q&A and indexing"
+author: AMD
+license: MIT
+
+category: productivity
+tags: [rag, documents, qa, retrieval]
+icon: file-search
+tools_count: 0
+
+language: python
+min_gaia_version: "0.20.0"
+models: [Qwen3.5-35B-A3B-GGUF]
+
+python:
+  entry_module: gaia_agent_docqa
+  entry_class: DocumentQAAgent
+  dependencies:
+    - "amd-gaia>=0.20.0"
+
+requirements:
+  min_memory_gb: 8
+  platforms: [win-x64, linux-x64, darwin-arm64]
+
+permissions:
+  - filesystem:read
+
+interfaces:
+  tui: false
+  cli: false
+  pipe: true
+  api_server: true
+  mcp_server: true

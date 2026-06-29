@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gaia-agent-docqa"
+version = "0.1.0"
+description = "GAIA Document Q&A agent — RAG document Q&A and indexing"
+authors = [{ name = "AMD" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["amd-gaia>=0.20.0"]
+
+[project.entry-points."gaia.agent"]
+docqa = "gaia_agent_docqa:build_registration"
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["gaia_agent_docqa*"]

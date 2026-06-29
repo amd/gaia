@@ -21,13 +21,19 @@ no network — a fresh loader per scenario is the cold/empty-memory new-user sta
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from gaia.agents.base.tool_loader import (
     DEFAULT_MAX_TOOLS,
     DEFAULT_THRESHOLD,
     ToolLoader,
 )
-from gaia.agents.chat.tool_bundles import DOC_BUNDLES, DOC_CORE_TOOLS
+
+# DOC_BUNDLES ships with the standalone gaia-agent-chat wheel (#1102); skip the
+# whole module when a framework-only env lacks it.
+pytest.importorskip("gaia_agent_chat")
+
+from gaia_agent_chat.tool_bundles import DOC_BUNDLES, DOC_CORE_TOOLS  # noqa: E402
 
 DIM = 768
 

@@ -51,7 +51,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from unittest.mock import MagicMock, patch
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from gaia.agents.chat.agent import ChatAgent
+    from gaia_agent_chat.agent import ChatAgent
 
 # Tokenizer proxy — see module docstring for why tiktoken (not Gemma's own).
 TOKENIZER_ENCODING = "cl100k_base"
@@ -156,9 +156,9 @@ def _build_skeleton_tool_loader(dynamic_tools: bool):
     if not dynamic_tools:
         return None
     import numpy as np
+    from gaia_agent_chat.tool_bundles import DOC_BUNDLES, DOC_CORE_TOOLS
 
     from gaia.agents.base.tool_loader import ToolLoader
-    from gaia.agents.chat.tool_bundles import DOC_BUNDLES, DOC_CORE_TOOLS
 
     return ToolLoader(
         core_tools=DOC_CORE_TOOLS,
@@ -204,7 +204,7 @@ def build_doc_agent_skeleton(
     """
     stubbed = _ensure_optional_deps_stubbed()
     try:
-        from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+        from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
         cfg = ChatAgentConfig(
             rag_documents=[],

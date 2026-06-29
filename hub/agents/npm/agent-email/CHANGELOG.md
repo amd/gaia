@@ -5,6 +5,16 @@ follows [SemVer](https://semver.org/): the **MAJOR** of the on-the-wire
 `SCHEMA_VERSION` is what `checkVersion` enforces at startup, so a contract MAJOR
 bump is always at least a package MINOR bump with a migration note.
 
+## 0.2.5
+
+Sending from a mailbox connected with identity-only scopes now returns an
+actionable 4xx (naming the missing `installed:email` grant) instead of an opaque
+HTTP 500, so the playground no longer points users at Lemonade for what is really
+an OAuth-scope problem. The playground's mailbox connect now requests mail-send
+scopes (so connect → send works), and the send panel keeps every connected
+mailbox selectable while marking ones that lack mail-send access. No agent
+wire-contract change — `SCHEMA_VERSION` stays `2.0`.
+
 ## 0.2.4
 
 First fully-published release of this feature set. The whole-package zip download

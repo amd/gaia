@@ -434,7 +434,8 @@ class TestChatFactoryRegression:
         """
         import dataclasses as _dc
 
-        from gaia.agents.chat.agent import ChatAgentConfig
+        pytest.importorskip("gaia_agent_chat")
+        from gaia_agent_chat.agent import ChatAgentConfig
 
         valid_fields = {f.name for f in _dc.fields(ChatAgentConfig)}
         assert "rag_documents" in valid_fields
@@ -450,8 +451,9 @@ class TestChatFactoryRegression:
         guard for AC item "built-in chat continues to receive its session
         kwargs unchanged".
         """
+        pytest.importorskip("gaia_agent_chat")
         registry = AgentRegistry()
-        registry._register_builtin_agents()
+        registry.discover()
 
         # Exercise the literal production-injection path: model_id +
         # session kwargs + an unknown kwarg the factory must drop.
