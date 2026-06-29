@@ -285,10 +285,14 @@ def test_type_label_unwraps_optional():
 def test_no_truncated_list_label_in_html():
     # The whole page must never contain a truncated 'list[Something' without a
     # closing bracket (the _type_label bracket-ordering bug). Every 'list['
-    # generic that opens must close with ']'.
+    # generic that opens must close with ']'. The inner may be a single type
+    # (list[EmailAddress]) or a union (list[SingleEmailInput | ThreadInput]),
+    # so we require a ']' before the next '<' (HTML tag) — never an unclosed run.
     html = _html()
-    for m in re.finditer(r"list\[[A-Za-z_]+(.?)", html):
-        assert m.group(1) == "]", f"Unclosed list[ label near: {m.group(0)!r}"
+    for m in re.finditer(r"list\[([^\]<]*)(.?)", html):
+        assert m.group(2) == "]", (
+            f"Unclosed list[ label near: {m.group(0)!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
