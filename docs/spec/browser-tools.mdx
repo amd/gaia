@@ -543,7 +543,7 @@ Single phase — this is a focused, self-contained feature.
   - `WebClient` utility class (rate limiting, timeouts, extraction)
   - `BrowserToolsMixin` with `register_browser_tools()` containing 4 tools
 - [ ] Update `src/gaia/agents/tools/__init__.py` to export `BrowserToolsMixin`
-- [ ] Update `src/gaia/agents/chat/agent.py`:
+- [ ] Update `hub/agents/python/chat/gaia_agent_chat/agent.py`:
   - Add `BrowserToolsMixin` to class MRO
   - Add `enable_browser` + config fields to `ChatAgentConfig`
   - Initialize `WebClient` in `__init__`

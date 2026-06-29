@@ -496,7 +496,7 @@ class TestStreamingRegisteredAgentDoesNotDoubleIndex:
 
         src = (
             _Path(__file__).parents[4] / "src" / "gaia" / "ui" / "_chat_helpers.py"
-        ).read_text()
+        ).read_text(encoding="utf-8")
 
         # Locate the streaming registered-agent factory call. It's the only
         # ``registry.create_agent(`` invocation in ``_stream_chat_response``
@@ -525,7 +525,7 @@ class TestStreamingRegisteredAgentDoesNotDoubleIndex:
         )
 
 
-# ── _stamp_builtin_chat_identity ─────────────────────────────────────────────
+# ── _stamp_chat_identity ─────────────────────────────────────────────
 #
 # Regression coverage for the activation-filter bypass discovered during #1005
 # UI verification: ``_chat_helpers`` constructs ``ChatAgent(config)`` directly
@@ -534,12 +534,12 @@ class TestStreamingRegisteredAgentDoesNotDoubleIndex:
 # activation filter as ``_gaia_namespaced_agent_id is None``, and
 # ``Agent._active_mcp_servers`` falls back to "ad-hoc agent — show every MCP
 # server unfiltered". The activations.json ledger gets written but ignored,
-# so deactivating ``mcp-github`` for ``builtin:chat`` has no effect on what the
+# so deactivating ``mcp-github`` for ``installed:chat`` has no effect on what the
 # UI's Chat sees.
 
 
 class TestStampBuiltinChatIdentity:
-    """Tests for _stamp_builtin_chat_identity().
+    """Tests for _stamp_chat_identity().
 
     The stamp must hit the ChatAgentConfig BEFORE ChatAgent.__init__ runs,
     because ``__init__`` calls ``_register_tools`` which reads the namespaced
@@ -548,22 +548,26 @@ class TestStampBuiltinChatIdentity:
     """
 
     def test_stamps_field_on_fresh_config(self):
-        from gaia.agents.chat.agent import ChatAgentConfig
-        from gaia.ui._chat_helpers import _stamp_builtin_chat_identity
+        pytest.importorskip("gaia_agent_chat")
+        from gaia_agent_chat.agent import ChatAgentConfig
+
+        from gaia.ui._chat_helpers import _stamp_chat_identity
 
         config = ChatAgentConfig()
         assert config.namespaced_agent_id is None
-        _stamp_builtin_chat_identity(config)
-        assert config.namespaced_agent_id == "builtin:chat"
+        _stamp_chat_identity(config)
+        assert config.namespaced_agent_id == "installed:chat"
 
     def test_is_idempotent_no_overwrite_when_already_set(self):
         # Callers that pre-fill the field with a custom id (e.g. a future
         # custom-Chat wrapper) must NOT be clobbered.
-        from gaia.agents.chat.agent import ChatAgentConfig
-        from gaia.ui._chat_helpers import _stamp_builtin_chat_identity
+        pytest.importorskip("gaia_agent_chat")
+        from gaia_agent_chat.agent import ChatAgentConfig
+
+        from gaia.ui._chat_helpers import _stamp_chat_identity
 
         config = ChatAgentConfig(namespaced_agent_id="custom:abc:chat")
-        _stamp_builtin_chat_identity(config)
+        _stamp_chat_identity(config)
         assert config.namespaced_agent_id == "custom:abc:chat"
 
     def test_chat_agent_init_propagates_config_to_instance_attr_before_super(
@@ -583,9 +587,17 @@ class TestStampBuiltinChatIdentity:
         """
         from pathlib import Path as _Path
 
+        # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102); its
+        # source now lives under hub/agents/python/chat/.
         src = (
-            _Path(__file__).parents[4] / "src" / "gaia" / "agents" / "chat" / "agent.py"
-        ).read_text()
+            _Path(__file__).parents[4]
+            / "hub"
+            / "agents"
+            / "python"
+            / "chat"
+            / "gaia_agent_chat"
+            / "agent.py"
+        ).read_text(encoding="utf-8")
         init_start = src.index("def __init__(self, config: Optional[ChatAgentConfig]")
         super_init = src.index("super().__init__(", init_start)
         prelude = src[init_start:super_init]
@@ -601,7 +613,7 @@ class TestStampBuiltinChatIdentity:
 
     def test_every_direct_ChatAgent_construction_is_pre_stamped(self):
         """Every ``agent = ChatAgent(config)`` in _chat_helpers.py must be
-        PRECEDED by ``_stamp_builtin_chat_identity(config)`` (within the
+        PRECEDED by ``_stamp_chat_identity(config)`` (within the
         last 5 non-blank lines).
 
         Structural guard: a fifth direct construction site added without
@@ -620,7 +632,7 @@ class TestStampBuiltinChatIdentity:
 
         src = (
             _Path(__file__).parents[4] / "src" / "gaia" / "ui" / "_chat_helpers.py"
-        ).read_text()
+        ).read_text(encoding="utf-8")
 
         lines = src.splitlines()
         offenders = []
@@ -633,15 +645,15 @@ class TestStampBuiltinChatIdentity:
                     if lines[j].strip():
                         window.append(lines[j])
                     j -= 1
-                if not any("_stamp_builtin_chat_identity(config)" in w for w in window):
+                if not any("_stamp_chat_identity(config)" in w for w in window):
                     offenders.append(
                         f"line {i + 1}: {line.strip()!r} — missing prior "
-                        f"_stamp_builtin_chat_identity(config)"
+                        f"_stamp_chat_identity(config)"
                     )
 
         assert not offenders, (
             "Every direct ``agent = ChatAgent(config)`` in _chat_helpers.py "
-            "must be PRECEDED by ``_stamp_builtin_chat_identity(config)`` "
+            "must be PRECEDED by ``_stamp_chat_identity(config)`` "
             "(within the last 5 non-blank lines) so the per-agent "
             "activation filter (#1005) fires correctly. Post-construction "
             "stamping is too late — ChatAgent.__init__ runs "

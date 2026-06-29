@@ -38,8 +38,8 @@ signals yourself.
 ## REST API
 
 `EmailClient` is a typed wrapper over the sidecar's HTTP surface. Methods:
-`triage`, `search`, `prescan`, `draft`, `send`, `confirmAction`, `archive`,
-`unarchive`, `quarantine`, `unquarantine`, `listCalendarEvents`,
+`triage`, `triageBatch`, `search`, `prescan`, `draft`, `send`, `confirmAction`,
+`archive`, `unarchive`, `quarantine`, `unquarantine`, `listCalendarEvents`,
 `previewCalendarEvent`, `createCalendarEvent`, `respondToCalendarEvent`, `health`,
 `version`, `emailHealth`, `emailVersion`, `spec`, `openapi`. `health`/`version` hit the **root** routes (the standalone
 sidecar); `emailHealth`/`emailVersion` hit the **`/v1/email`-scoped** mirrors (for
@@ -50,6 +50,7 @@ result.
 | Endpoint | Client method | Auth | What it needs |
 |----------|---------------|------|---------------|
 | `POST /v1/email/triage` | `triage()` | **Standalone** | Local Lemonade LLM only. Categorizes / summarizes / extracts action items + spam/phishing **signals** on the message you send in. *No mailbox is read.* |
+| `POST /v1/email/triage/batch` | `triageBatch()` | **Standalone** | Same as `triage` for an `items` array (1–100). Returns a parallel `results` array, order-preserved; per-item failures isolate (HTTP 200 can carry errored items — inspect `results[].error`). A `502` fails the whole batch (Lemonade unreachable). |
 | `POST /v1/email/search` | `search()` | **Connector** | Read-only inbox search. A connected Google/Microsoft mailbox (`503` if none, `400` if 2+); **no** confirmation token. Lists messages matching `query`/`labels` and returns metadata only (no body). |
 | `POST /v1/email/prescan` | `prescan()` | **Connector** | Reads recent inbox messages from the connected Google/Microsoft mailbox and returns the read-only triage-card envelope (`kind: "email_pre_scan"`). `503` if no mailbox is connected, `400` if 2+ are. Heuristic-only — no Lemonade call. |
 | `POST /v1/email/draft` | `draft()` | **Standalone** | Nothing external — wraps your `(to, subject, body)` and returns a single-use confirmation token. |
@@ -166,6 +167,26 @@ console.log(sent.sent_id);
 
 The full request/response types are exported from the package (`src/types.ts`) for
 exact field-level reference.
+
+### Batch triage shape (additive, #1887)
+
+`triageBatch` takes `{ schema_version?, items, context? }` where `items` is 1–100
+`EmailInput` objects (the same `SingleEmailInput` / `ThreadInput` shapes `triage`
+accepts, discriminated on `kind`), and `context` — when present — applies to **all**
+items. It returns `{ schema_version, results }` with one `BatchItemResult` per item,
+order-preserved (1:1 with `items`):
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `index` | `number` | 0-based position in the request `items` array. |
+| `result` | `EmailTriageResult \| null` | Set when the item succeeded (same shape as `triage`'s `result`). |
+| `error` | `BatchItemError \| null` | Set (with a `message`) when the item failed. Exactly one of `result` / `error` is set. |
+
+**HTTP 200 with every item errored is a valid response** — a per-item failure does
+not fail the request, so always inspect each `results[].error`, never just the HTTP
+status. A `502` means Lemonade was unreachable before any item ran (the whole batch
+fails). The single `triage()` endpoint and its types are unchanged; `MAX_BATCH_SIZE`
+is exported for the 100-item cap (over-cap → `422`).
 
 ### Inbox search shape
 

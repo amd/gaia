@@ -16,11 +16,25 @@ from __future__ import annotations
 import html as _html_lib
 import webbrowser
 from pathlib import Path
-from typing import Any, List, Optional, Tuple, Type, Union, get_args, get_origin
+from typing import (
+    Annotated,
+    Any,
+    List,
+    Optional,
+    Tuple,
+    Type,
+    Union,
+    get_args,
+    get_origin,
+)
 
 from gaia_agent_email.contract import (
     SCHEMA_VERSION,
     ActionItem,
+    BatchItemError,
+    BatchItemResult,
+    BatchTriageRequest,
+    BatchTriageResponse,
     CalendarCreateEventRequest,
     CalendarEvent,
     CalendarEventDateTime,
@@ -233,8 +247,14 @@ def _annotation_label(annotation: Any) -> str:
     ``Optional[List[EmailAddress]]`` render as ``list[EmailAddress]``
     rather than the bare outer name. NoneType arms (from Optional) are
     dropped so the label names the value type, not ``| None``.
+    ``Annotated[X, …]`` (e.g. a discriminated-union list element) is unwrapped
+    to ``X`` so the label names the value type, not the ``Annotated`` wrapper.
     """
     origin = get_origin(annotation)
+    # Unwrap Annotated[X, metadata…] → X before any other handling, so a
+    # discriminated-union element renders as the union, not 'Annotated[...'.
+    if origin is Annotated:
+        return _annotation_label(get_args(annotation)[0])
     if origin is None:
         # A concrete class (str, bool, EmailAddress, …) or a bare name.
         return getattr(annotation, "__name__", None) or str(annotation)
@@ -377,6 +397,29 @@ def render_endpoint_spec_html() -> str:
         f"{_model_table(EmailTriageResult, 'EmailTriageResult')}"
         f"{_model_table(DraftReply, 'DraftReply (optional)')}"
         f"{_model_table(ActionItem, 'ActionItem')}"
+        f"</div>"
+    )
+
+    batch_block = (
+        f'<div class="endpoint-block">'
+        f'<span class="method-badge">POST</span>'
+        f'<span class="path">/v1/email/triage/batch</span>'
+        f'<p class="desc">Triage a batch of emails or threads in one request (#1887). '
+        f"Accepts a BatchTriageRequest (an <code>items</code> array of 1–100 "
+        f"single-email / thread inputs) and returns a BatchTriageResponse — one "
+        f"BatchItemResult per item, order-preserved. This is additive: the single "
+        f"<code>/v1/email/triage</code> endpoint above is unchanged.</p>"
+        f"<p class='desc'><strong>Per-item isolation:</strong> a failure on one "
+        f"item sets that entry's <code>error</code> and the rest still run. "
+        f"<strong>HTTP 200 with every item errored is valid</strong> — inspect each "
+        f"<code>results[].error</code>, not just the status. A 502 means the local "
+        f"LLM was unreachable before any item was processed (the whole batch fails).</p>"
+        f"<h3>Request envelope</h3>"
+        f"{_model_table(BatchTriageRequest, 'BatchTriageRequest')}"
+        f"<h3>Response envelope</h3>"
+        f"{_model_table(BatchTriageResponse, 'BatchTriageResponse')}"
+        f"{_model_table(BatchItemResult, 'BatchItemResult (exactly one of result / error)')}"
+        f"{_model_table(BatchItemError, 'BatchItemError')}"
         f"</div>"
     )
 
@@ -597,6 +640,8 @@ def render_endpoint_spec_html() -> str:
 <h2>Endpoints</h2>
 
 {triage_block}
+
+{batch_block}
 
 {prescan_block}
 

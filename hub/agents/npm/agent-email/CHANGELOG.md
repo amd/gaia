@@ -5,11 +5,22 @@ follows [SemVer](https://semver.org/): the **MAJOR** of the on-the-wire
 `SCHEMA_VERSION` is what `checkVersion` enforces at startup, so a contract MAJOR
 bump is always at least a package MINOR bump with a migration note.
 
-## Unreleased (2.1)
+## 0.3.0
 
 Contract bumped to `SCHEMA_VERSION` **2.1** — additive, no triage shape change, so
 `checkVersion` (MAJOR-only) keeps accepting 2.0 clients.
 
+- **Batch triage endpoint** (#1887): new `POST /v1/email/triage/batch` /
+  `client.triageBatch(req)` beside the single-email endpoint, so a caller can triage
+  up to 100 emails or threads in one request instead of one HTTP round-trip per
+  message. The body carries an `items` array; the response carries a parallel
+  `results` array, order-preserved, each entry holding exactly one of `result` or
+  `error`. Per-item failures are isolated: HTTP 200 with every item errored is a
+  valid response, so consumers MUST inspect each `results[].error`, not just the
+  HTTP status. New npm surface: `client.triageBatch()`, the `BatchTriageRequest` /
+  `BatchTriageResponse` / `BatchItemResult` / `BatchItemError` types, and the
+  `MAX_BATCH_SIZE` constant. New MCP tool `triage_email_batch`. Purely additive —
+  the single `triage()` / `POST /v1/email/triage` / MCP `triage_email` are unchanged.
 - **Inbox search on the REST contract** (#1781): new read-only `POST /v1/email/search`
   / `client.search(req)`. The Agent UI lost live inbox search in the in-process
   agent rip-out (#1653); this restores it through the package. Lists messages

@@ -51,6 +51,138 @@
         "title": "ActionItem",
         "type": "object"
       },
+      "BatchItemError": {
+        "additionalProperties": false,
+        "description": "Why one batch item could not be triaged (surfaced loudly, never swallowed).\n\nKept as an object (not a bare string) so a future ``code``/``type`` field is\nadditive rather than another breaking change.",
+        "properties": {
+          "message": {
+            "description": "Actionable failure reason for this item.",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "BatchItemError",
+        "type": "object"
+      },
+      "BatchItemResult": {
+        "additionalProperties": false,
+        "description": "One item's outcome in a batch triage, correlated by 0-based index.\n\nExactly one of ``result`` or ``error`` is set. ``index`` matches the item's\nposition in the request ``items`` array so out-of-order processing is safe\n(the current implementation is sequential and order-preserving).",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BatchItemError"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when the item failed."
+          },
+          "index": {
+            "description": "0-based position in the request ``items`` array.",
+            "minimum": 0.0,
+            "title": "Index",
+            "type": "integer"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EmailTriageResult"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when the item succeeded."
+          }
+        },
+        "required": [
+          "index"
+        ],
+        "title": "BatchItemResult",
+        "type": "object"
+      },
+      "BatchTriageRequest": {
+        "additionalProperties": false,
+        "description": "Top-level batch triage request envelope (#1887).\n\nAccepts 1..MAX_BATCH_SIZE ``EmailInput`` items (same discriminated union as\nthe single-email endpoint's ``payload``). ``context`` applies to ALL items;\nper-item context override is out of scope.",
+        "properties": {
+          "context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TriageContext"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional context (people/projects/tone/self-email) applied to ALL items. Absent → behavior unchanged for every item."
+          },
+          "items": {
+            "description": "The emails / threads to triage, 1..MAX_BATCH_SIZE items. Each is a SingleEmailInput or ThreadInput discriminated by ``kind``.",
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "single": "#/components/schemas/SingleEmailInput",
+                  "thread": "#/components/schemas/ThreadInput"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/SingleEmailInput"
+                },
+                {
+                  "$ref": "#/components/schemas/ThreadInput"
+                }
+              ]
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Items",
+            "type": "array"
+          },
+          "schema_version": {
+            "default": "2.1",
+            "description": "Contract version. Mismatch lets a consumer fail loudly.",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "BatchTriageRequest",
+        "type": "object"
+      },
+      "BatchTriageResponse": {
+        "additionalProperties": false,
+        "description": "Top-level batch triage response envelope (#1887).\n\nOne ``BatchItemResult`` per request item, order-preserved, 1:1 with\n``items``. HTTP 200 with all items errored is valid — consumers MUST inspect\neach ``results[].error``, not just the HTTP status.",
+        "properties": {
+          "results": {
+            "description": "One entry per request item, order-preserved, 1:1 with ``items``.",
+            "items": {
+              "$ref": "#/components/schemas/BatchItemResult"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "schema_version": {
+            "default": "2.1",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "title": "BatchTriageResponse",
+        "type": "object"
+      },
       "CalendarCreateEventRequest": {
         "additionalProperties": false,
         "description": "Create a calendar event. Shared by the preview (token-mint) and create\n(token-consume) endpoints.\n\nCreating an event is a Tier-2 (externally visible) mutation, so it is gated\nby the same single-use confirmation-token handshake as ``/v1/email/send``:\nPOST this to ``/calendar/events/preview`` to mint a token bound to the exact\nevent, then echo the token in ``confirmation_token`` to ``/calendar/events``.",
@@ -2632,6 +2764,48 @@
           }
         },
         "summary": "Triage Email",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/triage/batch": {
+      "post": {
+        "description": "Triage an array of emails or threads in a single request (#1887).\n\nAccepts a ``BatchTriageRequest`` (1..MAX_BATCH_SIZE ``EmailInput`` items)\nand returns a ``BatchTriageResponse`` — one ``BatchItemResult`` per item,\norder-preserved. Per-item failures surface as ``BatchItemResult.error``\n(HTTP 200 with all items errored is valid — inspect each result). A 502\nmeans Lemonade was unreachable before any item was processed. No mail is\nread or sent; this analyzes only the items in the request.",
+        "operationId": "triage_email_batch_v1_email_triage_batch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchTriageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchTriageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Triage Email Batch",
         "tags": [
           "email"
         ]

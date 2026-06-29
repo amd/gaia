@@ -2,6 +2,8 @@
 
 [![npm version](https://img.shields.io/npm/v/@amd-gaia/agent-email?label=version)](https://www.npmjs.com/package/@amd-gaia/agent-email) · contract `SCHEMA_VERSION` **2.1** · last updated **2026-06-26**
 
+**Eval scorecard (v0.2.5): aggregate 42.0 / 100** — `category_accuracy` 0.42 over 100 of 220 labeled emails ([`./SCORECARD.md`](./SCORECARD.md)), scored against the schema-2.0 triage taxonomy. The linked scorecard carries the full recipe, metrics, a per-category breakdown, the run environment, a worked recomputation, and reproduction steps.
+
 Embed the **GAIA email agent** in your JS/TS app. It triages, organizes, replies
 to, and schedules from Gmail and Outlook — with every email body analyzed
 **locally on AMD Ryzen AI** via Lemonade. No message content is sent to a cloud
@@ -88,6 +90,36 @@ console.log(res.result.category, res.result.summary);
 await shutdown(sidecar); // kills the whole process tree
 ```
 
+### Triage many at once
+
+`triageBatch` sends up to 100 emails or threads in a single request and returns a
+parallel `results` array (one entry per item, order-preserved). It's additive — the
+single `triage()` above is unchanged. Per-item failures are isolated, so an HTTP 200
+can still carry errored items: inspect each `results[].error`, never just the status.
+
+```ts
+const batch = await sidecar.client.triageBatch({
+  items: [
+    {
+      kind: "single",
+      principal: { email: "me@example.com" },
+      message: { message_id: "m1", from: { email: "sarah@example.com" },
+        subject: "Prod incident", body: "Reply by Friday." },
+    },
+    {
+      kind: "single",
+      principal: { email: "me@example.com" },
+      message: { message_id: "m2", from: { email: "promo@shop.example" },
+        subject: "Sale", body: "Shop now." },
+    },
+  ],
+});
+for (const item of batch.results) {
+  if (item.error) console.warn(`item ${item.index} failed: ${item.error.message}`);
+  else console.log(`item ${item.index}:`, item.result!.category);
+}
+```
+
 ### Browser / Electron renderer
 
 The `.` entry uses Node built-ins, so it can't be bundled for a browser or an
@@ -136,6 +168,7 @@ example above). Every non-2xx response throws `HttpError` (with `status`, `url`,
 | Call | Needs | Does |
 |------|-------|------|
 | `triage(req)` | Local LLM only | Classifies the message you pass, summarizes it, and extracts action items + spam/phishing signals. No mailbox is read. |
+| `triageBatch(req)` | Local LLM only | Same as `triage`, but for an `items` array (1–100). Returns a parallel `results` array; per-item failures isolate (HTTP 200 can carry errored items — inspect `results[].error`). |
 | `search(req)` | A connected Gmail/Outlook mailbox | Searches the connected inbox (**read-only**) by Gmail-style `query`/`labels` and returns message metadata — id, subject, sender, snippet, labels. No message is read in full or modified; no confirmation token needed. |
 | `prescan(req?)` | A connected Gmail/Outlook mailbox | Reads recent inbox messages and returns the triage-card envelope (urgent / needs-response / suggested-archive rows + an informational count). Read-only — nothing is archived, marked, or sent. |
 | `draft(req)` | Nothing external | Proposes a reply (`to` is a list of `{ email }` objects, not strings) and returns a single-use confirmation token. |

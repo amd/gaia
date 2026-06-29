@@ -36,7 +36,7 @@ Design notes
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Union, cast
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -64,6 +64,10 @@ CATEGORY_PERSONAL = "PERSONAL"
 #   - calendar view/create/respond (#1780)
 #   - inbox pre-scan (#1778)
 SCHEMA_VERSION = "2.1"
+
+# Maximum number of items in a single batch request. Protects the single-tenant
+# local model slot from runaway batches. Enforced via Pydantic max_length.
+MAX_BATCH_SIZE = 100
 
 
 class _Strict(BaseModel):
@@ -367,6 +371,95 @@ class EmailTriageResponse(_Strict):
         ..., description="Which input shape produced this result."
     )
     result: EmailTriageResult = Field(..., description="The structured analysis.")
+
+
+# ---------------------------------------------------------------------------
+# Batch triage contract (#1887) — ADDITIVE beside the single-email models above
+# ---------------------------------------------------------------------------
+
+
+class BatchItemError(_Strict):
+    """Why one batch item could not be triaged (surfaced loudly, never swallowed).
+
+    Kept as an object (not a bare string) so a future ``code``/``type`` field is
+    additive rather than another breaking change.
+    """
+
+    message: str = Field(..., description="Actionable failure reason for this item.")
+
+
+class BatchItemResult(_Strict):
+    """One item's outcome in a batch triage, correlated by 0-based index.
+
+    Exactly one of ``result`` or ``error`` is set. ``index`` matches the item's
+    position in the request ``items`` array so out-of-order processing is safe
+    (the current implementation is sequential and order-preserving).
+    """
+
+    index: int = Field(
+        ..., ge=0, description="0-based position in the request ``items`` array."
+    )
+    result: Optional[EmailTriageResult] = Field(
+        default=None, description="Set when the item succeeded."
+    )
+    error: Optional[BatchItemError] = Field(
+        default=None, description="Set when the item failed."
+    )
+
+    @model_validator(mode="after")
+    def _exactly_one(self) -> "BatchItemResult":
+        if (self.result is None) == (self.error is None):
+            raise ValueError("exactly one of result/error must be set")
+        return self
+
+
+class BatchTriageRequest(_Strict):
+    """Top-level batch triage request envelope (#1887).
+
+    Accepts 1..MAX_BATCH_SIZE ``EmailInput`` items (same discriminated union as
+    the single-email endpoint's ``payload``). ``context`` applies to ALL items;
+    per-item context override is out of scope.
+    """
+
+    schema_version: str = Field(
+        default=SCHEMA_VERSION,
+        description="Contract version. Mismatch lets a consumer fail loudly.",
+    )
+    items: List[Annotated[EmailInput, Field(discriminator="kind")]] = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_BATCH_SIZE,
+        description=(
+            "The emails / threads to triage, 1..MAX_BATCH_SIZE items. "
+            "Each is a SingleEmailInput or ThreadInput discriminated by ``kind``."
+        ),
+    )
+    context: Optional[TriageContext] = Field(
+        default=None,
+        description=(
+            "Optional context (people/projects/tone/self-email) applied to ALL "
+            "items. Absent → behavior unchanged for every item."
+        ),
+    )
+
+
+class BatchTriageResponse(_Strict):
+    """Top-level batch triage response envelope (#1887).
+
+    One ``BatchItemResult`` per request item, order-preserved, 1:1 with
+    ``items``. HTTP 200 with all items errored is valid — consumers MUST inspect
+    each ``results[].error``, not just the HTTP status.
+    """
+
+    schema_version: str = Field(
+        default=SCHEMA_VERSION, description="Echoes the contract version."
+    )
+    results: List[BatchItemResult] = Field(
+        ...,
+        description=(
+            "One entry per request item, order-preserved, 1:1 with ``items``."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1123,6 +1216,11 @@ __all__ = [
     "TriageUsage",
     "EmailTriageResult",
     "EmailTriageResponse",
+    # Batch triage (#1887) — additive beside the single-email models above
+    "BatchItemError",
+    "BatchItemResult",
+    "BatchTriageRequest",
+    "BatchTriageResponse",
     # Inbox pre-scan (schema 2.1, #1778).
     "PreScanItem",
     "PreScanPreferencesApplied",

@@ -81,3 +81,64 @@ describe("GET routes", () => {
     expect(res.status).toBe(405);
   });
 });
+
+// Minimal YAML front matter matching the email agent's scorecard shape.
+const SAMPLE_SCORECARD = [
+  "---",
+  "schema_version: 1",
+  "agent:",
+  "  name: Test Agent",
+  "  version: 0.1.0",
+  "aggregate:",
+  "  name: weighted_accuracy",
+  "  value: 87.5",
+  "generated_at: '2026-06-26T00:00:00Z'",
+  "---",
+  "# Test Agent — Eval Scorecard v0.1.0",
+  "",
+  "**Aggregate score: 87.5** (out of 100)",
+].join("\n");
+
+describe("eval scorecard in catalog", () => {
+  it("exposes eval_score and eval_scorecard_url when a scorecard is published", async () => {
+    const env = makeEnv();
+    await worker.fetch(
+      publishRequest({
+        token: "tok_amd",
+        manifestYaml: sampleManifest({ id: "chat", version: "0.1.0" }),
+        artifact: "chat-wheel",
+        filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
+        evalScorecard: SAMPLE_SCORECARD,
+      }),
+      env as never
+    );
+
+    const res = await worker.fetch(get("/index.json"), env as never);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    const entry = body.agents[0];
+    expect(entry.eval_score).toBe(87.5);
+    expect(entry.eval_scorecard_url).toMatch(/\/agents\/chat\/0\.1\.0\/SCORECARD\.md$/);
+  });
+
+  it("omits eval_score and eval_scorecard_url when no scorecard is published", async () => {
+    const env = makeEnv();
+    await worker.fetch(
+      publishRequest({
+        token: "tok_amd",
+        manifestYaml: sampleManifest({ id: "chat", version: "0.1.0" }),
+        artifact: "chat-wheel",
+        filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
+        // no evalScorecard
+      }),
+      env as never
+    );
+
+    const res = await worker.fetch(get("/index.json"), env as never);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    const entry = body.agents[0];
+    expect(entry.eval_score).toBeUndefined();
+    expect(entry.eval_scorecard_url).toBeUndefined();
+  });
+});

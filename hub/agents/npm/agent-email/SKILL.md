@@ -74,11 +74,31 @@ const res = await sidecar.client.triage({
 console.log(res.result.category, res.result.summary);
 ```
 
+To classify many messages at once, use `triageBatch` — an `items` array (1–100) in,
+a parallel `results` array out, order-preserved. It's additive (the single `triage`
+above is unchanged). Per-item failures isolate, so an HTTP 200 can still carry
+errored items — inspect each `results[].error`, never just the status:
+
+```ts
+const batch = await sidecar.client.triageBatch({
+  items: [
+    { kind: "single", principal: { email: "me@example.com" },
+      message: { message_id: "m1", from: { email: "sarah@example.com" },
+        subject: "Prod incident", body: "Reply by Friday." } },
+  ],
+});
+for (const r of batch.results) {
+  if (r.error) console.warn(`item ${r.index} failed: ${r.error.message}`);
+  else console.log(`item ${r.index}:`, r.result!.category);
+}
+```
+
 The interface:
 
 | Call | Needs | Notes |
 |------|-------|-------|
 | `triage(req)` | Local LLM only | Classify / summarize / extract action items + phishing signals on the message you pass. No mailbox read. |
+| `triageBatch(req)` | Local LLM only | Same as `triage` for an `items` array (1–100). Parallel `results` array; per-item failures isolate (200 can carry errored items — inspect `results[].error`). |
 | `search(req)` | A connected mailbox | Read-only inbox search by `query`/`labels`; returns message metadata (id, subject, sender, snippet, labels), no body. No token. No mailbox → 503, two+ → 400. |
 | `prescan(req?)` | A connected mailbox | Read-only inbox pre-scan → triage-card envelope (`kind: "email_pre_scan"`: urgent / actionable / suggested-archive rows + an informational count). No mailbox connected → 503; 2+ → 400. Heuristic-only, no Lemonade call. |
 | `draft(req)` | Nothing external | Returns a single-use confirmation token. |
