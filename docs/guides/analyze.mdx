@@ -1,13 +1,25 @@
 ---
 title: "Analyst Agent"
 description: "Load structured rows into scratchpad tables and query them with a focused GAIA agent."
+icon: "chart-column"
 ---
 
-# Analyst Agent
+<Info>
+  **First time here?** Complete the [Setup](/setup) guide first to install GAIA and its dependencies.
+</Info>
 
-The Analyst Agent is a focused structured-data agent for users who want scratchpad table tools without the full Chat Agent tool surface. It is useful for CSV-style rows, extracted records, and calculations that should be performed by SQL instead of mental arithmetic.
+The Analyst Agent is a focused structured-data agent for users who want scratchpad table tools without the full Chat Agent tool surface. It's useful for CSV-style rows, extracted records, and calculations that should be performed by SQL instead of mental arithmetic.
 
-## Quick start
+**Who it's for:** anyone who has rows of data and wants the model to compute over them reliably — totals, group-bys, filters — by writing SQL against an in-memory scratchpad table rather than guessing at numbers.
+
+## Prerequisites
+
+- GAIA installed (see [Setup](/setup)).
+- A local model available — run `gaia init` if you haven't set one up. By default the agent uses the local Lemonade backend.
+
+## Quick Start
+
+Run a single analysis task with `-q`:
 
 ```bash
 gaia analyze -q "Create a sales table, insert these rows, and calculate revenue by region"
@@ -19,25 +31,62 @@ Use interactive mode when you want to build up tables and ask follow-up question
 gaia analyze
 ```
 
-## Tool surface
+## Tool Surface
 
 `gaia analyze --list-tools` shows the exact tools available in your installed version. The focused Analyst Agent exposes:
 
-- `create_table` for creating scratchpad tables.
-- `insert_data` for loading structured rows.
-- `query_data` for SQL calculations and filtering.
-- `list_tables` for inspecting available tables.
-- `drop_table` for removing scratchpad tables.
+- `create_table` — create a scratchpad SQL table.
+- `insert_data` — load structured rows.
+- `query_data` — run SQL calculations and filtering.
+- `list_tables` — inspect available tables.
+- `drop_table` — remove a scratchpad table.
 
-The Analyst Agent does not register browser tools. Use `gaia browse` for web research, or `gaia chat` when you need the broader mixed tool set.
+The Analyst Agent does not register browser tools. Use [`gaia browse`](/guides/browse) for web research, or [`gaia chat`](/guides/chat) when you need the broader mixed tool set.
 
-## Local model options
+## Model and Backend Options
 
 By default, `gaia analyze` uses the local Lemonade backend configured for GAIA. You can override the model or backend with the common agent flags:
 
 ```bash
+# Use a smaller local model for lighter tasks
 gaia analyze --model Qwen3-4B-Instruct-2507-GGUF -q "Summarize this table"
+
+# Run against the Claude API instead of local inference
 gaia analyze --use-claude -q "Normalize these rows and calculate totals"
 ```
 
+Other shared agent flags work here too — `--max-steps` to bound the run, `--trace` to save a JSON execution trace, and `--stats` for performance metrics.
+
 In the Agent UI the analyst appears as a single `data` card with a model-size selector — pick **Lite (~4B)** for shorter analysis tasks on lighter hardware, or **Full** for the default model. (The old `data-lite` registry ID still resolves to `data` on the lite tier for existing sessions.)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Browser Agent" icon="globe" href="/guides/browse">
+    Search the web, fetch pages, and download files.
+  </Card>
+
+  <Card title="Document Q&A" icon="message" href="/guides/chat">
+    The full chat agent with RAG, memory, and the broader tool set.
+  </Card>
+
+  <Card title="CLI Reference" icon="terminal" href="/reference/cli">
+    Every `gaia` command and flag.
+  </Card>
+
+  <Card title="All Guides" icon="book" href="/guides">
+    Browse every GAIA agent.
+  </Card>
+</CardGroup>
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>
