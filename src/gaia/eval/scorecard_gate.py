@@ -49,6 +49,37 @@ from gaia.eval.release_scorecard import (
 )
 
 
+def _metric_value(parsed: dict, name: str) -> float | None:
+    """Read a displayed metric's value by name from a parsed scorecard.
+
+    Looks in ``results.metrics`` first, then ``aggregate.components`` — both carry
+    the secondary (weight-0) metrics. Returns ``None`` if absent or non-numeric.
+    """
+    for m in parsed.get("results", {}).get("metrics", []) or []:
+        if m.get("name") == name and isinstance(m.get("value"), (int, float)):
+            return float(m["value"])
+    for c in parsed.get("aggregate", {}).get("components", []) or []:
+        if c.get("metric") == name and isinstance(c.get("value"), (int, float)):
+            return float(c["value"])
+    return None
+
+
+def _within_one_stdev(parsed: dict) -> float | None:
+    """Recorded run-to-run stdev of the within-one aggregate (#1894), [0,1] scale.
+
+    Lives in ``recipe.config.acceptance_variance.within_one_bucket_accuracy.stdev``.
+    Returns ``None`` when the card carries no variance (single-run / older cards) —
+    the gate then falls back to a strict ``<`` regression check.
+    """
+    av = parsed.get("recipe", {}).get("config", {}).get("acceptance_variance")
+    if not isinstance(av, dict):
+        return None
+    w = av.get("within_one_bucket_accuracy")
+    if isinstance(w, dict) and isinstance(w.get("stdev"), (int, float)):
+        return float(w["stdev"])
+    return None
+
+
 def _parse_baseline_ref(scorecard_path: Path, ref: str) -> str | None:
     """Resolve ``<ref>:<scorecard-path>`` via ``git show`` and return the content.
 
@@ -151,6 +182,37 @@ def main(argv=None) -> int:
             "version/score pairs, then exits 0. Use only when a regression is intentional."
         ),
     )
+    parser.add_argument(
+        "--min-aggregate",
+        type=float,
+        default=None,
+        help=(
+            "Absolute acceptance bar (#1437): fail if aggregate.value is below this "
+            "(e.g. 80 for the 80%% within-one-bucket target). Applies to every path, "
+            "including first adoption. Omit to skip the absolute check (report mode)."
+        ),
+    )
+    parser.add_argument(
+        "--min-urgent-recall",
+        type=float,
+        default=None,
+        help=(
+            "Anti-gaming floor: fail if the card's 'urgent_recall' secondary metric "
+            "is below this (e.g. 0.70) — a high aggregate must not come with buried "
+            "urgent mail. Fails loud if the metric is absent. Omit to skip."
+        ),
+    )
+    parser.add_argument(
+        "--regression-k",
+        type=float,
+        default=1.0,
+        help=(
+            "Variance-aware regression band (#1894): when the BASELINE card records a "
+            "within-one stdev, flag a regression only if the candidate falls below "
+            "baseline − k·stdev (default k=1). With no recorded stdev, a strict '<' "
+            "check is used."
+        ),
+    )
 
     try:
         args = parser.parse_args(argv)
@@ -183,6 +245,47 @@ def main(argv=None) -> int:
             + "\n".join(f"  - {e}" for e in errors)
         )
         return 1
+
+    # --- Step 1b: Absolute acceptance bar + URGENT floor (#1437) ---
+    # These are candidate-only checks (no baseline needed) and apply to EVERY
+    # path including first adoption, so a sub-bar release is blocked even when no
+    # prior version exists.
+    cand_version = candidate_parsed.get("agent", {}).get("version", "?")
+    cand_aggregate = candidate_parsed.get("aggregate", {}).get("value")
+    if args.min_aggregate is not None:
+        if cand_aggregate is None:
+            print(
+                f"ERROR: Candidate SCORECARD.md at {candidate_path} has no "
+                f"'aggregate.value'; cannot enforce --min-aggregate."
+            )
+            return 1
+        if float(cand_aggregate) < float(args.min_aggregate):
+            print(
+                f"ERROR: Acceptance bar not met (#1437).\n"
+                f"  Candidate v{cand_version}: aggregate.value = {cand_aggregate}\n"
+                f"  Required: >= {args.min_aggregate}\n"
+                f"  Improve the agent's within-one-bucket accuracy before releasing."
+            )
+            return 1
+    if args.min_urgent_recall is not None:
+        urgent_recall = _metric_value(candidate_parsed, "urgent_recall")
+        if urgent_recall is None:
+            print(
+                f"ERROR: --min-urgent-recall set but the candidate SCORECARD.md at "
+                f"{candidate_path} has no 'urgent_recall' metric.\n"
+                f"  Re-generate the scorecard with the current adapter (it records "
+                f"urgent_recall as a secondary metric)."
+            )
+            return 1
+        if float(urgent_recall) < float(args.min_urgent_recall):
+            print(
+                f"ERROR: URGENT recall floor not met (anti-gaming).\n"
+                f"  Candidate v{cand_version}: urgent_recall = {urgent_recall}\n"
+                f"  Required: >= {args.min_urgent_recall}\n"
+                f"  Urgent mail is being buried — fix before releasing even if the "
+                f"aggregate passes."
+            )
+            return 1
 
     # --- Step 2: Resolve baseline ---
     baseline_text: str | None = None
@@ -274,8 +377,24 @@ def main(argv=None) -> int:
     candidate_version = candidate_parsed.get("agent", {}).get("version", "?")
     prev_version = prev_parsed.get("agent", {}).get("version", "?")
 
-    if float(candidate_score) < float(prev_score):
-        # Strict regression detected
+    # Variance-aware regression band (#1894): if the baseline recorded a within-one
+    # stdev, a single noisy draw shouldn't trip the gate — only flag a regression
+    # when the candidate falls below baseline − k·stdev. stdev is on the [0,1]
+    # scale; aggregate.value is ×100, so scale the band to match. With no recorded
+    # stdev, fall back to a strict '<' (back-compat with older single-run cards).
+    prev_stdev = _within_one_stdev(prev_parsed)
+    regression_threshold = float(prev_score)
+    band_note = ""
+    if prev_stdev is not None and args.regression_k > 0:
+        band = args.regression_k * prev_stdev * 100.0
+        regression_threshold = float(prev_score) - band
+        band_note = (
+            f" [variance-aware: {prev_score} − {args.regression_k}×stdev"
+            f"({round(prev_stdev * 100, 2)}) = {round(regression_threshold, 2)}]"
+        )
+
+    if float(candidate_score) < regression_threshold:
+        # Regression detected (beyond the noise band, if one is recorded)
         if args.allow_regression:
             print(
                 f"::warning::Scorecard regression allowed by --allow-regression: "
@@ -289,10 +408,10 @@ def main(argv=None) -> int:
             )
             return 0
         print(
-            f"ERROR: Scorecard regression detected.\n"
+            f"ERROR: Scorecard regression detected.{band_note}\n"
             f"  Prior version v{prev_version}: aggregate.value = {prev_score}\n"
             f"  Candidate v{candidate_version}: aggregate.value = {candidate_score}\n"
-            f"  The candidate score is strictly lower than the prior. "
+            f"  The candidate score is below the regression threshold. "
             f"Investigate the regression or use --allow-regression to override intentionally."
         )
         return 1

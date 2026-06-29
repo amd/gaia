@@ -21,7 +21,27 @@ Each published hub agent ships a **release scorecard** — a single `SCORECARD.m
 - A single **named aggregate score**: a deterministic, recomputable percentage so a reviewer can verify the number without re-running the eval.
 - A **Reproduction section**: the exact commands to reproduce the result from scratch.
 
-Scorecards are committed alongside the agent's README and linked from it. A standalone **release gate** (`scorecard_gate.py`) blocks packaging when the scorecard is missing or when its aggregate score strictly regresses below the prior version's.
+Scorecards are committed alongside the agent's README and linked from it. A standalone **release gate** (`scorecard_gate.py`) blocks packaging when the scorecard is missing, when its aggregate score regresses below the prior version's, or — when enforcement is on — when it is below an absolute bar or an anti-gaming floor.
+
+## Acceptance metric — email triage (#1437)
+
+The email-triage scorecard's aggregate is **within-one-bucket acceptance accuracy**, not exact 4-way match. Triage priority is an *ordinal* scale, so the user-facing question is "how far off", not "exact match":
+
+```
+URGENT (3) > NEEDS_RESPONSE (2) > FYI (1) > PROMOTIONAL (0)
+```
+
+A prediction is credited when it is exact **or an adjacent bucket** (`|rank(pred) − rank(expected)| ≤ 1`) — what a user feels (nothing urgent buried in low-priority). `PERSONAL` is not a priority *level* and is absent from the corpus, so it is scored exact-only; re-place it on the scale if the corpus gains `PERSONAL` examples. Exact 4-way agreement (~40% on a 4B on-device model) is below the realistic ceiling — single-rater human agreement on subjective priority is only ~60–75% — so the **80% bar (#1437) is on this acceptance metric**, with these **reported (non-gating) secondaries**:
+
+- `urgent_vs_not_accuracy` — binary accuracy on the needs-attention axis (`{URGENT, NEEDS_RESPONSE}` vs rest).
+- `urgent_recall` — recall on that axis; the input to the gate's anti-gaming URGENT floor.
+- `category_accuracy` — exact 4-way match, kept as a reference.
+
+The secondaries are recorded with **weight 0**, so they are displayed but excluded from `aggregate.value` (which stays `round(100 × within_one_bucket_accuracy, 2)`, recomputable from the displayed components per the formula below).
+
+### Trustworthy numbers — variance & CI (#1894)
+
+The corpus + greedy decoding (`temperature=0.0`) are fixed, and the `needs_llm` routing is a deterministic heuristic, so the only run-to-run noise is GPU floating-point non-determinism (not seedable — measured, not removed). `gaia eval benchmark --experiments N` runs N times over the same corpus and the adapter records an additive `acceptance_variance` block (mean / stdev / CV% / 95% CI / `n_runs`) in `recipe.config`. It never affects `aggregate.value` (the mean); it lets the gate tell a real regression from noise.
 
 ## File format
 
@@ -32,38 +52,50 @@ Scorecard files are **Markdown with YAML front matter** (`.md`). The front matte
 schema_version: 1
 agent:
   name: Email Triage
-  version: 0.2.5
+  version: 0.3.0
 recipe:
   dataset:
     reference: tests/fixtures/email/ground_truth.json
     description: Synthetic email corpus (FakeGmailBackend, schema-2.0 triage taxonomy)
     size: 220
-  methodology: gaia eval benchmark — category_accuracy (case-insensitive exact match)
+  methodology: gaia eval benchmark — within-one-bucket acceptance (exact-or-adjacent, #1437)
   config:
     harness: gaia eval benchmark
     model: Gemma-4-E4B-it-GGUF
     limit: 220
+    n_runs: 3
+    # acceptance_variance: { ... } — additive mean/stdev/CI per metric (omitted here)
 results:
   test_cases_run: 100
   metrics:
-    - name: category_accuracy
-      value: 0.42
+    - name: within_one_bucket_accuracy   # gated aggregate
+      value: 0.8467
       weight: 1.0
+    - name: urgent_vs_not_accuracy       # reported secondaries (weight 0)
+      value: 0.58
+      weight: 0.0
+    - name: urgent_recall
+      value: 0.6571
+      weight: 0.0
+    - name: category_accuracy
+      value: 0.4567
+      weight: 0.0
 aggregate:
   name: weighted_accuracy
   formula: "round(100 * sum(weight_i * value_i) / sum(weight_i), 2)"
   components:
-    - metric: category_accuracy
-      value: 0.42
+    - metric: within_one_bucket_accuracy
+      value: 0.8467
       weight: 1.0
-  value: 42.0
-generated_at: "2026-06-26T16:47:13+00:00"
+    # ... weight-0 secondaries omitted for brevity
+  value: 84.67
+generated_at: "2026-06-29T21:45:03+00:00"
 inherited_from: null
 ---
 
-# Email Triage — Eval Scorecard v0.2.5
+# Email Triage — Eval Scorecard v0.3.0
 
-**Aggregate score: 42.0** (out of 100)
+**Aggregate score: 84.67** (out of 100)
 ...
 
 ## Reproduction
@@ -241,23 +273,29 @@ python -m gaia.eval.scorecard_gate \
 ### Gate logic
 
 1. **Presence check**: `--scorecard` path must exist and be a valid scorecard. → exit 1 if not.
-2. **Baseline resolution**:
+2. **Absolute bar + anti-gaming floor** (opt-in, applies to *every* path including first adoption):
+   - `--min-aggregate <N>`: exit 1 if `aggregate.value < N` (the #1437 80% bar is `--min-aggregate 80`).
+   - `--min-urgent-recall <r>`: exit 1 if the card's `urgent_recall` secondary is below `r` (a high aggregate must not come with buried urgent mail). Fails loud if the metric is absent.
+   - Omit both for report mode (presence + regression only). The email release workflow reads these from the thresholds manifest (`acceptance_target`, `urgent_recall_floor`, `acceptance_enforce`) — data, not code.
+3. **Baseline resolution**:
    - `--baseline-file`: read the given file directly (no git access; suitable for unit tests).
    - `--baseline-ref`: resolve via `git show <ref>:<scorecard-path>`. If the file does not exist at that ref → **first adoption**, exit 0.
    - Neither specified: **first adoption**, exit 0 (presence-only pass).
-3. **Regression check**: if `candidate.aggregate.value < baseline.aggregate.value` (strict) → exit 1.
-4. Equal or greater → exit 0.
+4. **Regression check** (variance-aware, #1894): if the baseline records a within-one stdev, a regression is flagged only when `candidate < baseline − k·stdev` (`--regression-k`, default 1; stdev is on the [0,1] scale, scaled ×100 to match `aggregate.value`). With no recorded stdev, a strict `<` is used.
+5. Equal or above the threshold → exit 0.
 
 ### Exit codes
 
 | Case | Exit code |
 |------|-----------|
 | Missing or invalid candidate scorecard | `1` |
-| Strict regression vs baseline | `1` |
-| No baseline (first adoption) | `0` |
+| Below `--min-aggregate` bar | `1` |
+| Below `--min-urgent-recall` floor (or metric absent) | `1` |
+| Regression beyond the variance band vs baseline | `1` |
+| No baseline (first adoption), bar/floor met | `0` |
 | File absent at `--baseline-ref` | `0` |
 | Equal score (patch carry-forward) | `0` |
-| Score improved | `0` |
+| Dip within the variance band, or score improved | `0` |
 
 ### `--allow-regression`
 

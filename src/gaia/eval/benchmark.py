@@ -24,12 +24,22 @@ message we're looking for".
 from __future__ import annotations
 
 import json
+import statistics as _stats
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 from gaia.eval import performance, quality_metrics
+
+# Metrics whose run-to-run spread is recorded for trustworthiness (#1894). The
+# first is the gated aggregate (within-one-bucket); the rest are reported.
+_ACCEPTANCE_SERIES_KEYS = (
+    "within_one_bucket_accuracy",
+    "urgent_vs_not_accuracy",
+    "urgent_recall",
+    "category_accuracy",
+)
 
 # Committed throughput bar for #1233 (non-gating for the demo).
 THROUGHPUT_BAR_TPS = 10.0
@@ -211,10 +221,18 @@ def build_result(
             for r in triage_results
             if r.get("id")
         }
+        # Acceptance metrics (#1437): within-one-bucket is the gated aggregate;
+        # urgent-vs-not + urgent-recall + exact category_accuracy are reported.
+        # One source of truth so the scorecard adapter never recomputes these
+        # a different way.
+        acceptance = quality_metrics.acceptance_metrics(
+            predicted_categories, ground_truth
+        )
         out["quality"] = {
-            "category_accuracy": quality_metrics.category_accuracy(
-                predicted_categories, ground_truth
-            ),
+            "category_accuracy": acceptance["category_accuracy"],
+            "within_one_bucket_accuracy": acceptance["within_one_bucket_accuracy"],
+            "urgent_vs_not_accuracy": acceptance["urgent_vs_not_accuracy"],
+            "urgent_recall": acceptance["urgent_recall"],
             "spam": quality_metrics.confusion_for_flag(
                 predicted_spam, ground_truth, "is_spam"
             ).to_dict(),
@@ -247,7 +265,10 @@ def _aggregate_quality(results: list[dict]) -> dict[str, Any] | None:
     """
     axes = ("spam", "phishing", "needs_attention")
     totals = {axis: quality_metrics.Confusion() for axis in axes}
-    accuracies: list[float] = []
+    # Per-run scalar series for each accuracy metric (mean across runs is the
+    # aggregate; the series feeds the variance/CI block in summarize_benchmark).
+    series_keys = _ACCEPTANCE_SERIES_KEYS
+    series: dict[str, list[float]] = {k: [] for k in series_keys}
     saw_quality = False
 
     for r in results:
@@ -255,8 +276,9 @@ def _aggregate_quality(results: list[dict]) -> dict[str, Any] | None:
         if not isinstance(q, dict):
             continue
         saw_quality = True
-        if isinstance(q.get("category_accuracy"), (int, float)):
-            accuracies.append(float(q["category_accuracy"]))
+        for key in series_keys:
+            if isinstance(q.get(key), (int, float)):
+                series[key].append(float(q[key]))
         for axis in axes:
             block = q.get(axis)
             if isinstance(block, dict):
@@ -270,10 +292,72 @@ def _aggregate_quality(results: list[dict]) -> dict[str, Any] | None:
         return None
 
     out: dict[str, Any] = {axis: totals[axis].to_dict() for axis in axes}
-    out["category_accuracy"] = (
-        round(sum(accuracies) / len(accuracies), 4) if accuracies else 0.0
-    )
+    for key in series_keys:
+        vals = series[key]
+        out[key] = round(sum(vals) / len(vals), 4) if vals else 0.0
+    # Keep the per-run series so the scorecard can record run-to-run variance/CI
+    # (#1894). Mean-of-scalars (above) is the aggregate; this is its spread.
+    out["per_run"] = {k: series[k] for k in series_keys}
     return out
+
+
+def _accuracy_variance(values: list[float]) -> dict[str, Any]:
+    """Run-to-run spread of one accuracy metric (#1894).
+
+    Records mean/stdev/min/max/CV% plus a normal-approximation 95% CI on the mean
+    (half-width = 1.96·stdev/√n). Computed at full float precision here rather than
+    via :func:`gaia.eval.statistics.compute_variance` (which rounds to 2 d.p. for
+    ms/token magnitudes — too coarse for a [0,1] accuracy the gate's ±k·stdev band
+    keys off). For n<2 there is no spread: stdev/CI are 0 and ``n`` flags it. The
+    normal approximation is acknowledged-coarse at small n; the honest signal is
+    mean ± stdev and the observed [min, max].
+    """
+    n = len(values)
+    if n == 0:
+        return {
+            "n": 0,
+            "mean": 0.0,
+            "stdev": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "cv_pct": 0.0,
+            "ci95_half_width": 0.0,
+            "ci95_low": 0.0,
+            "ci95_high": 0.0,
+        }
+    mean = sum(values) / n
+    stdev = _stats.stdev(values) if n >= 2 else 0.0
+    half = 1.96 * stdev / (n**0.5) if n >= 2 else 0.0
+    cv = (stdev / mean * 100.0) if mean else 0.0
+    return {
+        "n": n,
+        "mean": round(mean, 4),
+        "stdev": round(stdev, 4),
+        "min": round(min(values), 4),
+        "max": round(max(values), 4),
+        "cv_pct": round(cv, 2),
+        "ci95_half_width": round(half, 4),
+        "ci95_low": round(mean - half, 4),
+        "ci95_high": round(mean + half, 4),
+    }
+
+
+def _acceptance_variance(aggregate_quality: dict) -> dict[str, Any]:
+    """Variance/CI block over the per-run acceptance series (#1894).
+
+    Keys off the ``per_run`` series :func:`_aggregate_quality` attached. The
+    primary metric (within-one-bucket) is the gated aggregate, so its spread is
+    what the variance-aware gate consumes; the others are reported.
+    """
+    per_run = aggregate_quality.get("per_run", {})
+    block: dict[str, Any] = {
+        "n_runs": max(
+            (len(per_run.get(k, [])) for k in _ACCEPTANCE_SERIES_KEYS), default=0
+        )
+    }
+    for k in _ACCEPTANCE_SERIES_KEYS:
+        block[k] = _accuracy_variance([float(v) for v in per_run.get(k, [])])
+    return block
 
 
 def _aggregate_perf(results: list[dict]) -> dict[str, Any] | None:
@@ -367,6 +451,12 @@ def summarize_benchmark(
 
     aggregate_quality = _aggregate_quality(results)
     if aggregate_quality is not None:
+        # Multi-run variance/CI on the acceptance metrics (#1894). Additive — the
+        # gate keys off aggregate.value (the mean); this records its spread so a
+        # noisy single draw can't masquerade as a regression.
+        aggregate_quality["acceptance_variance"] = _acceptance_variance(
+            aggregate_quality
+        )
         summary["quality"] = aggregate_quality
 
     if thresholds is not None:

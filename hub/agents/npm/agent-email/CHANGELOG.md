@@ -10,6 +10,14 @@ bump is always at least a package MINOR bump with a migration note.
 Contract bumped to `SCHEMA_VERSION` **2.1** — additive, no triage shape change, so
 `checkVersion` (MAJOR-only) keeps accepting 2.0 clients.
 
+- **Eval scorecard now measures acceptance, and the release gate enforces it** (#1437,
+  #1894): the `SCORECARD.md` aggregate is now **within-one-bucket acceptance accuracy**
+  (triage priority is ordinal, so exact-or-adjacent buckets are credited — what users
+  feel) instead of exact 4-way match. Measured **0.8467** (3-run mean on Strix Halo /
+  Gemma-4-E4B, 95% CI [0.834, 0.860]) vs the **0.80** bar (#1437); exact 4-way stays a
+  reported secondary (0.46). The card now carries run-to-run variance/CI, and the
+  release gate enforces the 0.80 bar plus an anti-gaming URGENT-recall floor and a
+  variance-aware regression check. No runtime/contract change — eval + packaging only.
 - **Batch triage endpoint** (#1887): new `POST /v1/email/triage/batch` /
   `client.triageBatch(req)` beside the single-email endpoint, so a caller can triage
   up to 100 emails or threads in one request instead of one HTTP round-trip per

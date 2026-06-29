@@ -130,6 +130,43 @@ def _is_judged(scenario: dict) -> bool:
     return 0.0 <= f <= 1.0 and math.isfinite(f)
 
 
+def _load_quality_aggregate(benchmark_dir: Path) -> Optional[dict]:
+    """Read the harness's aggregate acceptance block (``quality.json``) if present.
+
+    ``gaia eval benchmark`` writes ``quality.json`` (the aggregate within-one /
+    urgent-vs-not / urgent-recall metrics + run-to-run variance/CI) alongside
+    ``scorecard.json``. The adapter consumes this file — never the harness module —
+    so the harness→file→adapter loose coupling holds. Returns ``None`` when the
+    file is absent (older runs); the caller then derives the metrics from the
+    per-scenario quality blocks.
+    """
+    p = benchmark_dir / "quality.json"
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise ValueError(
+            f"quality.json present in {benchmark_dir} but unreadable: {exc}. "
+            f"Re-run 'gaia eval benchmark --output-dir {benchmark_dir}'."
+        ) from exc
+
+
+def _mean_scenario_metric(judged: list, key: str) -> Optional[float]:
+    """Mean of a per-scenario quality metric across judged runs (None if absent).
+
+    Each run scores the same corpus, so the cross-run mean is the aggregate — the
+    same value :func:`gaia.eval.benchmark._aggregate_quality` records.
+    """
+    vals = [
+        float(s["quality"][key])
+        for s in judged
+        if isinstance(s.get("quality"), dict)
+        and isinstance(s["quality"].get(key), (int, float))
+    ]
+    return round(sum(vals) / len(vals), 4) if vals else None
+
+
 def _compute_breakdown(judged: list) -> Optional[dict]:
     """Aggregate per-category accuracy and top confusion pairs across judged scenarios.
 
@@ -241,24 +278,51 @@ def build_payload(
             f"Benchmark dir: {benchmark_dir}"
         )
 
-    # Weight each scenario's accuracy by the emails it scored, so the headline
-    # value is the true per-email accuracy over test_cases_run. An unweighted
-    # scenario mean misreports the number (and the gate that compares it) when
-    # judged scenarios have unequal sizes.
-    test_cases_run = sum(int(s.get("total_emails", 0)) for s in judged)
+    # Each judged scenario is one experiment over the SAME corpus, so test cases
+    # run = the per-run email count (NOT summed across experiments — that would
+    # conflate runs with cases and inflate the count n_runs-fold). n_runs is
+    # recorded distinctly so a reader sees both.
+    per_run_emails = [int(s.get("total_emails", 0)) for s in judged]
+    test_cases_run = max(per_run_emails) if per_run_emails else 0
     if test_cases_run <= 0:
         raise ValueError(
             f"Judged scenarios in {scorecard_path} report no emails "
-            f"(total_emails sums to {test_cases_run}); cannot compute a "
-            f"per-email accuracy. Check the benchmark output."
+            f"(total_emails={per_run_emails}); cannot compute a per-email "
+            f"accuracy. Check the benchmark output."
         )
-    category_accuracy = (
-        sum(
-            float(s["quality"]["category_accuracy"]) * int(s.get("total_emails", 0))
-            for s in judged
+    n_runs = len(judged)
+
+    # Acceptance metrics (#1437): within-one-bucket is the GATED aggregate;
+    # urgent-vs-not, urgent-recall, and exact category accuracy are reported.
+    # Prefer the harness aggregate (quality.json — carries variance/CI #1894);
+    # fall back to per-scenario means; fail loud if the metric is absent entirely
+    # (an old benchmark run predating the acceptance metric — never silently
+    # default to exact-only).
+    quality_agg = _load_quality_aggregate(benchmark_dir)
+    acceptance_variance = None
+    if quality_agg is not None and "within_one_bucket_accuracy" in quality_agg:
+        within_one_accuracy = float(quality_agg["within_one_bucket_accuracy"])
+        urgent_vs_not_accuracy = float(quality_agg.get("urgent_vs_not_accuracy", 0.0))
+        urgent_recall = float(quality_agg.get("urgent_recall", 0.0))
+        category_accuracy = float(quality_agg.get("category_accuracy", 0.0))
+        acceptance_variance = quality_agg.get("acceptance_variance")
+    else:
+        within_one_accuracy = _mean_scenario_metric(
+            judged, "within_one_bucket_accuracy"
         )
-        / test_cases_run
-    )
+        if within_one_accuracy is None:
+            raise ValueError(
+                f"No acceptance metric (within_one_bucket_accuracy) in {benchmark_dir}.\n"
+                f"This benchmark output predates the acceptance metric (#1437). "
+                f"Re-run 'gaia eval benchmark --output-dir {benchmark_dir}' with the "
+                f"current harness, which writes quality.json + per-scenario acceptance "
+                f"fields."
+            )
+        urgent_vs_not_accuracy = (
+            _mean_scenario_metric(judged, "urgent_vs_not_accuracy") or 0.0
+        )
+        urgent_recall = _mean_scenario_metric(judged, "urgent_recall") or 0.0
+        category_accuracy = _mean_scenario_metric(judged, "category_accuracy") or 0.0
 
     # Dataset size = labeled entries in ground_truth.json (excluding _meta key)
     if not ground_truth_path.exists():
@@ -290,8 +354,27 @@ def build_payload(
     manifest_models = agent_data.get("models") or [None]
     model = scenario_model or manifest_models[0]
 
+    # within_one_bucket_accuracy is the gated aggregate (weight 1.0). The rest are
+    # DISPLAYED but weight 0.0 — shown on the card, excluded from the aggregate
+    # formula so aggregate.value stays recomputable from the displayed metrics
+    # (#1862) and equals 100 × within_one.
     metrics = [
-        {"name": "category_accuracy", "value": float(category_accuracy), "weight": 1.0}
+        {
+            "name": "within_one_bucket_accuracy",
+            "value": float(within_one_accuracy),
+            "weight": 1.0,
+        },
+        {
+            "name": "urgent_vs_not_accuracy",
+            "value": float(urgent_vs_not_accuracy),
+            "weight": 0.0,
+        },
+        {"name": "urgent_recall", "value": float(urgent_recall), "weight": 0.0},
+        {
+            "name": "category_accuracy",
+            "value": float(category_accuracy),
+            "weight": 0.0,
+        },
     ]
     compute_aggregate(
         metrics
@@ -342,11 +425,16 @@ def build_payload(
         ),
         dataset_size=dataset_size,
         methodology=(
-            "gaia eval benchmark — category classification accuracy "
-            "(case-insensitive exact match of the agent's triage label vs the "
-            "ground-truth label) over a synthetic labeled corpus via "
-            "FakeGmailBackend; no LLM judge. The corpus uses the schema-2.0 "
-            "triage taxonomy, aligned with the agent's output labels (#1874)"
+            "gaia eval benchmark over a synthetic labeled corpus via "
+            "FakeGmailBackend; no LLM judge. Aggregate = within-one-bucket "
+            "ACCEPTANCE accuracy (#1437): triage priority is ordinal "
+            "(URGENT>NEEDS_RESPONSE>FYI>PROMOTIONAL), so a prediction is credited "
+            "when it is exact or an adjacent bucket (|rank diff|<=1) — what users "
+            "feel (nothing urgent buried). Reported secondaries (not in the "
+            "aggregate): urgent-vs-not binary accuracy, urgent recall (anti-gaming "
+            "floor), and exact 4-way category_accuracy. The corpus uses the "
+            "schema-2.0 taxonomy aligned with the agent's output labels (#1874); "
+            f"averaged over {n_runs} run(s) for run-to-run variance/CI (#1894)"
         ),
         config={
             "harness": "gaia eval benchmark",
@@ -356,6 +444,10 @@ def build_payload(
             # a committed/published artifact.
             "ground_truth": ground_truth_rel,
             "limit": limit,
+            "n_runs": n_runs,
+            # Run-to-run variance/CI on the acceptance metrics (#1894). Additive —
+            # never affects aggregate.value (which is the within-one mean).
+            "acceptance_variance": acceptance_variance,
         },
         test_cases_run=test_cases_run,
         metrics=metrics,
@@ -557,7 +649,7 @@ def main(argv=None) -> int:
     print(
         f"Scorecard written: {out_path}\n"
         f"  Version: {payload.agent_version}\n"
-        f"  Aggregate: {payload.metrics[0]['value']:.4f} category_accuracy "
+        f"  Aggregate: {payload.metrics[0]['value']:.4f} {payload.metrics[0]['name']} "
         f"({payload.test_cases_run} emails judged)\n"
         f"  Dataset size: {payload.dataset_size} labeled examples"
     )

@@ -4191,9 +4191,19 @@ Let me know your answer!
                     json.dumps(summary["variance"], indent=2, ensure_ascii=False),
                     encoding="utf-8",
                 )
+                wrote_quality = ""
+                if isinstance(summary.get("quality"), dict):
+                    # Aggregate acceptance metrics + run-to-run variance/CI (#1437,
+                    # #1894). The scorecard adapter reads this (never the harness),
+                    # preserving the harness→file→adapter loose coupling.
+                    (outdir / "quality.json").write_text(
+                        json.dumps(summary["quality"], indent=2, ensure_ascii=False),
+                        encoding="utf-8",
+                    )
+                    wrote_quality = " / quality.json"
                 print(
-                    f"[OUT] wrote scorecard.json / summary.md / variance.json "
-                    f"→ {outdir}"
+                    f"[OUT] wrote scorecard.json / summary.md / variance.json"
+                    f"{wrote_quality} → {outdir}"
                 )
 
             if getattr(args, "save_baseline", False):

@@ -3,5 +3,9 @@
   "fp_max": 0.05,
   "fn_max": 0.02,
   "axis": "needs_attention",
-  "enforce": false
+  "enforce": false,
+  "_acceptance_comment": "Release-gate acceptance bar (#1437): the per-version scorecard gate (gaia.eval.scorecard_gate) enforces 'acceptance_target' as --min-aggregate (on the within-one-bucket aggregate, ×100) and 'urgent_recall_floor' as --min-urgent-recall (anti-gaming). 'acceptance_enforce' is the switch the release_agent_email.yml gate keys off: when true it passes the bar/floor flags so a sub-bar candidate blocks; when false it runs report-only. These keys are read by the workflow, not by load_quality_thresholds (which ignores extras). ENFORCED as of the v0.3.0 Strix Halo run (#1894): within-one acceptance measured 0.8467 (3-run mean, stdev 0.0115) >= 0.80 target. urgent_recall_floor (0.65) is locked just under the measured-current urgent_recall (0.6571). The margin is intentionally tight because this metric is DETERMINISTIC on this corpus — all 3 runs gave exactly 0.6571 (0.0 stdev), so there is no run-to-run noise to absorb; only a real agent/code change can move it, which is exactly what this anti-regression guard should catch. It is a floor, NOT an aspiration; raise it as the agent's urgent recall improves.",
+  "acceptance_target": 0.80,
+  "urgent_recall_floor": 0.65,
+  "acceptance_enforce": true
 }
