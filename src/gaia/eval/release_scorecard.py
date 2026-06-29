@@ -275,8 +275,25 @@ matter alone — no eval-harness access needed.
             f"| {r['accuracy']:.4f} |"
             for r in per_cat
         )
+        # The breakdown pools every (email, run) observation, so for a multi-run
+        # eval the per-category totals = test_cases_run × n_runs. Label it so a
+        # reader doesn't read the N× counts as failing to reconcile with
+        # results.test_cases_run.
+        try:
+            n_runs = int((payload.config or {}).get("n_runs", 0) or 0)
+        except (TypeError, ValueError):
+            n_runs = 0
+        if n_runs > 1:
+            heading = f"## Category breakdown (pooled across all {n_runs} runs)"
+            note = (
+                f"\n_Each of the {payload.test_cases_run} test cases is scored once "
+                f"per run, so the totals below sum to test_cases_run × {n_runs}._\n"
+            )
+        else:
+            heading = "## Category breakdown"
+            note = ""
         breakdown_section = (
-            "\n## Category breakdown\n\n"
+            f"\n{heading}\n{note}\n"
             "| Category | Total | Correct | Accuracy |\n"
             "|----------|-------|---------|----------|\n"
             f"{cat_rows}\n"

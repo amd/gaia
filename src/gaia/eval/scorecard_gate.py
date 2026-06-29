@@ -279,10 +279,12 @@ def main(argv=None) -> int:
             return 1
         if float(urgent_recall) < float(args.min_urgent_recall):
             print(
-                f"ERROR: URGENT recall floor not met (anti-gaming).\n"
+                f"ERROR: needs-attention recall floor not met (anti-gaming).\n"
                 f"  Candidate v{cand_version}: urgent_recall = {urgent_recall}\n"
                 f"  Required: >= {args.min_urgent_recall}\n"
-                f"  Urgent mail is being buried — fix before releasing even if the "
+                f"  This is recall over the needs-attention axis (URGENT + "
+                f"NEEDS_RESPONSE), not URGENT alone: attention-worthy mail is being "
+                f"buried as FYI/PROMOTIONAL. Fix before releasing even if the "
                 f"aggregate passes."
             )
             return 1

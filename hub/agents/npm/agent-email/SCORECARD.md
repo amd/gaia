@@ -67,7 +67,7 @@ recipe:
         ci95_low: 0.4436
         ci95_high: 0.4697
   environment:
-    gaia_commit: 7f52903b
+    gaia_commit: e1c6bff3
     lemonade_version: 10.7.0
     model: Gemma-4-E4B-it-GGUF
     hardware: AMD Ryzen AI MAX+ (Strix Halo)
@@ -138,7 +138,7 @@ aggregate:
     value: 0.4567
     weight: 0.0
   value: 84.67
-generated_at: '2026-06-29T21:45:03.635443+00:00'
+generated_at: '2026-06-29T23:15:10.123136+00:00'
 inherited_from: null
 ---
 # Email Triage — Eval Scorecard v0.3.0
@@ -205,13 +205,15 @@ See [eval-scorecard docs](https://amd-gaia.ai/docs/reference/eval-scorecard) and
 
 | Field | Value |
 |-------|-------|
-| gaia_commit | 7f52903b |
+| gaia_commit | e1c6bff3 |
 | lemonade_version | 10.7.0 |
 | model | Gemma-4-E4B-it-GGUF |
 | hardware | AMD Ryzen AI MAX+ (Strix Halo) |
 | temperature | 0.0 |
 
-## Category breakdown
+## Category breakdown (pooled across all 3 runs)
+
+_Each of the 100 test cases is scored once per run, so the totals below sum to test_cases_run × 3._
 
 | Category | Total | Correct | Accuracy |
 |----------|-------|---------|----------|
