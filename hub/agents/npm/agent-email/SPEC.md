@@ -2,7 +2,7 @@
 
 Detailed reference for `@amd-gaia/agent-email`. For a quick start, see
 [`README.md`](./README.md); for an AI-assisted integration walkthrough, see
-[`SKILL.md`](./SKILL.md). The contract version is `SCHEMA_VERSION` **2.0**.
+[`SKILL.md`](./SKILL.md). The contract version is `SCHEMA_VERSION` **2.1**.
 
 ## Architecture
 
@@ -38,8 +38,10 @@ signals yourself.
 ## REST API
 
 `EmailClient` is a typed wrapper over the sidecar's HTTP surface. Methods:
-`triage`, `triageBatch`, `draft`, `send`, `health`, `version`, `emailHealth`,
-`emailVersion`, `spec`, `openapi`. `health`/`version` hit the **root** routes (the standalone
+`triage`, `triageBatch`, `search`, `prescan`, `draft`, `send`, `confirmAction`,
+`archive`, `unarchive`, `quarantine`, `unquarantine`, `listCalendarEvents`,
+`previewCalendarEvent`, `createCalendarEvent`, `respondToCalendarEvent`, `health`,
+`version`, `emailHealth`, `emailVersion`, `spec`, `openapi`. `health`/`version` hit the **root** routes (the standalone
 sidecar); `emailHealth`/`emailVersion` hit the **`/v1/email`-scoped** mirrors (for
 when the router is mounted on a product app). Every non-2xx response throws
 `HttpError` (carrying `status`, `url`, `bodyText`) — never a silent empty/null
@@ -49,8 +51,19 @@ result.
 |----------|---------------|------|---------------|
 | `POST /v1/email/triage` | `triage()` | **Standalone** | Local Lemonade LLM only. Categorizes / summarizes / extracts action items + spam/phishing **signals** on the message you send in. *No mailbox is read.* |
 | `POST /v1/email/triage/batch` | `triageBatch()` | **Standalone** | Same as `triage` for an `items` array (1–100). Returns a parallel `results` array, order-preserved; per-item failures isolate (HTTP 200 can carry errored items — inspect `results[].error`). A `502` fails the whole batch (Lemonade unreachable). |
+| `POST /v1/email/search` | `search()` | **Connector** | Read-only inbox search. A connected Google/Microsoft mailbox (`503` if none, `400` if 2+); **no** confirmation token. Lists messages matching `query`/`labels` and returns metadata only (no body). |
+| `POST /v1/email/prescan` | `prescan()` | **Connector** | Reads recent inbox messages from the connected Google/Microsoft mailbox and returns the read-only triage-card envelope (`kind: "email_pre_scan"`). `503` if no mailbox is connected, `400` if 2+ are. Heuristic-only — no Lemonade call. |
 | `POST /v1/email/draft` | `draft()` | **Standalone** | Nothing external — wraps your `(to, subject, body)` and returns a single-use confirmation token. |
 | `POST /v1/email/send` | `send()` | **Connector** | A valid `draft` confirmation token **and** a connected Google/Microsoft mailbox. The token gate fires first: no/invalid token → `403`; then `503` if no mailbox is connected, `400` if 2+ are. |
+| `POST /v1/email/confirm` | `confirmAction()` | **Standalone** | Nothing external — mints a single-use token for `"archive"`/`"quarantine"`, bound to that exact `(action, message_id)`. |
+| `POST /v1/email/archive` | `archive()` | **Connector** | A valid `confirm` token (`action="archive"`) **and** a connected mailbox. Gate fires first (no/invalid token → `403`); returns a `batch_id` undo handle + `post_archive_id`. |
+| `POST /v1/email/unarchive` | `unarchive()` | **Connector** | A connected mailbox + the `batch_id`. **Ungated** (it restores). Window expired / unknown handle → `409`. |
+| `POST /v1/email/quarantine` | `quarantine()` | **Connector (Gmail)** | A valid `confirm` token (`action="quarantine"`) **and** a connected **Gmail** mailbox. Applies `GAIA_PHISHING_QUARANTINE` + archives; refuses `is_phishing: false` → `400`; refuses an Outlook mailbox → `400` (label-undo can't reverse a folder move, #1738). |
+| `POST /v1/email/unquarantine` | `unquarantine()` | **Connector** | A connected mailbox + the `action_id`. **Ungated** (it restores prior labels). Window expired / unknown → `409`. |
+| `GET /v1/email/calendar/events` | `listCalendarEvents()` | **Connector** | A connected mailbox whose **calendar scope** was granted. Read-only view of the primary calendar; `403` (reconnect CTA) if the scope is missing. Optional `time_min`/`time_max`; `provider` only when 2+ accounts. |
+| `POST /v1/email/calendar/events/preview` | `previewCalendarEvent()` | **Standalone** | Nothing external — mints a single-use confirmation token bound to the event (calendar analogue of `draft`). |
+| `POST /v1/email/calendar/events` | `createCalendarEvent()` | **Connector** | A valid `preview` token **and** a connected calendar. Token gate fires first: no/invalid token → `403`; then the calendar-scope / account checks. |
+| `POST /v1/email/calendar/events/respond` | `respondToCalendarEvent()` | **Connector** | A connected calendar. RSVPs `accepted`/`declined`/`tentative` to an existing invite. |
 | `GET /health` | `health()` | **Standalone** | Liveness only — does **not** check Lemonade/model. |
 | `GET /version` | `version()` | **Standalone** | Version negotiation. |
 | `GET /v1/email/health` | `emailHealth()` | **Standalone** | Router-scoped liveness (mounted-on-app case). |
@@ -59,8 +72,54 @@ result.
 | `GET /openapi.json` | `openapi()` | **Standalone** | Machine-readable OpenAPI document. |
 
 `GET /docs` (Swagger UI) and `GET /redoc` are also served but are browser UIs, not
-wrapped by the client. **Everything except `send` is standalone** — integrate and
-verify the whole surface with zero connector setup.
+wrapped by the client. **The standalone surface is `triage`, `draft`, `confirmAction`,
+and `previewCalendarEvent`** (plus the probes) — integrate and verify those flows with
+zero connector setup. The read-only `search` and `prescan` read the live inbox (a
+connected mailbox, but no token); the mutating calls (`send`, `archive`, `quarantine`,
+`createCalendarEvent`) and the reversals/calendar views need a connected mailbox whose
+relevant scope was granted.
+
+### Mailbox actions (archive / quarantine, schema 2.1)
+
+`archive` and `quarantine` mutate the live mailbox, so each is gated on a single-use
+token exactly like `send` — but minted by `confirmAction` (not `draft`), bound to the
+`(action, message_id)`. A token for one action/message cannot authorize a different
+one. Both are reversible inside the 30s undo window:
+
+```ts
+// Archive (gated) → undo within the window (ungated):
+const { confirmation_token } = await client.confirmAction({
+  action: "archive",
+  message_id: "msg-123",
+});
+const { batch_id, post_archive_id } = await client.archive({
+  message_id: "msg-123",
+  confirmation_token,
+});
+// post_archive_id is the id valid NOW — Outlook mints a new one on the folder move.
+await client.unarchive({ batch_id }); // restores to inbox; 409 if the window lapsed
+
+// Quarantine a phishing message (Gmail-only; refuses is_phishing:false and Outlook), then undo by action_id:
+const t = await client.confirmAction({ action: "quarantine", message_id: "msg-9" });
+const q = await client.quarantine({
+  message_id: "msg-9",
+  is_phishing: true,
+  confirmation_token: t.confirmation_token,
+});
+await client.unquarantine({ action_id: q.action_id });
+```
+
+### Calendar (view / create / respond, schema 2.1)
+
+> **Confirmation gating — deliberate asymmetry.** `send` and calendar **create**
+> are token-gated (a payload-bound `confirmation_token` from `draft` /
+> `previewCalendarEvent`; no/invalid token → `403`). Calendar **respond** (RSVP) is
+> intentionally **not** token-gated, even though the in-process agent treats
+> `accept_invite` / `decline_invite` as confirmation-tier tools. The contract draws
+> the line at irreversibility: `send` and `create` are externally visible and not
+> cleanly undoable, whereas an RSVP only sets your own response status on an existing
+> invite and can be changed by responding again. The REST caller (the Agent UI's
+> accept/decline controls) is the human-in-the-loop for that reversible action.
 
 ### Readiness vs liveness
 
@@ -129,6 +188,34 @@ status. A `502` means Lemonade was unreachable before any item ran (the whole ba
 fails). The single `triage()` endpoint and its types are unchanged; `MAX_BATCH_SIZE`
 is exported for the 100-item cap (over-cap → `422`).
 
+### Inbox search shape
+
+`search({ query?, labels?, max_results? })` lists messages from the connected
+mailbox and returns `{ schema_version, query, count, messages, next_page_token }`.
+It is **read-only** — no body is read in full, nothing is modified, no confirmation
+token is involved. Both `query` and `labels` are optional: a `query` searches **all
+mail** (Gmail search semantics), `labels` filter to those labels, and with **neither**
+it lists the INBOX. `max_results` is `1–100` (default `25`); each match is hydrated
+with a per-message fetch, so the cap bounds that fan-out. To page, pass the
+response's `next_page_token` back as the request's `page_token`. Each `messages[]`
+item:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | `string` | Provider message id (opaque) — pass to the agent/triage path to read in full. |
+| `thread_id` | `string \| null` | Provider thread id. |
+| `subject` | `string` | Subject line. |
+| `from` | `string` | Raw `From` header (e.g. `"Sarah Chen <sarah@example.com>"`) — a **string**, not an address object, unlike triage's `from`. |
+| `to` | `string` | Raw `To` header. |
+| `date` | `string` | Raw `Date` header. |
+| `snippet` | `string` | Provider-supplied short preview. |
+| `label_ids` | `string[]` | Label ids on the message. |
+
+```ts
+const { messages } = await client.search({ query: "is:unread", max_results: 20 });
+for (const m of messages) console.log(m.subject, "—", m.from);
+```
+
 ## Lifecycle helpers
 
 `startSidecar(opts)` does spawn → `waitForHealth` → `checkVersion` in one call and
@@ -189,10 +276,15 @@ connection through this package's API**, so connector-backed calls only work on 
 machine where the mailbox is already connected in GAIA. Triage and draft, which
 need no connector, work anywhere.
 
-The full GAIA email agent also reads and acts on the live mailbox and calendar
-(list/search messages, archive, label, mark spam, RSVP, create events). Those
-actions are connector-gated by definition and are **not exposed through this
-package's REST API yet** — only triage / draft / send are.
+As of `SCHEMA_VERSION` 2.1 this package's REST API exposes the read-only inbox
+**search** and **pre-scan** (`search` / `prescan`), the **archive** and
+phishing-**quarantine** mailbox actions plus their undo (`confirmAction` / `archive` /
+`unarchive` / `quarantine` / `unquarantine`), and calendar **view / create / respond**
+(`listCalendarEvents` / `previewCalendarEvent` / `createCalendarEvent` /
+`respondToCalendarEvent`). The full GAIA email agent does more on the live mailbox
+(label, move, mark spam) and calendar (detect / conflicts); those remaining actions are
+connector-gated by definition and are **not exposed through this package's REST API
+yet**.
 
 ## Browser / Electron renderer (`./client`)
 
@@ -236,7 +328,9 @@ editors autocomplete but your code never imports them.
 
 TypeScript types in `src/types.ts` mirror two Python sources of truth:
 
-- `contract.py` — the triage request/response contract (`SCHEMA_VERSION = "2.0"`).
+- `contract.py` — the triage request/response contract plus the schema-2.1 additions:
+  inbox search, mailbox actions (archive / quarantine + reversal), calendar, and
+  pre-scan (`SCHEMA_VERSION = "2.1"`).
 - `api_routes.py` — the local draft/send confirmation handshake models.
 
 They are hand-written (vs. generated from `/openapi.json`) because the contract is

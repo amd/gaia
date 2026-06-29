@@ -5,8 +5,19 @@
  *
  * Wraps every HTTP endpoint the frozen sidecar serves:
  *   POST /v1/email/triage    (the frozen triage contract)
+ *   POST /v1/email/search     (read-only inbox search)
+ *   POST /v1/email/prescan    (read-only inbox pre-scan → triage-card envelope)
  *   POST /v1/email/draft      (mint a confirmation token)
  *   POST /v1/email/send       (send — gated on a valid token)
+ *   POST /v1/email/confirm    (mint an action confirmation token)
+ *   POST /v1/email/archive    (archive — gated on a valid token)
+ *   POST /v1/email/unarchive  (reverse an archive — ungated, within 30s)
+ *   POST /v1/email/quarantine (quarantine phishing — gated on a valid token)
+ *   POST /v1/email/unquarantine (reverse a quarantine — ungated, within 30s)
+ *   GET  /v1/email/calendar/events            (view events — read-only)
+ *   POST /v1/email/calendar/events/preview     (mint a calendar confirmation token)
+ *   POST /v1/email/calendar/events             (create — gated on a valid token)
+ *   POST /v1/email/calendar/events/respond     (RSVP accept/decline/tentative)
  *   GET  /health              (root liveness — what the standalone sidecar serves)
  *   GET  /version             (root apiVersion / agentVersion)
  *   GET  /v1/email/health     (router-scoped liveness — for the mounted-on-app case)
@@ -30,12 +41,32 @@ import { stripTrailingSlashes } from "./url.js";
 import type {
   BatchTriageRequest,
   BatchTriageResponse,
+  CalendarCreateEventRequest,
+  CalendarEventPreviewResponse,
+  CalendarEventResponse,
+  CalendarEventsResponse,
+  CalendarRespondRequest,
+  CalendarRespondResponse,
+  EmailActionConfirmRequest,
+  EmailActionConfirmResponse,
+  EmailArchiveRequest,
+  EmailArchiveResponse,
   EmailDraftRequest,
   EmailDraftResponse,
+  EmailPreScanRequest,
+  EmailPreScanResponse,
+  EmailQuarantineRequest,
+  EmailQuarantineResponse,
+  EmailSearchRequest,
+  EmailSearchResponse,
   EmailSendRequest,
   EmailSendResponse,
   EmailTriageRequest,
   EmailTriageResponse,
+  EmailUnarchiveRequest,
+  EmailUnarchiveResponse,
+  EmailUnquarantineRequest,
+  EmailUnquarantineResponse,
   HealthResponse,
   OpenApiDocument,
   VersionResponse,
@@ -95,6 +126,29 @@ export class EmailClient {
     return this.post<BatchTriageResponse>("/v1/email/triage/batch", request);
   }
 
+  /**
+   * Search the connected mailbox, read-only (POST /v1/email/search). Returns
+   * inbox-list metadata (id, thread, subject, from, snippet, labels) for
+   * messages matching the query/labels — not the message body. Requires a
+   * mailbox connected on the host; no mailbox → 503, two+ → 400.
+   */
+  async search(request: EmailSearchRequest): Promise<EmailSearchResponse> {
+    return this.post<EmailSearchResponse>("/v1/email/search", request);
+  }
+
+  /**
+   * Pre-scan the connected inbox into the triage-card envelope (POST
+   * /v1/email/prescan). Read-only: lists recent inbox messages and returns the
+   * aggregate summary (urgent / actionable / suggested archives + counts) the
+   * Agent UI's pre-scan card renders. The request defaults `max_messages` to 25
+   * server-side, so `{}` is a valid body.
+   */
+  async prescan(
+    request: EmailPreScanRequest = {},
+  ): Promise<EmailPreScanResponse> {
+    return this.post<EmailPreScanResponse>("/v1/email/prescan", request);
+  }
+
   /** Propose a reply and mint a confirmation token (POST /v1/email/draft). */
   async draft(request: EmailDraftRequest): Promise<EmailDraftResponse> {
     return this.post<EmailDraftResponse>("/v1/email/draft", request);
@@ -103,6 +157,124 @@ export class EmailClient {
   /** Send a reply — requires a valid confirmation token (POST /v1/email/send). */
   async send(request: EmailSendRequest): Promise<EmailSendResponse> {
     return this.post<EmailSendResponse>("/v1/email/send", request);
+  }
+
+  /**
+   * Mint a single-use confirmation token for a destructive mailbox action
+   * (POST /v1/email/confirm). The token authorizes exactly one
+   * `(action, message_id)` — echo it to `archive`/`quarantine`. This is the
+   * action analogue of `draft` for sends; nothing mutates here.
+   */
+  async confirmAction(
+    request: EmailActionConfirmRequest,
+  ): Promise<EmailActionConfirmResponse> {
+    return this.post<EmailActionConfirmResponse>("/v1/email/confirm", request);
+  }
+
+  /**
+   * Archive a message — requires a valid confirmation token (POST /v1/email/archive).
+   * Returns a `batch_id` undo handle; pass it to `unarchive` within
+   * `undo_window_seconds` to restore the message to the inbox.
+   */
+  async archive(request: EmailArchiveRequest): Promise<EmailArchiveResponse> {
+    return this.post<EmailArchiveResponse>("/v1/email/archive", request);
+  }
+
+  /**
+   * Reverse an archive within the undo window (POST /v1/email/unarchive).
+   * NOT gated — it restores. Routes by the mailbox recorded at archive time and
+   * uses the post-archive id so Outlook can find the moved message.
+   */
+  async unarchive(
+    request: EmailUnarchiveRequest,
+  ): Promise<EmailUnarchiveResponse> {
+    return this.post<EmailUnarchiveResponse>("/v1/email/unarchive", request);
+  }
+
+  /**
+   * Quarantine a phishing message — requires a valid confirmation token
+   * (POST /v1/email/quarantine). Applies the GAIA_PHISHING_QUARANTINE label and
+   * archives. Refuses `is_phishing: false`. Reverse with `unquarantine`.
+   */
+  async quarantine(
+    request: EmailQuarantineRequest,
+  ): Promise<EmailQuarantineResponse> {
+    return this.post<EmailQuarantineResponse>("/v1/email/quarantine", request);
+  }
+
+  /**
+   * Reverse a quarantine within the undo window (POST /v1/email/unquarantine).
+   * NOT gated — it restores the message's prior labels.
+   */
+  async unquarantine(
+    request: EmailUnquarantineRequest,
+  ): Promise<EmailUnquarantineResponse> {
+    return this.post<EmailUnquarantineResponse>(
+      "/v1/email/unquarantine",
+      request,
+    );
+  }
+
+  /**
+   * View calendar events on the primary calendar (GET /v1/email/calendar/events).
+   * Read-only. `timeMin`/`timeMax` are optional RFC 3339 bounds; `provider`
+   * (google|microsoft) is required only when more than one account is connected.
+   */
+  async listCalendarEvents(opts?: {
+    timeMin?: string;
+    timeMax?: string;
+    provider?: string;
+  }): Promise<CalendarEventsResponse> {
+    const params = new URLSearchParams();
+    if (opts?.timeMin) params.set("time_min", opts.timeMin);
+    if (opts?.timeMax) params.set("time_max", opts.timeMax);
+    if (opts?.provider) params.set("provider", opts.provider);
+    const qs = params.toString();
+    return this.get<CalendarEventsResponse>(
+      `/v1/email/calendar/events${qs ? `?${qs}` : ""}`,
+    );
+  }
+
+  /**
+   * Mint a single-use confirmation token bound to a proposed event
+   * (POST /v1/email/calendar/events/preview). The calendar analogue of `draft`:
+   * creates nothing; echo the returned `confirmation_token` to `createCalendarEvent`.
+   */
+  async previewCalendarEvent(
+    request: CalendarCreateEventRequest,
+  ): Promise<CalendarEventPreviewResponse> {
+    return this.post<CalendarEventPreviewResponse>(
+      "/v1/email/calendar/events/preview",
+      request,
+    );
+  }
+
+  /**
+   * Create a calendar event — requires a valid confirmation token from
+   * `previewCalendarEvent` (POST /v1/email/calendar/events). Without a
+   * payload-bound token the create is rejected (403); events are never created
+   * without explicit confirmation.
+   */
+  async createCalendarEvent(
+    request: CalendarCreateEventRequest,
+  ): Promise<CalendarEventResponse> {
+    return this.post<CalendarEventResponse>(
+      "/v1/email/calendar/events",
+      request,
+    );
+  }
+
+  /**
+   * RSVP accept / decline / tentative to an existing calendar invite
+   * (POST /v1/email/calendar/events/respond).
+   */
+  async respondToCalendarEvent(
+    request: CalendarRespondRequest,
+  ): Promise<CalendarRespondResponse> {
+    return this.post<CalendarRespondResponse>(
+      "/v1/email/calendar/events/respond",
+      request,
+    );
   }
 
   /**

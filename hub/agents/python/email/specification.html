@@ -3,7 +3,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <script>(function(){try{var t=localStorage.getItem('amd-site-theme');if(!t)t=(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();</script>
-<title>Email Agent — Capability &amp; API Specification · v2.0</title>
+<title>Email Agent — Capability &amp; API Specification · v2.1</title>
 <link rel="icon" href="data:image/svg+xml,&lt;svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'&gt;&lt;rect width='32' height='32' rx='5' fill='%23111114'/&gt;&lt;g fill='none' stroke='%23c9a24a' stroke-width='2.4' stroke-linecap='round'&gt;&lt;path d='M8 9 L15 16 L8 23'/&gt;&lt;path d='M16 9 L23 16 L16 23'/&gt;&lt;/g&gt;&lt;/svg&gt;">
 <style>
   /* Self-hosted latin webfonts, base64-embedded so this spec is a single
@@ -289,16 +289,16 @@
     <h1 style="margin-top:24px">The Email Agent,<br><span class="c1">Defined End to End</span></h1>
     <p class="lead">GAIA's Email Agent reads, triages, drafts, sends, organizes, and schedules your mail — running <em>locally on Ryzen&nbsp;AI</em>, so nothing leaves the device. This spec walks through how to integrate it (REST, MCP, or the full agent), its seventeen capabilities and the guardrails that gate them, the workflows that chain them, the personalization and always-on tracks, the evaluation dataset, and the contract reference — with examples throughout.</p>
     <div class="chips">
-      <div class="chip"><div class="k">Implemented</div><div class="v">schema 1.0</div></div>
-      <div class="chip"><div class="k">Proposed</div><div class="v g">schema 2.0</div></div>
+      <div class="chip"><div class="k">Implemented</div><div class="v">schema 2.1</div></div>
+      <div class="chip"><div class="k">New in 2.1</div><div class="v g">REST calendar</div></div>
       <div class="chip"><div class="k">Capabilities</div><div class="v g">17</div></div>
       <div class="chip"><div class="k">Personalization</div><div class="v">5</div></div>
       <div class="chip"><div class="k">Workflows</div><div class="v">10</div></div>
       <div class="chip"><div class="k">Inference</div><div class="v">100% on-device</div></div>
       <div class="chip"><div class="k">Milestone</div><div class="v g"><a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a></div></div>
     </div>
-    <div style="margin-top:30px;font-family:'JetBrains Mono',monospace;font-size:13px;letter-spacing:.04em;color:var(--faint)">Spec <b style="color:var(--c1)">v2.0</b> &nbsp;·&nbsp; updated <b style="color:var(--ink)">2026-06-11</b> &nbsp;·&nbsp; <b style="color:var(--ink)">schema 1.0</b> implemented · <b style="color:var(--ink)">2.0</b> proposed &nbsp;·&nbsp; status as of <b style="color:var(--ink)"><a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (<a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a>)</b></div>
-    <div style="margin-top:10px;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.03em;color:var(--faint);max-width:900px;line-height:1.6">The contract reference documents the <b style="color:var(--ink)">implemented schema 1.0</b> (4-bucket triage). <b style="color:var(--ink)">Schema 2.0</b> — a 5-bucket taxonomy plus a <code>suggested_action</code> verb — is proposed (see the API reference); it is breaking, so consumers opt in.</div>
+    <div style="margin-top:30px;font-family:'JetBrains Mono',monospace;font-size:13px;letter-spacing:.04em;color:var(--faint)">Spec <b style="color:var(--c1)">v2.1</b> &nbsp;·&nbsp; updated <b style="color:var(--ink)">2026-06-26</b> &nbsp;·&nbsp; contract <b style="color:var(--ink)">schema 2.1</b> implemented &nbsp;·&nbsp; status as of <b style="color:var(--ink)"><a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (<a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a>)</b></div>
+    <div style="margin-top:10px;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.03em;color:var(--faint);max-width:900px;line-height:1.6">The contract reference documents the <b style="color:var(--ink)">implemented schema 2.1</b>: a 5-bucket triage taxonomy plus a <code>suggested_action</code> verb (schema 2.0), and the schema-2.1 REST surfaces — inbox search (<a class="iss" href="https://github.com/amd/gaia/issues/1781" target="_blank" rel="noopener">#1781</a>), inbox pre-scan (<a class="iss" href="https://github.com/amd/gaia/issues/1778" target="_blank" rel="noopener">#1778</a>), archive / quarantine mailbox actions (<a class="iss" href="https://github.com/amd/gaia/issues/1779" target="_blank" rel="noopener">#1779</a>), and calendar view / create / respond (<a class="iss" href="https://github.com/amd/gaia/issues/1780" target="_blank" rel="noopener">#1780</a>).</div>
   </div>
 </section>
 
@@ -348,7 +348,7 @@
         <tr><td><b>6</b></td><td><b>Full-thread comprehension</b></td><td><span class="dot wip"></span>Wired</td><td>Gist of a long back-and-forth, categorized on the last inbound</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>7</b></td><td><b>Send a reply via agent</b></td><td><span class="dot wip"></span>Wired</td><td>Post a reply through the agent (draft → confirm → send)</td><td><span class="pill t2">Tier 2</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>8</b></td><td><b>Batch archive</b></td><td><span class="dot wip"></span>Wired</td><td>Archive 20+ messages in one reversible action</td><td><span class="pill t1">Tier 1</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
-        <tr><td><b>9</b></td><td><b>Quarantine + undo</b></td><td><span class="dot wip"></span>Wired</td><td>30-second reversibility on bulk / destructive ops</td><td><span class="pill t1">Tier 1</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
+        <tr><td><b>9</b></td><td><b>Quarantine + undo</b></td><td><span class="dot ok"></span>Validated · on REST</td><td>30-second reversibility on bulk / destructive ops</td><td><span class="pill t1">Tier 1</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>10</b></td><td><b>Calendar — detect</b></td><td><span class="dot wip"></span>Wired</td><td>Spot meeting requests inside email bodies</td><td><span class="pill t0">Tier 0</span></td><td><span style="color:var(--soft)">New&nbsp;mail</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>11</b></td><td><b>Calendar — conflicts</b></td><td><span class="dot wip"></span>Wired</td><td>Check the calendar in-line for overlaps</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>12</b></td><td><b>Calendar — create</b></td><td><span class="dot wip"></span>Wired</td><td>Create events from email context</td><td><span class="pill t2">Tier 2</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
@@ -388,7 +388,7 @@
     </div>
 
     <h3 style="margin-top:40px">Capability → surface</h3>
-    <p class="body-t">REST and MCP expose the <b>analysis + reply + send</b> core (capabilities 1–4, 6, 7). Capabilities that mutate the mailbox or calendar run through the <b>full agent</b>, which acts via a forwarded connection.</p>
+    <p class="body-t">REST and MCP expose the <b>analysis + reply + send</b> core (capabilities 1–4, 6, 7). As of <b>schema 2.1</b> the <b>REST</b> surface additionally exposes the reversible mailbox mutations <b>archive</b> and <b>phishing-quarantine</b> (capabilities 8, 9) — each gated on a single-use confirmation token like <code>/send</code>, each reversible within a 30-second undo window — plus <b>calendar view / create / respond</b> (<a class="iss" href="https://github.com/amd/gaia/issues/1780" target="_blank" rel="noopener">#1780</a>; calendar <i>detect</i> and <i>conflicts</i> remain agent-only). MCP does not surface these. The remaining mailbox/calendar capabilities run through the <b>full agent</b>, which acts via a forwarded connection.</p>
     <table class="tbl">
       <thead><tr><th>Capability</th><th>REST</th><th>MCP</th><th>Agent</th></tr></thead>
       <tbody>
@@ -398,7 +398,12 @@
         <tr><td><b>4</b> · Phishing detection</td><td>✓ <span class="opt">(flag in triage)</span></td><td>✓</td><td>✓ <span class="opt">(+ quarantine)</span></td></tr>
         <tr><td><b>6</b> · Full-thread comprehension</td><td>✓ <span class="opt">(thread payload)</span></td><td>✓</td><td>✓</td></tr>
         <tr><td><b>7</b> · Send a reply</td><td>✓ <code>/v1/email/send</code></td><td>✓ <code>send_email</code></td><td>✓</td></tr>
-        <tr><td><b>5, 8, 9, 10–12</b> · pre-scan, organize, calendar &nbsp;·&nbsp; <b>13–17</b> planned &nbsp;·&nbsp; <b>P1–P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
+        <tr><td><b>5</b> · Inbox pre-scan</td><td>✓ <code>/v1/email/prescan</code> <span class="opt">(read-only)</span></td><td>—</td><td>✓ <code>pre_scan_inbox</code></td></tr>
+        <tr><td><b>8</b> · Archive (+ undo)</td><td>✓ <code>/v1/email/archive</code> · <code>/unarchive</code></td><td>—</td><td>✓ <code>archive_message</code></td></tr>
+        <tr><td><b>9</b> · Quarantine (+ undo)</td><td>✓ <code>/v1/email/quarantine</code> · <code>/unquarantine</code> <span class="opt">(Gmail)</span></td><td>—</td><td>✓ <code>quarantine_phishing_message</code></td></tr>
+        <tr><td>Inbox search <span class="opt">(read-only, <a class="iss" href="https://github.com/amd/gaia/issues/1781" target="_blank" rel="noopener">#1781</a>)</span></td><td>✓ <code>/v1/email/search</code></td><td>—</td><td>✓ <code>search_messages</code></td></tr>
+        <tr><td>Calendar · view / create / respond <span class="opt">(of capability <b>12</b>)</span></td><td>✓ <code>/v1/email/calendar/*</code> <span class="opt">(2.1)</span></td><td>—</td><td>✓</td></tr>
+        <tr><td>calendar <b>detect / conflicts</b> (10–11) &nbsp;·&nbsp; <b>13–17</b> planned &nbsp;·&nbsp; <b>P1–P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
       </tbody>
     </table>
 
@@ -448,6 +453,16 @@
         "body": "Thanks Dana — signing today, MSA back before Friday EOD.",
         "confirmation_token": "9f1c…a7e2" }'
 # → { "sent_id": "msg-abc123", "sent": true }</pre>
+    <p class="body-t"><b>Inbox pre-scan</b> (read-only) — list recent inbox mail and get the triage-card envelope the Agent UI renders. Needs a connected mailbox (<code>503</code> with none, <code>400</code> with 2+); no Lemonade call:</p>
+    <pre class="code">curl -s http://localhost:8080/v1/email/prescan \
+  -H "Content-Type: application/json" \
+  -d '{ "max_messages": 25 }'
+# → { "schema_version": "2.1",
+#     "result": { "kind": "email_pre_scan",
+#                 "urgent": [ … ], "actionable": [ … ],
+#                 "informational_count": 7,
+#                 "suggested_archives": [ … ], "suggested_drafts": [],
+#                 "totals": { "urgent": 2, "actionable": 3, "informational": 7, "suggested_archives": 4 } } }</pre>
   </div>
 </section>
 
@@ -697,10 +712,10 @@ quarantine_phishing_message → { "ok": true, "data": {
 
     <!-- 9 -->
     <div class="cap">
-      <div class="cap-head"><span class="num">9</span><h3>Quarantine + undo</h3><span class="pill wip">Wired</span><span class="pill t1">undo · T1</span></div>
+      <div class="cap-head"><span class="num">9</span><h3>Quarantine + undo</h3><span class="pill ok">Validated · on REST</span><span class="pill t1">undo · T1</span></div>
       <div class="field"><div class="fl">Use-case</div><div class="fv">Give every reversible mutation a safety net. <b>Trash and batch operations</b> are written to a local action log and undone within a <b>30-second window</b> (<code>restore_message</code>, <code>undo_archive_batch</code>), restoring the exact prior label set; nothing is hard-deleted, and undo past the window fails loudly with manual-recovery instructions. <b>Phishing quarantine</b> is separate — auto-applied when enabled (see capability 4); its <code>unquarantine_message</code> undo restores the exact prior labels within the same window, and past it the quarantine label still preserves the message for manual restore, like spam. This is what lets the user — and the agent — act decisively.</div></div>
       <div class="field"><div class="fl">Why it matters</div><div class="fv">The user acts decisively because every action is recoverable for 30 seconds — the safety net that makes automation trustworthy.</div></div>
-      <div class="field"><div class="fl">Backed by</div><div class="fv">A local action log. <code>trash_message</code> ↔ <code>restore_message</code> and batch archive ↔ undo within 30s; <code>quarantine_phishing_message</code> ↔ <code>unquarantine_message</code> within the same window; past it, the quarantine label preserves the message for manual restore.</div></div>
+      <div class="field"><div class="fl">Backed by</div><div class="fv">A local action log. <code>trash_message</code> ↔ <code>restore_message</code> and batch archive ↔ undo within 30s; <code>quarantine_phishing_message</code> ↔ <code>unquarantine_message</code> within the same window; past it, the quarantine label preserves the message for manual restore. <b>Now on the REST contract</b> (schema 2.1, <a class="iss" href="https://github.com/amd/gaia/issues/1779" target="_blank" rel="noopener">#1779</a>): <a class="eplink" href="#ep-archive"><code>POST /v1/email/archive</code></a> · <a class="eplink" href="#ep-quarantine"><code>/quarantine</code></a> and their <code>/unarchive</code> · <code>/unquarantine</code> reversals — confirmation-gated, so the Agent UI drives them through the package.</div></div>
       <div class="field"><div class="fl">Guardrails</div><div class="fv">Trash / archive / batch are <b>Tier 1</b> — reversible within 30s, never hard-delete; undo outside the window fails loudly. Phishing quarantine is opt-in auto; undo follows the same window, and the quarantine label keeps the message recoverable manually anytime (capability 4).</div></div>
       <div class="field"><div class="fl">Example</div><div class="fv"><pre class="code">// within 30s: unquarantine_message(action_id="act-55")
 { "ok": true, "data": { "action_id": "act-55", "message_id": "m-2002", "restored": true } }
@@ -744,8 +759,8 @@ quarantine_phishing_message → { "ok": true, "data": {
       <div class="cap-head"><span class="num">12</span><h3>Calendar — create</h3><span class="pill wip">Wired</span><span class="pill t2">Tier 2 · confirm + no-time refusal</span></div>
       <div class="field"><div class="fl">Use-case</div><div class="fv">Turn the meeting described in an email into a real calendar event — title from the subject, attendee from the sender, time from the detected date/time — in one confirmed action. It refuses to invent a time: if no concrete date/time can be resolved it raises <code>NoEventDateTimeError</code> and asks the user to confirm one, and it rejects inverted or zero-length windows. Creation is confirmation-gated, as are accepting and declining invites.</div></div>
       <div class="field"><div class="fl">Why it matters</div><div class="fv">Turns "let's meet Thursday 2pm" into a real event in one confirmed action.</div></div>
-      <div class="field"><div class="fl">Backed by</div><div class="fv"><code>create_event_from_email(summary, start, end, attendees, …)</code>; <code>extract_event_details</code> derives title + attendees + <code>has_datetime</code>.</div></div>
-      <div class="field"><div class="fl">Guardrails</div><div class="fv"><b>Tier 2</b> (as are <code>accept_invite</code> / <code>decline_invite</code>). Fail-loud: raises <code>NoEventDateTimeError</code> when no resolvable time exists (never invents one); rejects inverted/zero-length windows.</div></div>
+      <div class="field"><div class="fl">Backed by</div><div class="fv"><code>create_event_from_email(summary, start, end, attendees, …)</code>; <code>extract_event_details</code> derives title + attendees + <code>has_datetime</code>. On REST (schema 2.1): <a class="eplink" href="#ep-cal-preview"><code>POST /v1/email/calendar/events/preview</code></a> → <a class="eplink" href="#ep-cal-create"><code>POST /v1/email/calendar/events</code></a>; view via <a class="eplink" href="#ep-cal-view"><code>GET /v1/email/calendar/events</code></a> and RSVP via <a class="eplink" href="#ep-cal-respond"><code>POST .../respond</code></a>.</div></div>
+      <div class="field"><div class="fl">Guardrails</div><div class="fv"><b>Tier 2</b> (as are <code>accept_invite</code> / <code>decline_invite</code>). Fail-loud: raises <code>NoEventDateTimeError</code> when no resolvable time exists (never invents one); rejects inverted/zero-length windows. On REST, create is gated by the same single-use confirmation-token handshake as <a class="eplink" href="#ep-send"><code>/send</code></a>; RSVP (<a class="eplink" href="#ep-cal-respond"><code>respond</code></a>) is an explicit, reversible action and is not separately token-gated.</div></div>
       <div class="field"><div class="fl">Example</div><div class="fv"><pre class="code">// create_event_from_email(summary="Numbers walkthrough",
 //   start={"dateTime":"2026-06-18T14:00:00Z"}, end={"dateTime":"2026-06-18T14:30:00Z"},
 //   attendees=["pm@co.com"])
@@ -1143,7 +1158,7 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
     <p class="body-t" style="margin-top:14px"><b>Example set.</b> A complete dataset covers the roles your integration serves, and should add personas the base set lacks — external / customer correspondents, out-of-office &amp; auto-reply, multilingual, and adversarial / injection senders.</p>
 
     <h3 style="margin-top:40px">Label taxonomy &amp; mapping</h3>
-    <p class="body-t">A labelled dataset's <code>category</code> + <code>suggested_action</code> <b>are the schema 2.0 fields</b> (5-bucket category + action verb), so fixtures are schema-2.0-native and need no relabeling. The threat flags derive from <code>promotional_subtype</code> (<code>spam</code> → <code>is_spam</code>; <code>adversarial</code> → review for <code>is_phishing</code>). To test today's shipped <b>schema 1.0</b> (4-bucket), apply the mapping below; under schema 2.0 <code>category</code> and <code>suggested_action</code> pass through unchanged.</p>
+    <p class="body-t">A labelled dataset's <code>category</code> + <code>suggested_action</code> <b>are the schema 2.0 fields</b> (5-bucket category + action verb), so fixtures are schema-2.0-native and need no relabeling. The threat flags derive from <code>promotional_subtype</code> (<code>spam</code> → <code>is_spam</code>; <code>adversarial</code> → review for <code>is_phishing</code>). To map onto the legacy <b>schema 1.0</b> (4-bucket) contract, apply the mapping below; under the shipped schema 2.x <code>category</code> and <code>suggested_action</code> pass through unchanged.</p>
     <table class="tbl">
       <thead><tr><th>Corpus <code>category</code></th><th><code>suggested_action</code></th><th>Schema 1.0 <code>category</code></th><th>Flags</th></tr></thead>
       <tbody>
@@ -1317,7 +1332,7 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
       <p class="body-t">Each item is triaged independently: a failure on one item sets that entry's <code>error</code> and the remaining items still run. <b>HTTP 200 with every item errored is a valid response</b> — consumers MUST inspect each <code>results[].error</code>, not just the HTTP status. A <code>502</code> means the local LLM was unreachable before any item was processed (the whole batch fails).</p>
       <h4>Request body — BatchTriageRequest</h4>
       <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
-        <tr><td><code>schema_version</code></td><td>string <span class="opt">optional</span></td><td>Contract version. Defaults to <code>"2.0"</code>.</td></tr>
+        <tr><td><code>schema_version</code></td><td>string <span class="opt">optional</span></td><td>Contract version. Defaults to <code>"2.1"</code>.</td></tr>
         <tr><td><code>items</code></td><td>list[EmailInput] <span class="req">required</span></td><td>1–100 <code>SingleEmailInput</code> / <code>ThreadInput</code> objects, discriminated on <code>kind</code>. Over 100 → <code>422</code>.</td></tr>
         <tr><td><code>context</code></td><td>TriageContext <span class="opt">optional</span></td><td>Applied to <b>all</b> items.</td></tr>
       </tbody></table>
@@ -1371,17 +1386,198 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
       </tbody></table>
     </div>
 
+    <div class="endpoint" id="ep-search">
+      <span class="badge">POST</span><span class="path">/v1/email/search</span>
+      <p class="desc">Search the connected mailbox (<b>read-only</b>) by Gmail-style query / labels (<a class="iss" href="https://github.com/amd/gaia/issues/1781" target="_blank" rel="noopener">#1781</a>). Returns inbox-list metadata for each match — id, thread, subject, from, snippet, labels — <b>not</b> the message body. No mail is sent or modified; no <code>confirmation_token</code> is involved. Restores the agent's in-loop inbox search on the REST contract so the Agent UI drives it through the package.</p>
+      <h4>Request body — EmailSearchRequest</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>schema_version</code></td><td>string <span class="opt">optional</span></td><td>Contract version. Defaults to <code>"2.1"</code>; a mismatch lets a consumer fail loudly.</td></tr>
+        <tr><td><code>query</code></td><td>string <span class="opt">optional</span></td><td>Gmail-style query (e.g. <code>from:alice is:unread</code>). A query searches <b>all mail</b>; omit it to list by label (the <code>INBOX</code> when labels are also omitted).</td></tr>
+        <tr><td><code>labels</code></td><td>list[string] <span class="opt">optional</span></td><td>Label ids to filter by (e.g. <code>["INBOX","UNREAD"]</code>). Omit to apply no label filter; when <code>query</code> is also omitted, the search defaults to <code>INBOX</code>.</td></tr>
+        <tr><td><code>max_results</code></td><td>int <span class="opt">optional</span></td><td>Max messages to return, <code>1–100</code> (default <code>25</code>). Each match is hydrated with a per-message fetch, so the count is capped.</td></tr>
+        <tr><td><code>page_token</code></td><td>string <span class="opt">optional</span></td><td>Opaque pagination cursor from a prior response's <code>next_page_token</code>. Omit to fetch the first page.</td></tr>
+      </tbody></table>
+      <h4>Response body — EmailSearchResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>schema_version</code></td><td>string</td><td>Echoes the contract version.</td></tr>
+        <tr><td><code>query</code></td><td>string | null</td><td>Echoes the request query (null when unset).</td></tr>
+        <tr><td><code>count</code></td><td>int</td><td>Number of messages returned.</td></tr>
+        <tr><td><code>messages</code></td><td>list[EmailSearchResultItem]</td><td>Matching messages (newest-first). Each is <code>{ id, thread_id, subject, from, to, date, snippet, label_ids }</code> — header values are raw strings, not parsed <code>EmailAddress</code> objects.</td></tr>
+        <tr><td><code>next_page_token</code></td><td>string | null</td><td>Opaque token to fetch the next page, or null when no more.</td></tr>
+      </tbody></table>
+      <h4>Mailbox resolution</h4>
+      <p class="body-t">The mailbox is the one connected in GAIA (<i>Settings → Connectors</i>). Fails loud on an ambiguous count — never silently picks: <b>0</b> connected → <code>503</code>, <b>2+</b> connected → <code>400</code>, exactly one → that mailbox.</p>
+    </div>
+
+    <div class="endpoint" id="ep-confirm">
+      <span class="badge">POST</span><span class="path">/v1/email/confirm</span>
+      <p class="desc">Mint a single-use confirmation token for a destructive mailbox action (<a class="iss" href="https://github.com/amd/gaia/issues/1779" target="_blank" rel="noopener">#1779</a>). Nothing mutates — this is the action analogue of <a class="eplink" href="#ep-draft"><code>/draft</code></a>. The token authorizes exactly one <code>(action, message_id)</code>.</p>
+      <h4>Request body — EmailActionConfirmRequest</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>action</code></td><td>"archive" | "quarantine" <span class="req">required</span></td><td>The action the token will authorize.</td></tr>
+        <tr><td><code>message_id</code></td><td>string <span class="req">required</span></td><td>The message the token is bound to.</td></tr>
+        <tr><td><code>provider</code></td><td>string <span class="opt">optional</span></td><td>Provider binding (<code>"google"</code> / <code>"microsoft"</code>); routes the action when several mailboxes are connected.</td></tr>
+      </tbody></table>
+      <h4>Response body — EmailActionConfirmResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>confirmation_token</code></td><td>string</td><td>Echo to <a class="eplink" href="#ep-archive"><code>/archive</code></a> or <a class="eplink" href="#ep-quarantine"><code>/quarantine</code></a>. Single-use; bound to the action.</td></tr>
+        <tr><td><code>action</code></td><td>"archive" | "quarantine"</td><td>The authorized action.</td></tr>
+        <tr><td><code>message_id</code></td><td>string</td><td>The message the token authorizes.</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="endpoint" id="ep-archive">
+      <span class="badge">POST</span><span class="path">/v1/email/archive</span>
+      <p class="desc">Archive a message — gated on confirmation, reversible for 30s. The gate fires first: no valid token for this <code>(action='archive', message_id)</code> → <b>403</b> before any backend call. Returns a <code>batch_id</code> undo handle and the <code>post_archive_id</code> so a folder-based backend (Outlook) can be tracked after the move changes its id (<a class="iss" href="https://github.com/amd/gaia/issues/1738" target="_blank" rel="noopener">#1738</a>).</p>
+      <h4>Request body — EmailArchiveRequest</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>message_id</code></td><td>string <span class="req">required</span></td><td>Provider message id to archive.</td></tr>
+        <tr><td><code>confirmation_token</code></td><td>string <span class="opt">optional</span></td><td>Token from <a class="eplink" href="#ep-confirm"><code>/confirm</code></a>. Missing/invalid for this exact action → 403.</td></tr>
+        <tr><td><code>provider</code></td><td>string <span class="opt">optional</span></td><td>Fallback provider, used only when the token carries no binding.</td></tr>
+      </tbody></table>
+      <h4>Response body — EmailArchiveResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>message_id</code></td><td>string</td><td>The message that was archived.</td></tr>
+        <tr><td><code>action_id</code></td><td>string</td><td>Action-log id for this archive.</td></tr>
+        <tr><td><code>batch_id</code></td><td>string</td><td>Undo handle — pass to <a class="eplink" href="#ep-unarchive"><code>/unarchive</code></a> within the window.</td></tr>
+        <tr><td><code>post_archive_id</code></td><td>string</td><td>The id valid AFTER the archive (Outlook mints a new one; Gmail keeps the request id).</td></tr>
+        <tr><td><code>undo_window_seconds</code></td><td>int</td><td>Seconds the undo handle stays valid (default 30).</td></tr>
+        <tr><td><code>archived</code></td><td>bool</td><td>Always true on success.</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="endpoint" id="ep-unarchive">
+      <span class="badge">POST</span><span class="path">/v1/email/unarchive</span>
+      <p class="desc">Reverse an archive within the undo window. <b>Not gated</b> — it restores. Routes each row to the mailbox it was archived from and uses the recorded <code>post_archive_id</code> so Outlook can find the moved message. Fails loudly (<b>409</b>) when the window has expired or the <code>batch_id</code> has no undoable rows.</p>
+      <h4>Request body — EmailUnarchiveRequest</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>batch_id</code></td><td>string <span class="req">required</span></td><td>The undo handle from <a class="eplink" href="#ep-archive"><code>/archive</code></a>.</td></tr>
+        <tr><td><code>provider</code></td><td>string <span class="opt">optional</span></td><td>Omit to route by the mailbox recorded at archive time.</td></tr>
+      </tbody></table>
+      <h4>Response body — EmailUnarchiveResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>batch_id</code></td><td>string</td><td>The undo handle processed.</td></tr>
+        <tr><td><code>restored</code></td><td>int</td><td>Count of messages restored to the inbox.</td></tr>
+        <tr><td><code>messages</code></td><td>list[{message_id, action_id}]</td><td>Each restored message.</td></tr>
+        <tr><td><code>failed</code></td><td>list[{message_id, error}]</td><td>Messages that could not be restored, with reasons (partial success is reported, never silent).</td></tr>
+        <tr><td><code>undone</code></td><td>bool</td><td>True when at least one message was restored.</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="endpoint" id="ep-quarantine">
+      <span class="badge">POST</span><span class="path">/v1/email/quarantine</span>
+      <p class="desc">Quarantine a phishing message — gated on confirmation, reversible for 30s. Applies the <code>GAIA_PHISHING_QUARANTINE</code> label and removes the message from the inbox (capability #9). The gate fires first (403 without a valid token). Refuses <code>is_phishing=false</code> with <b>400</b> — only phishing-flagged mail may be quarantined. <b>Gmail-only:</b> the label-based quarantine and its undo don't map onto Outlook's folder moves, so a request resolving to an Outlook mailbox is refused with <b>400</b> rather than performing a move undo can't reverse (<a class="iss" href="https://github.com/amd/gaia/issues/1738" target="_blank" rel="noopener">#1738</a>).</p>
+      <h4>Request body — EmailQuarantineRequest</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>message_id</code></td><td>string <span class="req">required</span></td><td>Provider message id to quarantine.</td></tr>
+        <tr><td><code>is_phishing</code></td><td>bool <span class="req">required</span></td><td>Must be true — safety gate, never silently bypassed.</td></tr>
+        <tr><td><code>confirmation_token</code></td><td>string <span class="opt">optional</span></td><td>Token from <a class="eplink" href="#ep-confirm"><code>/confirm</code></a> (action='quarantine'). Missing/invalid → 403.</td></tr>
+        <tr><td><code>provider</code></td><td>string <span class="opt">optional</span></td><td>Fallback provider, used only when the token carries no binding.</td></tr>
+      </tbody></table>
+      <h4>Response body — EmailQuarantineResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>message_id</code></td><td>string</td><td>The message that was quarantined.</td></tr>
+        <tr><td><code>action_id</code></td><td>string</td><td>Undo handle — pass to <a class="eplink" href="#ep-unquarantine"><code>/unquarantine</code></a> within the window.</td></tr>
+        <tr><td><code>quarantine_label_id</code></td><td>string</td><td>Id of the applied <code>GAIA_PHISHING_QUARANTINE</code> label.</td></tr>
+        <tr><td><code>prior_labels</code></td><td>list[string]</td><td>The label set restored on undo (recorded pre-quarantine).</td></tr>
+        <tr><td><code>undo_window_seconds</code></td><td>int</td><td>Seconds the undo handle stays valid (default 30).</td></tr>
+        <tr><td><code>quarantined</code></td><td>bool</td><td>Always true on success.</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="endpoint" id="ep-unquarantine">
+      <span class="badge">POST</span><span class="path">/v1/email/unquarantine</span>
+      <p class="desc">Reverse a quarantine within the undo window. <b>Not gated</b> — it restores the exact label set recorded at quarantine time and removes the quarantine label. Fails loudly (<b>409</b>) when the window has expired or the <code>action_id</code> is unknown/already undone.</p>
+      <h4>Request body — EmailUnquarantineRequest</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>action_id</code></td><td>string <span class="req">required</span></td><td>The action id from <a class="eplink" href="#ep-quarantine"><code>/quarantine</code></a>.</td></tr>
+        <tr><td><code>provider</code></td><td>string <span class="opt">optional</span></td><td>Omit to route by the mailbox recorded at quarantine time.</td></tr>
+      </tbody></table>
+      <h4>Response body — EmailUnquarantineResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>action_id</code></td><td>string</td><td>The action id that was undone.</td></tr>
+        <tr><td><code>message_id</code></td><td>string</td><td>The restored message id.</td></tr>
+        <tr><td><code>restored</code></td><td>bool</td><td>Always true on success.</td></tr>
+      </tbody></table>
+    </div>
+
+    <h3 style="margin-top:40px">Calendar endpoints <span class="pill t0" style="vertical-align:middle">schema 2.1 · <a class="iss" href="https://github.com/amd/gaia/issues/1780" target="_blank" rel="noopener">#1780</a></span></h3>
+    <p class="body-t">View, create, and RSVP to calendar events through the same REST surface — reaching whichever calendar (Google or Microsoft) the user connected. Create is a Tier-2 mutation, gated by the same single-use confirmation-token handshake as <a class="eplink" href="#ep-send"><code>/send</code></a>: mint a token at <a class="eplink" href="#ep-cal-preview"><code>/calendar/events/preview</code></a>, then echo it to <a class="eplink" href="#ep-cal-create"><code>/calendar/events</code></a>. A missing calendar scope fails loud (403) with the reconnect CTA. All operate on the primary calendar.</p>
+
+    <div class="endpoint" id="ep-cal-view">
+      <span class="badge">GET</span><span class="path">/v1/email/calendar/events</span>
+      <p class="desc">View events on the primary calendar (read-only). Optional RFC 3339 query params <code>time_min</code> / <code>time_max</code> bound the window; <code>provider</code> (<code>google</code> / <code>microsoft</code>) is required only when more than one account is connected.</p>
+      <h4>Response body — CalendarEventsResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>schema_version</code></td><td>string</td><td>Echoes the contract version.</td></tr>
+        <tr><td><code>events</code></td><td>list[CalendarEvent]</td><td>Matching events, ordered by start time. Each carries <code>id</code>, <code>summary</code>, <code>start</code>, <code>end</code>, <code>location</code>, <code>organizer</code> (start/end are the raw <code>dateTime</code> or all-day <code>date</code> strings).</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="endpoint" id="ep-cal-preview">
+      <span class="badge">POST</span><span class="path">/v1/email/calendar/events/preview</span>
+      <p class="desc">Mint a single-use confirmation token bound to a proposed event — the calendar analogue of <a class="eplink" href="#ep-draft"><code>/draft</code></a>. Creates nothing and reads no calendar.</p>
+      <h4>Request body — CalendarCreateEventRequest</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>summary</code></td><td>string <span class="req">required</span></td><td>Event title (non-empty).</td></tr>
+        <tr><td><code>start</code></td><td>CalendarEventDateTime <span class="req">required</span></td><td>Provide exactly one of <code>date_time</code> (timed, RFC 3339) or <code>date</code> (all-day). <code>time_zone</code> is optional — the Outlook backend defaults a missing zone to <code>UTC</code> for timed events.</td></tr>
+        <tr><td><code>end</code></td><td>CalendarEventDateTime <span class="req">required</span></td><td>Event end (after start).</td></tr>
+        <tr><td><code>attendees</code></td><td>list[string] <span class="opt">optional</span></td><td>Attendee email addresses to invite.</td></tr>
+        <tr><td><code>location</code></td><td>string <span class="opt">optional</span></td><td>Free-text location.</td></tr>
+        <tr><td><code>description</code></td><td>string <span class="opt">optional</span></td><td>Event description / body.</td></tr>
+        <tr><td><code>provider</code></td><td>string <span class="opt">optional</span></td><td>Provider binding (<code>"google"</code> / <code>"microsoft"</code>). Binds the minted token so the create routes to the right calendar.</td></tr>
+      </tbody></table>
+      <h4>Response body — CalendarEventPreviewResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>summary</code> / <code>start</code> / <code>end</code> / <code>attendees</code> / <code>location</code> / <code>description</code></td><td>—</td><td>The normalized event echo.</td></tr>
+        <tr><td><code>confirmation_token</code></td><td>string</td><td>Echo to <a class="eplink" href="#ep-cal-create"><code>/calendar/events</code></a> to authorize creating exactly this event. Single-use; payload-bound.</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="endpoint" id="ep-cal-create">
+      <span class="badge">POST</span><span class="path">/v1/email/calendar/events</span>
+      <p class="desc">Create a calendar event — gated on confirmation (<a class="iss" href="https://github.com/amd/gaia/issues/1780" target="_blank" rel="noopener">#1780</a>). The gate is evaluated first: a request without a valid, payload-bound token (from <a class="eplink" href="#ep-cal-preview"><code>/preview</code></a>) is rejected with <b>403</b> before any backend call. Never auto-confirms.</p>
+      <h4>Request body — CalendarCreateEventRequest</h4>
+      <p class="body-t">Same shape as <a class="eplink" href="#ep-cal-preview"><code>/preview</code></a>, plus <code>confirmation_token</code> (<span class="req">required here</span>) — the token minted by preview for this exact event.</p>
+      <h4>Response body — CalendarEventResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>schema_version</code></td><td>string</td><td>Echoes the contract version.</td></tr>
+        <tr><td><code>event_id</code></td><td>string</td><td>Provider id of the created event.</td></tr>
+        <tr><td><code>summary</code></td><td>string</td><td>Title of the created event.</td></tr>
+        <tr><td><code>created</code></td><td>bool</td><td>Always true on success.</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="endpoint" id="ep-cal-respond">
+      <span class="badge">POST</span><span class="path">/v1/email/calendar/events/respond</span>
+      <p class="desc">RSVP <code>accepted</code> / <code>declined</code> / <code>tentative</code> to an existing invite. An explicit, user-initiated action (the UI's accept/decline controls), so it is not separately token-gated.</p>
+      <h4>Request body — CalendarRespondRequest</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>event_id</code></td><td>string <span class="req">required</span></td><td>Provider event id to RSVP to.</td></tr>
+        <tr><td><code>status</code></td><td>"accepted" | "declined" | "tentative" <span class="req">required</span></td><td>The RSVP response.</td></tr>
+        <tr><td><code>attendee_email</code></td><td>string <span class="req">required</span></td><td>The principal's own email. Used by the Google backend; ignored by Outlook (RSVPs on <code>/me</code>).</td></tr>
+        <tr><td><code>provider</code></td><td>string <span class="opt">optional</span></td><td>Provider binding (<code>"google"</code> / <code>"microsoft"</code>).</td></tr>
+      </tbody></table>
+      <h4>Response body — CalendarRespondResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>event_id</code></td><td>string</td><td>The event that was responded to.</td></tr>
+        <tr><td><code>status</code></td><td>"accepted" | "declined" | "tentative"</td><td>The RSVP response recorded.</td></tr>
+        <tr><td><code>responded</code></td><td>bool</td><td>Always true on success.</td></tr>
+      </tbody></table>
+    </div>
+
     <h3 style="margin-top:40px">Errors &amp; status codes</h3>
     <p class="body-t">All endpoints return JSON. Errors use the standard <code>{ "detail": "…" }</code> shape with an HTTP status; the message names what failed and how to fix it.</p>
     <table class="tbl">
       <thead><tr><th>Status</th><th>Meaning</th><th>When</th></tr></thead>
       <tbody>
         <tr><td><code>200</code></td><td>OK</td><td>Successful triage / draft / send.</td></tr>
-        <tr><td><code>400</code></td><td>Ambiguous provider</td><td>Two mailboxes are connected and neither the confirmation token nor the request names a provider. Pass <code>provider</code> on <a class="eplink" href="#ep-draft"><code>/draft</code></a> (binding the token) or on <a class="eplink" href="#ep-send"><code>/send</code></a>.</td></tr>
-        <tr><td><code>403</code></td><td>Forbidden — send gate</td><td><a class="eplink" href="#ep-send"><code>/v1/email/send</code></a> called without a valid, payload-bound <code>confirmation_token</code>. Mint one with <a class="eplink" href="#ep-draft"><code>/v1/email/draft</code></a>.</td></tr>
+        <tr><td><code>400</code></td><td>Ambiguous provider / bad request</td><td>Two mailboxes are connected and neither the token nor the request names a provider (<a class="eplink" href="#ep-send"><code>/send</code></a>, <a class="eplink" href="#ep-archive"><code>/archive</code></a>, <a class="eplink" href="#ep-quarantine"><code>/quarantine</code></a>); or <a class="eplink" href="#ep-quarantine"><code>/quarantine</code></a> was called with <code>is_phishing=false</code>. Pass <code>provider</code> (binding the token) or fix the request.</td></tr>
+        <tr><td><code>403</code></td><td>Forbidden — confirmation gate</td><td>A mutating action (<a class="eplink" href="#ep-send"><code>/send</code></a>, <a class="eplink" href="#ep-archive"><code>/archive</code></a>, <a class="eplink" href="#ep-quarantine"><code>/quarantine</code></a>) called without a valid, bound <code>confirmation_token</code>. Mint one with <a class="eplink" href="#ep-draft"><code>/draft</code></a> (send) or <a class="eplink" href="#ep-confirm"><code>/confirm</code></a> (archive/quarantine).</td></tr>
+        <tr><td><code>409</code></td><td>Undo window expired</td><td><a class="eplink" href="#ep-unarchive"><code>/unarchive</code></a> or <a class="eplink" href="#ep-unquarantine"><code>/unquarantine</code></a> called past the 30s window, or the handle is unknown/already undone. Restore manually in the mail client.</td></tr>
         <tr><td><code>422</code></td><td>Validation error</td><td>Request violates the contract — unknown field, missing required field, or malformed address. The contract is strict (extra fields are rejected).</td></tr>
-        <tr><td><code>502</code></td><td>Upstream error</td><td><code>/triage</code>: the local-LLM triage call failed. <code>/send</code>: the mail backend accepted the send but returned no message id.</td></tr>
-        <tr><td><code>503</code></td><td>Backend unavailable</td><td>The mailbox account isn't connected. Connect the provider before sending.</td></tr>
+        <tr><td><code>502</code></td><td>Upstream error</td><td><code>/triage</code>: the local-LLM triage call failed. <code>/send</code> · <code>/archive</code> · <code>/quarantine</code>: the mail backend errored (or send returned no message id).</td></tr>
+        <tr><td><code>503</code></td><td>Backend unavailable</td><td>The mailbox account isn't connected. Connect the provider before sending, archiving, or quarantining.</td></tr>
       </tbody>
     </table>
 
@@ -1469,12 +1665,12 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
 <footer class="footer">
   <div class="wrap">
     <p>
-      GAIA Email Agent — Capability &amp; API Specification &nbsp;·&nbsp; <b>v2.0</b> &nbsp;·&nbsp; updated <b>2026-06-11</b> &nbsp;·&nbsp; documents contract <b>schema 1.0</b> (schema 2.0 proposed) &nbsp;·&nbsp; status as of <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (<a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a>)<br>
+      GAIA Email Agent — Capability &amp; API Specification &nbsp;·&nbsp; <b>v2.1</b> &nbsp;·&nbsp; updated <b>2026-06-26</b> &nbsp;·&nbsp; documents contract <b>schema 2.1</b> (5-bucket triage + REST search / pre-scan / archive · quarantine / calendar) &nbsp;·&nbsp; status as of <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (<a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a>)<br>
       Source of truth:
       <a href="https://github.com/amd/gaia/blob/main/hub/agents/python/email/gaia_agent_email/contract.py" target="_blank" rel="noopener">contract.py</a> ·
       <a href="https://github.com/amd/gaia/blob/main/hub/agents/python/email/gaia_agent_email/api_routes.py" target="_blank" rel="noopener">api_routes.py</a> ·
       <a href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a><br>
-      The contract reference reflects the current schema 1.0 models; the capability, guardrail,
+      The contract reference reflects the current schema 2.1 models; the capability, guardrail,
       and workflow sections describe intended behaviour.
     </p>
   </div>

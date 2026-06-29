@@ -227,6 +227,25 @@ async function main() {
     } else {
       skip("triage()", `endpoint routed OK; ${stack.cause} — see Health check above`);
     }
+    // prescan — CONNECTOR-GATED but READ-ONLY, so we actually try it. A 503
+    // (no mailbox) or 400 (2+ mailboxes) means the endpoint routed fine but no
+    // single mailbox is connected — skip with the reason rather than fail.
+    try {
+      const ps = await client.prescan({ max_messages: 10 });
+      const t = ps.result.totals || {};
+      pass(
+        "prescan()",
+        `urgent=${t.urgent ?? ps.result.urgent.length} ` +
+          `actionable=${t.actionable ?? ps.result.actionable.length} ` +
+          `archives=${t.suggested_archives ?? ps.result.suggested_archives.length}`,
+      );
+    } catch (e) {
+      if (e instanceof HttpError && (e.status === 503 || e.status === 400)) {
+        skip("prescan()", "endpoint routed OK; needs a single connected Gmail/Outlook mailbox");
+      } else {
+        throw e;
+      }
+    }
     // send — CONNECTOR-GATED. Not exercised: needs a connected Gmail/Outlook
     // mailbox (OAuth). A connector-backed demo is a later addition.
     skip("send()", "needs a connected Gmail/Outlook mailbox (OAuth) — connector flow not covered yet");

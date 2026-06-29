@@ -4,9 +4,9 @@
 HTML spec generator for the Email Triage Agent REST endpoints (issue #1263).
 
 ``render_endpoint_spec_html()`` returns a single self-contained HTML page
-documenting the three email REST endpoints and the frozen #1262 contract
-request/response shapes. It derives field rows directly from the contract
-pydantic models so the spec stays in sync with the contract automatically.
+documenting the email REST endpoints (triage, search, draft, send) and the
+frozen #1262 contract request/response shapes. It derives field rows directly
+from the contract pydantic models so the spec stays in sync automatically.
 
 No external assets — inline CSS only. No LLM, no network calls.
 """
@@ -28,8 +28,6 @@ from typing import (
     get_origin,
 )
 
-from pydantic import BaseModel
-
 from gaia_agent_email.contract import (
     SCHEMA_VERSION,
     ActionItem,
@@ -37,16 +35,42 @@ from gaia_agent_email.contract import (
     BatchItemResult,
     BatchTriageRequest,
     BatchTriageResponse,
+    CalendarCreateEventRequest,
+    CalendarEvent,
+    CalendarEventDateTime,
+    CalendarEventPreviewResponse,
+    CalendarEventResponse,
+    CalendarEventsResponse,
+    CalendarRespondRequest,
+    CalendarRespondResponse,
     DraftReply,
+    EmailActionConfirmRequest,
+    EmailActionConfirmResponse,
     EmailAddress,
+    EmailArchiveRequest,
+    EmailArchiveResponse,
     EmailCategory,
     EmailMessage,
+    EmailPreScanRequest,
+    EmailPreScanResponse,
+    EmailPreScanResult,
+    EmailQuarantineRequest,
+    EmailQuarantineResponse,
+    EmailSearchRequest,
+    EmailSearchResponse,
+    EmailSearchResultItem,
     EmailTriageRequest,
     EmailTriageResponse,
     EmailTriageResult,
+    EmailUnarchiveRequest,
+    EmailUnarchiveResponse,
+    EmailUnquarantineRequest,
+    EmailUnquarantineResponse,
+    PreScanItem,
     SingleEmailInput,
     ThreadInput,
 )
+from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -309,16 +333,21 @@ def _endpoint_block(
     request_sections: List[Tuple[str, Type[BaseModel]]],
     response_sections: List[Tuple[str, Type[BaseModel]]],
     extra_html: str = "",
+    method: str = "POST",
 ) -> str:
     req_html = "".join(_model_table(m, t) for t, m in request_sections)
     resp_html = "".join(_model_table(m, t) for t, m in response_sections)
+    # A GET (read-only) endpoint has no request body — show query params (if any)
+    # via the request_sections heading text instead of a "Request body" header.
+    req_heading = "Query parameters" if method.upper() == "GET" else "Request body"
+    req_block = f"<h3>{req_heading}</h3>{req_html}" if req_html else ""
     return (
         f'<div class="endpoint-block">'
-        f'<span class="method-badge">POST</span>'
+        f'<span class="method-badge">{_esc(method.upper())}</span>'
         f'<span class="path">{_esc(path)}</span>'
         f'<p class="desc">{_esc(description)}</p>'
         f"{extra_html}"
-        f"<h3>Request body</h3>{req_html}"
+        f"{req_block}"
         f"<h3>Response body</h3>{resp_html}"
         f"</div>"
     )
@@ -394,6 +423,25 @@ def render_endpoint_spec_html() -> str:
         f"</div>"
     )
 
+    prescan_block = _endpoint_block(
+        path="/v1/email/prescan",
+        description=(
+            "Inbox pre-scan (#1778). Lists the most-recent inbox messages from "
+            "the connected mailbox and returns the aggregate triage-card "
+            "envelope the Agent UI renders — top urgent / actionable rows, an "
+            "informational count, and suggested archives, each with a heuristic "
+            "reason. Read-only: nothing is archived, marked, or sent. "
+            "Classification reuses the agent's pre_scan_inbox path. Fails loudly "
+            "when no mailbox is connected (503) or 2+ are (400)."
+        ),
+        request_sections=[("EmailPreScanRequest", EmailPreScanRequest)],
+        response_sections=[
+            ("EmailPreScanResponse", EmailPreScanResponse),
+            ("EmailPreScanResult", EmailPreScanResult),
+            ("PreScanItem", PreScanItem),
+        ],
+    )
+
     # /draft and /send are derived from the REST route models (the same
     # pydantic classes the endpoints actually use) via _endpoint_block, so the
     # tables cannot drift from the live request/response shapes. Imported
@@ -405,6 +453,22 @@ def render_endpoint_spec_html() -> str:
         EmailDraftResponse,
         EmailSendRequest,
         EmailSendResponse,
+    )
+
+    search_block = _endpoint_block(
+        path="/v1/email/search",
+        description=(
+            "Search the connected mailbox (read-only, #1781) by Gmail-style "
+            "query / labels. Returns inbox-list metadata (id, thread, subject, "
+            "from, snippet, labels) for each match — not the message body, and "
+            "nothing is sent or modified. The mailbox is the one connected in "
+            "GAIA; an ambiguous count fails loud (0 -> 503, 2+ -> 400)."
+        ),
+        request_sections=[("EmailSearchRequest", EmailSearchRequest)],
+        response_sections=[
+            ("EmailSearchResponse", EmailSearchResponse),
+            ("EmailSearchResultItem", EmailSearchResultItem),
+        ],
     )
 
     draft_block = _endpoint_block(
@@ -429,6 +493,127 @@ def render_endpoint_spec_html() -> str:
         ),
         request_sections=[("EmailSendRequest", EmailSendRequest)],
         response_sections=[("EmailSendResponse", EmailSendResponse)],
+    )
+
+    # Mailbox actions — archive / quarantine + reversal (schema 2.1, #1779).
+    # Built from the contract models so the tables track the live shapes.
+    confirm_block = _endpoint_block(
+        path="/v1/email/confirm",
+        description=(
+            "Mint a single-use confirmation token for a destructive mailbox "
+            "action (archive / quarantine), bound to that exact (action, "
+            "message_id). The action analogue of /v1/email/draft — nothing "
+            "mutates here. Echo the token to /archive or /quarantine."
+        ),
+        request_sections=[("EmailActionConfirmRequest", EmailActionConfirmRequest)],
+        response_sections=[("EmailActionConfirmResponse", EmailActionConfirmResponse)],
+    )
+
+    archive_block = _endpoint_block(
+        path="/v1/email/archive",
+        description=(
+            "Archive a message — gated on confirmation, reversible for 30s. The "
+            "gate fires FIRST: no valid token for this (action='archive', "
+            "message_id) is rejected with HTTP 403 before any backend call. "
+            "Returns a batch_id undo handle and the post_archive_id (the id a "
+            "folder-based backend like Outlook mints on the move, #1738)."
+        ),
+        request_sections=[("EmailArchiveRequest", EmailArchiveRequest)],
+        response_sections=[("EmailArchiveResponse", EmailArchiveResponse)],
+    )
+
+    unarchive_block = _endpoint_block(
+        path="/v1/email/unarchive",
+        description=(
+            "Reverse an archive within the undo window. NOT gated — it restores. "
+            "Routes by the mailbox recorded at archive time and uses the "
+            "post_archive_id so Outlook can find the moved message. Fails loudly "
+            "with HTTP 409 when the window has expired or the batch_id is unknown."
+        ),
+        request_sections=[("EmailUnarchiveRequest", EmailUnarchiveRequest)],
+        response_sections=[("EmailUnarchiveResponse", EmailUnarchiveResponse)],
+    )
+
+    quarantine_block = _endpoint_block(
+        path="/v1/email/quarantine",
+        description=(
+            "Quarantine a phishing message — gated on confirmation, reversible "
+            "for 30s. Applies the GAIA_PHISHING_QUARANTINE label and removes the "
+            "message from the inbox. The gate fires FIRST (HTTP 403 without a "
+            "valid token). Refuses is_phishing=false with HTTP 400."
+        ),
+        request_sections=[("EmailQuarantineRequest", EmailQuarantineRequest)],
+        response_sections=[("EmailQuarantineResponse", EmailQuarantineResponse)],
+    )
+
+    unquarantine_block = _endpoint_block(
+        path="/v1/email/unquarantine",
+        description=(
+            "Reverse a quarantine within the undo window. NOT gated — it restores "
+            "the exact prior label set and removes the quarantine label. Fails "
+            "loudly with HTTP 409 when the window has expired or the action_id is "
+            "unknown/already undone."
+        ),
+        request_sections=[("EmailUnquarantineRequest", EmailUnquarantineRequest)],
+        response_sections=[("EmailUnquarantineResponse", EmailUnquarantineResponse)],
+    )
+
+    # Calendar surface (schema 2.1, #1780) — view / preview / create / respond.
+    # Reaches either the Google or Microsoft calendar backend through one contract.
+    calendar_view_block = _endpoint_block(
+        path="/v1/email/calendar/events",
+        method="GET",
+        description=(
+            "View events on the primary calendar (read-only). Optional RFC 3339 "
+            "query params time_min / time_max bound the window; provider "
+            "(google|microsoft) is required only when more than one account is "
+            "connected. Fails loudly (403 + reconnect CTA) if the calendar scope "
+            "is missing."
+        ),
+        request_sections=[],
+        response_sections=[
+            ("CalendarEventsResponse", CalendarEventsResponse),
+            ("CalendarEvent", CalendarEvent),
+        ],
+    )
+
+    calendar_preview_block = _endpoint_block(
+        path="/v1/email/calendar/events/preview",
+        description=(
+            "Mint a single-use confirmation token bound to a proposed event — the "
+            "calendar analogue of /v1/email/draft. Creates nothing; echo the "
+            "returned confirmation_token to POST /v1/email/calendar/events."
+        ),
+        request_sections=[("CalendarCreateEventRequest", CalendarCreateEventRequest)],
+        response_sections=[
+            ("CalendarEventPreviewResponse", CalendarEventPreviewResponse),
+            ("CalendarEventDateTime", CalendarEventDateTime),
+        ],
+    )
+
+    calendar_create_block = _endpoint_block(
+        path="/v1/email/calendar/events",
+        description=(
+            "Create a calendar event — gated on explicit confirmation (#1780). "
+            "Like /send, the gate fires FIRST: a request without a valid, "
+            "payload-bound confirmation token (from .../preview) is rejected with "
+            "HTTP 403 before any backend call. Events are externally visible to "
+            "attendees, so they are never created without confirmation."
+        ),
+        request_sections=[("CalendarCreateEventRequest", CalendarCreateEventRequest)],
+        response_sections=[("CalendarEventResponse", CalendarEventResponse)],
+    )
+
+    calendar_respond_block = _endpoint_block(
+        path="/v1/email/calendar/events/respond",
+        description=(
+            "RSVP accept / decline / tentative to an existing invite. An explicit, "
+            "user-initiated action (the UI's accept/decline controls), so it is not "
+            "separately token-gated. attendee_email is the principal's own address "
+            "(used by Google; ignored by Outlook, which RSVPs on /me)."
+        ),
+        request_sections=[("CalendarRespondRequest", CalendarRespondRequest)],
+        response_sections=[("CalendarRespondResponse", CalendarRespondResponse)],
     )
 
     body = f"""<!DOCTYPE html>
@@ -458,9 +643,47 @@ def render_endpoint_spec_html() -> str:
 
 {batch_block}
 
+{prescan_block}
+
+{search_block}
+
 {draft_block}
 
 {send_block}
+
+<h2>Mailbox actions — archive &amp; quarantine (schema 2.1)</h2>
+<p class="subtitle">
+  Reversible mailbox mutations exposed on the contract (#1779). Each acts on the
+  mailbox connected in GAIA on the host and is gated on a single-use confirmation
+  token from <code>/v1/email/confirm</code> — the same explicit-confirmation rule as
+  <code>/v1/email/send</code>. Both are reversible within a 30-second undo window via
+  the ungated <code>/unarchive</code> · <code>/unquarantine</code>.
+</p>
+
+{confirm_block}
+
+{archive_block}
+
+{unarchive_block}
+
+{quarantine_block}
+
+{unquarantine_block}
+
+<h2>Calendar</h2>
+<p class="subtitle">
+  View, create, and RSVP to calendar events through the same contract — reaching
+  whichever calendar (Google or Microsoft) the user connected. Added in
+  schema_version 2.1 (#1780).
+</p>
+
+{calendar_view_block}
+
+{calendar_preview_block}
+
+{calendar_create_block}
+
+{calendar_respond_block}
 
 <h2>Convenience pages</h2>
 

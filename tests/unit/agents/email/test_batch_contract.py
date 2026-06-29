@@ -3,11 +3,13 @@
 """
 Batch triage contract tests for issue #1887 (ADDITIVE redesign).
 
-These tests define the schema-2.0 batch contract that lives BESIDE the
-single-email contract.  They FAIL until:
+These tests define the batch contract that lives BESIDE the single-email
+contract.  They FAIL until:
   - BatchItemError, BatchItemResult, BatchTriageRequest, BatchTriageResponse,
     and MAX_BATCH_SIZE exist in gaia_agent_email.contract
-  - SCHEMA_VERSION stays "2.0" (NOT bumped — this is additive)
+  - Batch stays additive — it adds no required field to the existing triage
+    shapes and forces no MAJOR bump (the contract sits at 2.1, a same-major
+    additive revision over 2.0).
   - The original EmailTriageRequest (payload) / EmailTriageResponse
     (request_kind/result) are UNCHANGED.
 """
@@ -77,15 +79,22 @@ def _minimal_triage_result() -> EmailTriageResult:
 
 
 # ---------------------------------------------------------------------------
-# 1a — SCHEMA_VERSION must still be "2.0" (NOT bumped)
+# 1a — Batch is additive: it must not force a MAJOR bump (contract is 2.x)
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_is_still_2_0():
-    """The additive batch endpoint must NOT bump SCHEMA_VERSION."""
+def test_schema_version_stays_same_major():
+    """Batch is additive, so the contract MAJOR must stay 2 (no breaking bump).
+
+    The contract sits at 2.1 — a same-major additive revision over 2.0 — because
+    the 2.1 REST surfaces (search / prescan / archive / quarantine / calendar)
+    are bundled alongside batch. Batch itself adds no required field to the
+    existing triage shapes, so it never forces a MAJOR bump.
+    """
+    major = SCHEMA_VERSION.split(".")[0]
     assert (
-        SCHEMA_VERSION == "2.0"
-    ), f"SCHEMA_VERSION is {SCHEMA_VERSION!r}; additive change must NOT bump it"
+        major == "2"
+    ), f"SCHEMA_VERSION is {SCHEMA_VERSION!r}; an additive change must not bump MAJOR"
 
 
 # ---------------------------------------------------------------------------
