@@ -110,16 +110,18 @@ RAG (Retrieval-Augmented Generation) enables chatting with documents — includi
 <Tabs>
   <Tab title="Single Document">
     ```bash
-    # Chat with a PDF or PowerPoint document
+    # Chat with a PDF, Word, PowerPoint, or Excel document
     gaia chat --index manual.pdf
+    gaia chat --index handbook.docx
     gaia chat --index slides.pptx
+    gaia chat --index budget.xlsx
     ```
   </Tab>
 
   <Tab title="Multiple Documents">
     ```bash
-    # Chat with multiple documents (PDF and PPTX supported)
-    gaia chat --index doc1.pdf doc2.pdf slides.pptx
+    # Chat with multiple documents (PDF, DOCX, PPTX, XLSX supported)
+    gaia chat --index doc1.pdf report.docx slides.pptx
     ```
   </Tab>
 
@@ -132,7 +134,7 @@ RAG (Retrieval-Augmented Generation) enables chatting with documents — includi
 
   <Tab title="Watch Folder">
     ```bash
-    # Auto-index every PDF/PPTX in a folder, and any new ones dropped in later
+    # Auto-index every supported document in a folder, and any new ones dropped in later
     gaia chat --watch ./docs
     ```
   </Tab>
