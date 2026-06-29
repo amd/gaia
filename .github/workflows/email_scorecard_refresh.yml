@@ -32,7 +32,7 @@ on:
       limit:
         description: 'Messages to triage (must match the committed scorecard for comparability)'
         required: false
-        default: '25'
+        default: '220'
       model:
         description: 'Lemonade model id'
         required: false
@@ -58,7 +58,7 @@ permissions:
 env:
   SCORECARD: hub/agents/npm/agent-email/SCORECARD.md
   MANIFEST: hub/agents/python/email/gaia-agent.yaml
-  LIMIT: ${{ github.event.inputs.limit || '25' }}
+  LIMIT: ${{ github.event.inputs.limit || '220' }}
   MODEL: ${{ github.event.inputs.model || 'Gemma-4-E4B-it-GGUF' }}
 
 jobs:

@@ -118,6 +118,23 @@ class TestSchemaValidator:
         errors = validate_scorecard(parsed)
         assert errors, "Expected a non-dict 'agent' section to be flagged"
 
+    @pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), float("-inf")])
+    def test_non_finite_aggregate_value_flagged(self, bad_value):
+        # A NaN/inf aggregate.value silently passes the gate's `<` regression
+        # check, so validation must reject it.
+        payload = _make_payload()
+        parsed = parse_scorecard(render_scorecard(payload))
+        parsed["aggregate"]["value"] = bad_value
+        errors = validate_scorecard(parsed)
+        assert any("aggregate.value" in e for e in errors), errors
+
+    def test_non_numeric_aggregate_value_flagged(self):
+        payload = _make_payload()
+        parsed = parse_scorecard(render_scorecard(payload))
+        parsed["aggregate"]["value"] = "46.0"
+        errors = validate_scorecard(parsed)
+        assert any("aggregate.value" in e for e in errors), errors
+
 
 # ---------------------------------------------------------------------------
 # 2. Aggregate computation
@@ -462,6 +479,42 @@ class TestEmailAdapter:
         assert payload.metrics[0]["value"] == pytest.approx(
             expected_mean
         ), f"Expected metric value {expected_mean}, got {payload.metrics[0]['value']}"
+
+    def test_build_payload_weighted_by_total_emails(self, tmp_path):
+        # Unequal scenario sizes: the aggregate must be the per-email accuracy
+        # (weighted by total_emails), not an unweighted scenario mean.
+        mod = self._load_gen_scorecard()
+
+        benchmark_dir = tmp_path / "benchmark"
+        benchmark_dir.mkdir()
+        scorecard = {
+            "run_id": "weighted-fixture",
+            "scenarios": [
+                {
+                    "category": "m",
+                    "status": "PASS",
+                    "total_emails": 90,
+                    "quality": {"category_accuracy": 0.90},
+                },
+                {
+                    "category": "m",
+                    "status": "PASS",
+                    "total_emails": 10,
+                    "quality": {"category_accuracy": 0.00},
+                },
+            ],
+        }
+        (benchmark_dir / "email_benchmark_scorecard.json").write_text(
+            json.dumps(scorecard)
+        )
+        gt_path = tmp_path / "ground_truth.json"
+        gt_path.write_text(json.dumps({"a": {"label": "x"}, "b": {"label": "y"}}))
+
+        payload = mod.build_payload(benchmark_dir, gt_path)
+
+        # Weighted: (0.90*90 + 0.00*10) / 100 = 0.81  (unweighted would be 0.45)
+        assert payload.metrics[0]["value"] == pytest.approx(0.81)
+        assert payload.test_cases_run == 100
 
     def test_build_payload_test_cases_run(self, tmp_path):
         mod = self._load_gen_scorecard()

@@ -30,6 +30,7 @@ Usage pattern::
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -381,6 +382,18 @@ def validate_scorecard(parsed: dict) -> list:
         for sub in ("name", "formula", "value"):
             if sub not in aggregate:
                 errors.append(f"Missing required field: 'aggregate.{sub}'")
+        # The gate compares aggregate.value numerically; a non-finite value
+        # (NaN/inf) silently passes every `<` regression check, so reject it here.
+        if "value" in aggregate:
+            value = aggregate["value"]
+            if (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+            ):
+                errors.append(
+                    f"Field 'aggregate.value' must be a finite number, got {value!r}"
+                )
 
     return errors
 
