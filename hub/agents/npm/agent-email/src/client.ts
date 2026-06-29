@@ -28,6 +28,8 @@ import { HttpError } from "./errors.js";
 import { createLogger } from "./logger.js";
 import { stripTrailingSlashes } from "./url.js";
 import type {
+  BatchTriageRequest,
+  BatchTriageResponse,
   EmailDraftRequest,
   EmailDraftResponse,
   EmailSendRequest,
@@ -80,6 +82,17 @@ export class EmailClient {
   /** Triage a single email or a full thread (POST /v1/email/triage). */
   async triage(request: EmailTriageRequest): Promise<EmailTriageResponse> {
     return this.post<EmailTriageResponse>("/v1/email/triage", request);
+  }
+
+  /**
+   * Triage a batch of emails/threads in one request (POST /v1/email/triage/batch).
+   * Returns one `results[]` entry per item, order-preserved. A 200 with every
+   * item errored is valid — inspect each `results[].error`, not just the status.
+   */
+  async triageBatch(
+    request: BatchTriageRequest,
+  ): Promise<BatchTriageResponse> {
+    return this.post<BatchTriageResponse>("/v1/email/triage/batch", request);
   }
 
   /** Propose a reply and mint a confirmation token (POST /v1/email/draft). */

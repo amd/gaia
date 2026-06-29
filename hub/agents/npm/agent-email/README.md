@@ -90,6 +90,36 @@ console.log(res.result.category, res.result.summary);
 await shutdown(sidecar); // kills the whole process tree
 ```
 
+### Triage many at once
+
+`triageBatch` sends up to 100 emails or threads in a single request and returns a
+parallel `results` array (one entry per item, order-preserved). It's additive — the
+single `triage()` above is unchanged. Per-item failures are isolated, so an HTTP 200
+can still carry errored items: inspect each `results[].error`, never just the status.
+
+```ts
+const batch = await sidecar.client.triageBatch({
+  items: [
+    {
+      kind: "single",
+      principal: { email: "me@example.com" },
+      message: { message_id: "m1", from: { email: "sarah@example.com" },
+        subject: "Prod incident", body: "Reply by Friday." },
+    },
+    {
+      kind: "single",
+      principal: { email: "me@example.com" },
+      message: { message_id: "m2", from: { email: "promo@shop.example" },
+        subject: "Sale", body: "Shop now." },
+    },
+  ],
+});
+for (const item of batch.results) {
+  if (item.error) console.warn(`item ${item.index} failed: ${item.error.message}`);
+  else console.log(`item ${item.index}:`, item.result!.category);
+}
+```
+
 ### Browser / Electron renderer
 
 The `.` entry uses Node built-ins, so it can't be bundled for a browser or an
@@ -138,6 +168,7 @@ example above). Every non-2xx response throws `HttpError` (with `status`, `url`,
 | Call | Needs | Does |
 |------|-------|------|
 | `triage(req)` | Local LLM only | Classifies the message you pass, summarizes it, and extracts action items + spam/phishing signals. No mailbox is read. |
+| `triageBatch(req)` | Local LLM only | Same as `triage`, but for an `items` array (1–100). Returns a parallel `results` array; per-item failures isolate (HTTP 200 can carry errored items — inspect `results[].error`). |
 | `draft(req)` | Nothing external | Proposes a reply (`to` is a list of `{ email }` objects, not strings) and returns a single-use confirmation token. |
 | `send(req)` | A connected Gmail/Outlook mailbox + the token | Actually transmits the mail. |
 

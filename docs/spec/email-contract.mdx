@@ -134,6 +134,101 @@ the principal is not necessarily a recipient of every message.
 
 ---
 
+## Batch endpoint (`POST /v1/email/triage/batch`)
+
+Added in agent `0.3.0` (#1887) **beside** the single-email endpoint — the single
+`POST /v1/email/triage` and its schema above are unchanged, and `SCHEMA_VERSION`
+stays `"2.0"`. The batch endpoint triages up to **100** emails or threads in one
+request: an `items` array in, a parallel `results` array out, order-preserved.
+
+`BatchTriageRequest` — top-level envelope:
+
+| Field | Type | Notes |
+|---|---|---|
+| `schema_version` | string | Contract version. Defaults to `"2.0"`. |
+| `items` | `(SingleEmailInput \| ThreadInput)[]` | 1–100 inputs, discriminated on `kind` — the same item shapes the single endpoint's `payload` accepts. Over 100 → `422`. |
+| `context` | `TriageContext` \| null | Optional; applied to **all** items. |
+
+`BatchTriageResponse` — top-level envelope:
+
+| Field | Type | Notes |
+|---|---|---|
+| `schema_version` | string | Echoes the contract version. |
+| `results` | `BatchItemResult[]` | One entry per request item, order-preserved, 1:1 with `items`. |
+
+`BatchItemResult` — exactly one of `result` / `error` is set:
+
+| Field | Type | Notes |
+|---|---|---|
+| `index` | int | 0-based position in the request `items` array. |
+| `result` | `EmailTriageResult` \| null | Set when the item succeeded (same shape as the single response's `result`). |
+| `error` | `BatchItemError` \| null | Set when the item failed; `BatchItemError` carries a `message`. |
+
+**Per-item isolation — read the results, not the status.** A failure on one item
+sets that entry's `error` and the rest still run, so **HTTP 200 with every item
+errored is a valid response**. Consumers MUST inspect each `results[].error`, never
+just the HTTP status. A `502` means the local LLM was unreachable before any item
+was processed — the whole batch fails.
+
+### Example — batch request
+
+```json
+{
+  "schema_version": "2.0",
+  "items": [
+    {
+      "kind": "single",
+      "principal": { "email": "alice@example.com" },
+      "message": {
+        "message_id": "msg-1",
+        "from": { "email": "bob@vendor.com" },
+        "subject": "Q2 invoice",
+        "body": "Please review the attached invoice by Friday."
+      }
+    },
+    {
+      "kind": "single",
+      "principal": { "email": "alice@example.com" },
+      "message": {
+        "message_id": "msg-2",
+        "from": { "email": "promo@shop.example" },
+        "subject": "50% off this weekend",
+        "body": "Limited-time offer — shop now."
+      }
+    }
+  ]
+}
+```
+
+### Example — batch response (one item errored)
+
+```json
+{
+  "schema_version": "2.0",
+  "results": [
+    {
+      "index": 0,
+      "result": {
+        "category": "NEEDS_RESPONSE",
+        "is_spam": false,
+        "is_phishing": false,
+        "summary": "Vendor invoice needs review by Friday.",
+        "action_items": [{ "description": "Review the Q2 invoice", "due_hint": "Friday" }]
+      }
+    },
+    {
+      "index": 1,
+      "error": { "message": "local LLM triage failed for this item" }
+    }
+  ]
+}
+```
+
+The MCP surface mirrors this with a `triage_email_batch` tool (the single
+`triage_email` tool is unchanged).
+
+---
+
 ## Example — single email
 
 ### Request

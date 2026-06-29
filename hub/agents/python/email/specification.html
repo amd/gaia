@@ -392,7 +392,7 @@
     <table class="tbl">
       <thead><tr><th>Capability</th><th>REST</th><th>MCP</th><th>Agent</th></tr></thead>
       <tbody>
-        <tr><td><b>1</b> · 4-way triage</td><td>✓ <code>/v1/email/triage</code></td><td>✓ <code>triage_email</code></td><td>✓</td></tr>
+        <tr><td><b>1</b> · 4-way triage</td><td>✓ <code>/v1/email/triage</code> <span class="opt">· batch: <code>/v1/email/triage/batch</code></span></td><td>✓ <code>triage_email</code> <span class="opt">· <code>triage_email_batch</code></span></td><td>✓</td></tr>
         <tr><td><b>2</b> · Per-email summary</td><td>✓ <span class="opt">(in triage result)</span></td><td>✓</td><td>✓</td></tr>
         <tr><td><b>3</b> · Draft reply</td><td>✓ <code>/v1/email/draft</code></td><td>✓ <code>draft_reply</code></td><td>✓</td></tr>
         <tr><td><b>4</b> · Phishing detection</td><td>✓ <span class="opt">(flag in triage)</span></td><td>✓</td><td>✓ <span class="opt">(+ quarantine)</span></td></tr>
@@ -1307,6 +1307,30 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
         <tr><td><code>schema_version</code></td><td>string</td><td>Echoes the contract version.</td></tr>
         <tr><td><code>request_kind</code></td><td>"single" | "thread"</td><td>Which input shape produced the result.</td></tr>
         <tr><td><code>result</code></td><td>EmailTriageResult</td><td>The structured analysis (below).</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="endpoint" id="ep-triage-batch">
+      <span class="badge">POST</span><span class="path">/v1/email/triage/batch</span>
+      <p class="desc">Triage many emails or threads in one request (<a class="iss" href="https://github.com/amd/gaia/issues/1887" target="_blank" rel="noopener">#1887</a>). Same per-item analysis as <a class="eplink" href="#ep-triage"><code>/triage</code></a>, but the body carries an <code>items</code> array (1–100) and the response carries a parallel <code>results</code> array, order-preserved. Additive — the single <a class="eplink" href="#ep-triage"><code>/triage</code></a> endpoint is unchanged. Reads/sends no mail.</p>
+      <h4>Per-item isolation</h4>
+      <p class="body-t">Each item is triaged independently: a failure on one item sets that entry's <code>error</code> and the remaining items still run. <b>HTTP 200 with every item errored is a valid response</b> — consumers MUST inspect each <code>results[].error</code>, not just the HTTP status. A <code>502</code> means the local LLM was unreachable before any item was processed (the whole batch fails).</p>
+      <h4>Request body — BatchTriageRequest</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>schema_version</code></td><td>string <span class="opt">optional</span></td><td>Contract version. Defaults to <code>"2.0"</code>.</td></tr>
+        <tr><td><code>items</code></td><td>list[EmailInput] <span class="req">required</span></td><td>1–100 <code>SingleEmailInput</code> / <code>ThreadInput</code> objects, discriminated on <code>kind</code>. Over 100 → <code>422</code>.</td></tr>
+        <tr><td><code>context</code></td><td>TriageContext <span class="opt">optional</span></td><td>Applied to <b>all</b> items.</td></tr>
+      </tbody></table>
+      <h4>Response body — BatchTriageResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>schema_version</code></td><td>string</td><td>Echoes the contract version.</td></tr>
+        <tr><td><code>results</code></td><td>list[BatchItemResult]</td><td>One entry per item, order-preserved, 1:1 with <code>items</code>.</td></tr>
+      </tbody></table>
+      <h4>BatchItemResult — exactly one of result / error</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>index</code></td><td>int</td><td>0-based position in the request <code>items</code> array.</td></tr>
+        <tr><td><code>result</code></td><td>EmailTriageResult <span class="opt">optional</span></td><td>Set when the item succeeded.</td></tr>
+        <tr><td><code>error</code></td><td>BatchItemError <span class="opt">optional</span></td><td>Set (with a <code>message</code>) when the item failed.</td></tr>
       </tbody></table>
     </div>
 

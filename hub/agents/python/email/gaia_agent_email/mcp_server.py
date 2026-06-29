@@ -37,6 +37,7 @@ from typing import Any, Dict, List, Optional
 from gaia.agents.base.console import SilentConsole
 from gaia.agents.base.mcp_agent import MCPAgent
 from gaia_agent_email.contract import (
+    BatchTriageRequest,
     DraftReply,
     EmailAddress,
     EmailTriageRequest,
@@ -97,6 +98,46 @@ _TRIAGE_SCHEMA = {
         },
     },
     "required": ["payload"],
+}
+
+# triage_email_batch accepts BatchTriageRequest. ``items`` is the list of
+# SingleEmailInput / ThreadInput objects; ``schema_version`` and ``context``
+# are optional. Discriminator on ``kind`` is enforced by pydantic.
+_BATCH_TRIAGE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "items": {
+            "type": "array",
+            "description": (
+                "1..100 email or thread inputs to triage. Each item must be a "
+                "SingleEmailInput (kind='single', with 'principal' + 'message') "
+                "or a ThreadInput (kind='thread', with 'principal' + 'thread_id' "
+                "+ 'messages'). Order is preserved in the response."
+            ),
+            "minItems": 1,
+            "maxItems": 100,
+            "items": {"type": "object"},
+        },
+        "schema_version": {
+            "type": "string",
+            "description": "Contract version. Defaults to the frozen current revision.",
+        },
+        "context": {
+            "type": "object",
+            "description": (
+                "Optional context applied to ALL items (#1541): "
+                "people (list), projects (list), tone (string), self_email "
+                "(string). Absent → behavior unchanged."
+            ),
+            "properties": {
+                "people": {"type": "array", "items": {"type": "string"}},
+                "projects": {"type": "array", "items": {"type": "string"}},
+                "tone": {"type": "string"},
+                "self_email": {"type": "string"},
+            },
+        },
+    },
+    "required": ["items"],
 }
 
 # draft_reply / send_email mirror EmailDraftRequest / EmailSendRequest. ``to``
@@ -222,6 +263,20 @@ class EmailTriageMCPAgent(MCPAgent):
                 "inputSchema": _TRIAGE_SCHEMA,
             },
             {
+                "name": "triage_email_batch",
+                "description": (
+                    "Triage a batch of emails or threads in a single call "
+                    "(#1887). Accepts 1..100 EmailInput items (each a "
+                    "SingleEmailInput or ThreadInput) and returns a "
+                    "BatchTriageResponse with one BatchItemResult per item, "
+                    "order-preserved. Per-item failures set "
+                    "BatchItemResult.error; remaining items are still "
+                    "processed. HTTP-200 with all items errored is valid — "
+                    "inspect each result. Reads/sends no mail."
+                ),
+                "inputSchema": _BATCH_TRIAGE_SCHEMA,
+            },
+            {
                 "name": "draft_reply",
                 "description": (
                     "Propose a reply and mint a single-use confirmation token "
@@ -246,6 +301,8 @@ class EmailTriageMCPAgent(MCPAgent):
     ) -> Dict[str, Any]:
         if tool_name == "triage_email":
             return self._triage(arguments)
+        if tool_name == "triage_email_batch":
+            return self._triage_batch(arguments)
         if tool_name == "draft_reply":
             return self._draft(arguments)
         if tool_name == "send_email":
@@ -261,6 +318,14 @@ class EmailTriageMCPAgent(MCPAgent):
         response = self._service.triage_request(request)
         # JSON mode so enums serialize to their string values — the exact wire
         # form the REST endpoint returns. This is what guarantees parity.
+        return response.model_dump(mode="json")
+
+    def _triage_batch(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        # Same validation + JSON-mode serialization pattern as _triage — parity
+        # with the REST /triage/batch endpoint is guaranteed by using the same
+        # contract models and the same service method.
+        request = BatchTriageRequest.model_validate(arguments)
+        response = self._service.triage_batch(request)
         return response.model_dump(mode="json")
 
     def _draft(self, arguments: Dict[str, Any]) -> Dict[str, Any]:

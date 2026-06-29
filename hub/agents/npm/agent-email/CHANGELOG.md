@@ -5,6 +5,21 @@ follows [SemVer](https://semver.org/): the **MAJOR** of the on-the-wire
 `SCHEMA_VERSION` is what `checkVersion` enforces at startup, so a contract MAJOR
 bump is always at least a package MINOR bump with a migration note.
 
+## 0.3.0
+
+Adds a batch triage endpoint — `POST /v1/email/triage/batch` — beside the
+single-email endpoint, so a caller can triage up to 100 emails or threads in one
+request instead of one HTTP round-trip per message. The body carries an `items`
+array; the response carries a parallel `results` array, order-preserved, each
+entry holding exactly one of `result` or `error`. Per-item failures are isolated:
+HTTP 200 with every item errored is a valid response, so consumers MUST inspect
+each `results[].error`, not just the HTTP status. New npm surface:
+`client.triageBatch()`, the `BatchTriageRequest` / `BatchTriageResponse` /
+`BatchItemResult` / `BatchItemError` types, and the `MAX_BATCH_SIZE` constant.
+New MCP tool `triage_email_batch`. This is **purely additive** — the single
+`triage()` / `POST /v1/email/triage` / MCP `triage_email` are unchanged and
+`SCHEMA_VERSION` stays `2.0`; existing consumers need no migration.
+
 ## 0.2.5
 
 Sending from a mailbox connected with identity-only scopes now returns an
