@@ -356,6 +356,7 @@
                 "group": "Evaluation Framework",
                 "pages": [
                   "reference/eval",
+                  "reference/eval-scorecard",
                   "eval"
                 ]
               },
