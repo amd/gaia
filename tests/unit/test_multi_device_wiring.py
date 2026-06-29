@@ -254,14 +254,16 @@ class TestAgentThreadsDevice:
 
 class TestChatAgentConfigDeviceField:
     def test_config_has_device_and_ctx(self):
-        from gaia.agents.chat.agent import ChatAgentConfig
+        pytest.importorskip("gaia_agent_chat")
+        from gaia_agent_chat.agent import ChatAgentConfig
 
         cfg = ChatAgentConfig(device="npu", min_context_size=4096)
         assert cfg.device == "npu"
         assert cfg.min_context_size == 4096
 
     def test_config_device_defaults_none(self):
-        from gaia.agents.chat.agent import ChatAgentConfig
+        pytest.importorskip("gaia_agent_chat")
+        from gaia_agent_chat.agent import ChatAgentConfig
 
         cfg = ChatAgentConfig()
         assert cfg.device is None
@@ -274,12 +276,12 @@ class TestChatAgentConfigDeviceField:
 class TestResolveDeviceModelUI:
     """``resolve_device_model`` is the heart of the UI dropdown fix."""
 
-    def test_npu_resolves_to_flm_model_and_4k_ctx(self):
+    def test_npu_resolves_to_flm_model_and_32k_ctx(self):
         from gaia.ui._chat_helpers import resolve_device_model
 
         model, ctx = resolve_device_model("chat", "npu", None)
         assert model == "gemma4-it-e2b-FLM"
-        assert ctx == 4096
+        assert ctx == 32768
 
     def test_gpu_resolves_to_gguf_model_and_32k_ctx(self):
         from gaia.ui._chat_helpers import resolve_device_model

@@ -53,7 +53,7 @@
             "name": "Chat Agent Debug - Model Selection",
             "type": "debugpy",
             "request": "launch",
-            "module": "gaia.agents.chat.app",
+            "module": "gaia_agent_chat.app",
             "args": ["--query", "hi"],
             "cwd": "${workspaceFolder}",
             "env": {

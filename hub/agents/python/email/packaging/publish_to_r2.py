@@ -129,6 +129,7 @@ def publish_one(
     changelog_bytes: bytes | None = None,
     spec_bytes: bytes | None = None,
     skill_bytes: bytes | None = None,
+    eval_scorecard_bytes: bytes | None = None,
     package_files_bytes: bytes | None = None,
 ) -> dict:
     if not artifact_path.exists():
@@ -172,6 +173,10 @@ def publish_one(
             files["spec"] = ("SPEC.md", spec_bytes, "text/markdown")
         if skill_bytes is not None:
             files["skill"] = ("SKILL.md", skill_bytes, "text/markdown")
+        # The eval scorecard rides along with the first platform binary and becomes
+        # the catalog entry's `eval_score` and `eval_scorecard_url`.
+        if eval_scorecard_bytes is not None:
+            files["eval_scorecard"] = ("eval-scorecard.md", eval_scorecard_bytes, "text/markdown")
         # The whole-package file listing rides with the zip artifact — it becomes
         # the catalog entry's `package.files` (the hub's file-list display).
         if package_files_bytes is not None:
@@ -272,6 +277,14 @@ def main(argv=None) -> int:
         "(POSTed as the multipart 'skill' part the Worker accepts).",
     )
     parser.add_argument(
+        "--eval-scorecard",
+        type=Path,
+        help="Path to the eval scorecard markdown (e.g. SCORECARD.md) to "
+        "publish as the agent's catalog eval score and scorecard URL "
+        "(POSTed as the multipart 'eval_scorecard' part the Worker accepts). "
+        "Absent = publish without an eval scorecard.",
+    )
+    parser.add_argument(
         "--package-files",
         type=Path,
         help='Path to a package-files.json ({"files":[{name,size_bytes}]}) to '
@@ -341,6 +354,21 @@ def main(argv=None) -> int:
             flush=True,
         )
 
+    eval_scorecard_bytes = None
+    if args.eval_scorecard is not None:
+        if not args.eval_scorecard.exists():
+            raise SystemExit(
+                f"error: --eval-scorecard path not found: {args.eval_scorecard}. "
+                "Pass the scorecard markdown, or omit --eval-scorecard to publish "
+                "without one."
+            )
+        eval_scorecard_bytes = args.eval_scorecard.read_bytes()
+        print(
+            f"[publish] attaching eval scorecard: {args.eval_scorecard} "
+            f"({len(eval_scorecard_bytes)} bytes)",
+            flush=True,
+        )
+
     package_files_bytes = None
     if args.package_files is not None:
         if not args.package_files.exists():
@@ -376,6 +404,7 @@ def main(argv=None) -> int:
                 changelog_bytes=changelog_bytes,
                 spec_bytes=spec_bytes,
                 skill_bytes=skill_bytes,
+                eval_scorecard_bytes=eval_scorecard_bytes,
                 package_files_bytes=package_files_bytes,
             )
         )

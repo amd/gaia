@@ -185,6 +185,32 @@ _HTML = r"""<!doctype html>
     </div>
   </details>
 
+  <!-- Batch triage (#1887) -->
+  <details class="card">
+    <summary><span class="sum-title">Batch triage</span>
+      <span class="sum-desc">array in · array out · /v1/email/triage/batch</span><span class="chev">›</span></summary>
+    <div class="card-body">
+      <p class="note">Sends the two emails below as one <code>items</code> array and renders the
+        parallel <code>results</code> array — each entry carries either a <code>result</code> or an
+        <code>error</code>, correlated by <code>index</code>. Additive: the single Triage card above is unchanged.</p>
+      <div class="grid2">
+        <div><label>Item 0 — From</label><input id="tb-from0" value="Sarah Chen &lt;sarah@example.com&gt;" /></div>
+        <div><label>Item 0 — Subject</label><input id="tb-subject0" value="Prod incident follow-up" /></div>
+      </div>
+      <label style="display:block;margin-top:10px">Item 0 — Body</label>
+      <textarea id="tb-body0">Please review the incident report and reply by Friday. Action required.</textarea>
+      <div class="grid2" style="margin-top:10px">
+        <div><label>Item 1 — From</label><input id="tb-from1" value="Deals &lt;promo@shop.example&gt;" /></div>
+        <div><label>Item 1 — Subject</label><input id="tb-subject1" value="50% off this weekend only" /></div>
+      </div>
+      <label style="display:block;margin-top:10px">Item 1 — Body</label>
+      <textarea id="tb-body1">Limited-time offer — shop now and save big before Sunday.</textarea>
+      <div class="actions"><button id="do-triage-batch">Triage batch</button>
+        <span class="note">Needs Lemonade + the model. HTTP 200 with all items errored is valid — inspect each result.</span></div>
+      <div class="out" id="tb-out"></div>
+    </div>
+  </details>
+
   <!-- Draft -->
   <details class="card">
     <summary><span class="sum-title">Draft a reply</span>
@@ -388,6 +414,35 @@ function renderTriage(out, r){
     const ul = document.createElement("ul"); ul.className = "items";
     for(const a of r.action_items){ const li=document.createElement("li"); li.textContent = a.description + (a.due_hint?(" — "+a.due_hint):""); ul.appendChild(li); }
     out.appendChild(ul);
+  }
+}
+function tbItem(idx){
+  const m = parseFrom($("tb-from"+idx).value);
+  return { kind:"single", principal:{ email:"me@example.com" },
+    message:{ message_id:"playground-batch-"+idx, from:m, to:[{ email:"me@example.com" }],
+      subject:$("tb-subject"+idx).value, body:$("tb-body"+idx).value } };
+}
+async function doTriageBatch(){
+  const out = $("tb-out"); out.className = "out show"; out.textContent = "Triaging batch…";
+  try{
+    const res = await postJSON("/v1/email/triage/batch", { items:[ tbItem(0), tbItem(1) ] });
+    out.textContent = "";
+    for(const item of res.results){
+      const block = document.createElement("div"); block.style.marginTop = "10px";
+      const hdr = document.createElement("div"); hdr.style.fontSize="12px"; hdr.style.color="var(--faint)";
+      hdr.textContent = "index " + item.index; block.appendChild(hdr);
+      if(item.error){
+        const er = document.createElement("div"); er.textContent = "✗ " + item.error.message; block.appendChild(er);
+      }else{
+        const inner = document.createElement("div"); renderTriage(inner, item.result); block.appendChild(inner);
+      }
+      out.appendChild(block);
+    }
+  }catch(e){
+    out.textContent = ""; const d = diagnose(e);
+    const p = document.createElement("div");
+    p.textContent = (e.status===502||e.status===0) ? ("✗ " + d.cause + " — " + d.hint + (d.cmd?(" ("+d.cmd+")"):"")) : ("✗ HTTP " + e.status + ": " + (e.body||e.message));
+    out.appendChild(p);
   }
 }
 async function doDraft(){
@@ -624,23 +679,39 @@ async function disconnectProvider(provider, btn){
 function populateSend(connected){
   const sel = $("send-from"); if(!sel) return;
   sel.textContent = "";
+  // List every connected mailbox so it's always selectable — send-capability is
+  // surfaced per selection (and a send to a mailbox without mail-send access
+  // returns an actionable error) rather than hiding the mailbox here.
+  const canSendById = {};
+  const sorted = connected.slice().sort((a, b) => a.provider.localeCompare(b.provider));
+  for(const p of sorted){
+    canSendById[p.provider] = !!p.can_send;
+    const o = document.createElement("option"); o.value = p.provider;
+    o.textContent = (p.label || p.provider) + (p.account_email ? (" · " + p.account_email) : "")
+      + (p.can_send ? "" : " · needs mail access");
+    sel.appendChild(o);
+  }
   if(!connected.length){
     const o = document.createElement("option"); o.value = ""; o.textContent = "— no mailbox connected —";
     sel.appendChild(o);
-  } else {
-    // Alphabetical by provider; the browser selects the first option. No
-    // remembered selection, no "default" — deterministic and simple.
-    const sorted = connected.slice().sort((a, b) => a.provider.localeCompare(b.provider));
-    for(const p of sorted){
-      const o = document.createElement("option"); o.value = p.provider;
-      o.textContent = (p.label || p.provider) + (p.account_email ? (" · " + p.account_email) : "");
-      sel.appendChild(o);
+  }
+  function refresh(){
+    const canSend = !!canSendById[sel.value];
+    const hasConnected = connected.length > 0;
+    if($("do-send")) $("do-send").disabled = !hasConnected;
+    if($("send-stat")) $("send-stat").style.display = canSend ? "inline-block" : "none";
+    if($("send-note")){
+      if(!hasConnected){
+        $("send-note").textContent = "Connect a mailbox in the Connectors panel above.";
+      } else if(canSend){
+        $("send-note").textContent = "";
+      } else {
+        $("send-note").textContent = "This mailbox is missing mail-send access — reconnect to enable sending.";
+      }
     }
   }
-  const has = connected.length > 0;
-  if($("do-send")) $("do-send").disabled = !has;
-  if($("send-stat")) $("send-stat").style.display = has ? "inline-block" : "none";
-  if($("send-note")) $("send-note").textContent = has ? "" : "Connect a mailbox in the Connectors panel above.";
+  sel.onchange = refresh;
+  refresh();
 }
 async function doSend(){
   const out = $("send-out"); out.className = "out show"; out.textContent = "Drafting…";
@@ -658,6 +729,7 @@ $("recheck").onclick = healthCheck;
 $("do-init").onclick = doInit;
 $("do-provision").onclick = doProvision;
 $("do-triage").onclick = doTriage;
+$("do-triage-batch").onclick = doTriageBatch;
 $("do-draft").onclick = doDraft;
 $("do-send").onclick = doSend;
 healthCheck();

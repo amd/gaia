@@ -20,7 +20,7 @@ Provides corpus-agnostic scoring primitives:
 **FP/FN axis.** Email triage has two independent binary axes — a spam/phishing
 axis (the corpus tracks ``is_spam`` / ``is_phishing`` booleans) and a
 "needs-attention" axis (category ∈ ``NEEDS_ATTENTION_CATEGORIES`` = {urgent,
-actionable}). #1278's bars (FP<5% / FN<2%) are coherent on the attention axis
+needs_response}). #1278's bars (FP<5% / FN<2%) are coherent on the attention axis
 (missing an important mail is worse than a false alarm), so the gate defaults to
 it — but the axis is a *manifest* value, so flipping the gate to the spam axis is
 a data edit. This module still exposes neutral primitives for *all* axes. Ground
@@ -50,7 +50,7 @@ _METADATA_KEYS = {"_meta", "_comment", "_metadata"}
 # Default attention axis: which categories count as "needs attention" (the axis
 # #1278's FP/FN bars are coherent on). Missing one of these is worse than a false
 # alarm — the asymmetry the bars encode.
-NEEDS_ATTENTION_CATEGORIES = {"urgent", "actionable"}
+NEEDS_ATTENTION_CATEGORIES = {"urgent", "needs_response"}
 
 
 @dataclass
@@ -184,7 +184,7 @@ def confusion_for_categories(
     positive_categories: set[str],
 ) -> Confusion:
     """One-vs-rest confusion treating ``positive_categories`` as the positive
-    class (e.g. ``{"urgent", "actionable"}`` for a needs-attention axis)."""
+    class (e.g. ``{"urgent", "needs_response"}`` for a needs-attention axis)."""
     positives = {c.strip().lower() for c in positive_categories}
     predictions = {
         gid: cat.strip().lower() in positives

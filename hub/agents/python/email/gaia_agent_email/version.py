@@ -28,7 +28,7 @@ from gaia_agent_email.contract import SCHEMA_VERSION
 # Package build version. Keep in sync with ``pyproject.toml``'s ``version`` —
 # ``test_rest_contract.test_agent_version_matches_package_metadata`` asserts the
 # installed distribution metadata agrees with this literal so the two never drift.
-AGENT_VERSION = "0.2.4"
+AGENT_VERSION = "0.3.0"
 
 # REST/contract version exposed to hosts. Aliased to the frozen contract's
 # SCHEMA_VERSION so a contract bump is an API bump — no second number to forget.

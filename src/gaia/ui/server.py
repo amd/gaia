@@ -368,7 +368,16 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 )
 
             def _run() -> str:
-                from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+                # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102).
+                try:
+                    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+                except ImportError as e:
+                    raise RuntimeError(
+                        "The chat agent is not installed. Install it with "
+                        "`pip install gaia-agent-chat` (or `pip install "
+                        '"amd-gaia[agents]"` for all agents) to run scheduled '
+                        "chat tasks."
+                    ) from e
 
                 # Beta dynamic tool loader (#1798). Inert here: scheduled runs
                 # use the default "full" prompt profile and the loader only

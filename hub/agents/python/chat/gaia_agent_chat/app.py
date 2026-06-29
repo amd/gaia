@@ -9,7 +9,7 @@ import os
 import sys
 from pathlib import Path
 
-from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)

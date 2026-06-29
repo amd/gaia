@@ -66,5 +66,5 @@ export {
   BinaryNotFoundError,
 } from "./errors.js";
 
-export { SCHEMA_VERSION } from "./types.js";
+export { SCHEMA_VERSION, MAX_BATCH_SIZE } from "./types.js";
 export type * from "./types.js";

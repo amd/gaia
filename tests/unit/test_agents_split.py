@@ -5,12 +5,12 @@ import pytest
 
 
 def test_instantiate_new_agents():
-    # fileio/docqa ship as the standalone gaia-agent-fileio / gaia-agent-docqa
-    # wheels (#1102).
+    # fileio / docqa / chat ship as standalone gaia-agent-* wheels (#1102).
     pytest.importorskip("gaia_agent_fileio")
     pytest.importorskip("gaia_agent_docqa")
+    pytest.importorskip("gaia_agent_chat")
     # Import without triggering heavy optional deps by relying on skip_lemonade
-    chat_mod = import_module("gaia.agents.chat.lite_agent")
+    chat_mod = import_module("gaia_agent_chat.lite_agent")
     docqa_mod = import_module("gaia_agent_docqa.agent")
     fileio_mod = import_module("gaia_agent_fileio.agent")
 
@@ -159,12 +159,13 @@ def test_get_mcp_status_report_does_not_raise(tmp_path):
     pytest.importorskip("gaia_agent_browser")
     pytest.importorskip("gaia_agent_analyst")
     pytest.importorskip("gaia_agent_docqa")
+    pytest.importorskip("gaia_agent_chat")
     from gaia_agent_analyst.agent import AnalystAgent, AnalystAgentConfig
     from gaia_agent_browser.agent import BrowserAgent
+    from gaia_agent_chat.lite_agent import ChatAgentLite
     from gaia_agent_docqa.agent import DocumentQAAgent
     from gaia_agent_fileio.agent import FileIOAgent
 
-    from gaia.agents.chat.lite_agent import ChatAgentLite
 
     agents = [
         BrowserAgent(),

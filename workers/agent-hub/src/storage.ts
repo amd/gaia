@@ -52,6 +52,10 @@ export function skillKey(id: string, version: string): string {
   return `${versionDir(id, version)}SKILL.md`;
 }
 
+export function evalScorecardKey(id: string, version: string): string {
+  return `${versionDir(id, version)}SCORECARD.md`;
+}
+
 export function packageFilesKey(id: string, version: string): string {
   return `${versionDir(id, version)}package-files.json`;
 }
@@ -111,6 +115,21 @@ export async function readSkill(
 ): Promise<string> {
   const obj = await bucket.get(skillKey(id, version));
   if (!obj) return "";
+  return obj.text();
+}
+
+/**
+ * Read the eval scorecard markdown for one published version. Returns null when
+ * none was published — the `eval_scorecard` form part is optional, so its
+ * absence is not an error.
+ */
+export async function readEvalScorecard(
+  bucket: R2Bucket,
+  id: string,
+  version: string
+): Promise<string | null> {
+  const obj = await bucket.get(evalScorecardKey(id, version));
+  if (!obj) return null;
   return obj.text();
 }
 

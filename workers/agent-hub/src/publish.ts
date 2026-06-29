@@ -18,6 +18,7 @@ import { parseManifest } from "./manifest";
 import {
   artifactKey,
   changelogKey,
+  evalScorecardKey,
   packageFilesKey,
   rawManifestKey,
   readAgentManifest,
@@ -173,6 +174,9 @@ export async function handlePublish(
   // semantics as README/CHANGELOG.
   const specText = await optionalMarkdownPart(form, "spec", "SPEC.md");
   const skillText = await optionalMarkdownPart(form, "skill", "SKILL.md");
+  // Optional eval scorecard markdown (the agent's benchmark results, rendered on
+  // the hub listing as an aggregate score + link). Per-version, first-POST semantics.
+  const evalScorecardText = await optionalMarkdownPart(form, "eval_scorecard", "SCORECARD.md");
   // Optional whole-package file listing (the zip's contents, for the hub's file
   // list). The zip itself rides in as a normal `artifact`; this is just the
   // manifest of what's inside it.
@@ -276,6 +280,11 @@ export async function handlePublish(
         httpMetadata: { contentType: "text/markdown; charset=utf-8" },
       });
     }
+    if (evalScorecardText != null) {
+      await env.BUCKET.put(evalScorecardKey(manifest.id, manifest.version), evalScorecardText, {
+        httpMetadata: { contentType: "text/markdown; charset=utf-8" },
+      });
+    }
   }
 
   // The package file listing rides the whole-package zip POST, which in a real
@@ -296,7 +305,8 @@ export async function handlePublish(
   const updated = upsertVersion(existing, manifest, versionEntry);
   await writeAgentManifest(env.BUCKET, updated);
 
-  const index = await rebuildIndex(env.BUCKET, now);
+  const baseUrl = new URL(request.url).origin;
+  const index = await rebuildIndex(env.BUCKET, now, baseUrl);
 
   return json(
     {

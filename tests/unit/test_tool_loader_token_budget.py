@@ -30,8 +30,13 @@ import os
 
 import pytest
 
-from gaia.agents.chat.tool_bundles import DOC_CORE_TOOLS
-from gaia.eval.tool_cost import (
+# DOC_CORE_TOOLS ships with the standalone gaia-agent-chat wheel (#1102); skip
+# the whole module when a framework-only env lacks it.
+pytest.importorskip("gaia_agent_chat")
+
+from gaia_agent_chat.tool_bundles import DOC_CORE_TOOLS  # noqa: E402
+
+from gaia.eval.tool_cost import (  # noqa: E402
     FIXED_SUBSET_DEFAULT,
     build_doc_agent_skeleton,
     get_tokenizer,
