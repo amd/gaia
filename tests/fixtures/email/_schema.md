@@ -116,9 +116,10 @@ apply. What is enforced:
 
 ## Baseline
 
-> ⚠️ `baseline_accuracy.json` / `baseline_accuracy_e2b.json` were recorded on the
-> previous synthetic 220-message corpus and are **stale** for this vendor-derived
-> 249-message corpus. Re-record them on AMD hardware (`score_baseline.py`) before
+> `baseline_accuracy.json` / `baseline_accuracy_e2b.json` have been **re-recorded
+> against the 249-message vendor corpus** (`scored: 249`, Gemma-4-E4B / E2B,
+> no-lever) and are current. Re-run the commands below on AMD hardware
+> (`score_baseline.py`) whenever the corpus or the triage path changes, before
 > relying on the `test_email_agent_triage` integration gate (which is
 > Lemonade-gated and skips without a live server).
 
