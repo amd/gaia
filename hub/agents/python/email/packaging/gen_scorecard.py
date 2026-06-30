@@ -429,16 +429,19 @@ def build_payload(
         ),
         dataset_size=dataset_size,
         methodology=(
-            "gaia eval benchmark over a synthetic labeled corpus via "
-            "FakeGmailBackend; no LLM judge. Aggregate = within-one-bucket "
-            "ACCEPTANCE accuracy (#1437): triage priority is ordinal "
-            "(URGENT>NEEDS_RESPONSE>FYI>PROMOTIONAL), so a prediction is credited "
-            "when it is exact or an adjacent bucket (|rank diff|<=1) — what users "
-            "feel (nothing urgent buried). Reported secondaries (not in the "
-            "aggregate): urgent-vs-not binary accuracy, urgent recall (anti-gaming "
-            "floor), and exact 4-way category_accuracy. The corpus uses the "
-            "schema-2.0 taxonomy aligned with the agent's output labels (#1874); "
-            f"averaged over {n_runs} run(s) for run-to-run variance/CI (#1894)"
+            "gaia eval benchmark over the vendor-derived labelled corpus via "
+            "FakeGmailBackend; no LLM judge. The full 249-email corpus is scored "
+            "(GAIA_EMAIL_TRIAGE_MAX_MESSAGES lifts the interactive per-call scan "
+            "cap for the eval so the whole balanced corpus is covered). Aggregate "
+            "= within-one-bucket ACCEPTANCE accuracy (#1437): triage priority is "
+            "ordinal (URGENT>NEEDS_RESPONSE>FYI>PROMOTIONAL), so a prediction is "
+            "credited when it is exact or an adjacent bucket (|rank diff|<=1) — "
+            "what users feel (nothing urgent buried). Reported secondaries (not in "
+            "the aggregate): urgent-vs-not binary accuracy, urgent recall "
+            "(anti-gaming floor), and exact 4-way category_accuracy. The corpus "
+            "uses the schema-2.0 taxonomy aligned with the agent's output labels "
+            f"(#1874); averaged over {n_runs} run(s) for run-to-run variance/CI "
+            "(#1894)"
         ),
         config={
             "harness": "gaia eval benchmark",
