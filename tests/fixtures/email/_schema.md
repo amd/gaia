@@ -2,11 +2,16 @@
 
 ## Purpose
 
-`synthetic_inbox.mbox` + `ground_truth.json` are the committed, deterministic
-corpus for email-triage categorization eval. The corpus is **vendor-derived**:
-the labelled emails come from the vendor's mailbox dataset (already in the
-schema-2.0 triage taxonomy). The committed source of truth is
-`vendor_corpus_seed.jsonl` — a deterministic, balanced subset of that dataset.
+`synthetic_inbox.mbox` + `ground_truth.json` are the deterministic corpus for
+email-triage categorization eval. They are **generated artifacts**, not checked
+in (gitignored): both are fully derived from the committed source of truth,
+`vendor_corpus_seed.jsonl` — a deterministic, balanced subset of the vendor's
+labelled mailbox dataset (already in the schema-2.0 taxonomy). The corpus is
+**vendor-derived**, not GAIA-synthesised. The seed carries only the fields the
+builder consumes; the bulky vendor metadata is dropped. The pytest session
+(root `conftest.py`), the baseline scorer, and the eval workflows rebuild the
+mbox + ground_truth from the seed on demand via `generate_mbox.ensure_corpus()`,
+so a fresh checkout never needs them committed.
 
 **Provenance chain (all reproducible):**
 

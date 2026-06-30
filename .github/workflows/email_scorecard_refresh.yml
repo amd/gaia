@@ -120,6 +120,9 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf eval-out && mkdir -p eval-out
+          # mbox + ground_truth are generated artifacts (not committed) — build
+          # them from the committed seed before the eval reads them.
+          python tests/fixtures/email/generate_mbox.py
           gaia eval benchmark \
             --model "${MODEL}" \
             --mbox-path tests/fixtures/email/synthetic_inbox.mbox \

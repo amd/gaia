@@ -52,14 +52,14 @@ _PER_CATEGORY = {
     "PERSONAL": 10**9,
 }
 
-# Fields kept in the committed seed (drop the bulky generation/variation/
-# verification metadata; keep what the builder + provenance need).
+# Fields kept in the committed seed: exactly the ones ``generate_mbox.py``
+# consumes to build the mbox + ground_truth. Bulky generation/variation metadata
+# and fields the builder never reads (message_id/thread_id/in_reply_to/references
+# — the builder derives Message-ID/threadId from ``id``; mailbox_owner/category_v1
+# — unused) are dropped so the committed fixture carries only what the corpus
+# actually needs.
 _KEEP_FIELDS = [
     "id",
-    "message_id",
-    "thread_id",
-    "in_reply_to",
-    "references",
     "sender",
     "to",
     "cc",
@@ -72,8 +72,6 @@ _KEEP_FIELDS = [
     "promotional_subtype",
     "source_dataset",
     "mailbox_persona",
-    "mailbox_owner",
-    "category_v1",
 ]
 
 

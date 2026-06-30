@@ -244,6 +244,21 @@ def generate(
     return _sha256(out_mbox), _sha256(out_gt)
 
 
+def ensure_corpus(out_mbox: Path = OUT_MBOX, out_gt: Path = OUT_GT) -> None:
+    """Build the corpus from the committed seed if it isn't already present.
+
+    ``synthetic_inbox.mbox`` and ``ground_truth.json`` are generated artifacts
+    (fully derived from the committed ``vendor_corpus_seed.jsonl``) and are not
+    checked in, so a fresh checkout has the seed but not the corpus. Callers that
+    need the corpus on disk — the pytest session, the baseline scorer, the eval
+    harness — call this first. No-op when both files already exist; raises loudly
+    via :func:`_load_seed` if the committed seed is missing.
+    """
+    if out_mbox.exists() and out_gt.exists():
+        return
+    generate(out_mbox, out_gt)
+
+
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
