@@ -138,14 +138,15 @@ def test_triage_meets_baseline_minus_tolerance(require_lemonade, tmp_path):
     )
 
     # Spam / phishing gate: baseline-relative against the MEASURED accuracy on
-    # this corpus + path. On the 249-message corpus, spam/phishing are NOT
-    # perfect: the corpus carries realistic inbox-spam with no Gmail SPAM label
-    # that the keyword heuristic can't catch, and the LLM follow-up only revises
-    # the *category* (is_spam/is_phishing are heuristic-set), so it cannot flip
-    # those flags. We therefore gate baseline-relative rather than asserting
-    # 100% — a hard 100% assert would be a faked pass that hides the real
-    # spam-recall ceiling. (See the spam/phishing accuracy recorded in
-    # baseline_accuracy.json, measured via this exact path.)
+    # this corpus + path. Spam/phishing are NOT perfect: is_spam is
+    # content-based (#1906) -- the heuristic only commits it for a narrow,
+    # mechanical sender-pattern signal, and the LLM follow-up judges the rest
+    # from actual content, which is inherently harder than a keyword match.
+    # is_phishing remains heuristic-only (the LLM follow-up does not revise
+    # it). We therefore gate baseline-relative rather than asserting 100% — a
+    # hard 100% assert would be a faked pass that hides the real
+    # spam/phishing-recall ceiling. (See the spam/phishing accuracy recorded
+    # in baseline_accuracy.json, measured via this exact path.)
     if baseline_spam is not None:
         spam_floor = baseline_spam - tolerance
         assert spam_accuracy >= spam_floor, (

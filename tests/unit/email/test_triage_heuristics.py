@@ -10,9 +10,12 @@ Critical behaviour pinned by this suite:
 2. The heuristic emits the schema-2.0 five-bucket taxonomy (#1615)
    (``URGENT / NEEDS_RESPONSE / FYI / PROMOTIONAL / PERSONAL``), NOT
    the retired #848 four-bucket scheme.
-3. ``is_spam`` is always ``False`` — provider-specific label checks
-   (e.g. Gmail's SPAM label) are removed (#1906). Future content-based
-   detection will set it without relying on vendor flags.
+3. ``is_spam`` is content-based, provider-agnostic (#1906): the heuristic
+   commits ``True`` only for a narrow, mechanical sender-pattern signal
+   (auto-generated anonymous local-parts, freemail-domain impersonation);
+   everything else is left ``spam_confident=False`` for the LLM to judge
+   from actual content -- the heuristic never asserts a content-based
+   spam/not-spam judgment call itself.
 4. ``is_phishing`` is a SEPARATE boolean; it fires independently of spam.
 5. ``confident=False`` results MUST escalate to the LLM.
 """
@@ -168,17 +171,80 @@ class TestTaxonomy:
 
 
 class TestSpamPhishingFlags:
-    def test_is_spam_is_always_false_until_content_detection_implemented(self):
-        """is_spam is reserved for future content-based detection (#1906); always False for now."""
-        for label_ids in [[], [LABEL_INBOX], [LABEL_CATEGORY_PROMOTIONS]]:
-            result = classify_category_heuristic(
-                subject="Win a free iPhone!",
-                sender="winner@scam.example",
-                label_ids=label_ids,
-            )
-            assert (
-                result.is_spam is False
-            ), f"is_spam should be False for label_ids={label_ids}"
+    def test_anon_sender_pattern_flags_spam_confidently(self):
+        """Auto-generated anonymous local-part (contact.NNNN@) is a mechanical
+        sender-format signal, not a content judgment -- the heuristic may
+        commit it without LLM consultation (#1906)."""
+        result = classify_category_heuristic(
+            subject="50% off everything",
+            sender="contact.4821@dealsnow.biz",
+            label_ids=[],
+        )
+        assert result.is_spam is True
+        assert result.spam_confident is True
+
+    def test_freemail_impersonation_flags_spam_confidently(self):
+        """A sender domain that contains a freemail brand name but isn't the
+        real domain (e.g. hotmail-secure.cc vs hotmail.com) is a mechanical
+        impersonation signal (#1906)."""
+        result = classify_category_heuristic(
+            subject="account update",
+            sender="user@hotmail-secure.cc",
+            label_ids=[],
+        )
+        assert result.is_spam is True
+        assert result.spam_confident is True
+
+    def test_real_freemail_domain_does_not_false_positive(self):
+        """The real hotmail.com/gmail.com/etc. domains must not match the
+        impersonation pattern just because they contain the brand name."""
+        result = classify_category_heuristic(
+            subject="50% off everything",
+            sender="someone@gmail.com",
+            label_ids=[],
+        )
+        assert result.is_spam is False
+        assert result.spam_confident is False  # PROMOTIONAL, no signal -> LLM
+
+    def test_promotional_without_spam_signal_escalates_to_llm(self):
+        """Most PROMOTIONAL mail (real or merely aggressive marketing) needs
+        the LLM's actual reading of content to separate spam from legitimate
+        marketing -- the heuristic does not guess (#1906)."""
+        result = classify_category_heuristic(
+            subject="50% off everything",
+            sender="sales@legitcompany.example",
+            label_ids=[],
+        )
+        assert result.category == CATEGORY_PROMOTIONAL
+        assert result.confident is True  # category is confident...
+        assert result.is_spam is False
+        assert result.spam_confident is False  # ...but spam is not
+
+    def test_non_promotional_category_trusts_is_spam_false(self):
+        """Spam exclusively lives in PROMOTIONAL in this corpus/design; a
+        confidently non-PROMOTIONAL category trusts is_spam=False outright,
+        with no LLM round-trip needed just for spam."""
+        result = classify_category_heuristic(
+            subject="Re: budget review",
+            sender="noreply@company.example",
+            label_ids=[],
+        )
+        assert result.category == CATEGORY_FYI
+        assert result.is_spam is False
+        assert result.spam_confident is True
+
+    def test_unresolved_category_with_no_spam_signal_escalates(self):
+        """When no heuristic matches at all (category unresolved, going to
+        the LLM anyway), spam confidence cannot be assumed from category --
+        always escalate unless the sender signal fired."""
+        result = classify_category_heuristic(
+            subject="Re: meeting at 3pm",
+            sender="alice@company.example",
+            label_ids=[],
+        )
+        assert result.confident is False
+        assert result.is_spam is False
+        assert result.spam_confident is False
 
     def test_phishing_keyword_pair_flags_phishing(self):
         result = classify_category_heuristic(
