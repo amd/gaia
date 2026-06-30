@@ -1,11 +1,11 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Unit tests for the synthetic email-triage corpus generator (#1230).
+"""Unit tests for the vendor-derived email-triage corpus (#1230, #1437).
 
 These tests assert the *generator contract* independently of any live
 service:
 
-- The corpus is exactly the reconciled size (220 messages).
+- The corpus size matches the generator's declared ``TOTAL_MESSAGES``.
 - Every ground-truth label is one of the five schema-2.0 taxonomy categories
   (URGENT / NEEDS_RESPONSE / FYI / PROMOTIONAL / PERSONAL, #1615) — exact
   strings, matching ``gaia_agent_email.tools.triage_heuristics.ALL_CATEGORIES``.

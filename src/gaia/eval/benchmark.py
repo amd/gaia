@@ -546,72 +546,83 @@ def run_benchmark(
     # Raise the ceiling to ``limit`` so ``--limit`` actually governs coverage;
     # per-email decisions are batch-size-independent, so this changes only how
     # many emails are scored, never how any one is classified.
+    # Scope the override: save/restore so run_benchmark never permanently
+    # mutates the process env — a shared-process caller (a test or a future
+    # harness interleaving benchmark + agent calls) must keep the interactive
+    # default ceiling once the benchmark returns.
+    _prev_ceiling = os.environ.get("GAIA_EMAIL_TRIAGE_MAX_MESSAGES")
     os.environ["GAIA_EMAIL_TRIAGE_MAX_MESSAGES"] = str(limit)
-    # Steer the agent to triage_inbox (whose envelope carries per-email
-    # ``results``) rather than pre_scan_inbox, so throughput AND quality are
-    # both harvestable and the run is deterministic across model whims.
-    prompt = (
-        f"Call triage_inbox for up to {limit} messages in my inbox, "
-        "then give me a short summary."
-    )
-    results: list[dict[str, Any]] = []
-
-    for exp in range(1, experiments + 1):
-        if agent_factory is not None:
-            agent = agent_factory()
-        else:
-            # Lazy import: keep `import gaia.eval.benchmark` free of the agent
-            # stack. EmailTriageAgent ships as the standalone gaia-agent-email
-            # wheel (#1102).
-            try:
-                from gaia_agent_email.agent import EmailTriageAgent
-                from gaia_agent_email.config import EmailAgentConfig
-            except ImportError as exc:
-                raise RuntimeError(
-                    "The email throughput benchmark needs the email agent. "
-                    "Install it with `pip install gaia-agent-email` (or "
-                    '`pip install "amd-gaia[agents]"`). '
-                    f"Original import error: {exc}"
-                ) from exc
-
-            try:
-                from tests.fixtures.email.fake_gmail import FakeGmailBackend
-            except ImportError as exc:
-                raise RuntimeError(
-                    "The email throughput benchmark must run from a GAIA repo "
-                    "checkout — it drives the synthetic corpus in "
-                    "tests/fixtures/email and is not available in a packaged "
-                    f"install. Original import error: {exc}"
-                ) from exc
-
-            config = EmailAgentConfig(
-                model_id=model_id,
-                base_url=base_url,
-                gmail_backend=FakeGmailBackend(mbox_path),
-                db_path=db_path,
-                show_stats=True,
-                silent_mode=True,
-            )
-            agent = EmailTriageAgent(config=config)
-
-        run_id = f"{run_id_prefix}-{model_slug}-exp{exp}"
-        start = time.monotonic()
-        agent_result = agent.process_query(prompt)
-        total_duration_ms = int((time.monotonic() - start) * 1000)
-
-        results.append(
-            build_result(
-                agent_result,
-                run_id=run_id,
-                timestamp=_utc_now_iso(),
-                model_id=model_id,
-                total_duration_ms=total_duration_ms,
-                ground_truth=ground_truth,
-                is_cold_start=(exp == 1),
-            )
+    try:
+        # Steer the agent to triage_inbox (whose envelope carries per-email
+        # ``results``) rather than pre_scan_inbox, so throughput AND quality are
+        # both harvestable and the run is deterministic across model whims.
+        prompt = (
+            f"Call triage_inbox for up to {limit} messages in my inbox, "
+            "then give me a short summary."
         )
+        results: list[dict[str, Any]] = []
 
-    return results
+        for exp in range(1, experiments + 1):
+            if agent_factory is not None:
+                agent = agent_factory()
+            else:
+                # Lazy import: keep `import gaia.eval.benchmark` free of the
+                # agent stack. EmailTriageAgent ships as the standalone
+                # gaia-agent-email wheel (#1102).
+                try:
+                    from gaia_agent_email.agent import EmailTriageAgent
+                    from gaia_agent_email.config import EmailAgentConfig
+                except ImportError as exc:
+                    raise RuntimeError(
+                        "The email throughput benchmark needs the email agent. "
+                        "Install it with `pip install gaia-agent-email` (or "
+                        '`pip install "amd-gaia[agents]"`). '
+                        f"Original import error: {exc}"
+                    ) from exc
+
+                try:
+                    from tests.fixtures.email.fake_gmail import FakeGmailBackend
+                except ImportError as exc:
+                    raise RuntimeError(
+                        "The email throughput benchmark must run from a GAIA "
+                        "repo checkout — it drives the synthetic corpus in "
+                        "tests/fixtures/email and is not available in a packaged "
+                        f"install. Original import error: {exc}"
+                    ) from exc
+
+                config = EmailAgentConfig(
+                    model_id=model_id,
+                    base_url=base_url,
+                    gmail_backend=FakeGmailBackend(mbox_path),
+                    db_path=db_path,
+                    show_stats=True,
+                    silent_mode=True,
+                )
+                agent = EmailTriageAgent(config=config)
+
+            run_id = f"{run_id_prefix}-{model_slug}-exp{exp}"
+            start = time.monotonic()
+            agent_result = agent.process_query(prompt)
+            total_duration_ms = int((time.monotonic() - start) * 1000)
+
+            results.append(
+                build_result(
+                    agent_result,
+                    run_id=run_id,
+                    timestamp=_utc_now_iso(),
+                    model_id=model_id,
+                    total_duration_ms=total_duration_ms,
+                    ground_truth=ground_truth,
+                    is_cold_start=(exp == 1),
+                )
+            )
+
+        return results
+    finally:
+        if _prev_ceiling is None:
+            os.environ.pop("GAIA_EMAIL_TRIAGE_MAX_MESSAGES", None)
+        else:
+            os.environ["GAIA_EMAIL_TRIAGE_MAX_MESSAGES"] = _prev_ceiling
 
 
 def load_ground_truth(path: str | Path) -> dict[str, dict]:

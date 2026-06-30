@@ -22,7 +22,7 @@ Usage::
     python hub/agents/python/email/packaging/gen_scorecard.py \\
         --benchmark-dir /tmp/email-eval \\
         [--ground-truth tests/fixtures/email/ground_truth.json] \\
-        [--limit 220]
+        [--limit N]   # the --limit passed to the benchmark for this run
 
 The ``--ground-truth`` path defaults to the canonical fixture in the repository.
 """

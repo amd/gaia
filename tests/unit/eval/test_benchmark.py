@@ -3,6 +3,7 @@
 """Unit tests for gaia.eval.benchmark (offline — no Lemonade)."""
 
 import json
+import os
 
 import pytest
 
@@ -199,6 +200,38 @@ class TestRunBenchmarkOffline:
         assert all(r["status"] == "PASS" for r in results)
         assert results[0]["is_cold_start"] is True
         assert results[1]["is_cold_start"] is False
+
+    def test_run_benchmark_restores_triage_ceiling_env(self, monkeypatch):
+        """The scan-ceiling override is scoped: run_benchmark must not leak the
+        inflated GAIA_EMAIL_TRIAGE_MAX_MESSAGES to the rest of the process."""
+
+        class _StubAgent:
+            def process_query(self, prompt):
+                return _agent_result()
+
+        # Unset before → unset after (no key materialized).
+        monkeypatch.delenv("GAIA_EMAIL_TRIAGE_MAX_MESSAGES", raising=False)
+        run_benchmark(
+            "Gemma-4-E4B-it-GGUF",
+            mbox_path="ignored",
+            limit=250,
+            experiments=1,
+            ground_truth=GT,
+            agent_factory=_StubAgent,
+        )
+        assert "GAIA_EMAIL_TRIAGE_MAX_MESSAGES" not in os.environ
+
+        # Pre-existing value → restored verbatim, not left at the benchmark limit.
+        monkeypatch.setenv("GAIA_EMAIL_TRIAGE_MAX_MESSAGES", "100")
+        run_benchmark(
+            "Gemma-4-E4B-it-GGUF",
+            mbox_path="ignored",
+            limit=250,
+            experiments=1,
+            ground_truth=GT,
+            agent_factory=_StubAgent,
+        )
+        assert os.environ["GAIA_EMAIL_TRIAGE_MAX_MESSAGES"] == "100"
 
 
 class TestCategorizationExportInResult:
