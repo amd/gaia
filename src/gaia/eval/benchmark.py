@@ -24,6 +24,7 @@ message we're looking for".
 from __future__ import annotations
 
 import json
+import os
 import statistics as _stats
 import time
 from datetime import datetime, timezone
@@ -538,6 +539,14 @@ def run_benchmark(
     omitted a real agent is built lazily so importing this module stays cheap.
     """
     model_slug = model_id.replace("/", "-").lower()
+    # The benchmark scores a fixed labelled corpus and must cover all of it for
+    # a representative, category-balanced result. The LLM-facing triage tool
+    # otherwise clamps each call to its interactive default (100), silently
+    # truncating a larger corpus to its first N (and skewing the category mix).
+    # Raise the ceiling to ``limit`` so ``--limit`` actually governs coverage;
+    # per-email decisions are batch-size-independent, so this changes only how
+    # many emails are scored, never how any one is classified.
+    os.environ["GAIA_EMAIL_TRIAGE_MAX_MESSAGES"] = str(limit)
     # Steer the agent to triage_inbox (whose envelope carries per-email
     # ``results``) rather than pre_scan_inbox, so throughput AND quality are
     # both harvestable and the run is deterministic across model whims.
