@@ -29,15 +29,21 @@ PACKAGING_DIR = EMAIL_PKG / "packaging"
 def test_server_app_dir_import_string_resolves_to_fastapi_app():
     # Mirror `uvicorn server:app --app-dir <email>/packaging`: put the packaging
     # dir on sys.path and import the file as top-level module `server`.
+    # Use TestClient HTTP probes instead of app.routes introspection: older
+    # Starlette versions expose _IncludedRouter objects without a .path attribute,
+    # so reachability (status != 404) is the robust cross-version assertion.
     code = (
         "import sys; sys.path.insert(0, sys.argv[1]);"
         "import server as s;"
         "from fastapi import FastAPI;"
+        "from fastapi.testclient import TestClient;"
         "assert hasattr(s, 'app'), 'module-level app missing for uvicorn --reload';"
         "assert isinstance(s.app, FastAPI), type(s.app);"
-        "routes={r.path for r in s.app.routes};"
-        "assert '/health' in routes, routes;"
-        "assert '/v1/email/triage' in routes, routes;"
+        "client = TestClient(s.app, raise_server_exceptions=False);"
+        "h = client.get('/health');"
+        "assert h.status_code != 404, f'/health returned 404: {h.text}';"
+        "t = client.post('/v1/email/triage', json={});"
+        "assert t.status_code != 404, f'/v1/email/triage returned 404: {t.text}';"
         "print('OK')"
     )
     result = subprocess.run(

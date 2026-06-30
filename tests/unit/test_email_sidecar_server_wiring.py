@@ -11,12 +11,6 @@ from fastapi.testclient import TestClient
 from gaia.ui.server import create_app
 
 
-def _email_routes(app):
-    return {
-        r.path for r in app.routes if getattr(r, "path", "").startswith("/v1/email")
-    }
-
-
 def test_flag_set_mounts_sidecar_router_and_manager(monkeypatch):
     monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
     app = create_app(db_path=":memory:")
@@ -24,10 +18,17 @@ def test_flag_set_mounts_sidecar_router_and_manager(monkeypatch):
     from gaia.ui.email_sidecar.manager import EmailSidecarManager
 
     assert isinstance(app.state.email_sidecar_manager, EmailSidecarManager)
-    routes = _email_routes(app)
-    assert "/v1/email/triage" in routes
-    # Security: connector write routes are NOT exposed via the sidecar surface.
-    assert not any("connectors" in p for p in routes)
+    # Use a TestClient probe instead of inspecting app.routes directly: older
+    # Starlette versions expose _IncludedRouter objects without a .path attribute,
+    # so HTTP reachability is the robust cross-version assertion.
+    client = TestClient(app, raise_server_exceptions=False)
+    # /v1/email/triage is mounted: NOT 404 (422/405/503/200 all prove route exists).
+    assert client.post("/v1/email/triage", json={}).status_code != 404
+    # Security: connector write routes are NOT handled by the sidecar surface.
+    # They may return 404 (no route) or 405 (method not allowed on a read-only
+    # connector route elsewhere in the app). Neither is a sidecar proxy forward.
+    connector_post = client.post("/v1/email/connectors/google/complete", json={})
+    assert connector_post.status_code in (404, 405)
 
 
 def test_flag_unset_uses_in_process_mount(monkeypatch):
