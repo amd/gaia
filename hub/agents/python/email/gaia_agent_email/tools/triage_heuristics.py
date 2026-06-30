@@ -184,6 +184,66 @@ _URGENT_SUBJECT_PATTERNS = (
     "within 1 hour",
 )
 
+# Subject-line patterns that signal a concrete ask DIRECTED AT THE RECIPIENT --
+# a question, a review/approve/decide/sign-off request, an invite/RSVP, or a
+# task assigned to the reader. Like the urgent patterns, these must escalate an
+# automated-sender message to the LLM instead of confidently burying it as FYI:
+# a noreply@/alerts@/bot/digest wrapper does not turn a real ask into FYI
+# (#1900). General triage signals only -- no corpus-specific strings -- so the
+# guard generalizes beyond the eval fixture. Patterns are matched as substrings,
+# so bare inflectable verbs are avoided: "approve" would also match "approved"
+# and "invite" would match "invited" -- both common in NO-ASK FYI notifications
+# ("expense report approved", "user invited") that the heuristic-only triage
+# path would then mislabel. Key on phrase forms ("please approve", "your
+# approval", "meeting invite") instead.
+_ACTION_REQUEST_PATTERNS = (
+    "?",  # a direct question to the recipient
+    "can you",
+    "could you",
+    "would you",
+    "are you able",
+    "please review",
+    "please approve",
+    "please confirm",
+    "please advise",
+    "please respond",
+    "please reply",
+    "please complete",
+    "please sign",
+    "for your review",
+    "for your approval",
+    "for your signature",
+    "your review",
+    "your approval",
+    "your decision",
+    "your sign-off",
+    "your signoff",
+    "your input",
+    "your feedback",
+    "your response",
+    "need your",
+    "needs your",
+    "we need your",
+    "decision on",
+    "sign off",
+    "sign-off",
+    "action needed",
+    "action item",
+    "reply needed",
+    "reply if needed",
+    "awaiting your",
+    "let me know",
+    "rsvp",
+    "invitation",
+    "meeting invite",
+    "calendar invite",
+    "ticket assigned",
+    "assigned to you",
+    "task assigned",
+    "has been assigned",
+    "assigned:",
+)
+
 
 def classify_category_heuristic(
     subject: str,
@@ -301,6 +361,16 @@ def classify_category_heuristic(
                         "subject has urgent signal -- escalating to LLM"
                     ),
                 )
+            if _subject_requests_action(subject_lower):
+                return HeuristicResult(
+                    category=CATEGORY_NEEDS_RESPONSE,
+                    is_phishing=is_phishing,
+                    confident=False,
+                    reason=(
+                        f"sender contains automated-sender keyword '{kw}' but "
+                        "subject requests action -- escalating to LLM"
+                    ),
+                )
             return HeuristicResult(
                 category=CATEGORY_FYI,
                 is_phishing=is_phishing,
@@ -344,6 +414,18 @@ def _subject_has_urgent_signal(subject_lower: str) -> bool:
     informational (#1266).
     """
     return any(pattern in subject_lower for pattern in _URGENT_SUBJECT_PATTERNS)
+
+
+def _subject_requests_action(subject_lower: str) -> bool:
+    """Return True when the subject signals a concrete ask directed at the reader.
+
+    Mirrors ``_subject_has_urgent_signal`` for the non-urgent ask case (#1900):
+    a question, a review/approve/decide/sign-off request, an invite/RSVP, or a
+    task assigned to the reader. When True, the automated-sender fast path must
+    escalate to the LLM (which reads the body) rather than confidently committing
+    FYI -- an automated wrapper does not turn a real ask into FYI.
+    """
+    return any(pattern in subject_lower for pattern in _ACTION_REQUEST_PATTERNS)
 
 
 def _looks_phishing(subject_lower: str) -> bool:
