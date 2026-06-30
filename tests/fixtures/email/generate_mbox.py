@@ -264,7 +264,13 @@ def _sha256(path: Path) -> str:
 
 
 def verify() -> int:
-    """Rebuild into a temp dir and compare to the committed fixtures."""
+    """Rebuild into a temp dir and compare to the on-disk corpus.
+
+    The mbox/ground_truth are generated artifacts, so materialise them from the
+    seed first (no-op if already present) — this makes ``--verify`` work on a
+    fresh checkout and still catches drift if the on-disk copy was hand-edited.
+    """
+    ensure_corpus()
     existing_mbox_hash = _sha256(OUT_MBOX)
     existing_gt_hash = _sha256(OUT_GT)
     with tempfile.TemporaryDirectory() as td:
