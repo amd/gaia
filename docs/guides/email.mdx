@@ -278,24 +278,35 @@ library. If the source package is missing, dev mode fails loudly with the
 - If the backend exits without a clean shutdown, an `atexit` reaper tree-kills the
   sidecar so it never leaks its port or a loaded model.
 
-### What the sidecar serves today
+### What the sidecar serves
 
-When `GAIA_EMAIL_AGENT_MODE` is set, the UI backend serves the **`/v1/email/*`
-REST surface** (triage / draft / send / health / version) from the sidecar
-instead of importing the email agent in-process — no email dependencies in the
-core backend, and a crash in email tooling can't take down chat. The sidecar is
-spawned lazily on the first `/v1/email` request and tree-killed on backend
-shutdown. Only those five endpoints are proxied; the sidecar's connector OAuth
-**write** routes are never exposed to the UI (all grant writes stay on the
-backend's single-writer path).
+The sidecar is the **sole** backend for the email agent in the Agent UI — the
+core backend never imports the email wheel, so it stays lightweight, crash-
+isolated, and dogfoods the exact binary shipped to integrators.
+`GAIA_EMAIL_AGENT_MODE` only selects which *process* answers (`user` default /
+`dev`); there is no in-process fallback. Two surfaces run through it:
 
-When the flag is **unset** (the default), the in-process mount is used, so
-existing installs keep working until the frozen binary is published.
+- **The `/v1/email/*` REST surface** — the full schema-2.1 contract (triage,
+  batch triage, search, inbox pre-scan, draft/send + confirm, archive/unarchive,
+  quarantine/unquarantine, calendar view/preview/create/respond, health,
+  version). This is exactly what third-party integrators consume, so the UI
+  exercises the real product. The sidecar's connector OAuth **write** routes are
+  never exposed (all grant writes stay on the backend's single-writer path).
+- **The in-app email chat agent** (`agent_type=email`) — the local-LLM tool loop
+  still runs in the UI backend, but every tool is a thin HTTP call to the
+  sidecar. The chat **pre-scan card** runs through the sidecar's `/prescan` route
+  and returns the same `email_pre_scan` envelope, so the card renders unchanged.
 
-The chat inbox **pre-scan card** still runs through the in-process agent — it
-depends on an inbox-scan REST route the sidecar does not expose yet
-([pre-scan](https://github.com/amd/gaia/issues/1781) and friends). That swap is
-sequenced behind those routes.
+The sidecar is spawned lazily on first email use and tree-killed on shutdown; the
+REST surface and the chat agent share one sidecar process.
+
+**Chat tool surface (in-app email agent):** the sidecar-backed chat agent exposes
+the tools the schema-2.1 REST contract serves today — inbox pre-scan, search,
+calendar view, and archive + undo. Tools that have no REST route yet (labels,
+stars, mark-read, move, trash/delete, summarize, profile, preferences, forward,
+send) are not exposed in the chat agent until their routes land; the underlying
+agent product still implements them, they are simply not reachable over the REST
+contract yet.
 
 ## Troubleshooting
 
