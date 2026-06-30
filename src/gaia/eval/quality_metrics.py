@@ -237,9 +237,7 @@ def acceptance_metrics(
     attention = confusion_for_categories(
         predictions, ground_truth, NEEDS_ATTENTION_CATEGORIES
     )
-    personal = confusion_for_categories(
-        predictions, ground_truth, PERSONAL_CATEGORIES
-    )
+    personal = confusion_for_categories(predictions, ground_truth, PERSONAL_CATEGORIES)
     return {
         "within_one_bucket_accuracy": within_one_bucket_accuracy(
             predictions, ground_truth
