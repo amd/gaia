@@ -32,14 +32,14 @@ def stub_inbox_path() -> Path:
 
 @pytest.fixture
 def corpus_inbox_path() -> Path:
-    """Return the path to the committed 220-message synthetic corpus."""
+    """Return the path to the committed 249-message vendor-derived corpus."""
     assert CORPUS_INBOX_MBOX.exists(), CORPUS_INBOX_MBOX
     return CORPUS_INBOX_MBOX
 
 
 @pytest.fixture
 def synthetic_inbox(corpus_inbox_path):
-    """A pre-loaded ``FakeGmailBackend`` over the 220-message synthetic
+    """A pre-loaded ``FakeGmailBackend`` over the 249-message vendor-derived
     corpus. Its ground_truth is keyed by the Gmail-derived id, so it
     aligns 1:1 with this backend.
     """

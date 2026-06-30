@@ -78,6 +78,7 @@ from gaia_agent_email.tools.read_tools import triage_inbox_impl  # noqa: E402
 from gaia_agent_email.tools.triage_heuristics import ALL_CATEGORIES  # noqa: E402
 
 from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
+from tests.fixtures.email.generate_mbox import ensure_corpus  # noqa: E402
 
 FIXTURES_DIR = Path(__file__).resolve().parent
 CORPUS_MBOX = FIXTURES_DIR / "synthetic_inbox.mbox"
@@ -86,11 +87,10 @@ BASELINE_OUT = FIXTURES_DIR / "baseline_accuracy.json"
 
 
 def score(model: str, max_messages: int = 1000) -> Dict[str, Any]:
-    if not CORPUS_MBOX.exists() or not GROUND_TRUTH.exists():
-        raise FileNotFoundError(
-            "Corpus not generated. Run tests/fixtures/email/generate_mbox.py first. "
-            f"Looked for {CORPUS_MBOX} and {GROUND_TRUTH}."
-        )
+    # mbox + ground_truth are generated artifacts; build them from the committed
+    # seed if this checkout doesn't have them yet (raises loudly if the seed is
+    # missing).
+    ensure_corpus(CORPUS_MBOX, GROUND_TRUTH)
 
     backend = FakeGmailBackend(CORPUS_MBOX)
     ground_truth = json.loads(GROUND_TRUTH.read_text())

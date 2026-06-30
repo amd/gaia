@@ -3,6 +3,7 @@
 """Unit tests for gaia.eval.benchmark (offline — no Lemonade)."""
 
 import json
+import os
 
 import pytest
 
@@ -200,6 +201,38 @@ class TestRunBenchmarkOffline:
         assert results[0]["is_cold_start"] is True
         assert results[1]["is_cold_start"] is False
 
+    def test_run_benchmark_restores_triage_ceiling_env(self, monkeypatch):
+        """The scan-ceiling override is scoped: run_benchmark must not leak the
+        inflated GAIA_EMAIL_TRIAGE_MAX_MESSAGES to the rest of the process."""
+
+        class _StubAgent:
+            def process_query(self, prompt):
+                return _agent_result()
+
+        # Unset before → unset after (no key materialized).
+        monkeypatch.delenv("GAIA_EMAIL_TRIAGE_MAX_MESSAGES", raising=False)
+        run_benchmark(
+            "Gemma-4-E4B-it-GGUF",
+            mbox_path="ignored",
+            limit=250,
+            experiments=1,
+            ground_truth=GT,
+            agent_factory=_StubAgent,
+        )
+        assert "GAIA_EMAIL_TRIAGE_MAX_MESSAGES" not in os.environ
+
+        # Pre-existing value → restored verbatim, not left at the benchmark limit.
+        monkeypatch.setenv("GAIA_EMAIL_TRIAGE_MAX_MESSAGES", "100")
+        run_benchmark(
+            "Gemma-4-E4B-it-GGUF",
+            mbox_path="ignored",
+            limit=250,
+            experiments=1,
+            ground_truth=GT,
+            agent_factory=_StubAgent,
+        )
+        assert os.environ["GAIA_EMAIL_TRIAGE_MAX_MESSAGES"] == "100"
+
 
 class TestCategorizationExportInResult:
     def test_quality_block_carries_categorization_export(self):
@@ -357,6 +390,10 @@ class TestAcceptanceMetrics:
         assert q["category_accuracy"] == 1.0
         assert q["urgent_vs_not_accuracy"] == 1.0
         assert q["urgent_recall"] == 1.0
+        # PERSONAL axis is wired even when the (sub)corpus has no personal rows:
+        # the keys exist (honest 0.0 / empty confusion), never silently absent.
+        assert "personal_recall" in q
+        assert "personal" in q and "recall" in q["personal"]
 
     def test_within_one_credits_adjacent_not_distance_two(self):
         # a urgent->needs_response (adj ✓), b exact ✓, c fyi->promotional (adj ✓),
