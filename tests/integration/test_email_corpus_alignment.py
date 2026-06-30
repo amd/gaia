@@ -30,6 +30,9 @@ if str(_REPO_ROOT) not in sys.path:
 pytestmark = pytest.mark.integration
 
 from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
+from tests.fixtures.email.generate_mbox import (  # noqa: E402
+    TOTAL_MESSAGES as _EXPECTED_TOTAL,
+)
 
 FIXTURES_DIR = _REPO_ROOT / "tests" / "fixtures" / "email"
 CORPUS_MBOX = FIXTURES_DIR / "synthetic_inbox.mbox"
@@ -70,7 +73,7 @@ def test_ground_truth_aligns_1to1_with_mbox():
         not missing_gt
     ), f"{len(missing_gt)} mbox messages have no GT entry: {sorted(missing_gt)[:3]}"
     assert gt_ids == loaded_ids
-    assert len(loaded_ids) == 220
+    assert len(loaded_ids) == _EXPECTED_TOTAL
 
 
 def test_no_duplicate_messages_in_mbox():
@@ -89,5 +92,5 @@ def test_no_duplicate_messages_in_mbox():
     finally:
         box.close()
 
-    assert len(ids) == 220
+    assert len(ids) == _EXPECTED_TOTAL
     assert len(set(ids)) == len(ids), "duplicate Gmail ids -> Message-ID collision"

@@ -22,7 +22,7 @@ Usage::
     python hub/agents/python/email/packaging/gen_scorecard.py \\
         --benchmark-dir /tmp/email-eval \\
         [--ground-truth tests/fixtures/email/ground_truth.json] \\
-        [--limit 220]
+        [--limit N]   # the --limit passed to the benchmark for this run
 
 The ``--ground-truth`` path defaults to the canonical fixture in the repository.
 """
@@ -304,6 +304,7 @@ def build_payload(
         within_one_accuracy = float(quality_agg["within_one_bucket_accuracy"])
         urgent_vs_not_accuracy = float(quality_agg.get("urgent_vs_not_accuracy", 0.0))
         urgent_recall = float(quality_agg.get("urgent_recall", 0.0))
+        personal_recall = float(quality_agg.get("personal_recall", 0.0))
         category_accuracy = float(quality_agg.get("category_accuracy", 0.0))
         acceptance_variance = quality_agg.get("acceptance_variance")
     else:
@@ -322,6 +323,7 @@ def build_payload(
             _mean_scenario_metric(judged, "urgent_vs_not_accuracy") or 0.0
         )
         urgent_recall = _mean_scenario_metric(judged, "urgent_recall") or 0.0
+        personal_recall = _mean_scenario_metric(judged, "personal_recall") or 0.0
         category_accuracy = _mean_scenario_metric(judged, "category_accuracy") or 0.0
 
     # Dataset size = labeled entries in ground_truth.json (excluding _meta key)
@@ -370,6 +372,7 @@ def build_payload(
             "weight": 0.0,
         },
         {"name": "urgent_recall", "value": float(urgent_recall), "weight": 0.0},
+        {"name": "personal_recall", "value": float(personal_recall), "weight": 0.0},
         {
             "name": "category_accuracy",
             "value": float(category_accuracy),
@@ -419,22 +422,26 @@ def build_payload(
         agent_version=version,
         dataset_reference="tests/fixtures/email/ground_truth.json",
         dataset_description=(
-            "Synthetic email corpus for GAIA email-triage evaluation "
-            "(FakeGmailBackend, schema-2.0 triage taxonomy: "
-            "fyi / needs_response / promotional / urgent / personal)"
+            "Vendor-derived labelled email corpus for GAIA email-triage "
+            "evaluation (FakeGmailBackend, schema-2.0 triage taxonomy: "
+            "urgent / needs_response / fyi / promotional / personal); a "
+            "deterministic, category-balanced subset of the vendor mailbox dataset"
         ),
         dataset_size=dataset_size,
         methodology=(
-            "gaia eval benchmark over a synthetic labeled corpus via "
-            "FakeGmailBackend; no LLM judge. Aggregate = within-one-bucket "
-            "ACCEPTANCE accuracy (#1437): triage priority is ordinal "
-            "(URGENT>NEEDS_RESPONSE>FYI>PROMOTIONAL), so a prediction is credited "
-            "when it is exact or an adjacent bucket (|rank diff|<=1) — what users "
-            "feel (nothing urgent buried). Reported secondaries (not in the "
-            "aggregate): urgent-vs-not binary accuracy, urgent recall (anti-gaming "
-            "floor), and exact 4-way category_accuracy. The corpus uses the "
-            "schema-2.0 taxonomy aligned with the agent's output labels (#1874); "
-            f"averaged over {n_runs} run(s) for run-to-run variance/CI (#1894)"
+            "gaia eval benchmark over the vendor-derived labelled corpus via "
+            "FakeGmailBackend; no LLM judge. The full 249-email corpus is scored "
+            "(GAIA_EMAIL_TRIAGE_MAX_MESSAGES lifts the interactive per-call scan "
+            "cap for the eval so the whole balanced corpus is covered). Aggregate "
+            "= within-one-bucket ACCEPTANCE accuracy (#1437): triage priority is "
+            "ordinal (URGENT>NEEDS_RESPONSE>FYI>PROMOTIONAL), so a prediction is "
+            "credited when it is exact or an adjacent bucket (|rank diff|<=1) — "
+            "what users feel (nothing urgent buried). Reported secondaries (not in "
+            "the aggregate): urgent-vs-not binary accuracy, urgent recall "
+            "(anti-gaming floor), and exact 4-way category_accuracy. The corpus "
+            "uses the schema-2.0 taxonomy aligned with the agent's output labels "
+            f"(#1874); averaged over {n_runs} run(s) for run-to-run variance/CI "
+            "(#1894)"
         ),
         config={
             "harness": "gaia eval benchmark",
