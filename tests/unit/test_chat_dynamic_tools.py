@@ -23,6 +23,12 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
+# ChatAgent ships as the standalone gaia-agent-chat wheel (#1102); skip the
+# whole module when a framework-only env lacks it. Must run BEFORE the optional-
+# dep stubbing below — otherwise a skip would leave MagicMock stand-ins for
+# faiss/sentence_transformers in sys.modules and poison later modules in the run.
+pytest.importorskip("gaia_agent_chat")
+
 # Stub heavy optional deps only when genuinely absent (mirrors the budget test).
 _stubbed: list[str] = []
 for _mod in ("faiss", "sentence_transformers", "pdfplumber", "pypdf", "pypdfium2"):
@@ -31,8 +37,9 @@ for _mod in ("faiss", "sentence_transformers", "pdfplumber", "pypdf", "pypdfium2
     sys.modules[_mod] = MagicMock()
     _stubbed.append(_mod)
 
+from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
+
 from gaia.agents.base.tool_loader import ToolLoader  # noqa: E402
-from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
 from gaia.eval.tool_cost import build_doc_agent_skeleton  # noqa: E402
 
 for _mod in _stubbed:
@@ -93,6 +100,39 @@ def test_env_toggle_overrides_config(monkeypatch):
     assert a._maybe_build_tool_loader() is not None
     monkeypatch.setenv("GAIA_DYNAMIC_TOOLS", "0")
     assert a._maybe_build_tool_loader() is None
+
+
+def test_env_override_helper_none_when_unset(monkeypatch):
+    """``dynamic_tools_env_override`` returns ``None`` so callers fall back to
+    the persisted/config value — the single source of truth the UI router and
+    the agent resolver both read (#1798)."""
+    from gaia_agent_chat.agent import dynamic_tools_env_override
+
+    monkeypatch.delenv("GAIA_DYNAMIC_TOOLS", raising=False)
+    assert dynamic_tools_env_override() is None
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("1", True),
+        ("true", True),
+        ("TRUE", True),
+        ("yes", True),
+        ("on", True),
+        ("0", False),
+        ("false", False),
+        ("no", False),
+        ("", False),
+    ],
+)
+def test_env_override_helper_parses_truthy_set(monkeypatch, raw, expected):
+    """Same truthy set the resolver used to inline — pinned so the UI toggle
+    and the agent never disagree on what counts as "on"."""
+    from gaia_agent_chat.agent import dynamic_tools_env_override
+
+    monkeypatch.setenv("GAIA_DYNAMIC_TOOLS", raw)
+    assert dynamic_tools_env_override() is expected
 
 
 def test_env_threshold_and_max_overrides(monkeypatch):

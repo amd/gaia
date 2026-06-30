@@ -16,6 +16,8 @@ on:
       - "tests/**"
       - "setup.py"
       - "pyproject.toml"
+      - "installer/scripts/**"
+      - ".github/workflows/test_gaia_cli_windows.yml"
   pull_request:
     branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -24,6 +26,8 @@ on:
       - "tests/**"
       - "setup.py"
       - "pyproject.toml"
+      - "installer/scripts/**"
+      - ".github/workflows/test_gaia_cli_windows.yml"
   merge_group:
   workflow_dispatch:
 

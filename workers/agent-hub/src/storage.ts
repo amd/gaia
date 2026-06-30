@@ -10,6 +10,8 @@
  *   agents/<id>/<version>/gaia-agent.yaml   raw uploaded manifest, per version
  *   agents/<id>/<version>/README.md         README markdown, per version (optional)
  *   agents/<id>/<version>/CHANGELOG.md      changelog markdown, per version (optional)
+ *   agents/<id>/<version>/SPEC.md           spec/reference markdown, per version (optional)
+ *   agents/<id>/<version>/SKILL.md          AI-integration playbook markdown (optional)
  *   agents/<id>/<version>/<filename>        the artifact (wheel or binary)
  */
 
@@ -40,6 +42,18 @@ export function readmeKey(id: string, version: string): string {
 
 export function changelogKey(id: string, version: string): string {
   return `${versionDir(id, version)}CHANGELOG.md`;
+}
+
+export function specKey(id: string, version: string): string {
+  return `${versionDir(id, version)}SPEC.md`;
+}
+
+export function skillKey(id: string, version: string): string {
+  return `${versionDir(id, version)}SKILL.md`;
+}
+
+export function evalScorecardKey(id: string, version: string): string {
+  return `${versionDir(id, version)}SCORECARD.md`;
 }
 
 export function packageFilesKey(id: string, version: string): string {
@@ -73,6 +87,49 @@ export async function readChangelog(
 ): Promise<string> {
   const obj = await bucket.get(changelogKey(id, version));
   if (!obj) return "";
+  return obj.text();
+}
+
+/**
+ * Read the SPEC.md (technical reference) markdown for one version. Returns "" when
+ * none was published — the `spec` form part on POST /publish is optional.
+ */
+export async function readSpec(
+  bucket: R2Bucket,
+  id: string,
+  version: string
+): Promise<string> {
+  const obj = await bucket.get(specKey(id, version));
+  if (!obj) return "";
+  return obj.text();
+}
+
+/**
+ * Read the SKILL.md (AI-integration playbook) markdown for one version. Returns ""
+ * when none was published — the `skill` form part on POST /publish is optional.
+ */
+export async function readSkill(
+  bucket: R2Bucket,
+  id: string,
+  version: string
+): Promise<string> {
+  const obj = await bucket.get(skillKey(id, version));
+  if (!obj) return "";
+  return obj.text();
+}
+
+/**
+ * Read the eval scorecard markdown for one published version. Returns null when
+ * none was published — the `eval_scorecard` form part is optional, so its
+ * absence is not an error.
+ */
+export async function readEvalScorecard(
+  bucket: R2Bucket,
+  id: string,
+  version: string
+): Promise<string | null> {
+  const obj = await bucket.get(evalScorecardKey(id, version));
+  if (!obj) return null;
   return obj.text();
 }
 

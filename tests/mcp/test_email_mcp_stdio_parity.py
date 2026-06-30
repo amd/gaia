@@ -108,6 +108,16 @@ THREAD_REQUEST: Dict[str, Any] = {
 }
 
 
+# Batch envelope (#1887): one single + one thread item, reusing the exact
+# message payloads above so the per-item decisions match the single fixtures.
+BATCH_REQUEST: Dict[str, Any] = {
+    "items": [
+        SINGLE_REQUEST["payload"],
+        THREAD_REQUEST["payload"],
+    ]
+}
+
+
 def _rest_triage(request: Dict[str, Any]) -> Dict[str, Any]:
     """Run the REST-side service and return the JSON-mode response dict.
 
@@ -122,8 +132,20 @@ def _rest_triage(request: Dict[str, Any]) -> Dict[str, Any]:
     return resp.model_dump(mode="json")
 
 
+def _rest_triage_batch(request: Dict[str, Any]) -> Dict[str, Any]:
+    """Run the REST-side batch service and return the JSON-mode response dict.
+
+    Same deterministic path as :func:`_rest_triage` but for the #1887 batch
+    envelope (``{items: […]}`` in, ``{results: […]}`` out).
+    """
+    from gaia_agent_email.contract import BatchTriageRequest
+
+    resp = EmailTriageService().triage_batch(BatchTriageRequest.model_validate(request))
+    return resp.model_dump(mode="json")
+
+
 def _strip_runtime_usage(response: Dict[str, Any]) -> Dict[str, Any]:
-    """Drop the whole ``usage`` block before a byte-for-byte parity compare.
+    """Drop every ``usage`` block before a byte-for-byte parity compare.
 
     ``usage`` (#1540) reuses the runtime AgentResponse.stats measurement read
     from Lemonade's stateful ``/stats`` endpoint. None of its fields is
@@ -134,13 +156,23 @@ def _strip_runtime_usage(response: Dict[str, Any]) -> Dict[str, Any]:
     summary, action items, draft, suggested_action) is the property under
     test — not the reproducibility of a usage measurement, which each test
     asserts is *present* on both surfaces separately.
+
+    Walks BOTH response shapes: the single ``{request_kind, result}`` envelope
+    and the batch ``{results: [{index, result|error}, …]}`` envelope (#1887).
     """
     import copy
 
     out = copy.deepcopy(response)
+    # Single-email envelope: drop result.usage.
     result = out.get("result")
     if isinstance(result, dict):
         result.pop("usage", None)
+    # Batch envelope: drop usage from every per-item result.
+    results = out.get("results")
+    if isinstance(results, list):
+        for item in results:
+            if isinstance(item, dict) and isinstance(item.get("result"), dict):
+                item["result"].pop("usage", None)
     return out
 
 
@@ -226,9 +258,14 @@ class TestEmailMcpStdioParity:
 
     def test_tools_list_exposes_rest_surface(self):
         """The MCP server exposes the same capability set as the REST surface:
-        triage, draft, send."""
+        triage, batch triage, draft, send."""
         names = anyio.run(_list_tool_names)
-        assert {"triage_email", "draft_reply", "send_email"} <= set(names)
+        assert {
+            "triage_email",
+            "triage_email_batch",
+            "draft_reply",
+            "send_email",
+        } <= set(names)
 
     def test_single_email_parity(self):
         """Single-email triage: MCP stdio output == REST service output."""
@@ -257,6 +294,37 @@ class TestEmailMcpStdioParity:
         ), "MCP stdio triage diverged from REST for the thread fixture"
         parsed = parse_response(mcp_out)
         assert parsed.request_kind == "thread"
+
+    def test_batch_parity(self):
+        """Batch triage (#1887): MCP stdio output == REST service output.
+
+        Drives the SAME ``{items: [single, thread]}`` envelope over both
+        surfaces — ``triage_email_batch`` over MCP stdio and ``triage_batch``
+        on the REST service — and asserts the structured ``results[]`` arrays
+        are identical after stripping the non-reproducible per-item ``usage``.
+        """
+        rest = _rest_triage_batch(BATCH_REQUEST)
+        mcp_out = anyio.run(_call_tool, "triage_email_batch", BATCH_REQUEST)
+        assert _strip_runtime_usage(mcp_out) == _strip_runtime_usage(
+            rest
+        ), "MCP stdio batch triage diverged from REST for the batch fixture"
+        # Both surfaces produce a 2-item, order-preserved results array, each
+        # carrying a populated result (the deterministic path never errors).
+        assert len(mcp_out["results"]) == 2
+        for index, item in enumerate(mcp_out["results"]):
+            assert item["index"] == index
+            assert item["result"] is not None
+            assert item["error"] is None
+        # The batch results must match the single-path decisions for the same
+        # inputs — index 0 mirrors the single fixture, index 1 the thread.
+        single_rest = _strip_runtime_usage(_rest_triage(SINGLE_REQUEST))["result"]
+        thread_rest = _strip_runtime_usage(_rest_triage(THREAD_REQUEST))["result"]
+        stripped = _strip_runtime_usage(mcp_out)["results"]
+        assert stripped[0]["result"] == single_rest
+        assert stripped[1]["result"] == thread_rest
+        # usage echoes on both surfaces for every successful item (#1540).
+        assert mcp_out["results"][0]["result"]["usage"] is not None
+        assert rest["results"][0]["result"]["usage"] is not None
 
     def test_suggested_action_present_on_both_surfaces(self):
         """Schema 2.0: suggested_action must be present in both REST and MCP stdio (#1615)."""

@@ -78,206 +78,48 @@ The EMR agent uses three models, downloaded automatically on first run via `gaia
 
 ## Prerequisites
 
+Complete the [Setup](/setup) guide first to install Lemonade Server and `uv`. Then install GAIA with the EMR extras in a Python 3.12 virtual environment.
+
 <Tabs>
   <Tab title="Windows">
-    Installs [amd-gaia](https://pypi.org/project/amd-gaia/) from PyPI. **Recommended** for most users on **Windows**.
-
-    ### Step 1: Create Project Directory
-
-    Open **PowerShell** and run:
-    ```powershell
-    mkdir my-emr-project
-    ```
-    ```powershell
-    cd my-emr-project
-    ```
-
-    ### Step 2: Create Virtual Environment
-
     ```powershell
     uv venv .venv --python 3.12
-    ```
-
-    <Note>uv will automatically download Python 3.12 if not already installed.</Note>
-
-    ### Step 3: Activate the Environment
-
-    ```powershell
     .\.venv\Scripts\Activate.ps1
+    uv pip install "amd-gaia[api,rag]"
+    gaia-emr --help
     ```
 
     <Warning>
-      If you see a script execution error, run this once:
-      ```powershell
-      Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-      ```
-      Then retry the activation command.
+      If activation fails with a script execution error, run once:
+      `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`, then retry.
     </Warning>
-
-    You should see `(.venv)` in your terminal prompt when activated.
-
-    ### Step 4: Install GAIA with EMR Dependencies
-
-    ```powershell
-    uv pip install "amd-gaia[api,rag]"
-    ```
-
-    ### Step 5: Verify Installation
-
-    ```powershell
-    gaia-emr --help
-    ```
   </Tab>
 
   <Tab title="Linux">
-    Installs [amd-gaia](https://pypi.org/project/amd-gaia/) from PyPI. **Recommended** for most users on **Linux**.
-
-    ### Step 1: Create Project Directory
-
-    Open a **terminal** and run:
-    ```bash
-    mkdir my-emr-project
-    ```
-    ```bash
-    cd my-emr-project
-    ```
-
-    ### Step 2: Create Virtual Environment
-
     ```bash
     uv venv .venv --python 3.12
-    ```
-
-    <Note>uv will automatically download Python 3.12 if not already installed.</Note>
-
-    ### Step 3: Activate the Environment
-
-    ```bash
     source .venv/bin/activate
-    ```
-
-    You should see `(.venv)` in your terminal prompt when activated.
-
-    ### Step 4: Install GAIA with EMR Dependencies
-
-    ```bash
     uv pip install "amd-gaia[api,rag]"
-    ```
-
-    ### Step 5: Verify Installation
-
-    ```bash
     gaia-emr --help
     ```
   </Tab>
 
-  <Tab title="Windows (Dev)">
-    For contributors. Clones [amd/gaia](https://github.com/amd/gaia) from GitHub.
+  <Tab title="From Source (Dev)">
+    For contributors. Clone the repo and install in editable mode (changes take effect without reinstalling):
 
-    <Note>
-      **Requires:** [Git for Windows](https://git-scm.com/download/win) must be installed.
-    </Note>
-
-    ### Step 1: Clone the Repository
-
-    Open **PowerShell** and run:
-    ```powershell
-    git clone https://github.com/amd/gaia.git
-    ```
-    ```powershell
-    cd gaia
-    ```
-
-    ### Step 2: Create Virtual Environment
-
-    ```powershell
-    uv venv .venv --python 3.12
-    ```
-
-    ### Step 3: Activate the Environment
-
-    ```powershell
-    .\.venv\Scripts\Activate.ps1
-    ```
-
-    <Warning>
-      If you see a script execution error, run this once:
-      ```powershell
-      Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-      ```
-      Then retry the activation command.
-    </Warning>
-
-    You should see `(.venv)` in your prompt when activated.
-
-    ### Step 4: Install in Editable Mode
-
-    ```powershell
-    uv pip install -e ".[dev,api,rag]"
-    ```
-
-    ### Step 5: Verify Installation
-
-    ```powershell
-    gaia-emr --help
-    ```
-
-    <Note>
-      Changes to GAIA source code will take effect immediately without reinstalling.
-    </Note>
-  </Tab>
-
-  <Tab title="Linux (Dev)">
-    For contributors. Clones [amd/gaia](https://github.com/amd/gaia) from GitHub.
-
-    <Note>
-      **Requires:** Git must be installed (`sudo apt install git`).
-    </Note>
-
-    ### Step 1: Clone the Repository
-
-    Open a **terminal** and run:
     ```bash
     git clone https://github.com/amd/gaia.git
-    ```
-    ```bash
     cd gaia
-    ```
-
-    ### Step 2: Create Virtual Environment
-
-    ```bash
     uv venv .venv --python 3.12
-    ```
-
-    ### Step 3: Activate the Environment
-
-    ```bash
-    source .venv/bin/activate
-    ```
-
-    You should see `(.venv)` in your prompt when activated.
-
-    ### Step 4: Install in Editable Mode
-
-    ```bash
+    source .venv/bin/activate        # Windows: .\.venv\Scripts\Activate.ps1
     uv pip install -e ".[dev,api,rag]"
-    ```
-
-    ### Step 5: Verify Installation
-
-    ```bash
     gaia-emr --help
     ```
-
-    <Note>
-      Changes to GAIA source code will take effect immediately without reinstalling.
-    </Note>
   </Tab>
 </Tabs>
 
 <Note>
-  The `api` extra provides FastAPI and uvicorn for the web dashboard. The `rag` extra provides PyMuPDF for PDF processing.
+  The `api` extra provides FastAPI and uvicorn for the web dashboard; the `rag` extra provides PyMuPDF for PDF processing. `uv` downloads Python 3.12 automatically if it isn't already installed.
 </Note>
 
 <Tip>
@@ -287,10 +129,6 @@ The EMR agent uses three models, downloaded automatically on first run via `gaia
 ---
 
 ## Quick Start
-
-<Info>
-  **First time here?** Complete the [Setup](/setup) guide first to install Lemonade Server and uv.
-</Info>
 
 ### Step 1: Initialize (First Time Only)
 
@@ -546,99 +384,14 @@ The agent accepts scanned or photographed intake forms in these formats:
 
 ## Under the Hood
 
-### Image Preprocessing Pipeline
-
-Before reaching the VLM, intake forms go through an optimization pipeline:
-
-1. **EXIF Orientation** - Auto-rotates images based on camera metadata (critical for phone photos)
-2. **Resolution Scaling** - Resizes to max 1024px while preserving aspect ratio (balances quality vs. token count)
-3. **JPEG Compression** - Reduces file size with quality=85 for faster transmission to the model
-4. **Token Estimation** - Calculates expected image tokens to verify they fit within context window
-
-### Returning Patient Detection
-
-The agent uses a multi-signal approach to identify returning patients:
-
-- **Exact Match** - Name + DOB combination lookup in SQLite
-- **Fuzzy Match** - Levenshtein distance for misspellings ("Jon Smith" → "John Smith")
-- **Embedding Similarity** - Vector search using nomic-embed for semantic matching
-
-When a returning patient is detected, the agent highlights any changes from their previous record (new allergies, updated insurance, etc.).
-
-### Real-Time Dashboard Architecture
-
-The dashboard uses **Server-Sent Events (SSE)** for real-time updates without polling:
-
-- FastAPI backend streams processing events as they occur
-- React frontend subscribes to `/api/events` endpoint
-- Sub-100ms latency from file detection to UI update
-- No WebSocket complexity—SSE is simpler and works through proxies
-
-### Tool Calling for Database Queries
-
-When you ask a natural language question, the LLM uses **function calling** (tool use) to interact with the database:
-
-```mermaid
-%%{init: {'themeVariables': { 'fontSize': '18px' }}}%%
-sequenceDiagram
-    participant User
-    participant LLM
-    participant Tool
-    participant DB
-
-    User->>LLM: Query
-    LLM->>Tool: search_patients()
-    Tool->>DB: SQL query
-    DB-->>Tool: Results
-    Tool-->>LLM: Formatted
-    LLM-->>User: Response
-```
-
-This pattern ensures the LLM never directly writes SQL—it calls predefined, validated tools that safely construct queries.
+- **Image preprocessing** — Before reaching the VLM, forms are auto-rotated from EXIF orientation (critical for phone photos), scaled to a max 1024px dimension, and JPEG-compressed (quality 85) to balance extraction quality against image token count.
+- **Returning-patient detection** — A multi-signal lookup combines exact name + DOB match, fuzzy matching for misspellings ("Jon Smith" → "John Smith"), and `nomic-embed` vector similarity. When a returning patient is detected, changes from their previous record (new allergies, updated insurance) are highlighted.
+- **Real-time dashboard** — The FastAPI backend streams processing events to the React frontend over Server-Sent Events (SSE), so the UI updates within ~100ms of file detection without polling or WebSockets.
+- **Safe DB queries** — Natural language questions are answered via LLM tool calling: the model never writes SQL directly, it calls predefined, validated tools (e.g. `search_patients`) that construct queries safely.
 
 ---
 
 ## Troubleshooting
-
-### PyMuPDF Required
-
-```
-ERROR: PyMuPDF required for PDF processing
-```
-
-**Solution**: `pip install "amd-gaia[rag]"`
-
-### JSON Parse Failed
-
-```
-WARNING: Failed to parse extraction for: form.jpg
-```
-
-**Solution**: Check image quality and form layout clarity.
-
-### Database Locked
-
-```
-ERROR: database is locked
-```
-
-**Solution**: Only one agent should access the database at a time.
-
-### Slow First Run
-
-First run downloads models (LLM, VLM, embeddings) which may take several minutes. Subsequent runs start immediately.
-
-### Model Download Failed
-
-```
-Failed to download file: [model files]
-Download succeeded but failed to rename file: The process cannot access the file
-```
-
-**Solution**: Run `gaia-emr init` again to resume the download. If the error persists:
-1. Close any applications that may be using the model files
-2. Delete partial downloads in Lemonade's model cache directory
-3. Run `gaia-emr init` again
 
 ### Context Size Too Small
 
@@ -646,23 +399,39 @@ Download succeeded but failed to rename file: The process cannot access the file
 Context size too small! Image requires 4203 tokens but model context is only 4096.
 ```
 
-**Solution**: Increase Lemonade context size:
-1. Right-click Lemonade tray icon → Settings
-2. Set Context Size to **32768**
-3. Restart the model
+Large form images can require 4,000–8,000+ tokens. Set Lemonade context size to **32768**: right-click the Lemonade tray icon → Settings → Context Size → 32768, then restart the model.
 
-### Corrupted Model / Init Fails
+### Model Download Failed / Init Fails
 
-If `gaia-emr init` fails repeatedly or the agent won't start due to model errors:
+```
+Download succeeded but failed to rename file: The process cannot access the file
+```
 
-**Solution**: Delete the corrupted model from Lemonade's cache and restart:
-1. Close Lemonade Server (right-click tray icon → Exit)
-2. Navigate to the model cache directory:
-   - Windows: `%LOCALAPPDATA%\AMD\LemonadeModels\`
-   - Linux: `~/.local/share/lemonade/models/`
-3. Delete the corrupted model folder (e.g., `Gemma-4-E4B-it-GGUF/`)
-4. Restart Lemonade Server
-5. Run `gaia-emr init` again to re-download
+Run `gaia-emr init` again to resume. If it keeps failing, close any apps using the model files, delete the partial/corrupted model folder from Lemonade's cache (Windows: `%LOCALAPPDATA%\AMD\LemonadeModels\`, Linux: `~/.local/share/lemonade/models/`), restart Lemonade Server, then re-run `gaia-emr init`.
+
+### PyMuPDF Required
+
+```
+ERROR: PyMuPDF required for PDF processing
+```
+
+Install the RAG extra: `pip install "amd-gaia[rag]"`.
+
+### JSON Parse Failed
+
+```
+WARNING: Failed to parse extraction for: form.jpg
+```
+
+The VLM output wasn't valid JSON — usually a low-quality or unclear form image. Check image clarity, or re-run `gaia-emr test <file>` to inspect the raw extraction.
+
+### Database Locked
+
+```
+ERROR: database is locked
+```
+
+Only one agent process should access a given database file at a time. Stop other `gaia-emr` processes pointed at the same `--db` path.
 
 ---
 

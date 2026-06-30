@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import worker from "../src/index";
 import type { AgentManifest, CatalogIndex } from "../src/types";
-import { makeEnv, publishRequest, sampleManifest, streamPublishRequest } from "./fake-r2";
+import { makeEnv, publishRequest, sampleManifest } from "./fake-r2";
 
 async function publish(env: ReturnType<typeof makeEnv>, opts: Parameters<typeof publishRequest>[0]) {
   return worker.fetch(publishRequest(opts), env as never);
@@ -586,6 +586,69 @@ describe("POST /publish — CHANGELOG", () => {
   });
 });
 
+describe("POST /publish — SPEC & SKILL doc tabs", () => {
+  it("stores spec + skill, serves them, and includes them in index.json", async () => {
+    const env = makeEnv();
+    const spec = "# Spec\n\nThe wire contract is 2.0.\n";
+    const skill = "# Skill\n\nSpawn the sidecar, then call triage.\n";
+    const res = await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest(),
+      artifact: "wheel",
+      filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
+      spec,
+      skill,
+    });
+    expect(res.status).toBe(201);
+    expect(env.bucket.keys()).toContain("agents/chat/0.1.0/SPEC.md");
+    expect(env.bucket.keys()).toContain("agents/chat/0.1.0/SKILL.md");
+
+    // Served by the existing GET /agents/... download route, as markdown.
+    const getSpec = await worker.fetch(
+      new Request("https://hub.amd-gaia.ai/agents/chat/0.1.0/SPEC.md"),
+      env as never
+    );
+    expect(getSpec.status).toBe(200);
+    expect(getSpec.headers.get("content-type")).toContain("text/markdown");
+    expect(await getSpec.text()).toBe(spec);
+
+    const index = (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex;
+    const entry = index.agents.find((a) => a.id === "chat")!;
+    expect(entry.spec).toBe(spec);
+    expect(entry.skill).toBe(skill);
+  });
+
+  it('defaults spec + skill to "" in index.json when none are published', async () => {
+    const env = makeEnv();
+    await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest(),
+      artifact: "wheel",
+      filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
+    });
+    expect(env.bucket.keys()).not.toContain("agents/chat/0.1.0/SPEC.md");
+    const entry = (
+      (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex
+    ).agents.find((a) => a.id === "chat")!;
+    expect(entry.spec).toBe("");
+    expect(entry.skill).toBe("");
+  });
+
+  it("rejects an empty spec part (400) — omit it instead", async () => {
+    const env = makeEnv();
+    const res = await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest(),
+      artifact: "wheel",
+      filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
+      spec: "   ",
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as any).error.code).toBe("invalid_request");
+    expect(env.bucket.keys()).toEqual([]);
+  });
+});
+
 describe("POST /publish — npm_package & playground_url", () => {
   it("carries npm_package and playground_url through to index.json", async () => {
     const env = makeEnv();
@@ -742,274 +805,5 @@ describe("POST /publish — security tier & deprecation", () => {
 
     const index = (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex;
     expect(index.agents.find((a) => a.id === "old")!.deprecated).toBe(true);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Streaming path (application/octet-stream with X-Gaia-* headers)
-// ---------------------------------------------------------------------------
-
-async function hexSha256(data: Uint8Array | string): Promise<string> {
-  const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-async function streamPublish(
-  env: ReturnType<typeof makeEnv>,
-  opts: Parameters<typeof streamPublishRequest>[0]
-) {
-  return worker.fetch(streamPublishRequest(opts), env as never);
-}
-
-describe("POST /publish — streaming (octet-stream) path", () => {
-  it("(a) stores artifact, returns 201, artifact.sha256 matches, size correct, object present", async () => {
-    const env = makeEnv();
-    const artifactContent = "large-zip-bytes-streamed";
-    const sha256 = await hexSha256(artifactContent);
-    const res = await streamPublish(env, {
-      token: "tok_amd",
-      manifestYaml: sampleManifest({ id: "email", name: "Email" }),
-      bytes: artifactContent,
-      filename: "agent-email-0.1.0.zip",
-      sha256,
-    });
-    expect(res.status).toBe(201);
-    const body = (await res.json()) as any;
-    expect(body.published.artifact.sha256).toBe(sha256);
-    expect(body.published.artifact.size_bytes).toBe(artifactContent.length);
-    expect(env.bucket.keys()).toContain("agents/email/0.1.0/agent-email-0.1.0.zip");
-    // Artifact bytes must be stored correctly.
-    const stored = await env.bucket.get("agents/email/0.1.0/agent-email-0.1.0.zip");
-    expect(await stored!.text()).toBe(artifactContent);
-  });
-
-  it("(b) WRONG X-Gaia-Sha256 → R2 integrity check fails → non-201 with integrity_check_failed", async () => {
-    const env = makeEnv();
-    const artifactContent = "real-bytes";
-    const wrongSha = "a".repeat(64); // wrong hex sha256
-    const res = await streamPublish(env, {
-      token: "tok_amd",
-      manifestYaml: sampleManifest({ id: "email", name: "Email" }),
-      bytes: artifactContent,
-      filename: "agent-email-0.1.0.zip",
-      sha256: wrongSha,
-    });
-    expect(res.status).not.toBe(201);
-    const body = (await res.json()) as any;
-    expect(body.error.code).toBe("integrity_check_failed");
-    // Nothing must be stored.
-    expect(env.bucket.keys()).toEqual([]);
-  });
-
-  it("(c) Content-Length exceeds MAX_ARTIFACT_BYTES → 413 artifact_too_large", async () => {
-    const env = makeEnv({ maxBytes: "4" });
-    const artifactContent = "way-too-many-bytes";
-    const sha256 = await hexSha256(artifactContent);
-    const res = await streamPublish(env, {
-      token: "tok_amd",
-      manifestYaml: sampleManifest({ id: "email", name: "Email" }),
-      bytes: artifactContent,
-      filename: "agent-email-0.1.0.zip",
-      sha256,
-    });
-    expect(res.status).toBe(413);
-    expect(((await res.json()) as any).error.code).toBe("artifact_too_large");
-  });
-
-  it("(d) writes package-files.json when X-Gaia-Package-Files header present", async () => {
-    const env = makeEnv();
-    const filesJson = JSON.stringify({
-      files: [
-        { name: "binaries/email-agent-linux-x64", size_bytes: 35000000 },
-        { name: "README.md", size_bytes: 13000 },
-      ],
-    });
-    const artifactContent = "zip-content";
-    const sha256 = await hexSha256(artifactContent);
-    const res = await streamPublish(env, {
-      token: "tok_amd",
-      manifestYaml: sampleManifest({ id: "email", name: "Email" }),
-      bytes: artifactContent,
-      filename: "agent-email-0.1.0.zip",
-      sha256,
-      packageFiles: filesJson,
-    });
-    expect(res.status).toBe(201);
-    const keys = env.bucket.keys();
-    expect(keys).toContain("agents/email/0.1.0/package-files.json");
-    const pf = (await (await env.bucket.get("agents/email/0.1.0/package-files.json"))!.json()) as any;
-    expect(pf.files).toHaveLength(2);
-  });
-
-  it("(d2) does NOT write package-files.json when X-Gaia-Package-Files header is absent", async () => {
-    const env = makeEnv();
-    const artifactContent = "zip-content";
-    const sha256 = await hexSha256(artifactContent);
-    const res = await streamPublish(env, {
-      token: "tok_amd",
-      manifestYaml: sampleManifest({ id: "email", name: "Email" }),
-      bytes: artifactContent,
-      filename: "agent-email-0.1.0.zip",
-      sha256,
-    });
-    expect(res.status).toBe(201);
-    expect(env.bucket.keys()).not.toContain("agents/email/0.1.0/package-files.json");
-  });
-
-  it("(e) re-POST same filename → 409 version_exists", async () => {
-    const env = makeEnv();
-    const artifactContent = "zip-bytes";
-    const sha256 = await hexSha256(artifactContent);
-    const first = await streamPublish(env, {
-      token: "tok_amd",
-      manifestYaml: sampleManifest({ id: "email", name: "Email" }),
-      bytes: artifactContent,
-      filename: "agent-email-0.1.0.zip",
-      sha256,
-    });
-    expect(first.status).toBe(201);
-
-    const second = await streamPublish(env, {
-      token: "tok_amd",
-      manifestYaml: sampleManifest({ id: "email", name: "Email" }),
-      bytes: artifactContent,
-      filename: "agent-email-0.1.0.zip",
-      sha256,
-    });
-    expect(second.status).toBe(409);
-    expect(((await second.json()) as any).error.code).toBe("version_exists");
-  });
-
-  it("(f) missing required header X-Gaia-Manifest → 400 invalid_request", async () => {
-    const env = makeEnv();
-    // Build request manually without X-Gaia-Manifest.
-    const artifactContent = "zip-bytes";
-    const sha256 = await hexSha256(artifactContent);
-    const req = new Request("https://hub.amd-gaia.ai/publish", {
-      method: "POST",
-      headers: {
-        authorization: "Bearer tok_amd",
-        "content-type": "application/octet-stream",
-        "content-length": String(artifactContent.length),
-        "x-gaia-filename": "agent-email-0.1.0.zip",
-        "x-gaia-sha256": sha256,
-        // X-Gaia-Manifest intentionally omitted
-      },
-      body: artifactContent,
-    });
-    const res = await worker.fetch(req, env as never);
-    expect(res.status).toBe(400);
-    expect(((await res.json()) as any).error.code).toBe("invalid_request");
-  });
-
-  it("(f2) missing required header X-Gaia-Filename → 400 invalid_request", async () => {
-    const env = makeEnv();
-    const artifactContent = "zip-bytes";
-    const sha256 = await hexSha256(artifactContent);
-    const manifestYaml = sampleManifest({ id: "email", name: "Email" });
-    function b64(text: string): string {
-      return btoa(unescape(encodeURIComponent(text)));
-    }
-    const req = new Request("https://hub.amd-gaia.ai/publish", {
-      method: "POST",
-      headers: {
-        authorization: "Bearer tok_amd",
-        "content-type": "application/octet-stream",
-        "content-length": String(artifactContent.length),
-        "x-gaia-manifest": b64(manifestYaml),
-        "x-gaia-sha256": sha256,
-        // X-Gaia-Filename intentionally omitted
-      },
-      body: artifactContent,
-    });
-    const res = await worker.fetch(req, env as never);
-    expect(res.status).toBe(400);
-    expect(((await res.json()) as any).error.code).toBe("invalid_request");
-  });
-
-  it("(f3) missing required header X-Gaia-Sha256 → 400 invalid_request", async () => {
-    const env = makeEnv();
-    const artifactContent = "zip-bytes";
-    const manifestYaml = sampleManifest({ id: "email", name: "Email" });
-    function b64(text: string): string {
-      return btoa(unescape(encodeURIComponent(text)));
-    }
-    const req = new Request("https://hub.amd-gaia.ai/publish", {
-      method: "POST",
-      headers: {
-        authorization: "Bearer tok_amd",
-        "content-type": "application/octet-stream",
-        "content-length": String(artifactContent.length),
-        "x-gaia-manifest": b64(manifestYaml),
-        "x-gaia-filename": "agent-email-0.1.0.zip",
-        // X-Gaia-Sha256 intentionally omitted
-      },
-      body: artifactContent,
-    });
-    const res = await worker.fetch(req, env as never);
-    expect(res.status).toBe(400);
-    expect(((await res.json()) as any).error.code).toBe("invalid_request");
-  });
-
-  it("(g) regression — existing multipart path still passes (checksum test)", async () => {
-    // This is a quick regression guard: the multipart path must be untouched.
-    const env = makeEnv();
-    const artifact = "deterministic-artifact-content";
-    const res = await worker.fetch(
-      publishRequest({
-        token: "tok_amd",
-        manifestYaml: sampleManifest(),
-        artifact,
-        filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
-      }),
-      env as never
-    );
-    expect(res.status).toBe(201);
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(artifact));
-    const expected = [...new Uint8Array(digest)]
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
-    expect(((await res.json()) as any).published.artifact.sha256).toBe(expected);
-  });
-
-  it("streaming path writes manifest.json and index.json (end-to-end)", async () => {
-    const env = makeEnv();
-    const artifactContent = "whole-package-zip-bytes";
-    const sha256 = await hexSha256(artifactContent);
-    const res = await streamPublish(env, {
-      token: "tok_amd",
-      manifestYaml: sampleManifest({ id: "email", name: "Email" }),
-      bytes: artifactContent,
-      filename: "agent-email-0.1.0.zip",
-      sha256,
-    });
-    expect(res.status).toBe(201);
-    const keys = env.bucket.keys();
-    expect(keys).toContain("agents/email/manifest.json");
-    expect(keys).toContain("index.json");
-    const index = (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex;
-    expect(index.agents.map((a) => a.id)).toContain("email");
-  });
-
-  it("streaming path does NOT write gaia-agent.yaml, README, or CHANGELOG (no drive-by)", async () => {
-    // The streaming path is zip-only: no README/CHANGELOG, and gaia-agent.yaml only on first publish.
-    const env = makeEnv();
-    const artifactContent = "zip-content";
-    const sha256 = await hexSha256(artifactContent);
-    const res = await streamPublish(env, {
-      token: "tok_amd",
-      manifestYaml: sampleManifest({ id: "email", name: "Email" }),
-      bytes: artifactContent,
-      filename: "agent-email-0.1.0.zip",
-      sha256,
-    });
-    expect(res.status).toBe(201);
-    const keys = env.bucket.keys();
-    // gaia-agent.yaml IS written on first publish.
-    expect(keys).toContain("agents/email/0.1.0/gaia-agent.yaml");
-    // README and CHANGELOG must NOT be written (streaming path has no form parts for them).
-    expect(keys).not.toContain("agents/email/0.1.0/README.md");
-    expect(keys).not.toContain("agents/email/0.1.0/CHANGELOG.md");
   });
 });

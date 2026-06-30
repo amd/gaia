@@ -58,7 +58,11 @@ jobs:
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
 
       - name: Install dependencies
-        run: uv pip install --system -e .[dev,rag]
+        run: |
+          uv pip install --system -e .[dev,rag]
+          # verify_*.py instantiate ChatAgent, which ships as the standalone
+          # gaia-agent-chat wheel (#1102).
+          uv pip install --system -e hub/agents/python/chat
 
       - name: Run Path Validator Security Tests
         env:
@@ -155,7 +159,12 @@ jobs:
         shell: pwsh
 
       - name: Install dependencies
-        run: uv pip install --system -e .[dev,rag]
+        run: |
+          uv pip install --system -e .[dev,rag]
+          # verify_*.py instantiate ChatAgent, which ships as the standalone
+          # gaia-agent-chat wheel (#1102).
+          uv pip install --system -e hub/agents/python/chat
+        shell: pwsh
 
       - name: Run Path Validator Security Tests
         shell: pwsh

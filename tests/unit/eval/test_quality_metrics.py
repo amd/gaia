@@ -383,5 +383,88 @@ class TestEvaluateGate:
             evaluate_gate(bad, th)
 
 
+# Schema-2.0 taxonomy ground truth for the acceptance metric (#1437).
+# Ordinal ladder: urgent(3) > needs_response(2) > fyi(1) > promotional(0); personal off-scale.
+GT2 = {
+    "_meta": {"note": "metadata row — must be skipped"},
+    "u": {"category": "URGENT"},
+    "n": {"category": "NEEDS_RESPONSE"},
+    "f": {"category": "FYI"},
+    "p": {"category": "PROMOTIONAL"},
+    "x": {"category": "PERSONAL"},
+}
+
+
+class TestWithinOneBucketAccuracy:
+    def test_exact_matches_are_credited(self):
+        from gaia.eval.quality_metrics import within_one_bucket_accuracy
+
+        preds = {"u": "urgent", "n": "needs_response", "f": "fyi", "p": "promotional"}
+        assert within_one_bucket_accuracy(preds, GT2) == 1.0
+
+    def test_adjacent_buckets_credited(self):
+        from gaia.eval.quality_metrics import within_one_bucket_accuracy
+
+        # urgent->needs_response (adj), fyi->needs_response (adj),
+        # promotional->fyi (adj) — all within one. 3/3.
+        preds = {"u": "needs_response", "f": "needs_response", "p": "fyi"}
+        assert within_one_bucket_accuracy(preds, GT2) == 1.0
+
+    def test_distance_two_not_credited(self):
+        from gaia.eval.quality_metrics import within_one_bucket_accuracy
+
+        # promotional(0)->needs_response(2) distance 2; urgent(3)->fyi(1) distance 2.
+        preds = {"p": "needs_response", "u": "fyi"}
+        assert within_one_bucket_accuracy(preds, GT2) == 0.0
+
+    def test_mixed(self):
+        from gaia.eval.quality_metrics import within_one_bucket_accuracy
+
+        # u exact(✓), n->fyi adj(✓), f->urgent dist2(✗), p->needs_response dist2(✗)
+        preds = {"u": "urgent", "n": "fyi", "f": "urgent", "p": "needs_response"}
+        assert within_one_bucket_accuracy(preds, GT2) == 0.5
+
+    def test_personal_is_exact_only(self):
+        from gaia.eval.quality_metrics import within_one_bucket_accuracy
+
+        # x is PERSONAL (off-scale): exact credited, neighbor-by-rank NOT.
+        assert within_one_bucket_accuracy({"x": "personal"}, GT2) == 1.0
+        # fyi has rank 1 but personal has no rank → no ordinal credit.
+        assert within_one_bucket_accuracy({"x": "fyi"}, GT2) == 0.0
+
+    def test_unknown_predicted_label_exact_only(self):
+        from gaia.eval.quality_metrics import within_one_bucket_accuracy
+
+        assert within_one_bucket_accuracy({"u": "bogus"}, GT2) == 0.0
+
+    def test_no_overlap_is_zero(self):
+        from gaia.eval.quality_metrics import within_one_bucket_accuracy
+
+        assert within_one_bucket_accuracy({"zzz": "urgent"}, GT2) == 0.0
+
+
+class TestAcceptanceMetrics:
+    def test_bundle_shape_and_values(self):
+        from gaia.eval.quality_metrics import acceptance_metrics
+
+        # u exact, n->fyi adj, f exact, p->fyi adj  → within_one 4/4 = 1.0
+        # exact: u,f correct; n,p wrong → category_accuracy 2/4 = 0.5
+        preds = {"u": "urgent", "n": "fyi", "f": "fyi", "p": "fyi"}
+        m = acceptance_metrics(preds, GT2)
+        assert set(m) == {
+            "within_one_bucket_accuracy",
+            "urgent_vs_not_accuracy",
+            "urgent_recall",
+            "category_accuracy",
+        }
+        assert m["within_one_bucket_accuracy"] == 1.0
+        assert m["category_accuracy"] == 0.5
+        # needs-attention truth: u,n positive; f,p negative.
+        # preds positive (urgent/needs_response): only u. So tp=1(u), fn=1(n),
+        # fp=0, tn=2(f,p). recall=1/2=0.5, accuracy=3/4=0.75.
+        assert m["urgent_recall"] == 0.5
+        assert m["urgent_vs_not_accuracy"] == 0.75
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

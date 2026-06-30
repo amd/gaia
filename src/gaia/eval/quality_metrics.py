@@ -20,7 +20,7 @@ Provides corpus-agnostic scoring primitives:
 **FP/FN axis.** Email triage has two independent binary axes — a spam/phishing
 axis (the corpus tracks ``is_spam`` / ``is_phishing`` booleans) and a
 "needs-attention" axis (category ∈ ``NEEDS_ATTENTION_CATEGORIES`` = {urgent,
-actionable}). #1278's bars (FP<5% / FN<2%) are coherent on the attention axis
+needs_response}). #1278's bars (FP<5% / FN<2%) are coherent on the attention axis
 (missing an important mail is worse than a false alarm), so the gate defaults to
 it — but the axis is a *manifest* value, so flipping the gate to the spam axis is
 a data edit. This module still exposes neutral primitives for *all* axes. Ground
@@ -50,7 +50,23 @@ _METADATA_KEYS = {"_meta", "_comment", "_metadata"}
 # Default attention axis: which categories count as "needs attention" (the axis
 # #1278's FP/FN bars are coherent on). Missing one of these is worse than a false
 # alarm — the asymmetry the bars encode.
-NEEDS_ATTENTION_CATEGORIES = {"urgent", "actionable"}
+NEEDS_ATTENTION_CATEGORIES = {"urgent", "needs_response"}
+
+# Ordinal priority scale for the schema-2.0 triage taxonomy (#1437). Triage
+# priority is an *ordinal* scale, so the user-facing "acceptance" question is "how
+# far off" — not "exact match". Within-one-bucket on this ladder is the gated
+# acceptance metric (#1437: 80% target on within-one / urgent-vs-not, NOT exact
+# 4-way). Ordering: URGENT > NEEDS_RESPONSE > FYI > PROMOTIONAL. PERSONAL is absent
+# from the #1230 corpus and is not a priority *level*, so it is deliberately not on
+# the scale: a PERSONAL prediction/label is scored exact-only (see
+# ``within_one_bucket_accuracy``). Re-place it here if the corpus gains PERSONAL
+# examples. Keys are lowercase for the module's case-insensitive comparisons.
+ORDINAL_PRIORITY: dict[str, int] = {
+    "urgent": 3,
+    "needs_response": 2,
+    "fyi": 1,
+    "promotional": 0,
+}
 
 
 @dataclass
@@ -144,6 +160,75 @@ def category_accuracy(
     return round(correct / matched, 4) if matched else 0.0
 
 
+def within_one_bucket_accuracy(
+    predictions: dict[str, str], ground_truth: dict[str, dict]
+) -> float:
+    """Ordinal within-one-bucket accuracy — the gated acceptance metric (#1437).
+
+    Credits a prediction when it is exact OR an *adjacent* bucket on the ordinal
+    priority ladder (:data:`ORDINAL_PRIORITY`): ``|rank(pred) - rank(expected)| <= 1``.
+    This is what users actually feel — nothing urgent buried in low-priority — and
+    is the metric #1437 sets the 80% bar on (exact 4-way agreement is above the
+    on-device ceiling for a 4B model; single-rater human agreement on subjective
+    priority is only ~60–75%).
+
+    A label not on the ordinal scale (e.g. ``PERSONAL``, or any unrecognized
+    category) has no defined distance, so it is scored **exact-only**: credited
+    only on a case-insensitive exact match. Same overlap/metadata semantics as
+    :func:`category_accuracy` (only ids present in both, labelled rows only).
+    Returns 0.0 if no ids overlap.
+    """
+    matched = 0
+    correct = 0
+    for gid in _labelled_ids(ground_truth):
+        if gid not in predictions:
+            continue
+        matched += 1
+        expected = str(ground_truth[gid]["category"]).strip().lower()
+        actual = str(predictions[gid]).strip().lower()
+        exp_rank = ORDINAL_PRIORITY.get(expected)
+        act_rank = ORDINAL_PRIORITY.get(actual)
+        if exp_rank is None or act_rank is None:
+            # Off-scale label (PERSONAL / unknown) — no ordinal distance defined,
+            # so fall back to exact match rather than inventing a neighbor.
+            if actual == expected:
+                correct += 1
+        elif abs(act_rank - exp_rank) <= 1:
+            correct += 1
+    return round(correct / matched, 4) if matched else 0.0
+
+
+def acceptance_metrics(
+    predictions: dict[str, str], ground_truth: dict[str, dict]
+) -> dict[str, float]:
+    """The acceptance metric bundle (#1437) — one source of truth for harness + adapter.
+
+    Returns the gated aggregate plus the reported secondaries so the benchmark and
+    the scorecard adapter never compute these two different ways:
+
+    * ``within_one_bucket_accuracy`` — the gated aggregate (ordinal, see above).
+    * ``urgent_vs_not_accuracy`` — binary acceptance on the needs-attention axis
+      ({urgent, needs_response} vs rest); "did the agent get the urgent-vs-not call
+      right". Reported secondary.
+    * ``urgent_recall`` — recall on that same axis (fraction of true needs-attention
+      mail flagged as such); the input to the gate's anti-gaming URGENT floor — a
+      high aggregate must not come with buried urgent mail.
+    * ``category_accuracy`` — exact 4-way match; reported secondary (#1437 keeps it
+      as a non-gating reference).
+    """
+    attention = confusion_for_categories(
+        predictions, ground_truth, NEEDS_ATTENTION_CATEGORIES
+    )
+    return {
+        "within_one_bucket_accuracy": within_one_bucket_accuracy(
+            predictions, ground_truth
+        ),
+        "urgent_vs_not_accuracy": attention.accuracy,
+        "urgent_recall": attention.recall,
+        "category_accuracy": category_accuracy(predictions, ground_truth),
+    }
+
+
 def binary_confusion(predictions: dict[str, bool], truth: dict[str, bool]) -> Confusion:
     """Confusion counts over ids present in both ``predictions`` and ``truth``."""
     c = Confusion()
@@ -184,7 +269,7 @@ def confusion_for_categories(
     positive_categories: set[str],
 ) -> Confusion:
     """One-vs-rest confusion treating ``positive_categories`` as the positive
-    class (e.g. ``{"urgent", "actionable"}`` for a needs-attention axis)."""
+    class (e.g. ``{"urgent", "needs_response"}`` for a needs-attention axis)."""
     positives = {c.strip().lower() for c in positive_categories}
     predictions = {
         gid: cat.strip().lower() in positives

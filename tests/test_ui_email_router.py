@@ -107,9 +107,9 @@ def test_triage_returns_200_schema_2_shape(ui_client):
     assert resp.status_code == 200, resp.text
     body = resp.json()
 
-    # Schema-2.0 envelope shape
+    # Contract envelope shape — response echoes the server's contract version.
     assert "schema_version" in body
-    assert body.get("schema_version") == "2.0"
+    assert body.get("schema_version") == API_VERSION
     assert body.get("request_kind") == "single"
 
     result = body.get("result", {})
