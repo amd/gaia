@@ -9,13 +9,13 @@
     "PROMOTIONAL": 0.537,
     "PERSONAL": 0.2424
   },
-  "is_spam_accuracy": 0.747,
+  "is_spam_accuracy": 0.9719,
   "is_phishing_accuracy": 0.8112,
   "scored": 249,
   "correct": 180,
   "tolerance_pp": 5,
   "_recorded_on": "2026-06-30",
-  "_recorded_by": "real measurement on Gemma-4-E2B-it-GGUF via production heuristic + LLM-assist triage path (#1107)",
+  "_recorded_by": "real measurement on Gemma-4-E2B-it-GGUF via production heuristic + LLM-assist triage path (#1107); is_spam_accuracy recomputed offline after ground-truth correction (#1904: spamassassin/ling_spam HAM emails removed from is_spam=True)",
   "_misses": [
     {
       "id": "02e78d1a85996110",
