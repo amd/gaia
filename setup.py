@@ -271,8 +271,6 @@ setup(
         "agent-docqa": ["gaia-agent-docqa"],
         "agent-routing": ["gaia-agent-routing"],
         "agent-email": ["gaia-agent-email"],
-        "agent-docqa": ["gaia-agent-docqa"],
-        "agent-routing": ["gaia-agent-routing"],
         "agent-chat": ["gaia-agent-chat"],
         "agents": [
             "gaia-agent-summarize",
@@ -289,8 +287,6 @@ setup(
             "gaia-agent-docqa",
             "gaia-agent-routing",
             "gaia-agent-email",
-            "gaia-agent-docqa",
-            "gaia-agent-routing",
             "gaia-agent-chat",
         ],
     },
