@@ -45,6 +45,25 @@ class _Session:
         return self._make()
 
 
+def test_default_timeout_from_env(monkeypatch):
+    # Fix F: no explicit timeout → reads GAIA_EMAIL_SIDECAR_TIMEOUT (default 300).
+    monkeypatch.delenv("GAIA_EMAIL_SIDECAR_TIMEOUT", raising=False)
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=_Session({}))
+    assert proxy.timeout == 300.0
+
+    monkeypatch.setenv("GAIA_EMAIL_SIDECAR_TIMEOUT", "120")
+    proxy2 = EmailSidecarProxy("http://127.0.0.1:9100", session=_Session({}))
+    assert proxy2.timeout == 120.0
+
+
+def test_explicit_timeout_overrides_env(monkeypatch):
+    monkeypatch.setenv("GAIA_EMAIL_SIDECAR_TIMEOUT", "999")
+    proxy = EmailSidecarProxy(
+        "http://127.0.0.1:9100", session=_Session({}), timeout=60.0
+    )
+    assert proxy.timeout == 60.0
+
+
 def test_triage_forwards_and_returns_envelope_unchanged():
     envelope = {"request_kind": "single", "result": {"category": "primary"}}
     sess = _Session(envelope)

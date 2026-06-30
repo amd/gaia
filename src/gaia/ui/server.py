@@ -622,7 +622,8 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
         # Lazily spawned on the first /v1/email request (not at startup), so
         # users who never use email never pay for a sidecar.
-        app.state.email_sidecar_manager = EmailSidecarManager()
+        # Pin the email REST contract MAJOR so a breaking sidecar upgrade fails loudly (no silent drift); bump in lockstep with the contract SCHEMA_VERSION major.
+        app.state.email_sidecar_manager = EmailSidecarManager(expected_api_version="2")
         app.include_router(email_sidecar_router)
         logger.info(
             "Email REST surface served by out-of-process sidecar "

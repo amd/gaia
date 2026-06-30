@@ -420,10 +420,7 @@ class EmailSidecarManager:
 
     def _shutdown_locked(self, timeout: float = 5.0) -> None:
         if self._atexit_registered:
-            try:
-                atexit.unregister(self.shutdown)
-            except Exception:  # noqa: BLE001 - unregister is best-effort
-                pass
+            atexit.unregister(self.shutdown)
             self._atexit_registered = False
         proc = self._proc
         if proc is None:

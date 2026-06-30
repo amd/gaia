@@ -11,6 +11,8 @@ tracking issue rather than silently no-op — no fallback, no fake success.
 
 from __future__ import annotations
 
+import os
+
 from gaia.logger import get_logger
 from gaia.ui.email_sidecar.errors import RouteNotAvailableError, SidecarHTTPError
 
@@ -35,9 +37,13 @@ def _extract_detail(resp) -> str:
 
 
 class EmailSidecarProxy:
-    def __init__(self, base_url: str, *, session=None, timeout: float = 900.0):
+    def __init__(self, base_url: str, *, session=None, timeout: float | None = None):
         self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
+        self.timeout = (
+            timeout
+            if timeout is not None
+            else float(os.environ.get("GAIA_EMAIL_SIDECAR_TIMEOUT", "300"))
+        )
         if session is None:
             import requests
 
