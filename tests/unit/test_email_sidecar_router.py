@@ -3,6 +3,7 @@
 """The sidecar-backed /v1/email REST router: lazy-start, proxy, error passthrough,
 and the security allowlist (no connector write routes)."""
 
+import requests as _requests
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -115,6 +116,21 @@ def test_missing_manager_returns_500():
     app.include_router(email_router)
     r = TestClient(app, raise_server_exceptions=False).post("/v1/email/triage", json={})
     assert r.status_code == 500
+
+
+def test_connection_error_surfaces_as_503_with_actionable_detail():
+    # Fix B: a raw requests.ConnectionError (sidecar crashed mid-request, after
+    # the is_running pre-check) must surface as a loud 503, not an unhandled 500.
+    mgr = _FakeManager(
+        proxy_error=_requests.exceptions.ConnectionError(
+            "Connection refused to 127.0.0.1:9999"
+        )
+    )
+    client = _client(mgr)
+    r = client.post("/v1/email/triage", json={})
+    assert r.status_code == 503
+    assert "email sidecar unreachable" in r.json()["detail"]
+    assert "Connection refused" in r.json()["detail"]
 
 
 def test_connector_routes_not_exposed():

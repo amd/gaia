@@ -16,6 +16,7 @@ grants"), so a UI request can never drive a cross-process grant write.
 
 from __future__ import annotations
 
+import requests
 from fastapi import APIRouter, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
@@ -36,6 +37,7 @@ async def _get_proxy(request: Request):
             detail="email sidecar manager not configured on app.state",
         )
     try:
+        # The RLock inside manager.start() serializes concurrent lazy-start callers and re-checks is_running, so this unlocked pre-check is safe (not a TOCTOU race).
         if not manager.is_running:
             await run_in_threadpool(manager.start)
         return manager.proxy()
@@ -53,6 +55,10 @@ async def _forward(fn, *args):
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
     except SidecarError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(
+            status_code=503, detail=f"email sidecar unreachable: {e}"
+        ) from e
 
 
 @router.post("/triage")
