@@ -1,14 +1,16 @@
 ---
 title: "v0.22.0"
-description: "The email agent now runs inside the Agent UI as a no-Node sidecar with batch triage, search, archive, and calendar on the REST contract — plus persistent default models, an NPU context-size fix, and an opt-in dynamic tool loader."
+description: "The email agent now runs inside the Agent UI as a no-Node sidecar — triage and batch triage verified end-to-end, with search, archive, and calendar added to the REST contract (connector-gated) — plus persistent default models, an NPU context-size fix, and an opt-in dynamic tool loader."
 ---
 
 # GAIA v0.22.0 Release Notes
 
 GAIA v0.22.0 brings the email triage agent fully into the Agent UI. It now runs as
 an out-of-process sidecar — no Node.js or npm on the runtime path — so the Agent UI
-stays lean while the email agent gets its own REST surface: batch triage, inbox
-search, pre-scan, archive/quarantine, and calendar all land on the same contract.
+stays lean while the email agent gets its own REST surface. Triage and batch triage
+are verified end-to-end on AMD hardware; inbox search, pre-scan, archive/quarantine,
+and calendar are added to the same contract and fail loudly until a Gmail or
+Microsoft mailbox is connected.
 Alongside that, `gaia config` gets a persistent default model, the NPU profile's
 context-size bug is fixed, and a Beta dynamic-tools toggle speeds up the Doc Agent's
 first response.
@@ -20,9 +22,10 @@ first response.
 - **Triage a whole inbox in one call** — a new batch endpoint takes an array of
   emails and returns categorized results in the same order, instead of one
   request per message.
-- **Search, archive, quarantine, and calendar now have a REST contract** — the email
-  schema grows from triage-only to a full inbox surface, with confirmation-gated
-  destructive actions.
+- **Search, archive, quarantine, and calendar added to the REST contract** — the
+  email schema grows from triage-only to a full inbox surface, with
+  confirmation-gated destructive actions. These routes require a connected
+  mailbox; without one they fail loudly with an actionable 503.
 - **Set your default model once** — `gaia config set default_model <id>` persists
   across every model-bearing command, so you stop passing `--model` everywhere.
 - **NPU profile context fixed** — the NPU profile was silently capping context at
@@ -41,7 +44,9 @@ ephemeral port, health-checks it, proxies every `/v1/email/*` request to it, and
 tree-kills it the moment the parent process exits or crashes — so nothing is ever
 left orphaned. A `dev` mode runs the same contract straight from source with hot
 reload, for anyone iterating on the agent itself. Try it: open the Agent UI and
-trigger an email triage from the chat — the rest happens automatically. (PR
+trigger an email triage from the chat — the backend spawns and proxies to the
+sidecar automatically. (Search, archive, and calendar require a connected Gmail
+or Microsoft mailbox.) (PR
 [#1884](https://github.com/amd/gaia/pull/1884))
 
 ---
@@ -64,7 +69,10 @@ a lightweight pre-scan summary, archive/unarchive, quarantine/unquarantine for
 phishing or spam, and calendar event listing, preview, creation, and RSVP — all on
 the same `/v1/email/*` surface. Destructive actions like archive require an explicit
 confirmation token, and any route that needs a connected mailbox fails loudly with
-an actionable message instead of guessing. (PR
+an actionable 503 instead of guessing. For this release, search, archive,
+quarantine, and calendar were verified at the contract level (route shape,
+confirmation-gating, fail-loud); their behavior against live mail is exercised
+once a connector is configured. (PR
 [#1883](https://github.com/amd/gaia/pull/1883))
 
 ---
@@ -120,8 +128,8 @@ description.
 | Feature | Hardware | Result |
 |---|---|---|
 | Persistent default model | Strix Halo (NPU) | Set → persisted → overwritten, clean |
-| Email single + batch triage | Radeon GPU + Strix Halo | Both machines, real Lemonade inference |
-| Email schema 2.1 (18 routes) | Radeon GPU | All routes present; confirmation-gated archive (403 without token); fail-loud 503 on missing mailbox |
+| Email triage (single + batch), agent loop | Strix Halo + Radeon GPU | `gaia eval benchmark` — real LLM tool-calling loop over a synthetic mailbox (FakeGmailBackend), real Lemonade inference |
+| Email schema 2.1 — search / archive / quarantine / calendar | Radeon GPU | Contract-level only: all routes present; archive 403 without token; fail-loud 503 on no connected mailbox. Live-mail behavior connector-gated, not exercised this release |
 | NPU 32k context | Strix Halo (cold NPU load) | `gaia init --profile npu` confirmed `ctx_size: 32768` on `gemma4-it-e2b-FLM`, live inference verified |
 | Email sidecar lifecycle | Radeon GPU | Lazy spawn, health-check, proxied triage, and clean tree-kill on shutdown all confirmed in dev mode |
 | Dynamic Tools toggle | Radeon GPU (Ubuntu, browser) | Toggled on/off in the live Agent UI, state persisted via the settings API |
