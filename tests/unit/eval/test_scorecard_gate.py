@@ -306,3 +306,160 @@ class TestCliErrorHandling:
             ]
         )
         assert result == 1
+
+
+# ---------------------------------------------------------------------------
+# Acceptance bar (#1437) + URGENT floor + variance-aware regression (#1894)
+# ---------------------------------------------------------------------------
+
+
+def _make_acceptance_card(
+    path: Path,
+    *,
+    version: str,
+    within_one: float,
+    urgent_recall: float = 0.85,
+    stdev: float | None = None,
+) -> Path:
+    """Write a SCORECARD.md whose gated aggregate is within-one-bucket, with an
+    urgent_recall secondary and (optionally) a recorded within-one stdev."""
+    metrics = [
+        {"name": "within_one_bucket_accuracy", "value": within_one, "weight": 1.0},
+        {"name": "urgent_recall", "value": urgent_recall, "weight": 0.0},
+        {"name": "category_accuracy", "value": 0.42, "weight": 0.0},
+    ]
+    config = {"model": "test", "n_runs": 3}
+    if stdev is not None:
+        config["acceptance_variance"] = {
+            "n_runs": 3,
+            "within_one_bucket_accuracy": {"n": 3, "mean": within_one, "stdev": stdev},
+        }
+    payload = ResultPayload(
+        agent_name="test-agent",
+        agent_version=version,
+        dataset_reference="test/fixture",
+        dataset_description="test dataset",
+        dataset_size=100,
+        methodology="unit test",
+        config=config,
+        test_cases_run=100,
+        metrics=metrics,
+        aggregate_name="weighted_accuracy",
+        generated_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        inherited_from=None,
+    )
+    path.write_text(render_scorecard(payload))
+    return path
+
+
+class TestAbsoluteAcceptanceBar:
+    def test_below_bar_fails(self, tmp_path):
+        card = _make_acceptance_card(
+            tmp_path / "SCORECARD.md", version="0.3.0", within_one=0.75
+        )
+        # 75.0 < 80 → block, even with no baseline (first adoption).
+        assert main(["--scorecard", str(card), "--min-aggregate", "80"]) == 1
+
+    def test_at_or_above_bar_passes(self, tmp_path):
+        card = _make_acceptance_card(
+            tmp_path / "SCORECARD.md", version="0.3.0", within_one=0.83
+        )
+        assert main(["--scorecard", str(card), "--min-aggregate", "80"]) == 0
+
+    def test_no_min_aggregate_skips_bar(self, tmp_path):
+        # Report mode: a low score still passes presence-only when no bar is set.
+        card = _make_acceptance_card(
+            tmp_path / "SCORECARD.md", version="0.3.0", within_one=0.10
+        )
+        assert main(["--scorecard", str(card)]) == 0
+
+
+class TestUrgentRecallFloor:
+    def test_below_floor_fails(self, tmp_path):
+        card = _make_acceptance_card(
+            tmp_path / "SCORECARD.md",
+            version="0.3.0",
+            within_one=0.90,
+            urgent_recall=0.50,
+        )
+        # Aggregate passes (90) but urgent mail is buried (0.50 < 0.70) → block.
+        assert (
+            main(
+                [
+                    "--scorecard",
+                    str(card),
+                    "--min-aggregate",
+                    "80",
+                    "--min-urgent-recall",
+                    "0.70",
+                ]
+            )
+            == 1
+        )
+
+    def test_above_floor_passes(self, tmp_path):
+        card = _make_acceptance_card(
+            tmp_path / "SCORECARD.md",
+            version="0.3.0",
+            within_one=0.83,
+            urgent_recall=0.78,
+        )
+        assert (
+            main(
+                [
+                    "--scorecard",
+                    str(card),
+                    "--min-aggregate",
+                    "80",
+                    "--min-urgent-recall",
+                    "0.70",
+                ]
+            )
+            == 0
+        )
+
+    def test_floor_set_but_metric_absent_fails_loud(self, tmp_path):
+        # A category-only card (no urgent_recall) must fail loud, not pass silently.
+        card = _write_card(tmp_path, "0.3.0", accuracy=0.9)
+        assert main(["--scorecard", str(card), "--min-urgent-recall", "0.70"]) == 1
+
+
+class TestVarianceAwareRegression:
+    def test_dip_within_noise_band_passes(self, tmp_path):
+        # Baseline 84 ± stdev 0.02 (×100 = 2.0 band, k=1). Candidate 83 ≥ 84−2=82 → pass.
+        base = _make_acceptance_card(
+            tmp_path / "base.md", version="0.3.0", within_one=0.84, stdev=0.02
+        )
+        cand = _make_acceptance_card(
+            tmp_path / "SCORECARD.md", version="0.3.1", within_one=0.83, stdev=0.02
+        )
+        assert main(["--scorecard", str(cand), "--baseline-file", str(base)]) == 0
+
+    def test_dip_beyond_noise_band_fails(self, tmp_path):
+        # Candidate 80 < 84−2=82 → real regression, blocks.
+        base = _make_acceptance_card(
+            tmp_path / "base.md", version="0.3.0", within_one=0.84, stdev=0.02
+        )
+        cand = _make_acceptance_card(
+            tmp_path / "SCORECARD.md", version="0.3.1", within_one=0.80, stdev=0.02
+        )
+        assert main(["--scorecard", str(cand), "--baseline-file", str(base)]) == 1
+
+    def test_no_baseline_stdev_uses_strict_check(self, tmp_path):
+        # Baseline without variance → strict '<': 83 < 84 fails.
+        base = _make_acceptance_card(
+            tmp_path / "base.md", version="0.3.0", within_one=0.84
+        )
+        cand = _make_acceptance_card(
+            tmp_path / "SCORECARD.md", version="0.3.1", within_one=0.83
+        )
+        assert main(["--scorecard", str(cand), "--baseline-file", str(base)]) == 1
+
+    def test_equal_score_carry_forward_passes(self, tmp_path):
+        base = _make_acceptance_card(
+            tmp_path / "base.md", version="0.3.0", within_one=0.84, stdev=0.02
+        )
+        cand = _make_acceptance_card(
+            tmp_path / "SCORECARD.md", version="0.3.1", within_one=0.84, stdev=0.02
+        )
+        assert main(["--scorecard", str(cand), "--baseline-file", str(base)]) == 0

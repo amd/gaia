@@ -296,18 +296,42 @@ jobs:
           else
             echo "No previous release tag found — presence-only check."
           fi
+      - name: Resolve acceptance bar + URGENT floor (data-driven, #1437)
+        id: bars
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The bar/floor and the enforce switch live in the thresholds manifest
+          # (data, not code) — same pattern as the FP/FN 'enforce' switch. When
+          # acceptance_enforce is true, pass the gate the absolute bar (×100 of the
+          # within-one target) and the urgent-recall floor so a sub-bar candidate
+          # blocks the release; when false, the gate runs presence+regression only.
+          MANIFEST="tests/fixtures/email/quality_gate_thresholds.json"
+          ENFORCE="$(python -c "import json;print(json.load(open('${MANIFEST}')).get('acceptance_enforce',False))")"
+          if [ "${ENFORCE}" = "True" ]; then
+            TARGET="$(python -c "import json;print(json.load(open('${MANIFEST}'))['acceptance_target'])")"
+            FLOOR="$(python -c "import json;print(json.load(open('${MANIFEST}'))['urgent_recall_floor'])")"
+            # aggregate.value is the within-one accuracy ×100, so scale the target.
+            MINAGG="$(python -c "print(round(float('${TARGET}')*100,2))")"
+            echo "args=--min-aggregate ${MINAGG} --min-urgent-recall ${FLOOR}" >> "$GITHUB_OUTPUT"
+            echo "Acceptance enforcement ON: --min-aggregate ${MINAGG} --min-urgent-recall ${FLOOR}"
+          else
+            echo "args=" >> "$GITHUB_OUTPUT"
+            echo "Acceptance enforcement OFF (report-only) — presence+regression gate only."
+          fi
       - name: Run scorecard gate
         shell: bash
         run: |
           set -euo pipefail
           PREV="${{ steps.prev_tag.outputs.prev_tag }}"
+          BARS="${{ steps.bars.outputs.args }}"
           if [ -n "${PREV}" ]; then
             python -m gaia.eval.scorecard_gate \
               --scorecard hub/agents/npm/agent-email/SCORECARD.md \
-              --baseline-ref "${PREV}"
+              --baseline-ref "${PREV}" ${BARS}
           else
             python -m gaia.eval.scorecard_gate \
-              --scorecard hub/agents/npm/agent-email/SCORECARD.md
+              --scorecard hub/agents/npm/agent-email/SCORECARD.md ${BARS}
           fi
 
   # ── Stage 2: publish to the hub + npm (single atomic step) ─────────

@@ -500,46 +500,99 @@ class TestEmailAdapter:
 
         payload = mod.build_payload(benchmark_dir, gt_path)
 
-        expected_mean = round((0.4167 + 0.5000) / 2, 10)
-        assert payload.metrics[0]["value"] == pytest.approx(
-            expected_mean
-        ), f"Expected metric value {expected_mean}, got {payload.metrics[0]['value']}"
+        # The gated aggregate is within-one-bucket = mean across runs (#1437):
+        # (0.8333 + 0.9167) / 2 = 0.875. Exact category_accuracy is a secondary.
+        assert payload.metrics[0]["name"] == "within_one_bucket_accuracy"
+        assert payload.metrics[0]["weight"] == 1.0
+        expected_mean = round((0.8333 + 0.9167) / 2, 4)
+        assert payload.metrics[0]["value"] == pytest.approx(expected_mean)
 
-    def test_build_payload_weighted_by_total_emails(self, tmp_path):
-        # Unequal scenario sizes: the aggregate must be the per-email accuracy
-        # (weighted by total_emails), not an unweighted scenario mean.
+    def test_secondaries_are_displayed_weight_zero(self, tmp_path):
+        # urgent-vs-not, urgent-recall, category_accuracy are shown but excluded
+        # from the aggregate (weight 0), so aggregate == 100 × within-one (#1862).
+        mod = self._load_gen_scorecard()
+        from gaia.eval.release_scorecard import compute_aggregate
+
+        benchmark_dir = tmp_path / "benchmark"
+        benchmark_dir.mkdir()
+        (benchmark_dir / "email_benchmark_scorecard.json").write_text(
+            EMAIL_BENCHMARK_FIXTURE.read_text()
+        )
+        gt_path = tmp_path / "ground_truth.json"
+        gt_path.write_text(json.dumps({"_meta": {}, "a": {"label": "x"}}))
+
+        payload = mod.build_payload(benchmark_dir, gt_path)
+        names = {m["name"]: m["weight"] for m in payload.metrics}
+        assert names["within_one_bucket_accuracy"] == 1.0
+        assert names["urgent_vs_not_accuracy"] == 0.0
+        assert names["urgent_recall"] == 0.0
+        assert names["category_accuracy"] == 0.0
+        _components, agg = compute_aggregate(payload.metrics)
+        assert agg == pytest.approx(round(100 * 0.875, 2))
+
+    def test_quality_json_preferred_and_variance_recorded(self, tmp_path):
+        # When the harness wrote quality.json (the aggregate + variance/CI #1894),
+        # the adapter reads it and records the variance + n_runs in config.
         mod = self._load_gen_scorecard()
 
         benchmark_dir = tmp_path / "benchmark"
         benchmark_dir.mkdir()
-        scorecard = {
-            "run_id": "weighted-fixture",
+        (benchmark_dir / "email_benchmark_scorecard.json").write_text(
+            EMAIL_BENCHMARK_FIXTURE.read_text()
+        )
+        variance = {
+            "n_runs": 2,
+            "within_one_bucket_accuracy": {
+                "n": 2,
+                "mean": 0.84,
+                "stdev": 0.02,
+                "ci95_low": 0.81,
+                "ci95_high": 0.87,
+            },
+        }
+        quality = {
+            "within_one_bucket_accuracy": 0.84,
+            "urgent_vs_not_accuracy": 0.88,
+            "urgent_recall": 0.72,
+            "category_accuracy": 0.46,
+            "acceptance_variance": variance,
+        }
+        (benchmark_dir / "quality.json").write_text(json.dumps(quality))
+        gt_path = tmp_path / "ground_truth.json"
+        gt_path.write_text(json.dumps({"_meta": {}, "a": {"label": "x"}}))
+
+        payload = mod.build_payload(benchmark_dir, gt_path)
+        # quality.json wins over per-scenario means.
+        assert payload.metrics[0]["value"] == pytest.approx(0.84)
+        assert payload.config["acceptance_variance"] == variance
+        assert payload.config["n_runs"] == 2
+
+    def test_old_output_without_acceptance_metric_raises(self, tmp_path):
+        # A benchmark run predating the acceptance metric (only category_accuracy,
+        # no quality.json) must fail loud — never silently default to exact-only.
+        mod = self._load_gen_scorecard()
+
+        benchmark_dir = tmp_path / "benchmark"
+        benchmark_dir.mkdir()
+        legacy = {
+            "run_id": "legacy",
             "scenarios": [
                 {
                     "category": "m",
                     "status": "PASS",
-                    "total_emails": 90,
-                    "quality": {"category_accuracy": 0.90},
-                },
-                {
-                    "category": "m",
-                    "status": "PASS",
                     "total_emails": 10,
-                    "quality": {"category_accuracy": 0.00},
-                },
+                    "quality": {"category_accuracy": 0.42},
+                }
             ],
         }
         (benchmark_dir / "email_benchmark_scorecard.json").write_text(
-            json.dumps(scorecard)
+            json.dumps(legacy)
         )
         gt_path = tmp_path / "ground_truth.json"
-        gt_path.write_text(json.dumps({"a": {"label": "x"}, "b": {"label": "y"}}))
+        gt_path.write_text(json.dumps({"_meta": {}, "a": {"label": "x"}}))
 
-        payload = mod.build_payload(benchmark_dir, gt_path)
-
-        # Weighted: (0.90*90 + 0.00*10) / 100 = 0.81  (unweighted would be 0.45)
-        assert payload.metrics[0]["value"] == pytest.approx(0.81)
-        assert payload.test_cases_run == 100
+        with pytest.raises(ValueError, match="acceptance metric"):
+            mod.build_payload(benchmark_dir, gt_path)
 
     def test_build_payload_test_cases_run(self, tmp_path):
         mod = self._load_gen_scorecard()
@@ -558,8 +611,10 @@ class TestEmailAdapter:
         gt_path.write_text(json.dumps(ground_truth))
 
         payload = mod.build_payload(benchmark_dir, gt_path)
-        # 12 + 12 = 24; third scenario skipped (no quality key)
-        assert payload.test_cases_run == 24
+        # Two experiments over the SAME 12-email corpus → per-run count is 12,
+        # NOT 24 (summing runs would conflate experiments with cases). n_runs=2.
+        assert payload.test_cases_run == 12
+        assert payload.config["n_runs"] == 2
 
     def test_build_payload_dataset_size(self, tmp_path):
         mod = self._load_gen_scorecard()
@@ -834,6 +889,9 @@ _RICHER_SCORECARD = {
             "total_emails": 10,
             "quality": {
                 "category_accuracy": 0.6,
+                "within_one_bucket_accuracy": 0.7,
+                "urgent_vs_not_accuracy": 0.8,
+                "urgent_recall": 0.75,
                 "categorization": {
                     "axis": "needs_attention",
                     "rows": [
@@ -911,6 +969,9 @@ _RICHER_SCORECARD = {
             "total_emails": 20,
             "quality": {
                 "category_accuracy": 0.75,
+                "within_one_bucket_accuracy": 0.8,
+                "urgent_vs_not_accuracy": 0.85,
+                "urgent_recall": 0.8,
                 "categorization": {
                     "axis": "needs_attention",
                     "rows": [
@@ -1139,7 +1200,7 @@ class TestBreakdownAdapter:
         assert fyi_to_needs["count"] == 2
 
     def test_headline_accuracy_unchanged_with_breakdown(self, tmp_path):
-        """Weighted headline category_accuracy must be unaffected by breakdown."""
+        """Headline aggregate = within-one-bucket mean across runs, breakdown-independent."""
         mod = self._load_gen_scorecard()
         bd = tmp_path / "bdir"
         bd.mkdir()
@@ -1147,12 +1208,14 @@ class TestBreakdownAdapter:
         gt_path = self._make_gt(tmp_path)
         payload = mod.build_payload(bd, gt_path)
 
-        # Weighted: (0.6*10 + 0.75*20) / 30 = (6 + 15) / 30 = 0.7
-        assert payload.metrics[0]["value"] == pytest.approx(0.7)
+        # Gated aggregate is within-one mean across runs: (0.7 + 0.8) / 2 = 0.75.
+        assert payload.metrics[0]["name"] == "within_one_bucket_accuracy"
+        assert payload.metrics[0]["value"] == pytest.approx(0.75)
 
-    def test_breakdown_totals_reconcile_with_test_cases_run(self, tmp_path):
-        """Per-category totals must sum to test_cases_run — the breakdown
-        accounts for exactly the judged emails, no more, no fewer."""
+    def test_breakdown_totals_reconcile_with_scored_rows(self, tmp_path):
+        """Per-category totals must sum to every judged email-row scored — the
+        breakdown accounts for all rows across runs (= test_cases_run × n_runs for
+        equal-size runs), no more, no fewer."""
         mod = self._load_gen_scorecard()
         bd = tmp_path / "bdir"
         bd.mkdir()
@@ -1161,7 +1224,12 @@ class TestBreakdownAdapter:
         payload = mod.build_payload(bd, gt_path)
 
         total = sum(r["total"] for r in payload.breakdown["per_category"])
-        assert total == payload.test_cases_run
+        scored_rows = sum(
+            int(s.get("total_emails", 0))
+            for s in _RICHER_SCORECARD["scenarios"]
+            if isinstance(s.get("quality"), dict)
+        )
+        assert total == scored_rows
 
     def test_breakdown_none_when_no_categorization_rows(self, tmp_path):
         """If no judged scenario has categorization.rows, breakdown must be None."""
@@ -1176,7 +1244,10 @@ class TestBreakdownAdapter:
                     "category": "m",
                     "status": "PASS",
                     "total_emails": 10,
-                    "quality": {"category_accuracy": 0.5},
+                    "quality": {
+                        "category_accuracy": 0.5,
+                        "within_one_bucket_accuracy": 0.8,
+                    },
                 }
             ],
         }
@@ -1234,7 +1305,10 @@ class TestEnvironmentAdapter:
                     "category": "Gemma-4-E4B-it-GGUF",
                     "status": "PASS",
                     "total_emails": 10,
-                    "quality": {"category_accuracy": 0.5},
+                    "quality": {
+                        "category_accuracy": 0.5,
+                        "within_one_bucket_accuracy": 0.8,
+                    },
                 }
             ],
         }

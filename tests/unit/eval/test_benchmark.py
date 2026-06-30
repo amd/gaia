@@ -299,6 +299,123 @@ class TestSummarizeBenchmark:
         assert summary["quality_gate"]["skipped"] is True
 
 
+class TestAcceptanceMetrics:
+    """Acceptance metric (#1437) wiring in the benchmark + multi-run variance (#1894)."""
+
+    GT2 = {
+        "_meta": {"note": "skip me"},
+        "a": {"category": "URGENT", "is_spam": False, "is_phishing": False},
+        "b": {"category": "NEEDS_RESPONSE", "is_spam": False, "is_phishing": False},
+        "c": {"category": "FYI", "is_spam": False, "is_phishing": False},
+        "d": {"category": "PROMOTIONAL", "is_spam": False, "is_phishing": False},
+    }
+
+    def _result(self, preds, run_id="r0"):
+        envelope = {
+            "ok": True,
+            "data": {
+                "results": [
+                    {
+                        "id": k,
+                        "category": v,
+                        "confident": True,
+                        "is_spam": False,
+                        "is_phishing": False,
+                    }
+                    for k, v in preds.items()
+                ]
+            },
+        }
+        agent_result = {
+            "input_tokens": 1000,
+            "output_tokens": 200,
+            "conversation": [
+                {"role": "user", "content": "Triage my inbox"},
+                {
+                    "role": "tool",
+                    "name": "triage_inbox",
+                    "content": json.dumps(envelope),
+                },
+            ],
+        }
+        return build_result(
+            agent_result,
+            run_id=run_id,
+            timestamp="t",
+            model_id="Gemma-4-E4B-it-GGUF",
+            total_duration_ms=2000,
+            ground_truth=self.GT2,
+        )
+
+    def test_build_result_emits_acceptance_fields(self):
+        # All exact → within-one 1.0, exact 1.0, urgent-vs-not 1.0, urgent recall 1.0.
+        out = self._result(
+            {"a": "URGENT", "b": "NEEDS_RESPONSE", "c": "FYI", "d": "PROMOTIONAL"}
+        )
+        q = out["quality"]
+        assert q["within_one_bucket_accuracy"] == 1.0
+        assert q["category_accuracy"] == 1.0
+        assert q["urgent_vs_not_accuracy"] == 1.0
+        assert q["urgent_recall"] == 1.0
+
+    def test_within_one_credits_adjacent_not_distance_two(self):
+        # a urgent->needs_response (adj ✓), b exact ✓, c fyi->promotional (adj ✓),
+        # d promotional->needs_response (dist2 ✗). within-one 3/4 = 0.75; exact 1/4.
+        out = self._result(
+            {
+                "a": "NEEDS_RESPONSE",
+                "b": "NEEDS_RESPONSE",
+                "c": "PROMOTIONAL",
+                "d": "NEEDS_RESPONSE",
+            }
+        )
+        q = out["quality"]
+        assert q["within_one_bucket_accuracy"] == 0.75
+        assert q["category_accuracy"] == 0.25
+
+    def test_multirun_variance_block(self):
+        # within-one per run: 1.0, 0.75, 1.0 → mean 0.9167, stdev>0, n_runs 3.
+        runs = [
+            self._result(
+                {"a": "URGENT", "b": "NEEDS_RESPONSE", "c": "FYI", "d": "PROMOTIONAL"},
+                run_id="r1",
+            ),
+            self._result(
+                {
+                    "a": "NEEDS_RESPONSE",
+                    "b": "NEEDS_RESPONSE",
+                    "c": "PROMOTIONAL",
+                    "d": "NEEDS_RESPONSE",
+                },
+                run_id="r2",
+            ),
+            self._result(
+                {"a": "URGENT", "b": "NEEDS_RESPONSE", "c": "FYI", "d": "PROMOTIONAL"},
+                run_id="r3",
+            ),
+        ]
+        summary = summarize_benchmark(runs, run_id="bench-run")
+        q = summary["quality"]
+        assert q["within_one_bucket_accuracy"] == round((1.0 + 0.75 + 1.0) / 3, 4)
+        var = q["acceptance_variance"]
+        assert var["n_runs"] == 3
+        w = var["within_one_bucket_accuracy"]
+        assert w["n"] == 3
+        assert w["mean"] == round((1.0 + 0.75 + 1.0) / 3, 4)
+        assert w["stdev"] > 0.0
+        assert w["min"] == 0.75 and w["max"] == 1.0
+        # CI band the gate uses must bracket the mean.
+        assert w["ci95_low"] <= w["mean"] <= w["ci95_high"]
+
+    def test_single_run_variance_is_degenerate(self):
+        runs = [self._result({"a": "URGENT", "b": "NEEDS_RESPONSE"}, run_id="r1")]
+        summary = summarize_benchmark(runs, run_id="bench-run")
+        w = summary["quality"]["acceptance_variance"]["within_one_bucket_accuracy"]
+        assert w["n"] == 1
+        assert w["stdev"] == 0.0
+        assert w["ci95_half_width"] == 0.0
+
+
 class TestPerfGateInBenchmark:
     """The perf gate (#1277) added alongside #1278's quality gate — report mode."""
 
