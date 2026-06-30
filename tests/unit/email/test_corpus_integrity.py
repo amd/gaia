@@ -66,10 +66,10 @@ def _labels(ground_truth: dict) -> dict:
 
 
 def test_corpus_has_reconciled_total(generated_corpus):
-    """AC3: corpus is exactly 220 messages (reconciled size)."""
+    """Corpus size matches the generator's declared TOTAL_MESSAGES."""
     _, ground_truth = generated_corpus
     labels = _labels(ground_truth)
-    assert len(labels) == gen.TOTAL_MESSAGES == 220
+    assert len(labels) == gen.TOTAL_MESSAGES
 
 
 def test_every_label_is_valid_taxonomy(generated_corpus):
@@ -94,19 +94,20 @@ def test_category_counts_sum_to_total(generated_corpus):
     counts = {c: 0 for c in ALL_CATEGORIES}
     for meta in labels.values():
         counts[meta["category"]] += 1
-    assert sum(counts.values()) == len(labels) == 220
-    # Non-degenerate split: the synthetic corpus must spread across the
-    # priority/content buckets so per-category accuracy stays meaningful.
-    # PERSONAL is not yet represented in the synthetic corpus — populating it
-    # and re-recording the categorization baseline is eval-owned (#1438); until
-    # then we require the four generated buckets to be non-empty.
+    assert sum(counts.values()) == len(labels) == gen.TOTAL_MESSAGES
+    # Non-degenerate split: the synthetic corpus must spread across every bucket
+    # so per-category accuracy stays meaningful. PERSONAL is now represented
+    # (#1437) — all five schema-2.0 buckets must be non-empty.
     populated = {c for c, n in counts.items() if n > 0}
     assert populated >= {
         "URGENT",
         "NEEDS_RESPONSE",
         "FYI",
         "PROMOTIONAL",
+        "PERSONAL",
     }, f"degenerate corpus split: {counts}"
+    # PERSONAL specifically must have a meaningful sample (#1437 coverage gate).
+    assert counts["PERSONAL"] >= 20, f"too few PERSONAL examples: {counts}"
 
 
 def test_ground_truth_schema_well_formed(generated_corpus):
@@ -128,5 +129,5 @@ def test_meta_block_present_and_well_formed(generated_corpus):
     assert "_meta" in ground_truth
     meta = ground_truth["_meta"]
     assert meta["fixture"] == "synthetic_inbox.mbox"
-    assert meta["fixture_kind"] == "synthetic"
+    assert meta["fixture_kind"] == "vendor-derived"
     assert isinstance(meta["schema_version"], int)

@@ -4,7 +4,7 @@
 Integration test for end-to-end email triage against a live Lemonade.
 
 Skipped automatically when Lemonade is not running (via ``require_lemonade``).
-The test loads the 220-message synthetic corpus (#1230) into a
+The test loads the 249-message vendor-derived corpus (#1230) into a
 ``FakeGmailBackend`` and runs the production heuristic + LLM-assist triage
 path (#1107) over it, comparing per-message classifications to
 ``ground_truth.json``.
@@ -49,7 +49,7 @@ from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
 BASELINE_MODEL = "Gemma-4-E4B-it-GGUF"
 
 FIXTURES_DIR = _REPO_ROOT / "tests" / "fixtures" / "email"
-# The committed 220-message synthetic corpus (#1230). Its ground_truth.json is
+# The committed 249-message vendor-derived corpus (#1230). Its ground_truth.json is
 # keyed by the Gmail-derived id, so it aligns 1:1 with FakeGmailBackend.
 CORPUS_INBOX = FIXTURES_DIR / "synthetic_inbox.mbox"
 GROUND_TRUTH = FIXTURES_DIR / "ground_truth.json"
@@ -138,7 +138,7 @@ def test_triage_meets_baseline_minus_tolerance(require_lemonade, tmp_path):
     )
 
     # Spam / phishing gate: baseline-relative against the MEASURED accuracy on
-    # this corpus + path. On the 220-message corpus, spam/phishing are NOT
+    # this corpus + path. On the 249-message corpus, spam/phishing are NOT
     # perfect: the corpus carries realistic inbox-spam with no Gmail SPAM label
     # that the keyword heuristic can't catch, and the LLM follow-up only revises
     # the *category* (is_spam/is_phishing are heuristic-set), so it cannot flip

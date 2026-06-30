@@ -38,6 +38,7 @@ _ACCEPTANCE_SERIES_KEYS = (
     "within_one_bucket_accuracy",
     "urgent_vs_not_accuracy",
     "urgent_recall",
+    "personal_recall",
     "category_accuracy",
 )
 
@@ -233,6 +234,14 @@ def build_result(
             "within_one_bucket_accuracy": acceptance["within_one_bucket_accuracy"],
             "urgent_vs_not_accuracy": acceptance["urgent_vs_not_accuracy"],
             "urgent_recall": acceptance["urgent_recall"],
+            "personal_recall": acceptance["personal_recall"],
+            # PERSONAL-vs-rest axis (#1437 PERSONAL coverage) — same shape as
+            # needs_attention, so a personal-mail floor can gate it later.
+            "personal": quality_metrics.confusion_for_categories(
+                predicted_categories,
+                ground_truth,
+                quality_metrics.PERSONAL_CATEGORIES,
+            ).to_dict(),
             "spam": quality_metrics.confusion_for_flag(
                 predicted_spam, ground_truth, "is_spam"
             ).to_dict(),
@@ -263,7 +272,7 @@ def _aggregate_quality(results: list[dict]) -> dict[str, Any] | None:
     rates via :class:`~gaia.eval.quality_metrics.Confusion`. Returns ``None`` when
     no run carried a quality block (no ground truth) — the gate keys off that.
     """
-    axes = ("spam", "phishing", "needs_attention")
+    axes = ("spam", "phishing", "needs_attention", "personal")
     totals = {axis: quality_metrics.Confusion() for axis in axes}
     # Per-run scalar series for each accuracy metric (mean across runs is the
     # aggregate; the series feeds the variance/CI block in summarize_benchmark).

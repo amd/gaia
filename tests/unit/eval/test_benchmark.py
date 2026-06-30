@@ -357,6 +357,10 @@ class TestAcceptanceMetrics:
         assert q["category_accuracy"] == 1.0
         assert q["urgent_vs_not_accuracy"] == 1.0
         assert q["urgent_recall"] == 1.0
+        # PERSONAL axis is wired even when the (sub)corpus has no personal rows:
+        # the keys exist (honest 0.0 / empty confusion), never silently absent.
+        assert "personal_recall" in q
+        assert "personal" in q and "recall" in q["personal"]
 
     def test_within_one_credits_adjacent_not_distance_two(self):
         # a urgent->needs_response (adj ✓), b exact ✓, c fyi->promotional (adj ✓),

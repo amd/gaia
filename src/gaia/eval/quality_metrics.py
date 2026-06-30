@@ -52,15 +52,28 @@ _METADATA_KEYS = {"_meta", "_comment", "_metadata"}
 # alarm — the asymmetry the bars encode.
 NEEDS_ATTENTION_CATEGORIES = {"urgent", "needs_response"}
 
+# Personal axis: a dedicated binary axis (PERSONAL vs the rest), the same shape as
+# the needs-attention axis. PERSONAL is orthogonal to the priority ladder (it is
+# not a priority *level*), so it is NOT placed on ORDINAL_PRIORITY below — but it
+# still needs its own measurement surface so that "personal mail triaged as work"
+# is visible and gate-able (``personal_recall``). See ``acceptance_metrics``.
+PERSONAL_CATEGORIES = {"personal"}
+
 # Ordinal priority scale for the schema-2.0 triage taxonomy (#1437). Triage
 # priority is an *ordinal* scale, so the user-facing "acceptance" question is "how
 # far off" — not "exact match". Within-one-bucket on this ladder is the gated
 # acceptance metric (#1437: 80% target on within-one / urgent-vs-not, NOT exact
-# 4-way). Ordering: URGENT > NEEDS_RESPONSE > FYI > PROMOTIONAL. PERSONAL is absent
-# from the #1230 corpus and is not a priority *level*, so it is deliberately not on
-# the scale: a PERSONAL prediction/label is scored exact-only (see
-# ``within_one_bucket_accuracy``). Re-place it here if the corpus gains PERSONAL
-# examples. Keys are lowercase for the module's case-insensitive comparisons.
+# 4-way). Ordering: URGENT > NEEDS_RESPONSE > FYI > PROMOTIONAL.
+#
+# PERSONAL is DELIBERATELY off this scale. It is orthogonal to priority — there is
+# no meaningful "adjacent" priority bucket for it, so giving it a rank would hand
+# out within-one credit for confusing personal mail with a work bucket. Off-scale
+# means it is scored EXACT-ONLY in ``within_one_bucket_accuracy`` (a PERSONAL email
+# mis-triaged as any work bucket, or vice versa, gets zero within-one credit) —
+# which is exactly what makes a personal↔work regression visible. Its handling is
+# additionally measured on the dedicated PERSONAL_CATEGORIES axis above (decision
+# documented for #1437's PERSONAL-coverage follow-up). Keys are lowercase for the
+# module's case-insensitive comparisons.
 ORDINAL_PRIORITY: dict[str, int] = {
     "urgent": 3,
     "needs_response": 2,
@@ -213,11 +226,19 @@ def acceptance_metrics(
     * ``urgent_recall`` — recall on that same axis (fraction of true needs-attention
       mail flagged as such); the input to the gate's anti-gaming URGENT floor — a
       high aggregate must not come with buried urgent mail.
+    * ``personal_recall`` — recall on the PERSONAL-vs-rest axis (fraction of true
+      personal mail labeled PERSONAL rather than mis-triaged as a work bucket).
+      Reported secondary so "personal mail triaged as work" is visible and can be
+      gated later, the same way ``urgent_recall`` is. ``0.0`` when the corpus has
+      no PERSONAL examples (an honest "unmeasured", not a fabricated pass).
     * ``category_accuracy`` — exact 4-way match; reported secondary (#1437 keeps it
       as a non-gating reference).
     """
     attention = confusion_for_categories(
         predictions, ground_truth, NEEDS_ATTENTION_CATEGORIES
+    )
+    personal = confusion_for_categories(
+        predictions, ground_truth, PERSONAL_CATEGORIES
     )
     return {
         "within_one_bucket_accuracy": within_one_bucket_accuracy(
@@ -225,6 +246,7 @@ def acceptance_metrics(
         ),
         "urgent_vs_not_accuracy": attention.accuracy,
         "urgent_recall": attention.recall,
+        "personal_recall": personal.recall,
         "category_accuracy": category_accuracy(predictions, ground_truth),
     }
 

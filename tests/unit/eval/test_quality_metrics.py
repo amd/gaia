@@ -455,6 +455,7 @@ class TestAcceptanceMetrics:
             "within_one_bucket_accuracy",
             "urgent_vs_not_accuracy",
             "urgent_recall",
+            "personal_recall",
             "category_accuracy",
         }
         assert m["within_one_bucket_accuracy"] == 1.0
@@ -464,6 +465,32 @@ class TestAcceptanceMetrics:
         # fp=0, tn=2(f,p). recall=1/2=0.5, accuracy=3/4=0.75.
         assert m["urgent_recall"] == 0.5
         assert m["urgent_vs_not_accuracy"] == 0.75
+        # GT2 has one PERSONAL row ("x"), not predicted here → recall 0.0.
+        assert m["personal_recall"] == 0.0
+
+
+class TestPersonalAxis:
+    """PERSONAL is off the ordinal scale (exact-only) AND has its own binary axis."""
+
+    def test_personal_off_scale_exact_only_in_within_one(self):
+        from gaia.eval.quality_metrics import within_one_bucket_accuracy
+
+        # x is PERSONAL. Mis-triaged as fyi (a work bucket) → NO within-one credit,
+        # even though fyi is "low priority" — personal<->work is a full miss.
+        assert within_one_bucket_accuracy({"x": "fyi"}, GT2) == 0.0
+        # Correct PERSONAL → credited.
+        assert within_one_bucket_accuracy({"x": "personal"}, GT2) == 1.0
+
+    def test_personal_recall_measured_on_its_axis(self):
+        from gaia.eval.quality_metrics import acceptance_metrics
+
+        # GT2 personal-positive: {x}. Predict x=personal (caught), and a non-personal
+        # row as personal (false positive) — recall keys off the true positives.
+        m = acceptance_metrics({"x": "personal", "f": "personal"}, GT2)
+        assert m["personal_recall"] == 1.0  # the one true PERSONAL (x) was caught
+        # Now bury the personal mail as work → recall drops to 0.
+        m2 = acceptance_metrics({"x": "fyi"}, GT2)
+        assert m2["personal_recall"] == 0.0
 
 
 if __name__ == "__main__":

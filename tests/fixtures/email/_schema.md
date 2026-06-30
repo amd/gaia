@@ -1,27 +1,48 @@
-# Synthetic email-triage corpus schema
+# Email-triage corpus schema
 
 ## Purpose
 
 `synthetic_inbox.mbox` + `ground_truth.json` are the committed, deterministic
-synthetic corpus for email-triage categorization eval (#1230). The corpus is
-**fully synthetic** (RFC 2606 example domains, deterministic seed) — it is never
-a live corporate mailbox. Regenerate with
-`python tests/fixtures/email/generate_mbox.py`.
+corpus for email-triage categorization eval. The corpus is **vendor-derived**:
+the labelled emails come from the vendor's mailbox dataset (already in the
+schema-2.0 triage taxonomy). The committed source of truth is
+`vendor_corpus_seed.jsonl` — a deterministic, balanced subset of that dataset.
 
-The small `_stub_inbox.mbox` (~10 messages) remains only as a legacy fixture;
-new tests should use `synthetic_inbox.mbox`.
+**Provenance chain (all reproducible):**
 
-## Size / category split (reconciliation, #1230 AC3)
+```
+vendor mailbox JSONL  --select_vendor_subset.py-->  vendor_corpus_seed.jsonl
+                      --generate_mbox.py-->          synthetic_inbox.mbox + ground_truth.json
+```
 
-- **220 messages**, across the **four** v0.20 taxonomy categories.
-- The "1000 messages / 5 categories" figure from early planning was rejected:
-  there is no in-repo plan backing it, and the authoritative taxonomy is
-  `ALL_CATEGORIES` in `src/gaia/agents/email/tools/triage_heuristics.py` — the
-  four buckets below. Adding a fifth category would require changing production
-  classification code, which is out of scope for a corpus/baseline task. 220/4
-  keeps the corpus under the 1 MB CI size guard while being a 22x jump over the
-  stub. The reconciliation is "fix the generator to match the code that consumes
-  it," not "grow the corpus to match an unsourced number."
+- Regenerate the corpus from the committed seed: `python tests/fixtures/email/generate_mbox.py`
+- Re-select the seed from the vendor source: `python tests/fixtures/email/select_vendor_subset.py --source <vendor.jsonl>`
+
+**PII / provenance.** Selection is restricted to `origin_type` ∈
+{synthetic, public_llm_labeled}, and the raw real-person corpora (Enron,
+Hillary-Clinton) are excluded — no real personal correspondence enters a
+committed fixture. Public spam corpora (SpamAssassin / ling_spam) are kept: the
+vendor has wrapped them in synthetic sender/recipient envelopes (no personal PII)
+and they are needed for the spam axis. The large vendor source file is **not**
+committed (size + provenance); only the selected seed + derived artifacts are.
+
+The filename `synthetic_inbox.mbox` is retained for continuity with importers; the
+mbox is no longer GAIA-synthesised. The small `_stub_inbox.mbox` remains a legacy
+fixture; new tests should use `synthetic_inbox.mbox`.
+
+## Size / category split
+
+- **249 messages**, balanced across the **five** schema-2.0 taxonomy categories
+  (`URGENT`, `NEEDS_RESPONSE`, `FYI`, `PROMOTIONAL`, `PERSONAL`).
+- The authoritative taxonomy is `ALL_CATEGORIES` in the email agent's
+  `triage_heuristics` (now in the `gaia-agent-email` wheel); the builder imports it
+  so the corpus can't carry a label outside it.
+- Distribution: **54** each of URGENT / NEEDS_RESPONSE / FYI / PROMOTIONAL, and
+  **33** PERSONAL (the scarcest bucket in the source — all eligible PERSONAL are
+  taken). Balanced on purpose so per-category accuracy is meaningful and PERSONAL
+  (#1437) is measurable. The spam/phishing axes are non-empty (≈63 spam, ≈48
+  phishing) so they stay scoreable.
+- The corpus stays under the 1 MB CI size guard (~312 KB).
 
 ## ground_truth.json keying
 
@@ -41,11 +62,11 @@ NOT a message entry — consumers must skip `_`-prefixed keys.
     "fixture": "synthetic_inbox.mbox",
     "fixture_kind": "synthetic",
     "schema_version": 2,
-    "taxonomy": ["urgent", "actionable", "informational", "low priority"],
+    "taxonomy": ["URGENT", "NEEDS_RESPONSE", "FYI", "PROMOTIONAL", "PERSONAL"],
     "key": "gmail-id (sha256(Message-ID)[:16]) — aligns with FakeGmailBackend"
   },
   "<gmail_id>": {
-    "category": "urgent | actionable | informational | low priority",
+    "category": "URGENT | NEEDS_RESPONSE | FYI | PROMOTIONAL | PERSONAL",
     "priority": "high | normal | low",
     "is_spam": false,
     "is_phishing": false,
@@ -54,7 +75,7 @@ NOT a message entry — consumers must skip `_`-prefixed keys.
     "has_attachment": false,
     "ambiguous": false,
     "rationale": "Free-text human reason for the label.",
-    "sender_persona": "sarah_chen | ... | spam_unknown | unknown"
+    "sender_persona": "sarah_chen | ... | jamie_rivera | grace_okafor | spam_unknown | unknown"
   }
 }
 ```
@@ -63,36 +84,44 @@ NOT a message entry — consumers must skip `_`-prefixed keys.
 
 | Field | Notes |
 |---|---|
-| `category` | Exactly one of the four buckets. The low bucket is `"low priority"` (space), NEVER `"low_priority"` — it MUST match `CATEGORY_LOW_PRIORITY` / `ALL_CATEGORIES`. The generator derives every label from `ALL_CATEGORIES` via `_BUCKET_TO_CATEGORY` so it can never drift. |
+| `category` | Exactly one of the five schema-2.0 buckets (`URGENT`, `NEEDS_RESPONSE`, `FYI`, `PROMOTIONAL`, `PERSONAL`). `PERSONAL` is interpersonal mail (friends/family), orthogonal to the priority ladder. The generator derives every label from `ALL_CATEGORIES` via `_BUCKET_TO_CATEGORY` so it can never drift. |
 | `is_spam` | True ⇔ spam-flagged. Scored independently of `category`. |
 | `is_phishing` | True ⇔ phishing payload. Can co-fire with `is_spam`. |
 | `is_thread_root` | True ⇔ first message in a thread. |
 | `thread_id` | The Gmail-derived `threadId` (matches `FakeGmailBackend`). |
 | `has_attachment` | True ⇔ at least one non-text part. |
-| `ambiguous` | True ⇔ a reasonable human could disagree on the label. |
-| `rationale` | Hand-written ground-truth justification. |
-| `sender_persona` | Synthetic-only. Used for per-sender-type eval breakdown. |
+| `ambiguous` | True ⇔ a reasonable human could disagree on the label. Vendor data carries no per-email ambiguity flag, so this is `false` for the whole corpus. |
+| `rationale` | Ground-truth justification (empty for the vendor corpus). |
+| `sender_persona` | The vendor `mailbox_persona` (e.g. `amd_pm`, `amd_executive`, `amd_developer`). Used for per-sender-type eval breakdown. |
+| `suggested_action` | The vendor `suggestedAction` verb (`reply` / `archive` / `none`), schema-2.0. |
+| `source_dataset` | Provenance of the email within the vendor dataset (e.g. `synthetic_llm`, `spamassassin`). |
 
-## Fidelity requirements (enforced by the generator + tests)
+## Builder properties (enforced by tests)
 
-- ≥30% of messages are `text/html` / `multipart/alternative`.
-- At least one calendar invite (`text/calendar`), one forwarded message, and one
-  phishing-style payload.
-- Threading headers, malformed/parser-edge cases, and persona recurrence ranges.
-- mbox stays under 1 MB.
+The corpus is real labelled mail converted 1:1 from the seed, so synthesis-fidelity
+requirements (multipart/attachments/threading/malformed edge-cases) no longer
+apply. What is enforced:
+
+- Size equals the committed seed (`generate_mbox.TOTAL_MESSAGES`).
+- Every label is a valid schema-2.0 category; all five buckets are populated and
+  PERSONAL has ≥20 examples.
+- The spam and phishing axes are non-empty (so they stay scoreable).
+- Keys are Gmail-derived ids; ground truth aligns 1:1 with `FakeGmailBackend`.
+- The build is deterministic (`--verify`); mbox stays under 1 MB.
 
 ## Baseline
 
+> ⚠️ `baseline_accuracy.json` / `baseline_accuracy_e2b.json` were recorded on the
+> previous synthetic 220-message corpus and are **stale** for this vendor-derived
+> 249-message corpus. Re-record them on AMD hardware (`score_baseline.py`) before
+> relying on the `test_email_agent_triage` integration gate (which is
+> Lemonade-gated and skips without a live server).
+
 The baselines are recorded via the **production heuristic + LLM-assist triage
 path** (#1107) — `triage_inbox_impl(fake_gmail, classifier=make_llm_classifier(agent.chat))`
-over the 220 corpus — so they are apples-to-apples with what the integration
-test gates on. This supersedes the earlier stub-inbox + Qwen3.5-35B baseline
-and the standalone single-prompt classifier.
-
-`baseline_accuracy.json` records the primary demo model `Gemma-4-E4B-it-GGUF`;
-`baseline_accuracy_e2b.json` records the second model `Gemma-4-E2B-it-GGUF`.
-Both carry `category_accuracy` + `category_breakdown`, plus `is_spam_accuracy`
-and `is_phishing_accuracy` measured on the same run. Produced by:
+over the corpus — so they are apples-to-apples with what the integration test
+gates on. `baseline_accuracy.json` records `Gemma-4-E4B-it-GGUF`;
+`baseline_accuracy_e2b.json` records `Gemma-4-E2B-it-GGUF`. Re-record with:
 
 ```bash
 export LEMONADE_BASE_URL=http://localhost:13305   # Lemonade / NPU
@@ -102,8 +131,4 @@ python tests/fixtures/email/score_baseline.py --model Gemma-4-E2B-it-GGUF \
 ```
 
 The integration test gates each axis (category, is_spam, is_phishing)
-baseline-relative (`accuracy - tolerance_pp`). spam/phishing are not perfect on
-the 220 corpus: `is_spam`/`is_phishing` are heuristic-set and the LLM follow-up
-only revises the *category*, so it cannot flip those flags — gating
-baseline-relative (vs a faked 100% assert) keeps the real spam-recall ceiling
-visible.
+baseline-relative (`accuracy - tolerance_pp`).
