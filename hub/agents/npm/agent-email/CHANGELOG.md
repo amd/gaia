@@ -63,6 +63,13 @@ Contract bumped to `SCHEMA_VERSION` **2.1** — additive, no triage shape change
   Agent UI's pre-scan card renders. Read-only; reuses the agent's own
   `pre_scan_inbox` classification path. Contract `SCHEMA_VERSION` → `2.1`.
 
+**Verified before release:** the `darwin-arm64` binary was frozen with
+`packaging/freeze.py`, passed the no-Python `smoke_test.py` (OpenAPI surface +
+`/version` + `/v1/email/triage` all PASS), and was driven end-to-end through the
+published `EmailClient`/`checkVersion` — single `triage()` and `triageBatch()`
+both returned real, correctly-categorized Lemonade inference results. Full
+transcript in the release PR.
+
 ## 0.2.5
 
 Sending from a mailbox connected with identity-only scopes now returns an
