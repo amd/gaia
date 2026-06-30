@@ -1,0 +1,212 @@
+---
+title: "v0.22.0"
+description: "The email agent now runs inside the Agent UI as a no-Node sidecar with batch triage, search, archive, and calendar on the REST contract — plus persistent default models, an NPU context-size fix, and an opt-in dynamic tool loader."
+---
+
+# GAIA v0.22.0 Release Notes
+
+GAIA v0.22.0 brings the email triage agent fully into the Agent UI. It now runs as
+an out-of-process sidecar — no Node.js or npm on the runtime path — so the Agent UI
+stays lean while the email agent gets its own REST surface: batch triage, inbox
+search, pre-scan, archive/quarantine, and calendar all land on the same contract.
+Alongside that, `gaia config` gets a persistent default model, the NPU profile's
+context-size bug is fixed, and a Beta dynamic-tools toggle speeds up the Doc Agent's
+first response.
+
+**Why upgrade:**
+- **Email triage runs natively in the Agent UI, with no Node.js dependency** — the
+  email agent now runs as a managed sidecar process the backend spawns, health-checks,
+  and tree-kills on exit, so heavy email deps never load into core.
+- **Triage a whole inbox in one call** — a new batch endpoint takes an array of
+  emails and returns categorized results in the same order, instead of one
+  request per message.
+- **Search, archive, quarantine, and calendar now have a REST contract** — the email
+  schema grows from triage-only to a full inbox surface, with confirmation-gated
+  destructive actions.
+- **Set your default model once** — `gaia config set default_model <id>` persists
+  across every model-bearing command, so you stop passing `--model` everywhere.
+- **NPU profile context fixed** — the NPU profile was silently capping context at
+  4096 tokens regardless of what the model supported; it now defaults to 32768.
+
+---
+
+## What's New
+
+### Email triage in the Agent UI, no Node.js required — `gaia chat --ui`
+
+The Agent UI could previously only run the email agent in-process, which meant
+pulling its dependencies straight into core. Now the backend runs it as a separate
+sidecar process: it fetches the agent binary (SHA-256 verified), spawns it on an
+ephemeral port, health-checks it, proxies every `/v1/email/*` request to it, and
+tree-kills it the moment the parent process exits or crashes — so nothing is ever
+left orphaned. A `dev` mode runs the same contract straight from source with hot
+reload, for anyone iterating on the agent itself. Try it: open the Agent UI and
+trigger an email triage from the chat — the rest happens automatically. (PR
+[#1884](https://github.com/amd/gaia/pull/1884))
+
+---
+
+### Triage a whole inbox in one call — batch triage endpoint
+
+Triaging more than one email used to mean one HTTP round-trip per message. The REST
+contract now has `POST /v1/email/triage/batch`: send an array of emails, get back
+an array of results in the same order, each with its own category, action items,
+and per-item error handling if one message fails. Useful for catching up on a
+backlog without hammering the API one email at a time. (PR
+[#1893](https://github.com/amd/gaia/pull/1893))
+
+---
+
+### Search, pre-scan, archive, quarantine, and calendar — email schema 2.1
+
+The email REST contract grows well past triage. It now exposes inbox search,
+a lightweight pre-scan summary, archive/unarchive, quarantine/unquarantine for
+phishing or spam, and calendar event listing, preview, creation, and RSVP — all on
+the same `/v1/email/*` surface. Destructive actions like archive require an explicit
+confirmation token, and any route that needs a connected mailbox fails loudly with
+an actionable message instead of guessing. (PR
+[#1883](https://github.com/amd/gaia/pull/1883))
+
+---
+
+### Persistent default model — `gaia config`
+
+Passing `--model` on every command gets old fast. `gaia config set default_model
+<id>` now persists a default to `~/.gaia/config.json`, applied automatically to
+every model-bearing command until overridden by an explicit `--model` flag. Check
+the current value any time with `gaia config show`. (PR
+[#1863](https://github.com/amd/gaia/pull/1863))
+
+---
+
+### Opt-in faster first response — Dynamic Tools (Beta)
+
+The Doc Agent's first response can now skip past a stale or oversized tool list. A
+new Beta toggle in Agent UI settings trims each turn's tool list to a
+semantically-matched subset before the first model call. It's off by default, and
+an environment override (`GAIA_DYNAMIC_TOOLS`) can lock it on or off for a given
+install. (PR [#1857](https://github.com/amd/gaia/pull/1857))
+
+---
+
+## Bug Fixes
+
+- **NPU profile silently capped context at 4096 tokens** (PR
+  [#1747](https://github.com/amd/gaia/pull/1747)) — the NPU profile's FastFlowLM
+  model defaulted to a 4096-token context window no matter what the model actually
+  supported; it now defaults to 32768, matching the rest of the model lineup.
+- **Email triage send errors returned an opaque 500** (PR
+  [#1878](https://github.com/amd/gaia/pull/1878)) — a failure at send time now
+  surfaces as an actionable HTTP error instead of a generic server fault.
+- **Stale email-triage taxonomy in the eval corpus** (PR
+  [#1875](https://github.com/amd/gaia/pull/1875)) — the eval corpus is relabeled to
+  the schema-2.0 5-bucket taxonomy so eval scores reflect the categories triage
+  actually returns.
+- **Lemonade Server pinned to 10.8.1** (PRs
+  [#1869](https://github.com/amd/gaia/pull/1869),
+  [#1868](https://github.com/amd/gaia/pull/1868),
+  [#1867](https://github.com/amd/gaia/pull/1867)) — Windows CI's Lemonade startup is
+  fixed for the post-10.5 binary (the `serve` shim was removed), and the pinned
+  server version is bumped to pick up upstream fixes.
+
+---
+
+## Real-world testing evidence
+
+Every feature above was exercised on real AMD hardware before this release —
+not just unit tests. Summary below; full command output is in the release PR
+description.
+
+| Feature | Hardware | Result |
+|---|---|---|
+| Persistent default model | Strix Halo (NPU) | Set → persisted → overwritten, clean |
+| Email single + batch triage | Radeon GPU + Strix Halo | Both machines, real Lemonade inference |
+| Email schema 2.1 (18 routes) | Radeon GPU | All routes present; confirmation-gated archive (403 without token); fail-loud 503 on missing mailbox |
+| NPU 32k context | Strix Halo (cold NPU load) | `gaia init --profile npu` confirmed `ctx_size: 32768` on `gemma4-it-e2b-FLM`, live inference verified |
+| Email sidecar lifecycle | Radeon GPU | Lazy spawn, health-check, proxied triage, and clean tree-kill on shutdown all confirmed in dev mode |
+| Dynamic Tools toggle | Radeon GPU (Ubuntu, browser) | Toggled on/off in the live Agent UI, state persisted via the settings API |
+
+---
+
+## Full Changelog
+
+**76 commits** since v0.21.2:
+
+- `50c17de6` — feat(ui): Node-free email-agent sidecar with user/dev modes (#1884)
+- `1e45ff3c` — test(eval): vendor-derived email-triage corpus (PERSONAL coverage + balanced 5-bucket) (#1902)
+- `49805125` — feat(eval): acceptance metric + trustworthy scorecard/gate for email triage (#1901)
+- `dbe2764c` — feat(cli): persistent default_model via gaia config (#98) (#1863)
+- `f26ded9a` — docs(guides): reorganize User Guides nav, fill stubs, trim bloated guides (#1865)
+- `7f52903b` — feat(email): expose search, pre-scan, archive/quarantine & calendar on the REST contract (schema 2.1) (#1883)
+- `98e9a0a1` — feat(email): add batch triage endpoint alongside the single-email API (array in / array out) (#1893)
+- `7a82ed92` — docs(plans): email agent in the Agent UI — frozen sidecar + user/dev modes (#1882)
+- `dbe0fc46` — feat(eval): per-agent per-version eval scorecard + release gate (#1873)
+- `fa4280eb` — ci(stx): manual driver-update workflow for the self-hosted AMD runner (#1881)
+- `390361e9` — refactor(agents): migrate chat to hub (#1102) (#1456)
+- `21fff02e` — refactor(agents): migrate docqa + routing to hub (#1102) (#1455)
+- `1d6b71e8` — chore(agent-email): cut 0.2.5 (#1879)
+- `f7d8e418` — fix(email): surface send-time connector errors as actionable HTTP, not 500 (#1878)
+- `e3794410` — fix(eval): relabel email triage corpus to schema-2.0 5-bucket taxonomy (#1875)
+- `a0e3e723` — fix(npu): default 32k context on NPU profile, resolving the 4096↔32768 mismatch (#1747)
+- `0a4e2e18` — docs: add Prerequisites block to memory guide (#1665)
+- `8589f897` — feat(skill): GAIA technical + executive presentation skills (print-ready HTML→PDF) (#1860)
+- `d24c6613` — docs(reset-lemonade): bump stale 10.7.0 fallback to 10.8.1 (#1870)
+- `bd4b2606` — feat(lemonade): upgrade pinned Lemonade Server to 10.8.1 (#1869)
+- `c1bb70ff` — ci(windows): fix Lemonade port binding for the two integration jobs (#1867)
+- `9d82e9e9` — ci(lemonade): start server via LemonadeServer.exe --port (shim removed in v10.5) (#1868)
+- `25e5d528` — feat(skills): add integrate-hub-agent skill for embedding hub agents (#1864)
+- `0436f16a` — test(tool-loader): pin #800 doc-profile data-vs-recall disambiguation (#1844)
+- `88b93286` — feat(ui): add Beta dynamic tools toggle to Agent UI settings (#1798) (#1857)
+- `380cbb5b` — feat(hub): Files (package listing), Spec & Skill doc tabs on the agent page (#1856)
+- `5803b6d4` — fix(hub): revert worker streaming + disable whole-package zip; cut email 0.2.4 (#1855)
+- `4ae68e5e` — chore(agent-email): cut 0.2.3 (re-cut of 0.2.2 after Hub worker redeploy) (#1854)
+- `d71ad3f8` — docs(copilot): add repository instructions bridge (#1853)
+- `ccceea65` — chore(agent-email): cut 0.2.2 (first complete publish of the 0.2.1 feature set) (#1851)
+- `a268d1bc` — fix(hub): stream large artifacts to R2 so the whole-package zip publish stops OOMing (502) (#1849)
+- `22cbcd17` — feat(agent-email): one-command playground launcher + live hub launch card (#1846)
+- `f2d4eb1c` — feat(hub): whole-package zip download + file list on the agent page (#1843)
+- `758fdb31` — ci(claude): correctness-first PR-review rubric (REVIEW.md) base-fetched into the bot (#1845)
+- `e95cb2c9` — feat(agent-email): auto-reap sidecar on parent exit/crash (no manual wiring) (#1841)
+- `f73995eb` — docs(claude): functional changes must sync all bundled docs (README/SPEC/SKILL/CHANGELOG) (#1842)
+- `7be5571f` — docs(integrations): add Guarding the model endpoint (offline I/O guard for Lemonade) (#1809)
+- `f8342e8f` — feat(hub): production agent docs, changelog channel & richer hub rendering (#1839)
+- `34a43108` — docs(quickstart): pin first-agent example to the installed Gemma model (#1835)
+- `cea4c471` — release(agent-email): 0.2.1 (#1838)
+- `9cbb7576` — fix(hub): single npm README + fresh catalog on deploy + version on cards (#1836)
+- `65ff0eec` — feat(tool-loader): load recalled skills' tools ahead of semantic (#1451) (#1837)
+- `853e4930` — fix(agent-email): use in-repo raw image for README architecture diagram (#1833)
+- `bfb7d155` — refactor(agent-email): address review nits from #1829 (connector routes) (#1830)
+- `e7cd4a5a` — fix(email): refresh backends before multi-mailbox scans (#1808)
+- `1d720fcd` — feat(agent-email): playground mailbox connectors + live send (#1829)
+- `ef1c53d2` — test(guard): fail CI on stale migrated-agent paths in AI-instruction files (#1793)
+- `f7163242` — feat(ci): let contributors self-assign issues via `.take` comment (#1827)
+- `7906c66a` — Fix extract_json_from_text dropping JSON with a brace in a string value (#1824)
+- `a8f414ea` — feat(agent-email): single-source version stamping + publish-time --check (bump 0.2.0) (#1822)
+- `4fd499e9` — docs(agent-email): document ./client browser entry, ESM-only, and contract 2.0 (#1776)
+- `a8f0670a` — fix(memory): reconcile procedures by meaning, not exact name (#1818) (#1828)
+- `373b40a3` — docs(quickstart): clarify where to save the agent file per install path (#1826)
+- `54494fc6` — feat(memory): skill auto-synthesis — procedural memory layer (#887) (#1794)
+- `616803cb` — ci(claude): two-part bot output — human summary + collapsed technical details (#1787)
+- `29f36862` — docs(skill): add agent-hub-release skill for publishing sidecar agents (#1777)
+- `4574523f` — fix(agent): correct stale default-model comment (Gemma → Qwen3.5-35B-A3B) (#1810)
+- `45e233d8` — feat(hub): sidecar-served email-agent playground (localhost-only) (#1796) (#1814)
+- `1cb62656` — chore(email): disable in-process email agent discovery (entry point) (#1816)
+- `38c4ec29` — fix(agent-email/npm): bind EmailClient fetch to globalThis (browser Illegal invocation) (#1817)
+- `b9a2bd01` — docs(hub-publishing): use uv pip as the canonical install tool (#1782)
+- `2aace9f2` — docs(skills): refresh lemonade-client + gaia-release against current code (#1786)
+- `7e8632ee` — fix(agent-email): align version-triple to 0.2.0 (unblocks next release) (#1792)
+- `cd0b5529` — docs(agents): de-stale the 23 .claude/agents definitions against current code (#1790)
+- `26dfa67b` — docs(claude): de-stale agent tables + trim stale-prone enumerations in CLAUDE.md (#1784)
+- `3b489096` — docs: fix Mintlify MDX validation (unescaped '<' breaks the docs check) (#1791)
+- `ffdff615` — feat(agents): tool loader Part 2 — explicit escape hatch + tuning (#1450) (#1762)
+- `620b2ba1` — fix(electron): keep app alive on recoverable GPU-process crash (#1799)
+- `35cea1b9` — fix(memory): coerce string-typed days/limit in search_past_conversations (#1764)
+- `fbe00da4` — fix(connectors): make email AGENT_NOT_GRANTED message provider-aware (#1757)
+- `0d5bf4c0` — docs(plans): scope agent-ui Agent Hub publishing + in-app marketplace (#1714)
+- `e9dd58fb` — feat(ui): preserve email connector grant + scope consent under Path 2 (incl. Outlook CTA) (#1775)
+- `3ea793db` — feat(ui): serve email from the UI backend — mount gaia-agent-email REST router (Path 2) (#1774)
+- `42d92c32` — feat(agent-email/npm): browser-safe client-only entry (no Node builtins) (#1773)
+- `004522fa` — test(email): running-server OpenAPI conformance + apiVersion bump policy (#1772)
+- `abcd7809` — fix(agent-email/npm): regenerate JS/TS client to email contract 2.0 (#1771)
+
+Full Changelog: [v0.21.2...v0.22.0](https://github.com/amd/gaia/compare/v0.21.2...v0.22.0)
