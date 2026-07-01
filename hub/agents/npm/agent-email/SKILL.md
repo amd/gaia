@@ -124,6 +124,12 @@ reversible inside a 30s window via the ungated `unarchive` / `unquarantine`. Eve
 non-2xx response throws `HttpError` (`status`, `url`, `bodyText`) — handle it; there is
 no silent null.
 
+The full agent (the natural-language loop behind GAIA's Agent UI) covers more than
+this typed client: organize/label actions, calendar detect/conflicts, and read-only
+**follow-up tracking** (`find_awaiting_reply` flags sent mail still awaiting a reply,
+#1606). None of those have REST routes yet — don't look for them on this client; see
+`SPEC.md` for the exact exposed surface.
+
 ## 5. From a renderer (Electron / browser)
 
 The sidecar serves **same-origin only — no CORS**. A renderer on a different origin

@@ -97,6 +97,9 @@ class EmailAgentConfig:
       default), tracks ``mail_provider`` so a Microsoft-only user who set
       ``mail_provider="microsoft"`` gets the Outlook calendar too without
       separately configuring it.
+    - ``followup_window_days``: how many days a sent message may sit with no
+      inbound reply on its thread before ``find_awaiting_reply`` flags it
+      (#1606). Callers can override per call via the tool's ``window_days``.
     - ``gmail_backend`` / ``outlook_backend`` / ``calendar_backend``: eval
       seam — when set, the agent's tools use the injected backend instead of
       constructing the live one. ``gmail_backend`` is honored for
@@ -122,6 +125,7 @@ class EmailAgentConfig:
     outlook_backend: Optional[Any] = None
     calendar_backend: Optional[Any] = None
     force_llm: bool = False
+    followup_window_days: int = 3
 
     def validate(self) -> None:
         """Run startup-time invariants. Called from the agent's __init__.
@@ -140,6 +144,11 @@ class EmailAgentConfig:
                     "cloud LLM endpoints are permitted (AC3). To use a "
                     "non-default Lemonade port, set LEMONADE_BASE_URL."
                 )
+        if self.followup_window_days < 1:
+            raise ConfigurationError(
+                f"EmailAgentConfig.followup_window_days must be >= 1 "
+                f"(got {self.followup_window_days})."
+            )
 
     def resolved_db_path(self) -> str:
         """Return the SQLite path with ``$HOME`` expanded.
