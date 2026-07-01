@@ -221,6 +221,16 @@ integrity, not authenticity; they must go through the signing + tier + least-
 privilege + containment model in §0.24 before a third-party agent is trusted or
 handed a live connection.**
 
+**Install must provision the model, not just the binary (cold-start).** A freshly
+installed agent whose model (e.g. `Gemma-4-E4B`) isn't downloaded spawns fine, then
+its first `/query` dies deep in the broker/Lemonade path with model-not-found — the
+hidden-cold-state failure CLAUDE.md warns about (#1655). The agent's lock/manifest
+**declares its required model(s)**; install (or first spawn) pulls them **through the
+host broker** (§0.12) with progress in the UI, before the agent is marked launchable.
+Define the full **cold sequence**: open UI → no daemon (start it, §0.25) → no agents
+(hub grid) → install agent (binary **+ model**) → optional connector consent (§0.6,
+§0.24) → first `/query`.
+
 ### 0.6 OAuth: host owns consent + refresh, forwards to the sidecar
 
 `grants.json` keeps a single writer. The host runs the OAuth consent flow once and
@@ -294,6 +304,13 @@ of record for the user's chat log: uninstalling or crashing an agent would destr
 it, and the stateless `/query` model needs the host to *replay* context anyway. So
 the **host owns the transcript** (extending the session index it already owns); the
 sidecar is fed the slice it needs per call and persists nothing durable itself.
+
+**Session ownership across clients.** Run-isolation (§0.13) namespaces concurrent
+runs *inside* the sidecar, but two clients (two UI tabs, or UI + CLI) pointed at the
+**same** host-owned session would interleave writes into one transcript — braided
+turns or a lost-update race. The host needs a session-focus model: **one active
+writer per session** (others read-only/observing), or **per-client sessions** so two
+tabs are simply two conversations. Cheap to decide now, confusing to retrofit.
 
 **Alternative considered:** make user-memory and RAG their *own* dedicated
 sidecars (purest "all logic in a sidecar"). Rejected for v1 — it multiplies
@@ -675,6 +692,56 @@ surfaced these. The first three are one coupled trust-root + containment decisio
 The through-line: the plan authenticates the channel but must also **contain the
 endpoint**. Containment (egress + least-privilege connection + host-custody scope +
 signed/tiered trust root) is the security decision that gates third-party agents.
+
+### 0.25 The daemon's OWN lifecycle — birth, death, control, update
+
+§0 specs the daemon's *responsibilities* (custody, broker, supervision, clock) and
+its *singleton identity* (§0.14) but treats it as a process that simply exists. It
+never says how it starts, recovers, is controlled, or updates — the single
+highest-leverage hole, because a daemon that can silently die strands the scheduler
+clock (§0.22), the broker (§0.12), and every sidecar, undercutting the "always-on
+agent" headline.
+
+- **Birth + rebirth (fixes the §0.0↔§0.22 contradiction).** §0.0 says the daemon
+  "auto-starts on the first UI/CLI call," but §0.22 makes it the always-on cron
+  clock — after an overnight reboot with no human present, nothing starts it and the
+  8am brief never fires. Register the daemon with the **OS process manager**
+  (launchd/LaunchAgent, Windows Scheduled Task/service, systemd user unit) so it
+  **starts at login/boot and restarts on crash** — a supervisor-of-the-supervisor.
+  The Phase-C system-tray app is the natural long-term home, but it lands two phases
+  after the daemon ships, so name the **interim** manager. On restart, define whether
+  pinned-resident sidecars (§0.22) are respawned or left to lazy-spawn.
+- **Stale `instance.json` recovery.** On SIGKILL/OOM/power-loss the §0.14 lock file
+  is left pointing at a dead pid / freed port; the next client either hangs or
+  attaches to an unrelated process now on that port. On attach, **liveness-check the
+  pid and probe the port + auth token before trusting the file**; if dead, atomically
+  reclaim it. Write it temp-then-rename so a crash mid-write can't corrupt it.
+- **Control surface + cross-tier diagnostics.** Add `gaia daemon status|stop|restart|
+  logs` — an always-on process needs a way to see/stop/recover it (`gaia kill` is too
+  blunt; it also kills the clock). Give each sidecar a log file under its state dir,
+  **stamp `run_id` (§0.1) into every daemon/sidecar/relay log line**, and extend
+  `gaia diagnostics` to gather daemon + all sidecar logs correlated by `run_id` — so
+  a run spanning UI→daemon→sidecar→Lemonade is reconstructable and third-party-agent
+  bug reports are actionable, not "it froze."
+- **Daemon↔client version skew on update.** §0.15 negotiates the *agent* contract;
+  the *UI/CLI↔daemon* boundary is uncovered. An app update replaces the CLI/UI while
+  the **old daemon keeps running**, so the new client attaches to a stale host API.
+  **Version the host API**; on attach, mismatch the client can't speak → **drain
+  in-flight runs and cleanly restart the daemon** into the new binary. Decide where
+  the daemon binary ships (core wheel vs hub) so "update the daemon" has an owner.
+
+### 0.26 On-disk state layout & update survival
+
+The `~/.gaia` layout is specified piecemeal (`host/instance.json` §0.14, `agents/<id>/`
+§0.5, custody stores + schema version §0.10, keychain secrets §0.24) with **no single
+map** — and daemon *config* (pinned agents §0.22, broker priorities §0.12, egress
+allowlists §0.24, reaper timeout + live-cap §0.13) has **no assigned home**. Add one
+layout table classifying every path as **runtime-ephemeral** (rebuildable —
+`instance.json`, caches, spawned-sidecar records), **durable user data** (must be
+backed up — custody: OAuth/memory/RAG/transcripts/audit), or **config**
+(daemon settings + per-agent settings), and state the **update-survival guarantee**:
+custody + config survive an app update; ephemeral is rebuilt. One source of truth
+prevents an update from silently orphaning grants, memory, or pinned-agent config.
 
 ---
 
