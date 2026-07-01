@@ -1224,6 +1224,34 @@ and ships three adapters, auto-selected at launch:
 The sidecar calls the interface and **doesn't know which backend answers** (auto: *host
 endpoint present → delegate; else embed*). Same code path; the backend swaps by config.
 
+**Pros / cons per provider:**
+
+- **Embedded** (self-custody).
+  - *Pros:* fully self-contained rich agent — one binary, no external custody dep;
+    trivially its own single writer (no coordination); works offline/air-gapped;
+    simplest deployment; ideal for a third-party vendor who wants "rich, standalone."
+  - *Cons:* state is **siloed per agent** — no shared cross-agent user memory (each agent
+    has its own), so a multi-agent setup fragments the user's memory + duplicates shared
+    data (e.g. grants); the sidecar owns store lifecycle (schema, migration, backup,
+    encryption); audit is local + per-agent (uninstall can lose it).
+- **Delegated** (host custody).
+  - *Pros:* **one coherent user** — memory/RAG/audit unified across every agent; one
+    place to encrypt-at-rest, back up, govern, and enforce uninstall lifecycle; the
+    sidecar stays truly light (no store in the binary); enables cross-agent orchestration
+    over shared memory (§0.32).
+  - *Cons:* **requires a running host** (the coupling — custody-backed features don't work
+    standalone); a network hop + auth on every memory/RAG call; the host is a single point
+    of failure for all agents' custody; carries the full cross-process contract cost
+    (`/host/v1/*` + auth legs + versioning).
+- **Ephemeral** (stateless).
+  - *Pros:* nothing on disk — simplest, most portable, most secure at rest; horizontally
+    scalable (any instance serves any request); no migration/backup/encryption concerns;
+    easiest to test; ideal for one-shot/scriptable/serverless integration.
+  - *Cons:* **no memory or learning** — no personalization, follow-up tracking, or
+    cross-session context; the **caller must pass all context every request** (bigger
+    payloads, caller owns state); no persisted audit trail; it's a *function*, not an
+    assistant.
+
 **Why it's correct, not a workaround — the single-writer invariant holds in every mode:**
 embedded = one agent is its own writer; delegated = the host is the one writer across N;
 ephemeral = nothing persisted. There is *never* multi-writer, so §0.9's driving invariant
