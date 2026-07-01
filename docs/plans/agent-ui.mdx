@@ -49,6 +49,73 @@ not of custody-backed `/query`.
 > control/custody process, the single most responsibility-dense component, *not*
 > the web UI. Only the **UI** is "thin." (§0.0.)
 
+### At a glance
+
+**Plain-language mental model (for a new colleague):** instead of cramming every
+agent's code into one big app, each agent (email, code, …) runs as **its own small
+out-of-process web service — a "sidecar" — in its own process.** A single always-on
+background service, the **custodian daemon**, manages them all: it starts/stops them,
+holds the **shared state** (your logins, memory, documents, audit log), hands out the
+**one local-LLM slot** so they don't fight over it, and **routes messages between
+agents.** The **UI, the CLI, and the API server are all thin clients** that talk to
+those sidecars *through* the daemon — so an agent behaves identically no matter how you
+reach it. Each agent can only touch what it's **granted** (the email agent gets your
+mailbox; a finance agent doesn't), and because agents run in **separate processes**, a
+bug or compromise in one can't reach the others. Security isn't one magic check — it's
+a few **simple, separate layers** (who's allowed · keep untrusted data as data · ask
+the human for risky actions · one model at a time · autonomy rules on top). And we
+speak the **industry standards** (MCP for tools, A2A for agent-to-agent) so our agents
+plug into the wider ecosystem.
+
+```text
+                  ┌──────────── FRONT-DOORS (thin — render / relay only) ───────────┐
+                  │   Web UI          │  gaia <agent> CLI    │  gaia api (REST)       │
+                  │  (renders cards)  │  (attaches to daemon)│  /v1/chat/completions  │
+                  │                   │                      │  + /query (SSE)        │
+                  └─────────┬────────────────────┬────────────────────┬──────────────┘
+                            │   proxy the SAME agent contract (MCP tools + /query)
+                            ▼                                          ▼
+ ╔═══════════ CUSTODIAN DAEMON — headless, always-on — THE COORDINATION PLANE ══════════╗
+ ║  AUTHORIZATION       COORDINATION            CUSTODY (per-store,       SUPERVISION     ║
+ ║  capability grants   model broker (1 slot)   single-writer)           spawn / health  ║
+ ║  (per-agent scope)   scheduler (cron)        grants·memory·rag·        / reap · hub    ║
+ ║  A2A router                                  sessions·audit           install/remove   ║
+ ║  (Google A2A)                                [ /host/v1/* ]                            ║
+ ╚═════╦════════════════════════════════════════════════════════════════▲════════════════╝
+       ║  spawn · proxy · forward OAuth token · model lease · A2A invoke  ║  /host/v1/*
+       ▼                                                                  ║  callback (scoped)
+ ┌──────── AGENT SIDECARS — out-of-process, PROCESS-ISOLATED — all reasoning ───────┐
+ │  ┌── email sidecar ─────────┐   ┌── finance sidecar ───────┐   one contract:     │
+ │  │ MCP tools + /query (SSE) │   │ MCP tools + /query (SSE) │    • MCP tools       │
+ │  │ pluggable custody:       │   │ pluggable custody:       │    • /query (SSE)    │
+ │  │  embedded OR delegated   │   │  embedded OR delegated   │                      │
+ │  │  [ has mailbox grant ]   │   │  [ NO mailbox grant ]    │   grant = reach      │
+ │  └──────────────────────────┘   └──────────────────────────┘                      │
+ └──────────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Security = 5 orthogonal planes** (not one over-loaded "grant"):
+
+```text
+  1  Authorization / isolation  →  capability grant     (who may touch what)
+  2  Info-flow / safety         →  process isolation + egress sandbox + confirmation
+                                   + audit + treat-untrusted-input-as-DATA  (NOT formal IFC)
+  3  Human confirmation         →  confirmation gate    (intent oracle for the LLM)
+  4  Resource arbitration       →  model broker         (1 slot — a lease, not a permission)
+  5  Autonomy                   →  host-side policy layer ABOVE the contract
+```
+
+**Custody = a per-store spectrum** (one binary, config-selected):
+
+```text
+   EMBEDDED  ◄──────────── hybrid (per store) ───────────►  DELEGATED
+   all-private            grants: delegated (shared login)    all-shared
+   self-writer            memory:  embedded (private)         host = single
+   no host needed         audit:   delegated (unified)        writer, multi-agent
+        │                       rule: shared ⇒ delegated             │
+        └───────────  EPHEMERAL = no persistence  ───────────────────┘
+```
+
 ### One agent contract, many front-doors — two control-plane contracts behind it
 
 Precisely: there is **one *agent* contract** (fixed-function **+ `/query`**) driven
