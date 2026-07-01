@@ -986,6 +986,7 @@ every response is scoped to that agent (or its granted shared scope).
 | `GET /host/v1/sessions/{id}` | → `{transcript_slice}` | daemon verifies the session belongs to the caller (§0.30 `session id` = authz key) |
 | `POST /host/v1/audit` | `{action_id, action, summary, ts}` → `{seq}` | serialized append onto the hash-chain (§0.29); write-only to agents (§0.24) |
 | `POST /host/v1/models/lease` | `{model}` → `{lease}` / 429 | the §0.12 broker slot lease; blocks/queues by priority |
+| `POST /host/v1/agents/{id}/invoke` | `{query|capability, args}` → SSE/JSON | **orchestrator-scoped** agent-to-agent call (§0.32); not open to ordinary sidecars |
 
 **Versioning:** this API carries its own MAJOR, negotiated on the sidecar↔daemon leg and
 subject to the §0.15 evolution rules (new-daemon/old-sidecar skew). **Errors:** every
