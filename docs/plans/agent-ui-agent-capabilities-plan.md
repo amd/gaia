@@ -517,18 +517,39 @@ doubles as dev mode." Add a **local-agent registration path**: point the manager
 a source dir + port (skip SHA/lock, no catalog entry) so an in-development agent is
 launchable and appears in the UI before it is ever published.
 
-### 0.17 Testing & eval strategy for `/query`
+### 0.17 Testing & eval strategy (`/query` + the distributed seams)
 
-`/query` is a multi-step LLM loop — the single most LLM-affecting surface, which
-CLAUDE.md mandates evals for — yet it now runs out-of-process. Define:
+`/query` is a multi-step LLM loop — the most LLM-affecting surface, which CLAUDE.md
+mandates evals for — but v2 also adds a **daemon, a cross-process broker, an SSE
+relay, three auth legs, and a data migration**, each with its own failure modes. The
+strategy spans four tiers:
 
-- A **sidecar eval harness** that drives `/query` over REST and asserts on the
-  **event sequence** (`tool_call` → `tool_result` → `needs_confirmation` → `final`),
-  not just a final string; eval baselines move into each agent's hub package.
-- A **mocked-SSE relay unit test** for the host proxy: streaming passthrough (no
-  buffering), cancellation, and the synthetic crash `error` event.
-- Eval runs stay **serial** against the shared Lemonade broker (§0.12) — the
-  per-agent sidecar model must not reintroduce concurrent model-slot contention.
+- **`/query` behavior (eval).** A **sidecar eval harness** drives `/query` over REST
+  and asserts on the **event sequence** (`tool_call` → `tool_result` →
+  `needs_confirmation` → `final`), not just a final string; eval baselines move into
+  each agent's hub package. Runs stay **serial** against the shared broker (§0.12) —
+  the per-agent sidecar model must not reintroduce concurrent model-slot contention.
+- **The distributed seams (deterministic unit/integration, no LLM):**
+  - *SSE relay* — streaming passthrough (assert no buffering), cancel-on-disconnect
+    (§0.13), and the synthetic-crash `error` event, against a fake sidecar.
+  - *Auth legs (§0.11)* — assert **all three** reject a missing/wrong credential
+    (client→daemon token, daemon→sidecar per-spawn secret, sidecar→daemon callback),
+    and that callback authorization is **per-agent scoped** (agent A cannot read
+    agent B's memory/session) — the security property, tested as a boundary, not a
+    mock that only proves "we called it."
+  - *Broker (§0.12)* — a concurrency test proving two agents requesting different
+    models **serialize** rather than race-evict (the property CLAUDE.md's serial-eval
+    rule protects), plus priority (interactive preempts background).
+  - *Daemon lifecycle (§0.25)* — stale-`instance.json` reclaim after a killed pid,
+    atomic write, and daemon restart-on-version-skew draining in-flight runs.
+- **Data migration (§0.10 step 0)** — **idempotency + cold-state** test (CLAUDE.md's
+  "test from the user's real initial state"): run the one-time migration twice, and
+  from a *real pre-v2* `~/.gaia` fixture, asserting transcripts/memory land tagged
+  correctly and a second run is a no-op.
+- **End-to-end golden path** — one on-hardware test per the `gaia-testing` tiers: UI
+  (or CLI) → daemon → sidecar → Lemonade, a real `/query` inbox triage, confirming
+  the `email_pre_scan` card renders and a destructive step surfaces the confirmation
+  gate. This is the "the call is valid, not just invoked" proof for the whole chain.
 
 ### 0.18 Dispatch — which sidecar answers a free-form message
 
