@@ -64,10 +64,6 @@ SEED_JSONL = OUT_DIR / "vendor_corpus_seed.jsonl"
 OUT_MBOX = OUT_DIR / "synthetic_inbox.mbox"
 OUT_GT = OUT_DIR / "ground_truth.json"
 
-# Sources whose mail is spam (used to set the is_spam ground-truth flag, which
-# the vendor encodes via promotional_subtype / the spam source corpora).
-_SPAM_SOURCES = {"spamassassin", "ling_spam"}
-
 # Fixed mbox ``From `` separator so the corpus is byte-for-byte deterministic.
 _FIXED_FROM = "MAILER-DAEMON Mon Mar  2 08:00:00 2026"
 
@@ -98,10 +94,11 @@ TOTAL_MESSAGES = _seed_count()
 
 
 def _is_spam(rec: dict) -> bool:
-    return (
-        rec.get("promotional_subtype") == "spam"
-        or rec.get("source_dataset") in _SPAM_SOURCES
-    )
+    # Only records explicitly labelled spam by the vendor (promotional_subtype="spam")
+    # are ground-truth spam. Source-dataset membership (spamassassin/ling_spam) is NOT
+    # a spam signal — those datasets contain both spam and HAM; using them here sweeps
+    # legitimate NEEDS_RESPONSE/FYI/URGENT emails into is_spam=True.
+    return rec.get("promotional_subtype") == "spam"
 
 
 def _priority(category: str) -> str:

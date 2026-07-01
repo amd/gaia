@@ -15,7 +15,8 @@ Five-bucket taxonomy: URGENT, NEEDS_RESPONSE, FYI, PROMOTIONAL, PERSONAL.
 Plus two boolean fields surfaced separately so the eval harness can score
 them independently of the five-way classification:
 
-  - ``is_spam``        -- Gmail's SPAM label OR keyword heuristics suggest spam
+  - ``is_spam``        -- reserved for future content-based spam detection (#1906);
+                          currently always ``False`` (no provider-specific label check)
   - ``is_phishing``    -- heuristics suggest credential-harvesting (separate
                           from generic spam -- the agent should refuse to act
                           on links from a phishing message even if the user
@@ -45,7 +46,6 @@ from typing import Iterable, List
 # ``labelIds`` field.)
 
 LABEL_INBOX = "INBOX"
-LABEL_SPAM = "SPAM"
 LABEL_TRASH = "TRASH"
 LABEL_IMPORTANT = "IMPORTANT"
 LABEL_STARRED = "STARRED"
@@ -222,19 +222,7 @@ def classify_category_heuristic(
     # uses whatever text the caller provides (snippet or full decode).
     is_phishing = detect_phishing(subject, sender, body)
 
-    # 1. Spam -- confident, label-driven. Gmail's spam classifier is more
-    #    accurate than anything we'd build ad-hoc.
-    if LABEL_SPAM in label_id_set:
-        return HeuristicResult(
-            category=CATEGORY_PROMOTIONAL,
-            is_spam=True,
-            is_phishing=is_phishing,
-            confident=True,
-            reason="Gmail SPAM label set",
-            matched_label_ids=(LABEL_SPAM,),
-        )
-
-    # 2. Promotions -- confident, label-driven.
+    # 1. Promotions -- confident, label-driven.
     if LABEL_CATEGORY_PROMOTIONS in label_id_set:
         return HeuristicResult(
             category=CATEGORY_PROMOTIONAL,
@@ -677,7 +665,6 @@ __all__ = [
     # System label ID constants -- exported so callers can match without
     # repeating string literals.
     "LABEL_INBOX",
-    "LABEL_SPAM",
     "LABEL_TRASH",
     "LABEL_IMPORTANT",
     "LABEL_STARRED",

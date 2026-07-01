@@ -3,23 +3,18 @@
 """
 Tests for ``gaia_agent_email.tools.triage_heuristics``.
 
-The heuristic was lifted (and re-mapped) from PR #916's classifier. The
-critical behaviour that this test pins down:
+Critical behaviour pinned by this suite:
 
 1. The heuristic operates on Gmail API system label IDs
-   (``CATEGORY_PROMOTIONS``, ``SPAM``, ...), NOT on the human label
-   names that PR #916 originally used (``"Promotions"``, ``"Spam"``,
-   ...).
+   (``CATEGORY_PROMOTIONS``, ...), NOT on the human label names.
 2. The heuristic emits the schema-2.0 five-bucket taxonomy (#1615)
    (``URGENT / NEEDS_RESPONSE / FYI / PROMOTIONAL / PERSONAL``), NOT
-   the retired #848 four-bucket scheme (``urgent/actionable/...``).
-3. Spam/phishing are SEPARATE booleans, not categories.
-4. ``confident=False`` results MUST escalate to the LLM — the heuristic
-   must never silently absorb an ambiguous case.
-
-Without these tests, the lifted heuristic is dead code in production:
-matching against MBOX label names against live Gmail data never fires,
-and every email goes to the LLM regardless of how obvious it is.
+   the retired #848 four-bucket scheme.
+3. ``is_spam`` is always ``False`` — provider-specific label checks
+   (e.g. Gmail's SPAM label) are removed (#1906). Future content-based
+   detection will set it without relying on vendor flags.
+4. ``is_phishing`` is a SEPARATE boolean; it fires independently of spam.
+5. ``confident=False`` results MUST escalate to the LLM.
 """
 
 from __future__ import annotations
@@ -42,7 +37,6 @@ from gaia_agent_email.tools.triage_heuristics import (
     LABEL_CATEGORY_UPDATES,
     LABEL_IMPORTANT,
     LABEL_INBOX,
-    LABEL_SPAM,
     LABEL_STARRED,
     classify_category_heuristic,
     default_action_for,
@@ -57,17 +51,6 @@ from gaia_agent_email.tools.triage_heuristics import (
 
 class TestSystemLabelIDs:
     """The heuristic MUST match Gmail API system label IDs, not human names."""
-
-    def test_spam_label_marks_low_priority_and_is_spam(self):
-        result = classify_category_heuristic(
-            subject="Win a free iPhone",
-            sender="winner@scam.example",
-            label_ids=[LABEL_SPAM],
-        )
-        assert result.category == CATEGORY_PROMOTIONAL
-        assert result.is_spam is True
-        assert result.confident is True
-        assert "SPAM" in result.reason
 
     def test_promotions_label_marks_low_priority(self):
         result = classify_category_heuristic(
@@ -152,7 +135,6 @@ class TestTaxonomy:
     @pytest.mark.parametrize(
         "label_ids,expected",
         [
-            ([LABEL_SPAM], CATEGORY_PROMOTIONAL),
             ([LABEL_CATEGORY_PROMOTIONS], CATEGORY_PROMOTIONAL),
             ([LABEL_CATEGORY_SOCIAL], CATEGORY_PROMOTIONAL),
             ([LABEL_CATEGORY_UPDATES], CATEGORY_FYI),
@@ -170,7 +152,6 @@ class TestTaxonomy:
         """Schema 2.0 taxonomy (URGENT/NEEDS_RESPONSE/FYI/PROMOTIONAL/PERSONAL) must be emitted."""
         new_taxonomy = {"URGENT", "NEEDS_RESPONSE", "FYI", "PROMOTIONAL", "PERSONAL"}
         for label in [
-            [LABEL_SPAM],
             [LABEL_CATEGORY_PROMOTIONS],
             [LABEL_CATEGORY_UPDATES],
             [],  # no labels — fallback
@@ -187,11 +168,17 @@ class TestTaxonomy:
 
 
 class TestSpamPhishingFlags:
-    def test_spam_label_sets_is_spam_flag(self):
-        result = classify_category_heuristic(
-            subject="x", sender="x@example.com", label_ids=[LABEL_SPAM]
-        )
-        assert result.is_spam is True
+    def test_is_spam_is_always_false_until_content_detection_implemented(self):
+        """is_spam is reserved for future content-based detection (#1906); always False for now."""
+        for label_ids in [[], [LABEL_INBOX], [LABEL_CATEGORY_PROMOTIONS]]:
+            result = classify_category_heuristic(
+                subject="Win a free iPhone!",
+                sender="winner@scam.example",
+                label_ids=label_ids,
+            )
+            assert (
+                result.is_spam is False
+            ), f"is_spam should be False for label_ids={label_ids}"
 
     def test_phishing_keyword_pair_flags_phishing(self):
         result = classify_category_heuristic(
@@ -211,13 +198,14 @@ class TestSpamPhishingFlags:
         )
         assert result.is_phishing is False
 
-    def test_spam_and_phishing_can_both_fire(self):
+    def test_phishing_fires_independently_of_spam(self):
+        """Phishing detection is content-based and fires regardless of is_spam."""
         result = classify_category_heuristic(
             subject="Verify your account - click here urgently",
             sender="x@scam.example",
-            label_ids=[LABEL_SPAM],
+            label_ids=[LABEL_INBOX],
         )
-        assert result.is_spam is True
+        assert result.is_spam is False
         assert result.is_phishing is True
 
 

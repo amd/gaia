@@ -75,7 +75,11 @@ _KEEP_FIELDS = [
 ]
 
 
-def _is_spam(rec: dict) -> bool:
+def _is_spam_source(rec: dict) -> bool:
+    # Selection priority heuristic only — NOT ground-truth spam.
+    # Treats spamassassin/ling_spam records (which contain both spam and HAM)
+    # as "special" so they fill the spam-axis quota in the selected subset.
+    # Do NOT use this to set is_spam labels; use generate_mbox._is_spam for that.
     return (
         rec.get("promotional_subtype") == "spam"
         or rec.get("source_dataset") in _SPAM_SOURCES
@@ -100,8 +104,8 @@ def select(source: Path) -> list[dict]:
     selected: list[dict] = []
     for category, recs in sorted(by_cat.items()):
         recs = sorted(recs, key=lambda r: r["id"])  # stable, deterministic
-        special = [r for r in recs if r.get("is_phishing") or _is_spam(r)]
-        normal = [r for r in recs if not (r.get("is_phishing") or _is_spam(r))]
+        special = [r for r in recs if r.get("is_phishing") or _is_spam_source(r)]
+        normal = [r for r in recs if not (r.get("is_phishing") or _is_spam_source(r))]
         rng.shuffle(special)
         rng.shuffle(normal)
         selected.extend((special + normal)[: _PER_CATEGORY.get(category, 40)])
@@ -133,7 +137,7 @@ def main() -> int:
     print(f"Wrote {len(selected)} records -> {out}")
     print(f"  category: {dict(cats)}")
     print(f"  phishing: {sum(1 for r in selected if r.get('is_phishing'))}")
-    print(f"  spam:     {sum(1 for r in selected if _is_spam(r))}")
+    print(f"  spam:     {sum(1 for r in selected if _is_spam_source(r))}")
     return 0
 
 
