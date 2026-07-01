@@ -133,6 +133,18 @@ it to a `render`→component map keyed off `tool_result` events. The host stays
 generic, but each `render` type needs a frontend component, so a new agent that
 introduces a new card ships that component with it.
 
+**Build reality — the loop→SSE seam already exists; this table is a re-spec of it.**
+`src/gaia/ui/sse_handler.py` (`SSEOutputHandler(OutputHandler)`) already turns every
+agent-loop `console.print_*` call into a typed JSON event on a `queue.Queue` a
+streaming endpoint can drain — so `/query` is "run the agent with an SSE handler and
+expose the queue as `text/event-stream`," **not** net-new agent instrumentation.
+BUT the existing handler emits its *own* vocabulary
+(`status`/`step`/`thinking`/`tool_start`/`tool_end`/`tool_result`/`chunk`/`answer`),
+which is **not** the vocabulary above. The table is therefore the **target contract**;
+a small **translation layer** maps the handler's events onto it. Spec the mapping
+explicitly (it is the wire contract integrators depend on) rather than assuming the
+two vocabularies already agree — they don't.
+
 ### 0.3 Host: the per-agent sidecar supervisor
 
 Generalize the email `EmailSidecarManager` into an **`AgentSidecarManager`
@@ -145,6 +157,14 @@ tree-kill on shutdown, one shared instance per agent. Host routes:
 - `POST /v1/agents/{id}/install` · `DELETE /v1/agents/{id}` — one-click install/uninstall.
 - `ANY  /v1/<agent>/*` — reverse-proxy to that agent's running sidecar (lazy-start),
   preserving SSE for `/query` and the sidecar's own status codes + actionable detail.
+
+**Build reality — this is a NEW streaming proxy, not "generalize the existing one."**
+Today's `EmailSidecarProxy` is a synchronous `requests.Session` that ends every call
+in `resp.json()` (`src/gaia/ui/email_sidecar/proxy.py`) — it **fully buffers** and
+has no streaming, no client-disconnect propagation, no cancel path. SSE passthrough
+(§0.13 cancel-on-disconnect + the synthetic-crash `error` event) must be rebuilt on
+`httpx.AsyncClient(stream=True)` + `StreamingResponse`. Standard work, but net-new —
+the deterministic (buffered) proxy is what's reusable; the streaming path is not.
 
 ### 0.4 Mid-workflow confirmation (over SSE, no WebSocket)
 
@@ -510,10 +530,18 @@ is a well-defined set):
   of verified binaries (still SHA-check against the lock, skip the network), covering
   the *first* agent too. This also unblocks OEM factory-image bundling — cheap to
   reconcile now rather than retrofit.
-- **Footprint.** N frozen sidecars each bundle their own `gaia.connectors` / RAG /
-  model libs; ten agents is a multi-GB install with heavy duplication. Acknowledge
-  the cost and consider a **shared runtime layer** (a common base the per-agent
-  binaries link against) before the catalog grows.
+- **Footprint (honest downgrade).** The email binary is ~90 MB **only because** its
+  freeze `--exclude-module`s torch/transformers/faiss/scipy/pandas — legal solely
+  because email runs no in-process ML (it calls Lemonade over HTTP;
+  `packaging/freeze.py`). Any agent that needs an in-process embedder/VLM/SD (RAG,
+  vision) **cannot** use those excludes → multi-GB per binary. And PyInstaller
+  produces self-contained bundles with **no cross-binary linking**, so a "shared
+  runtime layer the per-agent binaries link against" is **not a PyInstaller
+  capability** — it needs a different packaging strategy (a shared base venv, a
+  host-side model-runtime service the sidecars call, or non-frozen deployment).
+  Treat §0.21 shared-runtime as **aspirational**, not a config tweak, and prefer
+  keeping in-process ML *out* of sidecars (route it through the host model broker,
+  §0.12) to preserve the lightweight-binary property.
 
 ### 0.22 Autonomy — the host holds the clock, the sidecar does the work
 
@@ -531,6 +559,49 @@ Resolve by splitting the clock from the work:
   wake-on-fire, since holding every autonomous agent resident defeats §0.13.
 
 Either way the wake-up owner is the daemon, never a reapable sidecar.
+
+### 0.23 Feasibility & build sequencing (grounded in the current code)
+
+A feasibility pass against the codebase found **no fatal blocker** — the design is
+buildable — but the "thin" framing rests on some primitives that are reuse and
+others that are genuinely net-new. Naming which is which sets an honest build order.
+
+**Already exists (de-risks the plan):**
+
+- **The agent-loop → SSE seam** (`src/gaia/ui/sse_handler.py` `SSEOutputHandler`) —
+  `/query` reuses it (§0.2 build note), not net-new instrumentation.
+- **Mid-workflow confirmation over SSE** — the pause/resume primitive §0.4 describes
+  (`_confirm_event`, `_user_input_queue`, `permission_request` events) **ships
+  in-process today**; the only new work is carrying the Event across the process
+  boundary (which is exactly what makes a resumed run stateful — the §0.4 tension is
+  real, not hypothetical).
+- **OAuth forward + short-lived-token refresh** — `import_forwarded_connection` and
+  `get_access_token` (`src/gaia/connectors/api.py`) already exist and the refresh
+  engine is client-neutral, so §0.6's "host refreshes, forwards short-lived tokens"
+  maps onto real code.
+
+**Net-new, load-bearing (sequence first):**
+
+1. **Lemonade broker (§0.12) — the critical path.** Today the only lock is an
+   *in-process* `_downloads_lock` (`lemonade_client.py`); "one model slot" literally
+   means last-writer-wins across processes. The host broker (serialized loads +
+   cross-process lease + priority) has **zero existing scaffolding** and gates the
+   plan's headline (more than one concurrently-active agent). Build + prove first.
+2. **Streaming reverse-proxy (§0.3, §0.13)** — net-new `httpx` streaming + cancel;
+   the current proxy buffers. Prove with a one-endpoint **freeze spike** (SSE through
+   a PyInstaller binary is unproven here, though low-risk — uvicorn loops/protocols
+   are collected in the freeze) before committing.
+3. **`/query` endpoint + event-vocab translation (§0.1, §0.2)** — de-risked by the
+   SSE seam, but the sidecar has no `/query` today and the handler's vocabulary must
+   be translated to the §0.2 contract.
+4. **CLI rewrite (§0.7)** — `gaia email` is fully in-process (`cli.py` builds
+   `EmailTriageAgent` and calls `process_query`); converting it to a daemon client is
+   a real rewrite that must stay behaviorally identical.
+5. **Forward-OUT intake on the sidecar (§0.6)** — primitive exists; the sidecar
+   `/v1/connections` intake route + role inversion is new wiring (low risk).
+
+Build order: **broker + streaming-proxy spike → `/query` + vocab → CLI → OAuth
+forward-out**, migrating email first (§0.10) as the reference.
 
 ---
 
