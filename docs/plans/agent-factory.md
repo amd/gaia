@@ -51,7 +51,7 @@ agent silently drifts from the platform. Therefore:
   pinning the SDK commit + hashing the generated source buys **provenance/integrity, not
   regeneration** (see §11.5). The agent is a **living product**, not a one-shot artifact.
 - **The factory is continuous.** An SDK change that breaks an agent's eval is a factory
-  **trigger** — re-scope / re-implement / **re-eval against the same synthetic datasets** /
+  **trigger** — re-scope / re-implement / **re-eval against the held-out oracle** (§5.5) /
   re-PR / re-ship — not a human fire drill. Keeping N agents correct against a moving SDK
   is the dominant, valuable work; it is exactly what the factory automates.
 
@@ -96,6 +96,13 @@ same accept/deny the product already exposes for agent actions. (Residual risk: 
 must not degrade to a rubber stamp; halting-by-default on the high-blast-radius stages is
 what keeps it real.)
 
+**Non-convergence fails loudly — never ships a degraded result.** The dev-half loops (spec
+iteration stage 4, eval-optimize stage 7) are LLM loops that may not converge. Each has a
+**bounded auto-iteration budget**; on exhaustion the run **halts and escalates to the human
+gate with the transcript + last failing scorecard** — it does **not** lower the bar,
+disable a failing scenario, or ship the best-so-far (per CLAUDE.md's no-silent-fallbacks
+rule). A gate that can't be met is a stop, not a downgrade.
+
 ## 3. The two halves + the full lifecycle (stage by stage)
 
 Each row is a real developer activity; 🚦 = a gate that can fail the run. **Front (dev)**
@@ -109,7 +116,7 @@ is mostly net-new automation; **Back (ship)** cites the pipeline that *already e
 | 2 | **Track** — open GitHub **issues + milestones**, decompose | orchestrator + `gh` | `gh` · `claude.yml` bot (*exists*) | — |
 | 3 | **Spec** — author the design/spec doc | `brainstorming` → `writing-plans` skills | this session's method (*skills exist*) | — |
 | 4 | **Iterate spec** 🚦 | adversarial review loop to convergence | review agents + memory (*exists*) | converges |
-| 5 | **Synthetic data** — generate eval corpus + ground truth | dataset generators | `eval/benchmark.py` corpus · `pdf_document_generator` · `audit` (*exists*) | — |
+| 5 | **Synthetic data** — generate the *dev/optimize* corpus (seed-from-real, labels-by-construction); held-out gate oracle stays human-curated, §5.5 | dataset generators | `generate_mbox.py` · `vendor_corpus_seed` · `pdf_document_generator` (*exists*) | train/held-out split |
 | 6 | **Implement** — write agent code **against the live SDK** | GAIA coder + TDD | `origin/coder` `CodeAgent` + `agents/base/*` (*exists*) | compiles/lints |
 | 7 | **Eval + optimize** 🚦 | eval → analyze failures → repair → re-eval | `gaia eval agent [--fix]` · `scorecard.py` · `analyze_failures.py` (*exists*) | scorecard ≥ bar |
 | 8 | **PR** 🚦 | open PR(s) into the codebase (agent code — *and SDK changes it needs*) | orchestrator + `gh` + `finalize` | `claude.yml` review + CI (*exists*) | review + CI green |
@@ -157,9 +164,45 @@ The real gate (stage 13) is more than a static comparison:
   scenario mix; the floor is a hard minimum on the safety-critical bucket (e.g. URGENT
   email recall) that no aggregate score can paper over.
 - **Refreshed independently** so the shipped scorecard stays honest as models/SDK move.
+- **Runs on the held-out oracle, not the dev/optimize corpus** (§5.5, M2) — gating on the
+  set the agent was tuned against would measure memorization, not capability.
 
 The factory's job is to *run this gate on every dev-half output and every SDK-delta
 rebuild* — the eval isn't a one-time ship check, it's the continuous regression net.
+
+## 5.5 Synthetic data generation — seed-from-real, labels-by-construction, strict split
+
+Stage 5 is where the review's circularity bites hardest: if the factory generates the eval
+data *and* the agent *and* the labels, a green score is self-certification. GAIA's existing
+practice already avoids the naive trap — the email corpus is **seeded from a real vendor
+corpus** (`vendor_corpus_seed.jsonl` → `generate_mbox.py`/`select_vendor_subset.py`), its
+**ground truth is committed/curated** (`ground_truth.json`), and `pdf_document_generator.py`
+generates from **templates** — so the factory must generalize *that discipline*, not just
+"ask an LLM for test cases." Three rules:
+
+1. **Seed from real, anonymized data — don't hallucinate the distribution.** Synthetic
+   *volume* over a *real* distribution (the vendor-seed pattern) reflects inputs users
+   actually send, not what a model imagines they send. Refresh the seed to catch drift.
+2. **Ground truth known BY CONSTRUCTION — never AI-labelled post-hoc.** Synthesize each
+   case *from a template/spec whose parameters fix the correct answer* (build an email *to
+   be* urgent → label = `urgent` by construction), rather than generating text and asking a
+   model to label it. A label the generator *knows* (it built the case to have it) is sound;
+   a label an LLM *guesses* afterward inherits the model's blind spots.
+3. **Strict train/held-out separation — the anti-overfitting rule (the review's core fix).**
+   Two corpora, never crossed:
+   - **Dev/optimize corpus (M3, factory-generated):** fuel for the eval-optimize (`--fix`)
+     loop; the factory may generate it freely (rules 1–2) — overfitting *to it* is fine, it's
+     the training signal.
+   - **Held-out gate oracle (M2, human-curated):** what stage 13 / regression gates on —
+     **human-curated, versioned, committed** (as `ground_truth.json` +
+     `quality_gate_thresholds.json` are today), of *different provenance than the agent's
+     implementer*, and **never** used in the optimize loop. Leakage = the score measures
+     memorization, not capability.
+
+**Coverage discipline:** templates enumerate the scenario space explicitly; hold a dedicated
+**adversarial/edge bucket** (the committed `phishing_fixture.json` is the pattern) so
+safety-critical cases aren't diluted by the easy mass; track which scenario classes the
+corpus covers so gaps are *visible* rather than silently untested.
 
 ## 6. Ship-half rigor the factory must preserve (do not reinvent, do not lose)
 
