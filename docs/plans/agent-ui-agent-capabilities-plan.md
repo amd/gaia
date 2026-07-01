@@ -70,6 +70,8 @@
 - **The agent contract:** §0.1 REST surface (fixed-function + `/query`) · §0.2
   `/query` SSE event schema · §0.4 mid-workflow confirmation · §0.18 dispatch ·
   §0.32 multi-agent orchestration · §0.33 `/query` on the `gaia api` REST server.
+- **Autonomy:** §0.22 the scheduler clock · §0.34 autonomy-readiness (the
+  human-in-the-loop → policy-driven gap).
 - **Auth & security:** §0.6 OAuth forward · §0.11 the three auth legs + per-agent
   authorization · §0.24 third-party **containment** (signing, tiers, egress,
   encrypt-at-rest, audit integrity, taint) 🔒.
@@ -1054,6 +1056,52 @@ first-class front-door for **programmatic** agent access; today it serves
   daemon's loopback custody API — so `/query` on it must sit behind the API server's
   **API-key auth** and still enforce the §0.4 confirmation gate + §0.24 containment on
   every destructive step. Do not inherit the loopback trust assumptions of §0.11 here.
+
+### 0.34 Autonomy readiness — infrastructure-ready, policy-hostile
+
+GAIA's roadmap is "always-on background agent" (Phase C), so assess v2 against **full
+autonomy** (the agent acting unattended, on its own initiative). The verdict: the
+architecture is a **strong foundation but not yet a fit for full autonomy**, because its
+safety + interaction model is **human-in-the-loop by construction**.
+
+**Already fits (the substrate is right):** the always-on **daemon** (§0.0/§0.25) +
+**scheduler clock** (§0.22); **tamper-evident audit** for unattended review (§0.19/§0.24);
+**persistent memory** (§0.9); **interactive > background broker priority** so autonomous
+jobs yield to the user (§0.12); and **containment** (egress/least-privilege/taint, §0.24)
+— the exact guardrails high-stakes unattended action needs.
+
+**Fights full autonomy (all assume a human is present) — the autonomy layer to design:**
+
+1. **Confirmation assumes a watcher.** §0.4's "approve-what-you-saw" pauses the SSE
+   stream for *synchronous* approval — but unattended there's nobody to approve. Full
+   autonomy needs a **policy / pre-authorization model**: the user pre-grants categories
+   of action (e.g. "auto-archive promotions," "auto-decline conflicting invites") with
+   undo + audit, *replacing* per-action approval when unattended. This is the central
+   missing piece.
+2. **Cron-only triggering (§0.22).** Autonomy is largely **event-driven** ("urgent mail
+   arrived → act"); needs a trigger/event bus + mailbox-watch, not just a clock.
+3. **No long-lived goals / self-initiation.** The contract is request → `/query` → done;
+   autonomy means the agent **initiates** from standing objectives it tracks over time
+   (`goals.py` is noted moving to a sidecar, §0.9, but autonomous goal-pursuit is
+   undesigned).
+4. **No async escalation.** An unattended agent that hits uncertainty should **notify and
+   resume later** when the user answers — but §0.4 confirmation is synchronous. Needs a
+   notify-and-resume path (push notification → deferred approval → continue).
+5. **No autonomy levels.** There are third-party *trust tiers* (§0.24) but no **graduated
+   autonomy** (observe → suggest → act-with-undo → act-freely) governing what an agent may
+   do unattended, per capability.
+6. **Ephemeral vs. continuous.** §0.13 reaps idle sidecars; a *monitoring* agent doesn't
+   fit "spawn-at-fire, reap-after." Pinned-resident (§0.22) is the exception, not a
+   first-class monitoring model.
+
+**Structural implication:** autonomy is a **new layer above the agent contract**, not a
+change to it — a host-side **autonomy engine** (policy store + event bus + goal tracker +
+async-escalation + autonomy-level enforcement) that drives `/query`/fixed-function calls
+on the user's behalf under pre-authorization, reusing audit (§0.19) + containment (§0.24)
++ broker priority (§0.12) as its guardrails. It also reconciles with `autonomy-engine.mdx`
+(§0.27): that engine **is** this layer, hosted in the daemon. Sequence it after the
+human-in-the-loop v1 — the v1 confirmation model is the *safe default*, and the autonomy
+layer is what lets the user progressively hand off.
 
 ---
 
