@@ -76,7 +76,8 @@
   contract, naming, module seams, v1-hardening scope, render primitives) · §0.36
   third-party integration ergonomics (the tiered capability matrix) · §0.37
   **pluggable custody** (one sidecar = rich *and* stateless; refines §0.9) · §0.38
-  memory/resource footprint · §0.39 **custody-modes comparison table**.
+  memory/resource footprint · §0.39 **custody-modes comparison table** · §0.40
+  **hybrid custody** (per-store shared/private — the embedded↔delegated spectrum).
 - **Auth & security:** §0.6 OAuth forward · §0.11 the three auth legs + per-agent
   authorization · §0.24 third-party **containment** (signing, tiers, egress,
   encrypt-at-rest, audit integrity, taint) 🔒.
@@ -1350,6 +1351,40 @@ A2A (§0.32), memory (§0.38), and pros/cons.
 | **Best for** | a single standalone agent; a vendor wanting **rich + self-contained** | the **GAIA Agent UI**; a multi-agent daily-driver | one-shot / scriptable / serverless; pure request→response |
 
 **Selection:** auto — *host custody endpoint injected → Delegated; else → Embedded;* Ephemeral by explicit flag. Same sidecar binary, same code path (§0.37); the invariant (single writer, never multi-writer) holds in all three.
+
+### 0.40 Hybrid custody — per-store provider (the embedded↔delegated spectrum)
+
+Embedded and delegated are not two points but the **endpoints of a spectrum**. Custody is
+not one store — it's several (**grants, memory, RAG, sessions/transcript, audit**) — so
+§0.37's provider choice generalizes to a **per-store** choice: a **composite
+`CustodyProvider`** where each sub-store is independently embedded or delegated.
+
+**Governing rule (preserves §0.9's invariant, now per-store):** the *sharing scope* of a
+store decides its provider — a store **shared across agents ⇒ delegated** (host is its
+single writer); an **agent-private store ⇒ embedded** (the agent is its single writer).
+Never a shared store with multiple writers; the invariant just applies per store.
+
+**High-value configurations:**
+
+| Hybrid | Split | What it gives |
+|---|---|---|
+| **Shared identity, private cognition** | grants delegated · memory/RAG/sessions embedded | agents share the user's **logins** but **not their memories** — real isolation (a 3rd-party agent can't read another agent's memory) with no repeated OAuth |
+| **Shared memory, private corpus** | memory + grants delegated · RAG + sessions embedded | one coherent cross-agent user memory; each agent's document index stays its own |
+| **Central audit, local rest** | audit delegated · rest embedded | one compliance-grade trail, minimal other coupling |
+
+**Why it's better, not just more knobs:** fine-grained sharing (share identity/coherent
+memory, isolate per-agent memory/corpus — the "shared auth + private data" split that SSO
++ local app state uses); and **weaker coupling / graceful degradation** — an agent needs
+the host only for its *delegated* stores, so a host outage degrades shared features while
+embedded ones keep working (partial-host becomes a real, tolerable state).
+
+**Costs:** more config surface — the **manifest declares** per-store shared-vs-private
+(extends §0.28); per-agent authorization (§0.11) already scopes shared reads, so it
+composes; mixed backends complicate export/migration (§0.10, now per store); and "where
+does X live" is per-store, so §0.39's table is read per-store, not per-mode.
+
+This makes **Embedded** (all-private) and **Delegated** (all-shared) the two ends, with
+the hybrid any point between — one rule, arbitrary granularity.
 
 ---
 
