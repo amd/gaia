@@ -1355,9 +1355,29 @@ A2A (§0.32), memory (§0.38), and pros/cons.
 ### 0.40 Hybrid custody — per-store provider (the embedded↔delegated spectrum)
 
 Embedded and delegated are not two points but the **endpoints of a spectrum**. Custody is
-not one store — it's several (**grants, memory, RAG, sessions/transcript, audit**) — so
-§0.37's provider choice generalizes to a **per-store** choice: a **composite
-`CustodyProvider`** where each sub-store is independently embedded or delegated.
+not one blob — it's several **stores** — so §0.37's provider choice generalizes to a
+**per-store** choice: a **composite `CustodyProvider`** where each store is independently
+embedded or delegated.
+
+**A "store" = one named, independently-addressable custody data-domain** — a coherent
+slice of user state with its own data kind, its own interface (a specific set of
+`/host/v1/*` routes / `CustodyProvider` methods), its own persistence + lifecycle, and its
+own natural sharing scope. The custody stores:
+
+| Store | Holds | Interface | Natural scope |
+|---|---|---|---|
+| **grants** | OAuth tokens (Google/MS refresh + access) | `/v1/connections` + host refresh (§0.6) | **shared** (one login) |
+| **memory** | the assistant's learned facts/prefs about the user | `GET/POST /host/v1/memory` | shared *or* private |
+| **rag** | the document/vector index retrieved over | `POST /host/v1/rag/query` | shared *or* private |
+| **sessions** | conversation transcripts + the session index | `GET /host/v1/sessions/{id}` | per-agent (host-indexed) |
+| **audit** | the append-only log of consequential actions | `POST /host/v1/audit` | shared *or* private |
+
+**Boundary test (what *is* a store):** a data domain is its own store when it has (a) a
+**distinct single-writer requirement** (it needs one clear owner) and (b) a **coherent,
+independently-swappable interface**. State that always shares a lifecycle + writer is *one*
+store (a transcript and its session-index entry travel together → one `sessions` store) —
+this keeps the list at ~5 stores, not per-field granularity. **"Per-store"** = each store
+independently picks embedded or delegated.
 
 **Governing rule (preserves §0.9's invariant, now per-store):** the *sharing scope* of a
 store decides its provider — a store **shared across agents ⇒ delegated** (host is its
