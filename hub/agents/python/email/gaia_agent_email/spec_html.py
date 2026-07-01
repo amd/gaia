@@ -449,10 +449,32 @@ def render_endpoint_spec_html() -> str:
     # avoid any import-order coupling with email_routes (which imports this
     # module lazily for its GET /spec page).
     from gaia_agent_email.api_routes import (
+        EmailBriefingResponse,
         EmailDraftRequest,
         EmailDraftResponse,
         EmailSendRequest,
         EmailSendResponse,
+    )
+
+    briefing_block = _endpoint_block(
+        path="/v1/email/briefing",
+        method="GET",
+        description=(
+            "Latest scheduled daily inbox briefing (#1608). The email sidecar "
+            "generates the pre-scan envelope on a configurable daily schedule "
+            "— off by default; enable with GAIA_EMAIL_BRIEFING_ENABLED=true "
+            "(fire time via GAIA_EMAIL_BRIEFING_TIME, 24h local HH:MM, "
+            "default 08:00) — and this endpoint returns the most recent run. "
+            "The briefing payload is the same email_pre_scan envelope as "
+            "POST /v1/email/prescan, produced by the agent's own "
+            "pre_scan_inbox path. 404 until a scheduled run has happened."
+        ),
+        request_sections=[],
+        response_sections=[
+            ("EmailBriefingResponse", EmailBriefingResponse),
+            ("EmailPreScanResult", EmailPreScanResult),
+            ("PreScanItem", PreScanItem),
+        ],
     )
 
     search_block = _endpoint_block(
@@ -644,6 +666,8 @@ def render_endpoint_spec_html() -> str:
 {batch_block}
 
 {prescan_block}
+
+{briefing_block}
 
 {search_block}
 

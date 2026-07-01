@@ -143,6 +143,25 @@ Preferences are stored in process memory only — restarting the agent (or quitt
 
 Senders you reply to quickly are automatically promoted to priority on the next triage run — no explicit command needed. The agent measures how long it took you to reply to each sender (using the original message's receipt timestamp as the anchor) and promotes senders whose median reply latency falls below the threshold. Promotion is applied on-demand during triage, not on a background thread, and persists across agent restarts. Works across both connected mailboxes (Gmail and Outlook).
 
+### Scheduled daily briefing (off by default)
+
+The email sidecar can run the pre-scan on a daily timer — no prompt needed — so the
+triage card is already waiting for you in the morning. It is **off by default**;
+enable it with environment variables when launching the sidecar:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `GAIA_EMAIL_BRIEFING_ENABLED` | unset (off) | `true`/`1`/`yes` turns the daily briefing on. |
+| `GAIA_EMAIL_BRIEFING_TIME` | `08:00` | Daily fire time, 24h local `HH:MM`. |
+| `GAIA_EMAIL_BRIEFING_MAX_MESSAGES` | `25` | Inbox messages to scan per run (1–100). |
+
+Each run produces the same `email_pre_scan` envelope as an on-demand pre-scan
+(the classification path is shared — nothing is re-implemented) and persists it
+locally; fetch the latest run from `GET /v1/email/briefing` (`404` until the first
+scheduled run). An invalid value fails sidecar startup with an actionable error
+rather than guessing a schedule. Push delivery and a cross-agent morning brief
+are planned on the autonomy engine (#555).
+
 ## Action surface
 
 ### Read
@@ -287,9 +306,10 @@ isolated, and dogfoods the exact binary shipped to integrators.
 `dev`); there is no in-process fallback. Two surfaces run through it:
 
 - **The `/v1/email/*` REST surface** — the full schema-2.1 contract (triage,
-  batch triage, search, inbox pre-scan, draft/send + confirm, archive/unarchive,
-  quarantine/unquarantine, calendar view/preview/create/respond, health,
-  version). This is exactly what third-party integrators consume, so the UI
+  batch triage, search, inbox pre-scan, scheduled daily briefing, draft/send +
+  confirm, archive/unarchive, quarantine/unquarantine, calendar
+  view/preview/create/respond, health, version). This is exactly what
+  third-party integrators consume, so the UI
   exercises the real product. The sidecar's connector OAuth **write** routes are
   never exposed (all grant writes stay on the backend's single-writer path).
 - **The in-app email chat agent** (`agent_type=email`) — the local-LLM tool loop
