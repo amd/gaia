@@ -5,6 +5,22 @@ follows [SemVer](https://semver.org/): the **MAJOR** of the on-the-wire
 `SCHEMA_VERSION` is what `checkVersion` enforces at startup, so a contract MAJOR
 bump is always at least a package MINOR bump with a migration note.
 
+## Unreleased
+
+### Added
+
+- **Voice/style-matched drafting from Sent history (#1607) — agent capability,
+  GAIA chat surface.** The bundled agent can learn a persisted, per-mailbox voice
+  profile from the user's Sent mail (`build_style_profile` / `get_style_profile`
+  / `clear_style_profile`) and compose `draft_reply` bodies in that voice —
+  greeting, sign-off, typical length, formality — instead of a generic scaffold.
+  The profile stores derived features only (never message text), is built with
+  deterministic on-device analysis, and never leaves the machine. Drafts stay
+  approval-gated; nothing auto-sends. **No wire-contract change** —
+  `SCHEMA_VERSION` stays `2.0` and the REST/MCP surface is unchanged
+  (`POST /v1/email/draft` still wraps a caller-supplied body); exposing the
+  profile over REST is a follow-up.
+
 ## 0.2.2
 
 Release-reliability fix. The 0.2.1 tag published the per-platform binaries to the

@@ -814,7 +814,7 @@ quarantine_phishing_message → { "ok": true, "data": {
   <div class="wrap">
     <div class="eyebrow"><span class="bar"></span>Part 1b · Personalization &amp; memory</div>
     <h2 style="margin-top:16px">Learns how you work <span class="pill t0" style="vertical-align:middle"><a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a></span></h2>
-    <p class="body-t">These features make the agent <b>adapt to the individual user</b>, entirely on-device. Today, classification preferences are <b>session-scoped</b> (<code>set_priority_sender</code>, <code>set_low_priority_sender</code>, <code>set_category_default</code>) and wiped on restart by design; the work below makes them <b>durable and learned</b> rather than hand-set. P1–P4 are <b>in flight</b>; P5 is <b>planned</b>.</p>
+    <p class="body-t">These features make the agent <b>adapt to the individual user</b>, entirely on-device. Today, classification preferences are <b>session-scoped</b> (<code>set_priority_sender</code>, <code>set_low_priority_sender</code>, <code>set_category_default</code>) and wiped on restart by design; the work below makes them <b>durable and learned</b> rather than hand-set. P1–P5 are <b>in flight</b>.</p>
 
     <div class="cap">
       <div class="cap-head"><span class="num">P1</span><h3>Behavioral sender prioritization</h3><span class="pill wip">In flight</span><span class="pill t0">Tier 0</span></div>
@@ -853,10 +853,10 @@ quarantine_phishing_message → { "ok": true, "data": {
     </div>
 
     <div class="cap">
-      <div class="cap-head"><span class="num">P5</span><h3>Voice / style-matched drafting</h3><span class="pill planned">Planned</span><span class="pill t0">Tier 0 · draft</span></div>
+      <div class="cap-head"><span class="num">P5</span><h3>Voice / style-matched drafting</h3><span class="pill wip">In flight</span><span class="pill t0">Tier 0 · draft</span></div>
       <div class="field"><div class="fl">Use-case</div><div class="fv">Draft replies in the user's own voice — greeting, sign-off, sentence length, formality — learned from a sample of their Sent mail, instead of a generic scaffold. The style profile is built and stored locally, exactly the kind of private history that shouldn't go to a cloud service, which makes it a natural fit for GAIA's on-device model. It extends the already-shipped per-request tone/context matching with a persisted, personalized voice profile.</div></div>
       <div class="field"><div class="fl">Why it matters</div><div class="fv">A blank-bodied or generic draft reads as "autocomplete"; a voice-matched draft is what makes users call an assistant genuinely theirs — a headline feature of comparable tools.</div></div>
-      <div class="field"><div class="fl">Backed by</div><div class="fv">A local style profile over Sent mail feeding <code>draft_reply</code>; extends the closed <a class="iss" href="https://github.com/amd/gaia/issues/1269" target="_blank" rel="noopener">#1269</a> (tone matching). Related: <a class="iss" href="https://github.com/amd/gaia/issues/704" target="_blank" rel="noopener">#704</a>.</div></div>
+      <div class="field"><div class="fl">Backed by</div><div class="fv">A persisted per-mailbox style profile over Sent mail (<code>build_style_profile</code> / <code>get_style_profile</code> / <code>clear_style_profile</code>) feeding the <code>draft_reply</code> composition prompt — derived features only, no message text stored; extends the closed <a class="iss" href="https://github.com/amd/gaia/issues/1269" target="_blank" rel="noopener">#1269</a> (tone matching). Related: <a class="iss" href="https://github.com/amd/gaia/issues/704" target="_blank" rel="noopener">#704</a>. Remaining for validation: the judge-scored style-match eval.</div></div>
       <div class="field"><div class="fl">Guardrails</div><div class="fv">Tier 0 — drafting; the send still stays Tier 2. Profile is local-only.</div></div>
       <div class="field"><div class="fl">Milestone</div><div class="fv"><a class="iss" href="https://github.com/amd/gaia/issues/1607" target="_blank" rel="noopener">#1607</a> · <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (P3 stretch)</div></div>
     </div>

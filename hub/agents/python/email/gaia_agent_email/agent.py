@@ -59,6 +59,7 @@ from gaia_agent_email.tools.preference_tools import (
 from gaia_agent_email.tools.profile_tools import ProfileToolsMixin
 from gaia_agent_email.tools.read_tools import ReadToolsMixin
 from gaia_agent_email.tools.reply_tools import ReplyToolsMixin
+from gaia_agent_email.tools.style_tools import StyleToolsMixin
 from gaia_agent_email.tools.summarize_tools import SummarizeToolsMixin
 
 from gaia.agents.base.agent import Agent
@@ -139,6 +140,10 @@ ACTIONS:
   set_category_default, clear_session_preferences) — mutate persistent
   classification preferences that survive across restarts. Confirm the
   change in plain English.
+- Style tools (build_style_profile, get_style_profile,
+  clear_style_profile) — learn, inspect, or delete a local voice profile
+  derived from the user's Sent mail. When a VOICE & STYLE PROFILE section
+  is present, match it when composing draft bodies.
 
 PRE-SCAN BEHAVIOR:
 When the user asks for a pre-scan, morning brief, triage view, or "what's
@@ -175,6 +180,7 @@ class EmailTriageAgent(
     PreferenceToolsMixin,
     PhishingToolsMixin,
     ProfileToolsMixin,
+    StyleToolsMixin,
 ):
     """Email Triage Agent — Gmail + Calendar through the connectors
     framework, all body inference local on Lemonade.
@@ -285,6 +291,11 @@ class EmailTriageAgent(
         # for the schema and the tools that mutate this state.
         self._session_preferences = init_session_preferences()
 
+        # Voice/style profiles per mailbox provider (#1607), learned from
+        # Sent mail and fed into the draft-composition prompt. Seeded from
+        # persisted records after init_memory() below.
+        self._style_profiles: dict[str, dict] = {}
+
         # SQLite for the action log. Default ``~/.gaia/email/state.db``.
         # Eval / unit tests inject ``db_path=tmp_path/state.db``.
         db_path = config.resolved_db_path()
@@ -304,6 +315,7 @@ class EmailTriageAgent(
         # init_memory() (so _memory_store is set) and after
         # _session_preferences is set (done above).
         self._load_persisted_preferences()
+        self._load_persisted_style_profiles()
 
         # LLM connection. Default to Lemonade — the config's base_url
         # allowlist guarantees the host is local.
@@ -357,6 +369,7 @@ class EmailTriageAgent(
         self._register_preference_tools()
         self._register_phishing_tools()
         self._register_profile_tools()
+        self._register_style_tools()
         self.register_memory_tools()
 
     # -- Phase 2 multi-inbox routing (#1603) -------------------------------
