@@ -33,10 +33,10 @@ It splits into **two halves that already differ sharply in maturity:**
   automates this with **agentic coding**.
 - **Ship half (back) — *already exists and is rigorous*.** `release_agent_email.yml` +
   `hub/agents/python/email/packaging/*` already do multi-platform freeze, cross-OS-version
-  verification, a **data-driven** scorecard gate, doc + scorecard generation, whole-package
-  assembly, Hub + npm publishing with provenance, real-hash lock regeneration, and
-  **post-publish edge verification**. **The factory ORCHESTRATES this half — it must not
-  reinvent it, and must not lose any of its rigor.**
+  verification (darwin-x64 leg), a **data-driven** scorecard gate, scorecard generation, Hub
+  + npm publishing with OIDC provenance, real-hash lock regeneration, and **post-publish edge
+  verification**. (The single whole-package *zip* is the one piece currently disabled — §6.)
+  **The factory ORCHESTRATES this half — it must not reinvent it, and must not lose its rigor.**
 - **Maintain loop — the keystone that ties both halves.** An SDK delta that breaks an
   agent's eval re-runs dev + ship for the affected agents.
 
@@ -78,9 +78,11 @@ mcp:        [gmail, google-calendar]                       # MCP servers (tool-l
 connectors: { google: [gmail.modify, calendar] }           # → manifest.oauthScopes (least-priv)
 egress:     [googleapis.com]                                # → manifest.egressAllowlist (§0.24)
 eval:                                                       # the gate (§5, §5.5)
-  held_out_oracle: oracles/email/            # human-curated, curator ≠ spec author
-  safety_floors:   { urgent_recall: 0.95 }   # per-agent hard floors (#1437 pattern)
-  gate:            "LCB(acceptance, k=5) >= previous_release"
+  held_out_oracle: oracles/email/            # human-curated, curator ≠ spec author; split by thread-id
+  n_runs:          3                          # repetitions to estimate variance (NOT k)
+  acceptance_bar:  0.80                       # FIXED hard bar — no drift (like --min-aggregate)
+  safety_floor:    { needs_attention_recall: 0.90 }  # FIXED tripwire; #1437 axis = URGENT+NEEDS_RESPONSE
+  non_inferiority: "candidate >= previous_release - k*stdev"   # k = stdev-band mult (default 1.0), matches scorecard_gate.py
 trust_tier: verified                                        # → manifest.trustTier (§0.24)
 gates:      { sdk_release: human, ship: human }             # illustrative subset of the §2.5 checkpoints
 targets:    [win32-x64, darwin-arm64, darwin-x64, linux-x64]
@@ -157,13 +159,21 @@ token). It would be incoherent to scope every *agent's* capabilities tightly (ru
 yet leave the *factory* — which can change the SDK all agents run on — with ambient
 god-rights. So the factory is subject to the same capability discipline it ships:
 
-- **Least-privilege credentials per stage.** The dev-loop lane gets repo-read + branch-write
-  only. **PR-merge, npm-publish, Hub-publish, and SDK-tag credentials are held by the human
-  gates** (§2.5), not the orchestrator — the orchestrator *requests* a privileged action and
-  a human (or a trusted-lane policy) releases the credential. A compromised orchestrator run
-  **cannot publish or tag on its own.**
+- **Least-privilege via three *distinct* GH mechanisms** (not one) — and only the first is
+  built today:
+  - **Publish** — a **GitHub Environment secret** (`GAIA_HUB_TOKEN`) with required reviewers,
+    plus npm **OIDC** (no stored secret): the token is unreadable until the human gate
+    approves. *This is already how `release_agent_email.yml` works* — "secrets injected only
+    at the gated stage" is real, not aspirational, for publishing.
+  - **Merge** — **branch protection + required reviews** (Environments don't gate "who may
+    merge"). *To build.*
+  - **SDK tag** — a **tag-protection ruleset** (and note a tag that *triggers* release can't
+    sit behind the downstream environment gate). *To build.*
+  - The "cannot self-merge/tag" guarantee also requires the **orchestrator token to lack
+    `contents: write`/admin** — otherwise a `gh`-authed run holds whatever its token can do;
+    all privileged git ops must route through the gated Actions jobs.
 - **Isolated execution.** Each run is a throwaway worktree/sandbox (§2) with no standing
-  access to publish secrets; secrets are injected only at the gated stage that needs them.
+  access to publish secrets.
 - **Auditable.** Every privileged action (merge, tag, publish) is attributable to the run +
   the approving human — the runtime's audit plane, applied to the factory itself.
 
@@ -190,15 +200,15 @@ is mostly net-new automation; **Back (ship)** cites the pipeline that *already e
 
 | # | Stage | What it does | Component (status) | Gate |
 |---|---|---|---|---|
-| 9 | **Docs generate + sync** | emit/refresh README · SPEC · SKILL · CHANGELOG · SCORECARD · openapi/spec_html, kept in sync (§4) | `packaging/gen_*` · `spec_html` · CLAUDE.md sync rule (*exists, manual sync*) | docs-in-sync |
-| 10 | **Manifest emit** | derive `manifest.json` (§0.28) from recipe + compose/eval outputs | net-new emitter | schema-valid |
+| 9 | **Docs: generate SCORECARD, publish the rest** | `SCORECARD.md` is CI-generated; README/SPEC/SKILL/CHANGELOG are authored/committed and *published* (not emitted), kept in sync (§4) | `gen_scorecard.py` (gen) · committed docs · CLAUDE.md sync rule (*exists, manual sync*) | docs-in-sync |
+| 10 | **Manifest emit** | derive `manifest.json` (§0.28) from recipe + compose/eval outputs | net-new emitter (schema in #1913) | schema-valid |
 | 11 | **Multi-platform freeze** 🚦 | freeze win32-x64 · darwin-arm64 · darwin-x64 · linux-x64; smoke-test each; **assert required platforms** | `packaging/freeze.py` · `smoke_test.py` · `release_agent_email.yml` (*exists*) | smoke + platforms |
-| 12 | **OS-compat verify** 🚦 | run a newer-OS-built binary on an **older OS** (e.g. macos-26 build → macOS 15) | `release_agent_email.yml` verify job (*exists*) | older-OS smoke |
-| 13 | **Eval gate (data-driven)** 🚦 | on the **held-out oracle** (§5.5); baseline = **previous release**; **acceptance bar + URGENT floor** (#1437) | scorecard gate job (*exists*) | `LCB(k) ≥ bar`, ≥ floor |
-| 14 | **Package assemble** | whole-package zip (all binaries + npm TS client + docs + lock) + `package-files.json` | `gen_package_files.py` · npm build (*exists*) | manifest complete |
+| 12 | **OS-compat verify** 🚦 | run a newer-OS-built binary on an **older OS** — *darwin-x64 leg only today* (macos-26 build → macOS 15); other platforms have no older-OS verify | `release_agent_email.yml` verify job (*exists, darwin-x64*) | older-OS smoke |
+| 13 | **Eval gate** 🚦 | on the **held-out oracle** (§5.5); **fixed** acceptance bar + safety floor (#1437); prev-release as a **non-inferiority band** `≥ prev − k·stdev` (§5) | `scorecard_gate.py` (*exists*) | point-estimate `min-aggregate` today; LCB/band = **M2** |
+| 14 | **Package assemble** | npm tarball (client + docs + lock) + R2 binaries + `package-files.json`. ⚠️ single whole-package **zip DISABLED** (`if: false`, Cloudflare 413) | `gen_package_files.py` · npm build (*exists; zip disabled*) | manifest complete |
 | 15 | **Sign + real-hash lock + provenance** 🚦 | SHA-256, **npm OIDC trusted-publishing provenance**, regenerate `binaries.lock.json` with **real hashes**, embed provenance (spec · scorecard · SDK commit) | `gen_binaries_lock.py` · npm OIDC (*exists; signing partial*) | signature/provenance |
 | 16 | **Publish** | cut-from-main + token gates; POST `/publish` to Hub Worker; npm publish; **redeploy catalog site** | `publish_to_r2.py` · Hub Worker · website deploy (*exists*) | governance gates |
-| 17 | **Post-publish edge verify** 🚦 | fetch **every published object via the real fetch CLI**; assert the package zip is **fetchable at the CDN edge** (the #1655 "user's real state" rule) | fetch-verify steps (*exists*) | real download OK |
+| 17 | **Post-publish edge verify** 🚦 | fetch **every published object via the real fetch CLI** at the CDN edge (#1655 "user's real state") — *per-object verify works; the zip-verify leg is disabled with the zip (§6)* | fetch-verify steps (*exists; zip leg off*) | real download OK |
 | 18 | **Maintain (continuous)** 🚦 | on an SDK delta that regresses the agent's eval, re-run 1–17 for the delta | net-new trigger + the above | eval stays ≥ bar |
 
 Stages 9–17 already run in CI (`release_agent_email.yml`, `build_agents.yml`,
@@ -221,19 +231,37 @@ and keeps current.
 
 ## 5. The eval gate is data-driven, not "≥ a committed baseline"
 
-The real gate (stage 13) is more than a static comparison:
+The gate has three parts — and the construction matters, because a naive "beat last
+release" gate is statistically unsound (an eval-methodology review caught the original
+draft reinventing the shipped gate in a strictly worse form):
 
-- **Baseline = the previous release** (resolved dynamically), so an agent must not regress
-  against *what shipped last*, not against a hand-committed file.
-- **A data-driven acceptance bar + an URGENT floor** (#1437) — the bar adapts to the
-  scenario mix; the floor is a hard minimum on the safety-critical bucket (e.g. URGENT
-  email recall) that no aggregate score can paper over.
+- **Two FIXED hard gates (no drift):** a **fixed acceptance bar** and **fixed safety
+  floors** — constants, exactly as #1437's `--min-aggregate` / `--min-urgent-recall`. A
+  fixed bar is ratchet-free.
+- **Previous-release comparison is a NON-INFERIORITY BAND, never a moving bar.** The shipped
+  gate (`scorecard_gate.py`) is `candidate_point ≥ baseline_point − k·stdev` — the noise
+  band sits *below* the baseline, so flat-true-capability passes and the accepted point can
+  drift *down* as well as up (mean-reverting, not a ratchet). **Do not** gate `LCB(candidate)
+  ≥ prev_point`: that enshrines the noisy upper tail as the next floor and ratchets the bar
+  out of reach within ~2–3 releases. For a real two-sample check, use the framework's
+  `mann_whitney_u` / `bootstrap_ci`.
+- **`k` is the stdev-band multiplier (default 1.0), NOT a run count.** Repetitions are
+  `n_runs` (3 in the shipped fixture) — enough for a crude band, not a reliable CI (n≈5
+  normal-approx is anti-conservative; use t or bootstrap). Conflating the two silently 5×'s
+  the serial-eval cost (§11.5). *Today's gate is a point-estimate `min-aggregate ≥ bar`;
+  the noise-band/LCB is the **M2 upgrade**, not existing behavior.*
+- **Know which pipeline the metric comes from** (different noise): structured agents (email)
+  gate on **deterministic confusion-matrix** metrics vs `ground_truth.json` (small spread —
+  the band matters little); generic scenario scorecards gate on **LLM-judge `avg_score`**
+  (larger spread — the band matters). The recipe declares which.
+- **Safety floors are point tripwires, not CI-backed guarantees** unless the bucket is sized
+  for it: 95%-confidence that true recall ≥ 0.95 with zero observed misses needs ≈ **59**
+  positive instances. So state a minimum positive count per safety bucket, or label the floor
+  a tripwire (as #1437 does at **0.90** on the *needs-attention* axis = URGENT + NEEDS_RESPONSE,
+  not URGENT alone).
+- **Runs on the held-out oracle, not the dev/optimize corpus** (§5.5) — gating on the
+  tuned-against set measures memorization, not capability.
 - **Refreshed independently** so the shipped scorecard stays honest as models/SDK move.
-- **Runs on the held-out oracle, not the dev/optimize corpus** (§5.5, M2) — gating on the
-  set the agent was tuned against would measure memorization, not capability.
-- **Gates on the lower confidence bound over *k* runs, not a point estimate** — the judge is
-  nondeterministic, so the gate is `LCB(score, k) ≥ bar`. A point-estimate gate near the bar
-  is a *flaky* gate → false-trigger rebuilds in the maintenance loop (§11.5).
 
 The factory's job is to *run this gate on every dev-half output and every SDK-delta
 rebuild* — the eval isn't a one-time ship check, it's the continuous regression net.
@@ -262,29 +290,44 @@ generates from **templates** — so the factory must generalize *that discipline
    AI-labelling). So the held-out oracle must **also** carry a fraction of labels
    **human-judged on real seed data**, free to *disagree* with the templates — that slice is
    the only thing that can catch a systematically mis-defined task, not just instance-level
-   overfitting.
-3. **Strict train/held-out separation — the anti-overfitting rule.** Two corpora, never
-   crossed:
+   overfitting. **Size it (a floor, e.g. ≥ 20% of the oracle) and track template-vs-human
+   label agreement** — if templates disagree with humans beyond a threshold, the template
+   *definition* is suspect; a 5% decorative slice detects nothing.
+3. **Strict train/held-out separation — split by SOURCE, not just by instance.** Two
+   corpora, never crossed — and "never cross an *instance*" is not enough, because both
+   corpora seed from the **same vendor pool + same templates**, so a dev instance and an
+   oracle instance can be *near-duplicates* off one seed/template (leakage that reads as
+   "held-out"):
+   - **Split key = source document / thread ID:** no oracle item may share a seed thread with
+     any dev item; the oracle's by-construction portion uses **templates disjoint** from the
+     dev corpus (or leans on real, non-templated seed instances). Otherwise "held-out"
+     measures template-surface memorization, not capability.
    - **Dev/optimize corpus (M3, factory-generated):** fuel for the eval-optimize (`--fix`)
-     loop; the factory may generate it freely (rules 1–2) — overfitting *to it* is fine, it's
-     the training signal.
+     loop; the factory may generate it freely (rules 1–2) — overfitting *to it* is fine.
    - **Held-out gate oracle (M2, human-curated):** what stage 13 / regression gates on —
-     **human-curated, versioned, committed** (as `ground_truth.json` +
-     `quality_gate_thresholds.json` are today), curated by **a human who is *not* the spec
-     author** (the circular source is the person who defined the task, *not* the LLM
-     implementer — "different from the implementer" is trivially and uselessly true), and
-     **never** used in the optimize loop.
+     versioned, committed (as `ground_truth.json` + `quality_gate_thresholds.json` today),
+     curated by **a human who is *not* the spec author** (the circular source is the person
+     who defined the task, *not* the LLM implementer — "different from the implementer" is
+     trivially true), and **never** used in the optimize loop. Make that a **mechanism, not
+     discipline:** the oracle lives at a path the `gaia eval agent --fix` run *cannot read*,
+     enforced in the harness — so a config slip can't leak it.
 
 **The oracle is manufactured and maintained by an explicit stage — it does not pre-exist by
 magic.** Stage 13 (and the regression gates) *consume* the held-out oracle — stage 7's
 optimize loop must **not** (rule 3) — so a stage must *produce* it: **stage 5b
 "curate/extend the held-out oracle to cover the current capability surface,"** owned by a
 human, triggered on **capability change** (not just model/SDK drift). Its gate is a
-**coverage-delta 🚦: block release when the agent's capability set grew but oracle coverage
-didn't** (capability set = the agent's tool/skill/route surface from the recipe + manifest;
-coverage = which of those surfaces the oracle actually exercises) — otherwise a maintenance pass (stage 6) that expands the agent passes green while
-testing only the *old* behavior. Visibility of coverage gaps (below) is necessary but not
-sufficient; the coverage-delta gate is what makes it real.
+**coverage-delta 🚦: block release when the agent's capability grew but oracle coverage
+didn't** — otherwise a maintenance pass (stage 6) that expands the agent passes green while
+testing only the *old* behavior. Two levels, because presence-coverage alone is not enough:
+- **Presence (measurable today):** capability *surface* = the tool/skill/route set from the
+  recipe + manifest (a diff detects additions); coverage = "≥1 oracle scenario invokes every
+  manifest tool" — instrumentable via the shipped `tool_recall.py`.
+- **Behavior (the harder half):** a capability can deepen *inside* an existing tool (new
+  parameter/path) with **no** new named surface, so presence-coverage won't fire. Tie the
+  gate to the **scenario-class** enumeration (templates already enumerate the space):
+  a new capability must add a new scenario *class*, not merely hit an existing tool once.
+Visibility of gaps is necessary but not sufficient; the coverage-delta gate makes it real.
 
 **Coverage discipline:** templates enumerate the scenario space explicitly; hold a dedicated
 **adversarial/edge bucket** (the committed `phishing_fixture.json` is the pattern) so
@@ -304,8 +347,11 @@ keeps every property:
 - **Real-hash lock regeneration** (stage 15) — `binaries.lock.json` is rewritten from the
   **actually-published** artifacts, so the integrity manifest reflects reality, not a
   pre-computed guess.
-- **Whole-package multi-component assembly** (stage 14) — the product is *not one binary*
-  (§7); the zip bundles all platform binaries + the npm client + docs + lock + examples.
+- **Multi-component product** (stage 14) — the product is *not one binary* (§7): the npm
+  tarball carries client + docs + lock, and binaries live on R2. ⚠️ The single **whole-package
+  zip is currently DISABLED** in the live workflow (`if: false` — the ~177 MB all-platforms
+  zip hits Cloudflare's edge 413 limit; revive via presigned-to-R2 or per-platform zips), so
+  treat it as *aspirational*, not existing rigor.
 - **npm OIDC trusted publishing + provenance** (stage 15) — supply-chain provenance, not a
   bare signature.
 - **Post-publish edge verification** (stage 17) — the #1655 discipline: verify the thing a
@@ -317,29 +363,45 @@ keeps every property:
 ## 6.5 Recovery — a passed-but-broken release must be revertible
 
 Gates reduce but never eliminate escapes: an agent can clear the held-out oracle (stage 13)
-and still fail in the wild — a scenario the oracle didn't cover, an environment the freeze
-didn't. **There is no rollback path today** (verified — the pipeline is all fail-forward).
-The factory must add one:
+and still fail in the wild. **There is no rollback path today** (verified — all fail-forward).
+Recovery must use the levers the real infra actually supports — published npm tarballs + R2
+objects are **immutable** (npm unpublish blocked after 72h; R2 append-only), and the Hub
+Worker has **no delete/yank/rollback route** (`catalog.ts` serves `latest = max-semver`).
+So "roll the catalog back" is *not* a thing; the workable levers are:
 
-- **Pin-previous (fast path):** the runtime installs by `binaries.lock.json`, so a bad
-  release is recovered by re-pinning the lock to the last-good version — no rebuild.
-- **Yank the version:** npm-deprecate + revert the SDK tag for the affected version, and
-  **roll the Hub catalog entry back to last-good** so new installs get the good one.
+- **Roll forward (the real recovery):** re-publish the last-good content at a **higher
+  semver** — since the catalog always serves the highest version, this is how you displace a
+  bad `latest`. (Deprecation only *flags* a version; it does not redirect installs.)
+- **Redirect new installs immediately:** move the npm **`latest` dist-tag** back to the
+  last-good version (`npm dist-tag add @amd-gaia/agent-email@<good> latest`) — the dist-tag,
+  **not** deprecate, is the npm redirect lever.
+- **Pin-previous (fast path for a known-good consumer):** re-install the last-good **version**
+  (`gaia agent install email@<good>` / `npm i …@<good>`); its *immutable bundled*
+  `binaries.lock.json` still points at present R2 binaries, so no rebuild — the version pin
+  is the lever, not "re-pinning the lock" (the lock is fixed content of each version). Needs
+  the Hub-CLI install path to support pinning a **non-latest** version.
 - **The escape becomes an oracle case:** the failing real scenario is curated into the
-  held-out oracle (stage 5b) so the regression can never re-ship — recovery *feeds* M2,
-  closing the loop instead of just patching.
+  held-out oracle (stage 5b) so it can never re-ship — recovery *feeds* M2.
 
-**Versioning is a factory decision, not a human-set constant.** `stamp_version.py` today
-only *propagates* a hand-set version; the factory must *choose* the bump from the change's
-contract impact — a breaking manifest/contract change (runtime §0.15) forces a **major**, so
-the runtime's version guard and the agent's semver stay honest rather than drifting.
+*True catalog rollback (skip a `yanked[]` version in `latestVersion()`) is **net-new Worker
+work**, not an existing capability — scope it if roll-forward isn't enough.*
+
+**Versioning is a factory decision across TWO independent axes** — `stamp_version.py` today
+only *propagates* a hand-set version, and it deliberately keeps them separate:
+- the **contract/API version** (`API_VERSION` == `SCHEMA_VERSION`) — what the runtime's
+  version guard (§0.15) actually checks; a contract-breaking change must bump **this**;
+- the **package semver** (distribution) — a build/feature bump.
+A package-major alone does *not* keep the runtime guard honest unless `API_VERSION` is also
+bumped; the factory must decide both from the change's contract impact.
 
 ## 7. The product is multi-component, not a single binary
 
-A shipped agent = **platform binaries + the npm TS integration client (`fetch`/`lifecycle`)
-+ the five docs + `binaries.lock.json` + examples/tests**. The factory produces and ships
-all of it as one versioned release; "the binary" is one component, not the product. (This
-is why stage 14 assembles a whole-package zip and stage 9 owns docs.)
+A shipped agent = **R2 platform binaries + the npm tarball (TS client `fetch`/`lifecycle`
++ the five docs + bundled `binaries.lock.json` + examples/tests)**. The factory produces and
+ships all of it as one versioned release; "the binary" is one component, not the product.
+(This is why stage 9 owns docs and the lock is bundled per-version.) A *single* whole-package
+zip would be convenient but is currently disabled (§6) — the shipped multi-component form is
+the npm tarball + R2 binaries, not one zip.
 
 ## 8. The factory ↔ runtime seam
 
@@ -437,8 +499,11 @@ milestone order (§10):
   `release_agent_email.yml` is ~718 lines, **email-hardcoded** — npm OIDC is **bound to the
   workflow *filename***, and tags/binary-names/manifest-path/R2-prefix/the `urgent_recall_
   floor` gate are all baked in. Per-agent generalization is a reusable-workflow rewrite +
-  **a registered npm publisher per agent** — substantial, not "just drive it." **M0 proves
-  it empirically on a second, non-email agent.**
+  **a registered npm publisher per agent** — substantial, not "just drive it." And npm's
+  trusted-publisher subject matches the **entry-point** workflow file GitHub triggered, *not*
+  a `workflow_call` reusable — so N thin per-agent caller workflows still need **N publisher
+  registrations** (unless one caller publishes all agents). **M0 proves it empirically on a
+  second, non-email agent.**
 - **"Exists" overstated for two dev-half deps:** the GAIA coder is on `origin/coder` (not
   main); the §0.x refs depend on **#1913 (unmerged)** — both "exist *on a branch*."
 
@@ -504,6 +569,32 @@ A second review pressure-tested the §11.5 fixes. Results, folded into the secti
 - **Residual, by design:** the human gates' realness still depends on reviewers not
   rubber-stamping; the factory reduces this to *deciding over evidence* (the blast-radius
   dry-run, the failing scorecard) rather than reviewing blind, but cannot eliminate it.
+
+## 11.7 Domain-review corrections (eval methodology + release mechanics)
+
+Two specialist reviews (eval-engineer, release-manager) checked the densest sections against
+the real code and found factual errors the generalist passes missed. Corrected in-place:
+
+- **Eval gate was statistically unsound → matched to the shipped gate.** The draft's
+  `LCB(candidate) ≥ prev_release_point` with a moving baseline is a **ratchet** (the accepted
+  noisy mean becomes the next floor → nothing passes within ~2–3 releases). Now a **fixed
+  bar + fixed safety floor** with the previous release as a **non-inferiority band**
+  `≥ prev − k·stdev` — exactly what `scorecard_gate.py` already does (§5, §1.5, stage 13).
+- **`k` overload fixed:** `k` = stdev-band multiplier (default 1.0), `n_runs` = repetitions
+  (3) — the draft's "k=5 runs" both collided with the real `--regression-k` and silently 5×'d
+  the serial-eval cost.
+- **Safety floor is a point tripwire, not a CI guarantee** (0.95 needs ≈59 sized instances;
+  #1437 uses 0.90 on the needs-attention axis); **split by source/thread-id** (near-duplicate
+  leakage); enforce oracle-separation as a **harness mechanism** (§5.5).
+- **Recovery rewritten to the real infra (§6.5):** the Hub Worker has **no rollback route**
+  (roll *forward*), npm redirect is the **dist-tag** (not deprecate), pin-previous is a
+  **version re-install** (the lock is immutable per version), tag-revert un-ships nothing.
+- **Two-axis versioning:** contract `API_VERSION` (drives the §0.15 guard) *and* package
+  semver — kept separate by `stamp_version.py` (§6.5).
+- **"Exists" corrected:** the whole-package **zip is disabled** (Cloudflare 413) — the shipped
+  multi-component product is the npm tarball + R2 binaries (§6, §7, stages 14/17); §2.6's
+  publish-secret gate is *built*, but merge/tag gating needs branch/tag-protection rulesets +
+  an orchestrator token without `contents: write`.
 
 ## 12. Open decisions (need sign-off)
 
