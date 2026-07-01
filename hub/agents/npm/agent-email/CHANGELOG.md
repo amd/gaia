@@ -5,6 +5,18 @@ follows [SemVer](https://semver.org/): the **MAJOR** of the on-the-wire
 `SCHEMA_VERSION` is what `checkVersion` enforces at startup, so a contract MAJOR
 bump is always at least a package MINOR bump with a migration note.
 
+## Unreleased
+
+- **Triage action items now persist as a task list** (#1605): `triage()` /
+  `triageBatch()` write each extracted action item to the sidecar's local SQLite
+  (`~/.gaia/email/state.db`), linked back to the source `message_id` (or
+  `thread_id` for a thread) and de-duplicated per message on the normalized
+  description — re-triaging a message never duplicates tasks. Side-effect only:
+  the wire response, contract, and `SCHEMA_VERSION` are unchanged, and results
+  without a `message_id` are not persisted. Read/complete surfaces arrive with
+  GAIA's cross-agent task store (amd/gaia#1521); until then the store is the
+  email-local `email_tasks` table.
+
 ## 0.3.0
 
 Contract bumped to `SCHEMA_VERSION` **2.1** — additive, no triage shape change, so

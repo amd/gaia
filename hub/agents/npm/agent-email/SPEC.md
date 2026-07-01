@@ -49,7 +49,7 @@ result.
 
 | Endpoint | Client method | Auth | What it needs |
 |----------|---------------|------|---------------|
-| `POST /v1/email/triage` | `triage()` | **Standalone** | Local Lemonade LLM only. Categorizes / summarizes / extracts action items + spam/phishing **signals** on the message you send in. *No mailbox is read.* |
+| `POST /v1/email/triage` | `triage()` | **Standalone** | Local Lemonade LLM only. Categorizes / summarizes / extracts action items + spam/phishing **signals** on the message you send in. *No mailbox is read.* Extracted action items also persist to the sidecar's local task list (see "Action-item task persistence" below); the response shape is unchanged. |
 | `POST /v1/email/triage/batch` | `triageBatch()` | **Standalone** | Same as `triage` for an `items` array (1–100). Returns a parallel `results` array, order-preserved; per-item failures isolate (HTTP 200 can carry errored items — inspect `results[].error`). A `502` fails the whole batch (Lemonade unreachable). |
 | `POST /v1/email/search` | `search()` | **Connector** | Read-only inbox search. A connected Google/Microsoft mailbox (`503` if none, `400` if 2+); **no** confirmation token. Lists messages matching `query`/`labels` and returns metadata only (no body). |
 | `POST /v1/email/prescan` | `prescan()` | **Connector** | Reads recent inbox messages from the connected Google/Microsoft mailbox and returns the read-only triage-card envelope (`kind: "email_pre_scan"`). `503` if no mailbox is connected, `400` if 2+ are. Heuristic-only — no Lemonade call. |
@@ -167,6 +167,19 @@ console.log(sent.sent_id);
 
 The full request/response types are exported from the package (`src/types.ts`) for
 exact field-level reference.
+
+### Action-item task persistence (additive, #1605)
+
+Beyond returning `action_items` inline, `triage` / `triageBatch` persist each
+extracted item as a task row in the sidecar's local SQLite
+(`~/.gaia/email/state.db`), linked back to the source via the request's
+`message_id` (or `thread_id` for a thread). Persistence is de-duplicated per
+message on the normalized description, so re-triaging the same message never
+creates duplicate tasks. Results with no `message_id` are not persisted (no
+source to link back to). This is a **side-effect only** — the wire response is
+byte-for-byte what it was before; there is no read/complete task endpoint on
+this contract yet (that surface arrives with GAIA's cross-agent task store,
+amd/gaia#1521).
 
 ### Batch triage shape (additive, #1887)
 
