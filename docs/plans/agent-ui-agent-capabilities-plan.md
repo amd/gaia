@@ -78,6 +78,21 @@ Every agent sidecar exposes the **same** HTTP contract; the email sidecar
   forwarded-connection intake `POST /v1/connections` gated by `X-Gaia-UI: 1`
   (the Agent UI host path — see §0.6).
 
+**`/query` request body (define it — currently only the response is specced):**
+`{ query, run_id, context, model?, provider?, max_steps? }`. Two rules that avoid
+real bugs:
+
+- **The host mints `run_id`**, not the sidecar. §0.13's `cancel/{run_id}` and the
+  confirmation flow key off it; if the sidecar minted it, a "Stop" pressed before
+  the first SSE event would have no id to cancel (a race window). Host-minted
+  `run_id` is cancellable from the instant the request is sent.
+- **Context is pushed in the body**, not pulled. The host owns the transcript
+  (§0.9) and passes the relevant slice as `context`; the sidecar stays stateless
+  and never reads other sessions back over the callback (which §0.11's scoping
+  would forbid anyway). The `GET /host/v1/sessions` callback is host-internal, not
+  a sidecar transcript-access path — so a pushed slice and a pulled one can't
+  disagree.
+
 ### 0.2 `/query` SSE event schema
 
 One JSON object per SSE `data:` line, discriminated on `type`:
@@ -145,6 +160,16 @@ token to the whole approved multi-step segment, or have the host pass the sideca
 the exact prior tool-plan/step state so it executes rather than re-decides. This
 constraint holds under *either* confirmation model and is a hard requirement.
 
+**Which artifacts belong to which model (avoid the mixed-model trap).** `run_id` is
+the **streaming-run handle** and exists under *both* models — it is what §0.13's
+`cancel/{run_id}` targets. The `confirm_url = /v1/<agent>/query/{run_id}/confirm`
+in the numbered flow above is **resume-model-only** (it keeps a paused run alive).
+Under the **recommended stateless model** there is no paused run to resume: a
+`needs_confirmation` event *ends* the stream, the host performs the deterministic
+call (`/send` with the token) itself, then issues a **fresh `/query`** carrying the
+approved-step state to continue. So if stateless is adopted, drop `confirm_url` and
+the server-side run-continuation store; keep `run_id` purely for cancellation.
+
 ### 0.5 Agent Hub mirror (install / uninstall)
 
 The UI embeds a catalog mirror (existing `agentHub.ts` / `AgentInstallDialog` /
@@ -178,10 +203,12 @@ integrator (no host) may instead use the sidecar's self-service connector routes
 
 ### 0.7 CLI ↔ sidecar parity
 
-`gaia <agent>` becomes a thin REST client: it spawns the sidecar (same
-`AgentSidecarManager`, `user`/`dev` mode) and calls the **identical** endpoints —
-`gaia email "triage my inbox"` drives `POST /v1/email/query` exactly as the UI
-does. One contract, no second in-process code path to keep in sync.
+`gaia <agent>` becomes a thin REST client: it **attaches to the running sidecar if
+one is live on this machine, and spawns only if none is** (same
+`AgentSidecarManager`, `user`/`dev` mode, machine-wide discovery — see §0.14, which
+prevents CLI and UI from spawning rival instances), then calls the **identical**
+endpoints — `gaia email "triage my inbox"` drives `POST /v1/email/query` exactly as
+the UI does. One contract, no second in-process code path to keep in sync.
 
 ### 0.8 What's superseded
 
@@ -208,7 +235,8 @@ queried by sidecars rather than duplicated:
 | `connectors.py` | ~977 | **Host** — OAuth custody (§0.6). |
 | `files.py` | ~665 | **Host** — upload storage the UI serves. |
 | `mcp.py` | ~349 | **Host** — the user-configured MCP *server registry* is shared (like connectors); each sidecar connects to the servers its agent needs. Host owns the config, not the connections. |
-| (Lemonade LLM backend) | — | **Host broker** — single-tenant per model slot; a host-owned queue serializes model loads across agents (§0.12). Not a router today, but the most-contended shared resource. |
+| (Lemonade — **all** model families) | — | **Host broker** — single-tenant per model slot; a host-owned queue serializes loads of LLM **and** embedder / VLM / ASR / TTS / SD across agents *and* host-custody RAG (§0.12). The most-contended shared resource. |
+| (audit trail) | — | **Host custody sink** — consequential actions (incl. autonomous + fixed-function + direct-integrator paths) are appended to a host-owned log, NOT kept agent-private, or the observability dashboard is blind and uninstall erases the record (§0.19). |
 | `hub.py`, `agents.py`, `system.py`, `tunnel.py` | ~1700 | **Host** — supervision, settings, remote access. |
 | `chat.py`, `goals.py`, `schedules.py` | ~826 | **Sidecar** — agent/autonomy logic moves into the agent that owns it. |
 
@@ -230,8 +258,18 @@ decision that most shapes the migration — needs explicit sign-off.**
 
 ### 0.10 Migration path (strangler-fig — no big-bang)
 
-Retire the ~19K-LoC backend incrementally; the app stays shippable throughout:
+Retire the ~19K-LoC backend incrementally; the app stays shippable throughout.
+**This is code migration — existing user *data* needs its own step:**
 
+0. **Data migration (one-time, idempotent, versioned).** The current `~/.gaia`
+   state predates host custody: today's transcripts (`sessions.py` store) have no
+   agent tag, and the single memory store has no host/agent-private partition.
+   Migrate on first v2 launch: existing sessions → host session index with a
+   default agent tag; existing memory → host **user** memory (the conservative
+   default — it was cross-agent already), with a documented rule for what becomes
+   agent-private. Stamp an on-disk schema version so the migration is detectable and
+   runs once. Without this, upgraders lose past chats or see them reattach to a
+   wrong/null agent, and memory either leaks cross-agent or is stranded.
 1. **Email first** — already sidecar-shaped; add `/query` (SSE) and route the UI's
    email session through it. All other agents remain in-process, untouched.
 2. **Host supervisor** — generalize `EmailSidecarManager` → `AgentSidecarManager`
@@ -262,17 +300,48 @@ Two halves of the same mechanism, both currently **undefined** in the code
   host injects its own callback base-URL + the secret at launch). Symmetric to the
   forward proxy; without it, "the host stores it, the sidecar queries it" has no
   transport and agents silently re-fork their own copies.
+- **Authorization, not just authentication (🔒 the decisive one).** The per-spawn
+  secret only proves "the host spawned me" — it does not say *which* agent, and
+  unscoped callback routes turn the custody store into a **single-reader
+  exfiltration surface**: a hub-installed third-party agent could read the entire
+  cross-agent user memory, the whole RAG corpus, and *any* session transcript by id
+  — including other agents' conversations. **The host must bind the secret to the
+  agent id at mint time and scope every callback per-agent:** `/host/v1/memory` and
+  `/host/v1/rag` return only rows tagged to that agent (or an explicitly
+  user-granted shared scope), and `/host/v1/sessions/{id}` verifies the session
+  belongs to the caller. Shared-memory/RAG read access becomes a **per-agent grant**
+  surfaced at install, like connector grants. This is an architecture-level security
+  decision — settle it before the callback contract is frozen.
+- **Secret delivery.** Passing the secret via env is readable by other same-user
+  processes on some OSes — the exact "another local process" threat the auth exists
+  to stop. Prefer a pipe/inherited fd or a short-lived `0600` file over the
+  environment.
 
-### 0.12 Shared LLM backend — a host-owned model-slot broker
+### 0.12 Shared model backend — a host-owned model-slot broker
 
 Lemonade is **single-tenant per model slot** (this is why evals must run serially —
-CLAUDE.md). N sidecars each calling Lemonade independently will **race-evict each
-other's models** exactly as concurrent evals do — chaotic ctx-size errors and
+CLAUDE.md). N sidecars each loading models independently will **race-evict each
+other** exactly as concurrent evals do — chaotic ctx-size errors and
 `model_load_error` in production, not just CI. The custody layer must arbitrate the
-*most*-contended shared resource: a **host-owned Lemonade broker** that serializes
-model loads and grants a **model-slot lease** per request/run. Agents request
-inference through the broker (or the host proxies Lemonade), never contend directly.
-This is a hard requirement for more than one concurrently-active agent.
+*most*-contended shared resource: a **host-owned broker** that serializes model
+loads and grants a **model-slot lease** per request/run. Agents request inference
+through the broker (or the host proxies the backend), never contend directly. A
+hard requirement for more than one concurrently-active agent.
+
+- **All model families, not just the chat LLM.** Host-custody RAG needs the
+  **embedder** to serve `/host/v1/rag/query`; a VLM agent needs the VLM; voice
+  (host I/O) needs Whisper/Kokoro; SD needs SDXL. A host RAG call mid-`/query`
+  evicting the chat model is the exact silent-ctx-cap regression #1030 warns about.
+  The lease must cover embedder + LLM + VLM (+ voice/SD) together for a run —
+  host-custody RAG/VLM/voice are broker *clients*, not privileged bypass paths.
+- **Priority + preemption.** Serialization prevents corruption, not stalls. A
+  Phase-C autonomous brief runs in-sidecar and also draws the slot, so it can block
+  the user's interactive turn behind it. The broker needs **interactive > background
+  priority** (and preemption), or a background job silently makes a chat turn wait.
+- **Affinity + legibility.** A hot-model **affinity hint** keeps agents sharing a
+  model from reloading on every switch; the host emits a **`switching model…`
+  status event** so an unavoidable evict+reload stall (seconds, worse on NPU) is a
+  visible state, not a frozen UI.
 
 ### 0.13 Concurrency, cancellation & failure semantics
 
@@ -338,6 +407,62 @@ CLAUDE.md mandates evals for — yet it now runs out-of-process. Define:
   buffering), cancellation, and the synthetic crash `error` event.
 - Eval runs stay **serial** against the shared Lemonade broker (§0.12) — the
   per-agent sidecar model must not reintroduce concurrent model-slot contention.
+
+### 0.18 Dispatch — which sidecar answers a free-form message
+
+`/query` "is what the UI's chat drives," but with N installed sidecars nothing
+chooses the target. `gaia email "…"` is explicit; the UI's single chat box is not —
+the "host renders, sidecar reasons" split has a hole exactly where the user types.
+Pick one model and put it in the call graph:
+
+- **(a) Explicit per-session agent selection** (recommended v1) — the UI's active-
+  agent picker names the sidecar; matches the CLI; zero extra LLM cost.
+- **(b) A routing *sidecar*** the host calls first — flexible, but routing is itself
+  an LLM loop, so it draws the model slot (§0.12) and adds a hop before every turn.
+
+Cross-agent requests ("summarize this and email it") need either the user to switch
+agents or an orchestrator agent that itself calls other sidecars — defer to v2+, but
+name it so the v1 picker isn't mistaken for the end state.
+
+### 0.19 Audit trail — a host-custody sink, not agent-private
+
+The observability dashboard (security-model.mdx) promises "everything the agent
+did," but v2 moves the *acting* into sidecars, so the host sees only what crosses
+its SSE relay. Three blind spots: fixed-function calls from the CLI/integrators
+bypass the host; Phase-C autonomous schedules fire in-sidecar with no host in the
+loop; and email's action log is agent-*private* (§0.9) so the dashboard can't read
+it and uninstall deletes it. **Every consequential action** (send, archive,
+calendar-create, autonomous or scripted) must be appended to a **host-owned audit
+log** via `POST /host/v1/audit` (per-agent scoped, §0.11) — not just host-relayed
+`/query`. Otherwise the trail is a partial, self-erasing view.
+
+### 0.20 Uninstall — data lifecycle
+
+§0.5 uninstall stops the sidecar + removes the binary, but is silent on data.
+Define the policy explicitly (tie to §0.11 per-agent scoping so "this agent's data"
+is a well-defined set):
+
+- **Forwarded connection** — the host **withdraws/revokes** the OAuth connection it
+  forwarded, so a removed agent doesn't retain live mailbox access.
+- **Host-custody transcripts** tagged to the agent — offer **keep or delete** (they
+  survive the binary; dangling "ghost" sessions that can't reopen are the failure to
+  avoid); on reinstall, keep = reattach.
+- **Agent-private state** (`~/.gaia/agents/<id>/`, e.g. the action log) — wipe by
+  default (state a default), with an option to retain.
+- **Shared user-memory rows** the agent wrote — governed by its §0.11 grant scope.
+
+### 0.21 Offline / sideload install + install footprint
+
+- **Sideload.** Every §0.5 path *downloads* from the lock's `baseUrl` — but GAIA is
+  privacy-first and targets air-gapped + OEM-preloaded deployments (a stated Phase-D
+  goal). Add a **local install source**: point the manager at a pre-staged directory
+  of verified binaries (still SHA-check against the lock, skip the network), covering
+  the *first* agent too. This also unblocks OEM factory-image bundling — cheap to
+  reconcile now rather than retrofit.
+- **Footprint.** N frozen sidecars each bundle their own `gaia.connectors` / RAG /
+  model libs; ten agents is a multi-GB install with heavy duplication. Acknowledge
+  the cost and consider a **shared runtime layer** (a common base the per-agent
+  binaries link against) before the catalog grows.
 
 ---
 

@@ -156,12 +156,15 @@ removes that PR's tool-surface reduction.
 These apply to *every* sidecar and are detailed in the plan's §0.11–§0.17 — flagged
 here so the overview isn't read as "just spawn a process":
 
-- **Per-spawn auth** — a loopback port that can send email is not safe unauthenticated; the host mints a secret per spawn and the sidecar requires it (§0.11).
-- **Reverse callback contract** — sidecars reach host custody (memory/RAG/sessions) over a defined `/host/v1/*` API with that same secret (§0.11).
-- **LLM broker** — Lemonade is single-tenant per model slot; a host-owned broker serializes model loads so N agents don't race-evict each other (§0.12).
-- **Run isolation + cancellation + failure events** — `/query` runs are namespaced by `run_id`, cancellable on stop/disconnect, and crash-safe (§0.13).
+- **Per-spawn auth *and* per-agent authorization** — a loopback port that can send email isn't safe unauthenticated; the host mints a secret per spawn, and — critically — **scopes it to the agent** so a hub-installed third-party agent can't read all your memory/RAG/other agents' transcripts over the callback API (§0.11). 🔒
+- **Reverse callback contract** — sidecars reach host custody (memory/RAG/sessions) over a defined, per-agent-scoped `/host/v1/*` API (§0.11).
+- **Model broker (all families)** — the LLM backend is single-tenant per slot; a host-owned broker serializes loads of LLM + embedder + VLM + voice/SD (incl. host RAG) with interactive-over-background priority, so agents don't race-evict each other (§0.12).
+- **Dispatch** — with N agents, the host needs a defined way to pick which sidecar answers a free-form message (v1: explicit agent picker) (§0.18).
+- **Audit as host custody** — consequential actions (incl. autonomous + scripted) append to a host-owned audit log, or the observability dashboard is blind (§0.19).
+- **Run isolation + cancellation + failure events** — `/query` runs are namespaced by `run_id` (host-minted), cancellable on stop/disconnect, crash-safe (§0.13).
 - **One instance per machine** — CLI and UI attach to the same sidecar, not rival copies (§0.14).
 - **Version negotiation + idle reaping** — install rejects out-of-range contracts; idle sidecars are reaped (§0.13, §0.15).
+- **Data migration + uninstall lifecycle + sideload** — existing `~/.gaia` state migrates once (§0.10 step 0); uninstall revokes the forwarded connection and offers keep/delete of data (§0.20); air-gapped/OEM sideload install without the network (§0.21).
 
 ## Phased Delivery
 
