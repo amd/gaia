@@ -75,7 +75,8 @@
 - **Structure & framing:** §0.35 architecture-review refinements (two-tier custody
   contract, naming, module seams, v1-hardening scope, render primitives) · §0.36
   third-party integration ergonomics (the tiered capability matrix) · §0.37
-  **pluggable custody** (one sidecar = rich *and* stateless; refines §0.9).
+  **pluggable custody** (one sidecar = rich *and* stateless; refines §0.9) · §0.38
+  memory/resource footprint · §0.39 **custody-modes comparison table**.
 - **Auth & security:** §0.6 OAuth forward · §0.11 the three auth legs + per-agent
   authorization · §0.24 third-party **containment** (signing, tiers, egress,
   encrypt-at-rest, audit integrity, taint) 🔒.
@@ -1325,6 +1326,30 @@ shared custody** for a *multi-agent* daily-driver (avoids store + RAG-index dupl
 This is the concrete "whole-system resource budget" the operational review flagged as
 downstream — the governors (broker + reaper + live-cap) exist; set their limits from a
 stated target. (RAM is distinct from the *disk* footprint of §0.21.)
+
+### 0.39 Custody modes at a glance — consolidated comparison
+
+One table across all three sidecar custody modes (§0.37), pulling together capabilities,
+A2A (§0.32), memory (§0.38), and pros/cons.
+
+| Dimension | **Embedded** (default, standalone) | **Delegated** (GAIA host) | **Ephemeral** (stateless) |
+|---|---|---|---|
+| **Durable state** | own bundled SQLite + file store | host `/host/v1/*` (shared) | none |
+| **Rich agentic (memory/RAG/audit)** | ✅ full, self-contained | ✅ full, shared across agents | ❌ none (fixed-function + stateless `/query`) |
+| **Host/coordinator required?** | ❌ no — fully standalone | ✅ yes — needs the daemon | ❌ no |
+| **Single-writer** | the sidecar itself (one agent) | the host (across N agents) | n/a — nothing persisted |
+| **Cross-agent shared memory** | ❌ siloed per agent | ✅ unified user memory | ❌ none |
+| **A2A communication** | single: none · multi: needs a coordinator (host or 3rd-party impl); **direct sidecar→sidecar loses taint/audit/broker** | ✅ **mediated** via `POST /host/v1/agents/{id}/invoke` — authz + audit + broker-lease + taint | caller-orchestrated **call-chaining** (caller passes context A→B) |
+| **Model backend** | external, configured `base_url` | external, via the host **broker** (slot lease) | external, configured `base_url` |
+| **RAM footprint (multi-agent)** | heaviest — store **+ RAG index** duplicated per process | leanest — shared store + **one** RAG index (host RSS grows) | lightest — no store |
+| **Encryption / backup / audit** | per-agent, the vendor's responsibility | central: one place to encrypt-at-rest, back up, govern, audit | none persisted |
+| **OAuth / connectors** | self-service on the sidecar | host forwards short-lived tokens (§0.6) | self-service (per call) |
+| **Third-party digestibility** | ✅ rich **and** drop-in (one binary) | needs the GAIA host *or* a `/host/v1/*` impl | ✅ simplest drop-in |
+| **Pros** | self-contained; offline/air-gapped; simplest deploy; own writer; no host | coherent single user; central govern/encrypt/backup/audit; thin light sidecars; enables cross-agent orchestration | nothing on disk; portable; horizontally scalable; trivial to test |
+| **Cons** | siloed state; per-agent duplication (RAM + shared data); owns store lifecycle; local/losable audit | requires a running host; per-call hop + auth; host = single point of failure; cross-process contract cost | no memory/learning; caller must pass all context each call; no persisted audit; a *function*, not an assistant |
+| **Best for** | a single standalone agent; a vendor wanting **rich + self-contained** | the **GAIA Agent UI**; a multi-agent daily-driver | one-shot / scriptable / serverless; pure request→response |
+
+**Selection:** auto — *host custody endpoint injected → Delegated; else → Embedded;* Ephemeral by explicit flag. Same sidecar binary, same code path (§0.37); the invariant (single writer, never multi-writer) holds in all three.
 
 ---
 
