@@ -75,7 +75,8 @@
 - **Shared resources (host custody):** §0.9 memory/RAG/sessions/audit/MCP/model
   table · §0.12 the model-slot broker · §0.19 audit sink · §0.29 store consistency.
 - **Data & contracts:** §0.28 the agent manifest schema · §0.29 custody-store
-  consistency · §0.30 identifier catalog · §0.15 contract evolution.
+  consistency · §0.30 identifier catalog · §0.31 the `/host/v1/*` callback API ·
+  §0.15 contract evolution.
 - **Lifecycle & ops:** §0.5 install (+model provisioning) · §0.13 concurrency /
   cancel / failure / reaper · §0.14 one daemon per machine · §0.15 version
   negotiation · §0.16 dev-mode · §0.20 uninstall · §0.21 offline/footprint · §0.22
@@ -967,6 +968,30 @@ consumer:
 - **`batch_id`** — batch-archive/undo handle (email spec); define its mint + lifetime.
 - **per-spawn secret vs client-auth token** — already cleanly separated (§0.11/§0.24); no
   gap.
+
+### 0.31 The `/host/v1/*` callback API (the reverse contract, specified)
+
+§0.11/§0.9/§0.19/§0.29 lean on the daemon's reverse contract but never list it. Like the
+manifest (§0.28), it's load-bearing and must be pinned. Every route requires the
+per-spawn secret **and** resolves the calling agent id from it (§0.11 authorization);
+every response is scoped to that agent (or its granted shared scope).
+
+| Route | Shape | Scope / notes |
+|---|---|---|
+| `POST /host/v1/rag/query` | `{query, k}` → `{chunks[]}` | agent-scoped corpus (or `sharedScopes`); read-during-index isolation (§0.29) |
+| `GET /host/v1/memory` | `?scope=&query=` → `{items[]}` | agent-private memory, or user memory only if the manifest declares the `sharedScopes` grant (§0.28/§0.11) |
+| `POST /host/v1/memory` | `{scope, item}` → `{id}` | write goes through the daemon's single writer (§0.29) |
+| `GET /host/v1/sessions/{id}` | → `{transcript_slice}` | daemon verifies the session belongs to the caller (§0.30 `session id` = authz key) |
+| `POST /host/v1/audit` | `{action_id, action, summary, ts}` → `{seq}` | serialized append onto the hash-chain (§0.29); write-only to agents (§0.24) |
+| `POST /host/v1/models/lease` | `{model}` → `{lease}` / 429 | the §0.12 broker slot lease; blocks/queues by priority |
+
+**Versioning:** this API carries its own MAJOR, negotiated on the sidecar↔daemon leg and
+subject to the §0.15 evolution rules (new-daemon/old-sidecar skew). **Errors:** every
+route fails loud with an actionable, typed error (`403` unauthorized/wrong-scope, `409`
+audit-chain conflict, `429` no model slot, `503` store unavailable) — never a silent
+empty result, per the no-silent-fallback rule. The daemon's **client-facing** API
+(UI/CLI → daemon: sessions list, agent install/uninstall, `/query` proxy) is a separate
+surface under the client-auth token (§0.11), versioned per §0.25.
 
 ---
 
