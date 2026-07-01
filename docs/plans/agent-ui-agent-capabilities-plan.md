@@ -1407,52 +1407,105 @@ does X live" is per-store, so §0.39's table is read per-store, not per-mode.
 This makes **Embedded** (all-private) and **Delegated** (all-shared) the two ends, with
 the hybrid any point between — one rule, arbitrary granularity.
 
-### 0.41 The unified model — a capability-mediation plane (collapses the modes)
+### 0.41 Separation of concerns — one clean authorization plane, not one god-grant
 
-The three custody modes (§0.37), A2A (§0.32), per-agent privacy (§0.11), and autonomy
-(§0.34) are not four subsystems — they are **one primitive**: a **scoped capability grant**
-enforced by an **always-present mediation plane** (the host). This is the object-capability
-/ policy-enforcement-point model applied to the agent plane, and it collapses the modes
-into configurations of one architecture.
+An adversarial stress-test (+ prior-art research, §0.42) showed an earlier draft here
+overreached: it relabeled **five orthogonal mechanisms** as "one grant." That was a
+*vocabulary*, not an architecture — and it even contradicted §0.34 and §0.24. The
+**simpler** and correct model is clean **separation of concerns**: orthogonal
+single-purpose planes beat one kernel pretending to do five jobs. (Simplicity =
+orthogonality, not collapse.)
 
-**The primitive.** Everything an agent touches — a store, another agent, a connector, an
-action, an *autonomous* act — is a **capability** the host grant-checks, mediates, audits
-(§0.19), and taint-tracks (§0.24). An agent runs under a **capability grant** =
-(manifest-declared needs, §0.28) ∩ (user consent). One check answers four requirements:
+**What genuinely unifies (keep this):** the **capability grant** is *one* clean thing —
+the **authorization / isolation plane**: which agent may touch which store (§0.40 scope),
+connector (§0.6), or peer (§0.32 *routing*). §0.11 per-agent authz + §0.40 per-store scope
++ §0.32 A2A-routing really are one primitive (a scoped, host-checked grant). Keep them one.
 
-| Requirement | Resolved by the grant |
-|---|---|
-| **Privacy** (email agent has emails; finance agent doesn't) | the grant *is* the boundary — enforced on every store read, connector use, and A2A hop (unifies §0.11 authz + §0.40 per-store scope) |
-| **A2A** | "A may invoke B" is a capability; **B runs under B's own grant**, so A gets only B's taint-tracked *result*, never B's data (§0.32) |
-| **Autonomy** | each capability carries an **autonomy level** (confirm / act-with-undo / act-freely); autonomous = capabilities the user *pre-authorized* unattended — §0.34 is this field on the grant |
-| **Custody modes** | a store is a capability with a **scope**: private → embedded, shared → delegated, none → ephemeral (§0.37/§0.40) |
+**What does NOT fold into the grant (four separate planes):**
 
-**One architecture, varying host richness — the modes collapse.** The sidecar *always*
-speaks the same `/host/v1/*` + grant interface; only *which host answers* varies:
-- **Ephemeral** = a host with no persistent stores.
-- **Embedded/standalone** = a **minimal host bundled with the sidecar** (local stores, one
-  agent, all-private grants, no A2A). §0.37's "embedded provider" already *is* a host
-  implementation — so "the sidecar always talks to a host" is literally true.
-- **Delegated** = the full external daemon (shared stores, multi-agent, broker, autonomy).
+| Concern | Its own plane | Why it's separate (not a grant field) |
+|---|---|---|
+| **Authorization / isolation** | the **capability grant** | who may touch what — the one thing the grant *is* |
+| **Information-flow / safety** | the **pragmatic stack**: process isolation + egress sandbox (§0.24) + confirmation (§0.4) + audit (§0.19) + treat cross-agent/untrusted input as *data* | access-control's orthogonal dual (Denning) — the grant authorizes the *hop*; this secures the *content*. A2A results carry B's data; the grant can't stop that. **Not formal IFC** — the field doesn't ship it (§0.42) |
+| **Human confirmation** | the **confirmation gate** (§0.4) | an intent oracle for LLM non-determinism — orthogonal to whether the cap is *held* |
+| **Resource arbitration** | the **broker** (§0.12) | a mutex/lease, not a permission — *holding the cap ≠ holding the slot* |
+| **Autonomy** | the **§0.34 host-side layer** | a policy + temporal engine (event bus, goals, escalation — six parts), not one enum field. Reference §0.34; do not fold it |
 
-So there is **one code path** (agent → mediation interface), **one security kernel** (the
-grant), and the "modes" are deployment + scope configs. A third party still gets a
-self-contained rich agent: "sidecar + bundled minimal host," not a different architecture.
+**Consequences of getting the boundary right (all corrections to the overreach):**
 
-**Gains:** one mechanism to secure + audit (privacy, A2A, connector isolation, autonomy
-are the *same* grant-check, not four); autonomy is an added grant field, not a bolt-on;
-A2A is safe by construction (mediated + bounded by each agent's grant); privacy is
-first-class (an agent's reach *is* its grant).
+- **The grant checks the tool boundary, not the reasoning.** In an LLM loop the tools *are*
+  the capabilities but the *model* chooses which to call over tainted context — a static
+  "may A call tool T" cannot judge "should *this* call, with these args, happen." That
+  judgment is the confirmation gate + treat-input-as-data (the confused-deputy answer),
+  **not** the grant. Don't claim the grant secures the reasoning.
+- **Revocation (simple, concrete).** Grants are **mutable host state keyed by agent-id**;
+  the mediator **re-reads the grant per mediated call** (cheap, in-memory) — revoke = update
+  the grant. An in-flight autonomous batch re-checks per op (already mediated); revoking A
+  stops further A2A invokes while B's in-flight call completes under *B's own* grant. (No new
+  machinery — it's a lookup the mediator already does.)
+- **Embedded has NO mediation plane — say so.** Embedded single-agent is a **trust boundary
+  of one** — a storage *adapter* (§0.37), not a policy-enforcement point. The mediation
+  plane exists only where multiple mutually-distrusting agents share a host (delegated).
+  Drop the "embedded = a minimal host that enforces" claim (it would ship a stub PEP that
+  enforces nothing). So the modes are **not** "one architecture, varying host" — they're
+  *one contract*, with a real PEP only in the multi-agent (delegated) case.
+- **Audit *actions*, not reads.** §0.24/§0.29's serialized hash-chain covers consequential
+  *actions* (low-frequency, tamper-evident) — do **not** put a machine-wide append-lock on
+  every store read. Audit is host-if-present, not part of the per-store hybrid (§0.40) freedom.
+- **Taint is a defense-in-depth *hint*, not a guarantee** — it dies through LLM
+  summarization (§0.42) and is non-durable across a daemon restart. The real backstops are
+  isolation + egress + confirmation + audit. Treat cross-agent/untrusted input as data
+  regardless of taint.
 
-**Trade-off (honest):** agents **never** touch shared resources or each other directly —
-always through the mediator (the object-capability discipline). The cost is the mediator
-hop and the fact that **the grant model becomes the security kernel** — the one thing to
-get exactly right. A bare integrator wanting *zero* host runs the ephemeral/degraded tier
-(§0.36) without the mediated capabilities.
+**Net:** the capability grant is the right core abstraction for **authorization/isolation**
+— clean and genuinely unifying. Safety, confirmation, arbitration, and autonomy are
+**co-equal separate planes**. That is both more honest and *simpler* than the god-grant.
 
-This is the plan's capstone: **§0.32/§0.34/§0.37/§0.40 are facets of one capability-
-mediation architecture** — the host is the policy-enforcement + coordination plane, agents
-are capability-scoped sidecars, and the three modes are how richly that plane is deployed.
+### 0.42 Prior art & learnings (OpenClaw · Hermes · MCP/A2A)
+
+Benchmarking v2 against the field both validates the shape and yields concrete adopt-items.
+
+**Convergent validation (the shape is sound):**
+- **Coordinator + one agent core.** OpenClaw's **Gateway** (one port multiplexing sessions,
+  tool dispatch, routing, orchestration) and **Hermes**'s single `AIAgent` core reused by
+  CLI / gateway / ACP server / cron are the *same* pattern as our custodian daemon +
+  one-contract-many-front-doors (§0.33). Independent convergence → sound.
+- **OpenAI-compatible server** (Hermes exposes `/v1/chat/completions`) = our §0.33.
+- **Shared-or-scoped skills** (OpenClaw scopes skills global↔per-agent) = our shared/private
+  custody axis (§0.40).
+- **Persistent memory is table-stakes** — Hermes ("grows with you," a GraphRAG "second
+  brain") validates our custody/memory direction; consider **GraphRAG** for RAG.
+
+**Learnings to adopt:**
+1. **Align with the MCP + A2A two-layer standard — don't invent.** **MCP** (Anthropic's
+   tool layer; ~97M monthly SDK downloads; adopted by Anthropic/OpenAI/Google/Microsoft/
+   Amazon) is the vertical *tool* protocol → expose our **fixed-function endpoints as MCP
+   tools** (the email agent already ships `mcp_server.py` — make it first-class). **Google's
+   A2A protocol** is the horizontal *agent-coordination* layer → align §0.32 A2A with **A2A
+   Agent Cards** (capability discovery), **signed payloads**, and **delegation control**
+   instead of a proprietary invoke route. Payoff: any MCP/A2A client consumes our agents
+   out of the box → §0.36 third-party digestibility jumps.
+2. **Process isolation is our security *advantage* — lean in.** OpenClaw's documented core
+   flaw — *"a single compromised skill inherits ALL permissions"* (plus multiple arXiv
+   injection/trojan papers) — is a **shared-runtime** problem. Our per-agent **process-
+   isolated sidecars + per-agent grants** contain a compromised agent to its own grant.
+   Strictly better isolation; position it as a differentiator.
+3. **Use a permission *cascade* to blunt consent fatigue.** OpenClaw's global→provider→
+   agent→session→sandbox cascade sets sensible **defaults** at each level so the user
+   consents only to *deviations*. Adopt trust-tier defaults → user overrides (§0.24), far
+   better than per-capability prompts.
+4. **Nobody ships formal information-flow control — this confirms the §0.41 correction.**
+   MCP's own security guidance is *"read-only for untrusted agents, scoped permissions,
+   network restrictions"* — i.e. the **same pragmatic stack** (isolation + scopes + egress
+   + human approval + audit) we landed on. Don't build formal IFC.
+5. **A2A protocol's "prevents unauthorized delegation" is the confused-deputy answer** —
+   adopt its delegation-control + payload signing for our A2A hops.
+
+**Sources:** [OpenClaw architecture guide](https://vallettasoftware.com/blog/post/openclaw-2026-guide) · [Security analysis of OpenClaw (arXiv)](https://arxiv.org/pdf/2603.27517) · [Securing a personal agent with OpenClaw](https://www.freecodecamp.org/news/how-to-build-and-secure-a-personal-ai-agent-with-openclaw/) · [NousResearch/hermes-agent](https://github.com/nousresearch/hermes-agent) · [Hermes docs](https://hermes-agent.nousresearch.com/docs/) · [MCP vs A2A protocols](https://onereach.ai/blog/guide-choosing-mcp-vs-a2a-protocols/) · [Agent interoperability 2026: MCP/A2A/ACP convergence](https://zylos.ai/research/2026-03-26-agent-interoperability-protocols-mcp-a2a-acp-convergence/) · [Permission Manifests for Web Agents (arXiv)](https://arxiv.org/pdf/2601.02371)
+
+---
+
+## 1. Current GAIA SDK Capability Inventory
 
 ### 1.1 Agents
 
