@@ -73,7 +73,9 @@
   authorization · §0.24 third-party **containment** (signing, tiers, egress,
   encrypt-at-rest, audit integrity, taint) 🔒.
 - **Shared resources (host custody):** §0.9 memory/RAG/sessions/audit/MCP/model
-  table · §0.12 the model-slot broker · §0.19 audit sink.
+  table · §0.12 the model-slot broker · §0.19 audit sink · §0.29 store consistency.
+- **Data & contracts:** §0.28 the agent manifest schema · §0.29 custody-store
+  consistency · §0.30 identifier catalog · §0.15 contract evolution.
 - **Lifecycle & ops:** §0.5 install (+model provisioning) · §0.13 concurrency /
   cancel / failure / reaper · §0.14 one daemon per machine · §0.15 version
   negotiation · §0.16 dev-mode · §0.20 uninstall · §0.21 offline/footprint · §0.22
@@ -508,6 +510,22 @@ first-party / AMD-verified only in v1**; a third-party agent's novel card
 gracefully degrades to the generic result card via the fallback above. Don't plan a
 dynamic-component-load path unless/until that's explicitly sanctioned.
 
+**Evolution doesn't stop at the install gate.** Install negotiates only the contract
+*MAJOR*; §0.25's daemon self-update then makes skew inevitable (the daemon updates,
+installed sidecars don't). Cover the after-install cases:
+
+- **Reverse callback skew (new daemon → old sidecar).** §0.25 versions the
+  *client↔daemon* API; the mirror case — an old installed sidecar calling a changed
+  `/host/v1/*` — is uncovered. **Version the callback API too**, symmetric to §0.25:
+  refuse + prompt reinstall on a MAJOR the daemon can't serve, or hold N-1 compat.
+- **Unknown SSE event `type` (§0.2).** A newer agent emitting a new top-level event
+  `type` to an older host must **surface a visible "unsupported event," never silently
+  drop it** (the CLAUDE.md no-silent-fallback rule) — parity with the `render`-type
+  fallback above.
+- **Additive vs deprecation.** A new endpoint/capability/event is a backward-compatible
+  **MINOR**; removing one needs a stated **deprecation/sunset window**, not a silent
+  break. (The MAJOR gate alone can't express either.)
+
 ### 0.16 Dev-mode discovery for *unpublished* agents
 
 `GAIA_<AGENT>_MODE=dev` runs a *known* agent from source, but `AgentSidecarManager`
@@ -868,6 +886,87 @@ following the wrong one builds the wrong thing.
   just the binary** (§0.5 cold-start), and **sign the lock/catalog + anti-rollback**
   (§0.24) — the hub docs specify SHA-256 + tiers, but SHA is integrity, not
   authenticity.
+
+### 0.28 The agent manifest — the load-bearing artifact (was undefined)
+
+~8 sections say "the manifest/lock declares X," but no section defined it — and the
+artifact that exists today (`hub/agents/npm/agent-email/binaries.lock.json`) is a
+**binary-integrity map only** (`schemaVersion`, `agentVersion`, `baseUrl`, per-platform
+`{filename, executable, sha256, size}`) — it carries **none** of the policy/capability
+fields §0 leans on. So the plan conflated two different artifacts:
+
+- **The lock** = binary integrity (exists). SHA/signature-verified (§0.24).
+- **The manifest** = capability + policy declaration (**new; define it**). It drives
+  *authorization* decisions (egress, scopes, tier), so it **must ride inside the
+  §0.24 signature envelope** — the recommended shape is a separate `manifest.json`
+  **referenced by digest from the signed lock**, so its security fields can't be
+  swapped independently of the binary. A manifest outside the signed envelope is
+  forgeable and worthless for authorization.
+
+**Schema (fields → the section that requires each):**
+
+| Field | Required by |
+|---|---|
+| `id`, `displayName`, `agentVersion` | §0.3/§0.14 registry key, §0.5 |
+| `contractMajor` (+ supported range) | §0.15, §0.1 |
+| `requiredModels[]` (LLM + embedder/VLM/…, min ctx) | §0.5 cold-start, §0.12 broker pull |
+| `capabilities[]` + which are `fixedFunctionEndpoints[]` vs agent-only | §0.1 two-surface split, §0.18 dispatch |
+| `renderTypes[]` the agent emits | §0.2, §0.15 (first-party gate + fallback) |
+| `oauthScopes[]` (minimum forwarded) | §0.6, §0.24 least-privilege + install consent |
+| `egressAllowlist[]` (hosts) | §0.24 |
+| `trustTier` (Verified/Community/Experimental) | §0.24 tier-gating |
+| `publisher` + signature / TOFU pin | §0.24 (SHA ≠ authenticity) |
+| `mcpServers[]` needed | §0.9, §0.24 curated allowlist |
+| `sharedScopes[]` requested (memory/RAG read grants) | §0.11, §0.20 |
+| `pinnedResident` + `schedules[]`/triggers | §0.22 |
+| `devSourcePath` (dev-mode) | §0.16 |
+
+**Authoring + validation.** The publisher checks `manifest.json` into the hub package
+next to the lock. The install-time validator **fails loud** on: unknown
+`contractMajor`, missing `requiredModels`, a capability with no matching `renderType`/
+endpoint, or egress/scope fields absent when `trustTier != Verified`. This one artifact
+unblocks §0.5, §0.12, §0.15, §0.18, §0.20, and §0.24 at once.
+
+### 0.29 Custody store consistency model (concurrent daemon + N sidecars)
+
+§0.9 moves memory/RAG/sessions/transcript/audit into host custody, read/written by the
+daemon **and** N sidecars — but only `grants.json` got a single-writer rule (§0.6). The
+same rule must generalize, and one case is a hard correctness requirement:
+
+- **Single physical writer.** All custody writes go **through the daemon**; sidecars
+  *request* writes via `/host/v1/*`, they never touch the files. This extends §0.6's
+  single-writer rationale to memory, RAG, sessions, and audit — so N sidecars writing
+  "shared user-memory rows" (§0.20) still resolve to one physical writer.
+- **Serialized audit appends (hard requirement of §0.24's hash-chain).** §0.24's
+  tamper-evident chain needs a **strict total order** — "each entry seals the prior."
+  N sidecars `POST /host/v1/audit` concurrently would both seal entry *k* and **fork
+  the chain**, which the gap-detector reads as tampering. The daemon must serialize
+  appends behind a **single append queue**, or the tamper-evidence guarantee is
+  undefined.
+- **Storage engine.** The current UI stores are SQLite (single-writer; `SQLITE_BUSY`
+  under concurrent writers). Specify **WAL + `busy_timeout`** (or a host-side write
+  queue) and RAG **read-during-index** isolation, or "host stores it, sidecars query
+  it" hits lock contention the first time two agents write.
+
+(Sessions is partly covered — §0.9 already flags the two-client interleave and proposes
+a single-active-writer focus model.)
+
+### 0.30 Identifier catalog
+
+`run_id` is the model (host-minted §0.1; cancel target §0.13; confirm key §0.4;
+log-correlation stamp §0.25). The rest need the same rigor — minter / scope / lifetime /
+consumer:
+
+- **`session id`** — host-minted, host-owned (§0.9); it is the **authorization key** the
+  callback verifies (`/host/v1/sessions/{id}`, §0.11), so leaving its mint point +
+  per-client-vs-per-session semantics undefined (the open §0.9 focus decision) leaves a
+  *security check keyed off an undefined id*. Resolve with §0.9.
+- **`action_id`** — mint on **every consequential action**; it's the handle the §0.19
+  audit entry and §0.20 uninstall-scoping ("withdraw/revoke this action") both need, and
+  it appears nowhere in §0 today. Stamp it into the audit record.
+- **`batch_id`** — batch-archive/undo handle (email spec); define its mint + lifetime.
+- **per-spawn secret vs client-auth token** — already cleanly separated (§0.11/§0.24); no
+  gap.
 
 ---
 
