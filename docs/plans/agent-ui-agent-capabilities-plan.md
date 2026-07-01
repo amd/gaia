@@ -1039,6 +1039,28 @@ after v1:
   first-class agent** built on the same contract — not a special host mode. This keeps
   "the UI is thin, the sidecar reasons" intact even for multi-agent flows.
 
+**A2A across the §0.37 custody modes (A2A is a host-role capability).** Agent-to-agent
+mediation is a coordinator responsibility, exactly like custody (§0.37) and model
+brokering (§0.12) — so safe A2A exists only when a coordinator (host) is present:
+
+- **Delegated (host present):** full A2A as above — `invoke` through the host, which
+  authorizes + audits + leases the slot + carries taint on every hop.
+- **Embedded, single agent:** no A2A — one agent, no peers, no coordinator needed.
+- **Embedded, multi-agent (a vendor runs several sidecars):** needs a coordinator — run
+  the GAIA host *or* implement its `invoke`+custody+broker interfaces. **Direct
+  sidecar→sidecar is possible but loses the guarantees** (taint doesn't travel → §0.24
+  injection risk; no unified audit; the two agents contend for the model slot → the
+  §0.12 eviction bug). Fine for trusted simple chaining; unsafe as a general pattern.
+- **Ephemeral:** A2A is **caller-orchestrated call-chaining** — the caller invokes A,
+  passes its output into B's request; nothing shared or persisted; the caller owns all
+  coordination.
+
+**Unifying point:** the host is the **multi-agent coordination plane** — it bundles the
+three responsibilities that only matter with *multiple* agents on one user/machine:
+custody (single writer, §0.37), model brokering (single slot, §0.12), and A2A mediation
+(safe routing). A single embedded agent needs none; multi-agent needs all three — which
+is exactly what "the host" provides. Same pluggable host role as §0.37.
+
 ### 0.33 The GAIA REST API agent server exposes `/query` too (`src/gaia/api/`)
 
 `/query` is not UI-specific — it belongs on **every agent-serving REST surface**. GAIA's
