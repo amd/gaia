@@ -14,7 +14,7 @@
 - **Why & what** — §0 thesis (SDLC automated) · §1 the live-SDK keystone · §1.5 the *recipe* (the one authored input)
 - **Engine & governance** — §2 agentic-coding engine · §2.5 human approve/deny gates · §2.6 the factory's *own* least-privilege
 - **The pipeline** — §3 the lifecycle stages · §4 docs-as-output · §5/§5.5 eval gate + synthetic-data discipline · §6/§6.5 ship rigor + recovery · §7 multi-component product · §8 runtime seam
-- **Plan & honesty** — §9 exists-vs-net-new · §10 milestones M0→M4 (easiest→hardest) · §11 distinctiveness · §11.5/§11.6 adversarial corrections · §11.7 domain-review corrections (eval + release) · §12 open decisions
+- **Plan & honesty** — §9 exists-vs-net-new · §10 milestones M0→M4 (easiest→hardest) · §11 distinctiveness · §11.5 review record (all findings → resolutions) · §12 open decisions
 
 ## 0. Thesis — the factory is the SDLC, automated, against a living SDK
 
@@ -111,7 +111,7 @@ recipe names the **held-out oracle path** but not its contents (that stays human
    │      ├─► memory: prior spec, eval baselines, past failures, SDK-change history    │
    │      └─► tools: git worktree · gh (issues/PRs) · gaia eval · packaging line       │
    │  runs inside an ISOLATED WORKTREE clone of the live GAIA repo (HEAD, not a snap)  │
-   └──────────────────────────────────────────────────────────────────────────────---─┘
+   └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 The GAIA coder does the *code*; Claude Code / the Agent SDK does the *orchestration,
@@ -213,7 +213,7 @@ is mostly net-new automation; **Back (ship)** cites the pipeline that *already e
 | 10 | **Manifest emit** | derive `manifest.json` (§0.28) from recipe + compose/eval outputs | net-new emitter (schema in #1913) | schema-valid |
 | 11 | **Multi-platform freeze** 🚦 | freeze win32-x64 · darwin-arm64 · darwin-x64 · linux-x64; smoke-test each; **assert required platforms** | `packaging/freeze.py` · `smoke_test.py` · `release_agent_email.yml` (*exists*) | smoke + platforms |
 | 12 | **OS-compat verify** 🚦 | run a newer-OS-built binary on an **older OS** — *darwin-x64 leg only today* (macos-26 build → macOS 15); other platforms have no older-OS verify | `release_agent_email.yml` verify job (*exists, darwin-x64*) | older-OS smoke |
-| 13 | **Eval gate** 🚦 | on the **held-out oracle** (§5.5); **fixed** acceptance bar + safety floor (#1437); prev-release as a **non-inferiority band** `≥ prev − k·stdev` (§5) | `scorecard_gate.py` (*exists*) | point-estimate `min-aggregate` today; LCB/band = **M2** |
+| 13 | **Eval gate** 🚦 | on the **held-out oracle** (§5.5); **fixed** acceptance bar + safety floor (#1437); prev-release as a **non-inferiority band** `≥ prev − k·stdev` (§5) | `scorecard_gate.py` (*exists*) | point-estimate `min-aggregate` today; non-inferiority band = **M2** |
 | 14 | **Package assemble** | npm tarball (client + docs + lock) + R2 binaries + `package-files.json`. ⚠️ single whole-package **zip DISABLED** (`if: false`, Cloudflare 413) | `gen_package_files.py` · npm build (*exists; zip disabled*) | manifest complete |
 | 15 | **Sign + real-hash lock + provenance** 🚦 | SHA-256, **npm OIDC trusted-publishing provenance**, regenerate `binaries.lock.json` with **real hashes**, embed provenance (spec · scorecard · SDK commit) | `gen_binaries_lock.py` · npm OIDC (*exists; signing partial*) | signature/provenance |
 | 16 | **Publish** | cut-from-main + token gates; POST `/publish` to Hub Worker; npm publish; **redeploy catalog site** | `publish_to_r2.py` · Hub Worker · website deploy (*exists*) | governance gates |
@@ -231,7 +231,10 @@ The shipped product (`hub/agents/npm/agent-email/`) carries **five doc surfaces*
 `CHANGELOG.md` (version) · `SCORECARD.md` (eval results) — plus `spec_html`/OpenAPI. Per
 CLAUDE.md, *a functional change must update **every** doc*, or the package ships
 self-contradicting documentation. So the factory needs a **docs generate-and-sync stage**
-(stage 9) — and this is a hard gate, because doc drift is a real published-defect class.
+(stage 9). Timing: **M0 ships stage 9 as-is** (SCORECARD generation + publishing the
+committed docs); the *sync-check automation* that makes docs-in-sync a **hard gate is an M1
+deliverable** — doc drift is a real published-defect class, but the checker doesn't exist
+yet and M0 shouldn't block on building it.
 
 **The scorecard is a shipped, refreshed artifact — not just a gate.** `SCORECARD.md`
 publishes *with* the agent and is refreshed on a cadence (`email_scorecard_refresh.yml`),
@@ -258,7 +261,7 @@ draft reinventing the shipped gate in a strictly worse form):
   `n_runs` (3 in the shipped fixture) — enough for a crude band, not a reliable CI (n≈5
   normal-approx is anti-conservative; use t or bootstrap). Conflating the two silently 5×'s
   the serial-eval cost (§11.5). *Today's gate is a point-estimate `min-aggregate ≥ bar`;
-  the noise-band/LCB is the **M2 upgrade**, not existing behavior.*
+  the non-inferiority band is the **M2 upgrade**, not existing behavior.*
 - **Know which pipeline the metric comes from** (different noise): structured agents (email)
   gate on **deterministic confusion-matrix** metrics vs `ground_truth.json` (small spread —
   the band matters little); generic scenario scorecards gate on **LLM-judge `avg_score`**
@@ -291,7 +294,7 @@ generates from **templates** — so the factory must generalize *that discipline
    **🔒 Because the seed is real user data on a *recurring* intake (every refresh), a
    PII-scrub + consent/provenance gate 🚦 is mandatory *before* any seeded corpus is
    committed** — "anonymized" is a requirement with an owning gate, not an adjective
-   (escalated to @kovtcharov-amd; see §11.6).
+   (escalated to @kovtcharov-amd; see §11.5).
 2. **Ground truth: known by construction *plus* a human-judged real-data slice — not one or
    the other.** By-construction labels (build an email *to be* urgent → label = `urgent`)
    are internally consistent but only *relative to the template author's definition* — they
@@ -435,12 +438,12 @@ the npm tarball + R2 binaries, not one zip.
   │ DEV: clone→scope→issues→spec→iterate→synth→CODE→EVAL🚦→PR🚦             │   │ daemon installs │
   │ SHIP: docs→manifest→freeze→OS-compat→GATE🚦→assemble→SIGN🚦→publish→    │   │ + verifies+runs │
   │       edge-verify🚦   └──── continuous maintenance ◄──── SDK delta ──── │   └────────▲────────┘
-  └───────────────────────────────┬─────────────────────────────────────---─┘            │ enforces grants,
+  └───────────────────────────────┬─────────────────────────────────────────┘            │ enforces grants,
                     emits: signed multi-component product + manifest.json (§0.28)          │ version, signature
                            + provenance (spec · scorecard · SDK commit)                    │
                                    ▼                                                        │
                           ┌──────── Agent Hub (§0.5) — the conveyor ─────────┐──────────────┘
-                          └──────────────────────────────────────────────---─┘
+                          └──────────────────────────────────────────────────┘
 ```
 
 ## 9. Component inventory — exists vs net-new
@@ -488,7 +491,7 @@ work from M2. Each milestone is independently valuable and shippable.
 |---|---|---|---|---|
 | **M0** | **Generalize the *sidecar* lane** (recipe-driven, per-agent) | the *deterministic packaging spine* — stages **9, 11, 12, 14, 16** — for *any* agent: turn `release_agent_email.yml` + `packaging/*` into a reusable, recipe-parametrized pipeline. **The wheel lane needs no generalizing** — `publish_agents.yml` is already per-agent + gated + OIDC (§6); M0 orchestrates it and generalizes the *sidecar* lane (M1 adds provenance stages 10/15/17; M2 the trustworthy gate 13). The `agent-hub-release` skill is the existing runbook to automate | **Easiest — but not risk-free**: deterministic/no-LLM, yet per-agent OIDC-publisher provisioning is **supply-chain work**, and the ship half exists *only for email* (a 2nd agent may lack `packaging/*` parity) | **Prove on a *second, non-email* agent** (browser/analyst) — the empirical reuse-vs-rewrite *and* parity check; includes per-agent OIDC publisher provisioning, tags, R2 prefixes |
 | **M1** | **Provenance + edge-verified releases** | manifest emit (stage 10) · signing + source-hash + SDK-commit provenance (stage 15) · post-publish edge verify (stage 17) | **Easy** — mechanical (*but the manifest schema lives in unmerged #1913*) | integrity/traceability (not "reproducibility," §11.5); docs-in-sync becomes a hard gate |
-| **M2** | **Independent eval oracle + noise-aware gate** | the *trustworthy* eval gate: a **human-curated, held-out** ground-truth set per agent + fixed safety floors; gate = **fixed bar + non-inferiority band** `≥ prev − k·stdev` over `n_runs` repetitions (§5 — *not* LCB-vs-moving-baseline, §11.7). **Adoption reality: 1 of 18 agents has a scorecard today** (email) — M2 is 17 harness→payload adapters + oracles; the `adding-eval-scorecard` skill is the per-agent runbook | **Medium** — mostly discipline, but the oracle is **human judgment the factory does NOT automate** | **Prerequisite for everything generative** (M3–M4) — without an independent oracle the gate is self-certification (§11.5 #1) |
+| **M2** | **Independent eval oracle + noise-aware gate** | the *trustworthy* eval gate: a **human-curated, held-out** ground-truth set per agent + fixed safety floors; gate = **fixed bar + non-inferiority band** `≥ prev − k·stdev` over `n_runs` repetitions (§5 — *not* LCB-vs-moving-baseline, §11.5). **Adoption reality: 1 of 18 agents has a scorecard today** (email) — M2 is 17 harness→payload adapters + oracles; the `adding-eval-scorecard` skill is the per-agent runbook. **M2 also owns stage 5b** (oracle curation/extension) **and its coverage-delta gate** (§5.5) | **Medium** — mostly discipline, but the oracle is **human judgment the factory does NOT automate** | **Prerequisite for everything generative** (M3–M4) — without an independent oracle the gate is self-certification (§11.5 #1) |
 | **M3** | **Assisted dev automation** | the *mechanical* dev stages: scaffold (build on the existing `gaia agent init` starter-package generator + Builder templates), tool/skill/MCP wiring, synthetic-data gen, the eval-optimize (`--fix`) loop, PR authoring | **Harder** — net-new agentic coding (*needs `origin/coder` merged to main*), human-in-the-loop | human still owns **scope, spec, the oracle (M2, curator ≠ spec author), PR-approve, ship**; the GAIA coder + Claude Code loop assist, they don't decide |
 | **M4** | **SDK-delta maintenance loop** (stage 18 — the keystone) | on an SDK delta that regresses an agent (measured on M2's held-out oracle via the §5 noise-band gate), re-run M3+M0 for that agent | **Hardest** — the differentiator *and* the highest risk | **Last, and only after M2.** Built-in: (a) **serial-eval throughput cap** (one eval/backend — CLAUDE.md), size cadence against it; (b) SDK changes ship via **PR + tag through the existing release process**, gated by the **human approve/deny at the SDK-release checkpoint over a pre-cut all-agent blast-radius dry-run** (§2.5) — approve the radius, not the tag; the all-agent re-eval is the *intended* regression net |
 
@@ -503,6 +506,19 @@ schema §0.28); M3–M4 depend on **`origin/coder`** (the GAIA coder) merged to 
 unmerged today (§11.5) — so the value that lands with *zero* external merge-dependency is M0
 alone, and the differentiator (M4) sits behind two branch merges *and* M2's oracle work.
 
+**M0 day-1 prerequisites (settle before the first line of workflow code):**
+1. **The npm-OIDC publisher topology** — npm's trusted-publisher subject matches the
+   *entry-point* workflow filename, so it's either **N thin per-agent caller workflows = N
+   publisher registrations**, or **one caller workflow that publishes all agents = 1
+   registration but a shared blast radius**. This is a supply-chain decision (§12.6), and it
+   *is* the architecture of the workflow refactor.
+2. **Recipe schema v1** — §1.5 is illustrative ("Shape:"); M0 is recipe-driven, so a
+   **versioned field list + validation contract** for the fields M0 consumes is an **M0
+   deliverable** (the *manifest* schema defers to #1913; the *recipe* schema cannot).
+3. **Pick the second agent + run its packaging-parity audit** — name browser or analyst and
+   inventory its freeze/smoke/R2/npm state vs email's `packaging/*` before scoping, since a
+   second agent may have *none* of it.
+
 ## 11. Distinctiveness (brief, honest)
 
 Not skill-learning (Hermes/OpenClaw) and not ordinary CI/CD — an **automated AI
@@ -514,120 +530,48 @@ half exists and is rigorous, but the dev-half orchestrator + the SDK-delta loop 
 substantial net-new work; this is a *potential* moat that must be built, and stage 18 is
 the hard part.
 
-## 11.5 Critique & corrections (adversarial review)
+## 11.5 Review record — findings, resolutions, and where they live
 
-An adversarial review (grounded in the real workflow + packaging code) returned:
-**sound as a *packaging* architecture; over-reach as an *SDLC-automation* one — a rigorous
-back half bolted to an aspirational front half where ~90% of both the value and the
-unsolved-research risk lives.** The "two halves" framing is honest but must not let the
-ship half's maturity launder the dev half's + M4's risk. Corrections, folded into the
-milestone order (§10):
+The plan was hardened by six review passes (two adversarial architecture reviews, two
+independent cold reads, an eval-methodology specialist, a release-mechanics specialist —
+the specialists verified against the real code). Every correction is **absorbed into the
+normative sections**; this table is the traceability record, one row per finding:
 
-**Load-bearing claims that were wrong — corrected:**
-- **"Reproducible against an SDK commit" is a category error.** The deterministic tail
-  (freeze/sign/publish) is reproducible; the *generative head* (LLM codegen, LLM-judged
-  eval) is **not** — re-running yields a *different* agent. Pinning buys **traceability +
-  integrity (source-hashed), not regeneration** (§1 corrected).
-- **"Orchestrate the ship half, don't reinvent it" overclaims reuse.**
-  `release_agent_email.yml` is ~718 lines, **email-hardcoded** — npm OIDC is **bound to the
-  workflow *filename***, and tags/binary-names/manifest-path/R2-prefix/the `urgent_recall_
-  floor` gate are all baked in. Per-agent generalization is a reusable-workflow rewrite +
-  **a registered npm publisher per agent** — substantial, not "just drive it." And npm's
-  trusted-publisher subject matches the **entry-point** workflow file GitHub triggered, *not*
-  a `workflow_call` reusable — so N thin per-agent caller workflows still need **N publisher
-  registrations** (unless one caller publishes all agents). **M0 proves it empirically on a
-  second, non-email agent.**
-- **"Exists" overstated for two dev-half deps:** the GAIA coder is on `origin/coder` (not
-  main); the §0.x refs depend on **#1913 (unmerged)** — both "exist *on a branch*."
+| Review | Finding | Resolution → lives in |
+|---|---|---|
+| Adversarial #1 | "Reproducible against an SDK commit" is a category error — LLM codegen isn't regenerable | SDK-commit-pinned + source-hashed = *traceability/integrity*, not regeneration → **§1** |
+| Adversarial #1 | No independent eval oracle — factory wrote the agent, the corpus, and the bar (self-certification) | Human-curated held-out oracle; **curator ≠ spec author**; human-judged real-data slice → **§5.5, M2** |
+| Adversarial #1 | "Orchestrate the ship half" overclaimed reuse — `release_agent_email.yml` is ~718 lines, email-hardcoded; npm OIDC bound to the workflow *filename* | M0 = generalize the *sidecar* lane, proven on a 2nd agent; publisher-topology decision → **§6, §10, §12.6** |
+| Adversarial #1 | Maintenance-loop convergence hazard + serial-eval throughput ceiling (~18 agents, one Lemonade slot — the cost is *wall-clock*, not dollars) | Noise-band gate + one-eval-per-backend cap; cadence sized to it → **§5, M4** |
+| Adversarial #1 | AI PRs into the shared SDK = blast radius contained only by a rubber stamp | Per-stage human gates; factory *may* PR+tag the SDK behind them → **§2.5** |
+| Adversarial #2 | "Different provenance" was defined against the LLM implementer (trivially true); the real circular source is the **spec author** | Curator ≠ spec author as a hard M2 constraint → **§5.5** |
+| Adversarial #2 | The oracle was consumed (stage 13) but *produced nowhere*, and rots as the agent grows | Stage **5b** (curate/extend) + the coverage-delta gate → **§3, §5.5, M2** |
+| Adversarial #2 | The SDK-release gate fired *blind to blast radius* (approving a tag before the N-agent fan-out is computed) | Pre-cut **all-agent dry-run**; approve the radius, not the tag → **§2.5** |
+| Adversarial #2 | Non-convergence handling had no capacity model — escalations are un-eliminated manual maintenance | Escalation checkpoint; sustained rate = mis-sized M4 cadence signal → **§2.5** |
+| Adversarial #2 | 🔒 Seed-from-real is a **recurring PII intake** with no owning gate | PII-scrub + consent/provenance gate 🚦 on every refresh → **§5.5** (escalated to @kovtcharov-amd) |
+| Adversarial #2 | Unmerged branches laundered as "exists" (`origin/coder`, #1913) | Named merge-prerequisites → **§10** |
+| Eval-engineer | `LCB(candidate) ≥ prev_point` with a moving baseline is a **ratchet** (locks out releases in ~2–3 cycles); also reinvented the shipped gate in a worse form | **Fixed bar + fixed floors + non-inferiority band** `≥ prev − k·stdev`, matching `scorecard_gate.py` → **§5, §1.5, stage 13** |
+| Eval-engineer | `k` overloaded (real `--regression-k` = stdev-band multiplier, not run count) — conflation also 5×'d the serial-eval cost | `k` = band multiplier (default 1.0); `n_runs` = repetitions (3) → **§5, §1.5** |
+| Eval-engineer | 0.95 safety floor unsized (95%-confidence needs ≈59 positives); wrong axis name | Point *tripwire* at 0.90 on the **needs-attention** axis (URGENT+NEEDS_RESPONSE); size or label → **§5** |
+| Eval-engineer | Near-duplicate leakage — both corpora seed from the same pool/templates | **Split by source/thread-id**; disjoint templates; oracle isolation as a *harness mechanism* → **§5.5** |
+| Eval-engineer | Coverage-delta was presence-only — capability can deepen *inside* a tool | Two-level gate: presence (via `tool_recall.py`) + **scenario-class** → **§5.5** |
+| Release-manager | §6.5 recovery didn't hold against the real infra: Hub Worker has **no rollback route**; npm-deprecate doesn't redirect; tag-revert un-ships nothing; the lock is immutable per version | **Roll forward** + **dist-tag** + **version re-install**; catalog-yank = net-new Worker work → **§6.5** |
+| Release-manager | Versioning conflated the package semver with the contract version | Two independent axes: `API_VERSION` (drives the §0.15 guard) *and* package semver → **§6.5** |
+| Release-manager | The whole-package **zip is disabled** (`if: false`, Cloudflare 413) but was cited as existing rigor in four places | Marked disabled/aspirational; product = npm tarball + R2 binaries → **§6, §7, stages 14/17** |
+| Release-manager | §2.6 lumped three different privilege mechanisms; only the publish gate is built | Environment-secret (built) / branch protection (to build) / tag ruleset (to build); orchestrator token without `contents: write` → **§2.6** |
+| Cold read #1 | §5.5 listed stage 7 as an oracle *consumer* — the exact leak rule 3 forbids | Stage 13 consumes; stage 7 must not → **§5.5** |
+| Cold read #1 | M0's stage range overclaimed (10/13/15/17 are M1/M2 work) | M0 = the deterministic spine 9, 11, 12, 14, 16 → **§10** |
+| Cold read #2 | LCB terminology leaked back into §5/stage-13/M2 after the band correction; the prose appendices' present-tense claims drifted against each other | "Non-inferiority band" everywhere normative; the three prose appendices consolidated into this table → **§5, §3, §10** |
+| Cold read #2 | Docs-in-sync gate timing ambiguous (M0 or M1); M0 prerequisites unstated (OIDC topology, recipe schema, 2nd-agent parity) | Hard gate lands in **M1**; M0 day-1 prerequisites listed → **§4, §10, §12.6** |
+| Codebase passes | Invented `finalize` skill; `claude.yml` misattributed to issue-opening; under-credited existing infra | Removed/corrected; grounded on `gaia-agent.yaml`, the wheel lane, `gaia agent init`, the two runbook skills → **§1.5, §6, §9** |
 
-**The eval gate has no independent oracle — the deepest flaw.** The factory writes the
-agent *and* the corpus + ground truth *and* sets the bar *and* reviews the PR: a green
-scorecard proves the agent matches the *factory's own* notion of correct, not correctness.
-The pipeline's *only* real oracle today is the **hand-authored `urgent_recall_floor`**
-(`quality_gate_thresholds.json`, #1437). **M2 is the fix and is a hard prerequisite for
-M3–M4:** gate on a **human-curated, held-out** ground-truth set per agent (different
-provenance than the implementer — *never* the factory-generated training corpus) + per-agent
-hand-set safety floors, and gate on the **lower confidence bound over *k* runs** (the judge
-is noisy) — not the point estimate. *The oracle is human judgment the factory does NOT
-automate; admitting that is the factory's honest scope — it automates the mechanics, not
-the oracle.*
+**Residual, by design:** the human gates' realness still depends on reviewers not
+rubber-stamping. The factory reduces this to *deciding over evidence* (the blast-radius
+dry-run, the failing scorecard) rather than reviewing blind, but cannot eliminate it.
 
-**M4 (the keystone) has a convergence hazard + a hard throughput ceiling.** Moving baseline
-(previous release) + fixed corpus + noisy judge churns → the LCB gating above is the fix.
-Cascade: an SDK change to fix agent A re-triggers B…Z; evals **must run serially** on one
-Lemonade backend (CLAUDE.md), so N≈19 agents × every SDK delta is a **wall-clock ceiling** —
-the real cost driver is *throughput, not dollars*. M4 caps to one-eval-per-backend and sizes
-cadence against it.
-
-**AI PRs into the shared SDK — contained by a per-stage human gate, not a prohibition
-(resolved §2.5).** The review flagged the blast radius of an automated system PRing the
-shared SDK. Resolution: **the factory *may* ship SDK versions via PR + tag** (driving the
-*existing* release process), because the containment is the **human approve/deny gate at
-the SDK-release checkpoint** (§2.5) — the same accept/deny model the agents use, halting-by-
-default on this high-blast-radius stage. The cascade (an SDK change re-evals all agents) is
-then the **intended regression net**, not a hazard — bounded by the serial-eval throughput
-cap. The residual poisoned-issue → injected-scope path is contained at the PR-review + merge
-gates; keeping those gates real (not rubber stamps) on SDK changes is the standing
-requirement.
-
-**Honest reframe:** the stated moat (the maintenance loop) is the doc's **least-built,
-highest-risk, last-scheduled** component. "The back half exists, we're most of the way
-there" is false — **we're most of the way through the *cheap* half.** M0–M1 deliver real
-value with **no LLM in the loop**; the research risk is quarantined to M3–M4, behind M2's
-oracle.
-
-## 11.6 Second adversarial pass — what the fixes did and didn't close
-
-A second review pressure-tested the §11.5 fixes. Results, folded into the sections above:
-
-- **Closed:** silent-degradation (§2.5 non-convergence fails loudly); the *memorization* axis
-  of eval circularity (the train/held-out split, §5.5).
-- **Was half-closed — now hardened:** the *self-certification* axis. "Different provenance"
-  had been defined against the LLM implementer (trivially true); the real circular source is
-  the **spec author**. §5.5 now requires the oracle curator ≠ spec author, adds a
-  **human-judged real-data label slice** (by-construction labels alone just encode the
-  author's definition as truth), and adds an explicit **oracle-production/maintenance stage
-  (5b) with a coverage-delta gate** so the oracle can't silently rot as the agent grows
-  (previously *no stage produced it*).
-- **Was not closed — now fixed:** the **SDK-release gate fired blind to blast radius**
-  (approving a tag before the N-agent fan-out is computed just relocates the rubber stamp).
-  §2.5 now feeds that gate a **pre-cut all-agent dry-run** — approve the radius, not the
-  tag — and disambiguates SDK-release (M4-only) from agent-publish (stage 16).
-- **New items surfaced & addressed:** the LCB/k-runs gate is now in the canonical spec
-  (§5, stage 13), not only the critique; §10 names the **unmerged-branch prerequisites**
-  (#1913, `origin/coder`) instead of laundering them as "exists"; **non-convergence has a
-  capacity cost** (escalations are un-eliminated manual maintenance → a mis-sized-cadence
-  signal, §2.5); and **🔒 seed-from-real is a recurring PII intake** needing a scrub/consent
-  gate (§5.5, escalated to @kovtcharov-amd).
-- **Residual, by design:** the human gates' realness still depends on reviewers not
-  rubber-stamping; the factory reduces this to *deciding over evidence* (the blast-radius
-  dry-run, the failing scorecard) rather than reviewing blind, but cannot eliminate it.
-
-## 11.7 Domain-review corrections (eval methodology + release mechanics)
-
-Two specialist reviews (eval-engineer, release-manager) checked the densest sections against
-the real code and found factual errors the generalist passes missed. Corrected in-place:
-
-- **Eval gate was statistically unsound → matched to the shipped gate.** The draft's
-  `LCB(candidate) ≥ prev_release_point` with a moving baseline is a **ratchet** (the accepted
-  noisy mean becomes the next floor → nothing passes within ~2–3 releases). Now a **fixed
-  bar + fixed safety floor** with the previous release as a **non-inferiority band**
-  `≥ prev − k·stdev` — exactly what `scorecard_gate.py` already does (§5, §1.5, stage 13).
-- **`k` overload fixed:** `k` = stdev-band multiplier (default 1.0), `n_runs` = repetitions
-  (3) — the draft's "k=5 runs" both collided with the real `--regression-k` and silently 5×'d
-  the serial-eval cost.
-- **Safety floor is a point tripwire, not a CI guarantee** (0.95 needs ≈59 sized instances;
-  #1437 uses 0.90 on the needs-attention axis); **split by source/thread-id** (near-duplicate
-  leakage); enforce oracle-separation as a **harness mechanism** (§5.5).
-- **Recovery rewritten to the real infra (§6.5):** the Hub Worker has **no rollback route**
-  (roll *forward*), npm redirect is the **dist-tag** (not deprecate), pin-previous is a
-  **version re-install** (the lock is immutable per version), tag-revert un-ships nothing.
-- **Two-axis versioning:** contract `API_VERSION` (drives the §0.15 guard) *and* package
-  semver — kept separate by `stamp_version.py` (§6.5).
-- **"Exists" corrected:** the whole-package **zip is disabled** (Cloudflare 413) — the shipped
-  multi-component product is the npm tarball + R2 binaries (§6, §7, stages 14/17); §2.6's
-  publish-secret gate is *built*, but merge/tag gating needs branch/tag-protection rulesets +
-  an orchestrator token without `contents: write`.
+**Honest reframe (kept from the first review):** the stated moat — the maintenance loop —
+is the plan's least-built, highest-risk, last-scheduled component. M0–M1 deliver real value
+with **no LLM in the loop**; the research risk is quarantined to M3–M4 behind M2's oracle.
 
 ## 12. Open decisions (need sign-off)
 
@@ -647,3 +591,8 @@ the real code and found factual errors the generalist passes missed. Corrected i
 5. **Recipe vs. manifest** — one authored input or recipe-in / manifest-out. *Rec:*
    separate recipe (human intent, richer: eval config + targets) → manifest (machine
    contract the runtime enforces).
+6. **npm-OIDC publisher topology (M0 day-1)** — N thin per-agent caller workflows (**N
+   registrations**, per-agent blast radius) vs one caller publishing all agents (**1
+   registration**, shared blast radius). *Rec:* N thin callers — per-agent trusted
+   publishers preserve supply-chain isolation (a compromised caller can publish only its
+   own agent); the registration cost is one-time per agent.
