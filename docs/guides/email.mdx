@@ -11,6 +11,7 @@ The Email Triage Agent connects to your Gmail account through GAIA's connectors 
 ## What it does
 
 - **Triage your inbox** — classify every message as `urgent`, `actionable`, `informational`, or `low priority`, plus separate `is_spam` and `is_phishing` flags.
+- **Follow-up tracking** — flag the emails *you* sent that never got a reply, once they're older than a configurable window (default 3 days). Read-only detection: the agent surfaces the overdue threads, it never auto-sends a chaser.
 - **Organize** — archive, label, mark read/unread, star/unstar. Reversible via the per-action undo log.
 - **Soft-delete with undo** — `trash_message` records the action; `restore_message` reverses it within a 30-second window.
 - **Draft + confirmed send** — generate replies (`draft_reply`) and forwards (`draft_forward`); `send_draft` and `send_now` require explicit user confirmation in the UI.
@@ -147,7 +148,9 @@ Senders you reply to quickly are automatically promoted to priority on the next 
 
 ### Read
 
-`list_inbox`, `get_message`, `get_thread`, `search_messages`, `list_labels`, `triage_inbox`, `pre_scan_inbox`
+`list_inbox`, `get_message`, `get_thread`, `search_messages`, `list_labels`, `triage_inbox`, `pre_scan_inbox`, `find_awaiting_reply`
+
+`find_awaiting_reply` ([#1606](https://github.com/amd/gaia/issues/1606)) scans your Sent folder and returns the threads whose newest message is still yours — i.e. nobody replied — once the send is older than the window (`window_days` per call, or the agent's `followup_window_days` config, default 3). Each hit carries the message id, recipient, subject, and age in days, most overdue first. Ask the agent *"who hasn't replied to me?"* or *"what am I still waiting on?"*. Detection only — sending an actual follow-up goes through the normal confirmation-gated reply tools, and only when you ask ([#555](https://github.com/amd/gaia/issues/555) tracks autonomous nudging). Gmail-only for now: the Outlook backend has no Sent-label mapping yet, so a Microsoft-only setup gets a clear error instead of a wrong answer.
 
 ### Session preferences (in-memory; wiped on agent restart)
 

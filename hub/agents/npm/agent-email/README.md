@@ -21,6 +21,8 @@ the agent runs as a frozen, self-contained REST sidecar your app launches and ow
 
 - **Triage** — classify each message (urgent / needs-response / FYI / promotional /
   personal), summarize a thread, and extract action items and phishing signals.
+- **Follow-up tracking** — flag sent threads still awaiting a reply after a
+  configurable window (read-only detection; the agent never auto-sends a chaser).
 - **Organize** — archive, label, move, mark read/unread — one message or in batches.
 - **Reply & send** — draft context-aware replies and forwards, then send.
 - **Calendar** — detect meeting requests, flag conflicts, RSVP, and create events
@@ -217,8 +219,9 @@ When you need finer control, the steps are exported individually:
 As of `SCHEMA_VERSION` 2.1 this package exposes inbox **search** (read-only),
 the **archive** / phishing-**quarantine** mailbox actions (+ their undo), and
 calendar **view / create / respond**. The remaining mailbox **actions** (label,
-move, mark read/unread) are part of the full agent but not yet exposed through
-this package — see
+move, mark read/unread) and the read-only **follow-up tracker** (flag sent mail
+awaiting a reply, `find_awaiting_reply`, #1606) are part of the full agent but
+not yet exposed through this package — see
 [`SPEC.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md) for the complete surface.
 
 ## Running in production

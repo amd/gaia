@@ -282,9 +282,10 @@ phishing-**quarantine** mailbox actions plus their undo (`confirmAction` / `arch
 `unarchive` / `quarantine` / `unquarantine`), and calendar **view / create / respond**
 (`listCalendarEvents` / `previewCalendarEvent` / `createCalendarEvent` /
 `respondToCalendarEvent`). The full GAIA email agent does more on the live mailbox
-(label, move, mark spam) and calendar (detect / conflicts); those remaining actions are
-connector-gated by definition and are **not exposed through this package's REST API
-yet**.
+(label, move, mark spam), follow-up tracking (flag sent mail still awaiting a reply —
+read-only `find_awaiting_reply`, #1606), and calendar (detect / conflicts); those
+remaining capabilities are connector-gated by definition and are **not exposed through
+this package's REST API yet**.
 
 ## Browser / Electron renderer (`./client`)
 

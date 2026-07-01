@@ -354,7 +354,7 @@
         <tr><td><b>12</b></td><td><b>Calendar — create</b></td><td><span class="dot wip"></span>Wired</td><td>Create events from email context</td><td><span class="pill t2">Tier 2</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>13</b></td><td><b>Search past email</b></td><td><span class="dot" style="background:var(--faint)"></span>Planned</td><td>Natural-language / keyword search across the mailbox</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>14</b></td><td><b>Task extraction → list</b></td><td><span class="dot" style="background:var(--faint)"></span>Planned</td><td>Persist action items into a trackable task list</td><td><span class="pill t0">Tier 0</span></td><td><span style="color:var(--soft)">New&nbsp;mail</span></td><td><span class="opt">—</span></td></tr>
-        <tr><td><b>15</b></td><td><b>Follow-up tracking</b></td><td><span class="dot" style="background:var(--faint)"></span>Planned</td><td>Flag sent mail awaiting a reply; nudge when overdue</td><td><span class="pill t0">Tier 0</span></td><td><span style="color:var(--c1)">Scheduled</span></td><td><span class="opt">—</span></td></tr>
+        <tr><td><b>15</b></td><td><b>Follow-up tracking</b></td><td><span class="dot wip"></span>Wired</td><td>Flag sent mail awaiting a reply (read-only detection; the overdue nudge stays with autonomy #555)</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>16</b></td><td><b>Proactive daily briefing</b></td><td><span class="dot" style="background:var(--faint)"></span>Planned</td><td>Scheduled morning inbox + calendar + tasks brief</td><td><span class="pill t0">Tier 0</span></td><td><span style="color:var(--c1)">Scheduled</span></td><td><span style="color:var(--ok)">○</span></td></tr>
         <tr><td><b>17</b></td><td><b>Scheduled send &amp; snooze</b></td><td><span class="dot" style="background:var(--faint)"></span>Planned</td><td>Defer a send; snooze a message out of the inbox</td><td><span class="pill t2">Tier 2</span></td><td><span style="color:var(--c1)">Scheduled</span></td><td><span class="opt">—</span></td></tr>
       </tbody>
@@ -403,7 +403,8 @@
         <tr><td><b>9</b> · Quarantine (+ undo)</td><td>✓ <code>/v1/email/quarantine</code> · <code>/unquarantine</code> <span class="opt">(Gmail)</span></td><td>—</td><td>✓ <code>quarantine_phishing_message</code></td></tr>
         <tr><td>Inbox search <span class="opt">(read-only, <a class="iss" href="https://github.com/amd/gaia/issues/1781" target="_blank" rel="noopener">#1781</a>)</span></td><td>✓ <code>/v1/email/search</code></td><td>—</td><td>✓ <code>search_messages</code></td></tr>
         <tr><td>Calendar · view / create / respond <span class="opt">(of capability <b>12</b>)</span></td><td>✓ <code>/v1/email/calendar/*</code> <span class="opt">(2.1)</span></td><td>—</td><td>✓</td></tr>
-        <tr><td>calendar <b>detect / conflicts</b> (10–11) &nbsp;·&nbsp; <b>13–17</b> planned &nbsp;·&nbsp; <b>P1–P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
+        <tr><td><b>15</b> · Follow-up tracking <span class="opt">(read-only, <a class="iss" href="https://github.com/amd/gaia/issues/1606" target="_blank" rel="noopener">#1606</a>)</span></td><td>—</td><td>—</td><td>✓ <code>find_awaiting_reply</code></td></tr>
+        <tr><td>calendar <b>detect / conflicts</b> (10–11) &nbsp;·&nbsp; <b>13, 14, 16, 17</b> planned &nbsp;·&nbsp; <b>P1–P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
       </tbody>
     </table>
 
@@ -790,12 +791,12 @@ quarantine_phishing_message → { "ok": true, "data": {
       <div class="field"><div class="fl">Tracking</div><div class="fv"><a class="iss" href="https://github.com/amd/gaia/issues/1605" target="_blank" rel="noopener">#1605</a> · <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (P3 stretch)</div></div>
     </div>
 
-    <!-- 15 · planned -->
+    <!-- 15 · wired -->
     <div class="cap">
-      <div class="cap-head"><span class="num">15</span><h3>Follow-up tracking</h3><span class="pill planned">Planned</span><span class="pill t0">Tier 0 · read-only</span></div>
+      <div class="cap-head"><span class="num">15</span><h3>Follow-up tracking</h3><span class="pill wip">Wired</span><span class="pill t0">Tier 0 · read-only</span></div>
       <div class="field"><div class="fl">Use-case</div><div class="fv">Watch the messages the user has <em>sent</em> and flag the ones that have gone unanswered past a configurable window, so a dropped thread resurfaces instead of disappearing. The agent scans the Sent folder, matches each outbound message against later inbound replies on the same thread, and surfaces the still-open ones (recipient, subject, age) for a nudge. It only detects and surfaces; it never auto-sends a follow-up (that is a separate, confirmation-gated action).</div></div>
       <div class="field"><div class="fl">Why it matters</div><div class="fv">The unanswered email you forgot you sent is the inbox's biggest silent failure mode — and a top-billed feature in every comparable assistant.</div></div>
-      <div class="field"><div class="fl">Backed by</div><div class="fv">Sent-folder scan + reply detection. Distinct from autonomy <a class="iss" href="https://github.com/amd/gaia/issues/555" target="_blank" rel="noopener">#555</a> (which proactively <em>sends</em> follow-ups). <b>Highest-impact gap.</b></div></div>
+      <div class="field"><div class="fl">Backed by</div><div class="fv"><code>find_awaiting_reply</code> — Sent-folder scan + per-thread reply detection; the window is configurable (<code>followup_window_days</code>, default 3, or per call). Gmail-only for now. Distinct from autonomy <a class="iss" href="https://github.com/amd/gaia/issues/555" target="_blank" rel="noopener">#555</a> (which proactively <em>sends</em> follow-ups).</div></div>
       <div class="field"><div class="fl">Guardrails</div><div class="fv">Tier 0 — read-only detection; never auto-sends.</div></div>
       <div class="field"><div class="fl">Tracking</div><div class="fv"><a class="iss" href="https://github.com/amd/gaia/issues/1606" target="_blank" rel="noopener">#1606</a> · <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (P3 stretch)</div></div>
     </div>

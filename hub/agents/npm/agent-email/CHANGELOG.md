@@ -5,6 +5,19 @@ follows [SemVer](https://semver.org/): the **MAJOR** of the on-the-wire
 `SCHEMA_VERSION` is what `checkVersion` enforces at startup, so a contract MAJOR
 bump is always at least a package MINOR bump with a migration note.
 
+## Unreleased
+
+- **Follow-up tracking — flag sent mail awaiting a reply** (#1606): the agent can
+  now scan the Sent folder and surface every thread whose newest message is still
+  the user's own — i.e. nobody replied — once the send is older than a configurable
+  window (`followup_window_days`, default 3 days, or per call). The new read-only
+  `find_awaiting_reply` agent tool returns message id, recipient, subject, and age,
+  most overdue first. Detection only: it never drafts or sends a nudge (autonomous
+  follow-up sending remains #555, confirmation-gated). Gmail-only for now — a
+  Microsoft-only setup gets a loud error instead of a silently wrong scan.
+  Agent-loop surface (Agent UI natural-language queries); no new REST route, so the
+  REST contract and `SCHEMA_VERSION` are unchanged.
+
 ## 0.3.0
 
 Contract bumped to `SCHEMA_VERSION` **2.1** — additive, no triage shape change, so
