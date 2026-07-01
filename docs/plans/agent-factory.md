@@ -45,10 +45,11 @@ It splits into **two halves that already differ sharply in maturity:**
 base `Agent` class, a mixin signature, or the Lemonade client changes at `v0.24`, the
 agent silently drifts from the platform. Therefore:
 
-- **Every build pins an SDK commit** and is reproducible against it, but the agent is a
-  **living product**, not a one-shot artifact. Provenance records the SDK commit built +
-  evaluated against (the runtime's contract-version check §0.15 is the coarse guard; the
-  SDK-commit pin is the fine one).
+- **Every build is SDK-commit-pinned + agent-source-hashed — traceable, not reproducible.**
+  The deterministic tail (freeze/sign/publish) is reproducible, but the *generative head*
+  (LLM codegen, LLM-judged eval) is **not** — re-running yields a *different* agent. So
+  pinning the SDK commit + hashing the generated source buys **provenance/integrity, not
+  regeneration** (see §11.5). The agent is a **living product**, not a one-shot artifact.
 - **The factory is continuous.** An SDK change that breaks an agent's eval is a factory
   **trigger** — re-scope / re-implement / **re-eval against the same synthetic datasets** /
   re-PR / re-ship — not a human fire drill. Keeping N agents correct against a moving SDK
@@ -206,19 +207,27 @@ verify) · git worktrees.
 6. **Signing + provenance embedding** (extend `gen_binaries_lock.py` with a signature +
    spec/scorecard/SDK-commit provenance).
 
-## 10. Phased build (strangler-fig; email is the reference agent)
+## 10. Milestones — automate easiest → hardest (difficulty-ordered)
 
-0. **Wrap the existing ship half.** A `gaia factory ship <agent>` that drives the *current*
-   `release_agent_email.yml` + `packaging/*` for email, recipe-driven — proving the back
-   half is orchestratable without loss of rigor.
-1. **Manifest + provenance.** Emit `manifest.json` + embed provenance (SDK commit pinned);
-   promote docs-in-sync + the data-driven scorecard to hard gates.
-2. **Dev-half orchestrator (assisted).** `gaia factory build <recipe>` runs
-   scope→code→eval against a live worktree, human-approved at the PR + ship gates.
-3. **SDK-delta maintenance (the keystone).** Wire stage 18 — an SDK change re-runs the
-   factory for affected agents; ship only if eval holds. *Hardest; follows, not leads.*
-4. **Assisted → automated authoring.** Mature scope/code so a new agent goes intent →
-   shipped with human approval only at the gates.
+Deliberately ordered by **difficulty and risk**: automate the *deterministic, already-built*
+work first, defer the *judgment-heavy, unsolved-research* work last. This is also the
+adversarial review's de-risking (§11.5): the ship half is real → cheap; the dev half is
+net-new; the maintenance loop is the hardest and must come **last**, gated on the oracle
+work from M2. Each milestone is independently valuable and shippable.
+
+| M | Milestone | Automates | Difficulty | Why here / gate |
+|---|---|---|---|---|
+| **M0** | **Generalize the ship half** (recipe-driven, per-agent) | stages 9–17 for *any* agent: turn `release_agent_email.yml` + `packaging/*` into a reusable, recipe-parametrized pipeline | **Easiest** — deterministic, already exists, no LLM | **Prove on a *second, non-email* agent** (browser/analyst) — the review's empirical reuse-vs-rewrite check; includes per-agent OIDC publisher provisioning, tags, R2 prefixes |
+| **M1** | **Provenance + edge-verified releases** | manifest emit (stage 10) · signing + source-hash + SDK-commit provenance (stage 15) · post-publish edge verify (stage 17) | **Easy** — mechanical, extends existing scripts | integrity/traceability (not "reproducibility," §11.5); docs-in-sync becomes a hard gate |
+| **M2** | **Independent eval oracle + confidence-bound gate** | the *trustworthy* eval gate: a **human-curated, held-out** ground-truth set per agent + per-agent safety floors; gate on `LCB(score, k runs) ≥ bar` | **Medium** — mostly discipline, but the oracle is **human judgment the factory does NOT automate** | **Prerequisite for everything generative** (M3–M4) — without an independent oracle the gate is self-certification (§11.5 #1) |
+| **M3** | **Assisted dev automation** | the *mechanical* dev stages: scaffold, tool/skill/MCP wiring, synthetic-data gen, the eval-optimize (`--fix`) loop, PR authoring | **Harder** — net-new agentic coding, but human-in-the-loop | human still owns **scope, spec, the oracle (M2), PR-approve, ship**; the GAIA coder + Claude Code loop assist, they don't decide |
+| **M4** | **SDK-delta maintenance loop** (stage 18 — the keystone) | on an SDK delta that regresses an agent (measured on M2's held-out oracle, LCB-gated), auto-re-run M3+M0 for that agent | **Hardest** — the differentiator *and* the highest risk | **Last, and only after M2.** Hard rules baked in: (a) **serial-eval throughput cap** (one eval/backend — CLAUDE.md), size cadence against it; (b) the factory **may not auto-PR the SDK** — agent code needing an SDK change *fails + files a human issue* (breaks the cascade + blast radius, §11.5 #4, 🔒) |
+
+**Reading the order:** M0–M1 ship *any* agent reproducibly-packaged and provenance-verified
+with **no LLM in the loop** — pure, high-value CI. M2 buys the trust bar. Only then does
+M3 add agentic authoring (human-gated), and M4 the continuous maintenance loop. The moat
+(M4) is *last* because it depends on M2's oracle and is the unsolved-research part — you do
+not build the loop before you can trust the gate it runs on.
 
 ## 11. Distinctiveness (brief, honest)
 
@@ -231,6 +240,61 @@ half exists and is rigorous, but the dev-half orchestrator + the SDK-delta loop 
 substantial net-new work; this is a *potential* moat that must be built, and stage 18 is
 the hard part.
 
+## 11.5 Critique & corrections (adversarial review)
+
+An adversarial review (grounded in the real workflow + packaging code) returned:
+**sound as a *packaging* architecture; over-reach as an *SDLC-automation* one — a rigorous
+back half bolted to an aspirational front half where ~90% of both the value and the
+unsolved-research risk lives.** The "two halves" framing is honest but must not let the
+ship half's maturity launder the dev half's + M4's risk. Corrections, folded into the
+milestone order (§10):
+
+**Load-bearing claims that were wrong — corrected:**
+- **"Reproducible against an SDK commit" is a category error.** The deterministic tail
+  (freeze/sign/publish) is reproducible; the *generative head* (LLM codegen, LLM-judged
+  eval) is **not** — re-running yields a *different* agent. Pinning buys **traceability +
+  integrity (source-hashed), not regeneration** (§1 corrected).
+- **"Orchestrate the ship half, don't reinvent it" overclaims reuse.**
+  `release_agent_email.yml` is ~718 lines, **email-hardcoded** — npm OIDC is **bound to the
+  workflow *filename***, and tags/binary-names/manifest-path/R2-prefix/the `urgent_recall_
+  floor` gate are all baked in. Per-agent generalization is a reusable-workflow rewrite +
+  **a registered npm publisher per agent** — substantial, not "just drive it." **M0 proves
+  it empirically on a second, non-email agent.**
+- **"Exists" overstated for two dev-half deps:** the GAIA coder is on `origin/coder` (not
+  main); the §0.x refs depend on **#1913 (unmerged)** — both "exist *on a branch*."
+
+**The eval gate has no independent oracle — the deepest flaw.** The factory writes the
+agent *and* the corpus + ground truth *and* sets the bar *and* reviews the PR: a green
+scorecard proves the agent matches the *factory's own* notion of correct, not correctness.
+The pipeline's *only* real oracle today is the **hand-authored `urgent_recall_floor`**
+(`quality_gate_thresholds.json`, #1437). **M2 is the fix and is a hard prerequisite for
+M3–M4:** gate on a **human-curated, held-out** ground-truth set per agent (different
+provenance than the implementer — *never* the factory-generated training corpus) + per-agent
+hand-set safety floors, and gate on the **lower confidence bound over *k* runs** (the judge
+is noisy) — not the point estimate. *The oracle is human judgment the factory does NOT
+automate; admitting that is the factory's honest scope — it automates the mechanics, not
+the oracle.*
+
+**M4 (the keystone) has a convergence hazard + a hard throughput ceiling.** Moving baseline
+(previous release) + fixed corpus + noisy judge churns → the LCB gating above is the fix.
+Cascade: an SDK change to fix agent A re-triggers B…Z; evals **must run serially** on one
+Lemonade backend (CLAUDE.md), so N≈19 agents × every SDK delta is a **wall-clock ceiling** —
+the real cost driver is *throughput, not dollars*. M4 caps to one-eval-per-backend and sizes
+cadence against it.
+
+**🔒 AI PRs into the shared SDK — a hard boundary, not a rec (escalated to @kovtcharov-amd).**
+An automated system PRing the shared SDK every agent depends on, contained only by a
+human rubber-stamp at scale, with a poisoned-issue → injected-scope → regressive-PR path,
+is an architecture/security call above the doc. **Hard rule (M4):** the factory **may not
+auto-PR the SDK** — agent code needing an SDK change **fails the run and files a human
+issue.** This cuts the cascade *and* the blast radius in one move.
+
+**Honest reframe:** the stated moat (the maintenance loop) is the doc's **least-built,
+highest-risk, last-scheduled** component. "The back half exists, we're most of the way
+there" is false — **we're most of the way through the *cheap* half.** M0–M1 deliver real
+value with **no LLM in the loop**; the research risk is quarantined to M3–M4, behind M2's
+oracle.
+
 ## 12. Open decisions (need sign-off)
 
 1. **Orchestrator substrate** — Claude Code (skills + memory, already in CI) + GAIA coder
@@ -238,8 +302,9 @@ the hard part.
    exist); evaluate a custom build if the loop needs tighter control.
 2. **Autonomy at the PR + ship gates** — auto-merge/ship vs. human-approve. *Rec:* human
    approves merge + ship in v1; auto-iterate only *up to* the gate (ties to runtime §0.34).
-3. **SDK-improvement scope** — may the factory PR the *SDK itself*, or only agent code?
-   *Rec:* agent code auto; SDK changes proposed-for-human-review.
+3. **SDK-improvement scope** — *resolved to a hard rule* (§11.5, 🔒): the factory **may not
+   auto-PR the SDK**; agent code needing an SDK change fails the run + files a human issue.
+   Open only for @kovtcharov-amd sign-off on that boundary.
 4. **Stage-18 trigger policy** — re-run on every SDK commit vs. only on eval regression vs.
    scheduled. *Rec:* run eval on SDK-affecting deltas; rebuild only on regression.
 5. **Recipe vs. manifest** — one authored input or recipe-in / manifest-out. *Rec:*
