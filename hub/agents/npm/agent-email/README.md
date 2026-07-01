@@ -1,6 +1,6 @@
 # @amd-gaia/agent-email
 
-[![npm version](https://img.shields.io/npm/v/@amd-gaia/agent-email?label=version)](https://www.npmjs.com/package/@amd-gaia/agent-email) · contract `SCHEMA_VERSION` **2.1** · last updated **2026-06-26**
+[![npm version](https://img.shields.io/npm/v/@amd-gaia/agent-email?label=version)](https://www.npmjs.com/package/@amd-gaia/agent-email) · contract `SCHEMA_VERSION` **2.1** · last updated **2026-07-01**
 
 **Eval scorecard (v0.3.0): aggregate 84.67 / 100** — within-one-bucket **acceptance** accuracy (3-run mean, 95% CI [83.4, 86.0]) over 100 of 220 labeled emails ([`./SCORECARD.md`](./SCORECARD.md)). Triage priority is ordinal, so the bar (#1437) credits exact-or-adjacent buckets — what users feel — not exact 4-way match (reported as a secondary, 0.46). The linked scorecard carries the full recipe, metrics + reported secondaries, run-to-run variance/CI, a per-category breakdown, the run environment, a worked recomputation, and reproduction steps.
 
@@ -22,7 +22,10 @@ the agent runs as a frozen, self-contained REST sidecar your app launches and ow
 - **Triage** — classify each message (urgent / needs-response / FYI / promotional /
   personal), summarize a thread, and extract action items and phishing signals.
 - **Organize** — archive, label, move, mark read/unread — one message or in batches.
-- **Reply & send** — draft context-aware replies and forwards, then send.
+- **Reply & send** — draft context-aware replies and forwards, then send. The
+  underlying agent can also schedule a confirmed send for a future time and
+  snooze messages out of the inbox (agent tool loop today — not yet exposed on
+  this package's REST surface).
 - **Calendar** — detect meeting requests, flag conflicts, RSVP, and create events
   from an email.
 - **Safe by construction** — email bodies are treated as untrusted **data, never

@@ -5,6 +5,20 @@ follows [SemVer](https://semver.org/): the **MAJOR** of the on-the-wire
 `SCHEMA_VERSION` is what `checkVersion` enforces at startup, so a contract MAJOR
 bump is always at least a package MINOR bump with a migration note.
 
+## Unreleased
+
+- **Scheduled send + snooze in the agent tool loop** (#1609): the agent can now
+  schedule a send for a future time ("send this tomorrow at 9am") and snooze a
+  message out of the inbox until a chosen time. A scheduled send is
+  user-confirmed **at creation** (literal recipient/subject/body + fire time),
+  stored as a regular mailbox draft plus a persistent one-shot job, and fired
+  at/after its time by the agent's scheduler; snooze archives now and re-adds
+  INBOX at the chosen time. Both are cancellable before they fire, and a firing
+  failure is recorded on the job and logged — never silently swallowed.
+  **Agent-loop only — no runtime/contract change**: no new REST endpoints, no
+  new npm surface in this package (see SPEC "Agent-loop capabilities not on the
+  contract").
+
 ## 0.3.0
 
 Contract bumped to `SCHEMA_VERSION` **2.1** — additive, no triage shape change, so

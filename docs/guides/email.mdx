@@ -169,6 +169,14 @@ Senders you reply to quickly are automatically promoted to priority on the next 
 
 `draft_reply`, `draft_forward` — drafts are harmless. `send_draft`, `send_now`, `forward_message` — gated by user confirmation; the UI shows the literal recipient/subject/body before you approve.
 
+### Scheduled send & snooze
+
+`schedule_send` — schedule an email for a future time ("send this tomorrow at 9am"). Confirmation-gated **at creation**: you approve the literal recipient/subject/body *and the fire time*, then the send fires unattended at/after that time. The message is stored as a regular draft in your mailbox (visible in your mail client) until it sends — the body is never persisted in the agent's local database.
+
+`snooze_message` — move a message out of INBOX now and have it return at a chosen time ("snooze this until Monday"). Reversible, no confirmation needed; cancelling keeps the message archived.
+
+`cancel_scheduled_job`, `list_scheduled_jobs` — both scheduled sends and snoozes are cancellable any time before they fire; `list_scheduled_jobs` shows the pending jobs with their cancel handles. Jobs persist in the agent's SQLite, so a job whose time passed while no agent was running fires on the next start.
+
 ### Calendar (require confirmation)
 
 `list_calendar_events`, `accept_invite`, `decline_invite`, `create_event_from_email`
@@ -191,7 +199,7 @@ Each reaches whichever calendar (Google or Microsoft) the user connected; a miss
 
 This guarantee is enforced independently on every surface, so a missing confirmation on one path can't be a back door on another:
 
-- **Chat / Agent UI / CLI** — `send_draft`, `send_now`, and `forward_message` are confirmation-gated in the agent loop. Before the send runs, you're shown the **literal** recipient, subject, and body (not an LLM paraphrase) and must approve. Decline, and nothing is sent. In unattended/background mode there's no one to approve, so the send is refused outright rather than run silently.
+- **Chat / Agent UI / CLI** — `send_draft`, `send_now`, `schedule_send`, and `forward_message` are confirmation-gated in the agent loop. Before the send runs (or is scheduled), you're shown the **literal** recipient, subject, and body (not an LLM paraphrase) and must approve. Decline, and nothing is sent. In unattended/background mode there's no one to approve, so the send is refused outright rather than run silently. The one deliberate variation is `schedule_send`: the confirmation happens **at creation** — you approve the exact message *and* its fire time — and only that pre-approved send later fires unattended; it is cancellable until it does.
 - **REST API** (`POST /v1/email/send`) — rejected with **HTTP 403** unless you supply a single-use confirmation token. You get that token from `POST /v1/email/draft`, and it is **bound to the exact `(to, subject, body)`**: a token minted for one message can't be replayed to send different content, and it's consumed on first use.
 - **REST API** (`POST /v1/email/archive`, `POST /v1/email/quarantine`) — the two mutating mailbox actions follow the **same gate** (schema 2.1): each is rejected with **HTTP 403** unless you supply a single-use token from `POST /v1/email/confirm`, bound to that exact `(action, message_id)`. Both are reversible inside the 30-second undo window via the ungated `POST /v1/email/unarchive` / `POST /v1/email/unquarantine` (which *restore*, never destroy). Archive returns a `batch_id` undo handle and a `post_archive_id` so undo survives the id change an Outlook folder-move causes. Quarantine is **Gmail-only** — an Outlook mailbox is refused with **HTTP 400**, because its label-based undo can't reverse Outlook's folder move (#1738).
 - **MCP server** (`send_email`) — same rule as REST: a send without a valid, payload-bound token returns a structured error and sends nothing.
@@ -304,7 +312,8 @@ REST surface and the chat agent share one sidecar process.
 the tools the schema-2.1 REST contract serves today — inbox pre-scan, search,
 calendar view, and archive + undo. Tools that have no REST route yet (labels,
 stars, mark-read, move, trash/delete, summarize, profile, preferences, forward,
-send) are not exposed in the chat agent until their routes land; the underlying
+send, scheduled send / snooze) are not exposed in the chat agent until their
+routes land; the underlying
 agent product still implements them, they are simply not reachable over the REST
 contract yet.
 
@@ -328,3 +337,4 @@ The agent surfaces a single batch confirmation when it tries more than five orga
 - Bulk-undo (e.g., "undo my last 10 archives") — `batch_id` is recorded but no UI surface yet.
 - Audit-log inspection (`gaia email log`) — deferred to a follow-up; the SQLite at `~/.gaia/email/state.db` is queryable directly via `sqlite3` until then.
 - Vacation auto-responder collision detection — deferred. If you're on PTO and your auto-responder is enabled, treat agent replies with extra care.
+- Scheduled send / snooze fire from a running agent process — the scheduler polls every 30 s while an email agent is alive. A job whose time passes with no agent running fires on the next start (never silently dropped; failures are recorded on the job and logged). Wiring these jobs into the system-wide `gaia schedule` dispatcher is tracked in [#1371](https://github.com/amd/gaia/pull/1371) / autonomy epic [#555](https://github.com/amd/gaia/issues/555).

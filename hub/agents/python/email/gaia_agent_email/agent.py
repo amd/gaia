@@ -35,8 +35,9 @@ import os
 from pathlib import Path
 from typing import Any, ClassVar, List, Optional
 
-from gaia_agent_email import action_store
+from gaia_agent_email import action_store, schedule_store
 from gaia_agent_email.config import ConfigurationError, EmailAgentConfig
+from gaia_agent_email.scheduler import EmailJobScheduler
 from gaia_agent_email.outlook_scopes import (
     OUTLOOK_CALENDAR_SCOPES,
     OUTLOOK_MAIL_SCOPES,
@@ -59,6 +60,7 @@ from gaia_agent_email.tools.preference_tools import (
 from gaia_agent_email.tools.profile_tools import ProfileToolsMixin
 from gaia_agent_email.tools.read_tools import ReadToolsMixin
 from gaia_agent_email.tools.reply_tools import ReplyToolsMixin
+from gaia_agent_email.tools.schedule_tools import ScheduleToolsMixin
 from gaia_agent_email.tools.summarize_tools import SummarizeToolsMixin
 
 from gaia.agents.base.agent import Agent
@@ -139,6 +141,14 @@ ACTIONS:
   set_category_default, clear_session_preferences) — mutate persistent
   classification preferences that survive across restarts. Confirm the
   change in plain English.
+- Scheduling (schedule_send, snooze_message, cancel_scheduled_job,
+  list_scheduled_jobs) — schedule_send REQUIRES explicit user confirmation
+  at creation (the user approves the literal recipient/subject/body and the
+  fire time), then sends unattended at that time. snooze_message removes a
+  message from INBOX now and brings it back at the chosen time; it is
+  reversible (cancel keeps it archived) and needs no confirmation. Times
+  are ISO-8601, e.g. '2026-07-02T09:00'; both are cancellable before they
+  fire via cancel_scheduled_job with the job_id.
 
 PRE-SCAN BEHAVIOR:
 When the user asks for a pre-scan, morning brief, triage view, or "what's
@@ -169,6 +179,7 @@ class EmailTriageAgent(
     ReadToolsMixin,
     OrganizeToolsMixin,
     ReplyToolsMixin,
+    ScheduleToolsMixin,
     SummarizeToolsMixin,
     DeleteToolsMixin,
     CalendarToolsMixin,
@@ -291,6 +302,7 @@ class EmailTriageAgent(
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.init_db(db_path)
         action_store.init_schema(self)
+        schedule_store.init_schema(self)
 
         # Memory subsystem. Must be called BEFORE super().__init__() because
         # Agent.__init__() calls _register_tools(), and register_memory_tools()
@@ -326,6 +338,25 @@ class EmailTriageAgent(
             output_dir=config.output_dir,
         )
 
+        # One-shot scheduler (#1609): fires persisted scheduled-send / snooze
+        # jobs. Jobs live in the same SQLite as the action log, so past-due
+        # jobs from a previous run fire on the first polling pass after
+        # startup ("at/after its time"). The polling thread is the default
+        # driver; the #1371 `gaia schedule` dispatcher can call
+        # ``fire_due_jobs()`` instead once it lands (autonomy epic #555).
+        # The scheduler opens its own connection per pass — never hand it
+        # ``self``'s db connection (cross-thread sqlite use-after-close).
+        self._scheduler = EmailJobScheduler(
+            db_path,
+            executors={
+                schedule_store.KIND_SCHEDULED_SEND: self._execute_scheduled_send,
+                schedule_store.KIND_SNOOZE: self._execute_snooze_restore,
+            },
+            poll_seconds=config.scheduler_poll_seconds,
+        )
+        if config.start_scheduler:
+            self._scheduler.start()
+
     # -- Agent contract -----------------------------------------------------
 
     def _create_console(self) -> AgentConsole:
@@ -351,6 +382,7 @@ class EmailTriageAgent(
         self._register_read_tools()
         self._register_organize_tools()
         self._register_reply_tools()
+        self._register_schedule_tools()
         self._register_summarize_tools()
         self._register_delete_tools()
         self._register_calendar_tools()
@@ -443,6 +475,14 @@ class EmailTriageAgent(
                 f"{', '.join(self._backends) or 'none'}."
             )
         return backend
+
+    def _provider_for_backend(self, backend: Any) -> str:
+        """Return the provider name (the key in ``_backends``) for a resolved
+        backend instance, so schedule rows can record which mailbox fires."""
+        for provider, candidate in self._backends.items():
+            if candidate is backend:
+                return provider
+        raise ValueError("resolved backend is not in _backends")
 
     def _remember_draft_mailbox(self, draft_id: Optional[str], provider: str) -> None:
         """Record which mailbox a draft was created in (for send_draft routing)."""
