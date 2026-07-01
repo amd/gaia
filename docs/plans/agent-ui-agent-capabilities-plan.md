@@ -61,6 +61,24 @@
 > the *sidecar* exposes over REST and the host relays," not "Python loaded into
 > the UI backend." PR #1910 (in-UI `EmailProxyAgent`) is **superseded**.
 
+### 0.0 "The host" is a headless daemon, not the web UI
+
+Throughout §0, **the host** is a **headless custody/supervisor daemon** — a
+distinct, always-on machine process — *not* the web UI. It serves `/host/v1/*`
+(custody: OAuth/memory/RAG/sessions/audit — §0.9, §0.11, §0.19), supervises
+sidecars (§0.3), and holds the scheduler clock (§0.22). The **thin web UI** and the
+**`gaia <agent>` CLI** are *both* thin clients that attach to this one daemon
+(machine-wide, discovered per §0.14). This split is load-bearing:
+
+- **CLI-only / no-UI works.** `gaia email "what did I say about X last week"` and
+  its audit writes reach `/host/v1/*` because the daemon — not the browser tab — is
+  the custody server. Without this split, any sidecar spawned while the UI is closed
+  would have no callback target (the exact hole §0.11/§0.19 exist to prevent).
+- **The daemon is the always-on component** that survives the web UI closing, owns
+  the machine-wide single-instance registry, and is the wake-up owner for autonomy
+  (§0.22). Starting the UI or a CLI command **auto-starts the daemon** if not
+  already running.
+
 ### 0.1 The agent REST contract (one per sidecar)
 
 Every agent sidecar exposes the **same** HTTP contract; the email sidecar
@@ -238,7 +256,8 @@ queried by sidecars rather than duplicated:
 | (Lemonade — **all** model families) | — | **Host broker** — single-tenant per model slot; a host-owned queue serializes loads of LLM **and** embedder / VLM / ASR / TTS / SD across agents *and* host-custody RAG (§0.12). The most-contended shared resource. |
 | (audit trail) | — | **Host custody sink** — consequential actions (incl. autonomous + fixed-function + direct-integrator paths) are appended to a host-owned log, NOT kept agent-private, or the observability dashboard is blind and uninstall erases the record (§0.19). |
 | `hub.py`, `agents.py`, `system.py`, `tunnel.py` | ~1700 | **Host** — supervision, settings, remote access. |
-| `chat.py`, `goals.py`, `schedules.py` | ~826 | **Sidecar** — agent/autonomy logic moves into the agent that owns it. |
+| `chat.py` | ~304 | **Sidecar** — agent chat loop moves into the owning agent. |
+| `goals.py`, `schedules.py` | ~522 | **Split** — the trigger **registry + cron clock is host** (the daemon is the always-on wake-up owner); the job **executes in the owning sidecar**, spawned at fire time (§0.22). A reaped sidecar can't fire its own cron, so the clock cannot live inside it. |
 
 **Conversation history must be host custody (was a contradiction).** An earlier
 draft had the sidecar own message history — but §0.3 makes the sidecar *ephemeral*
@@ -386,6 +405,13 @@ loud, actionable error** (never a silent partial-compat install); and the fronte
 renders an explicit **"unsupported card"** fallback for an unknown `render` type
 rather than nothing.
 
+**Custom cards are first-party in v1.** A sidecar binary cannot inject a React
+component into the pre-built, signed thin-UI bundle without a dynamic
+component-load path (itself a security surface) — so **custom `render` types are
+first-party / AMD-verified only in v1**; a third-party agent's novel card
+gracefully degrades to the generic result card via the fallback above. Don't plan a
+dynamic-component-load path unless/until that's explicitly sanctioned.
+
 ### 0.16 Dev-mode discovery for *unpublished* agents
 
 `GAIA_<AGENT>_MODE=dev` runs a *known* agent from source, but `AgentSidecarManager`
@@ -463,6 +489,23 @@ is a well-defined set):
   model libs; ten agents is a multi-GB install with heavy duplication. Acknowledge
   the cost and consider a **shared runtime layer** (a common base the per-agent
   binaries link against) before the catalog grows.
+
+### 0.22 Autonomy — the host holds the clock, the sidecar does the work
+
+§0.9 runs autonomy (schedules/goals) in the owning sidecar, but §0.13 idle-reaps
+sidecars and caps live ones — so a reaped email sidecar has nothing alive at 8am to
+fire the daily brief, and the job silently never runs (passing every unit test).
+Resolve by splitting the clock from the work:
+
+- The **host daemon (§0.0) owns the trigger registry + cron clock** — always-on, it
+  is the wake-up owner. Schedule *metadata* is host custody.
+- At fire time the host **spawns the owning sidecar** (if not resident) and hands it
+  the job over `/query` (or a fixed endpoint), then lets the reaper reclaim it after.
+- Alternatively, mark specific agents **pinned-resident** (exempt from the reaper +
+  live-cap) when sub-minute latency matters. State which agents qualify; default is
+  wake-on-fire, since holding every autonomous agent resident defeats §0.13.
+
+Either way the wake-up owner is the daemon, never a reapable sidecar.
 
 ---
 

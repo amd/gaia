@@ -33,10 +33,11 @@ The Agent UI is GAIA's desktop application — a privacy-first AI assistant that
 **The shift:** today the Agent UI is a fat Python backend (~19K LoC) that hosts
 each agent *in-process* (chat, RAG, connectors, files, goals, memory, schedules,
 MCP, tunnel). v2 inverts this: **every agent ships as its own out-of-process
-sidecar that exposes a complete agent REST interface**, and the UI becomes a
-**thin host that only renders components** — *all* agent logic runs in the
-sidecar. This is the same out-of-process product third parties integrate, so the
-UI dogfoods exactly what we ship.
+sidecar that exposes a complete agent REST interface**, supervised by a **headless
+host daemon** (custody + lifecycle), with a **thin web UI that only renders
+components** on top — *all* agent logic runs in the sidecar. This is the same
+out-of-process product third parties integrate, so the UI dogfoods exactly what we
+ship.
 
 ### One contract, three thin clients
 
@@ -74,13 +75,21 @@ back — no action without explicit user consent, even mid-workflow.
 
 ### Thin-host boundary
 
-"Thin" means **no agent *reasoning* runs in the host** — but the host is the
+First, a precision that matters: **"the host" is a headless custody/supervisor
+daemon — a distinct always-on process, NOT the web UI.** The **thin web UI** and
+the **`gaia <agent>` CLI** are *both* thin clients that attach to this one daemon,
+so `gaia email` works with no browser open and its memory/audit still land (see the
+detailed plan §0.0). "Thin UI" and "custody host" are two things; only the UI is
+thin.
+
+"Thin" means **no agent *reasoning* runs in the host** — but the host daemon is the
 **custodian of shared, user-scoped data that must have a single writer**: OAuth
 grants, cross-agent **user memory**, the **document/RAG store**, and the
-**session index** (which conversation belongs to which agent). These aren't agent
-logic; they're per-user state that fragments or corrupts if N sidecars each own a
-copy. The host stores them and lets sidecars read/query them; the sidecars do all
-the reasoning and own only their **agent-private** state.
+**session index + transcript** (which conversation belongs to which agent). These
+aren't agent logic; they're per-user state that fragments or corrupts if N sidecars
+each own a copy. The host stores them and lets sidecars read/query them (per-agent
+scoped, §0.11); the sidecars do all the reasoning and own only their
+**agent-private** state.
 
 OAuth is the model for all custody: a trusted host performs consent once and
 **forwards** the connection *out* to each sidecar via the sidecar's
