@@ -93,9 +93,11 @@ def find_awaiting_reply_impl(
         debug:        Pass-through to ``log_tool_call``.
 
     Returns:
-        ``{"window_days", "threads_scanned", "count", "awaiting_reply":
-        [{"message_id", "thread_id", "recipient", "subject", "sent_date",
-        "age_days"}]}`` — most overdue first.
+        ``{"window_days", "threads_scanned", "count", "scan_truncated",
+        "awaiting_reply": [{"message_id", "thread_id", "recipient",
+        "subject", "sent_date", "age_days"}]}`` — most overdue first.
+        ``scan_truncated`` is True when older sends exist beyond the scan
+        ceiling, so callers can say the answer may be incomplete.
     """
     if window_days < 0:
         raise ValueError(f"window_days must be >= 0 (got {window_days})")
@@ -117,13 +119,22 @@ def find_awaiting_reply_impl(
         listing = gmail.list_messages(
             label_ids=["SENT"], max_results=DEFAULT_SENT_SCAN_CEILING
         )
+        stubs = listing.get("messages", [])
         thread_ids: List[str] = []
         seen: set[str] = set()
-        for stub in listing.get("messages", []):
+        for stub in stubs:
             tid = stub.get("threadId")
             if tid and tid not in seen:
                 seen.add(tid)
                 thread_ids.append(tid)
+        # The listing is newest-first, so hitting either ceiling means the
+        # OLDEST (most overdue) sends may be the ones left unscanned — never
+        # let that read as an exhaustive answer.
+        scan_truncated = (
+            bool(listing.get("nextPageToken"))
+            or len(stubs) >= DEFAULT_SENT_SCAN_CEILING
+            or len(thread_ids) > max_threads
+        )
 
         awaiting: List[Dict[str, Any]] = []
         scanned = 0
@@ -166,11 +177,16 @@ def find_awaiting_reply_impl(
             )
 
         awaiting.sort(key=lambda item: item["age_days"], reverse=True)
-        st["result_summary"] = {"count": len(awaiting), "threads_scanned": scanned}
+        st["result_summary"] = {
+            "count": len(awaiting),
+            "threads_scanned": scanned,
+            "scan_truncated": scan_truncated,
+        }
         return {
             "window_days": window_days,
             "threads_scanned": scanned,
             "count": len(awaiting),
+            "scan_truncated": scan_truncated,
             "awaiting_reply": awaiting,
         }
 
@@ -209,14 +225,21 @@ class FollowupToolsMixin:
             Returns:
                 JSON envelope with ``{"awaiting_reply": [{message_id,
                 thread_id, recipient, subject, sent_date, age_days,
-                mailbox}], "count", "window_days", "threads_scanned"}`` —
-                most overdue first.
+                mailbox}], "count", "window_days", "threads_scanned",
+                "scan_truncated"}`` — most overdue first. When
+                ``scan_truncated`` is true, older sent threads exist beyond
+                the scan ceiling — tell the user the list may be incomplete.
             """
             try:
                 window = int(window_days or 0)
                 if window <= 0:
                     window = int(getattr(agent.config, "followup_window_days", 3))
-                max_threads = max(1, min(int(max_threads or 50), 100))
+                # Cap matches DEFAULT_SENT_SCAN_CEILING — the impl only
+                # enumerates that many sent stubs, so a higher cap here
+                # could never be honored; raise the two together.
+                max_threads = max(
+                    1, min(int(max_threads or 50), DEFAULT_SENT_SCAN_CEILING)
+                )
                 backends = agent._backends
                 google_backends = {
                     provider: backend
@@ -231,6 +254,7 @@ class FollowupToolsMixin:
                     )
                 merged: List[Dict[str, Any]] = []
                 scanned = 0
+                truncated = False
                 for provider, backend in google_backends.items():
                     result = find_awaiting_reply_impl(
                         backend,
@@ -239,6 +263,7 @@ class FollowupToolsMixin:
                         debug=debug_flag,
                     )
                     scanned += result["threads_scanned"]
+                    truncated = truncated or result["scan_truncated"]
                     for item in result["awaiting_reply"]:
                         item["mailbox"] = provider
                         agent._remember_message_mailbox(
@@ -253,6 +278,7 @@ class FollowupToolsMixin:
                     "window_days": window,
                     "threads_scanned": scanned,
                     "count": len(merged),
+                    "scan_truncated": truncated,
                     "awaiting_reply": merged,
                 }
                 skipped = sorted(set(backends) - set(google_backends))

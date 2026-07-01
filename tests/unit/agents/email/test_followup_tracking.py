@@ -165,6 +165,7 @@ def test_unreplied_sent_message_is_flagged_after_window():
     out = find_awaiting_reply_impl(gmail, window_days=3, now_ms=NOW_MS)
 
     assert out["count"] == 1
+    assert out["scan_truncated"] is False
     item = out["awaiting_reply"][0]
     assert item["message_id"] == "s1"
     assert item["thread_id"] == "t1"
@@ -239,6 +240,44 @@ def test_results_sorted_most_overdue_first():
     out = find_awaiting_reply_impl(gmail, window_days=3, now_ms=NOW_MS)
 
     assert [i["message_id"] for i in out["awaiting_reply"]] == ["s1", "s2"]
+
+
+def test_scan_truncation_is_surfaced_not_silent():
+    """Newest-first listing means the ceilings hide the OLDEST sends —
+    the result must say the scan was partial, never read as exhaustive."""
+    gmail = _backend()
+    for i in range(3):
+        _add_sent(
+            gmail,
+            msg_id=f"s{i}",
+            thread_id=f"t{i}",
+            to=f"p{i}@example.com",
+            subject=f"thread {i}",
+            date_ms=_days_ago(5 + i),
+        )
+
+    # max_threads ceiling: 3 sent threads, only 2 inspected.
+    out = find_awaiting_reply_impl(gmail, window_days=3, max_threads=2, now_ms=NOW_MS)
+    assert out["threads_scanned"] == 2
+    assert out["scan_truncated"] is True
+
+    # Listing ceiling: a full page of sent stubs means older ones may exist.
+    from gaia_agent_email.tools.followup_tools import DEFAULT_SENT_SCAN_CEILING
+
+    gmail2 = _backend()
+    for i in range(DEFAULT_SENT_SCAN_CEILING):
+        _add_sent(
+            gmail2,
+            msg_id=f"s{i}",
+            thread_id=f"t{i}",
+            to="x@example.com",
+            subject=f"thread {i}",
+            date_ms=_days_ago(4) + i,  # unique dates, all past the window
+        )
+    out2 = find_awaiting_reply_impl(
+        gmail2, window_days=3, max_threads=DEFAULT_SENT_SCAN_CEILING, now_ms=NOW_MS
+    )
+    assert out2["scan_truncated"] is True
 
 
 # ---------------------------------------------------------------------------
