@@ -52,16 +52,34 @@ def build_app():
     contract — a playground convenience, not part of the frozen email REST
     contract.
     """
+    from contextlib import asynccontextmanager
+
     from fastapi import FastAPI
     from gaia_agent_email import __version__ as agent_version
     from gaia_agent_email.api_routes import router as email_router
+    from gaia_agent_email.briefing import BriefingScheduleConfig, BriefingScheduler
     from gaia_agent_email.connector_routes import router as connector_router
     from gaia_agent_email.contract import SCHEMA_VERSION
+
+    # Daily inbox briefing (#1608) — env config is read at build time so an
+    # invalid value aborts startup loudly, not at the first scheduled fire.
+    # Off by default: without the env opt-in no scheduler task is created.
+    briefing_config = BriefingScheduleConfig.from_env()
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        scheduler = BriefingScheduler(briefing_config)
+        scheduler.start()
+        try:
+            yield
+        finally:
+            await scheduler.stop()
 
     app = FastAPI(
         title="GAIA Email Agent Sidecar",
         version=agent_version,
         description="Frozen-binary email triage REST sidecar.",
+        lifespan=lifespan,
     )
 
     @app.get("/health", include_in_schema=True)
