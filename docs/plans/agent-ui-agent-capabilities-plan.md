@@ -77,7 +77,8 @@
   third-party integration ergonomics (the tiered capability matrix) · §0.37
   **pluggable custody** (one sidecar = rich *and* stateless; refines §0.9) · §0.38
   memory/resource footprint · §0.39 **custody-modes comparison table** · §0.40
-  **hybrid custody** (per-store shared/private — the embedded↔delegated spectrum).
+  **hybrid custody** (per-store shared/private — the embedded↔delegated spectrum) ·
+  §0.41 **the unified capability-mediation model** (collapses the modes — the capstone).
 - **Auth & security:** §0.6 OAuth forward · §0.11 the three auth legs + per-agent
   authorization · §0.24 third-party **containment** (signing, tiers, egress,
   encrypt-at-rest, audit integrity, taint) 🔒.
@@ -1406,9 +1407,52 @@ does X live" is per-store, so §0.39's table is read per-store, not per-mode.
 This makes **Embedded** (all-private) and **Delegated** (all-shared) the two ends, with
 the hybrid any point between — one rule, arbitrary granularity.
 
----
+### 0.41 The unified model — a capability-mediation plane (collapses the modes)
 
-## 1. Current GAIA SDK Capability Inventory
+The three custody modes (§0.37), A2A (§0.32), per-agent privacy (§0.11), and autonomy
+(§0.34) are not four subsystems — they are **one primitive**: a **scoped capability grant**
+enforced by an **always-present mediation plane** (the host). This is the object-capability
+/ policy-enforcement-point model applied to the agent plane, and it collapses the modes
+into configurations of one architecture.
+
+**The primitive.** Everything an agent touches — a store, another agent, a connector, an
+action, an *autonomous* act — is a **capability** the host grant-checks, mediates, audits
+(§0.19), and taint-tracks (§0.24). An agent runs under a **capability grant** =
+(manifest-declared needs, §0.28) ∩ (user consent). One check answers four requirements:
+
+| Requirement | Resolved by the grant |
+|---|---|
+| **Privacy** (email agent has emails; finance agent doesn't) | the grant *is* the boundary — enforced on every store read, connector use, and A2A hop (unifies §0.11 authz + §0.40 per-store scope) |
+| **A2A** | "A may invoke B" is a capability; **B runs under B's own grant**, so A gets only B's taint-tracked *result*, never B's data (§0.32) |
+| **Autonomy** | each capability carries an **autonomy level** (confirm / act-with-undo / act-freely); autonomous = capabilities the user *pre-authorized* unattended — §0.34 is this field on the grant |
+| **Custody modes** | a store is a capability with a **scope**: private → embedded, shared → delegated, none → ephemeral (§0.37/§0.40) |
+
+**One architecture, varying host richness — the modes collapse.** The sidecar *always*
+speaks the same `/host/v1/*` + grant interface; only *which host answers* varies:
+- **Ephemeral** = a host with no persistent stores.
+- **Embedded/standalone** = a **minimal host bundled with the sidecar** (local stores, one
+  agent, all-private grants, no A2A). §0.37's "embedded provider" already *is* a host
+  implementation — so "the sidecar always talks to a host" is literally true.
+- **Delegated** = the full external daemon (shared stores, multi-agent, broker, autonomy).
+
+So there is **one code path** (agent → mediation interface), **one security kernel** (the
+grant), and the "modes" are deployment + scope configs. A third party still gets a
+self-contained rich agent: "sidecar + bundled minimal host," not a different architecture.
+
+**Gains:** one mechanism to secure + audit (privacy, A2A, connector isolation, autonomy
+are the *same* grant-check, not four); autonomy is an added grant field, not a bolt-on;
+A2A is safe by construction (mediated + bounded by each agent's grant); privacy is
+first-class (an agent's reach *is* its grant).
+
+**Trade-off (honest):** agents **never** touch shared resources or each other directly —
+always through the mediator (the object-capability discipline). The cost is the mediator
+hop and the fact that **the grant model becomes the security kernel** — the one thing to
+get exactly right. A bare integrator wanting *zero* host runs the ephemeral/degraded tier
+(§0.36) without the mediated capabilities.
+
+This is the plan's capstone: **§0.32/§0.34/§0.37/§0.40 are facets of one capability-
+mediation architecture** — the host is the policy-enforcement + coordination plane, agents
+are capability-scoped sidecars, and the three modes are how richly that plane is deployed.
 
 ### 1.1 Agents
 
