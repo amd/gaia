@@ -135,6 +135,16 @@ continue). Promote to the resume model **only if** real workflows prove they nee
 many confirmations in one unbroken run and host-side stitching is too clumsy.
 *Decision pending sign-off.*
 
+**Approve-what-you-saw invariant (critical).** In the stateless model the sidecar
+*re-reasons* on the continuation, so it can produce a plan that **diverges from the
+action the user just approved** — the approved summary and the re-executed step are
+no longer guaranteed identical. The payload-fingerprint token protects a single
+`/send`, but not the workflow continuation. Resolution: the continuation must
+**resume the exact approved step**, not re-plan it — either scope the confirmation
+token to the whole approved multi-step segment, or have the host pass the sidecar
+the exact prior tool-plan/step state so it executes rather than re-decides. This
+constraint holds under *either* confirmation model and is a hard requirement.
+
 ### 0.5 Agent Hub mirror (install / uninstall)
 
 The UI embeds a catalog mirror (existing `agentHub.ts` / `AgentInstallDialog` /
@@ -194,11 +204,22 @@ queried by sidecars rather than duplicated:
 |---|---|---|
 | `memory.py` | ~1634 | **Host custody** — one user memory store; sidecars query it. Per-*agent* private memory (e.g. email session prefs) stays in the sidecar. |
 | `documents.py` (RAG) | ~739 | **Host custody** — one document/RAG store the user uploads into; any agent queries it. |
-| `sessions.py` | ~368 | **Host** — cross-agent session *index* (conversation ↔ agent ↔ title). Sidecars store their own message history; the host indexes it. |
+| `sessions.py` | ~368 | **Host** — session index **and the durable conversation transcript**. See below: a stateless, uninstall-able sidecar cannot be the system of record for chat history. The host feeds the relevant transcript to the sidecar as input per `/query`. |
 | `connectors.py` | ~977 | **Host** — OAuth custody (§0.6). |
 | `files.py` | ~665 | **Host** — upload storage the UI serves. |
+| `mcp.py` | ~349 | **Host** — the user-configured MCP *server registry* is shared (like connectors); each sidecar connects to the servers its agent needs. Host owns the config, not the connections. |
+| (Lemonade LLM backend) | — | **Host broker** — single-tenant per model slot; a host-owned queue serializes model loads across agents (§0.12). Not a router today, but the most-contended shared resource. |
 | `hub.py`, `agents.py`, `system.py`, `tunnel.py` | ~1700 | **Host** — supervision, settings, remote access. |
 | `chat.py`, `goals.py`, `schedules.py` | ~826 | **Sidecar** — agent/autonomy logic moves into the agent that owns it. |
+
+**Conversation history must be host custody (was a contradiction).** An earlier
+draft had the sidecar own message history — but §0.3 makes the sidecar *ephemeral*
+(lazy-spawn, tree-kill, dev-reload, and **uninstall deletes the cached binary**),
+and §0.4 leans on it being *stateless*. A disposable process cannot be the system
+of record for the user's chat log: uninstalling or crashing an agent would destroy
+it, and the stateless `/query` model needs the host to *replay* context anyway. So
+the **host owns the transcript** (extending the session index it already owns); the
+sidecar is fed the slice it needs per call and persists nothing durable itself.
 
 **Alternative considered:** make user-memory and RAG their *own* dedicated
 sidecars (purest "all logic in a sidecar"). Rejected for v1 — it multiplies
@@ -221,6 +242,102 @@ Retire the ~19K-LoC backend incrementally; the app stays shippable throughout:
    host custody layer (§0.9) as agents stop owning them in-process.
 
 No step requires all agents migrated at once; each is independently releasable.
+
+### 0.11 Host↔sidecar auth + the reverse (callback) contract
+
+Two halves of the same mechanism, both currently **undefined** in the code
+(`email_sidecar/router.py`/`proxy.py` do no auth; the port is loopback-only).
+
+- **Per-spawn secret (security boundary).** Loopback binding is **not** an auth
+  boundary — any local process (another user on a shared box, a browser tab via
+  CSRF/DNS-rebinding, a malicious `npm postinstall`) can `POST /v1/<agent>/query
+  "archive everything"` on an unauthenticated port that can send mail. The host
+  **mints a random secret per spawn**, passes it to the sidecar via env at launch,
+  and the sidecar **requires it** (bearer header) on every request — fixed-function,
+  `/query`, and `/confirm`. `X-Gaia-UI: 1` is CSRF hygiene, not authentication.
+- **The reverse contract (sidecar → host).** The custody model (§0.9) needs
+  sidecars to *read* host-owned data. Define a first-class host callback API —
+  `GET /host/v1/memory`, `POST /host/v1/rag/query`, `GET /host/v1/sessions/{id}` —
+  that the sidecar calls, authenticated with the **same per-spawn secret** (the
+  host injects its own callback base-URL + the secret at launch). Symmetric to the
+  forward proxy; without it, "the host stores it, the sidecar queries it" has no
+  transport and agents silently re-fork their own copies.
+
+### 0.12 Shared LLM backend — a host-owned model-slot broker
+
+Lemonade is **single-tenant per model slot** (this is why evals must run serially —
+CLAUDE.md). N sidecars each calling Lemonade independently will **race-evict each
+other's models** exactly as concurrent evals do — chaotic ctx-size errors and
+`model_load_error` in production, not just CI. The custody layer must arbitrate the
+*most*-contended shared resource: a **host-owned Lemonade broker** that serializes
+model loads and grants a **model-slot lease** per request/run. Agents request
+inference through the broker (or the host proxies Lemonade), never contend directly.
+This is a hard requirement for more than one concurrently-active agent.
+
+### 0.13 Concurrency, cancellation & failure semantics
+
+- **Run isolation.** §0.3 mandates one shared sidecar per agent, but a `/query`
+  run is a stateful multi-step loop and today's confirmation store is a single
+  process-wide dict. Two simultaneous callers (UI + a scheduled brief, two tabs)
+  must not collide: **namespace all per-run state by `run_id`** (token store, tool
+  state), forbid shared mutable module state, and document a **parallelism limit**
+  (or a per-run worker). "Shared instance" must not silently imply "safely reentrant."
+- **Cancellation.** Define `POST /v1/<agent>/query/{run_id}/cancel`; the host
+  propagates a UI "Stop" **and** a dropped SSE connection to it (a relayed stream
+  hides the client disconnect from the sidecar), and the agent loop checks a
+  cancel flag between tool steps — so a stopped run stops burning the model slot
+  and fires no further tools.
+- **Failure semantics.** On sidecar crash mid-SSE the host injects a synthetic
+  terminal `error` event (the UI otherwise sees a truncated stream with no
+  `final`), cleans up the orphaned `run_id`/session-index entry, and surfaces the
+  actionable cause. Download/spawn failure fails loud via the hub (§0.5).
+- **Lifecycle/resource limits.** Every installed agent is a long-lived process
+  holding a port + memory + a model-slot claim. Lazy-spawn is not enough: add an
+  **idle-timeout / LRU reaper** and a **cap on concurrent live sidecars**, or ten
+  installed agents = ten resident processes.
+
+### 0.14 One sidecar instance per *machine* (CLI + UI)
+
+§0.3's "one shared instance per agent" is per-*host-process*. If the UI is running
+the email sidecar and the user also runs `gaia email`, §0.7 spawns a **second**
+instance — two writers into one action log / `grants.json`, and two forwarders
+racing to refresh tokens (the exact race §0.6 eliminates, reintroduced *between*
+CLI and UI). Define **machine-wide discovery**: a lockfile/registry of running
+sidecars (`~/.gaia/agents/<id>/instance.json` → pid + port + secret) so a second
+client **attaches** to the running instance instead of spawning a rival, with a
+single **forwarder-of-record**. Spawn only if none is live.
+
+### 0.15 Contract-version negotiation at install + render fallback
+
+`GET /version` exists but the policy on mismatch does not. Installing an agent
+built against contract 3.x into a 2.x host would silently diverge on the SSE schema,
+`render` types, and `/v1/connections` shape. Define: the **host advertises a
+supported contract-major range**; hub **install rejects out-of-range agents with a
+loud, actionable error** (never a silent partial-compat install); and the frontend
+renders an explicit **"unsupported card"** fallback for an unknown `render` type
+rather than nothing.
+
+### 0.16 Dev-mode discovery for *unpublished* agents
+
+`GAIA_<AGENT>_MODE=dev` runs a *known* agent from source, but `AgentSidecarManager`
+is keyed by hub id + lock — a brand-new agent an author is building has no catalog
+entry, no lock, no binary, so it can't be registered or spawned, defeating "the UI
+doubles as dev mode." Add a **local-agent registration path**: point the manager at
+a source dir + port (skip SHA/lock, no catalog entry) so an in-development agent is
+launchable and appears in the UI before it is ever published.
+
+### 0.17 Testing & eval strategy for `/query`
+
+`/query` is a multi-step LLM loop — the single most LLM-affecting surface, which
+CLAUDE.md mandates evals for — yet it now runs out-of-process. Define:
+
+- A **sidecar eval harness** that drives `/query` over REST and asserts on the
+  **event sequence** (`tool_call` → `tool_result` → `needs_confirmation` → `final`),
+  not just a final string; eval baselines move into each agent's hub package.
+- A **mocked-SSE relay unit test** for the host proxy: streaming passthrough (no
+  buffering), cancellation, and the synthetic crash `error` event.
+- Eval runs stay **serial** against the shared Lemonade broker (§0.12) — the
+  per-agent sidecar model must not reintroduce concurrent model-slot contention.
 
 ---
 

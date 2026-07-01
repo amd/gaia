@@ -151,7 +151,29 @@ sidecar supervision). PR #1910 (the incremental email cutover with an in-UI
 to the sidecar's agent loop rather than running a reduced loop itself, which also
 removes that PR's tool-surface reduction.
 
+### Cross-cutting concerns (v2)
+
+These apply to *every* sidecar and are detailed in the plan's §0.11–§0.17 — flagged
+here so the overview isn't read as "just spawn a process":
+
+- **Per-spawn auth** — a loopback port that can send email is not safe unauthenticated; the host mints a secret per spawn and the sidecar requires it (§0.11).
+- **Reverse callback contract** — sidecars reach host custody (memory/RAG/sessions) over a defined `/host/v1/*` API with that same secret (§0.11).
+- **LLM broker** — Lemonade is single-tenant per model slot; a host-owned broker serializes model loads so N agents don't race-evict each other (§0.12).
+- **Run isolation + cancellation + failure events** — `/query` runs are namespaced by `run_id`, cancellable on stop/disconnect, and crash-safe (§0.13).
+- **One instance per machine** — CLI and UI attach to the same sidecar, not rival copies (§0.14).
+- **Version negotiation + idle reaping** — install rejects out-of-range contracts; idle sidecars are reaped (§0.13, §0.15).
+
 ## Phased Delivery
+
+> **v2 crosswalk:** the phases below were written for the in-process model. Under
+> the sidecar-first architecture they re-cast, not disappear: Phase A capabilities
+> become **sidecar `/query` tools or host custody** (not wiring into an in-process
+> `GaiaAgent`); Phase B **dashboards read host-custody data** and **memory/RAG move
+> to host custody**; Phase C **autonomy/schedules move into the owning agent's
+> sidecar**; Phase D's **skill marketplace IS the Agent Hub mirror** (§0.5). Voice
+> (ASR/TTS) is a **host I/O** feature layered over `/query`. The v0.18–v0.24 stamps
+> map onto the §0.10 migration steps. (A full rewrite of the phase list into
+> sidecar deliverables is a follow-up pass.)
 
 ### Phase A — Wire SDK Capabilities (v0.18.x)
 
