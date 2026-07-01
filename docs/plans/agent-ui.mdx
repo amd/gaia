@@ -175,6 +175,7 @@ here so the overview isn't read as "just spawn a process":
 - **One instance per machine** — CLI and UI attach to the same sidecar, not rival copies (§0.14).
 - **Version negotiation + idle reaping** — install rejects out-of-range contracts; idle sidecars are reaped (§0.13, §0.15).
 - **Data migration + uninstall lifecycle + sideload** — existing `~/.gaia` state migrates once (§0.10 step 0); uninstall revokes the forwarded connection and offers keep/delete of data (§0.20); air-gapped/OEM sideload install without the network (§0.21).
+- **Third-party containment (§0.24)** 🔒 — authenticating the channel isn't enough: a one-click third-party agent gets a live mailbox token + open network egress. Sign the lock (not just SHA-verify), tier-gate + least-privilege the OAuth forward, sandbox sidecar egress, encrypt custody at rest, tamper-evident audit, signed updates. The trust-root + containment decision that gates third-party agents.
 
 ## Phased Delivery
 

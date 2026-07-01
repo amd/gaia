@@ -216,7 +216,10 @@ platform binary from its lock → verified download (SHA-256) → cache under
 `~/.gaia/agents/<id>/` → register so it appears as a launchable agent.
 **Uninstall** = stop any running sidecar → remove the cached binary + registration.
 Reuses the email sidecar's verified-fetch + lifecycle primitives; **no Node on the
-runtime path**.
+runtime path**. **Install/update/forward are trust decisions — SHA-256 verifies
+integrity, not authenticity; they must go through the signing + tier + least-
+privilege + containment model in §0.24 before a third-party agent is trusted or
+handed a live connection.**
 
 ### 0.6 OAuth: host owns consent + refresh, forwards to the sidecar
 
@@ -602,6 +605,76 @@ others that are genuinely net-new. Naming which is which sets an honest build or
 
 Build order: **broker + streaming-proxy spike → `/query` + vocab → CLI → OAuth
 forward-out**, migrating email first (§0.10) as the reference.
+
+### 0.24 Security & privacy — containing a sidecar that is itself the adversary
+
+The prior auth work (§0.11) *authenticates* the sidecar↔host channels well, but the
+plan had **no story for containing a hostile agent** — critical the moment
+**one-click, third-party** hub agents (§0.5) are installable. A security review
+surfaced these. The first three are one coupled trust-root + containment decision;
+**settle before the first third-party agent ships (🔒 @kovtcharov-amd).**
+
+- **Sign the lock/catalog — SHA-256 alone is not authentication (🔒).** The hash
+  proves a binary matches the lock; it says nothing about *who wrote the lock*. A
+  controlled catalog/`baseUrl`/CDN can serve attacker code + a matching hash, or a
+  known-vuln *older* version. Sign the lock/catalog with an AMD key and verify the
+  signature *before* trusting any hash inside it; add **anti-rollback** (record
+  highest-installed version, refuse silent downgrade); third-party publishers get a
+  publisher signature + TOFU pin.
+- **Tier-gate + least-privilege the OAuth forward (🔒).** §0.5 one-click + §0.6
+  forward means a third-party agent can be handed a **live mailbox token**. Nothing
+  consults the Phase-D trust tiers (Verified/Community/Experimental) before
+  forwarding, and the forward hands the *whole* grant. Make forwarding + shared
+  scopes **tier-aware**, require an **explicit install consent** naming the exact
+  OAuth scopes forwarded, and forward the **minimum** scope the agent declares.
+- **Constrain sidecar network egress (🔒 the decisive containment gap).** A hostile
+  sidecar holds a mailbox token *and*, as an ordinary process, unrestricted outbound
+  network — it can read mail through the sanctioned connection and POST it anywhere,
+  invisible to the callback-authorization model (which guards host custody, not the
+  agent's own sockets). This is the difference between "sandboxed agent" and
+  "trusted arbitrary code with your mailbox," and it negates "100% local."
+  No-network-by-default + a **declared, install-surfaced egress allowlist** (the
+  manifest names hosts, e.g. `googleapis.com`) enforced via a host-controlled
+  network namespace/proxy.
+- **Encrypt data at rest.** §0.6/§0.9 move refresh tokens, user memory, RAG,
+  transcripts, and the audit log to host custody under `~/.gaia`; §0.11 stores the
+  auth secrets in `instance.json`. `0600` stops other *users*, not the threats that
+  matter on a single-user desktop (stolen laptop, synced backup, same-user malware →
+  live refresh tokens + the whole memory/transcript store in cleartext). Put secrets
+  in the **OS keychain** (Keychain/DPAPI/libsecret) and **encrypt the custody stores**
+  — pull Phase-C's "encrypted credential vault" **forward to whenever §0.6 lands**,
+  not v0.23.
+- **Make the audit log tamper-evident.** §0.19 appends actions to a host sink, but
+  nothing enforces append-only — a compromised process can rewrite/truncate it,
+  defeating the observability promise. Hash-chain / rolling-MAC each entry (sealing
+  the prior), restrictive perms, write-only exposure to agents, gap/rewrite detection
+  surfaced in the dashboard.
+- **Cross-agent prompt-injection taint (name it in §0.18 now).** The email agent
+  hardens *its own* body-as-data, but the cross-agent path (orchestrator, "summarize
+  this and email it") carries untrusted mailbox content from agent A into agent B's
+  `/query`, where it can drive B's destructive action — compounded by §0.4's
+  re-plan divergence. **Taint must travel with the data across the boundary** (mark
+  cross-agent-sourced context untrusted so the receiver treats it as data), with the
+  confirmation gate as backstop. A hard requirement for the orchestrator, not v1.
+- **MCP auto-install must not reintroduce the supply-chain hole.** §0.11 names "a
+  malicious `npm postinstall`" as a threat, yet §13.1 proposes auto-installing
+  `mcp-server-*` from npm/GitHub on demand — unpinned/unsigned npm runs arbitrary
+  postinstall code. Restrict auto-discovery to a **curated, version-pinned,
+  integrity-checked allowlist**; never auto-execute an unpinned package; disable
+  lifecycle scripts; gate installs behind the same signature/tier model as agents.
+- **Signed updates + re-consent.** §0.5 specs install/uninstall but not **update**.
+  Silent catalog auto-update is the classic vector (push malicious "update" to an
+  agent already granted mailbox + memory scope). Make update a first-class,
+  **signature-verified** op (reusing the signed lock), with anti-rollback and
+  **re-consent when the new version widens declared scopes/egress**.
+- **Telemetry vs "100% local."** Any phone-home (incl. Phase-D "cost savings
+  telemetry") punctures the privacy promise and rides the same egress as above.
+  **Local-only aggregation by default**; any network telemetry is explicit opt-in
+  with a visible disclosure. State the default here.
+
+The through-line: the plan authenticates the channel but must also **contain the
+endpoint**. Containment (egress + least-privilege connection + host-custody scope +
+signed/tiered trust root) is the security decision that gates third-party agents.
 
 ---
 
