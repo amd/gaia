@@ -39,10 +39,12 @@ components** on top — *all* agent logic runs in the sidecar. This is the same
 out-of-process product third parties integrate, so the UI dogfoods exactly what we
 ship.
 
-### One contract, three thin clients
+### One contract, many front-doors
 
-Each agent sidecar exposes **one** REST interface, consumed identically by three
-callers — so there is a single surface to build, test, and dogfood:
+Each agent sidecar exposes **one** REST interface (fixed-function **+ `/query`**),
+consumed identically by every front-door — one surface to build, test, and dogfood.
+The agent loop is implemented **once** (in the sidecar); each front-door just proxies
+to it, so `/query` is available everywhere, not only in the UI:
 
 1. **`gaia <agent>` CLI** — a thin client of the host daemon (§0.0); it attaches to
    the daemon (auto-starting it if needed) and calls the same REST contract. It does
@@ -51,7 +53,12 @@ callers — so there is a single surface to build, test, and dogfood:
 2. **Agent UI** — a thin web layer; renders components, relays everything else
    through the daemon to the sidecar. Doubles as **dev mode** for fast agent
    iteration and embeds an **Agent Hub mirror** (one-click install/uninstall).
-3. **Integrators** — the same contract, unchanged.
+3. **The GAIA REST API agent server** (`src/gaia/api/`, `gaia api`) — the
+   OpenAI-compatible server exposes **`/query` as a first-class endpoint** too (§0.33),
+   alongside `/v1/chat/completions`, so programmatic REST consumers get the agentic
+   tool-calling/workflow loop — not just OpenAI-style chat. It proxies to the same
+   sidecar, so there is no second agent-loop implementation.
+4. **Integrators** — the same contract, unchanged.
 
 ### The agent REST interface (per sidecar)
 

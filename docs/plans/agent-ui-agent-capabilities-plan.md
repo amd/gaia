@@ -69,7 +69,7 @@
   sidecar supervisor.
 - **The agent contract:** §0.1 REST surface (fixed-function + `/query`) · §0.2
   `/query` SSE event schema · §0.4 mid-workflow confirmation · §0.18 dispatch ·
-  §0.32 multi-agent orchestration.
+  §0.32 multi-agent orchestration · §0.33 `/query` on the `gaia api` REST server.
 - **Auth & security:** §0.6 OAuth forward · §0.11 the three auth legs + per-agent
   authorization · §0.24 third-party **containment** (signing, tiers, egress,
   encrypt-at-rest, audit integrity, taint) 🔒.
@@ -1026,6 +1026,34 @@ after v1:
 - **Sequencing:** v1 = explicit picker (§0.18); the orchestrator is a **later,
   first-class agent** built on the same contract — not a special host mode. This keeps
   "the UI is thin, the sidecar reasons" intact even for multi-agent flows.
+
+### 0.33 The GAIA REST API agent server exposes `/query` too (`src/gaia/api/`)
+
+`/query` is not UI-specific — it belongs on **every agent-serving REST surface**. GAIA's
+OpenAI-compatible API server (`src/gaia/api/openai_server.py`, `gaia api`) is a
+first-class front-door for **programmatic** agent access; today it serves
+`POST /v1/chat/completions` (agents-as-models), `GET /v1/models`, and an in-process
+`/v1/email/*` mount. It must also expose the **agentic `/query` loop**.
+
+- **Add `POST /v1/<agent>/query` (SSE) to the API server**, the *same* contract
+  (§0.1/§0.2) — so a REST consumer gets tool-calling, multi-step workflows, and the
+  typed event stream, not only OpenAI-style chat. **One agent-loop implementation:** the
+  API server **proxies to the sidecar** (via the daemon/broker, §0.3/§0.12), exactly as
+  the UI and CLI do — it does not run its own in-process loop.
+- **Relationship to `/v1/chat/completions`.** Keep both: chat-completions is the
+  OpenAI-SDK-compatible surface (drop-in for existing tooling); `/query` is the richer
+  **agentic superset** (SSE tool events + `needs_confirmation` + workflows). Consumers
+  choose by need; neither is removed.
+- **Supersedes the API server's in-process email mount.** `openai_server.py:143`
+  mounts `gaia_agent_email.api_routes` in-process — the same in-process pattern the UI
+  cutover removed (this surface was explicitly left out of PR #1910's scope). Under v2
+  it likewise becomes **sidecar-backed** (proxy to the email sidecar), so core stays
+  lightweight and there is one email implementation.
+- **Auth is stricter here than the loopback daemon (🔒).** `gaia api` is a
+  *network-exposed* surface (and reachable remotely via the tunnel), unlike the
+  daemon's loopback custody API — so `/query` on it must sit behind the API server's
+  **API-key auth** and still enforce the §0.4 confirmation gate + §0.24 containment on
+  every destructive step. Do not inherit the loopback trust assumptions of §0.11 here.
 
 ---
 
