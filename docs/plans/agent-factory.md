@@ -66,7 +66,15 @@ agent silently drifts from the platform. Therefore:
 Everything downstream is driven by one declarative **`recipe`** — the human intent the
 orchestrator plans from and the source the machine `manifest` (§0.28) is derived from
 (§12.5 keeps the two separate: recipe = intent, manifest = enforced contract). It is the
-*human-authored* artifact; the factory produces everything else. Shape:
+*human-authored* artifact; the factory produces everything else.
+
+**Ground it on the format that already exists: `gaia-agent.yaml`.** Eighteen hub agents
+already carry a per-agent manifest (`hub/agents/python/<id>/gaia-agent.yaml`) with
+`id/name/version/models/python.entry_module/dependencies/requirements.platforms/interfaces`
+— the recipe **extends that file** with the factory-specific fields (purpose, eval block,
+connectors/scopes, egress, trust tier, gates, freeze targets) rather than inventing a
+second per-agent YAML that would drift against it. Shape (factory fields added to the
+existing schema):
 
 ```yaml
 id: email
@@ -338,8 +346,24 @@ silently untested.
 
 ## 6. Ship-half rigor the factory must preserve (do not reinvent, do not lose)
 
-The existing publish pipeline encodes hard-won rigor. The factory orchestrates it and
-keeps every property:
+**The ship half is THREE lanes, not one — and one is already generalized:**
+
+| Lane | Pipeline | Status |
+|---|---|---|
+| **Wheel → PyPI** | `publish_agents.yml`: discover agents from `setup.py` → wheel matrix → **one manual approve gate** ("publish" environment) → **per-agent PyPI OIDC trusted publishing** (`gaia-agent-*`) | **already generalized, per-agent** |
+| **Frozen-binary sidecar → Hub R2 + npm** | `release_agent_email.yml` + `packaging/*` (the rigor analyzed below) | **email-only — this is M0's actual work** |
+| **C++ static binaries** | `build_agents.yml`: cross-compile matrix → binary + `gaia-agent.yaml` + checksums | generalized for `cpp/` examples |
+
+Two consequences the plan must absorb: (a) **M0 = generalize the *sidecar* lane
+specifically** — the wheel lane needs orchestration, not generalization; (b) the wheel
+lane's *manual-gate + per-agent OIDC* is a **shipped validation of §2.5/§2.6's model** —
+human-gated publishing with per-agent trusted publishers isn't aspirational, it's how
+`publish_agents.yml` works today. (The Hub's PR-route curation — "review earns the trust
+tier," `docs/guides/hub-publishing.mdx` — is the same human-gate policy at the ecosystem
+level.)
+
+The sidecar pipeline encodes hard-won rigor. The factory orchestrates it and keeps every
+property:
 
 - **Multi-platform matrix + "assert required platforms present"** (stage 11) — a partial
   build never publishes.
@@ -430,7 +454,13 @@ framework** (`eval/{runner,benchmark,scorecard,analyze_failures,audit}.py`, base
 bot · **`code_index`** over the live SDK · the **entire ship half**
 (`release_agent_email.yml`, `packaging/{freeze,gen_binaries_lock,gen_package_files,
 gen_scorecard,stamp_version,smoke_test,publish_to_r2}.py`, Hub Worker, npm OIDC, edge
-verify) · git worktrees.
+verify) · the **wheel lane** (`publish_agents.yml` — already per-agent, gated, OIDC; §6) ·
+**`gaia agent init`** (starter-package scaffold, python|cpp) + **`gaia agent publish`**
+(direct publish CLI) · **`gaia-agent.yaml`** (the per-agent manifest 18 agents already
+carry — the recipe's base, §1.5) · two **operational playbooks already written as Claude
+skills**: `agent-hub-release` (onboard/cut a sidecar release — *M0's runbook*) and
+`adding-eval-scorecard` (adapter → real scorecard → README link → release gate — *M2's
+per-agent adoption runbook*) · git worktrees.
 
 **Net-new (the stitch — the real work):**
 1. **The dev-half orchestrator** — integrate the GAIA coder + an Agent-SDK/Claude-Code
@@ -456,10 +486,10 @@ work from M2. Each milestone is independently valuable and shippable.
 
 | M | Milestone | Automates | Difficulty | Why here / gate |
 |---|---|---|---|---|
-| **M0** | **Generalize the ship half** (recipe-driven, per-agent) | the *deterministic packaging spine* — stages **9, 11, 12, 14, 16** — for *any* agent: turn `release_agent_email.yml` + `packaging/*` into a reusable, recipe-parametrized pipeline (M1 adds the provenance stages 10/15/17; M2 the trustworthy gate 13) | **Easiest — but not risk-free**: deterministic/no-LLM, yet per-agent OIDC-publisher provisioning is **supply-chain work**, and the ship half exists *only for email* (a 2nd agent may lack `packaging/*` parity) | **Prove on a *second, non-email* agent** (browser/analyst) — the empirical reuse-vs-rewrite *and* parity check; includes per-agent OIDC publisher provisioning, tags, R2 prefixes |
+| **M0** | **Generalize the *sidecar* lane** (recipe-driven, per-agent) | the *deterministic packaging spine* — stages **9, 11, 12, 14, 16** — for *any* agent: turn `release_agent_email.yml` + `packaging/*` into a reusable, recipe-parametrized pipeline. **The wheel lane needs no generalizing** — `publish_agents.yml` is already per-agent + gated + OIDC (§6); M0 orchestrates it and generalizes the *sidecar* lane (M1 adds provenance stages 10/15/17; M2 the trustworthy gate 13). The `agent-hub-release` skill is the existing runbook to automate | **Easiest — but not risk-free**: deterministic/no-LLM, yet per-agent OIDC-publisher provisioning is **supply-chain work**, and the ship half exists *only for email* (a 2nd agent may lack `packaging/*` parity) | **Prove on a *second, non-email* agent** (browser/analyst) — the empirical reuse-vs-rewrite *and* parity check; includes per-agent OIDC publisher provisioning, tags, R2 prefixes |
 | **M1** | **Provenance + edge-verified releases** | manifest emit (stage 10) · signing + source-hash + SDK-commit provenance (stage 15) · post-publish edge verify (stage 17) | **Easy** — mechanical (*but the manifest schema lives in unmerged #1913*) | integrity/traceability (not "reproducibility," §11.5); docs-in-sync becomes a hard gate |
-| **M2** | **Independent eval oracle + noise-aware gate** | the *trustworthy* eval gate: a **human-curated, held-out** ground-truth set per agent + fixed safety floors; gate = **fixed bar + non-inferiority band** `≥ prev − k·stdev` over `n_runs` repetitions (§5 — *not* LCB-vs-moving-baseline, §11.7) | **Medium** — mostly discipline, but the oracle is **human judgment the factory does NOT automate** | **Prerequisite for everything generative** (M3–M4) — without an independent oracle the gate is self-certification (§11.5 #1) |
-| **M3** | **Assisted dev automation** | the *mechanical* dev stages: scaffold, tool/skill/MCP wiring, synthetic-data gen, the eval-optimize (`--fix`) loop, PR authoring | **Harder** — net-new agentic coding (*needs `origin/coder` merged to main*), human-in-the-loop | human still owns **scope, spec, the oracle (M2, curator ≠ spec author), PR-approve, ship**; the GAIA coder + Claude Code loop assist, they don't decide |
+| **M2** | **Independent eval oracle + noise-aware gate** | the *trustworthy* eval gate: a **human-curated, held-out** ground-truth set per agent + fixed safety floors; gate = **fixed bar + non-inferiority band** `≥ prev − k·stdev` over `n_runs` repetitions (§5 — *not* LCB-vs-moving-baseline, §11.7). **Adoption reality: 1 of 18 agents has a scorecard today** (email) — M2 is 17 harness→payload adapters + oracles; the `adding-eval-scorecard` skill is the per-agent runbook | **Medium** — mostly discipline, but the oracle is **human judgment the factory does NOT automate** | **Prerequisite for everything generative** (M3–M4) — without an independent oracle the gate is self-certification (§11.5 #1) |
+| **M3** | **Assisted dev automation** | the *mechanical* dev stages: scaffold (build on the existing `gaia agent init` starter-package generator + Builder templates), tool/skill/MCP wiring, synthetic-data gen, the eval-optimize (`--fix`) loop, PR authoring | **Harder** — net-new agentic coding (*needs `origin/coder` merged to main*), human-in-the-loop | human still owns **scope, spec, the oracle (M2, curator ≠ spec author), PR-approve, ship**; the GAIA coder + Claude Code loop assist, they don't decide |
 | **M4** | **SDK-delta maintenance loop** (stage 18 — the keystone) | on an SDK delta that regresses an agent (measured on M2's held-out oracle via the §5 noise-band gate), re-run M3+M0 for that agent | **Hardest** — the differentiator *and* the highest risk | **Last, and only after M2.** Built-in: (a) **serial-eval throughput cap** (one eval/backend — CLAUDE.md), size cadence against it; (b) SDK changes ship via **PR + tag through the existing release process**, gated by the **human approve/deny at the SDK-release checkpoint over a pre-cut all-agent blast-radius dry-run** (§2.5) — approve the radius, not the tag; the all-agent re-eval is the *intended* regression net |
 
 **Reading the order:** M0–M1 ship *any* agent reproducibly-packaged and provenance-verified
