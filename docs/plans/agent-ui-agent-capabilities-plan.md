@@ -61,6 +61,29 @@
 > the *sidecar* exposes over REST and the host relays," not "Python loaded into
 > the UI backend." PR #1910 (in-UI `EmailProxyAgent`) is **superseded**.
 
+### 0.§ Reading map
+
+§0 grew comprehensive; here's the shape so you can jump to what you need.
+
+- **Foundations:** §0.0 the host is a headless daemon (not the web UI) · §0.3 the
+  sidecar supervisor.
+- **The agent contract:** §0.1 REST surface (fixed-function + `/query`) · §0.2
+  `/query` SSE event schema · §0.4 mid-workflow confirmation · §0.18 dispatch.
+- **Auth & security:** §0.6 OAuth forward · §0.11 the three auth legs + per-agent
+  authorization · §0.24 third-party **containment** (signing, tiers, egress,
+  encrypt-at-rest, audit integrity, taint) 🔒.
+- **Shared resources (host custody):** §0.9 memory/RAG/sessions/audit/MCP/model
+  table · §0.12 the model-slot broker · §0.19 audit sink.
+- **Lifecycle & ops:** §0.5 install (+model provisioning) · §0.13 concurrency /
+  cancel / failure / reaper · §0.14 one daemon per machine · §0.15 version
+  negotiation · §0.16 dev-mode · §0.20 uninstall · §0.21 offline/footprint · §0.22
+  autonomy clock · §0.25 daemon lifecycle · §0.26 on-disk layout.
+- **Delivery & context:** §0.7 CLI parity · §0.8 what's superseded · §0.10
+  migration (strangler-fig + data) · §0.17 eval/test · §0.23 feasibility & build
+  order · §0.27 relationship to sibling plans.
+- **Open decisions needing sign-off:** confirmation model (§0.4) · memory/RAG home
+  (§0.9) · third-party trust-root + containment (§0.24) 🔒.
+
 ### 0.0 "The host" is a headless daemon, not the web UI
 
 Throughout §0, **the host** is a **headless custody/supervisor daemon** — a
