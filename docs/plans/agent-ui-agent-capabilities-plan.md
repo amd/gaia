@@ -68,7 +68,8 @@
 - **Foundations:** §0.0 the host is a headless daemon (not the web UI) · §0.3 the
   sidecar supervisor.
 - **The agent contract:** §0.1 REST surface (fixed-function + `/query`) · §0.2
-  `/query` SSE event schema · §0.4 mid-workflow confirmation · §0.18 dispatch.
+  `/query` SSE event schema · §0.4 mid-workflow confirmation · §0.18 dispatch ·
+  §0.32 multi-agent orchestration.
 - **Auth & security:** §0.6 OAuth forward · §0.11 the three auth legs + per-agent
   authorization · §0.24 third-party **containment** (signing, tiers, egress,
   encrypt-at-rest, audit integrity, taint) 🔒.
@@ -583,8 +584,9 @@ Pick one model and put it in the call graph:
   an LLM loop, so it draws the model slot (§0.12) and adds a hop before every turn.
 
 Cross-agent requests ("summarize this and email it") need either the user to switch
-agents or an orchestrator agent that itself calls other sidecars — defer to v2+, but
-name it so the v1 picker isn't mistaken for the end state.
+agents or an orchestrator agent that itself calls other sidecars — **designed in
+§0.32** (later than v1, but a first-class agent on the same contract, so the v1
+picker isn't mistaken for the end state).
 
 ### 0.19 Audit trail — a host-custody sink, not agent-private
 
@@ -992,6 +994,37 @@ audit-chain conflict, `429` no model slot, `503` store unavailable) — never a 
 empty result, per the no-silent-fallback rule. The daemon's **client-facing** API
 (UI/CLI → daemon: sessions list, agent install/uninstall, `/query` proxy) is a separate
 surface under the client-auth token (§0.11), versioned per §0.25.
+
+### 0.32 Multi-agent orchestration (the headline "complex workflow automation")
+
+The stated goal is workflow automation that "reasons and calls the necessary tools,"
+including **cross-agent** ("summarize this doc and email it to Bob"). §0.18 rightly
+ships a v1 **explicit agent picker** (one sidecar per turn), but the cross-agent case
+needs a design, or the headline capability has no home. Shape it now even if it lands
+after v1:
+
+- **An orchestrator is itself an agent (a sidecar), not host logic.** Keeping the host
+  thin (§0.0), the orchestrator is a first-class agent whose `/query` **plans a
+  multi-step, multi-agent workflow** and invokes other agents. The host stays the
+  router/custodian; the reasoning lives in the orchestrator sidecar.
+- **Agent-to-agent calls go *through the host*, never sidecar-to-sidecar directly.**
+  The host mediates so every hop is **authorized (§0.11 per-agent scope), audited
+  (§0.19 `action_id`), broker-leased (§0.12), and taint-tracked** — a direct
+  sidecar→sidecar mesh would bypass all four. Add a host route
+  (`POST /host/v1/agents/{id}/invoke`, client-auth + orchestrator-scoped) so the
+  orchestrator reaches sub-agents under the same controls as any client.
+- **Taint + confirmation are the safety backbone (§0.24 / §0.4).** Untrusted content
+  read by agent A (a mailbox body) that becomes agent B's input is **marked tainted so
+  B treats it as data, not instructions** (§0.24 cross-agent injection), and **every
+  destructive cross-agent step keeps the confirmation gate** (§0.4 approve-what-you-saw)
+  — the orchestrator cannot launder an injected instruction into an un-approved send.
+- **Cost is real and must be legible.** A cross-agent workflow is N agent loops + M
+  model switches on one slot (§0.12) — the orchestrator's own loop plus each sub-agent's.
+  Surface it as streamed `status` (which agent is working) and hold **interactive
+  priority** so a foreground orchestration preempts background jobs (§0.12).
+- **Sequencing:** v1 = explicit picker (§0.18); the orchestrator is a **later,
+  first-class agent** built on the same contract — not a special host mode. This keeps
+  "the UI is thin, the sidecar reasons" intact even for multi-agent flows.
 
 ---
 
