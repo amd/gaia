@@ -112,6 +112,24 @@ sustained escalation rate above a threshold is the signal that the **M4 SDK-delt
 mis-sized** (too many deltas for the human throughput behind the single serial-eval backend,
 §11.5) — throttle the cadence, don't grow the queue.
 
+## 2.6 The factory's own authority — least-privilege, isolated, gated
+
+The factory is the **most privileged actor in the system**: it writes the repo, opens and
+merges PRs, cuts + tags SDK releases, and publishes to npm (OIDC) and the Hub (publish
+token). It would be incoherent to scope every *agent's* capabilities tightly (runtime §0.24)
+yet leave the *factory* — which can change the SDK all agents run on — with ambient
+god-rights. So the factory is subject to the same capability discipline it ships:
+
+- **Least-privilege credentials per stage.** The dev-loop lane gets repo-read + branch-write
+  only. **PR-merge, npm-publish, Hub-publish, and SDK-tag credentials are held by the human
+  gates** (§2.5), not the orchestrator — the orchestrator *requests* a privileged action and
+  a human (or a trusted-lane policy) releases the credential. A compromised orchestrator run
+  **cannot publish or tag on its own.**
+- **Isolated execution.** Each run is a throwaway worktree/sandbox (§2) with no standing
+  access to publish secrets; secrets are injected only at the gated stage that needs them.
+- **Auditable.** Every privileged action (merge, tag, publish) is attributable to the run +
+  the approving human — the runtime's audit plane, applied to the factory itself.
+
 ## 3. The two halves + the full lifecycle (stage by stage)
 
 Each row is a real developer activity; 🚦 = a gate that can fail the run. **Front (dev)**
@@ -256,6 +274,26 @@ keeps every property:
 - **Release governance** (stage 16) — cut-from-main assertion, publish-token gates, and
   **version single-source-of-truth** via `stamp_version.py --check` (pyproject/version.py/
   package.json/docs must agree before publish).
+
+## 6.5 Recovery — a passed-but-broken release must be revertible
+
+Gates reduce but never eliminate escapes: an agent can clear the held-out oracle (stage 13)
+and still fail in the wild — a scenario the oracle didn't cover, an environment the freeze
+didn't. **There is no rollback path today** (verified — the pipeline is all fail-forward).
+The factory must add one:
+
+- **Pin-previous (fast path):** the runtime installs by `binaries.lock.json`, so a bad
+  release is recovered by re-pinning the lock to the last-good version — no rebuild.
+- **Yank the version:** npm-deprecate + revert the SDK tag for the affected version, and
+  **roll the Hub catalog entry back to last-good** so new installs get the good one.
+- **The escape becomes an oracle case:** the failing real scenario is curated into the
+  held-out oracle (stage 5b) so the regression can never re-ship — recovery *feeds* M2,
+  closing the loop instead of just patching.
+
+**Versioning is a factory decision, not a human-set constant.** `stamp_version.py` today
+only *propagates* a hand-set version; the factory must *choose* the bump from the change's
+contract impact — a breaking manifest/contract change (runtime §0.15) forces a **major**, so
+the runtime's version guard and the agent's semver stay honest rather than drifting.
 
 ## 7. The product is multi-component, not a single binary
 
