@@ -2562,6 +2562,59 @@ Do NOT wrap conversational replies in JSON.
             self, "AGENT_ID", None
         )
 
+    # ------------------------------------------------------------------
+    # Proactive lifecycle hooks (#1484)
+    # ------------------------------------------------------------------
+
+    def on_first_run(self, context: Optional[Dict[str, Any]]) -> List["Proposal"]:
+        """First-run discovery: propose actions based on initial context.
+
+        Default: no-op, returns empty list. Override to implement proactive
+        discovery behavior.
+        """
+        return []
+
+    def on_heartbeat(self, context: Optional[Dict[str, Any]]) -> List["Proposal"]:
+        """Steady-state autonomous loop: propose actions based on current context.
+
+        Default: no-op, returns empty list. Override to implement heartbeat
+        behavior. Must act within trust bounds and never exceed permissions.
+        """
+        return []
+
+    def propose(
+        self,
+        proposal: "Proposal",
+    ) -> Optional[Goal]:
+        """Submit a proactive proposal for user approval.
+
+        Delegates to ``GoalStore.propose()``. Low-risk actions are
+        auto-approved; medium/high/critical actions go into
+        ``pending_approval`` and must be explicitly accepted before
+        execution.
+        """
+        from gaia.agents.base.goal_store import GoalStore
+
+        store = GoalStore()
+        try:
+            return store.propose(proposal)
+        except Exception:
+            logger.exception(
+                "[Agent] failed to submit proposal: %s",
+                proposal.action,
+            )
+            return None
+
+    def _agent_identity_context(self, ns_id: Optional[str]):
+        """Context manager that binds _agent_context for grant resolution.
+
+        Shared identity binding so that both process_query and
+        on_heartbeat can resolve per-agent grants via contextvars.
+        """
+        from gaia.connectors.context import _agent_context
+
+        return _agent_context(ns_id) if ns_id else None
+
     def _active_mcp_servers(self, manager) -> List[str]:
         """Return MCP server names whose tools should be visible to this agent.
 
@@ -2598,22 +2651,11 @@ Do NOT wrap conversational replies in JSON.
         Returns:
             Dict containing the final result and operation details
         """
-        # T-X2 (issue #915): bind agent identity for the duration of the
-        # query so any tool body's `get_access_token_sync(...)` calls can
-        # resolve the per-agent grant via contextvars.
-        #
-        # `_agent_context` is intentionally PRIVATE — imported via the
-        # private path so a malicious tool body cannot import it from the
-        # public `gaia.connectors` API to forge an agent identity.
-        # See plan amendment A9.
-        from gaia.connectors.context import _agent_context
-
-        ns_id = getattr(self, "_gaia_namespaced_agent_id", None) or getattr(
-            self, "AGENT_ID", None
-        )
-        if ns_id is None:
+        ns_id = self._namespaced_agent_id()
+        identity_ctx = self._agent_identity_context(ns_id)
+        if identity_ctx is None:
             return self._process_query_impl(user_input, max_steps, trace, filename)
-        with _agent_context(ns_id):
+        with identity_ctx:
             return self._process_query_impl(user_input, max_steps, trace, filename)
 
     def _process_query_impl(
