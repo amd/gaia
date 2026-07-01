@@ -72,6 +72,8 @@
   §0.32 multi-agent orchestration · §0.33 `/query` on the `gaia api` REST server.
 - **Autonomy:** §0.22 the scheduler clock · §0.34 autonomy-readiness (the
   human-in-the-loop → policy-driven gap).
+- **Structure & framing:** §0.35 architecture-review refinements (two-tier custody
+  contract, naming, module seams, v1-hardening scope, render primitives).
 - **Auth & security:** §0.6 OAuth forward · §0.11 the three auth legs + per-agent
   authorization · §0.24 third-party **containment** (signing, tiers, egress,
   encrypt-at-rest, audit integrity, taint) 🔒.
@@ -1102,6 +1104,54 @@ on the user's behalf under pre-authorization, reusing audit (§0.19) + containme
 (§0.27): that engine **is** this layer, hosted in the daemon. Sequence it after the
 human-in-the-loop v1 — the v1 confirmation model is the *safe default*, and the autonomy
 layer is what lets the user progressively hand off.
+
+### 0.35 Structural refinements (from the architecture review)
+
+A holistic architecture review found the design **structurally sound** — the daemon is
+a *coherent custodian* (everything it owns needs a single writer, a single arbiter, or
+is the trust root — one responsibility, not ten; and §0.9's rejection of dedicated
+memory/RAG sidecars is *correct* because decomposing would reintroduce the multi-writer
+problem the design exists to avoid), the sidecar↔host coupling is a *versioned runtime
+cycle*, not a build cycle, and the deferrals are honest. The remaining work is framing +
+trimming premature hardening. The refinements (priority order):
+
+1. **Sidecar independence is a two-tier contract, not a flat claim.** The sidecar owns
+   no durable state (§0.9), so custody-backed `/query` needs a host. Make it honest:
+   publish **`/host/v1/*` (§0.31) as a first-class, third-party-implementable custody
+   interface** (a third party can bring their own custodian), and formalize the
+   **bare-integrator degraded tier** (§0.6) as a *shipped, tested product* with a
+   capability matrix — **works without a host:** fixed-function + stateless `/query`;
+   **needs a host:** memory, RAG, sessions/transcript, audit. Converts the biggest hidden
+   coupling into an explicit contract tier. (Reflected in the mdx overview.)
+2. **Naming: never call the daemon "thin."** "The host" = the **custodian daemon**, the
+   most responsibility-dense process; "thin" is the UI only. (Applied across the docs.)
+3. **Assert the daemon's internal module seams.** One *process* is right; one *module*
+   would rot into a monolith. Commit — even inside the process — to separated
+   **custody-store / broker / supervisor / proxy-router / clock** modules with defined
+   interfaces. Mark the **broker (§0.12) as the one designed to be later-extractable** to
+   its own process: it arbitrates a hardware resource contended by non-agents (host RAG
+   embedder, voice, SD), a different axis + lifecycle from data custody.
+4. **Slogan: "one *agent* contract, many front-doors; two *control-plane* contracts
+   behind it"** (the callback §0.31 and the client↔daemon §0.11/§0.25) — so B/C get
+   first-class versioning/auth, not footnote status. (Reflected in the mdx.)
+5. **Trim three pieces of premature hardening to "third-party gate, not v1 build"**
+   (all additive later; acceptable under the first-party single-user threat model):
+   - **Audit:** v1 = a plain **append-only** host-owned log (the single writer already
+     gives order); the §0.24 **hash-chain** + §0.29 **global single-append-queue** are
+     the third-party addition, not day-one.
+   - **Egress:** v1 = the **proxy-enforced allowlist** (§0.24); the full **network-
+     namespace sandbox** is research-grade/per-OS — defer.
+   - **Broker:** v1 = **priority *queueing*** (foreground jumps the queue); defer
+     **mid-run preemption** (§0.12) — you can't cleanly pause a llama-server generation.
+6. **Make the render boundary real (layering fix).** The "thin UI" has a hidden
+   compile-time dependency on first-party agents' card set (§0.2/§0.15). Ship a **small
+   fixed set of generic render primitives** (table / key-value / list / image / diff)
+   once; **agents default to them**, a bespoke component is the *first-party exception* —
+   so "the thin UI renders *any* agent" is true rather than an ever-growing first-party
+   component map.
+
+None re-shape the core; they make the existing shape teachable and stop three claims
+(thin UI, one contract, independent sidecar) from being louder than the design supports.
 
 ---
 

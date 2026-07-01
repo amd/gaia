@@ -34,12 +34,29 @@ The Agent UI is GAIA's desktop application — a privacy-first AI assistant that
 each agent *in-process* (chat, RAG, connectors, files, goals, memory, schedules,
 MCP, tunnel). v2 inverts this: **every agent ships as its own out-of-process
 sidecar that exposes a complete agent REST interface**, supervised by a **headless
-host daemon** (custody + lifecycle), with a **thin web UI that only renders
-components** on top — *all* agent logic runs in the sidecar. This is the same
-out-of-process product third parties integrate, so the UI dogfoods exactly what we
-ship.
+custodian daemon** (custody + lifecycle — see naming note below), with a **thin
+web UI that only renders components** on top — *all agent reasoning* runs in the
+sidecar. The UI dogfoods the shipped product — **with a precise caveat:** the
+sidecar owns *no durable state* (memory/RAG/sessions/audit live in host custody,
+§0.9), so it is a complete, dogfoodable unit **only alongside a host**. A third
+party gets full parity by running the GAIA custodian *or* by implementing the
+`/host/v1/*` custody interface themselves (§0.31); a bare integrator without a host
+runs the **degraded tier** (fixed-function + stateless `/query`; no
+memory/RAG/audit — §0.6). "Independent sidecar" is true of the *deterministic core*,
+not of custody-backed `/query`.
 
-### One contract, many front-doors
+> **Naming:** "the host" throughout means the **custodian daemon** — an always-on
+> control/custody process, the single most responsibility-dense component, *not*
+> the web UI. Only the **UI** is "thin." (§0.0.)
+
+### One agent contract, many front-doors — two control-plane contracts behind it
+
+Precisely: there is **one *agent* contract** (fixed-function **+ `/query`**) driven
+identically by every front-door, and **two control-plane contracts behind it** — the
+sidecar→daemon **callback** API (`/host/v1/*`, §0.31) and the client→daemon API
+(§0.11/§0.25). They version and authenticate separately (that's why §0.11 has *three*
+auth legs). "One contract" is true of the agent surface; the control plane is its own
+two contracts, not a footnote.
 
 Each agent sidecar exposes **one** REST interface (fixed-function **+ `/query`**),
 consumed identically by every front-door — one surface to build, test, and dogfood.
@@ -89,10 +106,10 @@ existing **confirmation-token gate**: the sidecar emits a `needs_confirmation`
 event, the UI surfaces approve/deny, and approval echoes the single-use token
 back — no action without explicit user consent, even mid-workflow.
 
-### Thin-host boundary
+### Custodian daemon vs. thin UI — the boundary
 
-First, a precision that matters: **"the host" is a headless custody/supervisor
-daemon — a distinct always-on process, NOT the web UI.** The **thin web UI** and
+First, a precision that matters: **"the host" is the headless custodian daemon — the
+single most responsibility-dense process, NOT the web UI. "Thin" is the UI only.** The **thin web UI** and
 the **`gaia <agent>` CLI** are *both* thin clients that attach to this one daemon,
 so `gaia email` works with no browser open and its memory/audit still land (see the
 detailed plan §0.0). "Thin UI" and "custody host" are two things; only the UI is
@@ -115,7 +132,7 @@ access tokens so N sidecars sharing one Google grant never race to refresh. The
 sidecar *also* ships self-service connector routes, so a bare integrator can OAuth
 directly against it — "fixed functions for flexibility."
 
-| Thin host — custody + plumbing (one trusted process) | Per-agent sidecar — all reasoning |
+| Custodian daemon — custody + plumbing (one trusted process) | Per-agent sidecar — all reasoning |
 |---|---|
 | Serve the static web UI | The agent: fixed-function endpoints **+ `/query`** workflow loop |
 | Shared-user-data custody (single writer): OAuth grants + **token refresh**, user memory, document/RAG store, session index → **forwarded**/queried by sidecars | All tools, reasoning, multi-step workflows |
