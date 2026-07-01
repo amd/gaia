@@ -74,7 +74,8 @@
   human-in-the-loop → policy-driven gap).
 - **Structure & framing:** §0.35 architecture-review refinements (two-tier custody
   contract, naming, module seams, v1-hardening scope, render primitives) · §0.36
-  third-party integration ergonomics (the tiered capability matrix).
+  third-party integration ergonomics (the tiered capability matrix) · §0.37
+  **pluggable custody** (one sidecar = rich *and* stateless; refines §0.9).
 - **Auth & security:** §0.6 OAuth forward · §0.11 the three auth legs + per-agent
   authorization · §0.24 third-party **containment** (signing, tiers, egress,
   encrypt-at-rest, audit integrity, taint) 🔒.
@@ -317,10 +318,16 @@ being the sole spawner is what closes it.)
 
 ### 0.9 Shared services (host custody) — the biggest open call
 
+> **Refined by §0.37:** custody is a **pluggable provider**, not intrinsically the host.
+> The rationale below holds for the *multi-agent Agent UI* (N sidecars sharing one
+> user's data ⇒ single writer ⇒ the host). A **standalone** sidecar is its own single
+> writer and uses an **embedded** provider. So read this table as "the provider the GAIA
+> host implements," not "the only place custody can live."
+
 Not everything in the fat backend is "agent logic." Three chunks are **user-scoped
 data that spans agents** and would fragment/corrupt if each sidecar owned a copy —
-so they belong to the host's custody layer (same single-writer rationale as OAuth),
-queried by sidecars rather than duplicated:
+so in the Agent UI they belong to the host's custody layer (same single-writer rationale
+as OAuth), queried by sidecars rather than duplicated:
 
 | Current router | LoC | v2 home (recommended) |
 |---|---|---|
@@ -1194,6 +1201,52 @@ package** via the Hub, each agent carrying `README`/`SPEC`/`SKILL.md`/`specifica
 Treating this matrix as a **shipped contract** (not implicit) is what makes the sidecars
 genuinely easy for vendors to adopt — they pick a tier with eyes open instead of hitting
 the custody/LLM frictions by surprise.
+
+### 0.37 Pluggable custody — one sidecar, both experiences (rich *and* stateless)
+
+§0.36's tiers can collapse from a cliff into a config switch, resolving the §0.35 #1 risk
+at its root. The key realization: §0.9 put custody in the host because **N sidecars
+sharing one user's data need a single writer** — but that constraint exists *only* in the
+multi-agent Agent UI. A **standalone** single agent is trivially its own single writer.
+So custody is **not** intrinsically "the host"; it's a **pluggable provider**, and
+host-custody is one deployment's chosen backend.
+
+**Design (ports & adapters).** The sidecar depends on a **`CustodyProvider` interface**
+(memory / RAG / sessions / audit / grant-read — the same surface as `/host/v1/*`, §0.31)
+and ships three adapters, auto-selected at launch:
+
+| Provider | Selected when | Result |
+|---|---|---|
+| **Embedded** (default) | no host custody endpoint injected | **Full, self-contained rich agent** — its own bundled SQLite + file store; the sidecar is its *own* single writer |
+| **Delegated** | the host injects its `/host/v1/*` URL + per-spawn secret at spawn | shared single-writer host across N agents (the §0.9 model) |
+| **Ephemeral** | explicit stateless flag | no persistence; context passed per request → the drop-in stateless tier |
+
+The sidecar calls the interface and **doesn't know which backend answers** (auto: *host
+endpoint present → delegate; else embed*). Same code path; the backend swaps by config.
+
+**Why it's correct, not a workaround — the single-writer invariant holds in every mode:**
+embedded = one agent is its own writer; delegated = the host is the one writer across N;
+ephemeral = nothing persisted. There is *never* multi-writer, so §0.9's driving invariant
+is fully preserved — and "custody = host" is revealed as a property of the **Agent-UI
+deployment**, not of the sidecar.
+
+**Consequences (all favorable):**
+- **One binary does both:** a vendor gets a rich, self-contained agent *or* plugs in their
+  own custody host; GAIA gets shared multi-agent custody. §0.36's "high-effort" tier
+  becomes low-effort (embedded is the default).
+- **Footprint stays light:** embedded custody is *storage* (SQLite + index files), not ML
+  libs — the embedder *compute* still runs through the external model backend, so §0.21 is
+  untouched.
+- **`/host/v1/*` is now doubly justified:** it's both the delegated-mode wire protocol
+  *and* the third-party-implementable interface (§0.35 #1) — the embedded adapter is simply
+  GAIA's own reference implementation of it.
+- **Cost:** mode migration (embedded→hosted / export) reuses the §0.10 machinery; the
+  embedded and delegated adapters must pass the *same* conformance tests (§0.17) so
+  behavior is identical across backends.
+
+**This supersedes §0.9's "custody must be the host" framing:** custody is pluggable; the
+host is the provider the *Agent UI* selects. Read §0.9's custody table as "the provider
+the GAIA host implements," not "the only place custody can live."
 
 ---
 
