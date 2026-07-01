@@ -169,12 +169,7 @@ _PROMO_SUBJECT_KEYWORDS = (
 # by design. Everything the prefilter doesn't confidently catch is left for
 # the LLM to actually read and judge; see classify_category_heuristic.
 _ANON_SENDER_PATTERN = re.compile(r"^contact\.\d+@", re.IGNORECASE)
-_FREEMAIL_IMPERSONATION_PATTERN = re.compile(
-    r"@[\w.-]*(hotmail|gmail|yahoo|outlook)[\w.-]*\.", re.IGNORECASE
-)
-_REAL_FREEMAIL_DOMAINS = frozenset(
-    {"hotmail.com", "gmail.com", "yahoo.com", "outlook.com"}
-)
+_FREEMAIL_BRANDS = ("hotmail", "gmail", "yahoo", "outlook")
 
 
 def _spam_sender_signal(sender: str) -> bool:
@@ -183,15 +178,25 @@ def _spam_sender_signal(sender: str) -> bool:
     True only for a narrow set of patterns expected to generalize: an
     auto-generated anonymous local-part (``contact.1234@...``), or a sender
     domain that impersonates a freemail brand without being that brand's
-    real domain (``user@hotmail-secure.cc`` vs. the real ``hotmail.com``).
+    real domain.
+
+    The freemail check is registrable-domain-based, not a literal domain
+    allowlist: a real provider's leftmost domain label is the brand name
+    exactly (``hotmail.com``, ``hotmail.co.uk``, ``hotmail.fr`` -- any TLD/
+    ccTLD suffix), while an impersonation domain mixes the brand with other
+    characters in that same label (``hotmail-secure.cc``). A hardcoded list
+    of "real" domains would need every ccTLD variant (``yahoo.co.uk``,
+    ``outlook.de``, ...) to avoid flagging legitimate international mail --
+    this generalizes without one.
     """
     sender = sender or ""
     if _ANON_SENDER_PATTERN.match(sender):
         return True
     match = re.search(r"@([\w.-]+)", sender)
     domain = match.group(1).rstrip(">").lower() if match else ""
-    if _FREEMAIL_IMPERSONATION_PATTERN.search(sender) and (
-        domain not in _REAL_FREEMAIL_DOMAINS
+    leading_label = domain.split(".", 1)[0] if domain else ""
+    if leading_label and any(
+        brand in leading_label and leading_label != brand for brand in _FREEMAIL_BRANDS
     ):
         return True
     return False

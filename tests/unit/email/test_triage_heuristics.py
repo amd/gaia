@@ -206,6 +206,37 @@ class TestSpamPhishingFlags:
         assert result.is_spam is False
         assert result.spam_confident is False  # PROMOTIONAL, no signal -> LLM
 
+    def test_international_freemail_ccTLD_does_not_false_positive(self):
+        """A real freemail provider's ccTLD variant (yahoo.co.uk, hotmail.fr,
+        outlook.de) must not be confidently flagged spam just because it
+        isn't the .com form -- this signal must generalize beyond a
+        hardcoded domain allowlist (regression: legitimate international
+        PERSONAL mail was being flagged with no LLM recourse)."""
+        for sender in (
+            "grandma@yahoo.co.uk",
+            "bob@hotmail.fr",
+            "x@outlook.de",
+            "someone@googlemail.com",
+        ):
+            result = classify_category_heuristic(
+                subject="Hope you're doing well",
+                sender=sender,
+                label_ids=[],
+            )
+            assert result.is_spam is False, f"false positive for {sender}"
+
+    def test_freemail_impersonation_still_fires_regardless_of_tld(self):
+        """An impersonation domain (brand mixed with other characters in the
+        leading label) must still be caught, on any TLD -- confirms the
+        registrable-domain check didn't just get looser."""
+        result = classify_category_heuristic(
+            subject="account update",
+            sender="user@hotmail-secure.co.uk",
+            label_ids=[],
+        )
+        assert result.is_spam is True
+        assert result.spam_confident is True
+
     def test_promotional_without_spam_signal_escalates_to_llm(self):
         """Most PROMOTIONAL mail (real or merely aggressive marketing) needs
         the LLM's actual reading of content to separate spam from legitimate
