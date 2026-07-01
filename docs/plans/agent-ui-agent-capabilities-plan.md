@@ -221,12 +221,16 @@ integrator (no host) may instead use the sidecar's self-service connector routes
 
 ### 0.7 CLI ↔ sidecar parity
 
-`gaia <agent>` becomes a thin REST client: it **attaches to the running sidecar if
-one is live on this machine, and spawns only if none is** (same
-`AgentSidecarManager`, `user`/`dev` mode, machine-wide discovery — see §0.14, which
-prevents CLI and UI from spawning rival instances), then calls the **identical**
-endpoints — `gaia email "triage my inbox"` drives `POST /v1/email/query` exactly as
-the UI does. One contract, no second in-process code path to keep in sync.
+`gaia <agent>` becomes a thin client of the **host daemon** (§0.0), exactly like the
+web UI: it **auto-starts the daemon if none is running, then attaches to it** — it
+does **not** run `AgentSidecarManager` or spawn the sidecar itself. The daemon owns
+sidecar lifecycle (§0.3) and custody; the CLI just calls the **identical** contract
+through it — `gaia email "triage my inbox"` drives `POST /v1/email/query` exactly as
+the UI does, via the same daemon. One contract, one supervisor, no second in-process
+code path to keep in sync. (If the CLI spawned its own sidecar, that sidecar's
+callback base-URL would point at the ephemeral CLI process and its `/host/v1/audit`
++ memory writes would vanish when the command exits — the §0.0 hole. The daemon
+being the sole spawner is what closes it.)
 
 ### 0.8 What's superseded
 
@@ -300,12 +304,23 @@ Retire the ~19K-LoC backend incrementally; the app stays shippable throughout.
 
 No step requires all agents migrated at once; each is independently releasable.
 
-### 0.11 Host↔sidecar auth + the reverse (callback) contract
+### 0.11 Auth: three legs (client↔daemon, daemon↔sidecar, sidecar↔daemon)
 
-Two halves of the same mechanism, both currently **undefined** in the code
-(`email_sidecar/router.py`/`proxy.py` do no auth; the port is loopback-only).
+The §0.0 daemon split creates **three** trust legs, all currently **undefined** in
+the code (`email_sidecar/router.py`/`proxy.py` do no auth; the port is loopback-only).
 
-- **Per-spawn secret (security boundary).** Loopback binding is **not** an auth
+- **Client → daemon (new with the §0.0 split — 🔒).** The daemon is now a standalone
+  process exposing, on a loopback port, the whole custody API (`/host/v1/memory|rag|
+  sessions|audit`) **and** the `ANY /v1/<agent>/*` proxy that can drive any sidecar.
+  The UI and CLI are *external clients* of it, and loopback is not an auth boundary
+  (same threat model as below) — so without a credential, **any local process can
+  read the entire cross-agent memory/RAG/transcript store or drive any sidecar
+  through the proxy.** The daemon mints a **client-auth token** at startup, stored
+  `0600` in its `~/.gaia/host/instance.json` (§0.14); UI and CLI read it and present
+  it on every daemon call. (A unix-domain socket with SO_PEERCRED is a stronger
+  alternative where available.) This is distinct from the per-spawn secret below,
+  which is daemon↔sidecar only.
+- **Per-spawn secret (daemon → sidecar).** Loopback binding is **not** an auth
   boundary — any local process (another user on a shared box, a browser tab via
   CSRF/DNS-rebinding, a malicious `npm postinstall`) can `POST /v1/<agent>/query
   "archive everything"` on an unauthenticated port that can send mail. The host
@@ -384,16 +399,23 @@ hard requirement for more than one concurrently-active agent.
   **idle-timeout / LRU reaper** and a **cap on concurrent live sidecars**, or ten
   installed agents = ten resident processes.
 
-### 0.14 One sidecar instance per *machine* (CLI + UI)
+### 0.14 One daemon per machine; the daemon holds one sidecar per agent
 
-§0.3's "one shared instance per agent" is per-*host-process*. If the UI is running
-the email sidecar and the user also runs `gaia email`, §0.7 spawns a **second**
-instance — two writers into one action log / `grants.json`, and two forwarders
-racing to refresh tokens (the exact race §0.6 eliminates, reintroduced *between*
-CLI and UI). Define **machine-wide discovery**: a lockfile/registry of running
-sidecars (`~/.gaia/agents/<id>/instance.json` → pid + port + secret) so a second
-client **attaches** to the running instance instead of spawning a rival, with a
-single **forwarder-of-record**. Spawn only if none is live.
+Because the **daemon (§0.0) is the sole spawner/supervisor**, the old "UI and CLI
+race to spawn rival sidecars" problem is structurally gone — no client spawns a
+sidecar. What remains is single-instancing the *daemon* itself and letting clients
+find it:
+
+- **One daemon per machine.** A daemon lockfile/registry
+  (`~/.gaia/host/instance.json` → pid + client-auth token — see §0.11) makes the
+  first UI/CLI invocation start the daemon and every later one **attach**. Two
+  daemons would re-create two writers into `grants.json` and two forwarders, so the
+  lock is what guarantees a **single forwarder-of-record**.
+- **One sidecar per agent, owned by the daemon.** The daemon keeps its own
+  per-agent registry (`AgentSidecarManager`, §0.3) → pid + ephemeral port +
+  per-spawn secret; UI and CLI never see it, they go through the daemon's proxy. So
+  "one shared instance per agent" is now a property of the single daemon, not a race
+  between client processes.
 
 ### 0.15 Contract-version negotiation at install + render fallback
 

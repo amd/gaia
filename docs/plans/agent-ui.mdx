@@ -44,12 +44,13 @@ ship.
 Each agent sidecar exposes **one** REST interface, consumed identically by three
 callers — so there is a single surface to build, test, and dogfood:
 
-1. **`gaia <agent>` CLI** — spawns/【talks to】the sidecar over REST. The CLI's
-   endpoints are **identical** to the sidecar's; it is a thin REST client, not an
-   in-process agent. (`gaia email` and the email sidecar hit the same contract.)
-2. **Agent UI** — a thin web layer; renders components, relays everything else to
-   the sidecar. Doubles as **dev mode** for fast agent iteration and embeds an
-   **Agent Hub mirror** (one-click install/uninstall).
+1. **`gaia <agent>` CLI** — a thin client of the host daemon (§0.0); it attaches to
+   the daemon (auto-starting it if needed) and calls the same REST contract. It does
+   **not** spawn the sidecar itself — the daemon does. (`gaia email` and the email
+   sidecar hit the same contract, via the same daemon the UI uses.)
+2. **Agent UI** — a thin web layer; renders components, relays everything else
+   through the daemon to the sidecar. Doubles as **dev mode** for fast agent
+   iteration and embeds an **Agent Hub mirror** (one-click install/uninstall).
 3. **Integrators** — the same contract, unchanged.
 
 ### The agent REST interface (per sidecar)
