@@ -125,6 +125,7 @@ rejects at each checkpoint before the pipeline proceeds:
 | **PR open / Merge** (stage 8) | the agent-code — *or SDK* — changes, before they land / landing them |
 | **SDK release** (M4 only, *distinct from agent-publish*) | **cutting + tagging a new SDK version** — the factory drives the existing release process (PR + tag); **the human approves against a pre-cut all-agent blast-radius report** (below), not just a tag |
 | **Agent ship** (stage 16) | publishing an agent product to the Hub |
+| **Escalation** (stages 4/7, on non-convergence) | how to proceed when a dev-half loop exhausts its iteration budget (below) — fix by hand, re-scope, or abandon the run |
 
 The gate is **configurable per stage per trust level** — exactly like agent autonomy: a
 trusted lane may auto-approve low-risk stages while **always halting on the
@@ -601,8 +602,9 @@ the real code and found factual errors the generalist passes missed. Corrected i
 ## 12. Open decisions (need sign-off)
 
 1. **Orchestrator substrate** — Claude Code (skills + memory, already in CI) + GAIA coder
-   vs. a custom Anthropic Agent-SDK build. *Rec:* start on Claude Code + GAIA coder (both
-   exist); evaluate a custom build if the loop needs tighter control.
+   vs. a custom Anthropic Agent-SDK build. *Rec:* start on Claude Code + GAIA coder (Claude
+   Code is in CI today; the coder needs `origin/coder` merged — §10 prerequisites); evaluate
+   a custom build if the loop needs tighter control.
 2. **Autonomy at the gates** — *resolved* (§2.5): per-stage approve/deny mirroring the agent
    confirmation model; configurable per trust level, halting-by-default on the
    high-blast-radius stages (SDK release, ship). Open only: which stages a *trusted* lane
