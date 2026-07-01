@@ -73,7 +73,8 @@
 - **Autonomy:** §0.22 the scheduler clock · §0.34 autonomy-readiness (the
   human-in-the-loop → policy-driven gap).
 - **Structure & framing:** §0.35 architecture-review refinements (two-tier custody
-  contract, naming, module seams, v1-hardening scope, render primitives).
+  contract, naming, module seams, v1-hardening scope, render primitives) · §0.36
+  third-party integration ergonomics (the tiered capability matrix).
 - **Auth & security:** §0.6 OAuth forward · §0.11 the three auth legs + per-agent
   authorization · §0.24 third-party **containment** (signing, tiers, egress,
   encrypt-at-rest, audit integrity, taint) 🔒.
@@ -1152,6 +1153,47 @@ trimming premature hardening. The refinements (priority order):
 
 None re-shape the core; they make the existing shape teachable and stop three claims
 (thin UI, one contract, independent sidecar) from being louder than the design supports.
+
+### 0.36 Third-party integration ergonomics (a first-class design goal)
+
+"Agents as products" only works if a third-party vendor can **digest a sidecar easily**.
+The design is built for this, but ease is **tiered**, and the plan should treat that as a
+goal to hit, not an accident.
+
+**Already digestible (keep):** it's a **language-agnostic HTTP service** (no Python
+import, no running our UI); it speaks **familiar protocols** — fixed-function endpoints
+for "just do X" and **OpenAI-compatible `/v1/chat/completions`** (§0.33) so a vendor
+aims their existing OpenAI SDK at it; it ships as a **self-contained frozen binary + npm
+package** via the Hub, each agent carrying `README`/`SPEC`/`SKILL.md`/`specification.html`
+/OpenAPI; and the contract is **versioned + negotiated** (§0.15).
+
+**The two frictions that block "drop-in" for the *full* agent — design to remove them:**
+
+1. **Custody (the §0.35 #1 seam).** The sidecar owns no durable state (§0.9), so the
+   rich agentic experience (memory/RAG/audit-backed `/query`) needs a host. **Make the
+   tier a product:** publish `/host/v1/*` (§0.31) as a first-class, third-party-
+   implementable interface **and** ship the bare-integrator tier (§0.6) as a *tested*
+   product with a published **capability matrix** (below). Then "run our custodian,"
+   "bring your own custodian," and "degraded standalone" are three documented choices,
+   not a cliff.
+2. **The LLM backend.** The sidecar needs a reachable model backend (Lemonade), and some
+   agents (email) *force local-only* by policy — so the artifact is "agent + LLM backend,"
+   not one binary. **Make the backend an explicit, documented dependency** with a
+   configurable `base_url`, and state per-agent whether a cloud/remote backend is allowed
+   (email = local-only by design; others may differ). A vendor must know "you also
+   provide the model host" up front.
+
+**Published integration matrix (what works at each tier):**
+
+| Tier | Setup | Works | Doesn't |
+|---|---|---|---|
+| **Standalone (low effort)** | run binary + point at an LLM | fixed-function calls, stateless `/query`, OpenAI-compat chat | memory, RAG, audit, transcripts |
+| **+ OAuth (medium)** | + self-service connector setup | live mailbox/calendar actions | (as above) |
+| **Full (high)** | run the GAIA custodian *or* implement `/host/v1/*` | the complete memory/RAG/audit-backed agent | — |
+
+Treating this matrix as a **shipped contract** (not implicit) is what makes the sidecars
+genuinely easy for vendors to adopt — they pick a tier with eyes open instead of hitting
+the custody/LLM frictions by surprise.
 
 ---
 
