@@ -10,10 +10,10 @@
 > (#1913)** — this doc is the sibling half and assumes that PR's
 > `agent-ui-agent-capabilities-plan.md §0` as context.
 
-**Reading map** (§ jump-list for a 486-line doc):
+**Reading map** (§ jump-list):
 - **Why & what** — §0 thesis (SDLC automated) · §1 the live-SDK keystone · §1.5 the *recipe* (the one authored input)
 - **Engine & governance** — §2 agentic-coding engine · §2.5 human approve/deny gates · §2.6 the factory's *own* least-privilege
-- **The pipeline** — §3 the 18 stages · §4 docs-as-output · §5/§5.5 eval gate + synthetic-data discipline · §6/§6.5 ship rigor + recovery · §7 multi-component product · §8 runtime seam
+- **The pipeline** — §3 the lifecycle stages · §4 docs-as-output · §5/§5.5 eval gate + synthetic-data discipline · §6/§6.5 ship rigor + recovery · §7 multi-component product · §8 runtime seam
 - **Plan & honesty** — §9 exists-vs-net-new · §10 milestones M0→M4 (easiest→hardest) · §11 distinctiveness · §11.5/§11.6 adversarial corrections · §12 open decisions
 
 ## 0. Thesis — the factory is the SDLC, automated, against a living SDK
@@ -82,7 +82,7 @@ eval:                                                       # the gate (§5, §5
   safety_floors:   { urgent_recall: 0.95 }   # per-agent hard floors (#1437 pattern)
   gate:            "LCB(acceptance, k=5) >= previous_release"
 trust_tier: verified                                        # → manifest.trustTier (§0.24)
-gates:      { sdk_release: human, ship: human }             # per-stage approve/deny (§2.5)
+gates:      { sdk_release: human, ship: human }             # illustrative subset of the §2.5 checkpoints
 targets:    [win32-x64, darwin-arm64, darwin-x64, linux-x64]
 ```
 
@@ -276,11 +276,13 @@ generates from **templates** — so the factory must generalize *that discipline
      **never** used in the optimize loop.
 
 **The oracle is manufactured and maintained by an explicit stage — it does not pre-exist by
-magic.** Stages 7/13 *consume* the held-out oracle, so a stage must *produce* it: **stage 5b
+magic.** Stage 13 (and the regression gates) *consume* the held-out oracle — stage 7's
+optimize loop must **not** (rule 3) — so a stage must *produce* it: **stage 5b
 "curate/extend the held-out oracle to cover the current capability surface,"** owned by a
 human, triggered on **capability change** (not just model/SDK drift). Its gate is a
 **coverage-delta 🚦: block release when the agent's capability set grew but oracle coverage
-didn't** — otherwise a maintenance pass (stage 6) that expands the agent passes green while
+didn't** (capability set = the agent's tool/skill/route surface from the recipe + manifest;
+coverage = which of those surfaces the oracle actually exercises) — otherwise a maintenance pass (stage 6) that expands the agent passes green while
 testing only the *old* behavior. Visibility of coverage gaps (below) is necessary but not
 sufficient; the coverage-delta gate is what makes it real.
 
@@ -389,7 +391,7 @@ work from M2. Each milestone is independently valuable and shippable.
 
 | M | Milestone | Automates | Difficulty | Why here / gate |
 |---|---|---|---|---|
-| **M0** | **Generalize the ship half** (recipe-driven, per-agent) | stages 9–17 for *any* agent: turn `release_agent_email.yml` + `packaging/*` into a reusable, recipe-parametrized pipeline | **Easiest — but not risk-free**: deterministic/no-LLM, yet per-agent OIDC-publisher provisioning is **supply-chain work**, and the ship half exists *only for email* (a 2nd agent may lack `packaging/*` parity) | **Prove on a *second, non-email* agent** (browser/analyst) — the empirical reuse-vs-rewrite *and* parity check; includes per-agent OIDC publisher provisioning, tags, R2 prefixes |
+| **M0** | **Generalize the ship half** (recipe-driven, per-agent) | the *deterministic packaging spine* — stages **9, 11, 12, 14, 16** — for *any* agent: turn `release_agent_email.yml` + `packaging/*` into a reusable, recipe-parametrized pipeline (M1 adds the provenance stages 10/15/17; M2 the trustworthy gate 13) | **Easiest — but not risk-free**: deterministic/no-LLM, yet per-agent OIDC-publisher provisioning is **supply-chain work**, and the ship half exists *only for email* (a 2nd agent may lack `packaging/*` parity) | **Prove on a *second, non-email* agent** (browser/analyst) — the empirical reuse-vs-rewrite *and* parity check; includes per-agent OIDC publisher provisioning, tags, R2 prefixes |
 | **M1** | **Provenance + edge-verified releases** | manifest emit (stage 10) · signing + source-hash + SDK-commit provenance (stage 15) · post-publish edge verify (stage 17) | **Easy** — mechanical (*but the manifest schema lives in unmerged #1913*) | integrity/traceability (not "reproducibility," §11.5); docs-in-sync becomes a hard gate |
 | **M2** | **Independent eval oracle + confidence-bound gate** | the *trustworthy* eval gate: a **human-curated, held-out** ground-truth set per agent + per-agent safety floors; gate on `LCB(score, k runs) ≥ bar` | **Medium** — mostly discipline, but the oracle is **human judgment the factory does NOT automate** | **Prerequisite for everything generative** (M3–M4) — without an independent oracle the gate is self-certification (§11.5 #1) |
 | **M3** | **Assisted dev automation** | the *mechanical* dev stages: scaffold, tool/skill/MCP wiring, synthetic-data gen, the eval-optimize (`--fix`) loop, PR authoring | **Harder** — net-new agentic coding (*needs `origin/coder` merged to main*), human-in-the-loop | human still owns **scope, spec, the oracle (M2, curator ≠ spec author), PR-approve, ship**; the GAIA coder + Claude Code loop assist, they don't decide |
