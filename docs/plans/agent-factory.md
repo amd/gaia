@@ -187,14 +187,14 @@ is mostly net-new automation; **Back (ship)** cites the pipeline that *already e
 | # | Stage | Automated by | Component (status) | Gate |
 |---|---|---|---|---|
 | 1 | **Clone + scope** — pull live SDK; scope vs the *current* API surface | orchestrator + code-index | git worktree · `code_index` (*exists*) | — |
-| 2 | **Track** — open GitHub **issues + milestones**, decompose | orchestrator + `gh` | `gh` · `claude.yml` bot (*exists*) | — |
+| 2 | **Track** — open GitHub **issues + milestones**, decompose | orchestrator + `gh` | `gh` CLI (*exists*) | — |
 | 3 | **Spec** — author the design/spec doc | `brainstorming` → `writing-plans` skills | this session's method (*skills exist*) | — |
 | 4 | **Iterate spec** 🚦 | adversarial review loop to convergence | review agents + memory (*exists*) | converges |
 | 5 | **Dev/optimize corpus** — generate the *training* corpus (seed-from-real, labels-by-construction, §5.5) | dataset generators (*automated*) | `generate_mbox.py` · `vendor_corpus_seed` · `pdf_document_generator` (*exists*) | 🚦 PII-scrub on seed |
 | 5b | **Held-out oracle** — curate/extend to cover the *current capability surface* (§5.5) | **human, NOT the factory** (curator ≠ spec author) | `ground_truth.json` + `quality_gate_thresholds.json` pattern (*exists*) | 🚦 coverage-delta |
 | 6 | **Implement** — write agent code **against the live SDK** | GAIA coder + TDD | `origin/coder` `CodeAgent` *(on a branch)* + `agents/base/*` | compiles/lints |
 | 7 | **Eval + optimize** 🚦 | eval → analyze failures → repair → re-eval | `gaia eval agent [--fix]` · `scorecard.py` · `analyze_failures.py` (*exists*) | scorecard ≥ bar |
-| 8 | **PR** 🚦 | open PR(s) into the codebase (agent code — *and SDK changes it needs*) | orchestrator + `gh` + `finalize` | `claude.yml` review + CI (*exists*) | review + CI green |
+| 8 | **PR** 🚦 | open PR(s) into the codebase (agent code — *and SDK changes it needs*) | orchestrator + `gh` (PR authoring) | `claude.yml` PR-review bot + CI (*exists*) | review + CI green |
 
 **Back half — Ship (orchestrate the existing rigorous pipeline; §6 details):**
 
@@ -421,7 +421,9 @@ the npm tarball + R2 binaries, not one zip.
 ## 9. Component inventory — exists vs net-new
 
 **Exists (orchestrate, don't rebuild):** the **GAIA coder** (`origin/coder` `CodeAgent`) ·
-**Claude Code in CI** (`claude.yml`, `claude-run.yml`) + skills + memory · the **eval
+**Claude Code in CI** (`claude.yml`, `claude-run.yml`) + skills + memory — note `claude.yml`'s
+**`auto-fix`** (issue → locatable bug → branch → PR + test steps) is a *shipped, scoped
+instance of the dev-half loop*, real evidence M3 isn't vapor · the **eval
 framework** (`eval/{runner,benchmark,scorecard,analyze_failures,audit}.py`, baselines,
 `--fix`, synthetic corpus, `email_scorecard_refresh.yml`) · **`gh`** issues/PRs + review
 bot · **`code_index`** over the live SDK · the **entire ship half**
