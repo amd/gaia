@@ -28,6 +28,129 @@ The Agent UI is GAIA's desktop application — a privacy-first AI assistant that
 | Voice-first | Whisper ASR + Kokoro TTS for speech interaction (P0) |
 | Extensible | File I/O, web search, browser control, shell, MCP tools |
 
+## Architecture (v2 — sidecar-first)
+
+**The shift:** today the Agent UI is a fat Python backend (~19K LoC) that hosts
+each agent *in-process* (chat, RAG, connectors, files, goals, memory, schedules,
+MCP, tunnel). v2 inverts this: **every agent ships as its own out-of-process
+sidecar that exposes a complete agent REST interface**, and the UI becomes a
+**thin host that only renders components** — *all* agent logic runs in the
+sidecar. This is the same out-of-process product third parties integrate, so the
+UI dogfoods exactly what we ship.
+
+### One contract, three thin clients
+
+Each agent sidecar exposes **one** REST interface, consumed identically by three
+callers — so there is a single surface to build, test, and dogfood:
+
+1. **`gaia <agent>` CLI** — spawns/【talks to】the sidecar over REST. The CLI's
+   endpoints are **identical** to the sidecar's; it is a thin REST client, not an
+   in-process agent. (`gaia email` and the email sidecar hit the same contract.)
+2. **Agent UI** — a thin web layer; renders components, relays everything else to
+   the sidecar. Doubles as **dev mode** for fast agent iteration and embeds an
+   **Agent Hub mirror** (one-click install/uninstall).
+3. **Integrators** — the same contract, unchanged.
+
+### The agent REST interface (per sidecar)
+
+Two complementary surfaces, both first-class (`specification.html` is the email
+reference):
+
+- **Fixed-function endpoints** — every capability as a deterministic call
+  (triage, search, pre-scan, archive, calendar, …). For integrators who want one
+  thing, scriptably, with no LLM reasoning in the loop.
+- **`/query` — the agent loop.** A natural-language request in; the sidecar
+  **reasons and chains tools into multi-step workflows** (the daily-brief, "triage
+  then archive promotions then draft replies" class of work). Returns an **SSE
+  event stream** (`status` · `tool_call` · `tool_result` carrying the render
+  envelope, e.g. the `email_pre_scan` card · token deltas · `final`). The host
+  relays these straight into the UI's existing card pipeline. Long workflows
+  stream progress; integrators consume the same stream.
+
+Destructive steps inside a workflow (send, quarantine, calendar-create) keep the
+existing **confirmation-token gate**: the sidecar emits a `needs_confirmation`
+event, the UI surfaces approve/deny, and approval echoes the single-use token
+back — no action without explicit user consent, even mid-workflow.
+
+### Thin-host boundary
+
+"Thin" means **no agent *reasoning* runs in the host** — but the host is the
+**custodian of shared, user-scoped data that must have a single writer**: OAuth
+grants, cross-agent **user memory**, the **document/RAG store**, and the
+**session index** (which conversation belongs to which agent). These aren't agent
+logic; they're per-user state that fragments or corrupts if N sidecars each own a
+copy. The host stores them and lets sidecars read/query them; the sidecars do all
+the reasoning and own only their **agent-private** state.
+
+OAuth is the model for all custody: a trusted host performs consent once and
+**forwards** the connection *out* to each sidecar via the sidecar's
+`/v1/connections` intake (gated by `X-Gaia-UI: 1`; refresh-token/client-secret are
+inputs, never returned) — and the **host owns token refresh**, forwarding fresh
+access tokens so N sidecars sharing one Google grant never race to refresh. The
+sidecar *also* ships self-service connector routes, so a bare integrator can OAuth
+directly against it — "fixed functions for flexibility."
+
+| Thin host — custody + plumbing (one trusted process) | Per-agent sidecar — all reasoning |
+|---|---|
+| Serve the static web UI | The agent: fixed-function endpoints **+ `/query`** workflow loop |
+| Shared-user-data custody (single writer): OAuth grants + **token refresh**, user memory, document/RAG store, session index → **forwarded**/queried by sidecars | All tools, reasoning, multi-step workflows |
+| Sidecar lifecycle: hub install/uninstall · download+verify · spawn · health · proxy | Live mailbox/calendar access via the forwarded connection |
+| Relay UI ↔ sidecar (and `/query` SSE → typed UI cards) | Agent-**private** state only (e.g. email's action log) |
+
+> **Open decision:** whether user memory + the RAG store live in the host (custody
+> model above, recommended) or become their own dedicated sidecars. See the
+> detailed plan §0.9. The *session index* stays host-side either way.
+
+### Card rendering changes (be honest about "thin")
+
+The UI is thin, but not *unchanged*: today the frontend renders typed cards (e.g.
+`email_pre_scan`) by **fence-parsing** the assistant text (`MessageBubble.tsx`
+`STRUCTURED_PAYLOAD_LANGS`). v2 replaces that hack — the sidecar declares the card
+type explicitly on a `tool_result` SSE event (`render: "email_pre_scan"`), and the
+frontend maps `render`→component. The host needs no per-tool knowledge; the
+**frontend still needs a card component per `render` type**, so new agents that
+introduce new cards ship a matching component.
+
+### Migration path (strangler-fig — no big-bang rewrite)
+
+The ~19K-LoC backend is retired **incrementally**, one agent at a time:
+
+1. **Email first** — already sidecar-shaped; add `/query` (SSE) and route the UI's
+   email session through it. Other agents stay in-process, untouched.
+2. **Stand up the host supervisor** — generalize the email `EmailSidecarManager`
+   into a per-agent `AgentSidecarManager` + hub install/uninstall, so the UI can
+   run in-process agents and sidecar agents side by side during the transition.
+3. **Migrate agent-by-agent** — each agent moves to a sidecar behind the same
+   proxy; its in-process router logic is deleted only after its sidecar ships.
+4. **Extract shared services** — lift user memory / RAG / session index into the
+   host's custody layer as agents stop owning them in-process.
+
+At every step the app stays shippable; nothing requires all agents migrated at once.
+
+### Agent Hub mirror (install / uninstall)
+
+The UI embeds a catalog mirror; **install** = download the platform binary (or npm
+package), **verify SHA-256 against the lock**, register it, and surface it as a
+launchable agent — one click. **Uninstall** removes the cached binary + its
+registration. Reuses the verified-fetch + lifecycle primitives the email sidecar
+already established (no Node on the runtime path).
+
+### Dev mode (fast agent iteration)
+
+`GAIA_<AGENT>_MODE=dev` runs the sidecar **from local source** (`uvicorn --reload`)
+instead of the frozen binary, so an agent author edits Python and sees changes
+live in the UI without a freeze→publish→reinstall loop. `user` (default) runs the
+published, SHA-verified binary the UI dogfoods.
+
+### What this replaces
+
+The fat backend's in-process responsibilities move into sidecars (agent logic,
+chat/session loop, RAG, memory, scheduling) or the thin host (OAuth, UI serving,
+sidecar supervision). PR #1910 (the incremental email cutover with an in-UI
+`EmailProxyAgent`) is **superseded** by this `/query`-driven model — the UI relays
+to the sidecar's agent loop rather than running a reduced loop itself, which also
+removes that PR's tool-surface reduction.
+
 ## Phased Delivery
 
 ### Phase A — Wire SDK Capabilities (v0.18.x)

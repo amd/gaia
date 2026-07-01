@@ -51,6 +51,179 @@
 
 ---
 
+## 0. v2 Architecture: Sidecar-First (supersedes the in-process model below)
+
+> Realizes the **Architecture (v2 — sidecar-first)** section of
+> [`agent-ui.mdx`](agent-ui.mdx). The Milestone A/B wiring below assumes agents
+> run **in-process** inside the UI backend; v2 inverts that — agents are
+> out-of-process **sidecars** and the UI is a **thin host**. Where a section
+> below wires a capability into in-process `ChatAgent`, read it as "a capability
+> the *sidecar* exposes over REST and the host relays," not "Python loaded into
+> the UI backend." PR #1910 (in-UI `EmailProxyAgent`) is **superseded**.
+
+### 0.1 The agent REST contract (one per sidecar)
+
+Every agent sidecar exposes the **same** HTTP contract; the email sidecar
+(`specification.html`, schema 2.x) is the reference. Two co-equal surfaces:
+
+- **Fixed-function endpoints** — one deterministic call per capability
+  (`POST /v1/<agent>/<capability>`): triage, search, pre-scan, archive, calendar,
+  etc. No LLM reasoning in the loop; for scripted/integrator use.
+- **`POST /v1/<agent>/query` — the agent loop, exposed over REST like any other
+  endpoint.** NL request in; the sidecar reasons and chains tools into multi-step
+  workflows; **response is `text/event-stream` (SSE)**. This is the surface the
+  UI's chat experience and the `gaia <agent>` CLI both drive.
+- `GET /health`, `GET /version` — readiness + contract-version handshake.
+- Connector surfaces: self-service OAuth routes (bare integrators) **and**
+  forwarded-connection intake `POST /v1/connections` gated by `X-Gaia-UI: 1`
+  (the Agent UI host path — see §0.6).
+
+### 0.2 `/query` SSE event schema
+
+One JSON object per SSE `data:` line, discriminated on `type`:
+
+| `type` | Payload | UI effect |
+|---|---|---|
+| `status` | `{message}` | progress line / spinner label |
+| `token` | `{delta}` | stream assistant text |
+| `tool_call` | `{tool, args}` | "using tool" card |
+| `tool_result` | `{tool, render?, data}` | if `render` set (e.g. `email_pre_scan`), draw the typed card from `data`; else a generic result card |
+| `needs_confirmation` | `{run_id, action, summary, confirm_url}` | show approve/deny; on approve POST the token (see §0.4) |
+| `final` | `{answer, usage}` | finalize the message |
+| `error` | `{detail, status}` | surface the actionable error verbatim |
+
+`render` replaces the in-process SSE "fence injection" hack: the sidecar declares
+the card type explicitly, so the host needs no per-tool knowledge. **Frontend
+change required (be honest about "thin"):** today `MessageBubble.tsx` renders
+cards by *fence-parsing* the assistant text (`STRUCTURED_PAYLOAD_LANGS`); v2 moves
+it to a `render`→component map keyed off `tool_result` events. The host stays
+generic, but each `render` type needs a frontend component, so a new agent that
+introduces a new card ships that component with it.
+
+### 0.3 Host: the per-agent sidecar supervisor
+
+Generalize the email `EmailSidecarManager` into an **`AgentSidecarManager`
+registry** keyed by agent id. Per agent: mode (`user` frozen binary / `dev`
+uvicorn-from-source), verified download (SHA-256 vs the agent's lock), ephemeral
+port (never 4001), lazy spawn on first use, health + `/version` handshake,
+tree-kill on shutdown, one shared instance per agent. Host routes:
+
+- `GET  /v1/agents` — installed + catalog (hub mirror, §0.5).
+- `POST /v1/agents/{id}/install` · `DELETE /v1/agents/{id}` — one-click install/uninstall.
+- `ANY  /v1/<agent>/*` — reverse-proxy to that agent's running sidecar (lazy-start),
+  preserving SSE for `/query` and the sidecar's own status codes + actionable detail.
+
+### 0.4 Mid-workflow confirmation (over SSE, no WebSocket)
+
+Destructive steps keep the single-use **confirmation-token gate**. Flow:
+
+1. Sidecar reaches a gated step, emits `needs_confirmation{run_id, action, summary, confirm_url}` and **pauses the run** (kept alive server-side, keyed by `run_id`).
+2. UI shows approve/deny with the literal `summary` (recipient/subject/body, etc.).
+3. On approve the host `POST`s to `confirm_url` (`/v1/<agent>/query/{run_id}/confirm`) with the minted token; the sidecar resumes emitting on the **same** SSE stream. Deny ends the run with a `final` "skipped" answer.
+
+Trade-off: the resume model makes an in-flight run **stateful** in the sidecar (a
+`run_id`→continuation map with a TTL), which cuts against the email contract's
+explicit **"HTTP, stateless"** ethos and is fragile across dev-reload / crash /
+uninstall. The alternative — emit `needs_confirmation`, *end* the stream, let the
+host call the deterministic endpoint (`/send` with the token) itself, then issue a
+fresh `/query` carrying the prior context to continue — keeps the sidecar
+**stateless** at the cost of the host stitching the workflow across calls.
+
+**Recommendation: stateless stop-and-hand-off for v1** (preserves the sidecar's
+stateless design; the host, which already holds session context, orchestrates the
+continue). Promote to the resume model **only if** real workflows prove they need
+many confirmations in one unbroken run and host-side stitching is too clumsy.
+*Decision pending sign-off.*
+
+### 0.5 Agent Hub mirror (install / uninstall)
+
+The UI embeds a catalog mirror (existing `agentHub.ts` / `AgentInstallDialog` /
+`AgentHubGrid` are the starting point). **Install** = resolve the agent's
+platform binary from its lock → verified download (SHA-256) → cache under
+`~/.gaia/agents/<id>/` → register so it appears as a launchable agent.
+**Uninstall** = stop any running sidecar → remove the cached binary + registration.
+Reuses the email sidecar's verified-fetch + lifecycle primitives; **no Node on the
+runtime path**.
+
+### 0.6 OAuth: host owns consent + refresh, forwards to the sidecar
+
+`grants.json` keeps a single writer. The host runs the OAuth consent flow once and
+**forwards** the pre-authenticated connection *out* to each agent sidecar via the
+sidecar's `POST /v1/connections` intake (`X-Gaia-UI: 1`; refresh-token/client-secret
+are inputs, never returned). Sidecars never run the UI-facing consent write. A bare
+integrator (no host) may instead use the sidecar's self-service connector routes.
+
+**Two things the current code makes non-trivial (flag for the build):**
+
+- **Role inversion.** Today `/v1/connections` is a *host-side intake* — external
+  apps forward connections INTO gaia (`src/gaia/ui/routers/connectors.py:94`
+  `forwarded_router`; `src/gaia/connectors/api.py:266` `import_forwarded_connection`).
+  In v2 the host becomes the *forwarder OUT*, and the **sidecar** exposes the
+  intake (it bundles `gaia.connectors`). The primitive exists; the direction and
+  the per-agent wiring are new.
+- **Token refresh ownership.** With N sidecars sharing one Google grant, each
+  holding a refresh token would race to refresh and rotate each other out. The
+  single-writer host should **own refresh** and forward short-lived *access*
+  tokens (re-forward on expiry), so sidecars never touch the refresh token.
+
+### 0.7 CLI ↔ sidecar parity
+
+`gaia <agent>` becomes a thin REST client: it spawns the sidecar (same
+`AgentSidecarManager`, `user`/`dev` mode) and calls the **identical** endpoints —
+`gaia email "triage my inbox"` drives `POST /v1/email/query` exactly as the UI
+does. One contract, no second in-process code path to keep in sync.
+
+### 0.8 What's superseded
+
+- In-process agent construction in `src/gaia/ui/_chat_helpers.py` (the
+  `agent_type=…` factory) → replaced by proxying to sidecars.
+- `EmailProxyAgent` + the in-UI tool loop (PR #1910) → replaced by relaying to the
+  sidecar's `/query`.
+- Fat UI routers whose logic belongs to an agent (chat loop, scheduling) → migrate
+  into the relevant sidecar; the host keeps UI serving, shared-user-data custody
+  (§0.9), and sidecar supervision.
+
+### 0.9 Shared services (host custody) — the biggest open call
+
+Not everything in the fat backend is "agent logic." Three chunks are **user-scoped
+data that spans agents** and would fragment/corrupt if each sidecar owned a copy —
+so they belong to the host's custody layer (same single-writer rationale as OAuth),
+queried by sidecars rather than duplicated:
+
+| Current router | LoC | v2 home (recommended) |
+|---|---|---|
+| `memory.py` | ~1634 | **Host custody** — one user memory store; sidecars query it. Per-*agent* private memory (e.g. email session prefs) stays in the sidecar. |
+| `documents.py` (RAG) | ~739 | **Host custody** — one document/RAG store the user uploads into; any agent queries it. |
+| `sessions.py` | ~368 | **Host** — cross-agent session *index* (conversation ↔ agent ↔ title). Sidecars store their own message history; the host indexes it. |
+| `connectors.py` | ~977 | **Host** — OAuth custody (§0.6). |
+| `files.py` | ~665 | **Host** — upload storage the UI serves. |
+| `hub.py`, `agents.py`, `system.py`, `tunnel.py` | ~1700 | **Host** — supervision, settings, remote access. |
+| `chat.py`, `goals.py`, `schedules.py` | ~826 | **Sidecar** — agent/autonomy logic moves into the agent that owns it. |
+
+**Alternative considered:** make user-memory and RAG their *own* dedicated
+sidecars (purest "all logic in a sidecar"). Rejected for v1 — it multiplies
+cross-process user-data writers (the exact problem the OAuth single-writer rule
+avoids) and adds two more supervised processes before we've proven one. Revisit if
+the host custody layer grows its own heavy reasoning. **This is the single
+decision that most shapes the migration — needs explicit sign-off.**
+
+### 0.10 Migration path (strangler-fig — no big-bang)
+
+Retire the ~19K-LoC backend incrementally; the app stays shippable throughout:
+
+1. **Email first** — already sidecar-shaped; add `/query` (SSE) and route the UI's
+   email session through it. All other agents remain in-process, untouched.
+2. **Host supervisor** — generalize `EmailSidecarManager` → `AgentSidecarManager`
+   + hub install/uninstall, so in-process and sidecar agents run side by side.
+3. **Per-agent migration** — move one agent at a time behind the proxy; delete its
+   in-process router logic only after its sidecar ships.
+4. **Extract shared services** — lift user memory / RAG / session index into the
+   host custody layer (§0.9) as agents stop owning them in-process.
+
+No step requires all agents migrated at once; each is independently releasable.
+
+---
+
 ## 1. Current GAIA SDK Capability Inventory
 
 ### 1.1 Agents
