@@ -31,6 +31,7 @@ from typing import (
 from gaia_agent_email.contract import (
     SCHEMA_VERSION,
     ActionItem,
+    AttachmentMeta,
     BatchItemError,
     BatchItemResult,
     BatchTriageRequest,
@@ -66,6 +67,7 @@ from gaia_agent_email.contract import (
     EmailUnarchiveResponse,
     EmailUnquarantineRequest,
     EmailUnquarantineResponse,
+    OutgoingAttachment,
     PreScanItem,
     SingleEmailInput,
     ThreadInput,
@@ -377,6 +379,7 @@ def render_endpoint_spec_html() -> str:
         + _model_table(ThreadInput, "ThreadInput (kind: thread)")
         + _model_table(EmailMessage, "EmailMessage")
         + _model_table(EmailAddress, "EmailAddress")
+        + _model_table(AttachmentMeta, "AttachmentMeta (schema 2.2, #1542)")
     )
 
     triage_block = (
@@ -475,10 +478,15 @@ def render_endpoint_spec_html() -> str:
         path="/v1/email/draft",
         description=(
             "Propose a reply and obtain a single-use confirmation token bound "
-            "to the exact (to, subject, body) payload. Echo the token to "
-            "POST /v1/email/send to authorize sending."
+            "to the exact (to, subject, body, attachments) payload — "
+            "attachment binding covers filename, MIME type, and content digest "
+            "(schema 2.2, #1542). Echo the token to POST /v1/email/send to "
+            "authorize sending."
         ),
-        request_sections=[("EmailDraftRequest", EmailDraftRequest)],
+        request_sections=[
+            ("EmailDraftRequest", EmailDraftRequest),
+            ("OutgoingAttachment", OutgoingAttachment),
+        ],
         response_sections=[("EmailDraftResponse", EmailDraftResponse)],
     )
 
@@ -488,8 +496,9 @@ def render_endpoint_spec_html() -> str:
             "Send a reply — gated on explicit confirmation (#1264). The "
             "confirmation gate fires FIRST: a request without a valid, "
             "payload-bound confirmation token is rejected with HTTP 403 before "
-            "any backend call. Emails are never sent without explicit "
-            "confirmation."
+            "any backend call. Attachments (schema 2.2) must exactly match the "
+            "confirmed draft's — a swapped or smuggled file is rejected. "
+            "Emails are never sent without explicit confirmation."
         ),
         request_sections=[("EmailSendRequest", EmailSendRequest)],
         response_sections=[("EmailSendResponse", EmailSendResponse)],

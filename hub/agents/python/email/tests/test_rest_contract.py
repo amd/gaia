@@ -1127,3 +1127,274 @@ def test_prescan_ambiguous_mailbox_fails_loud(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         get_prescan_backend()
     assert exc.value.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Attachments (schema 2.2, #1542) — read/triage exposes; draft/send accept
+# ---------------------------------------------------------------------------
+
+from gaia_agent_email.contract import (  # noqa: E402
+    AttachmentMeta,
+    OutgoingAttachment,
+    parse_request,
+    parse_response,
+)
+
+_PDF_B64 = base64.b64encode(b"%PDF-1.4 sample attachment bytes").decode("ascii")
+
+
+def _attachment_payload(**overrides) -> dict:
+    payload = {
+        "filename": "q3-report.pdf",
+        "mime_type": "application/pdf",
+        "content_base64": _PDF_B64,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _draft_payload(**overrides) -> dict:
+    payload = {
+        "to": [{"email": "bob@example.com"}],
+        "subject": "Report",
+        "body": "See attached.",
+        "attachments": [_attachment_payload()],
+    }
+    payload.update(overrides)
+    return payload
+
+
+class _FakeSendBackend:
+    """Records the exact send_message call so tests assert the call SHAPE
+    (decoded bytes included), not just that a send happened."""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def send_message(self, *, to, subject, body, attachments=None):
+        self.calls.append(
+            {
+                "to": to,
+                "subject": subject,
+                "body": body,
+                "attachments": attachments,
+            }
+        )
+        return {"id": "sent-1"}
+
+
+@pytest.fixture
+def send_env(monkeypatch):
+    backend = _FakeSendBackend()
+    from gaia_agent_email import api_routes as email_routes
+
+    monkeypatch.setattr(
+        email_routes, "_resolve_backend_for_provider", lambda provider: backend
+    )
+    return TestClient(export_openapi.build_app()), backend
+
+
+def test_triage_request_sample_with_attachments_validates():
+    # AC3: the #1262 sample payload with attachment metadata validates via the
+    # contract helpers — request and response side.
+    req = parse_request(
+        {
+            "payload": {
+                "kind": "single",
+                "principal": {"email": "user@example.com"},
+                "message": {
+                    "message_id": "m1",
+                    "from": {"email": "alice@example.com"},
+                    "subject": "Q3 report attached",
+                    "body": "Please review the attached report.",
+                    "attachments": [
+                        {
+                            "filename": "q3-report.pdf",
+                            "mime_type": "application/pdf",
+                            "size_bytes": 48231,
+                            "attachment_id": "att_abc123",
+                        }
+                    ],
+                },
+            }
+        }
+    )
+    assert req.payload.message.attachments[0].filename == "q3-report.pdf"
+
+    resp = parse_response(
+        {
+            "request_kind": "single",
+            "result": {
+                "category": "NEEDS_RESPONSE",
+                "summary": "Review the attached Q3 report.",
+                "attachments": [
+                    {
+                        "filename": "q3-report.pdf",
+                        "mime_type": "application/pdf",
+                        "size_bytes": 48231,
+                    }
+                ],
+            },
+        }
+    )
+    assert resp.result.attachments[0].size_bytes == 48231
+    assert resp.schema_version == SCHEMA_VERSION
+
+
+def test_triage_result_echoes_message_attachments(monkeypatch):
+    # The service echoes the request's attachment metadata on the result so a
+    # consumer can process attachments from the response alone. Heuristicly
+    # confident path (promo label) → no LLM classify; summarizer stubbed.
+    from gaia_agent_email import api_routes as email_routes
+
+    monkeypatch.setattr(
+        email_routes.EmailTriageService, "_build_llm_chat", lambda self: object()
+    )
+    monkeypatch.setattr(
+        "gaia_agent_email.tools.summarize_tools.summarize_email_llm",
+        lambda chat, **kw: "Stub summary.",
+    )
+    monkeypatch.setattr(
+        "gaia_agent_email.tools.llm_triage.classify_email_llm",
+        lambda chat, **kw: {"category": "PROMOTIONAL", "suggested_action": "archive"},
+    )
+    req = parse_request(
+        {
+            "payload": {
+                "kind": "single",
+                "principal": {"email": "user@example.com"},
+                "message": {
+                    "message_id": "m1",
+                    "from": {"email": "deals@shop.example"},
+                    "subject": "50% off everything!",
+                    "body": "Huge savings this weekend only. Unsubscribe here.",
+                    "attachments": [
+                        {
+                            "filename": "coupon.pdf",
+                            "mime_type": "application/pdf",
+                            "size_bytes": 1024,
+                        }
+                    ],
+                },
+            }
+        }
+    )
+    out = email_routes.EmailTriageService().triage_request(req)
+    assert [a.filename for a in out.result.attachments] == ["coupon.pdf"]
+
+
+def test_draft_echoes_attachment_metadata_never_content(client):
+    resp = client.post("/v1/email/draft", json=_draft_payload())
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    (att,) = body["draft"]["attachments"]
+    assert att["filename"] == "q3-report.pdf"
+    assert att["mime_type"] == "application/pdf"
+    assert att["size_bytes"] == len(base64.b64decode(_PDF_B64))
+    # Metadata echo only — the content must not round-trip in the response.
+    assert "content_base64" not in att
+
+
+def test_send_with_attachments_reaches_backend_send(send_env):
+    client, backend = send_env
+    token = client.post("/v1/email/draft", json=_draft_payload()).json()[
+        "confirmation_token"
+    ]
+
+    resp = client.post(
+        "/v1/email/send", json=_draft_payload(confirmation_token=token)
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["sent"] is True
+    (att,) = body["attachments"]
+    assert att["filename"] == "q3-report.pdf"
+
+    # Boundary validity: the backend received the DECODED bytes + metadata.
+    (call,) = backend.calls
+    (sent_att,) = call["attachments"]
+    assert sent_att["filename"] == "q3-report.pdf"
+    assert sent_att["mime_type"] == "application/pdf"
+    assert sent_att["content"] == base64.b64decode(_PDF_B64)
+
+
+def test_send_without_attachments_passes_none_to_backend(send_env):
+    client, backend = send_env
+    payload = _draft_payload(attachments=[])
+    token = client.post("/v1/email/draft", json=payload).json()["confirmation_token"]
+
+    resp = client.post("/v1/email/send", json={**payload, "confirmation_token": token})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["attachments"] == []
+    (call,) = backend.calls
+    assert call["attachments"] is None
+
+
+def test_attachment_free_token_cannot_authorize_attachment_send(send_env):
+    # Anti-bait-and-switch: the confirmation token binds attachment digests.
+    client, backend = send_env
+    token = client.post(
+        "/v1/email/draft", json=_draft_payload(attachments=[])
+    ).json()["confirmation_token"]
+
+    resp = client.post(
+        "/v1/email/send", json=_draft_payload(confirmation_token=token)
+    )
+    assert resp.status_code == 403
+    assert backend.calls == []
+
+
+def test_swapped_attachment_content_invalidates_token(send_env):
+    client, backend = send_env
+    token = client.post("/v1/email/draft", json=_draft_payload()).json()[
+        "confirmation_token"
+    ]
+    swapped = base64.b64encode(b"different bytes entirely").decode("ascii")
+
+    resp = client.post(
+        "/v1/email/send",
+        json=_draft_payload(
+            confirmation_token=token,
+            attachments=[_attachment_payload(content_base64=swapped)],
+        ),
+    )
+    assert resp.status_code == 403
+    assert backend.calls == []
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"content_base64": "not!!valid@@base64"},
+        {"content_base64": ""},
+        {"mime_type": "not-a-mime-type"},
+        {"filename": ""},
+        {"filename": 'evil"name.pdf'},
+    ],
+)
+def test_invalid_attachment_is_422_never_dropped(client, bad):
+    resp = client.post(
+        "/v1/email/draft", json=_draft_payload(attachments=[_attachment_payload(**bad)])
+    )
+    assert resp.status_code == 422
+
+
+def test_oversize_attachment_is_422():
+    from gaia_agent_email.contract import MAX_ATTACHMENT_BYTES
+
+    import pydantic
+
+    too_big = base64.b64encode(b"\0" * (MAX_ATTACHMENT_BYTES + 1)).decode("ascii")
+    with pytest.raises(pydantic.ValidationError, match="maximum"):
+        OutgoingAttachment(
+            filename="huge.pdf", mime_type="application/pdf", content_base64=too_big
+        )
+
+
+def test_outgoing_attachment_to_meta_round_trip():
+    att = OutgoingAttachment(**_attachment_payload())
+    meta = att.to_meta()
+    assert isinstance(meta, AttachmentMeta)
+    assert meta.filename == "q3-report.pdf"
+    assert meta.size_bytes == len(base64.b64decode(_PDF_B64))
+    assert meta.attachment_id is None
