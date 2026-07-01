@@ -186,12 +186,15 @@ class TestSpamPhishingFlags:
     def test_freemail_impersonation_flags_spam_confidently(self):
         """A sender domain that contains a freemail brand name but isn't the
         real domain (e.g. hotmail-secure.cc vs hotmail.com) is a mechanical
-        impersonation signal (#1906)."""
+        impersonation signal (#1906) -- committed only once category is
+        confidently PROMOTIONAL (the sender signal alone can't override an
+        unresolved or non-PROMOTIONAL category)."""
         result = classify_category_heuristic(
-            subject="account update",
+            subject="50% off everything",
             sender="user@hotmail-secure.cc",
             label_ids=[],
         )
+        assert result.category == CATEGORY_PROMOTIONAL
         assert result.is_spam is True
         assert result.spam_confident is True
 
@@ -228,12 +231,14 @@ class TestSpamPhishingFlags:
     def test_freemail_impersonation_still_fires_regardless_of_tld(self):
         """An impersonation domain (brand mixed with other characters in the
         leading label) must still be caught, on any TLD -- confirms the
-        registrable-domain check didn't just get looser."""
+        registrable-domain check didn't just get looser. Category must be
+        confidently PROMOTIONAL for the signal to commit."""
         result = classify_category_heuristic(
-            subject="account update",
+            subject="50% off everything",
             sender="user@hotmail-secure.co.uk",
             label_ids=[],
         )
+        assert result.category == CATEGORY_PROMOTIONAL
         assert result.is_spam is True
         assert result.spam_confident is True
 
@@ -264,13 +269,55 @@ class TestSpamPhishingFlags:
         assert result.is_spam is False
         assert result.spam_confident is True
 
+    def test_non_promotional_category_overrides_spam_sender_signal(self):
+        """The category gate is checked BEFORE the sender signal: a
+        mechanically spam-shaped sender (auto-generated contact.NNNN@
+        address) on an otherwise-legitimate UPDATES email must NOT be
+        confidently flagged spam with no LLM recourse -- the sender pattern
+        alone isn't enough to override a confident non-PROMOTIONAL category
+        (regression: this previously fired before the category check)."""
+        result = classify_category_heuristic(
+            subject="Your order shipped",
+            sender="contact.12345@billing.company.com",
+            label_ids=[LABEL_CATEGORY_UPDATES],
+        )
+        assert result.category == CATEGORY_FYI
+        assert result.is_spam is False
+        assert result.spam_confident is True
+
+    def test_personal_category_overrides_spam_sender_signal(self):
+        """Same category-gate-first guarantee for the PERSONAL label path."""
+        result = classify_category_heuristic(
+            subject="Hi",
+            sender="contact.999@family.example",
+            label_ids=[LABEL_CATEGORY_PERSONAL],
+        )
+        assert result.category == CATEGORY_PERSONAL
+        assert result.is_spam is False
+        assert result.spam_confident is True
+
     def test_unresolved_category_with_no_spam_signal_escalates(self):
         """When no heuristic matches at all (category unresolved, going to
         the LLM anyway), spam confidence cannot be assumed from category --
-        always escalate unless the sender signal fired."""
+        always escalate, regardless of the sender signal, since the
+        eventual category could turn out non-PROMOTIONAL."""
         result = classify_category_heuristic(
             subject="Re: meeting at 3pm",
             sender="alice@company.example",
+            label_ids=[],
+        )
+        assert result.confident is False
+        assert result.is_spam is False
+        assert result.spam_confident is False
+
+    def test_unresolved_category_with_spam_signal_still_escalates(self):
+        """Even a confident sender-signal hit must not commit is_spam=True
+        while category is unresolved -- the message could resolve to a
+        non-PROMOTIONAL category, and there'd be no LLM recourse to correct
+        a wrongly-committed spam flag."""
+        result = classify_category_heuristic(
+            subject="Can we reschedule?",
+            sender="contact.42@family.example",
             label_ids=[],
         )
         assert result.confident is False

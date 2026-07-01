@@ -162,12 +162,14 @@ _PROMO_SUBJECT_KEYWORDS = (
 # Spam sender signals (#1906) -- provider-agnostic, content-derived, and
 # deliberately narrow: each pattern generalizes beyond this one corpus
 # (auto-generated anonymous local-parts, freemail-brand domain impersonation)
-# rather than memorizing specific spam-campaign domain strings. Validated
-# against the #1906 eval corpus: 0% false positives against both the
-# deliberately spam-adjacent "adversarial" promotional bucket and every
-# non-PROMOTIONAL category -- the cost is modest recall (~37% of true spam),
-# by design. Everything the prefilter doesn't confidently catch is left for
-# the LLM to actually read and judge; see classify_category_heuristic.
+# rather than memorizing specific spam-campaign domain strings. The signal
+# only ever commits is_spam=True once _spam_fields confirms category is
+# confidently PROMOTIONAL (never from an unresolved or non-PROMOTIONAL
+# category, even on a signal hit) -- so most of this corpus's spam, which
+# rarely also matches a confident-PROMOTIONAL heuristic branch, still falls
+# through to the LLM. That's intentional: this prefilter exists to skip an
+# LLM round-trip on the rare unambiguous case, not to carry recall on its
+# own; see classify_category_heuristic and _spam_fields.
 _ANON_SENDER_PATTERN = re.compile(r"^contact\.\d+@", re.IGNORECASE)
 _FREEMAIL_BRANDS = ("hotmail", "gmail", "yahoo", "outlook")
 
@@ -206,15 +208,19 @@ def _spam_fields(category: str, spam_signal: bool) -> tuple[bool, bool]:
     """Resolve ``(is_spam, spam_confident)`` for a HeuristicResult.
 
     Spam exclusively lives in PROMOTIONAL in the eval corpus, so a confident
-    non-PROMOTIONAL category trusts ``is_spam=False`` outright. Within
+    non-PROMOTIONAL category trusts ``is_spam=False`` outright -- the category
+    gate is checked FIRST, before the sender signal, so a mechanically
+    spam-shaped sender address (e.g. an auto-generated ``contact.NNNN@``
+    ticketing address) on an otherwise-legitimate UPDATES/PERSONAL email
+    can't get confidently mis-flagged with no LLM recourse. Within
     PROMOTIONAL, the sender signal commits ``True``; otherwise the heuristic
     is not confident and the caller should escalate to the LLM.
     """
+    if category != CATEGORY_PROMOTIONAL:
+        return False, True
     if spam_signal:
         return True, True
-    if category == CATEGORY_PROMOTIONAL:
-        return False, False
-    return False, True
+    return False, False
 
 
 # Senders that never need a human reply and are almost always informational
@@ -410,14 +416,16 @@ def classify_category_heuristic(
         )
 
     # 9. No high-confidence heuristic matched -- escalate. Category is
-    # unresolved (FYI is a placeholder the LLM will override), so spam
-    # confidence cannot be resolved from category either: trust the sender
-    # signal if it fired, otherwise always escalate to the LLM.
-    is_spam, spam_confident = (True, True) if spam_signal else (False, False)
+    # unresolved (FYI is a placeholder the LLM will override) and could turn
+    # out to be anything, including PROMOTIONAL -- committing is_spam=True
+    # from the sender signal here would risk confidently mis-flagging a
+    # message that later resolves to a non-PROMOTIONAL category, with no LLM
+    # recourse. Always escalate; the same LLM call already happening for
+    # category resolves is_spam too.
     return HeuristicResult(
         category=CATEGORY_FYI,
-        is_spam=is_spam,
-        spam_confident=spam_confident,
+        is_spam=False,
+        spam_confident=False,
         is_phishing=is_phishing,
         confident=False,
         reason="no heuristic match -- escalating to LLM",
