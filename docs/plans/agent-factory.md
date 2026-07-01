@@ -73,6 +73,29 @@ judgment, spec, review, and eval loop* around it — integrating the two is the 
 net-new engineering. Memory is load-bearing: each maintenance pass recalls the agent's
 spec, baseline, failure modes, and *what changed in the SDK since last build*.
 
+## 2.5 Human-in-the-loop — per-stage approve/deny (mirrors the agent model)
+
+The factory is a **supervised** pipeline, not a fully-autonomous one. Every risky stage
+carries an **approve/deny gate** — the *same* confirmation model the agents themselves use
+(runtime §0.4 confirmation gate, §0.34 autonomy levels). A human (or a policy) accepts or
+rejects at each checkpoint before the pipeline proceeds:
+
+| Checkpoint | What the human approves / denies |
+|---|---|
+| **Spec** (stages 3–4) | the scoped design, before any code is written |
+| **PR open** (stage 8) | the agent-code — *or SDK* — changes, before they land |
+| **Merge** (stage 8) | landing the PR into the codebase |
+| **SDK release** (stage 16) | **cutting + tagging a new SDK version** — the factory *drives the existing release process* (PR + tag), a human approves the cut |
+| **Ship** (stage 16) | publishing the agent product to the Hub |
+
+The gate is **configurable per stage per trust level** — exactly like agent autonomy: a
+trusted lane may auto-approve low-risk stages while **always halting on the
+high-blast-radius ones** (SDK release, ship). This is the containment for the shared-SDK
+concern (§11.5): **the factory *may* PR + tag the SDK — a human approves the release**, the
+same accept/deny the product already exposes for agent actions. (Residual risk: the gate
+must not degrade to a rubber stamp; halting-by-default on the high-blast-radius stages is
+what keeps it real.)
+
 ## 3. The two halves + the full lifecycle (stage by stage)
 
 Each row is a real developer activity; 🚦 = a gate that can fail the run. **Front (dev)**
@@ -221,7 +244,7 @@ work from M2. Each milestone is independently valuable and shippable.
 | **M1** | **Provenance + edge-verified releases** | manifest emit (stage 10) · signing + source-hash + SDK-commit provenance (stage 15) · post-publish edge verify (stage 17) | **Easy** — mechanical, extends existing scripts | integrity/traceability (not "reproducibility," §11.5); docs-in-sync becomes a hard gate |
 | **M2** | **Independent eval oracle + confidence-bound gate** | the *trustworthy* eval gate: a **human-curated, held-out** ground-truth set per agent + per-agent safety floors; gate on `LCB(score, k runs) ≥ bar` | **Medium** — mostly discipline, but the oracle is **human judgment the factory does NOT automate** | **Prerequisite for everything generative** (M3–M4) — without an independent oracle the gate is self-certification (§11.5 #1) |
 | **M3** | **Assisted dev automation** | the *mechanical* dev stages: scaffold, tool/skill/MCP wiring, synthetic-data gen, the eval-optimize (`--fix`) loop, PR authoring | **Harder** — net-new agentic coding, but human-in-the-loop | human still owns **scope, spec, the oracle (M2), PR-approve, ship**; the GAIA coder + Claude Code loop assist, they don't decide |
-| **M4** | **SDK-delta maintenance loop** (stage 18 — the keystone) | on an SDK delta that regresses an agent (measured on M2's held-out oracle, LCB-gated), auto-re-run M3+M0 for that agent | **Hardest** — the differentiator *and* the highest risk | **Last, and only after M2.** Hard rules baked in: (a) **serial-eval throughput cap** (one eval/backend — CLAUDE.md), size cadence against it; (b) the factory **may not auto-PR the SDK** — agent code needing an SDK change *fails + files a human issue* (breaks the cascade + blast radius, §11.5 #4, 🔒) |
+| **M4** | **SDK-delta maintenance loop** (stage 18 — the keystone) | on an SDK delta that regresses an agent (measured on M2's held-out oracle, LCB-gated), re-run M3+M0 for that agent | **Hardest** — the differentiator *and* the highest risk | **Last, and only after M2.** Built-in: (a) **serial-eval throughput cap** (one eval/backend — CLAUDE.md), size cadence against it; (b) SDK changes ship via **PR + tag through the existing release process**, gated by the **human approve/deny at the SDK-release checkpoint** (§2.5); the resulting all-agent re-eval is the *intended* regression net |
 
 **Reading the order:** M0–M1 ship *any* agent reproducibly-packaged and provenance-verified
 with **no LLM in the loop** — pure, high-value CI. M2 buys the trust bar. Only then does
@@ -282,12 +305,16 @@ Lemonade backend (CLAUDE.md), so N≈19 agents × every SDK delta is a **wall-cl
 the real cost driver is *throughput, not dollars*. M4 caps to one-eval-per-backend and sizes
 cadence against it.
 
-**🔒 AI PRs into the shared SDK — a hard boundary, not a rec (escalated to @kovtcharov-amd).**
-An automated system PRing the shared SDK every agent depends on, contained only by a
-human rubber-stamp at scale, with a poisoned-issue → injected-scope → regressive-PR path,
-is an architecture/security call above the doc. **Hard rule (M4):** the factory **may not
-auto-PR the SDK** — agent code needing an SDK change **fails the run and files a human
-issue.** This cuts the cascade *and* the blast radius in one move.
+**AI PRs into the shared SDK — contained by a per-stage human gate, not a prohibition
+(resolved §2.5).** The review flagged the blast radius of an automated system PRing the
+shared SDK. Resolution: **the factory *may* ship SDK versions via PR + tag** (driving the
+*existing* release process), because the containment is the **human approve/deny gate at
+the SDK-release checkpoint** (§2.5) — the same accept/deny model the agents use, halting-by-
+default on this high-blast-radius stage. The cascade (an SDK change re-evals all agents) is
+then the **intended regression net**, not a hazard — bounded by the serial-eval throughput
+cap. The residual poisoned-issue → injected-scope path is contained at the PR-review + merge
+gates; keeping those gates real (not rubber stamps) on SDK changes is the standing
+requirement.
 
 **Honest reframe:** the stated moat (the maintenance loop) is the doc's **least-built,
 highest-risk, last-scheduled** component. "The back half exists, we're most of the way
@@ -300,11 +327,13 @@ oracle.
 1. **Orchestrator substrate** — Claude Code (skills + memory, already in CI) + GAIA coder
    vs. a custom Anthropic Agent-SDK build. *Rec:* start on Claude Code + GAIA coder (both
    exist); evaluate a custom build if the loop needs tighter control.
-2. **Autonomy at the PR + ship gates** — auto-merge/ship vs. human-approve. *Rec:* human
-   approves merge + ship in v1; auto-iterate only *up to* the gate (ties to runtime §0.34).
-3. **SDK-improvement scope** — *resolved to a hard rule* (§11.5, 🔒): the factory **may not
-   auto-PR the SDK**; agent code needing an SDK change fails the run + files a human issue.
-   Open only for @kovtcharov-amd sign-off on that boundary.
+2. **Autonomy at the gates** — *resolved* (§2.5): per-stage approve/deny mirroring the agent
+   confirmation model; configurable per trust level, halting-by-default on the
+   high-blast-radius stages (SDK release, ship). Open only: which stages a *trusted* lane
+   may auto-approve.
+3. **SDK-release scope** — *resolved* (§2.5): the factory **may** ship SDK versions via
+   PR + tag (driving the existing release process), contained by the human approve/deny at
+   the SDK-release checkpoint. Open only: the auto-approve trust threshold for it.
 4. **Stage-18 trigger policy** — re-run on every SDK commit vs. only on eval regression vs.
    scheduled. *Rec:* run eval on SDK-affecting deltas; rebuild only on regression.
 5. **Recipe vs. manifest** — one authored input or recipe-in / manifest-out. *Rec:*
