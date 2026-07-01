@@ -143,6 +143,42 @@ Preferences are stored in process memory only — restarting the agent (or quitt
 
 Senders you reply to quickly are automatically promoted to priority on the next triage run — no explicit command needed. The agent measures how long it took you to reply to each sender (using the original message's receipt timestamp as the anchor) and promotes senders whose median reply latency falls below the threshold. Promotion is applied on-demand during triage, not on a background thread, and persists across agent restarts. Works across both connected mailboxes (Gmail and Outlook).
 
+## Scheduled daily briefing (off by default)
+
+The same pre-scan can run on a schedule instead of only on demand — a morning
+briefing that's ready before you ask. **It ships off by default**: nothing scans
+your inbox until you explicitly enable the schedule.
+
+The email sidecar stores the schedule and serves the trigger; it does **not** run
+a timer. A host scheduler — GAIA's autonomy engine once it lands, or any
+cron-like runner today — fires the trigger at your configured time:
+
+```bash
+# Enable once (the sidecar listens on 127.0.0.1:8131 by default):
+curl -s -X PUT http://127.0.0.1:8131/v1/email/briefing/schedule \
+  -H "Content-Type: application/json" \
+  -d '{ "enabled": true, "time": "08:00", "max_messages": 25 }'
+
+# What the scheduler fires daily:
+curl -s -X POST http://127.0.0.1:8131/v1/email/briefing/run
+```
+
+The run returns a `kind: "email_briefing"` envelope whose `pre_scan` field is the
+same `email_pre_scan` card the Agent UI renders, and also persists the envelope to
+`~/.gaia/email/briefing_latest.json` so a consumer can pick up the latest briefing
+without having been the live caller (the interim delivery surface until push
+delivery arrives with the autonomy engine).
+
+Two guarantees, both fail-loud:
+
+- **Disabled means disabled.** The trigger re-checks `enabled` itself — a disabled
+  schedule answers `409` before any mailbox access, so a stale or misfiring
+  scheduler can never scan a mailbox whose briefing you turned off.
+- **A corrupt schedule file is an error, not a guess.** If
+  `~/.gaia/email/briefing.json` exists but can't be parsed, the endpoints return
+  `500` naming the file and the fix — the agent never silently falls back to
+  "disabled" (or worse, "enabled").
+
 ## Action surface
 
 ### Read
@@ -286,9 +322,10 @@ isolated, and dogfoods the exact binary shipped to integrators.
 `GAIA_EMAIL_AGENT_MODE` only selects which *process* answers (`user` default /
 `dev`); there is no in-process fallback. Two surfaces run through it:
 
-- **The `/v1/email/*` REST surface** — the full schema-2.1 contract (triage,
-  batch triage, search, inbox pre-scan, draft/send + confirm, archive/unarchive,
-  quarantine/unquarantine, calendar view/preview/create/respond, health,
+- **The `/v1/email/*` REST surface** — the full schema-2.2 contract (triage,
+  batch triage, search, inbox pre-scan, the scheduled daily briefing, draft/send
+  + confirm, archive/unarchive, quarantine/unquarantine, calendar
+  view/preview/create/respond, health,
   version). This is exactly what third-party integrators consume, so the UI
   exercises the real product. The sidecar's connector OAuth **write** routes are
   never exposed (all grant writes stay on the backend's single-writer path).
@@ -301,7 +338,7 @@ The sidecar is spawned lazily on first email use and tree-killed on shutdown; th
 REST surface and the chat agent share one sidecar process.
 
 **Chat tool surface (in-app email agent):** the sidecar-backed chat agent exposes
-the tools the schema-2.1 REST contract serves today — inbox pre-scan, search,
+the tools the REST contract serves today — inbox pre-scan, search,
 calendar view, and archive + undo. Tools that have no REST route yet (labels,
 stars, mark-read, move, trash/delete, summarize, profile, preferences, forward,
 send) are not exposed in the chat agent until their routes land; the underlying

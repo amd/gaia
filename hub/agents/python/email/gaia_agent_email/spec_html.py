@@ -35,6 +35,8 @@ from gaia_agent_email.contract import (
     BatchItemResult,
     BatchTriageRequest,
     BatchTriageResponse,
+    BriefingSchedule,
+    BriefingScheduleResponse,
     CalendarCreateEventRequest,
     CalendarEvent,
     CalendarEventDateTime,
@@ -49,6 +51,8 @@ from gaia_agent_email.contract import (
     EmailAddress,
     EmailArchiveRequest,
     EmailArchiveResponse,
+    EmailBriefingResponse,
+    EmailBriefingResult,
     EmailCategory,
     EmailMessage,
     EmailPreScanRequest,
@@ -616,6 +620,56 @@ def render_endpoint_spec_html() -> str:
         response_sections=[("CalendarRespondResponse", CalendarRespondResponse)],
     )
 
+    briefing_get_block = _endpoint_block(
+        path="/v1/email/briefing/schedule",
+        method="GET",
+        description=(
+            "Read the persisted daily-briefing schedule (#1608). Ships OFF by "
+            "default — an absent config is reported as disabled. A corrupt "
+            "config file is a 500 naming the file and the fix, never silently "
+            "reported as disabled."
+        ),
+        request_sections=[],
+        response_sections=[
+            ("BriefingScheduleResponse", BriefingScheduleResponse),
+            ("BriefingSchedule", BriefingSchedule),
+        ],
+    )
+
+    briefing_put_block = _endpoint_block(
+        path="/v1/email/briefing/schedule",
+        method="PUT",
+        description=(
+            "Replace the persisted daily-briefing schedule (#1608) — the only "
+            "way to turn the briefing on. Full-document replace, validated by "
+            "the contract model (bad time/max_messages is a 422 before "
+            "anything persists). The sidecar stores the preference; the HOST "
+            "scheduler (autonomy engine #555, cron, the GAIA UI scheduler) "
+            "owns the timer and fires the /run trigger at the configured time."
+        ),
+        request_sections=[("BriefingSchedule", BriefingSchedule)],
+        response_sections=[("BriefingScheduleResponse", BriefingScheduleResponse)],
+    )
+
+    briefing_run_block = _endpoint_block(
+        path="/v1/email/briefing/run",
+        description=(
+            "The scheduled daily-briefing trigger (#1608). No request body — "
+            "the persisted schedule is the configuration. Disabled schedule → "
+            "409 before any mailbox access (a disabled briefing never reads "
+            "mail). Enabled → runs the same pre-scan classification path as "
+            "/v1/email/prescan, returns the briefing envelope, and persists it "
+            "to ~/.gaia/email/briefing_latest.json as the interim pull-based "
+            "delivery surface until push delivery lands with the autonomy "
+            "engine."
+        ),
+        request_sections=[],
+        response_sections=[
+            ("EmailBriefingResponse", EmailBriefingResponse),
+            ("EmailBriefingResult", EmailBriefingResult),
+        ],
+    )
+
     body = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -644,6 +698,20 @@ def render_endpoint_spec_html() -> str:
 {batch_block}
 
 {prescan_block}
+
+<h2>Scheduled daily briefing (schema 2.2)</h2>
+<p class="subtitle">
+  A host scheduler turns the pre-scan into a scheduled morning briefing (#1608).
+  The schedule ships OFF by default; the sidecar stores the preference and
+  serves the trigger — the timer and push delivery belong to the host
+  (autonomy engine #555).
+</p>
+
+{briefing_get_block}
+
+{briefing_put_block}
+
+{briefing_run_block}
 
 {search_block}
 

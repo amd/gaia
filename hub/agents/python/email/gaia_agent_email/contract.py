@@ -63,7 +63,10 @@ CATEGORY_PERSONAL = "PERSONAL"
 #   - archive + phishing-quarantine mailbox actions and their reversal (#1779)
 #   - calendar view/create/respond (#1780)
 #   - inbox pre-scan (#1778)
-SCHEMA_VERSION = "2.1"
+# 2.2 is additive over 2.1: the scheduled daily-briefing surface (#1608) —
+# GET/PUT /v1/email/briefing/schedule and the POST /v1/email/briefing/run
+# trigger. No existing shape changes, so 2.x consumers keep working.
+SCHEMA_VERSION = "2.2"
 
 # Maximum number of items in a single batch request. Protects the single-tenant
 # local model slot from runaway batches. Enforced via Pydantic max_length.
@@ -1178,6 +1181,90 @@ class EmailPreScanResponse(_Strict):
 
 
 # ---------------------------------------------------------------------------
+# Scheduled daily briefing (schema 2.2, #1608)
+# ---------------------------------------------------------------------------
+
+
+class BriefingSchedule(_Strict):
+    """The persisted daily-briefing schedule. OFF by default.
+
+    The sidecar does not run a timer — ``time`` is the preference a HOST
+    scheduler (autonomy engine #555, OS cron, the GAIA UI scheduler) reads to
+    decide when to fire ``POST /v1/email/briefing/run``. The trigger itself
+    re-checks ``enabled``, so a stale or misconfigured scheduler can never
+    scan a mailbox whose briefing the user turned off.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Master switch. False (the default) means the scheduled trigger "
+            "produces no briefing and never touches the mailbox."
+        ),
+    )
+    time: str = Field(
+        default="08:00",
+        pattern=r"^([01]\d|2[0-3]):[0-5]\d$",
+        description=(
+            "Local wall-clock HH:MM the host scheduler should fire the "
+            "briefing trigger at, once per day."
+        ),
+    )
+    max_messages: int = Field(
+        default=25,
+        ge=1,
+        le=100,
+        description=(
+            "How many recent inbox messages the briefing pre-scan reads. "
+            "Bounded like EmailPreScanRequest.max_messages."
+        ),
+    )
+
+
+class BriefingScheduleResponse(_Strict):
+    """Response envelope for the briefing-schedule read/replace endpoints."""
+
+    schema_version: str = Field(
+        default=SCHEMA_VERSION, description="Echoes the contract version."
+    )
+    schedule: BriefingSchedule = Field(
+        ..., description="The currently persisted schedule."
+    )
+
+
+class EmailBriefingResult(_Strict):
+    """One scheduled briefing: the pre-scan envelope plus run metadata.
+
+    ``pre_scan`` is byte-compatible with what ``POST /v1/email/prescan``
+    returns (``kind == "email_pre_scan"``) — same classification path, so a
+    consumer that already renders the pre-scan card renders the briefing.
+    """
+
+    kind: Literal["email_briefing"] = Field(
+        default="email_briefing",
+        description="Envelope discriminator for the briefing card.",
+    )
+    generated_at: str = Field(
+        ..., description="UTC ISO-8601 timestamp of when the briefing ran."
+    )
+    schedule: BriefingSchedule = Field(
+        ..., description="The schedule that produced this briefing."
+    )
+    pre_scan: EmailPreScanResult = Field(
+        ..., description="The inbox pre-scan envelope (kind: email_pre_scan)."
+    )
+
+
+class EmailBriefingResponse(_Strict):
+    """Top-level briefing-trigger response envelope (#1608)."""
+
+    schema_version: str = Field(
+        default=SCHEMA_VERSION, description="Echoes the contract version."
+    )
+    result: EmailBriefingResult = Field(..., description="The briefing envelope.")
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -1228,6 +1315,11 @@ __all__ = [
     "EmailPreScanRequest",
     "EmailPreScanResult",
     "EmailPreScanResponse",
+    # Scheduled daily briefing (schema 2.2, #1608)
+    "BriefingSchedule",
+    "BriefingScheduleResponse",
+    "EmailBriefingResult",
+    "EmailBriefingResponse",
     "EmailSearchRequest",
     "EmailSearchResultItem",
     "EmailSearchResponse",

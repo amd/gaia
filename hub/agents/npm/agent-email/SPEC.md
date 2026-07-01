@@ -2,7 +2,7 @@
 
 Detailed reference for `@amd-gaia/agent-email`. For a quick start, see
 [`README.md`](./README.md); for an AI-assisted integration walkthrough, see
-[`SKILL.md`](./SKILL.md). The contract version is `SCHEMA_VERSION` **2.1**.
+[`SKILL.md`](./SKILL.md). The contract version is `SCHEMA_VERSION` **2.2**.
 
 ## Architecture
 
@@ -53,6 +53,9 @@ result.
 | `POST /v1/email/triage/batch` | `triageBatch()` | **Standalone** | Same as `triage` for an `items` array (1–100). Returns a parallel `results` array, order-preserved; per-item failures isolate (HTTP 200 can carry errored items — inspect `results[].error`). A `502` fails the whole batch (Lemonade unreachable). |
 | `POST /v1/email/search` | `search()` | **Connector** | Read-only inbox search. A connected Google/Microsoft mailbox (`503` if none, `400` if 2+); **no** confirmation token. Lists messages matching `query`/`labels` and returns metadata only (no body). |
 | `POST /v1/email/prescan` | `prescan()` | **Connector** | Reads recent inbox messages from the connected Google/Microsoft mailbox and returns the read-only triage-card envelope (`kind: "email_pre_scan"`). `503` if no mailbox is connected, `400` if 2+ are. Heuristic-only — no Lemonade call. |
+| `GET /v1/email/briefing/schedule` | — (REST only, schema 2.2) | **Standalone** | Reads the persisted daily-briefing schedule (#1608). Ships **off by default**; an absent config reports as disabled, a corrupt config file is a `500` naming the file and the fix. |
+| `PUT /v1/email/briefing/schedule` | — (REST only, schema 2.2) | **Standalone** | Replaces the schedule (full-document, contract-validated — bad `time`/`max_messages` → `422` before anything persists). The only way to turn the briefing on. |
+| `POST /v1/email/briefing/run` | — (REST only, schema 2.2) | **Connector** | The scheduled briefing trigger. No body — the persisted schedule is the config. Disabled → `409` **before any mailbox access**; enabled → runs the pre-scan path, returns the `kind: "email_briefing"` envelope, and persists it to `~/.gaia/email/briefing_latest.json`. |
 | `POST /v1/email/draft` | `draft()` | **Standalone** | Nothing external — wraps your `(to, subject, body)` and returns a single-use confirmation token. |
 | `POST /v1/email/send` | `send()` | **Connector** | A valid `draft` confirmation token **and** a connected Google/Microsoft mailbox. The token gate fires first: no/invalid token → `403`; then `503` if no mailbox is connected, `400` if 2+ are. |
 | `POST /v1/email/confirm` | `confirmAction()` | **Standalone** | Nothing external — mints a single-use token for `"archive"`/`"quarantine"`, bound to that exact `(action, message_id)`. |
@@ -108,6 +111,37 @@ const q = await client.quarantine({
 });
 await client.unquarantine({ action_id: q.action_id });
 ```
+
+### Scheduled daily briefing (schema 2.2, #1608)
+
+The daily briefing turns the pre-scan into a scheduled morning summary. The
+sidecar stores the preference and serves the trigger — it does **not** run a
+timer. A host scheduler (GAIA's autonomy engine once it lands — #555 — or any
+cron-like runner in your app) fires `POST /v1/email/briefing/run` at the
+configured `time`:
+
+```bash
+# Enable once (ships off by default):
+curl -s -X PUT http://127.0.0.1:8131/v1/email/briefing/schedule \
+  -H "Content-Type: application/json" \
+  -d '{ "enabled": true, "time": "08:00", "max_messages": 25 }'
+
+# What the scheduler fires daily:
+curl -s -X POST http://127.0.0.1:8131/v1/email/briefing/run
+# → { "schema_version": "2.2",
+#     "result": { "kind": "email_briefing", "generated_at": "…",
+#                 "schedule": { … }, "pre_scan": { "kind": "email_pre_scan", … } } }
+```
+
+The trigger re-checks `enabled` itself: a disabled schedule is a `409` **before
+any mailbox access**, so a stale or misfiring scheduler can never scan a mailbox
+whose briefing the user turned off. `result.pre_scan` is byte-compatible with
+`prescan()`'s envelope, so a consumer that renders the pre-scan card renders the
+briefing. Each run also atomically persists the envelope to
+`~/.gaia/email/briefing_latest.json` — the interim pull-based delivery surface
+until push delivery lands with the autonomy engine. These endpoints are
+REST-only for now (no typed client methods yet); drive them with `fetch` or any
+HTTP client.
 
 ### Calendar (view / create / respond, schema 2.1)
 
@@ -276,12 +310,13 @@ connection through this package's API**, so connector-backed calls only work on 
 machine where the mailbox is already connected in GAIA. Triage and draft, which
 need no connector, work anywhere.
 
-As of `SCHEMA_VERSION` 2.1 this package's REST API exposes the read-only inbox
+As of `SCHEMA_VERSION` 2.2 this package's REST API exposes the read-only inbox
 **search** and **pre-scan** (`search` / `prescan`), the **archive** and
 phishing-**quarantine** mailbox actions plus their undo (`confirmAction` / `archive` /
-`unarchive` / `quarantine` / `unquarantine`), and calendar **view / create / respond**
+`unarchive` / `quarantine` / `unquarantine`), calendar **view / create / respond**
 (`listCalendarEvents` / `previewCalendarEvent` / `createCalendarEvent` /
-`respondToCalendarEvent`). The full GAIA email agent does more on the live mailbox
+`respondToCalendarEvent`), and the **scheduled daily briefing** (REST-only,
+`/v1/email/briefing/*`, #1608). The full GAIA email agent does more on the live mailbox
 (label, move, mark spam) and calendar (detect / conflicts); those remaining actions are
 connector-gated by definition and are **not exposed through this package's REST API
 yet**.
@@ -328,9 +363,10 @@ editors autocomplete but your code never imports them.
 
 TypeScript types in `src/types.ts` mirror two Python sources of truth:
 
-- `contract.py` — the triage request/response contract plus the schema-2.1 additions:
-  inbox search, mailbox actions (archive / quarantine + reversal), calendar, and
-  pre-scan (`SCHEMA_VERSION = "2.1"`).
+- `contract.py` — the triage request/response contract plus the schema-2.1 additions
+  (inbox search, mailbox actions — archive / quarantine + reversal — calendar, and
+  pre-scan) and the schema-2.2 daily-briefing models (`SCHEMA_VERSION = "2.2"`).
+  The briefing endpoints are REST-only for now — no TS types/methods yet.
 - `api_routes.py` — the local draft/send confirmation handshake models.
 
 They are hand-written (vs. generated from `/openapi.json`) because the contract is
