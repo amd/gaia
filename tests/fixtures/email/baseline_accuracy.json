@@ -1,21 +1,27 @@
 {
   "model": "Gemma-4-E4B-it-GGUF",
   "fixture": "synthetic_inbox.mbox",
-  "category_accuracy": 0.7751,
+  "category_accuracy": 0.8094,
   "category_breakdown": {
     "URGENT": 0.9259,
     "NEEDS_RESPONSE": 1.0,
-    "FYI": 0.7778,
-    "PROMOTIONAL": 0.6667,
-    "PERSONAL": 0.3333
+    "FYI": 0.8148,
+    "PROMOTIONAL": 0.7885,
+    "PERSONAL": 0.3636
   },
-  "is_spam_accuracy": 0.9719,
-  "is_phishing_accuracy": 0.8112,
-  "scored": 249,
-  "correct": 193,
+  "is_spam_accuracy": 0.8896,
+  "is_spam_precision": 0.6765,
+  "is_spam_recall": 0.807,
+  "is_spam_f1": 0.736,
+  "is_spam_tp": 46,
+  "is_spam_fp": 22,
+  "is_spam_fn": 11,
+  "is_phishing_accuracy": 0.6789,
+  "scored": 299,
+  "correct": 242,
   "tolerance_pp": 5,
   "_recorded_on": "2026-06-30",
-  "_recorded_by": "real measurement on Gemma-4-E4B-it-GGUF via production heuristic + LLM-assist triage path (#1107); is_spam_accuracy recomputed offline after ground-truth correction (#1904: spamassassin/ling_spam HAM emails removed from is_spam=True)",
+  "_recorded_by": "real measurement on Gemma-4-E4B-it-GGUF via production heuristic + LLM-assist triage path (#1107); is_spam now content-based detection with precision/recall/F1 (#1906)",
   "_misses": [
     {
       "id": "02e78d1a85996110",
@@ -54,12 +60,6 @@
       "source": "llm"
     },
     {
-      "id": "125717a5b5ed123f",
-      "predicted": "NEEDS_RESPONSE",
-      "expected": "FYI",
-      "source": "llm"
-    },
-    {
       "id": "166e34f9d48b5b26",
       "predicted": "NEEDS_RESPONSE",
       "expected": "PERSONAL",
@@ -68,6 +68,18 @@
     {
       "id": "1687d3e1ce3aa021",
       "predicted": "URGENT",
+      "expected": "PERSONAL",
+      "source": "llm"
+    },
+    {
+      "id": "21f22f402abbe49a",
+      "predicted": "PROMOTIONAL",
+      "expected": "URGENT",
+      "source": "llm"
+    },
+    {
+      "id": "232b40433d4955b6",
+      "predicted": "NEEDS_RESPONSE",
       "expected": "PERSONAL",
       "source": "llm"
     },
@@ -82,6 +94,18 @@
       "predicted": "NEEDS_RESPONSE",
       "expected": "PERSONAL",
       "source": "llm"
+    },
+    {
+      "id": "344dff4c13a24ae2",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
+      "id": "3a52c3779a233534",
+      "predicted": "FYI",
+      "expected": "PROMOTIONAL",
+      "source": "heuristic"
     },
     {
       "id": "3b584b2af8fe1715",
@@ -99,12 +123,6 @@
       "id": "3c0eb92f0aca6d5b",
       "predicted": "URGENT",
       "expected": "PROMOTIONAL",
-      "source": "llm"
-    },
-    {
-      "id": "3c4cecf6cbd377d6",
-      "predicted": "NEEDS_RESPONSE",
-      "expected": "FYI",
       "source": "llm"
     },
     {
@@ -126,15 +144,21 @@
       "source": "llm"
     },
     {
-      "id": "4d4ba9e552307a7a",
-      "predicted": "NEEDS_RESPONSE",
-      "expected": "FYI",
+      "id": "55c7ba7ffdd7f214",
+      "predicted": "URGENT",
+      "expected": "PROMOTIONAL",
       "source": "llm"
     },
     {
       "id": "5f38d18ebe236ccb",
       "predicted": "NEEDS_RESPONSE",
       "expected": "PERSONAL",
+      "source": "llm"
+    },
+    {
+      "id": "6099b47db3fa0c63",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PROMOTIONAL",
       "source": "llm"
     },
     {
@@ -150,22 +174,16 @@
       "source": "llm"
     },
     {
-      "id": "6fe864ff010f1533",
-      "predicted": "URGENT",
-      "expected": "PROMOTIONAL",
-      "source": "llm"
-    },
-    {
-      "id": "701dc44f760c540f",
-      "predicted": "NEEDS_RESPONSE",
-      "expected": "URGENT",
-      "source": "llm"
-    },
-    {
       "id": "7e98cd7264da1497",
       "predicted": "URGENT",
       "expected": "PROMOTIONAL",
       "source": "llm"
+    },
+    {
+      "id": "7f7866189bdaa8ad",
+      "predicted": "FYI",
+      "expected": "PROMOTIONAL",
+      "source": "heuristic"
     },
     {
       "id": "86d65646ed889eb2",
@@ -180,18 +198,6 @@
       "source": "llm"
     },
     {
-      "id": "8cd47b8bc07d016e",
-      "predicted": "NEEDS_RESPONSE",
-      "expected": "FYI",
-      "source": "llm"
-    },
-    {
-      "id": "8ee1b2f1fbb89c29",
-      "predicted": "URGENT",
-      "expected": "PROMOTIONAL",
-      "source": "llm"
-    },
-    {
       "id": "95f06a2fbdb2e33a",
       "predicted": "URGENT",
       "expected": "PERSONAL",
@@ -201,6 +207,12 @@
       "id": "98e077cf3d85289f",
       "predicted": "NEEDS_RESPONSE",
       "expected": "PERSONAL",
+      "source": "llm"
+    },
+    {
+      "id": "a1511668f14aa9a4",
+      "predicted": "URGENT",
+      "expected": "PROMOTIONAL",
       "source": "llm"
     },
     {
@@ -246,12 +258,6 @@
       "source": "llm"
     },
     {
-      "id": "b1de250d853b9df7",
-      "predicted": "NEEDS_RESPONSE",
-      "expected": "PERSONAL",
-      "source": "llm"
-    },
-    {
       "id": "b37c4de726918adc",
       "predicted": "NEEDS_RESPONSE",
       "expected": "FYI",
@@ -264,15 +270,21 @@
       "source": "llm"
     },
     {
+      "id": "ba0f911e9fd56d36",
+      "predicted": "FYI",
+      "expected": "PERSONAL",
+      "source": "llm"
+    },
+    {
       "id": "c44231570ae76a19",
       "predicted": "URGENT",
       "expected": "PROMOTIONAL",
       "source": "llm"
     },
     {
-      "id": "c6c8d92acb552bf9",
+      "id": "c6d1c3352562c979",
       "predicted": "NEEDS_RESPONSE",
-      "expected": "PERSONAL",
+      "expected": "FYI",
       "source": "llm"
     },
     {
@@ -288,6 +300,12 @@
       "source": "llm"
     },
     {
+      "id": "d975b7be169b2636",
+      "predicted": "URGENT",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
       "id": "dab15c22c83b3729",
       "predicted": "NEEDS_RESPONSE",
       "expected": "FYI",
@@ -300,27 +318,21 @@
       "source": "llm"
     },
     {
-      "id": "dbe7cff7277ae87b",
-      "predicted": "URGENT",
-      "expected": "PROMOTIONAL",
-      "source": "llm"
-    },
-    {
-      "id": "de388d9c5995367b",
-      "predicted": "URGENT",
-      "expected": "PROMOTIONAL",
-      "source": "llm"
-    },
-    {
-      "id": "e0005c024c375461",
-      "predicted": "NEEDS_RESPONSE",
-      "expected": "PERSONAL",
-      "source": "llm"
-    },
-    {
       "id": "e02075614a89a575",
       "predicted": "NEEDS_RESPONSE",
       "expected": "PERSONAL",
+      "source": "llm"
+    },
+    {
+      "id": "e17e00d7b5318c3c",
+      "predicted": "FYI",
+      "expected": "PROMOTIONAL",
+      "source": "heuristic"
+    },
+    {
+      "id": "e31d74a62bc24a73",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "FYI",
       "source": "llm"
     },
     {
