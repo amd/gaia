@@ -5,6 +5,10 @@
 > doc designs how agents are **built and maintained** — the factory. The two meet at
 > the artifacts the runtime consumes: the **manifest** (§0.28), the **Hub** (§0.5), and
 > **signing** (§0.24). The factory *produces* those; the runtime *enforces* them.
+>
+> **Dependency:** the `§0.x` cross-references (manifest §0.28, Hub §0.5, signing §0.24)
+> live in the **Agent UI v2 runtime PR (#1913)** — this doc is the sibling half and
+> assumes that PR's `agent-ui-agent-capabilities-plan.md §0` as context.
 
 ## 0. Thesis — the factory is the developer flow, automated
 
