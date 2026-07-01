@@ -11,6 +11,7 @@ The Email Triage Agent connects to your Gmail account through GAIA's connectors 
 ## What it does
 
 - **Triage your inbox** — classify every message as `urgent`, `actionable`, `informational`, or `low priority`, plus separate `is_spam` and `is_phishing` flags.
+- **Find past mail** — search your mailbox with keyword or Gmail-syntax queries (`from:alice is:unread newer_than:7d`). Ask in chat (the `search_messages` tool) or call it from a consuming app via `POST /v1/email/search` on the REST contract; results carry metadata only (id, sender, subject, date, snippet) — never message bodies.
 - **Organize** — archive, label, mark read/unread, star/unstar. Reversible via the per-action undo log.
 - **Soft-delete with undo** — `trash_message` records the action; `restore_message` reverses it within a 30-second window.
 - **Draft + confirmed send** — generate replies (`draft_reply`) and forwards (`draft_forward`); `send_draft` and `send_now` require explicit user confirmation in the UI.
