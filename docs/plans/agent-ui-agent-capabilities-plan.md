@@ -1298,6 +1298,34 @@ deployment**, not of the sidecar.
 host is the provider the *Agent UI* selects. Read §0.9's custody table as "the provider
 the GAIA host implements," not "the only place custody can live."
 
+### 0.38 Practical memory / resource footprint
+
+The sidecar-first + pluggable-custody design has real RAM implications on a Ryzen laptop;
+two effects dominate, and the mode choice is a *memory* decision as much as a feature one.
+
+- **The model dominates; the broker (§0.12) is the primary memory governor.** A 4B GGUF
+  is ~2–4 GB resident. The broker's single model slot keeps **~one model resident
+  regardless of agent count** — without it, N agents wanting models = N models = OOM. So
+  §0.12 is a memory-protection mechanism, not only a correctness one.
+- **Per-sidecar overhead (~50–150 MB RSS each) is bounded by reaping.** N *installed*
+  agents ≠ N *resident* processes — lazy-spawn + the idle-reaper + the live-sidecar cap
+  (§0.13) keep only *active* agents in memory. Second governor.
+- **Custody mode changes the multiplier:** **embedded** duplicates the store *and the RAG
+  index in RAM* per agent (heaviest multi-agent); **delegated** holds shared custody +
+  **one** RAG index in the host (leanest multi-agent; host RSS grows instead);
+  **ephemeral** holds no store (lightest). The **RAG/FAISS index** (tens–hundreds of MB in
+  RAM per query) is the sneaky duplicator — embedded = N copies, delegated = 1.
+- **Model switching is churn, not resident bloat** — different-model agents evict+reload
+  (~GB I/O + a stall), serialized by the broker; hot-model affinity (§0.12) reduces thrash.
+- **Steady state ≈ one model + the daemon + the *active* sidecars + (Electron UI ~300 MB,
+  only when open)** — not "sum of everything installed."
+
+**Guidance:** **embedded** for a *single* standalone agent (minimal, no host); **delegated
+shared custody** for a *multi-agent* daily-driver (avoids store + RAG-index duplication).
+This is the concrete "whole-system resource budget" the operational review flagged as
+downstream — the governors (broker + reaper + live-cap) exist; set their limits from a
+stated target. (RAM is distinct from the *disk* footprint of §0.21.)
+
 ---
 
 ## 1. Current GAIA SDK Capability Inventory
