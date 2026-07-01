@@ -652,15 +652,27 @@ surfaced these. The first three are one coupled trust-root + containment decisio
   "trusted arbitrary code with your mailbox," and it negates "100% local."
   No-network-by-default + a **declared, install-surfaced egress allowlist** (the
   manifest names hosts, e.g. `googleapis.com`) enforced via a host-controlled
-  network namespace/proxy.
-- **Encrypt data at rest.** §0.6/§0.9 move refresh tokens, user memory, RAG,
-  transcripts, and the audit log to host custody under `~/.gaia`; §0.11 stores the
-  auth secrets in `instance.json`. `0600` stops other *users*, not the threats that
-  matter on a single-user desktop (stolen laptop, synced backup, same-user malware →
-  live refresh tokens + the whole memory/transcript store in cleartext). Put secrets
-  in the **OS keychain** (Keychain/DPAPI/libsecret) and **encrypt the custody stores**
-  — pull Phase-C's "encrypted credential vault" **forward to whenever §0.6 lands**,
-  not v0.23.
+  network namespace/proxy. **Carve-out (do not sever the control channel):** the
+  daemon's own loopback endpoints — the §0.11 callback API, the §0.12 broker, and
+  the reverse-proxy — are an **always-allowed control channel**, separate from the
+  external-host egress allowlist. The proxy enforcement variant satisfies this
+  automatically (it *is* the host); a network-namespace variant must explicitly
+  plumb the daemon socket into the namespace, or it would cut the very
+  callback/broker paths the custody model depends on.
+- **Encrypt data at rest — but separate the two secret classes (don't break §0.11).**
+  `0600` stops other *users*, not the threats that matter on a single-user desktop
+  (stolen laptop, synced backup, same-user malware). Two distinct classes:
+  - **Durable custody secrets** — OAuth **refresh tokens** (`grants.json`) and the
+    custody stores (memory/RAG/transcripts) → **OS keychain** (Keychain/DPAPI/
+    libsecret) + **encrypt at rest**. Pull Phase-C's "encrypted credential vault"
+    **forward to whenever §0.6 lands**, not v0.23. These are the high-value,
+    long-lived secrets a stolen disk exposes.
+  - **The §0.11 client-auth token** (`instance.json`) — must stay **client-readable**
+    (UI/CLI read it to call the daemon), so it legitimately remains **`0600` in
+    `instance.json`**: it is *ephemeral, re-minted every daemon startup*, so losing
+    it is harmless. Do **not** move it to the keychain — that would break the read
+    path §0.11 relies on. (The daemon↔sidecar per-spawn secret is likewise ephemeral;
+    keychain is for durable secrets only.)
 - **Make the audit log tamper-evident.** §0.19 appends actions to a host sink, but
   nothing enforces append-only — a compromised process can rewrite/truncate it,
   defeating the observability promise. Hash-chain / rolling-MAC each entry (sealing
