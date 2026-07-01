@@ -79,6 +79,9 @@ class EmailAgentConfig:
     - ``undo_window_seconds``: how long after a soft-delete the user has
       to ``restore_message``. After this window ``restore_message``
       raises with a "use Trash to recover" message.
+    - ``followup_window_days``: how many days a sent message may sit
+      without an inbound reply before ``check_followups`` flags it
+      (#1606). Must be a positive integer.
     - ``db_path``: where ``email_actions`` / ``email_drafts`` live.
       Defaults to ``~/.gaia/email/state.db``. Eval harness passes a
       ``tmp_path``-derived path so concurrent live + eval runs don't
@@ -114,6 +117,7 @@ class EmailAgentConfig:
     show_stats: bool = False
     output_dir: Optional[str] = None
     undo_window_seconds: int = 30
+    followup_window_days: int = 3
     db_path: Optional[str] = None
     memory_db_path: Optional[str] = None
     mail_provider: Optional[str] = None
@@ -140,6 +144,13 @@ class EmailAgentConfig:
                     "cloud LLM endpoints are permitted (AC3). To use a "
                     "non-default Lemonade port, set LEMONADE_BASE_URL."
                 )
+        if not isinstance(self.followup_window_days, int) or (
+            self.followup_window_days <= 0
+        ):
+            raise ConfigurationError(
+                f"EmailAgentConfig.followup_window_days must be a positive "
+                f"integer number of days, got {self.followup_window_days!r}."
+            )
 
     def resolved_db_path(self) -> str:
         """Return the SQLite path with ``$HOME`` expanded.

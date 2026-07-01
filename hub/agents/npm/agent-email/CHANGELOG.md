@@ -5,6 +5,19 @@ follows [SemVer](https://semver.org/): the **MAJOR** of the on-the-wire
 `SCHEMA_VERSION` is what `checkVersion` enforces at startup, so a contract MAJOR
 bump is always at least a package MINOR bump with a migration note.
 
+## Unreleased
+
+### Added
+
+- **Follow-up tracking (#1606).** The agent gains a read-only `check_followups`
+  tool that scans the Sent folder of every connected mailbox and flags threads
+  whose latest message is still the user's own outbound mail past a
+  configurable window (default 3 days) — surfacing message id, recipient,
+  subject, and age, most overdue first. Detection only: it never sends a
+  nudge (any send stays confirmation-gated). Agent-loop surface (chat /
+  Agent UI / `gaia email`); the sidecar REST/MCP surface is unchanged and
+  `SCHEMA_VERSION` stays `2.0`.
+
 ## 0.2.2
 
 Release-reliability fix. The 0.2.1 tag published the per-platform binaries to the
