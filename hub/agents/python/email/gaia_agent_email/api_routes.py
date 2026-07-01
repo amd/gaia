@@ -1056,7 +1056,7 @@ def get_action_db():
         if _action_db is None:
             from pathlib import Path
 
-            from gaia_agent_email import action_store
+            from gaia_agent_email import action_store, task_store
             from gaia_agent_email.config import EmailAgentConfig
 
             from gaia.database.mixin import DatabaseMixin
@@ -1069,6 +1069,7 @@ def get_action_db():
             Path(path).parent.mkdir(parents=True, exist_ok=True)
             db.init_db(path)
             action_store.init_schema(db)
+            task_store.init_schema(db)
             _action_db = db
         return _action_db
 
@@ -1425,6 +1426,39 @@ class EmailSendResponse(_Strict):
 _service = EmailTriageService()
 
 
+def _persist_triage_tasks(result: EmailTriageResult) -> None:
+    """Write a triage result's action items to the persistent task store (#1605).
+
+    Side-effect only — the inline ``action_items`` response shape is
+    untouched. Skipped when the result carries no ``message_id`` (no source
+    message to link back to) or no action items. ``record_action_items``
+    de-duplicates per message, so re-triaging never duplicates tasks.
+    """
+    from gaia_agent_email import task_store
+
+    if not result.message_id or not result.action_items:
+        return
+    task_store.record_action_items(
+        resolve_action_db(),
+        message_id=result.message_id,
+        items=result.action_items,
+    )
+
+
+def _triage_and_persist(request: EmailTriageRequest) -> EmailTriageResponse:
+    response = _service.triage_request(request)
+    _persist_triage_tasks(response.result)
+    return response
+
+
+def _triage_batch_and_persist(request: BatchTriageRequest) -> BatchTriageResponse:
+    response = _service.triage_batch(request)
+    for item in response.results:
+        if item.result is not None:
+            _persist_triage_tasks(item.result)
+    return response
+
+
 @router.post("/triage", response_model=EmailTriageResponse)
 async def triage_email(request: EmailTriageRequest) -> EmailTriageResponse:
     """Triage a single email or a full thread.
@@ -1434,9 +1468,12 @@ async def triage_email(request: EmailTriageRequest) -> EmailTriageResponse:
     ``EmailTriageResponse`` — category, spam/phishing signals, a plain-text
     summary, extracted action items, and an optional draft-reply proposal.
     No mail is read or sent; this analyzes only the payload in the request.
+    Extracted action items are also persisted to the local task store,
+    linked to the source ``message_id`` and de-duplicated per message
+    (#1605) — additive, the response shape is unchanged.
     """
     try:
-        return await asyncio.to_thread(_service.triage_request, request)
+        return await asyncio.to_thread(_triage_and_persist, request)
     except (LLMTriageError, EmailSummarizeError) as e:
         raise HTTPException(
             status_code=502, detail=f"local LLM triage failed: {e}"
@@ -1452,10 +1489,13 @@ async def triage_email_batch(request: BatchTriageRequest) -> BatchTriageResponse
     order-preserved. Per-item failures surface as ``BatchItemResult.error``
     (HTTP 200 with all items errored is valid — inspect each result). A 502
     means Lemonade was unreachable before any item was processed. No mail is
-    read or sent; this analyzes only the items in the request.
+    read or sent; this analyzes only the items in the request. Each
+    successful item's action items are persisted to the local task store,
+    linked to its source ``message_id`` and de-duplicated per message
+    (#1605) — additive, the response shape is unchanged.
     """
     try:
-        return await asyncio.to_thread(_service.triage_batch, request)
+        return await asyncio.to_thread(_triage_batch_and_persist, request)
     except LLMTriageError as e:
         # Only LLMTriageError can escape triage_batch — it is raised by the
         # pre-loop Lemonade probe when the server is unreachable. Per-item

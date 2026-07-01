@@ -2729,7 +2729,7 @@
     },
     "/v1/email/triage": {
       "post": {
-        "description": "Triage a single email or a full thread.\n\nAccepts the FROZEN #1262 ``EmailTriageRequest`` (a single-email or\nthread payload, discriminated on ``kind``) and returns the structured\n``EmailTriageResponse`` — category, spam/phishing signals, a plain-text\nsummary, extracted action items, and an optional draft-reply proposal.\nNo mail is read or sent; this analyzes only the payload in the request.",
+        "description": "Triage a single email or a full thread.\n\nAccepts the FROZEN #1262 ``EmailTriageRequest`` (a single-email or\nthread payload, discriminated on ``kind``) and returns the structured\n``EmailTriageResponse`` — category, spam/phishing signals, a plain-text\nsummary, extracted action items, and an optional draft-reply proposal.\nNo mail is read or sent; this analyzes only the payload in the request.\nExtracted action items are also persisted to the local task store,\nlinked to the source ``message_id`` and de-duplicated per message\n(#1605) — additive, the response shape is unchanged.",
         "operationId": "triage_email_v1_email_triage_post",
         "requestBody": {
           "content": {
@@ -2771,7 +2771,7 @@
     },
     "/v1/email/triage/batch": {
       "post": {
-        "description": "Triage an array of emails or threads in a single request (#1887).\n\nAccepts a ``BatchTriageRequest`` (1..MAX_BATCH_SIZE ``EmailInput`` items)\nand returns a ``BatchTriageResponse`` — one ``BatchItemResult`` per item,\norder-preserved. Per-item failures surface as ``BatchItemResult.error``\n(HTTP 200 with all items errored is valid — inspect each result). A 502\nmeans Lemonade was unreachable before any item was processed. No mail is\nread or sent; this analyzes only the items in the request.",
+        "description": "Triage an array of emails or threads in a single request (#1887).\n\nAccepts a ``BatchTriageRequest`` (1..MAX_BATCH_SIZE ``EmailInput`` items)\nand returns a ``BatchTriageResponse`` — one ``BatchItemResult`` per item,\norder-preserved. Per-item failures surface as ``BatchItemResult.error``\n(HTTP 200 with all items errored is valid — inspect each result). A 502\nmeans Lemonade was unreachable before any item was processed. No mail is\nread or sent; this analyzes only the items in the request. Each\nsuccessful item's action items are persisted to the local task store,\nlinked to its source ``message_id`` and de-duplicated per message\n(#1605) — additive, the response shape is unchanged.",
         "operationId": "triage_email_batch_v1_email_triage_batch_post",
         "requestBody": {
           "content": {
