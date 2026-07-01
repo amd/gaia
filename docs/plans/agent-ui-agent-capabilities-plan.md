@@ -327,6 +327,9 @@ the code (`email_sidecar/router.py`/`proxy.py` do no auth; the port is loopback-
   **mints a random secret per spawn**, passes it to the sidecar via env at launch,
   and the sidecar **requires it** (bearer header) on every request — fixed-function,
   `/query`, and `/confirm`. `X-Gaia-UI: 1` is CSRF hygiene, not authentication.
+  (In the daemon-less **bare-integrator** topology of §0.6, the process that
+  launches the sidecar supplies this launch secret — the sidecar always requires
+  it; only the injector changes.)
 - **The reverse contract (sidecar → host).** The custody model (§0.9) needs
   sidecars to *read* host-owned data. Define a first-class host callback API —
   `GET /host/v1/memory`, `POST /host/v1/rag/query`, `GET /host/v1/sessions/{id}` —
