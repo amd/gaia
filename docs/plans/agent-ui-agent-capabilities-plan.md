@@ -81,12 +81,20 @@ sidecars (§0.3), and holds the scheduler clock (§0.22). The **thin web UI** an
 
 ### 0.1 The agent REST contract (one per sidecar)
 
-Every agent sidecar exposes the **same** HTTP contract; the email sidecar
-(`specification.html`, schema 2.x) is the reference. Two co-equal surfaces:
+Every agent sidecar exposes the **same** HTTP contract, presenting the agent's
+**full capability set** (`specification.html`, schema 2.x, is the reference — the
+deterministic core *and* the advanced tier: task extraction, follow-up tracking,
+daily briefing, scheduled send/snooze, sender prioritization, inbox profiling,
+persistent preferences). Two co-equal surfaces:
 
-- **Fixed-function endpoints** — one deterministic call per capability
-  (`POST /v1/<agent>/<capability>`): triage, search, pre-scan, archive, calendar,
-  etc. No LLM reasoning in the loop; for scripted/integrator use.
+- **Fixed-function endpoints** — the *deterministic core* as one call each
+  (`POST /v1/<agent>/<capability>`: triage, search, pre-scan, archive, calendar-
+  create, …). No LLM in the loop; for scripted/integrator use. **Not every
+  capability is a fixed-function call** — the spec's `Capability → surface` table
+  marks the advanced/personalization/detect-and-reason tier **"agent only"**, so
+  those are reached via `/query` + the §0.22 scheduler, *not* a deterministic
+  endpoint. (So "exposes ALL capabilities" is true of the *sidecar*, split across
+  the two surfaces — not "every capability has a fixed endpoint.")
 - **`POST /v1/<agent>/query` — the agent loop, exposed over REST like any other
   endpoint.** NL request in; the sidecar reasons and chains tools into multi-step
   workflows; **response is `text/event-stream` (SSE)**. This is the surface the
@@ -754,6 +762,68 @@ backed up — custody: OAuth/memory/RAG/transcripts/audit), or **config**
 (daemon settings + per-agent settings), and state the **update-survival guarantee**:
 custody + config survive an app update; ephemeral is rebuilt. One source of truth
 prevents an update from silently orphaning grants, memory, or pinned-agent config.
+
+### 0.27 Relationship to sibling plans (supersedes / depends / reconcile)
+
+v2 is a fundamental architecture change, so several sibling plan docs — which still
+describe the in-process model — must be superseded or reconciled, or a reader
+following the wrong one builds the wrong thing.
+
+**Supersedes (the sibling doc is now wrong for out-of-process agents):**
+
+- **`connectors.mdx` + `email-sidecar-agent-ui.md` — "the sidecar reads
+  `grants.json` directly" is superseded by §0.6.** Those docs bundle
+  `gaia.connectors` into the freeze so the binary can read the grant + keyring;
+  v2 **inverts** this — the host owns consent+refresh and *forwards a short-lived
+  access token* to the sidecar via `/v1/connections`; **sidecars never touch the
+  refresh token or the ledger.** A sidecar reading `grants.json` is exactly the
+  cross-process-writer race §0.6 removes. (Most material — it changes what the
+  email cutover builds.)
+- **`security-model.mdx` "localhost-only is the trust boundary; CLI+UI are
+  TRUSTED" is superseded by §0.11/§0.24.** v2 states loopback is **not** an auth
+  boundary and mandates the three auth legs + per-agent authorization + egress
+  containment. An implementer reading only `security-model.mdx` would wrongly
+  conclude localhost binding suffices.
+- **`email-sidecar-agent-ui.md` decision 4 (fixed-call forwarding only, no
+  `/query`) is superseded** — v2 makes `/query` (SSE) the primary UI chat surface
+  (§0.10 step 1). PR #1910's `EmailProxyAgent` is already flagged superseded (§0
+  header); the standalone doc needs a top banner pointing here.
+- **`email-sidecar-agent-ui-implementation.md` "the UI backend spawns/owns the
+  sidecar; `EmailSidecarManager` lives in `src/gaia/ui/`" is the *interim*
+  (email-first, §0.10 step 1) shape, not the v2 end state.** In v2 the
+  supervisor **relocates into the headless daemon** (§0.0/§0.3/§0.14); the UI and
+  CLI only attach.
+
+**Reconcile (decide the boundary, then state it in both docs):**
+
+- **`autonomy-engine.mdx` — the v2 host daemon IS the Autonomy Engine's always-on
+  background service.** Both independently define an always-on process with a cron
+  clock; they are the **same process** (recommended). The shipped in-UI
+  `/api/schedules` router (`schedules.py`, #550) moves per §0.9: the **clock +
+  trigger registry are host/daemon**, the job **executes in the owning sidecar**
+  spawned at fire time (§0.22). Self-scheduling writes to the host clock, never
+  sidecar-local state.
+- **MCP server ownership (`connectors.mdx` mirrors servers for an in-process
+  `MCPClient`).** v2 split: the **host owns the MCP server *registry/config***
+  (user-configured, shared — §0.9); a **sidecar spawns/manages its own client
+  connections** to the servers its agent needs. The host does not proxy MCP
+  traffic; it owns the config the sidecar reads (per-agent scoped, §0.11).
+- **`setup-wizard.mdx` model download vs §0.5 per-agent install-time provisioning.**
+  Two model-download triggers exist (wizard first-run, profile-level; §0.5 per-agent
+  at install). Decide ownership + sequencing: the wizard handles the *base profile*
+  model at first run; §0.5 handles *additional* per-agent models at install, both
+  pulling through the host broker (§0.12); daemon auto-start (§0.25) must compose
+  with wizard first-run detection so they don't both fight over `setup-state.json`.
+
+**Depends on / same work (cross-link, not conflict):**
+
+- **`agent-ui-hub-publish.mdx` Part 2 "in-app Agent Hub + dynamic install" IS §0.5.**
+  Same work — cross-link them. Its multi-component model also resolves "is the UI an
+  agent?" cleanly: **the UI is an `app`, not an installable agent.** Two requirements
+  v2 layers on top that the hub docs must carry: install **provisions the model, not
+  just the binary** (§0.5 cold-start), and **sign the lock/catalog + anti-rollback**
+  (§0.24) — the hub docs specify SHA-256 + tiers, but SHA is integrity, not
+  authenticity.
 
 ---
 

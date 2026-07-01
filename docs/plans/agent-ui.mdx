@@ -55,13 +55,21 @@ callers — so there is a single surface to build, test, and dogfood:
 
 ### The agent REST interface (per sidecar)
 
-Two complementary surfaces, both first-class (`specification.html` is the email
-reference):
+The sidecar exposes the agent's **full capability set** — not a subset
+(`specification.html` is the email reference: triage, summary, draft, phishing,
+pre-scan, thread comprehension, send, batch archive, quarantine, calendar
+detect/conflicts/create, search, **task extraction, follow-up tracking, daily
+briefing, scheduled send & snooze, sender prioritization, inbox profiling,
+persistent preferences**). It presents that set over **two complementary surfaces**:
 
-- **Fixed-function endpoints** — every capability as a deterministic call
-  (triage, search, pre-scan, archive, calendar, …). For integrators who want one
-  thing, scriptably, with no LLM reasoning in the loop.
-- **`/query` — the agent loop.** A natural-language request in; the sidecar
+- **Fixed-function endpoints** — the *deterministic core* as one call each
+  (triage, search, pre-scan, archive, calendar-create, …). For integrators who
+  want one thing, scriptably, with no LLM in the loop. **Not every capability has
+  one:** the spec's own `Capability → surface` table marks the advanced /
+  personalization / detect-and-reason tier **"agent only"** — those live behind
+  `/query` and the §0.22 scheduler, not a deterministic endpoint.
+- **`/query` — the agent loop (home of the advanced surface).** A natural-language
+  request in; the sidecar
   **reasons and chains tools into multi-step workflows** (the daily-brief, "triage
   then archive promotions then draft replies" class of work). Returns an **SSE
   event stream** (`status` · `tool_call` · `tool_result` carrying the render
