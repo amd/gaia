@@ -27,10 +27,13 @@
  *     confirm-token handshake (#1779)
  *   - calendar view/create/respond (#1780)
  *   - inbox pre-scan (POST /v1/email/prescan, #1778)
+ * Schema 2.2 (additive) adds the scheduled daily-briefing surface (#1608):
+ *   GET/PUT /v1/email/briefing/schedule and POST /v1/email/briefing/run —
+ *   REST-only for now; no typed client methods/types yet.
  */
 
 /** Frozen contract version echoed by the server's `/version` endpoint. */
-export const SCHEMA_VERSION = "2.1" as const;
+export const SCHEMA_VERSION = "2.2" as const;
 
 /**
  * The five-bucket triage taxonomy (schema 2.0 — contract.py: EmailCategory).

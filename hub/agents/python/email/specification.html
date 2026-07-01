@@ -3,7 +3,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <script>(function(){try{var t=localStorage.getItem('amd-site-theme');if(!t)t=(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();</script>
-<title>Email Agent — Capability &amp; API Specification · v2.1</title>
+<title>Email Agent — Capability &amp; API Specification · v2.2</title>
 <link rel="icon" href="data:image/svg+xml,&lt;svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'&gt;&lt;rect width='32' height='32' rx='5' fill='%23111114'/&gt;&lt;g fill='none' stroke='%23c9a24a' stroke-width='2.4' stroke-linecap='round'&gt;&lt;path d='M8 9 L15 16 L8 23'/&gt;&lt;path d='M16 9 L23 16 L16 23'/&gt;&lt;/g&gt;&lt;/svg&gt;">
 <style>
   /* Self-hosted latin webfonts, base64-embedded so this spec is a single
@@ -289,16 +289,16 @@
     <h1 style="margin-top:24px">The Email Agent,<br><span class="c1">Defined End to End</span></h1>
     <p class="lead">GAIA's Email Agent reads, triages, drafts, sends, organizes, and schedules your mail — running <em>locally on Ryzen&nbsp;AI</em>, so nothing leaves the device. This spec walks through how to integrate it (REST, MCP, or the full agent), its seventeen capabilities and the guardrails that gate them, the workflows that chain them, the personalization and always-on tracks, the evaluation dataset, and the contract reference — with examples throughout.</p>
     <div class="chips">
-      <div class="chip"><div class="k">Implemented</div><div class="v">schema 2.1</div></div>
-      <div class="chip"><div class="k">New in 2.1</div><div class="v g">REST calendar</div></div>
+      <div class="chip"><div class="k">Implemented</div><div class="v">schema 2.2</div></div>
+      <div class="chip"><div class="k">New in 2.2</div><div class="v g">daily briefing</div></div>
       <div class="chip"><div class="k">Capabilities</div><div class="v g">17</div></div>
       <div class="chip"><div class="k">Personalization</div><div class="v">5</div></div>
       <div class="chip"><div class="k">Workflows</div><div class="v">10</div></div>
       <div class="chip"><div class="k">Inference</div><div class="v">100% on-device</div></div>
       <div class="chip"><div class="k">Milestone</div><div class="v g"><a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a></div></div>
     </div>
-    <div style="margin-top:30px;font-family:'JetBrains Mono',monospace;font-size:13px;letter-spacing:.04em;color:var(--faint)">Spec <b style="color:var(--c1)">v2.1</b> &nbsp;·&nbsp; updated <b style="color:var(--ink)">2026-06-26</b> &nbsp;·&nbsp; contract <b style="color:var(--ink)">schema 2.1</b> implemented &nbsp;·&nbsp; status as of <b style="color:var(--ink)"><a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (<a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a>)</b></div>
-    <div style="margin-top:10px;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.03em;color:var(--faint);max-width:900px;line-height:1.6">The contract reference documents the <b style="color:var(--ink)">implemented schema 2.1</b>: a 5-bucket triage taxonomy plus a <code>suggested_action</code> verb (schema 2.0), and the schema-2.1 REST surfaces — inbox search (<a class="iss" href="https://github.com/amd/gaia/issues/1781" target="_blank" rel="noopener">#1781</a>), inbox pre-scan (<a class="iss" href="https://github.com/amd/gaia/issues/1778" target="_blank" rel="noopener">#1778</a>), archive / quarantine mailbox actions (<a class="iss" href="https://github.com/amd/gaia/issues/1779" target="_blank" rel="noopener">#1779</a>), and calendar view / create / respond (<a class="iss" href="https://github.com/amd/gaia/issues/1780" target="_blank" rel="noopener">#1780</a>).</div>
+    <div style="margin-top:30px;font-family:'JetBrains Mono',monospace;font-size:13px;letter-spacing:.04em;color:var(--faint)">Spec <b style="color:var(--c1)">v2.2</b> &nbsp;·&nbsp; updated <b style="color:var(--ink)">2026-07-01</b> &nbsp;·&nbsp; contract <b style="color:var(--ink)">schema 2.2</b> implemented &nbsp;·&nbsp; status as of <b style="color:var(--ink)"><a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (<a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a>)</b></div>
+    <div style="margin-top:10px;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.03em;color:var(--faint);max-width:900px;line-height:1.6">The contract reference documents the <b style="color:var(--ink)">implemented schema 2.2</b>: a 5-bucket triage taxonomy plus a <code>suggested_action</code> verb (schema 2.0), the schema-2.1 REST surfaces — inbox search (<a class="iss" href="https://github.com/amd/gaia/issues/1781" target="_blank" rel="noopener">#1781</a>), inbox pre-scan (<a class="iss" href="https://github.com/amd/gaia/issues/1778" target="_blank" rel="noopener">#1778</a>), archive / quarantine mailbox actions (<a class="iss" href="https://github.com/amd/gaia/issues/1779" target="_blank" rel="noopener">#1779</a>), and calendar view / create / respond (<a class="iss" href="https://github.com/amd/gaia/issues/1780" target="_blank" rel="noopener">#1780</a>) — and the schema-2.2 scheduled daily briefing (<a class="iss" href="https://github.com/amd/gaia/issues/1608" target="_blank" rel="noopener">#1608</a>): an off-by-default schedule plus a trigger that turns the pre-scan into a morning briefing.</div>
   </div>
 </section>
 
@@ -388,7 +388,7 @@
     </div>
 
     <h3 style="margin-top:40px">Capability → surface</h3>
-    <p class="body-t">REST and MCP expose the <b>analysis + reply + send</b> core (capabilities 1–4, 6, 7). As of <b>schema 2.1</b> the <b>REST</b> surface additionally exposes the reversible mailbox mutations <b>archive</b> and <b>phishing-quarantine</b> (capabilities 8, 9) — each gated on a single-use confirmation token like <code>/send</code>, each reversible within a 30-second undo window — plus <b>calendar view / create / respond</b> (<a class="iss" href="https://github.com/amd/gaia/issues/1780" target="_blank" rel="noopener">#1780</a>; calendar <i>detect</i> and <i>conflicts</i> remain agent-only). MCP does not surface these. The remaining mailbox/calendar capabilities run through the <b>full agent</b>, which acts via a forwarded connection.</p>
+    <p class="body-t">REST and MCP expose the <b>analysis + reply + send</b> core (capabilities 1–4, 6, 7). As of <b>schema 2.1</b> the <b>REST</b> surface additionally exposes the reversible mailbox mutations <b>archive</b> and <b>phishing-quarantine</b> (capabilities 8, 9) — each gated on a single-use confirmation token like <code>/send</code>, each reversible within a 30-second undo window — plus <b>calendar view / create / respond</b> (<a class="iss" href="https://github.com/amd/gaia/issues/1780" target="_blank" rel="noopener">#1780</a>; calendar <i>detect</i> and <i>conflicts</i> remain agent-only). As of <b>schema 2.2</b> REST also carries the <b>scheduled daily briefing</b> (<a class="iss" href="https://github.com/amd/gaia/issues/1608" target="_blank" rel="noopener">#1608</a>) — an off-by-default schedule plus a trigger that turns the pre-scan into a morning briefing. MCP does not surface these. The remaining mailbox/calendar capabilities run through the <b>full agent</b>, which acts via a forwarded connection.</p>
     <table class="tbl">
       <thead><tr><th>Capability</th><th>REST</th><th>MCP</th><th>Agent</th></tr></thead>
       <tbody>
@@ -403,6 +403,7 @@
         <tr><td><b>9</b> · Quarantine (+ undo)</td><td>✓ <code>/v1/email/quarantine</code> · <code>/unquarantine</code> <span class="opt">(Gmail)</span></td><td>—</td><td>✓ <code>quarantine_phishing_message</code></td></tr>
         <tr><td>Inbox search <span class="opt">(read-only, <a class="iss" href="https://github.com/amd/gaia/issues/1781" target="_blank" rel="noopener">#1781</a>)</span></td><td>✓ <code>/v1/email/search</code></td><td>—</td><td>✓ <code>search_messages</code></td></tr>
         <tr><td>Calendar · view / create / respond <span class="opt">(of capability <b>12</b>)</span></td><td>✓ <code>/v1/email/calendar/*</code> <span class="opt">(2.1)</span></td><td>—</td><td>✓</td></tr>
+        <tr><td>Daily briefing · scheduled pre-scan <span class="opt">(off by default, <a class="iss" href="https://github.com/amd/gaia/issues/1608" target="_blank" rel="noopener">#1608</a>)</span></td><td>✓ <code>/v1/email/briefing/*</code> <span class="opt">(2.2)</span></td><td>—</td><td>—</td></tr>
         <tr><td>calendar <b>detect / conflicts</b> (10–11) &nbsp;·&nbsp; <b>13–17</b> planned &nbsp;·&nbsp; <b>P1–P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
       </tbody>
     </table>
@@ -457,12 +458,22 @@
     <pre class="code">curl -s http://localhost:8080/v1/email/prescan \
   -H "Content-Type: application/json" \
   -d '{ "max_messages": 25 }'
-# → { "schema_version": "2.1",
+# → { "schema_version": "2.2",
 #     "result": { "kind": "email_pre_scan",
 #                 "urgent": [ … ], "actionable": [ … ],
 #                 "informational_count": 7,
 #                 "suggested_archives": [ … ], "suggested_drafts": [],
 #                 "totals": { "urgent": 2, "actionable": 3, "informational": 7, "suggested_archives": 4 } } }</pre>
+    <p class="body-t"><b>Scheduled daily briefing</b> (schema 2.2, <a class="iss" href="https://github.com/amd/gaia/issues/1608" target="_blank" rel="noopener">#1608</a>) — turn the pre-scan into a morning briefing. Ships <b>off by default</b>; enable the schedule once, then a host scheduler fires the trigger daily (a disabled schedule makes the trigger a <code>409</code> no-op — it never reads mail):</p>
+    <pre class="code">curl -s -X PUT http://localhost:8080/v1/email/briefing/schedule \
+  -H "Content-Type: application/json" \
+  -d '{ "enabled": true, "time": "08:00", "max_messages": 25 }'
+curl -s -X POST http://localhost:8080/v1/email/briefing/run
+# → { "schema_version": "2.2",
+#     "result": { "kind": "email_briefing",
+#                 "generated_at": "2026-07-01T08:00:03+00:00",
+#                 "schedule": { "enabled": true, "time": "08:00", "max_messages": 25 },
+#                 "pre_scan": { "kind": "email_pre_scan", … } } }</pre>
   </div>
 </section>
 
@@ -1332,7 +1343,7 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
       <p class="body-t">Each item is triaged independently: a failure on one item sets that entry's <code>error</code> and the remaining items still run. <b>HTTP 200 with every item errored is a valid response</b> — consumers MUST inspect each <code>results[].error</code>, not just the HTTP status. A <code>502</code> means the local LLM was unreachable before any item was processed (the whole batch fails).</p>
       <h4>Request body — BatchTriageRequest</h4>
       <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
-        <tr><td><code>schema_version</code></td><td>string <span class="opt">optional</span></td><td>Contract version. Defaults to <code>"2.1"</code>.</td></tr>
+        <tr><td><code>schema_version</code></td><td>string <span class="opt">optional</span></td><td>Contract version. Defaults to <code>"2.2"</code>.</td></tr>
         <tr><td><code>items</code></td><td>list[EmailInput] <span class="req">required</span></td><td>1–100 <code>SingleEmailInput</code> / <code>ThreadInput</code> objects, discriminated on <code>kind</code>. Over 100 → <code>422</code>.</td></tr>
         <tr><td><code>context</code></td><td>TriageContext <span class="opt">optional</span></td><td>Applied to <b>all</b> items.</td></tr>
       </tbody></table>
@@ -1391,7 +1402,7 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
       <p class="desc">Search the connected mailbox (<b>read-only</b>) by Gmail-style query / labels (<a class="iss" href="https://github.com/amd/gaia/issues/1781" target="_blank" rel="noopener">#1781</a>). Returns inbox-list metadata for each match — id, thread, subject, from, snippet, labels — <b>not</b> the message body. No mail is sent or modified; no <code>confirmation_token</code> is involved. Restores the agent's in-loop inbox search on the REST contract so the Agent UI drives it through the package.</p>
       <h4>Request body — EmailSearchRequest</h4>
       <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
-        <tr><td><code>schema_version</code></td><td>string <span class="opt">optional</span></td><td>Contract version. Defaults to <code>"2.1"</code>; a mismatch lets a consumer fail loudly.</td></tr>
+        <tr><td><code>schema_version</code></td><td>string <span class="opt">optional</span></td><td>Contract version. Defaults to <code>"2.2"</code>; a mismatch lets a consumer fail loudly.</td></tr>
         <tr><td><code>query</code></td><td>string <span class="opt">optional</span></td><td>Gmail-style query (e.g. <code>from:alice is:unread</code>). A query searches <b>all mail</b>; omit it to list by label (the <code>INBOX</code> when labels are also omitted).</td></tr>
         <tr><td><code>labels</code></td><td>list[string] <span class="opt">optional</span></td><td>Label ids to filter by (e.g. <code>["INBOX","UNREAD"]</code>). Omit to apply no label filter; when <code>query</code> is also omitted, the search defaults to <code>INBOX</code>.</td></tr>
         <tr><td><code>max_results</code></td><td>int <span class="opt">optional</span></td><td>Max messages to return, <code>1–100</code> (default <code>25</code>). Each match is hydrated with a per-message fetch, so the count is capped.</td></tr>
@@ -1407,6 +1418,32 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
       </tbody></table>
       <h4>Mailbox resolution</h4>
       <p class="body-t">The mailbox is the one connected in GAIA (<i>Settings → Connectors</i>). Fails loud on an ambiguous count — never silently picks: <b>0</b> connected → <code>503</code>, <b>2+</b> connected → <code>400</code>, exactly one → that mailbox.</p>
+    </div>
+
+    <div class="endpoint" id="ep-briefing-schedule">
+      <span class="badge">GET</span><span class="path">/v1/email/briefing/schedule</span>
+      <p class="desc">Read the persisted daily-briefing schedule (schema 2.2, <a class="iss" href="https://github.com/amd/gaia/issues/1608" target="_blank" rel="noopener">#1608</a>). Ships <b>off by default</b>: an absent config is reported as disabled; a corrupt config file is a <code>500</code> naming the file and the fix — never silently reported as disabled. <code>PUT</code> to the same path replaces the schedule (full-document, contract-validated — a bad <code>time</code> or <code>max_messages</code> is a <code>422</code> before anything persists) and is the only way to turn the briefing on. The sidecar stores the preference; the <b>host</b> scheduler (autonomy engine <a class="iss" href="https://github.com/amd/gaia/issues/555" target="_blank" rel="noopener">#555</a>, cron, the GAIA UI scheduler) owns the timer.</p>
+      <h4>Schedule document — BriefingSchedule (PUT request body = GET response's <code>schedule</code>)</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>enabled</code></td><td>bool <span class="opt">optional</span></td><td>Master switch, default <code>false</code>. While false the scheduled trigger produces no briefing and never touches the mailbox.</td></tr>
+        <tr><td><code>time</code></td><td>string <span class="opt">optional</span></td><td>Local wall-clock <code>HH:MM</code> (default <code>"08:00"</code>) the host scheduler should fire the trigger at, once per day.</td></tr>
+        <tr><td><code>max_messages</code></td><td>int <span class="opt">optional</span></td><td>How many recent inbox messages the briefing pre-scan reads, <code>1–100</code> (default <code>25</code>).</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="endpoint" id="ep-briefing-run">
+      <span class="badge">POST</span><span class="path">/v1/email/briefing/run</span>
+      <p class="desc">The scheduled daily-briefing trigger (schema 2.2, <a class="iss" href="https://github.com/amd/gaia/issues/1608" target="_blank" rel="noopener">#1608</a>). No request body — the persisted schedule is the configuration. The disabled check runs <b>first</b>: a disabled schedule is a <code>409</code> before any mailbox access, so a stale or misfiring scheduler can never scan a mailbox whose briefing is off. Enabled → runs the same pre-scan classification path as <code>/v1/email/prescan</code>, returns the briefing envelope, and atomically persists it to <code>~/.gaia/email/briefing_latest.json</code> — the interim pull-based delivery surface until push delivery lands with the autonomy engine (<a class="iss" href="https://github.com/amd/gaia/issues/555" target="_blank" rel="noopener">#555</a>).</p>
+      <h4>Response body — EmailBriefingResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>schema_version</code></td><td>string</td><td>Echoes the contract version.</td></tr>
+        <tr><td><code>result.kind</code></td><td>const <code>"email_briefing"</code></td><td>Envelope discriminator for the briefing card.</td></tr>
+        <tr><td><code>result.generated_at</code></td><td>string</td><td>UTC ISO-8601 timestamp of when the briefing ran.</td></tr>
+        <tr><td><code>result.schedule</code></td><td>BriefingSchedule</td><td>The schedule that produced this briefing.</td></tr>
+        <tr><td><code>result.pre_scan</code></td><td>EmailPreScanResult</td><td>The inbox pre-scan envelope (<code>kind: "email_pre_scan"</code>) — byte-compatible with <code>/v1/email/prescan</code>, so a consumer that renders the pre-scan card renders the briefing.</td></tr>
+      </tbody></table>
+      <h4>Mailbox resolution</h4>
+      <p class="body-t">Same fail-loud resolution as the pre-scan: <b>0</b> mailboxes connected → <code>503</code>, <b>2+</b> → <code>400</code>, exactly one → that mailbox.</p>
     </div>
 
     <div class="endpoint" id="ep-confirm">
@@ -1665,12 +1702,12 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
 <footer class="footer">
   <div class="wrap">
     <p>
-      GAIA Email Agent — Capability &amp; API Specification &nbsp;·&nbsp; <b>v2.1</b> &nbsp;·&nbsp; updated <b>2026-06-26</b> &nbsp;·&nbsp; documents contract <b>schema 2.1</b> (5-bucket triage + REST search / pre-scan / archive · quarantine / calendar) &nbsp;·&nbsp; status as of <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (<a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a>)<br>
+      GAIA Email Agent — Capability &amp; API Specification &nbsp;·&nbsp; <b>v2.2</b> &nbsp;·&nbsp; updated <b>2026-07-01</b> &nbsp;·&nbsp; documents contract <b>schema 2.2</b> (5-bucket triage + REST search / pre-scan / archive · quarantine / calendar / scheduled daily briefing) &nbsp;·&nbsp; status as of <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (<a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a>)<br>
       Source of truth:
       <a href="https://github.com/amd/gaia/blob/main/hub/agents/python/email/gaia_agent_email/contract.py" target="_blank" rel="noopener">contract.py</a> ·
       <a href="https://github.com/amd/gaia/blob/main/hub/agents/python/email/gaia_agent_email/api_routes.py" target="_blank" rel="noopener">api_routes.py</a> ·
       <a href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a><br>
-      The contract reference reflects the current schema 2.1 models; the capability, guardrail,
+      The contract reference reflects the current schema 2.2 models; the capability, guardrail,
       and workflow sections describe intended behaviour.
     </p>
   </div>

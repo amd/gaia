@@ -53,12 +53,20 @@ from typing import Any, Dict, List, Literal, NoReturn, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
+from gaia_agent_email.briefing import (
+    BriefingConfigError,
+    load_schedule,
+    run_scheduled_briefing,
+    save_schedule,
+)
 from gaia_agent_email.contract import (
     ActionItem,
     BatchItemError,
     BatchItemResult,
     BatchTriageRequest,
     BatchTriageResponse,
+    BriefingSchedule,
+    BriefingScheduleResponse,
     CalendarCreateEventRequest,
     CalendarEvent,
     CalendarEventDateTime,
@@ -73,6 +81,8 @@ from gaia_agent_email.contract import (
     EmailAddress,
     EmailArchiveRequest,
     EmailArchiveResponse,
+    EmailBriefingResponse,
+    EmailBriefingResult,
     EmailCategory,
     EmailMessage,
     EmailPreScanRequest,
@@ -1532,6 +1542,96 @@ async def prescan_inbox(
     except ConnectorsError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
     return EmailPreScanResponse(result=EmailPreScanResult.model_validate(out))
+
+
+@router.get("/briefing/schedule", response_model=BriefingScheduleResponse)
+async def get_briefing_schedule() -> BriefingScheduleResponse:
+    """Read the persisted daily-briefing schedule (#1608).
+
+    An absent config file is the documented default — disabled. A present
+    but corrupt file is a 500 with the fix (never silently reported as
+    "disabled", which would hide a schedule the user thinks is on).
+    """
+    try:
+        schedule = load_schedule()
+    except BriefingConfigError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    return BriefingScheduleResponse(schedule=schedule)
+
+
+@router.put("/briefing/schedule", response_model=BriefingScheduleResponse)
+async def put_briefing_schedule(schedule: BriefingSchedule) -> BriefingScheduleResponse:
+    """Replace the persisted daily-briefing schedule (#1608).
+
+    Full-document replace: the body is the complete schedule, validated by
+    the contract model (bad ``time``/``max_messages`` → 422 before anything
+    persists). This is how a host turns the briefing on — it ships OFF.
+    """
+    try:
+        path = save_schedule(schedule)
+    except OSError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Could not persist the briefing schedule: {e}. Check that "
+                "~/.gaia/email/ is writable, then retry."
+            ),
+        ) from e
+    logger.info("briefing schedule replaced at %s (enabled=%s)", path, schedule.enabled)
+    return BriefingScheduleResponse(schedule=schedule)
+
+
+@router.post("/briefing/run", response_model=EmailBriefingResponse)
+async def run_briefing() -> EmailBriefingResponse:
+    """The scheduled daily-briefing trigger (#1608).
+
+    A host scheduler (autonomy engine #555, cron, the GAIA UI scheduler)
+    calls this on its tick; no request body — the persisted schedule is the
+    configuration. The disabled check runs FIRST (409, actionable) so a
+    disabled schedule is a clean no-op that never resolves a mailbox
+    backend, let alone reads mail. When enabled, the run reuses the
+    pre-scan classification path via ``run_scheduled_briefing`` and both
+    returns the briefing envelope and persists it as the latest briefing
+    (the interim pull-based delivery surface until push delivery lands
+    with the autonomy engine).
+    """
+    try:
+        schedule = load_schedule()
+    except BriefingConfigError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    if not schedule.enabled:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "The daily briefing schedule is disabled (it ships off by "
+                "default). Enable it first via PUT /v1/email/briefing/schedule "
+                'with {"enabled": true, "time": "HH:MM"}.'
+            ),
+        )
+    backend = get_prescan_backend()
+    try:
+        out = await asyncio.to_thread(
+            run_scheduled_briefing, backend, schedule=schedule
+        )
+    except (
+        AuthRequiredError,
+        ScopeMismatchError,
+        ConnectionRevokedError,
+    ) as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ConfigurationError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except ConnectorsError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    except OSError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Briefing ran but could not persist its envelope: {e}. Check "
+                "that ~/.gaia/email/ is writable, then retry."
+            ),
+        ) from e
+    return EmailBriefingResponse(result=EmailBriefingResult.model_validate(out))
 
 
 @router.post("/draft", response_model=EmailDraftResponse)

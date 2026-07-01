@@ -124,6 +124,28 @@ reversible inside a 30s window via the ungated `unarchive` / `unquarantine`. Eve
 non-2xx response throws `HttpError` (`status`, `url`, `bodyText`) — handle it; there is
 no silent null.
 
+**Scheduled daily briefing (schema 2.2, REST-only).** The sidecar can turn the
+pre-scan into a scheduled morning briefing (#1608), but it does **not** run a
+timer — your app (or GAIA's autonomy engine, once it lands) owns the schedule and
+fires the trigger. No typed client methods yet; use `fetch` against the sidecar:
+
+```ts
+// Enable once (ships OFF by default):
+await fetch(`${base}/v1/email/briefing/schedule`, {
+  method: "PUT",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ enabled: true, time: "08:00", max_messages: 25 }),
+});
+// What your scheduler fires daily — returns { result: { kind: "email_briefing",
+// pre_scan: { kind: "email_pre_scan", … } } }; renders with the same card as prescan().
+const briefing = await fetch(`${base}/v1/email/briefing/run`, { method: "POST" });
+```
+
+A disabled schedule makes the trigger a `409` **before any mailbox access** — a
+misfiring scheduler can never scan a mailbox whose briefing is off. Each run also
+persists the envelope to `~/.gaia/email/briefing_latest.json` for pull-based
+consumers.
+
 ## 5. From a renderer (Electron / browser)
 
 The sidecar serves **same-origin only — no CORS**. A renderer on a different origin

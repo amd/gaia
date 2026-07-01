@@ -48,6 +48,10 @@ _EXPECTED_RESPONSE_MODELS = {
     ("post", "/v1/email/triage/batch"): "BatchTriageResponse",  # #1887 additive
     ("post", "/v1/email/search"): "EmailSearchResponse",
     ("post", "/v1/email/prescan"): "EmailPreScanResponse",
+    # Scheduled daily briefing (schema 2.2, #1608).
+    ("get", "/v1/email/briefing/schedule"): "BriefingScheduleResponse",
+    ("put", "/v1/email/briefing/schedule"): "BriefingScheduleResponse",
+    ("post", "/v1/email/briefing/run"): "EmailBriefingResponse",
     ("post", "/v1/email/draft"): "EmailDraftResponse",
     ("post", "/v1/email/send"): "EmailSendResponse",
     # Mailbox actions (schema 2.1, #1779).

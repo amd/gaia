@@ -1,6 +1,6 @@
 # @amd-gaia/agent-email
 
-[![npm version](https://img.shields.io/npm/v/@amd-gaia/agent-email?label=version)](https://www.npmjs.com/package/@amd-gaia/agent-email) · contract `SCHEMA_VERSION` **2.1** · last updated **2026-06-26**
+[![npm version](https://img.shields.io/npm/v/@amd-gaia/agent-email?label=version)](https://www.npmjs.com/package/@amd-gaia/agent-email) · contract `SCHEMA_VERSION` **2.2** · last updated **2026-07-01**
 
 **Eval scorecard (v0.3.0): aggregate 84.67 / 100** — within-one-bucket **acceptance** accuracy (3-run mean, 95% CI [83.4, 86.0]) over 100 of 220 labeled emails ([`./SCORECARD.md`](./SCORECARD.md)). Triage priority is ordinal, so the bar (#1437) credits exact-or-adjacent buckets — what users feel — not exact 4-way match (reported as a secondary, 0.46). The linked scorecard carries the full recipe, metrics + reported secondaries, run-to-run variance/CI, a per-category breakdown, the run environment, a worked recomputation, and reproduction steps.
 
@@ -214,9 +214,13 @@ When you need finer control, the steps are exported individually:
 | `checkVersion(client)` | Throw if the sidecar's contract MAJOR differs from the client's. |
 | `shutdown(sidecar)` | Kill the whole process tree. |
 
-As of `SCHEMA_VERSION` 2.1 this package exposes inbox **search** (read-only),
-the **archive** / phishing-**quarantine** mailbox actions (+ their undo), and
-calendar **view / create / respond**. The remaining mailbox **actions** (label,
+As of `SCHEMA_VERSION` 2.2 this package exposes inbox **search** (read-only),
+the **archive** / phishing-**quarantine** mailbox actions (+ their undo),
+calendar **view / create / respond**, and a **scheduled daily briefing** (#1608):
+an off-by-default schedule plus a `POST /v1/email/briefing/run` trigger that
+turns the pre-scan into a morning briefing — REST-only for now (no typed client
+methods yet; drive it with `fetch`), with the timer owned by your app or GAIA's
+autonomy engine, not the sidecar. The remaining mailbox **actions** (label,
 move, mark read/unread) are part of the full agent but not yet exposed through
 this package — see
 [`SPEC.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md) for the complete surface.

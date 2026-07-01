@@ -18,9 +18,9 @@ function clientReturning(apiVersion: string, agentVersion = "0.2.0"): EmailClien
 }
 
 describe("checkVersion", () => {
-  it("accepts apiVersion 2.0 against the current 2.1 default (same MAJOR 2)", async () => {
+  it("accepts apiVersion 2.0 against the current 2.2 default (same MAJOR 2)", async () => {
     // checkVersion enforces MAJOR only, so a 2.0 sidecar stays compatible with
-    // this client's default-expected SCHEMA_VERSION (now 2.1).
+    // this client's default-expected SCHEMA_VERSION (now 2.2).
     const info = await checkVersion(clientReturning("2.0"));
     expect(info.apiVersion).toBe("2.0");
   });

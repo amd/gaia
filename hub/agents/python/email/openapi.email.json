@@ -146,7 +146,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -171,7 +171,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -181,6 +181,56 @@
           "results"
         ],
         "title": "BatchTriageResponse",
+        "type": "object"
+      },
+      "BriefingSchedule": {
+        "additionalProperties": false,
+        "description": "The persisted daily-briefing schedule. OFF by default.\n\nThe sidecar does not run a timer — ``time`` is the preference a HOST\nscheduler (autonomy engine #555, OS cron, the GAIA UI scheduler) reads to\ndecide when to fire ``POST /v1/email/briefing/run``. The trigger itself\nre-checks ``enabled``, so a stale or misconfigured scheduler can never\nscan a mailbox whose briefing the user turned off.",
+        "properties": {
+          "enabled": {
+            "default": false,
+            "description": "Master switch. False (the default) means the scheduled trigger produces no briefing and never touches the mailbox.",
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "max_messages": {
+            "default": 25,
+            "description": "How many recent inbox messages the briefing pre-scan reads. Bounded like EmailPreScanRequest.max_messages.",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Max Messages",
+            "type": "integer"
+          },
+          "time": {
+            "default": "08:00",
+            "description": "Local wall-clock HH:MM the host scheduler should fire the briefing trigger at, once per day.",
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+            "title": "Time",
+            "type": "string"
+          }
+        },
+        "title": "BriefingSchedule",
+        "type": "object"
+      },
+      "BriefingScheduleResponse": {
+        "additionalProperties": false,
+        "description": "Response envelope for the briefing-schedule read/replace endpoints.",
+        "properties": {
+          "schedule": {
+            "$ref": "#/components/schemas/BriefingSchedule",
+            "description": "The currently persisted schedule."
+          },
+          "schema_version": {
+            "default": "2.2",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schedule"
+        ],
+        "title": "BriefingScheduleResponse",
         "type": "object"
       },
       "CalendarCreateEventRequest": {
@@ -248,7 +298,7 @@
             "title": "Provider"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -435,7 +485,7 @@
             "title": "Location"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -475,7 +525,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -506,7 +556,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -542,7 +592,7 @@
             "title": "Provider"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -582,7 +632,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -699,7 +749,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -812,7 +862,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -831,6 +881,60 @@
           "undo_window_seconds"
         ],
         "title": "EmailArchiveResponse",
+        "type": "object"
+      },
+      "EmailBriefingResponse": {
+        "additionalProperties": false,
+        "description": "Top-level briefing-trigger response envelope (#1608).",
+        "properties": {
+          "result": {
+            "$ref": "#/components/schemas/EmailBriefingResult",
+            "description": "The briefing envelope."
+          },
+          "schema_version": {
+            "default": "2.2",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "EmailBriefingResponse",
+        "type": "object"
+      },
+      "EmailBriefingResult": {
+        "additionalProperties": false,
+        "description": "One scheduled briefing: the pre-scan envelope plus run metadata.\n\n``pre_scan`` is byte-compatible with what ``POST /v1/email/prescan``\nreturns (``kind == \"email_pre_scan\"``) — same classification path, so a\nconsumer that already renders the pre-scan card renders the briefing.",
+        "properties": {
+          "generated_at": {
+            "description": "UTC ISO-8601 timestamp of when the briefing ran.",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "kind": {
+            "const": "email_briefing",
+            "default": "email_briefing",
+            "description": "Envelope discriminator for the briefing card.",
+            "title": "Kind",
+            "type": "string"
+          },
+          "pre_scan": {
+            "$ref": "#/components/schemas/EmailPreScanResult",
+            "description": "The inbox pre-scan envelope (kind: email_pre_scan)."
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/BriefingSchedule",
+            "description": "The schedule that produced this briefing."
+          }
+        },
+        "required": [
+          "generated_at",
+          "schedule",
+          "pre_scan"
+        ],
+        "title": "EmailBriefingResult",
         "type": "object"
       },
       "EmailCategory": {
@@ -1004,7 +1108,7 @@
             "type": "integer"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1022,7 +1126,7 @@
             "description": "The pre-scan envelope."
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1187,7 +1291,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1259,7 +1363,7 @@
             "title": "Query"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1310,7 +1414,7 @@
             "title": "Query"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1515,7 +1619,7 @@
             "title": "Payload"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1545,7 +1649,7 @@
             "description": "The structured analysis."
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1703,7 +1807,7 @@
             "type": "integer"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1771,7 +1875,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -2201,7 +2305,7 @@
   "info": {
     "description": "REST surface for the GAIA Email Triage agent (/v1/email/*). Cross-implementation contract for the npm client and native builds.",
     "title": "GAIA Email Agent API",
-    "version": "2.1"
+    "version": "2.2"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -2242,6 +2346,90 @@
           }
         },
         "summary": "Archive Email",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/briefing/run": {
+      "post": {
+        "description": "The scheduled daily-briefing trigger (#1608).\n\nA host scheduler (autonomy engine #555, cron, the GAIA UI scheduler)\ncalls this on its tick; no request body — the persisted schedule is the\nconfiguration. The disabled check runs FIRST (409, actionable) so a\ndisabled schedule is a clean no-op that never resolves a mailbox\nbackend, let alone reads mail. When enabled, the run reuses the\npre-scan classification path via ``run_scheduled_briefing`` and both\nreturns the briefing envelope and persists it as the latest briefing\n(the interim pull-based delivery surface until push delivery lands\nwith the autonomy engine).",
+        "operationId": "run_briefing_v1_email_briefing_run_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailBriefingResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Run Briefing",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/briefing/schedule": {
+      "get": {
+        "description": "Read the persisted daily-briefing schedule (#1608).\n\nAn absent config file is the documented default — disabled. A present\nbut corrupt file is a 500 with the fix (never silently reported as\n\"disabled\", which would hide a schedule the user thinks is on).",
+        "operationId": "get_briefing_schedule_v1_email_briefing_schedule_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BriefingScheduleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Briefing Schedule",
+        "tags": [
+          "email"
+        ]
+      },
+      "put": {
+        "description": "Replace the persisted daily-briefing schedule (#1608).\n\nFull-document replace: the body is the complete schedule, validated by\nthe contract model (bad ``time``/``max_messages`` → 422 before anything\npersists). This is how a host turns the briefing on — it ships OFF.",
+        "operationId": "put_briefing_schedule_v1_email_briefing_schedule_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BriefingSchedule"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BriefingScheduleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Briefing Schedule",
         "tags": [
           "email"
         ]

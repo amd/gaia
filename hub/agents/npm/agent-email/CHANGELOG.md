@@ -5,6 +5,25 @@ follows [SemVer](https://semver.org/): the **MAJOR** of the on-the-wire
 `SCHEMA_VERSION` is what `checkVersion` enforces at startup, so a contract MAJOR
 bump is always at least a package MINOR bump with a migration note.
 
+## Unreleased
+
+Contract bumped to `SCHEMA_VERSION` **2.2** — additive, no existing shape change,
+so `checkVersion` (MAJOR-only) keeps accepting 2.x clients.
+
+- **Scheduled daily inbox briefing** (#1608): the sidecar can now turn the
+  pre-scan into a scheduled morning briefing instead of only answering on
+  demand. New REST surface: `GET`/`PUT /v1/email/briefing/schedule` (persisted
+  schedule — **off by default**; enabling it is an explicit `PUT`) and
+  `POST /v1/email/briefing/run` (the trigger a host scheduler fires daily; the
+  sidecar stores the preference but runs no timer — that belongs to the host /
+  GAIA's autonomy engine #555). A disabled schedule makes the trigger a `409`
+  before any mailbox access, so a misfiring scheduler can never scan a mailbox
+  whose briefing is off. The run returns a `kind: "email_briefing"` envelope
+  whose `pre_scan` is byte-compatible with `prescan()`'s card, and atomically
+  persists it to `~/.gaia/email/briefing_latest.json` as the interim pull-based
+  delivery surface until push delivery lands with the autonomy engine.
+  REST-only for now — no typed client methods yet; drive it with `fetch`.
+
 ## 0.3.0
 
 Contract bumped to `SCHEMA_VERSION` **2.1** — additive, no triage shape change, so
