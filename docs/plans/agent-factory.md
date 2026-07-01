@@ -77,7 +77,8 @@ spec, baseline, failure modes, and *what changed in the SDK since last build*.
 
 The factory is a **supervised** pipeline, not a fully-autonomous one. Every risky stage
 carries an **approve/deny gate** — the *same* confirmation model the agents themselves use
-(runtime §0.4 confirmation gate, §0.34 autonomy levels). A human (or a policy) accepts or
+(runtime §0.4 confirmation gate, §0.34 autonomy *policy layer* — a policy engine, not an
+enum of levels). A human (or a policy) accepts or
 rejects at each checkpoint before the pipeline proceeds:
 
 | Checkpoint | What the human approves / denies |
