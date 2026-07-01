@@ -10,6 +10,12 @@
 > (#1913)** — this doc is the sibling half and assumes that PR's
 > `agent-ui-agent-capabilities-plan.md §0` as context.
 
+**Reading map** (§ jump-list for a 486-line doc):
+- **Why & what** — §0 thesis (SDLC automated) · §1 the live-SDK keystone · §1.5 the *recipe* (the one authored input)
+- **Engine & governance** — §2 agentic-coding engine · §2.5 human approve/deny gates · §2.6 the factory's *own* least-privilege
+- **The pipeline** — §3 the 18 stages · §4 docs-as-output · §5/§5.5 eval gate + synthetic-data discipline · §6/§6.5 ship rigor + recovery · §7 multi-component product · §8 runtime seam
+- **Plan & honesty** — §9 exists-vs-net-new · §10 milestones M0→M4 (easiest→hardest) · §11 distinctiveness · §11.5/§11.6 adversarial corrections · §12 open decisions
+
 ## 0. Thesis — the factory is the SDLC, automated, against a living SDK
 
 An agent is **not a static artifact frozen against an SDK snapshot.** The GAIA SDK
@@ -54,6 +60,36 @@ agent silently drifts from the platform. Therefore:
   **trigger** — re-scope / re-implement / **re-eval against the held-out oracle** (§5.5) /
   re-PR / re-ship — not a human fire drill. Keeping N agents correct against a moving SDK
   is the dominant, valuable work; it is exactly what the factory automates.
+
+## 1.5 The recipe — the single authored input
+
+Everything downstream is driven by one declarative **`recipe`** — the human intent the
+orchestrator plans from and the source the machine `manifest` (§0.28) is derived from
+(§12.5 keeps the two separate: recipe = intent, manifest = enforced contract). It is the
+*human-authored* artifact; the factory produces everything else. Shape:
+
+```yaml
+id: email
+purpose: "Triage, search, and organize a personal Gmail/Outlook mailbox, locally."
+model:      { llm: Gemma-4-E4B-it-GGUF, min_ctx: 8192 }   # → manifest.requiredModels
+tools:      [rag, file_io]                                 # KNOWN_TOOLS mixins
+skills:     [triage-inbox, follow-up-tracking]             # SKILL.md (skill-format)
+mcp:        [gmail, google-calendar]                       # MCP servers (tool-loader)
+connectors: { google: [gmail.modify, calendar] }           # → manifest.oauthScopes (least-priv)
+egress:     [googleapis.com]                                # → manifest.egressAllowlist (§0.24)
+eval:                                                       # the gate (§5, §5.5)
+  held_out_oracle: oracles/email/            # human-curated, curator ≠ spec author
+  safety_floors:   { urgent_recall: 0.95 }   # per-agent hard floors (#1437 pattern)
+  gate:            "LCB(acceptance, k=5) >= previous_release"
+trust_tier: verified                                        # → manifest.trustTier (§0.24)
+gates:      { sdk_release: human, ship: human }             # per-stage approve/deny (§2.5)
+targets:    [win32-x64, darwin-arm64, darwin-x64, linux-x64]
+```
+
+The recipe's content-hash is part of provenance (§1) — a published agent is traceable to
+the exact recipe that built it. Authoring the recipe *is* the human's core input; note the
+recipe names the **held-out oracle path** but not its contents (that stays human-curated,
+§5.5) and does not set the version (the factory decides the bump, §6.5).
 
 ## 2. The engine — agentic coding in an isolated SDK clone
 
@@ -333,8 +369,8 @@ verify) · git worktrees.
 1. **The dev-half orchestrator** — integrate the GAIA coder + an Agent-SDK/Claude-Code
    loop + skills + memory into one driver (`gaia factory <recipe>`) in an isolated live-SDK
    worktree, producing a merged, evaluated agent on `main`.
-2. **The recipe / agent-spec input** — declarative intent (purpose, capabilities, eval
-   config, targets) the orchestrator plans from → also the source of the manifest.
+2. **The recipe / agent-spec input** (§1.5) — the declarative intent the orchestrator
+   plans from → also the source of the manifest.
 3. **The manifest emitter** (stage 10) — derive `manifest.json` from recipe + outputs.
 4. **Generalize the ship half from one-agent to per-agent** — the pipeline exists for
    email; make it recipe-driven for any agent.
