@@ -14,6 +14,7 @@ The Email Triage Agent connects to your Gmail account through GAIA's connectors 
 - **Organize** — archive, label, mark read/unread, star/unstar. Reversible via the per-action undo log.
 - **Soft-delete with undo** — `trash_message` records the action; `restore_message` reverses it within a 30-second window.
 - **Draft + confirmed send** — generate replies (`draft_reply`) and forwards (`draft_forward`); `send_draft` and `send_now` require explicit user confirmation in the UI.
+- **Voice-matched drafting** — learn your writing style from your Sent mail (`build_voice_profile`) so drafts sound like you; the style profile is derived and stored locally, nothing leaves the device.
 - **Calendar** — list events, accept/decline invites, create events from email content (all calendar mutations gated by user confirmation).
 
 ## Setup
@@ -156,6 +157,10 @@ Senders you reply to quickly are automatically promoted to priority on the next 
 ### Inbox profiling
 
 `profile_inbox` — asks "who emails me most?" and returns a frequency ranking of senders with their dominant category (e.g. *urgent*, *informational*) and the timestamp of their most recent message. Profiling is built from the interaction history the agent accumulates during triage, so it improves the more you use the agent.
+
+### Voice-matched drafting
+
+`build_voice_profile` — ask the agent to "learn my writing style" and it samples your recent Sent mail, derives a style profile (usual greeting, sign-off, typical length, formality), and stores it on-device. From then on, drafted replies come out in your voice instead of neutral boilerplate — still returned for your approval, never auto-sent. The profile keeps derived features only (never your Sent message content) and lives in the agent's local SQLite database; nothing leaves the device. `clear_voice_profile` forgets it.
 
 ### Organize (reversible via the undo log)
 
