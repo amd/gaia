@@ -107,91 +107,19 @@ jobs:
             # v10 -- GGUF weights live in the HuggingFace hub cache -- so it was
             # a silent no-op and has been removed.
 
-            # Pull embedding model (actual model used in tests)
-            Write-Host "`n=== Pulling Embedding Model ==="
-            Write-Host "Pulling nomic-embed-text-v2-moe-GGUF..."
-            try {
-                $body = @{ model_name = "nomic-embed-text-v2-moe-GGUF" } | ConvertTo-Json
-                $response = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/pull" `
-                    -Method POST -ContentType "application/json" -Body $body -TimeoutSec 600
-                Write-Host "   [OK] Model pull initiated"
-            } catch {
-                Write-Host "   [WARN] Pull may have failed: $($_.Exception.Message)"
-            }
-
-            # Load embedding model into memory (required in Lemonade v9.x)
-            Write-Host "`n=== Loading Embedding Model ==="
-            try {
-                $loadRequest = @{
-                    model_name = "nomic-embed-text-v2-moe-GGUF"
-                } | ConvertTo-Json
-
-                Write-Host "Loading model: nomic-embed-text-v2-moe-GGUF"
-                $loadResponse = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/load" `
-                    -Method POST -Body $loadRequest -ContentType "application/json" -TimeoutSec 60
-                Write-Host "[OK] Model loaded successfully: $($loadResponse | ConvertTo-Json -Compress)"
-            } catch {
-                Write-Host "[ERROR] Model load failed: $($_.Exception.Message)"
-                if ($_.ErrorDetails) {
-                    Write-Host "Error details: $($_.ErrorDetails.Message)"
-                }
-                throw "Failed to load embedding model"
-            }
-
-            # Wait for llamacpp backend to fully initialize (increased from 10s)
-            Write-Host "Waiting 30 seconds for llamacpp backend initialization..."
-            Start-Sleep -Seconds 30
-
-            # Verify model is available
-            try {
-                $models = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/models" -Method GET
-                Write-Host "`n[OK] Available models:"
-                $models.data | ForEach-Object { Write-Host "   - $($_.id)" }
-            } catch {
-                Write-Host "[WARN] Could not verify model: $($_.Exception.Message)"
-            }
-
-            # Verify server is still responding before embeddings test
-            Write-Host "`n=== Verifying Server Health ==="
-            try {
-                $health = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/health" -Method GET -TimeoutSec 10
-                Write-Host "[OK] Server responding: $($health | ConvertTo-Json -Compress)"
-            } catch {
-                Write-Host "[ERROR] Server health check failed: $($_.Exception.Message)"
-                # Show server job output for debugging
+            # Pull + load + verify the embedding model THROUGH GAIA's
+            # LemonadeClient so CI validates our actual interface to Lemonade
+            # (including the model-load retry that absorbs the transient
+            # AMD-Vulkan "llama-server failed to start" fault) rather than raw
+            # REST, which would bypass that resilience and flake.
+            Write-Host "`n=== Pull + load + verify embedding model via LemonadeClient ==="
+            python tests/ci_lemonade_check.py --model nomic-embed-text-v2-moe-GGUF --embeddings
+            if ($LASTEXITCODE -ne 0) {
                 if ($env:LEMONADE_JOB_ID) {
-                    $jobOutput = Receive-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
-                    Write-Host "Server output: $jobOutput"
+                    Write-Host "Server output:"
+                    Receive-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
                 }
-                throw "Server not responding after model load"
-            }
-
-            # Verify embedding model with actual API call
-            Write-Host "`n=== Verifying Embedding Model ==="
-            $maxRetries = 3
-            $retryCount = 0
-            $modelReady = $false
-
-            while ($retryCount -lt $maxRetries -and -not $modelReady) {
-                try {
-                    $testBody = @{ input = @("test embedding"); model = "nomic-embed-text-v2-moe-GGUF" } | ConvertTo-Json
-                    # Use localhost consistently and increased timeout for first embedding request
-                    $response = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/embeddings" `
-                        -Method POST -ContentType "application/json" -Body $testBody -TimeoutSec 300
-                    Write-Host "[OK] Embedding model verified successfully"
-                    $modelReady = $true
-                } catch {
-                    $retryCount++
-                    Write-Host "[WARN] Embedding verification attempt $retryCount failed: $($_.Exception.Message)"
-                    if ($retryCount -lt $maxRetries) {
-                        Write-Host "Waiting 30 seconds before retry..."
-                        Start-Sleep -Seconds 30
-                    }
-                }
-            }
-
-            if (-not $modelReady) {
-                throw "Embedding model failed to load after $maxRetries attempts"
+                throw "Embedding model setup/verify via LemonadeClient failed"
             }
 
             # Run tests in same session while server is running
