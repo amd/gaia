@@ -340,3 +340,371 @@ describe("agent-seeder", () => {
     expect(result.errors).toEqual([]);
   });
 });
+
+// ── Marker-based deletion honoring + legacy zoo-agent cleanup ────────────
+//
+// Contract under test (issue #1908):
+//   - A per-agent marker file at `<home>/.gaia/seeder/<id>.seeded` records
+//     "this machine seeded <id> once". Its EXISTENCE is the signal — content
+//     is informational only and never asserted on here.
+//   - Marker present → never re-seed, even after the user deletes the agent.
+//   - A legacy `~/.gaia/agents/zoo-agent` left by older installs is cleaned
+//     up once (guarded: sentinel required, no user modifications, never
+//     through a symlink) and reported via the new additive `cleaned` array.
+
+describe("marker-based deletion honoring + legacy cleanup", () => {
+  afterEach(() => {
+    restoreEnv();
+  });
+
+  function markerPath(fakeHome, id) {
+    return path.join(fakeHome, ".gaia", "seeder", `${id}.seeded`);
+  }
+
+  function writeMarker(fakeHome, id) {
+    fs.mkdirSync(path.join(fakeHome, ".gaia", "seeder"), { recursive: true });
+    fs.writeFileSync(
+      markerPath(fakeHome, id),
+      JSON.stringify({ seededAt: new Date().toISOString(), source: "test" })
+    );
+  }
+
+  function agentDirPath(fakeHome, id) {
+    return path.join(fakeHome, ".gaia", "agents", id);
+  }
+
+  /**
+   * Ensure `<resources>/agents/` exists even when a test bundles nothing,
+   * so the seeder proceeds past its missing-source guard and cleanup runs.
+   */
+  function ensureBundleRoot(fakeResources) {
+    fs.mkdirSync(path.join(fakeResources, "agents"), { recursive: true });
+  }
+
+  /**
+   * Plant a legacy seeded zoo-agent at `<home>/.gaia/agents/zoo-agent` with
+   * a valid `.seeded` sentinel whose `seededAt` lies one hour in the past.
+   * Every file's mtime is pinned to `seededAt` (unmodified-since-seed shape).
+   * Returns { dir, seededAt }.
+   */
+  function createLegacyZooAgent(fakeHome) {
+    const seededAt = new Date(Date.now() - 60 * 60 * 1000);
+    const dir = agentDirPath(fakeHome, "zoo-agent");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "agent.py"), "print('zoo')\n");
+    fs.writeFileSync(path.join(dir, "manifest.json"), "{}");
+    fs.writeFileSync(
+      path.join(dir, ".seeded"),
+      JSON.stringify({ seededAt: seededAt.toISOString(), source: "test" })
+    );
+    for (const name of ["agent.py", "manifest.json", ".seeded"]) {
+      fs.utimesSync(path.join(dir, name), seededAt, seededAt);
+    }
+    fs.utimesSync(dir, seededAt, seededAt);
+    return { dir, seededAt };
+  }
+
+  test("AC1 fresh install — seeds example-agent, writes sentinel and marker", async () => {
+    const { fakeHome, fakeResources } = makeSandbox();
+    createBundledAgent(fakeResources, "example-agent", {
+      "agent.py": "class ExampleAgent: pass\n",
+    });
+
+    const seeder = loadSeederWith({ fakeHome, resourcesPath: fakeResources });
+    const result = await seeder.seedBundledAgents();
+
+    expect(result.seeded).toEqual(["example-agent"]);
+    expect(result.errors).toEqual([]);
+
+    const target = agentDirPath(fakeHome, "example-agent");
+    expect(fs.existsSync(path.join(target, "agent.py"))).toBe(true);
+    expect(fs.existsSync(path.join(target, ".seeded"))).toBe(true);
+    expect(fs.existsSync(markerPath(fakeHome, "example-agent"))).toBe(true);
+  });
+
+  test("AC2 deletion honored — deleted agent is never re-seeded while marker survives", async () => {
+    const { fakeHome, fakeResources } = makeSandbox();
+    createBundledAgent(fakeResources, "example-agent");
+
+    const seeder = loadSeederWith({ fakeHome, resourcesPath: fakeResources });
+    const first = await seeder.seedBundledAgents();
+    expect(first.seeded).toEqual(["example-agent"]);
+
+    // User deletes the seeded agent (marker left in place).
+    const target = agentDirPath(fakeHome, "example-agent");
+    fs.rmSync(target, { recursive: true, force: true });
+
+    const second = await seeder.seedBundledAgents();
+    expect(second.seeded).toEqual([]);
+    expect(second.skipped).toContain("example-agent");
+    expect(fs.existsSync(target)).toBe(false);
+    expect(fs.existsSync(markerPath(fakeHome, "example-agent"))).toBe(true);
+  });
+
+  test("AC3 back-fill — pre-marker install gets a marker, then deletion is honored", async () => {
+    const { fakeHome, fakeResources } = makeSandbox();
+    createBundledAgent(fakeResources, "backfill-agent");
+
+    // Simulate an install seeded before markers existed: dir + sentinel,
+    // no marker anywhere.
+    const target = agentDirPath(fakeHome, "backfill-agent");
+    fs.mkdirSync(target, { recursive: true });
+    fs.writeFileSync(path.join(target, "agent.py"), "original\n");
+    fs.writeFileSync(
+      path.join(target, ".seeded"),
+      JSON.stringify({ seededAt: new Date().toISOString(), source: "test" })
+    );
+
+    const seeder = loadSeederWith({ fakeHome, resourcesPath: fakeResources });
+    const first = await seeder.seedBundledAgents();
+
+    expect(first.seeded).toEqual([]);
+    expect(first.skipped).toContain("backfill-agent");
+    // Marker back-filled from the sentinel.
+    expect(fs.existsSync(markerPath(fakeHome, "backfill-agent"))).toBe(true);
+    // Contents untouched.
+    expect(fs.readFileSync(path.join(target, "agent.py"), "utf8")).toBe("original\n");
+
+    // Now the user deletes it — must stay deleted.
+    fs.rmSync(target, { recursive: true, force: true });
+    const second = await seeder.seedBundledAgents();
+    expect(second.seeded).toEqual([]);
+    expect(fs.existsSync(target)).toBe(false);
+    expect(fs.existsSync(markerPath(fakeHome, "backfill-agent"))).toBe(true);
+  });
+
+  test("AC4 marker precedence — user-recreated dir under a marked id is never touched", async () => {
+    const { fakeHome, fakeResources } = makeSandbox();
+    createBundledAgent(fakeResources, "precedence-agent", {
+      "bundled-only.txt": "from installer",
+    });
+
+    // Prior seed+delete cycle left a marker; the user then hand-created
+    // their OWN agent under the same id (no sentinel).
+    writeMarker(fakeHome, "precedence-agent");
+    const target = agentDirPath(fakeHome, "precedence-agent");
+    fs.mkdirSync(target, { recursive: true });
+    fs.writeFileSync(path.join(target, "user-file.txt"), "mine now");
+
+    const seeder = loadSeederWith({ fakeHome, resourcesPath: fakeResources });
+    const result = await seeder.seedBundledAgents();
+
+    expect(result.seeded).toEqual([]);
+    expect(result.skipped).toContain("precedence-agent");
+    expect(result.errors).toEqual([]);
+
+    // The user's dir is exactly as they left it.
+    expect(fs.readFileSync(path.join(target, "user-file.txt"), "utf8")).toBe("mine now");
+    expect(fs.existsSync(path.join(target, "bundled-only.txt"))).toBe(false);
+    expect(fs.existsSync(path.join(target, ".seeded"))).toBe(false);
+  });
+
+  test("AC5 user-owned — no sentinel, no marker: untouched, and NO marker is created", async () => {
+    const { fakeHome, fakeResources } = makeSandbox();
+    createBundledAgent(fakeResources, "user-owned-agent", {
+      "bundled-only.txt": "from installer",
+    });
+
+    const target = agentDirPath(fakeHome, "user-owned-agent");
+    fs.mkdirSync(target, { recursive: true });
+    fs.writeFileSync(path.join(target, "user-file.txt"), "hands off");
+
+    const seeder = loadSeederWith({ fakeHome, resourcesPath: fakeResources });
+
+    for (let run = 0; run < 2; run += 1) {
+      const result = await seeder.seedBundledAgents();
+      expect(result.seeded).toEqual([]);
+      expect(result.skipped).toContain("user-owned-agent");
+      expect(result.errors).toEqual([]);
+      expect(fs.readFileSync(path.join(target, "user-file.txt"), "utf8")).toBe("hands off");
+      expect(fs.existsSync(path.join(target, "bundled-only.txt"))).toBe(false);
+      expect(fs.existsSync(path.join(target, ".seeded"))).toBe(false);
+      // Crucially: a user-owned dir must NOT acquire a marker.
+      expect(fs.existsSync(markerPath(fakeHome, "user-owned-agent"))).toBe(false);
+    }
+  });
+
+  test("AC6 legacy cleanup — unmodified seeded zoo-agent is removed exactly once", async () => {
+    const { fakeHome, fakeResources } = makeSandbox();
+    ensureBundleRoot(fakeResources); // zoo-agent is NOT bundled anymore
+    const { dir } = createLegacyZooAgent(fakeHome);
+
+    const seeder = loadSeederWith({ fakeHome, resourcesPath: fakeResources });
+    const first = await seeder.seedBundledAgents();
+
+    expect(first.cleaned).toEqual(["zoo-agent"]);
+    expect(fs.existsSync(dir)).toBe(false);
+
+    const second = await seeder.seedBundledAgents();
+    expect(second.cleaned).toEqual([]);
+    expect(fs.existsSync(dir)).toBe(false);
+  });
+
+  test("AC7 legacy cleanup — user-modified zoo-agent is preserved", async () => {
+    const { fakeHome, fakeResources } = makeSandbox();
+    ensureBundleRoot(fakeResources);
+    const { dir, seededAt } = createLegacyZooAgent(fakeHome);
+
+    // One file modified well past seededAt + 5s slack → user's work now.
+    const late = new Date(seededAt.getTime() + 60 * 1000);
+    fs.utimesSync(path.join(dir, "agent.py"), late, late);
+
+    const seeder = loadSeederWith({ fakeHome, resourcesPath: fakeResources });
+    const result = await seeder.seedBundledAgents();
+
+    expect(result.cleaned).toEqual([]);
+    expect(fs.existsSync(dir)).toBe(true);
+    expect(fs.existsSync(path.join(dir, "agent.py"))).toBe(true);
+  });
+
+  const symlinkTest = process.platform === "win32" ? test.skip : test;
+  symlinkTest("AC8 legacy cleanup — never deletes through a symlink", async () => {
+    const { base, fakeHome, fakeResources } = makeSandbox();
+    ensureBundleRoot(fakeResources);
+
+    // A real directory elsewhere, reached via a symlink at the zoo-agent path.
+    const linkTarget = path.join(base, "link-target");
+    fs.mkdirSync(linkTarget, { recursive: true });
+    fs.writeFileSync(path.join(linkTarget, "precious.txt"), "do not delete");
+    fs.writeFileSync(
+      path.join(linkTarget, ".seeded"),
+      JSON.stringify({
+        seededAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+        source: "test",
+      })
+    );
+
+    fs.mkdirSync(path.join(fakeHome, ".gaia", "agents"), { recursive: true });
+    fs.symlinkSync(linkTarget, agentDirPath(fakeHome, "zoo-agent"), "dir");
+
+    const seeder = loadSeederWith({ fakeHome, resourcesPath: fakeResources });
+    const result = await seeder.seedBundledAgents();
+
+    expect(result.cleaned).toEqual([]);
+    // Nothing behind the link was harmed.
+    expect(fs.existsSync(path.join(linkTarget, "precious.txt"))).toBe(true);
+    expect(fs.readFileSync(path.join(linkTarget, "precious.txt"), "utf8")).toBe(
+      "do not delete"
+    );
+  });
+
+  test("AC9 cleanup failure isolation — EPERM on rmSync does not block seeding", async () => {
+    const { fakeHome, fakeResources } = makeSandbox();
+    createBundledAgent(fakeResources, "goodagent");
+    const { dir } = createLegacyZooAgent(fakeHome);
+
+    // Simulate a Windows-style file lock: rmSync throws only for zoo-agent
+    // paths; every other call falls through to the real implementation.
+    const realRm = fs.rmSync.bind(fs);
+    const rmSpy = jest.spyOn(fs, "rmSync").mockImplementation((target, opts) => {
+      if (typeof target === "string" && target.includes("zoo-agent")) {
+        const err = new Error("EPERM: simulated locked file");
+        err.code = "EPERM";
+        throw err;
+      }
+      return realRm(target, opts);
+    });
+
+    const seeder = loadSeederWith({ fakeHome, resourcesPath: fakeResources });
+    const result = await seeder.seedBundledAgents();
+
+    rmSpy.mockRestore();
+
+    // No throw escaped, cleanup reported nothing, and seeding proceeded.
+    expect(result.cleaned).toEqual([]);
+    expect(result.seeded).toContain("goodagent");
+    expect(fs.existsSync(dir)).toBe(true); // left for retry next launch
+    expect(
+      fs.existsSync(path.join(agentDirPath(fakeHome, "goodagent"), ".seeded"))
+    ).toBe(true);
+  });
+
+  test("AC10 upgrade in one pass — zoo cleaned AND example-agent seeded in a single run", async () => {
+    const { fakeHome, fakeResources } = makeSandbox();
+    createBundledAgent(fakeResources, "example-agent", {
+      "agent.py": "class ExampleAgent: pass\n",
+    });
+    const { dir: zooDir } = createLegacyZooAgent(fakeHome);
+
+    const seeder = loadSeederWith({ fakeHome, resourcesPath: fakeResources });
+    const result = await seeder.seedBundledAgents();
+
+    expect(result.cleaned).toEqual(["zoo-agent"]);
+    expect(result.seeded).toEqual(["example-agent"]);
+    expect(fs.existsSync(zooDir)).toBe(false);
+
+    const target = agentDirPath(fakeHome, "example-agent");
+    expect(fs.existsSync(path.join(target, ".seeded"))).toBe(true);
+    expect(fs.existsSync(markerPath(fakeHome, "example-agent"))).toBe(true);
+  });
+
+  test("AC11 reset semantics — agents/ wipe stays deleted; seeder/ wipe re-seeds", async () => {
+    const { fakeHome, fakeResources } = makeSandbox();
+    createBundledAgent(fakeResources, "example-agent");
+
+    const seeder = loadSeederWith({ fakeHome, resourcesPath: fakeResources });
+    const first = await seeder.seedBundledAgents();
+    expect(first.seeded).toEqual(["example-agent"]);
+
+    // Wipe ~/.gaia/agents entirely — markers live outside it and survive.
+    fs.rmSync(path.join(fakeHome, ".gaia", "agents"), {
+      recursive: true,
+      force: true,
+    });
+
+    const second = await seeder.seedBundledAgents();
+    expect(second.seeded).toEqual([]);
+    expect(second.skipped).toContain("example-agent");
+    expect(fs.existsSync(agentDirPath(fakeHome, "example-agent"))).toBe(false);
+
+    // Deleting the marker root is the documented recovery path.
+    fs.rmSync(path.join(fakeHome, ".gaia", "seeder"), {
+      recursive: true,
+      force: true,
+    });
+
+    const third = await seeder.seedBundledAgents();
+    expect(third.seeded).toEqual(["example-agent"]);
+    expect(
+      fs.existsSync(path.join(agentDirPath(fakeHome, "example-agent"), ".seeded"))
+    ).toBe(true);
+  });
+
+  test("AC12 identity — bundled example-agent exists and no zoo persona remains", () => {
+    const bundledRoot = path.join(
+      __dirname,
+      "..",
+      "..",
+      "src",
+      "gaia",
+      "apps",
+      "webui",
+      "build",
+      "bundled-agents"
+    );
+
+    const agentPy = path.join(bundledRoot, "example-agent", "agent.py");
+    expect(fs.existsSync(agentPy)).toBe(true);
+
+    const content = fs.readFileSync(agentPy, "utf8");
+    expect(content).toContain("class ExampleAgent");
+    expect(content).toContain('AGENT_ID = "example-agent"');
+    expect(content).toContain('AGENT_NAME = "Example Agent"');
+
+    // No file anywhere under bundled-agents/ may carry the zoo persona.
+    function walkFiles(root) {
+      const out = [];
+      for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+        const p = path.join(root, entry.name);
+        if (entry.isDirectory()) out.push(...walkFiles(p));
+        else if (entry.isFile()) out.push(p);
+      }
+      return out;
+    }
+
+    const offenders = walkFiles(bundledRoot).filter((p) =>
+      /zoo/i.test(fs.readFileSync(p, "utf8"))
+    );
+    expect(offenders).toEqual([]);
+  });
+});
