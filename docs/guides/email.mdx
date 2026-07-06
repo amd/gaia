@@ -11,9 +11,11 @@ The Email Triage Agent connects to your Gmail account through GAIA's connectors 
 ## What it does
 
 - **Triage your inbox** — classify every message as `urgent`, `actionable`, `informational`, or `low priority`, plus separate `is_spam` and `is_phishing` flags.
+- **Find past mail** — search your mailbox with keyword or Gmail-syntax queries (`from:alice is:unread newer_than:7d`). Ask in chat (the `search_messages` tool) or call it from a consuming app via `POST /v1/email/search` on the REST contract; results carry metadata only (id, sender, subject, date, snippet) — never message bodies.
 - **Organize** — archive, label, mark read/unread, star/unstar. Reversible via the per-action undo log.
 - **Soft-delete with undo** — `trash_message` records the action; `restore_message` reverses it within a 30-second window.
 - **Draft + confirmed send** — generate replies (`draft_reply`) and forwards (`draft_forward`); `send_draft` and `send_now` require explicit user confirmation in the UI.
+- **Voice-matched drafting** — learn your writing style from your Sent mail (`build_voice_profile`) so drafts sound like you; the style profile is derived and stored locally, nothing leaves the device.
 - **Calendar** — list events, accept/decline invites, create events from email content (all calendar mutations gated by user confirmation).
 
 ## Setup
@@ -143,6 +145,25 @@ Preferences are stored in process memory only — restarting the agent (or quitt
 
 Senders you reply to quickly are automatically promoted to priority on the next triage run — no explicit command needed. The agent measures how long it took you to reply to each sender (using the original message's receipt timestamp as the anchor) and promotes senders whose median reply latency falls below the threshold. Promotion is applied on-demand during triage, not on a background thread, and persists across agent restarts. Works across both connected mailboxes (Gmail and Outlook).
 
+### Scheduled daily briefing (off by default)
+
+The email sidecar can run the pre-scan on a daily timer — no prompt needed — so the
+triage card is already waiting for you in the morning. It is **off by default**;
+enable it with environment variables when launching the sidecar:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `GAIA_EMAIL_BRIEFING_ENABLED` | unset (off) | `true`/`1`/`yes` turns the daily briefing on. |
+| `GAIA_EMAIL_BRIEFING_TIME` | `08:00` | Daily fire time, 24h local `HH:MM`. |
+| `GAIA_EMAIL_BRIEFING_MAX_MESSAGES` | `25` | Inbox messages to scan per run (1–100). |
+
+Each run produces the same `email_pre_scan` envelope as an on-demand pre-scan
+(the classification path is shared — nothing is re-implemented) and persists it
+locally; fetch the latest run from `GET /v1/email/briefing` (`404` until the first
+scheduled run). An invalid value fails sidecar startup with an actionable error
+rather than guessing a schedule. Push delivery and a cross-agent morning brief
+are planned on the autonomy engine (#555).
+
 ## Action surface
 
 ### Read
@@ -156,6 +177,10 @@ Senders you reply to quickly are automatically promoted to priority on the next 
 ### Inbox profiling
 
 `profile_inbox` — asks "who emails me most?" and returns a frequency ranking of senders with their dominant category (e.g. *urgent*, *informational*) and the timestamp of their most recent message. Profiling is built from the interaction history the agent accumulates during triage, so it improves the more you use the agent.
+
+### Voice-matched drafting
+
+`build_voice_profile` — ask the agent to "learn my writing style" and it samples your recent Sent mail, derives a style profile (usual greeting, sign-off, typical length, formality), and stores it on-device. From then on, drafted replies come out in your voice instead of neutral boilerplate — still returned for your approval, never auto-sent. The profile keeps derived features only (never your Sent message content) and lives in the agent's local SQLite database; nothing leaves the device. `clear_voice_profile` forgets it.
 
 ### Organize (reversible via the undo log)
 
@@ -295,9 +320,10 @@ isolated, and dogfoods the exact binary shipped to integrators.
 `dev`); there is no in-process fallback. Two surfaces run through it:
 
 - **The `/v1/email/*` REST surface** — the full schema-2.1 contract (triage,
-  batch triage, search, inbox pre-scan, draft/send + confirm, archive/unarchive,
-  quarantine/unquarantine, calendar view/preview/create/respond, health,
-  version). This is exactly what third-party integrators consume, so the UI
+  batch triage, search, inbox pre-scan, scheduled daily briefing, draft/send +
+  confirm, archive/unarchive, quarantine/unquarantine, calendar
+  view/preview/create/respond, health, version). This is exactly what
+  third-party integrators consume, so the UI
   exercises the real product. The sidecar's connector OAuth **write** routes are
   never exposed (all grant writes stay on the backend's single-writer path).
 - **The in-app email chat agent** (`agent_type=email`) — the local-LLM tool loop

@@ -62,6 +62,8 @@ from gaia_agent_email.tools.read_tools import ReadToolsMixin
 from gaia_agent_email.tools.reply_tools import ReplyToolsMixin
 from gaia_agent_email.tools.schedule_tools import ScheduleToolsMixin
 from gaia_agent_email.tools.summarize_tools import SummarizeToolsMixin
+from gaia_agent_email.tools.voice_tools import VoiceToolsMixin
+from gaia_agent_email.voice_profile import render_style_guidance
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
@@ -149,6 +151,9 @@ ACTIONS:
   reversible (cancel keeps it archived) and needs no confirmation. Times
   are ISO-8601, e.g. '2026-07-02T09:00'; both are cancellable before they
   fire via cancel_scheduled_job with the job_id.
+- Style tools (build_voice_profile, clear_voice_profile) — learn or
+  forget the user's writing style from their Sent mail. Local-only:
+  reads mail, sends nothing; the profile is stored on-device.
 
 PRE-SCAN BEHAVIOR:
 When the user asks for a pre-scan, morning brief, triage view, or "what's
@@ -186,6 +191,7 @@ class EmailTriageAgent(
     PreferenceToolsMixin,
     PhishingToolsMixin,
     ProfileToolsMixin,
+    VoiceToolsMixin,
 ):
     """Email Triage Agent — Gmail + Calendar through the connectors
     framework, all body inference local on Lemonade.
@@ -363,7 +369,13 @@ class EmailTriageAgent(
         return AgentConsole()
 
     def _get_system_prompt(self) -> str:
-        return _SYSTEM_PROMPT
+        # Voice/style-matched drafting (#1607): once a profile has been
+        # built from Sent mail, every turn's prompt carries the style
+        # guidance so draft bodies come out in the user's own voice.
+        profile = action_store.fetch_voice_profile(self)
+        if profile is None:
+            return _SYSTEM_PROMPT
+        return _SYSTEM_PROMPT + "\n" + render_style_guidance(profile)
 
     def process_query(self, *args, **kwargs):
         # Zero the batch-organize counter per turn so a long-lived instance
@@ -389,6 +401,7 @@ class EmailTriageAgent(
         self._register_preference_tools()
         self._register_phishing_tools()
         self._register_profile_tools()
+        self._register_voice_tools()
         self.register_memory_tools()
 
     # -- Phase 2 multi-inbox routing (#1603) -------------------------------

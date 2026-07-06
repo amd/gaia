@@ -204,6 +204,9 @@ class TestToolRegistry:
         "clear_session_preferences",
         # Inbox profiling from memory (#1289)
         "profile_inbox",
+        # Voice/style profile from Sent mail (#1607)
+        "build_voice_profile",
+        "clear_voice_profile",
     }
 
     def test_every_expected_tool_is_registered(self, agent):
