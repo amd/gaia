@@ -540,6 +540,26 @@ describe("marker-based deletion honoring + legacy cleanup", () => {
     expect(fs.existsSync(dir)).toBe(false);
   });
 
+  test("legacy cleanup — regenerated __pycache__ does not count as a user modification", async () => {
+    const { fakeHome, fakeResources } = makeSandbox();
+    ensureBundleRoot(fakeResources);
+    const { dir } = createLegacyZooAgent(fakeHome);
+
+    // The agent registry exec_module-loads agent.py on every backend
+    // startup, regenerating __pycache__ with a fresh mtime — that is not
+    // the user's work and must not block cleanup.
+    const pycache = path.join(dir, "__pycache__");
+    fs.mkdirSync(pycache, { recursive: true });
+    fs.writeFileSync(path.join(pycache, "agent.cpython-312.pyc"), "bytecode");
+    // mtimes left at NOW — long after seededAt.
+
+    const seeder = loadSeederWith({ fakeHome, resourcesPath: fakeResources });
+    const result = await seeder.seedBundledAgents();
+
+    expect(result.cleaned).toEqual(["zoo-agent"]);
+    expect(fs.existsSync(dir)).toBe(false);
+  });
+
   test("AC7 legacy cleanup — user-modified zoo-agent is preserved", async () => {
     const { fakeHome, fakeResources } = makeSandbox();
     ensureBundleRoot(fakeResources);
