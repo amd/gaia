@@ -586,6 +586,69 @@ describe("POST /publish — CHANGELOG", () => {
   });
 });
 
+describe("POST /publish — SPEC & SKILL doc tabs", () => {
+  it("stores spec + skill, serves them, and includes them in index.json", async () => {
+    const env = makeEnv();
+    const spec = "# Spec\n\nThe wire contract is 2.0.\n";
+    const skill = "# Skill\n\nSpawn the sidecar, then call triage.\n";
+    const res = await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest(),
+      artifact: "wheel",
+      filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
+      spec,
+      skill,
+    });
+    expect(res.status).toBe(201);
+    expect(env.bucket.keys()).toContain("agents/chat/0.1.0/SPEC.md");
+    expect(env.bucket.keys()).toContain("agents/chat/0.1.0/SKILL.md");
+
+    // Served by the existing GET /agents/... download route, as markdown.
+    const getSpec = await worker.fetch(
+      new Request("https://hub.amd-gaia.ai/agents/chat/0.1.0/SPEC.md"),
+      env as never
+    );
+    expect(getSpec.status).toBe(200);
+    expect(getSpec.headers.get("content-type")).toContain("text/markdown");
+    expect(await getSpec.text()).toBe(spec);
+
+    const index = (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex;
+    const entry = index.agents.find((a) => a.id === "chat")!;
+    expect(entry.spec).toBe(spec);
+    expect(entry.skill).toBe(skill);
+  });
+
+  it('defaults spec + skill to "" in index.json when none are published', async () => {
+    const env = makeEnv();
+    await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest(),
+      artifact: "wheel",
+      filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
+    });
+    expect(env.bucket.keys()).not.toContain("agents/chat/0.1.0/SPEC.md");
+    const entry = (
+      (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex
+    ).agents.find((a) => a.id === "chat")!;
+    expect(entry.spec).toBe("");
+    expect(entry.skill).toBe("");
+  });
+
+  it("rejects an empty spec part (400) — omit it instead", async () => {
+    const env = makeEnv();
+    const res = await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest(),
+      artifact: "wheel",
+      filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
+      spec: "   ",
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as any).error.code).toBe("invalid_request");
+    expect(env.bucket.keys()).toEqual([]);
+  });
+});
+
 describe("POST /publish — npm_package & playground_url", () => {
   it("carries npm_package and playground_url through to index.json", async () => {
     const env = makeEnv();
@@ -617,6 +680,96 @@ describe("POST /publish — npm_package & playground_url", () => {
     const entry = index.agents.find((a) => a.id === "plain")!;
     expect(entry.npm_package).toBeUndefined();
     expect(entry.playground_url).toBeUndefined();
+  });
+});
+
+describe("POST /publish — whole-package zip + file list", () => {
+  const filesJson = JSON.stringify({
+    files: [
+      { name: "binaries/email-agent-linux-x64", size_bytes: 35000000 },
+      { name: "dist/index.js", size_bytes: 4096 },
+      { name: "README.md", size_bytes: 13000 },
+    ],
+  });
+
+  it("surfaces package { filename, size_bytes, files } in index.json when a zip + package_files are published", async () => {
+    const env = makeEnv();
+    await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ id: "sidecar" }),
+      artifact: "ZIPBYTES",
+      filename: "agent-sidecar-0.1.0.zip",
+      packageFiles: filesJson,
+    });
+    const entry = (
+      (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex
+    ).agents.find((a) => a.id === "sidecar")!;
+    expect(entry.package).toBeDefined();
+    expect(entry.package!.filename).toBe("agent-sidecar-0.1.0.zip");
+    expect(entry.package!.size_bytes).toBe("ZIPBYTES".length);
+    expect(entry.package!.files).toHaveLength(3);
+    expect(entry.package!.files[0].name).toBe("binaries/email-agent-linux-x64");
+  });
+
+  it("stores package_files on a LATER POST after the version already exists (real release order)", async () => {
+    // The real release publishes the per-platform binaries first (creating the
+    // version), THEN the whole-package zip + package_files in a separate POST. So
+    // the listing arrives when versionExists is already true — it must still be
+    // stored, or the catalog never gets `package` and the file list never renders.
+    const env = makeEnv();
+    const yaml = sampleManifest({ id: "email", name: "Email", version: "0.1.0" });
+
+    const first = await publish(env, {
+      token: "tok_amd",
+      manifestYaml: yaml,
+      artifact: "linux-binary",
+      filename: "email-agent-linux-x64",
+    });
+    expect(first.status).toBe(201);
+
+    // Second POST: the whole-package zip + the file listing, version now exists.
+    const second = await publish(env, {
+      token: "tok_amd",
+      manifestYaml: yaml,
+      artifact: "ZIPBYTES",
+      filename: "agent-email-0.1.0.zip",
+      packageFiles: filesJson,
+    });
+    expect(second.status).toBe(201);
+
+    const entry = (
+      (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex
+    ).agents.find((a) => a.id === "email")!;
+    expect(entry.package).toBeDefined();
+    expect(entry.package!.filename).toBe("agent-email-0.1.0.zip");
+    expect(entry.package!.files).toHaveLength(3);
+  });
+
+  it("omits package when no package_files manifest is published (even if a .zip exists)", async () => {
+    const env = makeEnv();
+    await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ id: "plain" }),
+      artifact: "z",
+      filename: "plain-0.1.0.zip",
+    });
+    const entry = (
+      (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex
+    ).agents.find((a) => a.id === "plain")!;
+    expect(entry.package).toBeUndefined();
+  });
+
+  it("rejects a malformed package_files part (400)", async () => {
+    const env = makeEnv();
+    const res = await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ id: "bad" }),
+      artifact: "z",
+      filename: "bad-0.1.0.zip",
+      packageFiles: '{"files":[{"name":"x"}]}', // missing size_bytes
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as any).error.code).toBe("invalid_request");
   });
 });
 

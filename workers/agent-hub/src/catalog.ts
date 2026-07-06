@@ -5,12 +5,19 @@
  * Build per-agent manifests and the top-level catalog index.
  */
 
+import { parse as parseYaml } from "yaml";
+
 import { compareSemver } from "./manifest";
 import {
+  evalScorecardKey,
   listAgentIds,
   readAgentManifest,
   readChangelog,
+  readEvalScorecard,
+  readPackageFiles,
   readReadme,
+  readSkill,
+  readSpec,
   writeIndex,
 } from "./storage";
 import type {
@@ -94,16 +101,52 @@ export function upsertVersion(
 }
 
 /**
- * Build the catalog entry for one agent manifest. `readme` and `changelog` are
- * the latest version's markdown ("" if none was published).
+ * Parse the `aggregate.value` from a scorecard's YAML front matter. Returns
+ * undefined when the scorecard is absent, malformed, or missing the field —
+ * never throws so a bad scorecard never breaks the catalog build.
+ */
+function parseScorecardScore(markdown: string | null): number | undefined {
+  if (!markdown) return undefined;
+  // Extract the YAML front matter block between the leading --- delimiters.
+  const match = /^---\n([\s\S]*?)\n---/.exec(markdown);
+  if (!match) return undefined;
+  try {
+    const fm = parseYaml(match[1]) as Record<string, unknown> | null;
+    const agg = fm && typeof fm === "object" ? (fm.aggregate as Record<string, unknown> | undefined) : undefined;
+    const val = agg?.value;
+    return typeof val === "number" && Number.isFinite(val) ? val : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Build the catalog entry for one agent manifest. `readme`/`changelog` are the
+ * latest version's markdown ("" if none was published); `packageFiles` is the
+ * whole-package zip's file listing (null if no package zip was published);
+ * `evalScorecard` is the scorecard markdown (null if none was published).
  */
 export function toIndexEntry(
   agent: AgentManifest,
   readme: string,
-  changelog: string
+  changelog: string,
+  packageFiles: { files: { name: string; size_bytes: number }[] } | null,
+  spec = "",
+  skill = "",
+  evalScorecard: string | null = null,
+  baseUrl = "https://hub.amd-gaia.ai"
 ): IndexEntry {
   const latest = agent.versions[agent.latest_version];
   const req = agent.requirements;
+  // The whole-package download is the published `.zip` artifact of the latest
+  // version, paired with its file listing. Only surface it when both exist.
+  const zip = (latest?.artifacts ?? [latest?.artifact]).find(
+    (a) => a && a.filename.toLowerCase().endsWith(".zip")
+  );
+  const pkg =
+    packageFiles && zip
+      ? { filename: zip.filename, size_bytes: zip.size_bytes, files: packageFiles.files }
+      : undefined;
   return {
     id: agent.id,
     name: agent.name,
@@ -133,9 +176,16 @@ export function toIndexEntry(
     },
     readme,
     changelog,
+    spec,
+    skill,
     // undefined serializes to "key absent" — only present when the manifest set it.
     npm_package: agent.npm_package,
     playground_url: agent.playground_url,
+    eval_scorecard_url: evalScorecard !== null
+      ? `${baseUrl.replace(/\/$/, "")}/${evalScorecardKey(agent.id, agent.latest_version)}`
+      : undefined,
+    eval_score: parseScorecardScore(evalScorecard),
+    package: pkg,
   };
 }
 
@@ -145,7 +195,8 @@ export function toIndexEntry(
  */
 export async function rebuildIndex(
   bucket: R2Bucket,
-  now: Date = new Date()
+  now: Date = new Date(),
+  baseUrl = "https://hub.amd-gaia.ai"
 ): Promise<CatalogIndex> {
   const ids = await listAgentIds(bucket);
   const entries: IndexEntry[] = [];
@@ -154,7 +205,11 @@ export async function rebuildIndex(
     if (!agent) continue;
     const readme = await readReadme(bucket, id, agent.latest_version);
     const changelog = await readChangelog(bucket, id, agent.latest_version);
-    entries.push(toIndexEntry(agent, readme, changelog));
+    const packageFiles = await readPackageFiles(bucket, id, agent.latest_version);
+    const spec = await readSpec(bucket, id, agent.latest_version);
+    const skill = await readSkill(bucket, id, agent.latest_version);
+    const evalScorecard = await readEvalScorecard(bucket, id, agent.latest_version);
+    entries.push(toIndexEntry(agent, readme, changelog, packageFiles, spec, skill, evalScorecard, baseUrl));
   }
   entries.sort((a, b) => a.id.localeCompare(b.id));
 

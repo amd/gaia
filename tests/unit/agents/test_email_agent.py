@@ -175,6 +175,11 @@ class TestToolRegistry:
         "send_draft",
         "send_now",
         "forward_message",
+        # Scheduled send + snooze (#1609)
+        "schedule_send",
+        "snooze_message",
+        "cancel_scheduled_job",
+        "list_scheduled_jobs",
         # Delete
         "trash_message",
         "restore_message",
@@ -199,6 +204,9 @@ class TestToolRegistry:
         "clear_session_preferences",
         # Inbox profiling from memory (#1289)
         "profile_inbox",
+        # Voice/style profile from Sent mail (#1607)
+        "build_voice_profile",
+        "clear_voice_profile",
     }
 
     def test_every_expected_tool_is_registered(self, agent):
@@ -230,6 +238,7 @@ class TestConfirmationGating:
         [
             "send_draft",
             "send_now",
+            "schedule_send",
             "forward_message",
             "permanent_delete",
             "accept_invite",

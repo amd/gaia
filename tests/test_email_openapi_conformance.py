@@ -34,6 +34,7 @@ pytest.importorskip("gaia_agent_email")
 
 from fastapi.testclient import TestClient  # noqa: E402
 from gaia_agent_email.contract import (  # noqa: E402
+    BatchTriageResponse,
     EmailCategory,
     EmailTriageResponse,
     EmailTriageResult,
@@ -249,7 +250,7 @@ def test_triage_conforms_to_spec(client, committed_spec):
     for key in required:
         assert key in body, f"required key {key!r} missing from /triage response"
 
-    assert body.get("schema_version") == "2.0"
+    assert body.get("schema_version") == API_VERSION
     assert body.get("request_kind") == "single"
     assert "result" in body
     result = body["result"]
@@ -260,6 +261,103 @@ def test_triage_conforms_to_spec(client, committed_spec):
 def test_triage_invalid_payload_returns_422(client):
     """POST /triage with a malformed body returns 422 (documented validation error)."""
     resp = client.post("/v1/email/triage", json={"schema_version": "2.0"})
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# 3.5 /search — conformance (mailbox backend injected; no live mail)
+# ---------------------------------------------------------------------------
+
+
+def _gmail_search_message() -> dict:
+    """A minimal Gmail-API-v1-shaped message the search route can hydrate."""
+    import base64
+
+    data = base64.urlsafe_b64encode(b"Body the search list drops.").decode().rstrip("=")
+    return {
+        "id": "s1",
+        "threadId": "t-s1",
+        "snippet": "please review",
+        "labelIds": ["INBOX", "UNREAD"],
+        "payload": {
+            "mimeType": "text/plain",
+            "headers": [
+                {"name": "Subject", "value": "Prod incident"},
+                {"name": "From", "value": "Sarah Chen <sarah@example.com>"},
+                {"name": "To", "value": "me@example.com"},
+                {"name": "Date", "value": "Mon, 01 Jan 2026 10:00:00 +0000"},
+            ],
+            "body": {"data": data},
+        },
+    }
+
+
+class _FakeSearchBackend:
+    """Inject-only fake exposing the two read methods the search route uses."""
+
+    def __init__(self, messages):
+        self._messages = {m["id"]: m for m in messages}
+
+    def list_messages(
+        self, *, query=None, label_ids=None, max_results=25, page_token=None
+    ):
+        ids = list(self._messages)[:max_results]
+        return {
+            "messages": [
+                {"id": i, "threadId": self._messages[i]["threadId"]} for i in ids
+            ],
+            "nextPageToken": None,
+        }
+
+    def get_message(self, message_id):
+        return self._messages[message_id]
+
+
+def test_search_conforms_to_spec(client, committed_spec):
+    """POST /search returns a body conforming to the EmailSearchResponse schema.
+
+    The mailbox backend is injected via ``app.dependency_overrides`` so no live
+    mail is touched — the running server still exercises the real route.
+    """
+    from gaia_agent_email.api_routes import get_search_backend
+
+    fake = _FakeSearchBackend([_gmail_search_message()])
+    client.app.dependency_overrides[get_search_backend] = lambda: fake
+    try:
+        resp = client.post(
+            "/v1/email/search", json={"query": "is:unread", "max_results": 10}
+        )
+    finally:
+        client.app.dependency_overrides.pop(get_search_backend, None)
+
+    assert resp.status_code == 200, resp.text
+
+    schema_name = _schema_name_from_response(committed_spec, "post", "/v1/email/search")
+    required = _required_keys(committed_spec, schema_name)
+    body = resp.json()
+
+    for key in required:
+        assert key in body, f"required key {key!r} missing from /search response"
+
+    assert body["schema_version"] == API_VERSION
+    assert body["count"] == 1
+    item = body["messages"][0]
+    assert item["id"] == "s1"
+    # Wire alias: the sender is `from`, not `from_`.
+    assert item["from"] == "Sarah Chen <sarah@example.com>"
+    assert item["label_ids"] == ["INBOX", "UNREAD"]
+
+
+def test_search_invalid_payload_returns_422(client):
+    """POST /search with an unknown field returns 422 (strict contract)."""
+    from gaia_agent_email.api_routes import get_search_backend
+
+    fake = _FakeSearchBackend([])
+    client.app.dependency_overrides[get_search_backend] = lambda: fake
+    try:
+        resp = client.post("/v1/email/search", json={"q": "oops"})
+    finally:
+        client.app.dependency_overrides.pop(get_search_backend, None)
     assert resp.status_code == 422
 
 
@@ -338,7 +436,367 @@ def test_send_invalid_payload_returns_422(client):
 
 
 # ---------------------------------------------------------------------------
-# 6. All documented paths are covered
+# 5b. Calendar surface (#1780) — view / preview / create (gated) / respond
+# ---------------------------------------------------------------------------
+
+
+class _FakeCalendarBackend:
+    """In-memory calendar backend (CalendarBackend Protocol) for conformance."""
+
+    def list_events(
+        self, *, calendar_id="primary", time_min=None, time_max=None, max_results=25
+    ):
+        return {
+            "items": [
+                {
+                    "id": "evt-conf-1",
+                    "summary": "Conformance sync",
+                    "start": {"dateTime": "2026-07-01T10:00:00Z"},
+                    "end": {"dateTime": "2026-07-01T10:30:00Z"},
+                    "location": None,
+                    "organizer": {"email": "host@example.com"},
+                }
+            ]
+        }
+
+    def create_event(
+        self,
+        *,
+        calendar_id="primary",
+        summary,
+        start,
+        end,
+        attendees=None,
+        location=None,
+        description=None,
+    ):
+        return {"id": "evt-conf-created", "summary": summary}
+
+    def update_event_rsvp(
+        self, *, calendar_id="primary", event_id, attendee_email, response_status
+    ):
+        return {"id": event_id, "responseStatus": response_status}
+
+
+@pytest.fixture
+def fake_calendar(monkeypatch):
+    from gaia_agent_email import api_routes as email_routes
+
+    backend = _FakeCalendarBackend()
+    monkeypatch.setattr(email_routes, "resolve_calendar_backend", lambda: backend)
+    return backend
+
+
+def _calendar_event_body(**overrides) -> dict:
+    body = {
+        "summary": "Conformance meeting",
+        "start": {"date_time": "2026-07-01T14:00:00Z"},
+        "end": {"date_time": "2026-07-01T15:00:00Z"},
+        "attendees": ["alice@example.com"],
+    }
+    body.update(overrides)
+    return body
+
+
+def test_calendar_view_conforms_to_spec(client, committed_spec, fake_calendar):
+    resp = client.get("/v1/email/calendar/events")
+    assert resp.status_code == 200
+    schema_name = _schema_name_from_response(
+        committed_spec, "get", "/v1/email/calendar/events"
+    )
+    required = _required_keys(committed_spec, schema_name)
+    body = resp.json()
+    for key in required:
+        assert key in body, f"required key {key!r} missing from calendar view response"
+    assert body["events"][0]["id"] == "evt-conf-1"
+
+
+def test_calendar_create_without_token_returns_403(client, fake_calendar):
+    """A create without a confirmation token is a documented 403 (gate)."""
+    resp = client.post("/v1/email/calendar/events", json=_calendar_event_body())
+    assert resp.status_code == 403
+    detail = resp.json()["detail"].lower()
+    assert "confirmation_token" in detail or "preview" in detail
+
+
+def test_calendar_preview_then_create_conforms(client, committed_spec, fake_calendar):
+    preview = client.post(
+        "/v1/email/calendar/events/preview", json=_calendar_event_body()
+    )
+    assert preview.status_code == 200
+    token = preview.json()["confirmation_token"]
+
+    resp = client.post(
+        "/v1/email/calendar/events",
+        json=_calendar_event_body(confirmation_token=token),
+    )
+    assert resp.status_code == 200, resp.text
+    schema_name = _schema_name_from_response(
+        committed_spec, "post", "/v1/email/calendar/events"
+    )
+    required = _required_keys(committed_spec, schema_name)
+    body = resp.json()
+    for key in required:
+        assert (
+            key in body
+        ), f"required key {key!r} missing from calendar create response"
+    assert body["event_id"] == "evt-conf-created"
+
+
+def test_calendar_respond_conforms_to_spec(client, committed_spec, fake_calendar):
+    resp = client.post(
+        "/v1/email/calendar/events/respond",
+        json={
+            "event_id": "evt-conf-1",
+            "status": "declined",
+            "attendee_email": "me@example.com",
+        },
+    )
+    assert resp.status_code == 200
+    schema_name = _schema_name_from_response(
+        committed_spec, "post", "/v1/email/calendar/events/respond"
+    )
+    required = _required_keys(committed_spec, schema_name)
+    body = resp.json()
+    for key in required:
+        assert (
+            key in body
+        ), f"required key {key!r} missing from calendar respond response"
+    assert body["status"] == "declined"
+
+
+def test_calendar_create_invalid_payload_returns_422(client):
+    """A start with neither date_time nor date is a documented validation error."""
+    resp = client.post(
+        "/v1/email/calendar/events/preview",
+        json=_calendar_event_body(start={}, end={}),
+    )
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# 6. /triage/batch — conformance (LLM mocked; real HTTP layer running, #1887)
+# ---------------------------------------------------------------------------
+
+
+def _minimal_batch_payload() -> dict:
+    """Minimal valid BatchTriageRequest body for POST /triage/batch."""
+    return {
+        "schema_version": "2.0",
+        "items": [
+            {
+                "kind": "single",
+                "principal": {"email": "bob@example.com"},
+                "message": {
+                    "message_id": "msg-batch-001",
+                    "subject": "Batch test",
+                    "from": {"email": "alice@example.com"},
+                    "body": "Can you review this before Monday?",
+                },
+            }
+        ],
+    }
+
+
+def _canned_batch_response() -> BatchTriageResponse:
+    """Return a valid BatchTriageResponse for LLM mock use."""
+    from gaia_agent_email.contract import BatchItemResult
+
+    result = EmailTriageResult(
+        category=EmailCategory.NEEDS_RESPONSE,
+        is_spam=False,
+        is_phishing=False,
+        summary="Review request for Monday.",
+        action_items=[],
+        draft=None,
+    )
+    return BatchTriageResponse(results=[BatchItemResult(index=0, result=result)])
+
+
+def test_triage_batch_conforms_to_spec(client, committed_spec):
+    """POST /triage/batch with a mocked LLM returns a body conforming to the spec."""
+    canned = _canned_batch_response()
+
+    with patch(
+        "gaia_agent_email.api_routes.EmailTriageService.triage_batch",
+        return_value=canned,
+    ):
+        resp = client.post("/v1/email/triage/batch", json=_minimal_batch_payload())
+
+    assert resp.status_code == 200
+
+    schema_name = _schema_name_from_response(
+        committed_spec, "post", "/v1/email/triage/batch"
+    )
+    required = _required_keys(committed_spec, schema_name)
+    body = resp.json()
+
+    for key in required:
+        assert key in body, f"required key {key!r} missing from /triage/batch response"
+
+    assert body.get("schema_version") == API_VERSION
+    assert "results" in body
+    assert len(body["results"]) == 1
+    assert body["results"][0]["index"] == 0
+    assert "result" in body["results"][0]
+
+
+def test_triage_batch_invalid_payload_returns_422(client):
+    """POST /triage/batch with empty items returns 422."""
+    resp = client.post("/v1/email/triage/batch", json={"items": []})
+    assert resp.status_code == 422
+
+
+def test_triage_batch_payload_shape_returns_422(client):
+    """POST /triage/batch with the single-email 'payload' shape returns 422."""
+    resp = client.post(
+        "/v1/email/triage/batch",
+        json={
+            "payload": {
+                "kind": "single",
+                "principal": {"email": "alice@example.com"},
+                "message": {
+                    "message_id": "msg-x",
+                    "from": {"email": "bob@example.com"},
+                    "subject": "Wrong shape",
+                    "body": "This belongs on /triage, not /triage/batch.",
+                },
+            }
+        },
+    )
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Mailbox actions — archive / quarantine + reversal (schema 2.1, #1779)
+# ---------------------------------------------------------------------------
+
+
+def test_confirm_conforms_to_spec(client, committed_spec):
+    """POST /confirm returns a body conforming to EmailActionConfirmResponse."""
+    resp = client.post(
+        "/v1/email/confirm", json={"action": "archive", "message_id": "m-conf-1"}
+    )
+    assert resp.status_code == 200
+
+    schema_name = _schema_name_from_response(
+        committed_spec, "post", "/v1/email/confirm"
+    )
+    required = _required_keys(committed_spec, schema_name)
+    body = resp.json()
+    for key in required:
+        assert key in body, f"required key {key!r} missing from /confirm response"
+    assert body["action"] == "archive"
+    assert body["message_id"] == "m-conf-1"
+    assert isinstance(body["confirmation_token"], str) and body["confirmation_token"]
+
+
+def test_archive_without_token_returns_403(client):
+    """POST /archive without a confirmation token returns the documented 403 gate."""
+    resp = client.post("/v1/email/archive", json={"message_id": "m-1"})
+    assert resp.status_code == 403
+    detail = resp.json()["detail"].lower()
+    assert "confirm" in detail or "token" in detail
+
+
+def test_quarantine_without_token_returns_403(client):
+    """POST /quarantine without a confirmation token returns the documented 403 gate."""
+    resp = client.post(
+        "/v1/email/quarantine", json={"message_id": "m-1", "is_phishing": True}
+    )
+    assert resp.status_code == 403
+    detail = resp.json()["detail"].lower()
+    assert "confirm" in detail or "token" in detail
+
+
+def test_unarchive_invalid_payload_returns_422(client):
+    """POST /unarchive without the required batch_id returns 422 (no DB touched)."""
+    resp = client.post("/v1/email/unarchive", json={})
+    assert resp.status_code == 422
+
+
+def test_unquarantine_invalid_payload_returns_422(client):
+    """POST /unquarantine without the required action_id returns 422 (no DB touched)."""
+    resp = client.post("/v1/email/unquarantine", json={})
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Inbox pre-scan (schema 2.1, #1778)
+# ---------------------------------------------------------------------------
+
+
+def test_prescan_without_mailbox_returns_503(client, in_memory_keyring):
+    """POST /prescan with no mailbox connected fails loud with the documented 503.
+
+    Pre-scan reads the live inbox, so its backend dependency resolves first and
+    rejects an unconnected host with 503 (never a silent empty card).
+
+    Unlike the other endpoints, this test exercises the real
+    ``connected_mailbox_providers()`` path (no dependency override), so it needs
+    the in-memory keyring — Linux CI runners ship without a system credential
+    store, and the real backend would otherwise raise instead of reporting an
+    empty (zero-mailbox) state.
+    """
+    resp = client.post("/v1/email/prescan", json={"max_messages": 5})
+    assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# Scheduled daily briefing (#1608 additive)
+# ---------------------------------------------------------------------------
+
+
+def test_briefing_conforms_to_spec(client, committed_spec, tmp_path, monkeypatch):
+    """GET /briefing returns the documented EmailBriefingResponse shape once a
+    scheduled run has persisted a briefing, and a documented 404 before one."""
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    resp = client.get("/v1/email/briefing")
+    assert resp.status_code == 404  # no scheduled run has happened yet
+
+    from gaia_agent_email.briefing import run_briefing_job
+
+    class _FakeBackend:
+        def list_messages(self, **_):
+            return {
+                "messages": [{"id": "m1", "threadId": "t-m1"}],
+                "nextPageToken": None,
+            }
+
+        def get_message(self, message_id):
+            return {
+                "id": message_id,
+                "threadId": f"t-{message_id}",
+                "labelIds": ["INBOX", "CATEGORY_PROMOTIONS"],
+                "snippet": "",
+                "payload": {
+                    "headers": [
+                        {"name": "Subject", "value": "50% off this weekend!"},
+                        {"name": "From", "value": "deals@shop.example"},
+                    ],
+                    "mimeType": "text/plain",
+                    "body": {"data": ""},
+                },
+            }
+
+    run_briefing_job(_FakeBackend(), max_messages=5)
+
+    resp = client.get("/v1/email/briefing")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    schema_name = _schema_name_from_response(
+        committed_spec, "get", "/v1/email/briefing"
+    )
+    assert schema_name == "EmailBriefingResponse"
+    for key in _required_keys(committed_spec, schema_name):
+        assert key in body, f"required key {key!r} missing from /briefing response"
+    assert body["schema_version"] == API_VERSION
+    assert body["briefing"]["kind"] == "email_pre_scan"
+
+
+# ---------------------------------------------------------------------------
+# 7. All documented paths are covered
 # ---------------------------------------------------------------------------
 
 
@@ -355,11 +813,26 @@ def test_all_documented_paths_covered(committed_spec):
     }
     expected = {
         ("post", "/v1/email/triage"),
+        ("post", "/v1/email/triage/batch"),  # #1887 additive
+        ("post", "/v1/email/search"),
+        ("post", "/v1/email/prescan"),
+        ("get", "/v1/email/briefing"),  # #1608 additive
         ("post", "/v1/email/draft"),
         ("post", "/v1/email/send"),
         ("get", "/v1/email/health"),
         ("get", "/v1/email/version"),
         ("get", "/v1/email/init"),
+        # Mailbox actions (schema 2.1, #1779).
+        ("post", "/v1/email/confirm"),
+        ("post", "/v1/email/archive"),
+        ("post", "/v1/email/unarchive"),
+        ("post", "/v1/email/quarantine"),
+        ("post", "/v1/email/unquarantine"),
+        # Calendar surface (schema 2.1, #1780).
+        ("get", "/v1/email/calendar/events"),
+        ("post", "/v1/email/calendar/events"),
+        ("post", "/v1/email/calendar/events/preview"),
+        ("post", "/v1/email/calendar/events/respond"),
     }
     assert documented == expected, (
         f"Spec has routes not covered by conformance tests: "

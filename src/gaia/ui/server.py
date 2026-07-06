@@ -19,7 +19,6 @@ Endpoint implementations are split into router modules under
 """
 
 import asyncio
-import importlib.util
 import logging
 import os
 import shutil  # noqa: F401  # pylint: disable=unused-import
@@ -368,9 +367,28 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 )
 
             def _run() -> str:
-                from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+                # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102).
+                try:
+                    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+                except ImportError as e:
+                    raise RuntimeError(
+                        "The chat agent is not installed. Install it with "
+                        "`pip install gaia-agent-chat` (or `pip install "
+                        '"amd-gaia[agents]"` for all agents) to run scheduled '
+                        "chat tasks."
+                    ) from e
 
-                config = ChatAgentConfig(max_steps=5, silent_mode=True, debug=False)
+                # Beta dynamic tool loader (#1798). Inert here: scheduled runs
+                # use the default "full" prompt profile and the loader only
+                # activates on the "doc" profile — wired for future-proofing so
+                # this path doesn't silently diverge if that ever changes.
+                dynamic_tools = db.get_setting("dynamic_tools", "false") == "true"
+                config = ChatAgentConfig(
+                    max_steps=5,
+                    silent_mode=True,
+                    debug=False,
+                    dynamic_tools=dynamic_tools,
+                )
                 agent = ChatAgent(config)
                 result = agent.process_query(prompt)
                 if isinstance(result, dict):
@@ -496,6 +514,12 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         logger.info("Memory store connection closed")
         goals_router_mod.close_store()
         logger.info("Goal store connection closed")
+        sidecar_mgr = getattr(app.state, "email_sidecar_manager", None)
+        if sidecar_mgr is not None:
+            from starlette.concurrency import run_in_threadpool
+
+            await run_in_threadpool(sidecar_mgr.shutdown)
+            logger.info("Email sidecar stopped")
 
     app = FastAPI(
         title="GAIA Agent UI API",
@@ -584,21 +608,29 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(connectors_router_mod.router)
     # Issue #1292 — forwarded pre-authenticated connections (/v1/connections).
     app.include_router(connectors_router_mod.forwarded_router)
-    # Issue #1768 — Email REST surface (/v1/email/*).
-    # Ships with the standalone gaia-agent-email wheel; mount only when present.
-    # find_spec gates on wheel availability without importing it; the import and
-    # include_router are outside any except so a broken installed wheel fails
-    # loudly per the no-silent-fallback rule.
-    if importlib.util.find_spec("gaia_agent_email") is None:
-        logger.info(
-            "Email REST routes unavailable: install the email agent "
-            "(pip install gaia-agent-email) to enable POST /v1/email/*. "
-            "(#1768)"
-        )
-    else:
-        from gaia_agent_email.api_routes import router as email_router
+    # Email REST surface (/v1/email/*) — out-of-process sidecar ONLY (#1767
+    # cutover / design decision 4). The core backend never imports the email
+    # wheel: it stays lightweight, crash-isolated, and dogfoods the exact binary
+    # we ship. GAIA_EMAIL_AGENT_MODE selects the backend process — user (default,
+    # frozen binary, lazy-fetched + SHA-verified) or dev (uvicorn from source);
+    # unset means user. The sidecar is the SOLE /v1/email surface — there is no
+    # in-process fallback (a missing/unpublished binary fails loudly with a
+    # remedy, never silently re-mounts the wheel).
+    from gaia.ui.email_sidecar.manager import get_shared_manager
+    from gaia.ui.email_sidecar.router import router as email_sidecar_router
 
-        app.include_router(email_router)
+    # Lazily spawned on the first /v1/email request (not at startup), so users
+    # who never use email never pay for a sidecar. The shared manager is the SAME
+    # one the in-app email chat agent (agent_type=email) drives, so the REST
+    # surface and the chat agent share one sidecar process. The contract MAJOR is
+    # pinned inside get_shared_manager() so a breaking upgrade fails loudly.
+    app.state.email_sidecar_manager = get_shared_manager()
+    app.include_router(email_sidecar_router)
+    logger.info(
+        "Email REST surface served by out-of-process sidecar "
+        "(GAIA_EMAIL_AGENT_MODE=%s).",
+        os.environ.get("GAIA_EMAIL_AGENT_MODE", "user"),
+    )
 
     # ── Serve Uploaded Files ─────────────────────────────────────────────
     # Mount the uploads directory so uploaded files can be served by URL.

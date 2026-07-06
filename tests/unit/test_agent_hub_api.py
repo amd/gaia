@@ -69,15 +69,22 @@ class TestAgentRegistrationHubMetadata:
 
 
 class TestBuiltinAgentHubMetadata:
-    """Verify builtin agents have Hub metadata populated."""
+    """Verify framework + installed agents have Hub metadata populated.
+
+    chat/doc migrated to the gaia-agent-chat wheel (#1102), so they are now
+    discovered via the ``gaia.agent`` entry point rather than registered as
+    builtins — the fixture runs full discovery and the chat/doc cases skip when
+    the wheel is absent.
+    """
 
     @pytest.fixture()
     def registry(self):
         r = AgentRegistry()
-        r._register_builtin_agents()
+        r.discover()
         return r
 
     def test_chat_agent_metadata(self, registry):
+        pytest.importorskip("gaia_agent_chat")
         reg = registry.get("chat")
         assert reg is not None
         assert reg.category == "conversation"
@@ -86,6 +93,7 @@ class TestBuiltinAgentHubMetadata:
         assert reg.language == "python"
 
     def test_gaia_lite_resolves_to_doc_with_lite_tier(self, registry):
+        pytest.importorskip("gaia_agent_chat")
         # #1162: gaia-lite is a legacy alias for the doc agent on the lite tier,
         # not a standalone registration.
         assert registry.canonical_id("gaia-lite") == "doc"
@@ -194,17 +202,19 @@ class TestConsumesMcpServersExposure:
     Settings "Active for" panel can list dynamic MCP consumers."""
 
     def test_reg_to_info_exposes_flag_for_chat(self):
+        pytest.importorskip("gaia_agent_chat")
         from gaia.ui.routers.agents import _reg_to_info
 
         registry = AgentRegistry()
-        registry._register_builtin_agents()
+        registry.discover()
         info = _reg_to_info(registry.get("chat"))
         assert info.consumes_mcp_servers is True
 
     def test_reg_to_info_defaults_false_for_non_consumer(self):
+        pytest.importorskip("gaia_agent_chat")
         from gaia.ui.routers.agents import _reg_to_info
 
         registry = AgentRegistry()
-        registry._register_builtin_agents()
+        registry.discover()
         info = _reg_to_info(registry.get("doc"))
         assert info.consumes_mcp_servers is False

@@ -621,7 +621,7 @@ gaia llm QUERY [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--model` | string | Client default | Specify the model to use |
+| `--model` | string | Client default | Specify the model to use. Overrides `default_model` from config (see [Configuration](#configuration)) |
 | `--max-tokens` | integer | 512 | Maximum tokens to generate |
 | `--no-stream` | flag | false | Disable streaming response |
 
@@ -666,7 +666,7 @@ gaia chat [MESSAGE] [OPTIONS]
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--query, -q` | string | - | Single query to execute |
-| `--model` | string | auto-selected by agent | Override the model used by `ChatAgent` (`None` means let the agent pick; see `ChatAgentConfig.model_id`) |
+| `--model` | string | auto-selected by agent | Override the model used by `ChatAgent` (`None` means let the agent pick; see `ChatAgentConfig.model_id`). Falls back to `default_model` from config — see [Configuration](#configuration) |
 | `--index, -i` | path(s) | - | PDF document(s) to index for RAG |
 | `--watch, -w` | path(s) | - | Directories to monitor for new documents |
 | `--chunk-size` | integer | 500 | Document chunk size for RAG |
@@ -799,7 +799,7 @@ gaia prompt "MESSAGE" [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--model` | string | auto | Model ID to use (default: auto-selected by each agent) |
+| `--model` | string | auto | Model ID to use (default: auto-selected by each agent). Falls back to `default_model` from config — see [Configuration](#configuration) |
 | `--max-tokens` | integer | 512 | Maximum tokens to generate |
 | `--stats` | flag | false | Show performance statistics |
 
@@ -1479,6 +1479,64 @@ gaia connectors grants grant google builtin:chat --scopes gmail.readonly
 </CodeGroup>
 
 [→ Connectors Guide](/connectors) · [→ Connectors SDK](/sdk/infrastructure/connectors)
+
+---
+
+## Configuration
+
+GAIA keeps a small persistent config at `~/.gaia/config.json` (override the
+location with the `GAIA_CONFIG_DIR` / `GAIA_CONFIG_FILE` environment variables).
+Use it to set a **default model** once instead of passing `--model` on every
+command.
+
+```bash
+gaia config show                                  # print current config + file path
+gaia config get default_model                     # read one value
+gaia config set default_model Qwen3.5-35B-A3B-GGUF # persist a default model
+```
+
+| Key | Default | Purpose |
+|-----|---------|---------|
+| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt` |
+| `default_device` | `gpu` | Default inference device (`cpu` / `gpu` / `npu`) |
+| `profile` | `chat` | Last `gaia init` profile |
+
+### Default model precedence
+
+For `gaia chat`, `gaia llm`, and `gaia prompt`, the model is resolved highest-wins:
+
+1. An explicit `--model <id>` flag
+2. `default_model` from `~/.gaia/config.json`
+3. The command's built-in default (`DEFAULT_MODEL_NAME`)
+
+So `gaia config set default_model <id>` lets you skip `--model` entirely, while
+`--model` still overrides it for a single run. For `gaia chat`, passing an
+explicit `--device` selects a device-specific model and takes precedence over
+the config default.
+
+<Note>
+A **missing** config file is fine — GAIA falls back to built-in defaults. A
+**corrupt** config file (invalid JSON) fails loudly with the file path and how
+to recover, rather than silently reverting to defaults.
+</Note>
+
+### Using a custom config file
+
+Point GAIA at a config file anywhere on disk — handy for per-project configs or
+keeping work and personal defaults separate. Two equivalent ways:
+
+```bash
+# 1. The --config flag (on `gaia config`, `gaia chat`, `gaia llm`, `gaia prompt`)
+gaia config set default_model Qwen3.5-35B-A3B-GGUF --config ./project.gaia.json
+gaia llm "hello" --config ./project.gaia.json          # uses that file's default_model
+
+# 2. The GAIA_CONFIG_FILE env var (or GAIA_CONFIG_DIR for just the directory)
+GAIA_CONFIG_FILE=./project.gaia.json gaia config set default_model Qwen3.5-35B-A3B-GGUF
+GAIA_CONFIG_FILE=./project.gaia.json gaia llm "hello"
+```
+
+When both are given, `--config` wins over `GAIA_CONFIG_FILE`, which wins over the
+default `~/.gaia/config.json`.
 
 ---
 

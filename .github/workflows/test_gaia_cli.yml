@@ -115,6 +115,20 @@ jobs:
     uses: ./.github/workflows/test_email_agent.yml
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
+  # Test DocQA Agent (standalone hub wheel, #1102)
+  test-docqa-agent:
+    name: DocQA Agent Tests
+    needs: lint
+    uses: ./.github/workflows/test_docqa_agent.yml
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+  # Test Routing Agent (standalone hub wheel, #1102)
+  test-routing-agent:
+    name: Routing Agent Tests
+    needs: lint
+    uses: ./.github/workflows/test_routing_agent.yml
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
   # Test Security features
   test-security:
     name: Security Tests
@@ -126,7 +140,7 @@ jobs:
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    needs: [lint, unit-tests, test-windows, test-linux, test-mcp, test-code-agent, test-chat-agent, test-connectors-demo, test-analyst-agent, test-browser-agent, test-docqa-agent, test-routing-agent, test-email-agent, test-security]
+    needs: [lint, unit-tests, test-windows, test-linux, test-mcp, test-code-agent, test-chat-agent, test-connectors-demo, test-analyst-agent, test-browser-agent, test-email-agent, test-docqa-agent, test-routing-agent, test-security]
     # Run always except when workflow or any dependency is cancelled (e.g., by cancel-in-progress)
     if: >-
       ${{ always() && !cancelled() &&

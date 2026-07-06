@@ -11,7 +11,7 @@
  * kill on POSIX).
  */
 
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -74,6 +74,13 @@ export interface SpawnOptions {
   extraArgs?: string[];
   /** Extra env vars merged over process.env. */
   env?: NodeJS.ProcessEnv;
+  /**
+   * Auto-reap this sidecar if the parent process exits, crashes, or is
+   * interrupted (exit / uncaughtException / SIGINT / SIGTERM / SIGHUP) without an
+   * explicit `shutdown()`. Default `true` — the frozen binary's detached child
+   * never leaks. Set `false` to own the process lifecycle yourself.
+   */
+  autoCleanup?: boolean;
 }
 
 /** A running sidecar handle. */
@@ -84,6 +91,100 @@ export interface Sidecar {
   baseUrl: string;
   /** A client bound to this sidecar's baseUrl. */
   client: EmailClient;
+}
+
+// --- Auto-cleanup: reap orphaned sidecars when the parent process goes away ---
+// The sidecar is spawned detached (its own process group), so a parent Ctrl+C,
+// crash, or plain exit does NOT propagate to it — without this it keeps running
+// and holds its port. We install process handlers once and SIGKILL the tree
+// synchronously on the way out. `process.on("exit")` covers normal exit and
+// process.exit(); the SIGINT/SIGTERM/SIGHUP handlers cover Ctrl+C / kill (which
+// never emit "exit"); and the uncaughtException/unhandledRejection handlers
+// cover a hard crash (which doesn't reliably emit "exit" before the process is
+// gone). A hard SIGKILL of the parent is the one case no in-process handler can
+// catch.
+const liveSidecars = new Set<Sidecar>();
+let cleanupInstalled = false;
+const CLEANUP_SIGNALS: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+
+function killTreeSync(sidecar: Sidecar): void {
+  const { child } = sidecar;
+  if (child.pid === undefined) return;
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  try {
+    if (process.platform === "win32") {
+      spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+    } else {
+      process.kill(-child.pid, "SIGKILL");
+    }
+  } catch {
+    /* already gone */
+  }
+}
+
+function reapAllSync(): void {
+  for (const s of liveSidecars) killTreeSync(s);
+  liveSidecars.clear();
+}
+
+function installCleanupHandlers(): void {
+  if (cleanupInstalled) return;
+  cleanupInstalled = true;
+  process.on("exit", reapAllSync);
+  // Reap, then preserve Node's default crash behavior (print + non-zero exit)
+  // only when we're the sole listener; if the consumer registered their own
+  // handler it runs too and owns the exit decision.
+  process.on("uncaughtException", (err) => {
+    reapAllSync();
+    if (process.listenerCount("uncaughtException") === 1) {
+      // Synchronous write (not console.error, which can truncate on a piped
+      // stderr before process.exit flushes). The reap already ran above.
+      try {
+        fs.writeSync(
+          2,
+          `${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`,
+        );
+      } catch {
+        /* stderr unavailable */
+      }
+      process.exit(1);
+    }
+  });
+  process.on("unhandledRejection", (err) => {
+    reapAllSync();
+    if (process.listenerCount("unhandledRejection") === 1) {
+      // Synchronous write (not console.error, which can truncate on a piped
+      // stderr before process.exit flushes). The reap already ran above.
+      try {
+        fs.writeSync(
+          2,
+          `${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`,
+        );
+      } catch {
+        /* stderr unavailable */
+      }
+      process.exit(1);
+    }
+  });
+  for (const sig of CLEANUP_SIGNALS) {
+    const handler = (): void => {
+      reapAllSync();
+      // Sole listener → restore default disposition and re-raise so the process
+      // still terminates (Ctrl+C). If a consumer handler also exists, we've
+      // reaped; their handler owns the exit decision.
+      if (process.listenerCount(sig) === 1) {
+        process.removeListener(sig, handler);
+        process.kill(process.pid, sig);
+      }
+    };
+    process.on(sig, handler);
+  }
+}
+
+function registerForCleanup(sidecar: Sidecar): void {
+  installCleanupHandlers();
+  liveSidecars.add(sidecar);
+  sidecar.child.once("exit", () => liveSidecars.delete(sidecar));
 }
 
 /**
@@ -125,7 +226,9 @@ export function spawnSidecar(opts: SpawnOptions): Sidecar {
 
   const baseUrl = `http://${host}:${port}`;
   const client = new EmailClient({ baseUrl });
-  return { child, host, port, baseUrl, client };
+  const sidecar: Sidecar = { child, host, port, baseUrl, client };
+  if (opts.autoCleanup !== false) registerForCleanup(sidecar);
+  return sidecar;
 }
 
 export interface WaitForHealthOptions {
@@ -184,7 +287,7 @@ function majorOf(version: string): number {
 }
 
 export interface VersionCheckOptions {
-  /** The apiVersion the client was built against. Default SCHEMA_VERSION ("2.0"). */
+  /** The apiVersion the client was built against. Default SCHEMA_VERSION ("2.2"). */
   expectedApiVersion?: string;
 }
 
@@ -220,6 +323,7 @@ export async function checkVersion(
  */
 export async function shutdown(sidecar: Sidecar, timeoutMs = 5000): Promise<void> {
   const { child } = sidecar;
+  liveSidecars.delete(sidecar); // explicit shutdown owns the lifecycle now
   if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) {
     log.debug("shutdown: sidecar already exited");
     return;

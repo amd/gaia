@@ -93,6 +93,10 @@ env:
   # Same canonical-doc story for the changelog: the npm CHANGELOG.md is what the
   # hub renders as the agent's Changelog section (and ships in the npm tarball).
   CHANGELOG: hub/agents/npm/agent-email/CHANGELOG.md
+  # SPEC.md (technical reference) + SKILL.md (AI-integration playbook) are rendered
+  # as their own doc tabs on the hub page (catalog entry's `spec` / `skill`).
+  SPEC: hub/agents/npm/agent-email/SPEC.md
+  SKILL: hub/agents/npm/agent-email/SKILL.md
   FREEZE_DIST: hub/agents/python/email/packaging/dist
   # Hub key prefix (mirrors the Worker's agents/<id> layout). The Worker owns the
   # bucket binding; CI never talks to R2 directly — it POSTs to /publish.
@@ -148,7 +152,7 @@ jobs:
             frozen: email-agent
             required: false
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -156,7 +160,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
 
       - name: Install deps + PyInstaller (frozen-binary env)
         shell: bash
@@ -227,7 +231,7 @@ jobs:
     outputs:
       ok: ${{ steps.smoke.outputs.ok }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -262,11 +266,79 @@ jobs:
             echo "ok=false" >> "$GITHUB_OUTPUT"
           fi
 
+  # ── Stage 1b: scorecard presence + regression gate ─────────────────
+  scorecard-gate:
+    name: Scorecard gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # full history so git describe can find previous tags
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install core + PyYAML
+        run: pip install -e . pyyaml
+      - name: Resolve previous release tag (best-effort baseline)
+        id: prev_tag
+        shell: bash
+        run: |
+          set -uo pipefail
+          # Find the most recent agent-pkg-email-* tag strictly before the
+          # current ref. On workflow_dispatch the current ref is a branch, not
+          # a tag, so we look for the latest tag of the right pattern overall.
+          PREV="$(git describe --tags --abbrev=0 \
+            --match 'agent-pkg-email-*' \
+            "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+          echo "prev_tag=${PREV}" >> "$GITHUB_OUTPUT"
+          if [ -n "${PREV}" ]; then
+            echo "Baseline tag: ${PREV}"
+          else
+            echo "No previous release tag found — presence-only check."
+          fi
+      - name: Resolve acceptance bar + URGENT floor (data-driven, #1437)
+        id: bars
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The bar/floor and the enforce switch live in the thresholds manifest
+          # (data, not code) — same pattern as the FP/FN 'enforce' switch. When
+          # acceptance_enforce is true, pass the gate the absolute bar (×100 of the
+          # within-one target) and the urgent-recall floor so a sub-bar candidate
+          # blocks the release; when false, the gate runs presence+regression only.
+          MANIFEST="tests/fixtures/email/quality_gate_thresholds.json"
+          ENFORCE="$(python -c "import json;print(json.load(open('${MANIFEST}')).get('acceptance_enforce',False))")"
+          if [ "${ENFORCE}" = "True" ]; then
+            TARGET="$(python -c "import json;print(json.load(open('${MANIFEST}'))['acceptance_target'])")"
+            FLOOR="$(python -c "import json;print(json.load(open('${MANIFEST}'))['urgent_recall_floor'])")"
+            # aggregate.value is the within-one accuracy ×100, so scale the target.
+            MINAGG="$(python -c "print(round(float('${TARGET}')*100,2))")"
+            echo "args=--min-aggregate ${MINAGG} --min-urgent-recall ${FLOOR}" >> "$GITHUB_OUTPUT"
+            echo "Acceptance enforcement ON: --min-aggregate ${MINAGG} --min-urgent-recall ${FLOOR}"
+          else
+            echo "args=" >> "$GITHUB_OUTPUT"
+            echo "Acceptance enforcement OFF (report-only) — presence+regression gate only."
+          fi
+      - name: Run scorecard gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          PREV="${{ steps.prev_tag.outputs.prev_tag }}"
+          BARS="${{ steps.bars.outputs.args }}"
+          if [ -n "${PREV}" ]; then
+            python -m gaia.eval.scorecard_gate \
+              --scorecard hub/agents/npm/agent-email/SCORECARD.md \
+              --baseline-ref "${PREV}" ${BARS}
+          else
+            python -m gaia.eval.scorecard_gate \
+              --scorecard hub/agents/npm/agent-email/SCORECARD.md ${BARS}
+          fi
+
   # ── Stage 2: publish to the hub + npm (single atomic step) ─────────
   publish:
     name: Publish to Hub + npm
     runs-on: ubuntu-latest
-    needs: [build, verify-darwin-x64-compat]
+    needs: [build, verify-darwin-x64-compat, scorecard-gate]
     # Manual approval gate: the `agent-publish` environment is configured (repo
     # Settings → Environments) with required reviewers, so this job pauses until a
     # maintainer approves — the human backstop for an accidental/tampered release
@@ -281,7 +353,7 @@ jobs:
       id-token: write   # npm trusted publishing (OIDC) — no npm token
       actions: write    # gh workflow run deploy_website.yml (redeploy on publish)
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # full history so the main-ancestry guard can resolve
 
@@ -454,11 +526,20 @@ jobs:
             case "$f" in *.json) continue ;; esac
             args+=(--artifact "$f")
           done
+          VER="${{ steps.ver.outputs.version }}"
+          scorecard_args=()
+          SCORECARD="hub/agents/npm/agent-email/SCORECARD.md"
+          if [ -f "${SCORECARD}" ]; then
+            scorecard_args+=(--eval-scorecard "${SCORECARD}")
+          fi
           python hub/agents/python/email/packaging/publish_to_r2.py \
             --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
             --manifest "${MANIFEST}" \
             --readme "${README}" \
             --changelog "${CHANGELOG}" \
+            --spec "${SPEC}" \
+            --skill "${SKILL}" \
+            "${scorecard_args[@]}" \
             "${args[@]}" \
             --summary-out published.json
           echo "=== publish summary ==="
@@ -502,6 +583,41 @@ jobs:
           npm ci
           npm run build
 
+      - name: Assemble + publish the whole-package zip (all platforms + client + docs)
+        # DISABLED: the ~177 MB all-platforms zip exceeds Cloudflare's edge upload
+        # limit (POST returns 413). Revive via presigned-to-R2 or per-platform zips.
+        if: false
+        shell: bash
+        env:
+          AGENT_HUB_PUBLISH_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
+          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
+          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
+        run: |
+          set -euo pipefail
+          VER="${{ steps.ver.outputs.version }}"
+          STAGE="agent-email-${VER}"
+          rm -rf "${STAGE}" "agent-email-${VER}.zip" package-files.json
+          mkdir -p "${STAGE}/binaries" "${STAGE}/dist"
+          # All platform binaries (whatever was published this run — Intel may be absent).
+          cp bins/email-agent-* "${STAGE}/binaries/"
+          # npm client + docs + the real (post-publish) lock + manifest + license.
+          cp -r "${PKG_DIR}/dist/." "${STAGE}/dist/"
+          cp "${PKG_DIR}/README.md" "${PKG_DIR}/SPEC.md" "${PKG_DIR}/SKILL.md" \
+             "${PKG_DIR}/CHANGELOG.md" "${PKG_DIR}/binaries.lock.json" \
+             "${PKG_DIR}/LICENSE" "${STAGE}/"
+          cp "${MANIFEST}" "${STAGE}/gaia-agent.yaml"
+          # Deterministic zip (sorted, no extra metadata).
+          ( cd "${STAGE}/.." && zip -rX "agent-email-${VER}.zip" "agent-email-${VER}" >/dev/null )
+          # File listing for the hub's package file-list display.
+          python hub/agents/python/email/packaging/gen_package_files.py "${STAGE}" package-files.json
+          echo "=== package contents ===" && (cd "${STAGE}" && find . -type f | sort)
+          # Publish the zip as the version's package artifact + its file listing.
+          python hub/agents/python/email/packaging/publish_to_r2.py \
+            --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
+            --manifest "${MANIFEST}" \
+            --artifact "agent-email-${VER}.zip=package" \
+            --package-files package-files.json
+
       - name: Verify every published object via the real fetch CLI
         working-directory: ${{ env.PKG_DIR }}
         shell: bash
@@ -529,6 +645,39 @@ jobs:
               echo "attempt ${attempt}/${max} failed; object may not have propagated to the edge yet — retrying in 10s."
               attempt=$((attempt + 1)); sleep 10
             done
+          done
+
+      - name: Verify the published package zip is fetchable at the edge
+        if: false  # disabled together with the whole-package zip publish above
+        shell: bash
+        env:
+          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
+        run: |
+          set -euo pipefail
+          # The package zip rides the `artifact` path (server- + locally-SHA-verified
+          # on upload by publish_to_r2.py), but it is NOT in binaries.lock.json, so the
+          # fetch CLI above doesn't cover it. Round-trip it through the public origin so
+          # a non-propagated / edge-blocked zip fails the release instead of shipping a
+          # 404 download button. Bytes were already proven on upload; here we gate on a
+          # 200 with a Content-Length matching the local zip. Same bounded edge retry.
+          VER="${{ steps.ver.outputs.version }}"
+          BASE="${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}"
+          ZIP="${GITHUB_WORKSPACE}/agent-email-${VER}.zip"
+          URL="${BASE}/agents/email/${VER}/agent-email-${VER}.zip"
+          local_size="$(stat -c%s "${ZIP}" 2>/dev/null || stat -f%z "${ZIP}")"
+          echo "verifying package zip: ${URL} (expecting ${local_size} bytes)"
+          attempt=1; max=5
+          while true; do
+            remote_size="$(curl -fsSL -o /dev/null -w '%{size_download}' "${URL}" || echo "")"
+            if [ "${remote_size}" = "${local_size}" ]; then
+              echo "package zip verified (${remote_size} bytes)."; break
+            fi
+            if [ "${attempt}" -ge "${max}" ]; then
+              echo "::error::package zip verify failed after ${max} attempts (got '${remote_size}', want ${local_size}) — the zip never became fetchable/correct at ${URL}."
+              exit 1
+            fi
+            echo "attempt ${attempt}/${max}: got '${remote_size}', want ${local_size} — retrying in 10s."
+            attempt=$((attempt + 1)); sleep 10
           done
 
       - name: Upgrade npm (trusted publishing support)

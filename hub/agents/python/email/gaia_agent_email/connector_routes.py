@@ -80,6 +80,23 @@ def _account_email(raw: Any) -> Optional[str]:
     return None if email == DEFAULT_ACCOUNT else email
 
 
+def _can_send(provider: str) -> bool:
+    """Return True when the installed:email grant for ``provider`` includes its send scope."""
+    from gaia_agent_email.outlook_scopes import SCOPE_MAIL_SEND
+    from gaia_agent_email.scopes import SCOPE_GMAIL_SEND
+
+    from gaia.connectors.api import list_agent_grants
+
+    send_scope = SCOPE_GMAIL_SEND if provider == "google" else SCOPE_MAIL_SEND
+    try:
+        granted = list_agent_grants(provider).get(EMAIL_AGENT_ID, [])
+        return send_scope in granted
+    except Exception as e:
+        # Badge fails closed, but a broken grant store must stay diagnosable.
+        log.warning("can_send check failed for %s: %s", provider, e)
+        return False
+
+
 @router.get("/connectors")
 async def list_email_connectors() -> Dict[str, Any]:
     """Status of the mailbox connectors the email agent can send from."""
@@ -95,9 +112,39 @@ async def list_email_connectors() -> Dict[str, Any]:
                 "connected": pid in connected,
                 "account_email": _account_email(conn.get("account_email")),
                 "scopes": conn.get("scopes", []),
+                "can_send": _can_send(pid),
             }
         )
     return {"agent_id": EMAIL_AGENT_ID, "providers": providers}
+
+
+def _mail_scopes_for_provider(provider: str) -> tuple:
+    """Return the mail-send scopes for ``provider`` (no calendar scopes)."""
+    if provider == "google":
+        from gaia_agent_email.scopes import GMAIL_SCOPES
+
+        return GMAIL_SCOPES
+    # microsoft
+    from gaia_agent_email.outlook_scopes import OUTLOOK_MAIL_SCOPES
+
+    return OUTLOOK_MAIL_SCOPES
+
+
+def _build_scope_union(provider: str) -> List[str]:
+    """Return default_scopes ∪ mail_scopes for ``provider``, order-preserving, no dups."""
+    import gaia.connectors.catalog  # noqa: F401 — populates registry
+    from gaia.connectors.registry import REGISTRY
+
+    # _require_supported already validated provider, so REGISTRY.get won't KeyError.
+    spec = REGISTRY.get(provider)
+    base = list(spec.default_scopes)
+    mail = list(_mail_scopes_for_provider(provider))
+    seen: set = set(base)
+    for s in mail:
+        if s not in seen:
+            base.append(s)
+            seen.add(s)
+    return base
 
 
 @router.post("/connectors/{provider}/configure")
@@ -108,6 +155,10 @@ async def configure_email_connector(
 
     Returns ``{flow_id, authorization_url}``. The connector framework opens the
     browser and stands up its own loopback callback; call ``/complete`` next.
+
+    When the caller omits ``scopes``, the framework receives
+    ``default_scopes ∪ mail_scopes`` so the resulting grant includes send
+    permission — not just identity scopes. Explicit scopes are honored unchanged.
     """
     _require_supported(provider)
     from gaia.connectors.handler import configure
@@ -116,8 +167,10 @@ async def configure_email_connector(
         "client_id": body.client_id,
         "client_secret": body.client_secret,
     }
-    if body.scopes:
+    if body.scopes is not None:
         config["scopes"] = body.scopes
+    else:
+        config["scopes"] = _build_scope_union(provider)
     try:
         return await configure(provider, config)
     except Exception as e:  # surface the framework's actionable error to the page

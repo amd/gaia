@@ -9,6 +9,7 @@ import Eyebrow from '../../components/Eyebrow.astro';
 import AgentIcon from '../../components/AgentIcon.astro';
 import InstallMethods from '../../components/InstallMethods.astro';
 import TerminalBlock from '../../components/TerminalBlock.astro';
+import FileTree from '../../components/FileTree.astro';
 import {
   getCatalog,
   getAgent,
@@ -20,6 +21,7 @@ import {
   platformLabel,
   npuLabel,
 } from '../../data/catalog';
+import { buildFileTree } from '../../data/fileTree';
 import { renderMarkdown } from '../../data/markdown';
 
 export async function getStaticPaths() {
@@ -37,10 +39,44 @@ const npmUrl = agent.npm_package ? `https://www.npmjs.com/package/${agent.npm_pa
 const installCmd = isNpm ? `npm i ${agent.npm_package}` : `gaia agent install ${agent.id}`;
 const deepLink = `gaia://hub/install/${agent.id}`;
 const readmeHtml = renderMarkdown(agent.readme);
-// Optional — older index.json (served before the hub Worker adds the field) has
-// no changelog; render the section only when there's content.
+// Optional docs — older index.json (served before the hub Worker adds a field) may
+// lack these; render a tab only when there's content.
 const changelogHtml = agent.changelog ? renderMarkdown(agent.changelog) : '';
+const specHtml = agent.spec ? renderMarkdown(agent.spec) : '';
+const skillHtml = agent.skill ? renderMarkdown(agent.skill) : '';
 const req = agent.requirements;
+
+const packageFiles = agent.package?.files ?? [];
+const topLevelFolders = new Set(
+  packageFiles.filter((f) => f.name.includes('/')).map((f) => f.name.split('/')[0])
+).size;
+
+// Details "Size" is a RANGE across the per-platform binaries (they differ by
+// OS/arch), computed from the package listing's binaries/ entries. Falls back to
+// the primary artifact size when no package zip listing is available.
+const binarySizes = packageFiles
+  .filter((f) => f.name.startsWith('binaries/'))
+  .map((f) => f.size_bytes);
+const sizeMin = binarySizes.length ? Math.min(...binarySizes) : agent.download_size_bytes;
+const sizeMax = binarySizes.length ? Math.max(...binarySizes) : agent.download_size_bytes;
+
+// File browser: a nested, collapsible tree of the package contents. Text files
+// link to their content on the npm CDN (jsdelivr) for inline preview; the zip's
+// binaries aren't on the CDN and aren't text, so they stay non-clickable.
+const previewBase = agent.npm_package
+  ? `https://cdn.jsdelivr.net/npm/${agent.npm_package}@${agent.latest_version}/`
+  : null;
+const fileTree = buildFileTree(packageFiles, previewBase);
+
+// Doc tabs that actually have content (README is always present). The Files tab is
+// the package's directory listing; it only appears once a whole-package zip ships.
+const docTabs = [
+  { key: 'readme', label: 'README' },
+  ...(specHtml ? [{ key: 'spec', label: 'Spec' }] : []),
+  ...(skillHtml ? [{ key: 'skill', label: 'Skill' }] : []),
+  ...(changelogHtml ? [{ key: 'changelog', label: 'Changelog' }] : []),
+  ...(packageFiles.length ? [{ key: 'files', label: 'Files' }] : []),
+];
 const terminalLines = [
   { prompt: true, text: installCmd },
   { muted: true, text: `✓ ${agent.name} ${agent.latest_version} installed` },
@@ -106,13 +142,23 @@ const terminalLines = [
       </div>
     </section>
 
-    <!-- Body: tabbed docs (README / Changelog) + manifest-driven cards -->
+    <!-- Body: tabbed docs (README / Spec / Skill / Changelog / Files) + cards -->
     <div class="mt-12 grid lg:grid-cols-[minmax(0,1fr)_280px] gap-12">
       <div class="min-w-0" data-doc-tabs>
-        {changelogHtml && (
-          <div role="tablist" aria-label={`${agent.name} documentation`} class="flex gap-1 border-b border-g-border mb-7">
-            <button type="button" role="tab" id="doctab-readme" aria-controls="docpanel-readme" data-doc-tab="readme" aria-selected="true" tabindex="0" class="doc-tab">README</button>
-            <button type="button" role="tab" id="doctab-changelog" aria-controls="docpanel-changelog" data-doc-tab="changelog" aria-selected="false" tabindex="-1" class="doc-tab">Changelog</button>
+        {docTabs.length > 1 && (
+          <div role="tablist" aria-label={`${agent.name} documentation`} class="flex gap-1 border-b border-g-border mb-7 overflow-x-auto">
+            {docTabs.map((t, i) => (
+              <button
+                type="button"
+                role="tab"
+                id={`doctab-${t.key}`}
+                aria-controls={`docpanel-${t.key}`}
+                data-doc-tab={t.key}
+                aria-selected={i === 0 ? 'true' : 'false'}
+                tabindex={i === 0 ? 0 : -1}
+                class="doc-tab"
+              >{t.label}</button>
+            ))}
           </div>
         )}
         <article role="tabpanel" id="docpanel-readme" aria-labelledby="doctab-readme" data-doc-panel="readme" class="doc max-w-[70ch]">
@@ -122,10 +168,37 @@ const terminalLines = [
             <TerminalBlock lines={terminalLines} typing />
           </div>
         </article>
+        {specHtml && (
+          <article role="tabpanel" id="docpanel-spec" aria-labelledby="doctab-spec" data-doc-panel="spec" class="doc max-w-[70ch]" hidden>
+            <div set:html={specHtml} />
+          </article>
+        )}
+        {skillHtml && (
+          <article role="tabpanel" id="docpanel-skill" aria-labelledby="doctab-skill" data-doc-panel="skill" class="doc max-w-[70ch]" hidden>
+            <div set:html={skillHtml} />
+          </article>
+        )}
         {changelogHtml && (
           <article role="tabpanel" id="docpanel-changelog" aria-labelledby="doctab-changelog" data-doc-panel="changelog" class="doc max-w-[70ch]" hidden>
             <div set:html={changelogHtml} />
           </article>
+        )}
+        {packageFiles.length > 0 && (
+          <section role="tabpanel" id="docpanel-files" aria-labelledby="doctab-files" data-doc-panel="files" hidden>
+            <h2 class="text-xl font-semibold tracking-tight">Package contents</h2>
+            <div class="mt-2 mb-4 flex flex-wrap items-center justify-between gap-3">
+              <p class="text-[13px] text-g-muted">
+                {packageFiles.length} files across {topLevelFolders} {topLevelFolders === 1 ? 'folder' : 'folders'}{previewBase ? ' — click a text file to preview it.' : '.'}
+              </p>
+              <div class="flex flex-none gap-1.5 text-[11px]" data-file-tree-controls>
+                <button type="button" data-files-expand class="rounded border border-g-border px-2 py-1 text-g-muted transition-colors hover:border-g-gold/50 hover:text-g-text">Expand all</button>
+                <button type="button" data-files-collapse class="rounded border border-g-border px-2 py-1 text-g-muted transition-colors hover:border-g-gold/50 hover:text-g-text">Collapse all</button>
+              </div>
+            </div>
+            <div class="file-tree rounded-xl border border-g-border p-3 font-mono text-[12.5px]" data-file-tree>
+              <FileTree nodes={fileTree.children} />
+            </div>
+          </section>
         )}
       </div>
 
@@ -148,25 +221,84 @@ const terminalLines = [
             <div class="flex justify-between py-2 border-b border-g-border">
               <dt class="text-g-muted">Version</dt><dd class="font-mono">{agent.latest_version}</dd>
             </div>
-            {agent.download_size_bytes > 0 && (
+            {sizeMax > 0 && (
               <div class="flex justify-between py-2 border-b border-g-border">
-                <dt class="text-g-muted">Size</dt><dd class="font-mono">{formatBytes(agent.download_size_bytes)}</dd>
+                <dt class="text-g-muted">Size</dt>
+                <dd class="font-mono">{sizeMin === sizeMax ? formatBytes(sizeMax) : `${formatBytes(sizeMin)} – ${formatBytes(sizeMax)}`}</dd>
               </div>
             )}
             <div class="flex justify-between py-2 border-b border-g-border">
               <dt class="text-g-muted">Author</dt><dd>{agent.author}</dd>
             </div>
             <div class="flex justify-between py-2 border-b border-g-border">
-              <dt class="text-g-muted">Language</dt><dd>{languageLabel(agent.language)}</dd>
+              <dt class="text-g-muted">Language</dt>
+              <dd class="text-right">
+                {languageLabel(agent.language)}
+                {/* npm/binary agents ship as a self-contained compiled binary — no
+                    Python runtime on the host. Surface that here; "Python" alone is misleading. */}
+                {isNpm && <span class="block text-[11px] text-g-muted">Ships as native binary — no Python needed</span>}
+              </dd>
             </div>
             <div class="flex justify-between py-2 border-b border-g-border">
               <dt class="text-g-muted">Category</dt><dd>{categoryLabel(agent.category)}</dd>
             </div>
             <div class="flex justify-between py-2 last:border-0 border-b border-g-border">
-              <dt class="text-g-muted">Min GAIA</dt><dd class="font-mono">{agent.min_gaia_version || '—'}</dd>
+              <dt class="text-g-muted">Min GAIA SDK</dt><dd class="font-mono">{agent.min_gaia_version || '—'}</dd>
             </div>
           </dl>
         </section>
+
+        {agent.package && packageFiles.length > 0 && (
+          <!-- Package contents: the client, docs, and every platform binary. Gated on
+               files.length too so the "Browse the contents →" jump always has a Files tab. -->
+          <section class="rounded-xl border border-g-border bg-g-surface p-5">
+            <Eyebrow class="mb-2">Package</Eyebrow>
+            <p class="text-[12px] leading-relaxed text-g-muted">
+              The client, docs, and every platform binary — {packageFiles.length} files in all.
+            </p>
+            <button
+              type="button"
+              data-doc-goto="files"
+              class="mt-3 text-[12px] font-medium text-g-gold-text hover:underline"
+            >Browse the contents →</button>
+          </section>
+        )}
+
+        {agent.playground_url && isNpm && (
+          <!-- Playground launcher: one command to fetch+run the sidecar, then a
+               button that goes live once the local sidecar is reachable. -->
+          <section
+            class="rounded-xl border border-g-border bg-g-surface p-5"
+            data-playground
+            data-playground-url={agent.playground_url}
+          >
+            <Eyebrow class="mb-2">Playground</Eyebrow>
+            <p class="text-[12px] leading-relaxed text-g-muted">
+              Run the sidecar and open the interactive playground in one command:
+            </p>
+            <button
+              type="button"
+              data-pg-copy={`npx ${agent.npm_package} playground`}
+              aria-label="Copy command"
+              class="pg-copy group mt-2 flex w-full items-center gap-2 rounded-md border border-g-border bg-g-bg/50 px-3 py-2 text-left font-mono text-[12px] text-g-text transition-colors hover:border-g-gold/50"
+            >
+              <span class="select-none text-g-gold" aria-hidden="true">$</span>
+              <span class="min-w-0 flex-1 truncate">npx {agent.npm_package} playground</span>
+              <span class="pg-copy-label flex-none select-none text-[11px] text-g-muted group-hover:text-g-gold-text">copy</span>
+            </button>
+            <a
+              href={agent.playground_url}
+              target="_blank"
+              rel="noopener"
+              data-pg-open
+              aria-disabled="true"
+              class="mt-2 flex items-center justify-center rounded-md border border-g-border px-4 py-2 text-[13px] font-medium text-g-muted transition-colors"
+            >
+              Open playground
+            </a>
+            <p data-pg-status class="mt-2 text-[11px] text-g-muted">Checking if it's running…</p>
+          </section>
+        )}
 
         <!-- Requirements card -->
         <section class="rounded-xl border border-g-border bg-g-surface p-5">
@@ -235,6 +367,29 @@ const terminalLines = [
   >
     <img id="doc-lightbox-img" src="" alt="" class="max-h-full max-w-full rounded-lg shadow-2xl" />
   </div>
+
+  <!-- File preview modal: shows the text content of a clicked package file. -->
+  <div
+    id="file-preview"
+    class="fixed inset-0 z-[100] hidden items-center justify-center bg-black/80 p-4 backdrop-blur-sm sm:p-8"
+    aria-hidden="true"
+    role="dialog"
+    aria-modal="true"
+    aria-label="File preview (press Escape to close)"
+  >
+    <div class="flex max-h-full w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-g-border bg-g-bg shadow-2xl">
+      <div class="flex flex-none items-center justify-between gap-3 border-b border-g-border bg-g-surface px-4 py-2.5">
+        <span id="file-preview-name" class="truncate font-mono text-[13px] text-g-text"></span>
+        <div class="flex flex-none items-center gap-3">
+          <a id="file-preview-raw" href="#" target="_blank" rel="noopener" class="text-[11px] text-g-muted hover:text-g-gold-text">Raw ↗</a>
+          <button type="button" id="file-preview-close" aria-label="Close preview" class="text-g-muted hover:text-g-text">✕</button>
+        </div>
+      </div>
+      <div class="min-h-0 flex-1 overflow-auto">
+        <pre class="!my-0 !rounded-none !border-0 bg-[#0c0c0e] p-4 text-[12.5px] leading-relaxed"><code id="file-preview-code" class="!bg-transparent"></code></pre>
+      </div>
+    </div>
+  </div>
 </Layout>
 
 <script>
@@ -243,6 +398,8 @@ const terminalLines = [
   import 'prismjs/components/prism-typescript';
   import 'prismjs/components/prism-bash';
   import 'prismjs/components/prism-json';
+  import 'prismjs/components/prism-yaml';
+  import 'prismjs/components/prism-markdown';
 
   // Syntax-highlight rendered code blocks. The renderer emits
   // <code class="language-*">; Prism reads textContent (already HTML-escaped) and
@@ -317,6 +474,146 @@ const terminalLines = [
         next.focus();
       });
     });
+
+    // Cross-links elsewhere on the page (e.g. the Package card's "View all files")
+    // that jump to a specific doc tab and scroll it into view.
+    document.querySelectorAll<HTMLElement>('[data-doc-goto]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const key = btn.getAttribute('data-doc-goto');
+        select(key);
+        tabRoot.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        tabs.find((t) => t.getAttribute('data-doc-tab') === key)?.focus();
+      });
+    });
+  }
+
+  // Playground card: copy the launch command, and probe the LOCAL sidecar so the
+  // "Open playground" button only activates once it's actually running. The hub
+  // is HTTPS but 127.0.0.1 is a trustworthy origin, so a no-cors liveness probe
+  // is allowed (it resolves if something is listening, rejects if not) — we can't
+  // read the response, but reachability is all we need.
+  const pg = document.querySelector('[data-playground]');
+  if (pg) {
+    const copyBtn = pg.querySelector<HTMLButtonElement>('[data-pg-copy]');
+    copyBtn?.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(copyBtn.dataset.pgCopy || '');
+        const label = copyBtn.querySelector('.pg-copy-label');
+        if (label) { label.textContent = 'copied'; setTimeout(() => (label.textContent = 'copy'), 1500); }
+      } catch { /* clipboard unavailable */ }
+    });
+
+    const open = pg.querySelector<HTMLAnchorElement>('[data-pg-open]');
+    const status = pg.querySelector<HTMLElement>('[data-pg-status]');
+    const pgUrl = pg.getAttribute('data-playground-url') || '';
+    let healthUrl = '';
+    try { healthUrl = new URL(pgUrl).origin + '/health'; } catch { /* invalid */ }
+
+    const setRunning = (up: boolean) => {
+      if (open) {
+        open.setAttribute('aria-disabled', up ? 'false' : 'true');
+        open.classList.toggle('border-g-gold/50', up);
+        open.classList.toggle('text-g-gold-text', up);
+        open.classList.toggle('text-g-muted', !up);
+        open.classList.toggle('border-g-border', !up);
+      }
+      if (status) status.textContent = up
+        ? 'Running — opens in a new tab.'
+        : 'Not running yet — run the command above, then this lights up.';
+    };
+    setRunning(false);
+
+    // Block the click until the sidecar is up (avoids a confusing connection error).
+    open?.addEventListener('click', (e) => {
+      if (open.getAttribute('aria-disabled') === 'true') {
+        e.preventDefault();
+        copyBtn?.classList.add('animate-g-pulse');
+        setTimeout(() => copyBtn?.classList.remove('animate-g-pulse'), 600);
+      }
+    });
+
+    if (healthUrl) {
+      const probe = async () => {
+        try {
+          await fetch(healthUrl, { mode: 'no-cors', signal: AbortSignal.timeout(1500) });
+          setRunning(true);
+        } catch { setRunning(false); }
+      };
+      probe();
+      setInterval(probe, 3000);
+    }
+  }
+
+  // Files tab: expand/collapse-all toggles every folder <details> in the tree.
+  const fileTreeEl = document.querySelector('[data-file-tree]');
+  if (fileTreeEl) {
+    const allDetails = () => Array.from(fileTreeEl.querySelectorAll<HTMLDetailsElement>('details'));
+    document.querySelector('[data-files-expand]')?.addEventListener('click', () =>
+      allDetails().forEach((d) => (d.open = true))
+    );
+    document.querySelector('[data-files-collapse]')?.addEventListener('click', () =>
+      allDetails().forEach((d) => (d.open = false))
+    );
+  }
+
+  // File preview: fetch a clicked text file's content from the CDN and show it in
+  // a modal. Content is set as textContent (never innerHTML) and only highlighted
+  // by Prism, so a file's bytes can't inject markup.
+  const fp = document.getElementById('file-preview');
+  const fpCode = document.getElementById('file-preview-code');
+  const fpName = document.getElementById('file-preview-name');
+  const fpRaw = document.getElementById('file-preview-raw') as HTMLAnchorElement | null;
+  const fpClose = document.getElementById('file-preview-close');
+  if (fp && fpCode && fpName && fpRaw) {
+    let lastFocused: HTMLElement | null = null;
+    const langByExt: Record<string, string> = {
+      js: 'javascript', mjs: 'javascript', cjs: 'javascript', ts: 'typescript',
+      tsx: 'typescript', json: 'json', yaml: 'yaml', yml: 'yaml', sh: 'bash',
+      md: 'markdown', markdown: 'markdown',
+    };
+    const closeFp = () => {
+      fp.classList.add('hidden');
+      fp.classList.remove('flex');
+      fp.setAttribute('aria-hidden', 'true');
+      fpCode.textContent = '';
+      lastFocused?.focus();
+    };
+    const openFp = async (url: string, name: string, trigger: HTMLElement) => {
+      lastFocused = trigger;
+      fpName.textContent = name;
+      fpRaw.href = url;
+      const ext = name.toLowerCase().split('.').pop() || '';
+      const lang = langByExt[ext] || 'none';
+      fpCode.className = `!bg-transparent language-${lang}`;
+      fpCode.textContent = 'Loading…';
+      fp.classList.remove('hidden');
+      fp.classList.add('flex');
+      fp.setAttribute('aria-hidden', 'false');
+      (fpClose as HTMLElement | null)?.focus();
+      try {
+        const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+        if (!res.ok) throw new Error(String(res.status));
+        const text = await res.text();
+        // Guard against accidentally rendering a huge/binary file in the modal.
+        fpCode.textContent = text.length > 500_000 ? text.slice(0, 500_000) + '\n…(truncated)' : text;
+        Prism.highlightElement(fpCode);
+      } catch {
+        fpCode.className = '!bg-transparent';
+        fpCode.textContent =
+          `Preview unavailable for this file.\n\nIt may not be part of the published npm package ` +
+          `(e.g. a platform binary), or this version isn't on the CDN yet. Use "Raw ↗" to try directly.`;
+      }
+    };
+    document.querySelectorAll<HTMLButtonElement>('[data-file-preview]').forEach((btn) => {
+      btn.addEventListener('click', () =>
+        openFp(btn.dataset.filePreview || '', btn.dataset.fileName || 'file', btn)
+      );
+    });
+    fpClose?.addEventListener('click', closeFp);
+    fp.addEventListener('click', (e) => { if (e.target === fp) closeFp(); });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !fp.classList.contains('hidden')) closeFp();
+    });
   }
 </script>
 
@@ -365,7 +662,14 @@ const terminalLines = [
   .doc p > img:only-child { @apply w-full cursor-zoom-in transition-colors hover:border-g-gold/50; }
   .doc hr { @apply my-8 border-0 border-t border-g-border; }
 
-  /* Doc tabs (README / Changelog) */
+  /* File tree (Files tab): native <details> collapse, custom chevron, no marker. */
+  .file-tree summary { list-style: none; }
+  .file-tree summary::-webkit-details-marker { display: none; }
+  .file-tree summary:hover .file-tree-chevron { @apply text-g-text; }
+  .file-tree-chevron { transition: transform 0.15s ease; }
+  .file-tree details[open] > summary .file-tree-chevron { transform: rotate(90deg); }
+
+  /* Doc tabs (README / Spec / Skill / Changelog / Files) */
   .doc-tab {
     @apply -mb-px border-b-2 border-transparent px-4 py-2 text-sm font-medium text-g-muted transition-colors hover:text-g-text;
   }

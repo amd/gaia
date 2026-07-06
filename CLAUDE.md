@@ -151,6 +151,35 @@ URL literal in `src/gaia/`; dropping `/docs/` from a runtime string is a CI fail
 not a cleanup. Only the site root and install scripts (`/install.ps1`, `/install.sh`)
 are allowlisted without the prefix.
 
+#### IMPORTANT: A functional change must update EVERY doc that describes it — not just one
+
+When a change alters an agent's behavior, public API, request/response contract,
+defaults, lifecycle, or error codes, the same claim is almost always repeated
+across several **bundled** docs. Update them **together** in the same change, or the
+package ships documentation that contradicts itself — and the contradiction goes
+live the moment that version publishes.
+
+For a hub agent package (`hub/agents/{npm,python}/<id>/`), the doc surfaces that
+must stay in sync are:
+
+- **`README.md`** — the canonical, integrator-facing doc (rendered on the hub + npm)
+- **`SPEC.md`** — the full technical reference
+- **`SKILL.md`** — the AI-assistant integration playbook (Claude Code, etc.)
+- **`CHANGELOG.md`** — the version entry describing the change
+- any runtime/contract spec it ships — `spec_html.py`, `specification.html`,
+  `openapi.*.json`
+
+**Before calling the change done, grep the old claim/symbol/status-code across all
+of these.** A behavior described in three docs must be corrected in three docs; the
+CHANGELOG must name it. The same rule applies to the doc *site* (`docs/`) when the
+change touches a documented surface.
+
+Canonical miss (#1841): an agent gained auto-reap of its sidecar on parent exit and
+the PR updated `README.md` to "cleanup is automatic" — but left `SPEC.md` and
+`SKILL.md` still saying "always call `shutdown` or the child is orphaned." Both were
+slated to publish in the same release, so the package would have shipped
+self-contradicting lifecycle docs.
+
 ### Code Reuse and Base Classes
 
 **Always extend existing base classes and reuse core functionality.** The `src/gaia/agents/base/` directory provides foundational components:
@@ -400,11 +429,11 @@ gaia/
 │   ├── agents/         # Agent framework + in-core agents
 │   │   ├── base/       # Base Agent class, MCPAgent, ApiAgent mixins
 │   │   ├── tools/      # Cross-agent tool mixins (rag, file, shell, browser, scratchpad, screenshot…)
-│   │   ├── chat/, docqa/, builder/, routing/   # in-core agents
+│   │   ├── chat/, builder/   # in-core agents
 │   │   ├── code_index/ # CodeIndexToolsMixin — semantic code search (FAISS)
 │   │   └── registry.py # Agent registry + KNOWN_TOOLS map
 │   │   #   Packaged agents (code, analyst, browser, fileio, email, summarize, jira,
-│   │   #   blender, docker, sd, emr, connectors-demo) live in hub/agents/python/<id>/.
+│   │   #   blender, docker, sd, emr, connectors-demo, docqa, routing) live in hub/agents/python/<id>/.
 │   ├── api/            # OpenAI-compatible REST API server
 │   ├── apps/           # Standalone applications
 │   │   ├── webui/      # Agent UI frontend (React/Vite/Electron)
@@ -499,9 +528,9 @@ is set in its own `agent.py` (see [Default Models](#default-models)).
 | Agent | Description |
 |-------|-------------|
 | **ChatAgent** | Multi-profile conversation (chat/doc/file) with RAG — in-core (`chat/`) |
-| **DocumentQAAgent** | Standalone document Q&A with RAG — in-core (`docqa/`) |
 | **BuilderAgent** | Scaffolds new agents from templates — in-core (`builder/`) |
-| **RoutingAgent** | Intelligent agent selection (`AGENT_ROUTING_MODEL`) — in-core (`routing/`) |
+| **DocumentQAAgent** | Standalone document Q&A with RAG — hub (`docqa/`) |
+| **RoutingAgent** | Intelligent agent selection (`AGENT_ROUTING_MODEL`) — hub (`routing/`) |
 | **CodeAgent** | Code generation with orchestration |
 | **AnalystAgent** | Structured data analysis (CSV/Excel, scratchpad SQL) |
 | **BrowserAgent** | Web research — search, fetch pages, download |
@@ -515,7 +544,7 @@ is set in its own `agent.py` (see [Default Models](#default-models)).
 | **MedicalIntakeAgent** | Medical form processing (VLM) — `hub/agents/python/emr/` |
 | **ConnectorsDemoAgent** | Per-agent connector activation demo |
 
-`gaia browse` and `gaia analyze` invoke BrowserAgent and AnalystAgent (see [`src/gaia/cli.py`](src/gaia/cli.py)); `gaia telegram` is a messaging adapter, not an agent. DocumentQAAgent, FileIOAgent, and ConnectorsDemoAgent are internal building-block agents (not standalone CLI commands).
+`gaia browse` and `gaia analyze` invoke BrowserAgent and AnalystAgent (see [`src/gaia/cli.py`](src/gaia/cli.py)); `gaia telegram` is a messaging adapter, not an agent. DocumentQAAgent, FileIOAgent, and ConnectorsDemoAgent are internal building-block agents (not standalone CLI commands). DocumentQAAgent and RoutingAgent now ship as standalone `gaia-agent-docqa` / `gaia-agent-routing` hub wheels (`hub/agents/python/`).
 
 ### Agent Registry & Tool Mixins
 
@@ -624,6 +653,10 @@ Browse the directory rather than a partial list here.
 
 When responding to GitHub issues and pull requests, follow these guidelines:
 
+**Automated PR-review policy lives in [`REVIEW.md`](REVIEW.md)** (the tunable review rubric:
+correctness-first severity, the nit cap, skip rules, and length caps). This section sets the
+shared tone/format the rubric builds on; keep the two consistent when editing either.
+
 ### Documentation Structure
 
 **External Site:** https://amd-gaia.ai
@@ -650,7 +683,7 @@ The documentation is organized in [`docs/docs.json`](docs/docs.json) with the fo
 2. **Check for duplicates:** Search existing issues/PRs to avoid redundant responses
 
 3. **Reference specific files:** Use precise file references with line numbers when possible
-   - Agent implementations: `src/gaia/agents/` (in-core: base/, tools/, chat/, docqa/, builder/, routing/, code_index/, registry.py) and `hub/agents/python/<id>/` (packaged agents: code, analyst, browser, email, jira, docker, sd, emr, …)
+   - Agent implementations: `src/gaia/agents/` (in-core: base/, tools/, chat/, builder/, code_index/, registry.py) and `hub/agents/python/<id>/` (packaged agents: code, analyst, browser, email, jira, docker, sd, emr, docqa, routing, …)
    - CLI commands: `src/gaia/cli.py`
    - MCP integration: `src/gaia/mcp/`
    - LLM backend: `src/gaia/llm/` (+ `providers/` for Claude/OpenAI)

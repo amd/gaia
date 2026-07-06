@@ -52,6 +52,11 @@ export interface Agent {
   // Optional at the type level so the site stays resilient to an older index.json
   // served before the hub Worker that adds this field is redeployed.
   changelog?: string;
+  // SPEC.md (technical reference) + SKILL.md (AI-integration playbook) markdown of
+  // the latest version, rendered as their own doc tabs. "" / absent if none was
+  // published. Optional for the same older-index.json resilience as `changelog`.
+  spec?: string;
+  skill?: string;
   // npm package name (e.g. "@amd-gaia/agent-email") when the agent is
   // distributed as an npm client + frozen sidecar. Present → npm is the install
   // path. Absent → the agent installs via pip/GAIA (language-driven).
@@ -60,6 +65,13 @@ export interface Agent {
   // (e.g. "http://127.0.0.1:8131/v1/email/playground"). Only resolves once the
   // package is installed and the sidecar is running — a best-effort dev link.
   playground_url?: string;
+  // Whole-package download: a single zip (all platform binaries + client + docs)
+  // and its file listing. Present only when the latest version published one.
+  package?: {
+    filename: string;
+    size_bytes: number;
+    files: { name: string; size_bytes: number }[];
+  };
 }
 
 interface CatalogFile {
@@ -182,6 +194,18 @@ export function securityTierLabel(tier: SecurityTier): string {
   return SECURITY_TIER_LABELS[tier] ?? tier;
 }
 
+/**
+ * Absolute URL of an agent's whole-package zip, served from the same hub origin
+ * as the catalog (`${HUB_CATALOG_URL}/agents/<id>/<version>/<filename>`). Returns
+ * null when the agent has no published package zip. Build-time only.
+ */
+export function packageDownloadUrl(agent: Agent): string | null {
+  if (!agent.package) return null;
+  const base = process.env.HUB_CATALOG_URL;
+  if (!base) return null;
+  return `${base.replace(/\/+$/, '')}/agents/${agent.id}/${agent.latest_version}/${agent.package.filename}`;
+}
+
 /** Human-readable download size, e.g. "2.3 MB". */
 export function formatBytes(bytes: number): string {
   if (bytes <= 0) return '0 B';
@@ -234,7 +258,7 @@ export function installMethods(agent: Agent): InstallMethod[] {
         key: 'npm',
         label: 'npm',
         command: `npm i ${agent.npm_package}`,
-        note: 'Installs the client and fetches the local sidecar binary on first run. Runs 100% locally on AMD Ryzen AI.',
+        note: '',
       },
     ];
   }

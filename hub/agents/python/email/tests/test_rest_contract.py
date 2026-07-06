@@ -34,6 +34,8 @@ from gaia_agent_email import __version__ as package_version  # noqa: E402
 from gaia_agent_email import export_openapi  # noqa: E402
 from gaia_agent_email.contract import (  # noqa: E402
     SCHEMA_VERSION,
+    BatchTriageRequest,
+    BatchTriageResponse,
     EmailTriageRequest,
     EmailTriageResponse,
 )
@@ -43,11 +45,28 @@ from gaia_agent_email.version import AGENT_VERSION, API_VERSION  # noqa: E402
 # Maps (method, path) -> the component schema name the handler declares.
 _EXPECTED_RESPONSE_MODELS = {
     ("post", "/v1/email/triage"): "EmailTriageResponse",
+    ("post", "/v1/email/triage/batch"): "BatchTriageResponse",  # #1887 additive
+    ("post", "/v1/email/search"): "EmailSearchResponse",
+    ("post", "/v1/email/prescan"): "EmailPreScanResponse",
+    # Scheduled daily briefing (#1608 additive) — the pull surface for the
+    # sidecar's scheduled pre-scan runs.
+    ("get", "/v1/email/briefing"): "EmailBriefingResponse",
     ("post", "/v1/email/draft"): "EmailDraftResponse",
     ("post", "/v1/email/send"): "EmailSendResponse",
+    # Mailbox actions (schema 2.1, #1779).
+    ("post", "/v1/email/confirm"): "EmailActionConfirmResponse",
+    ("post", "/v1/email/archive"): "EmailArchiveResponse",
+    ("post", "/v1/email/unarchive"): "EmailUnarchiveResponse",
+    ("post", "/v1/email/quarantine"): "EmailQuarantineResponse",
+    ("post", "/v1/email/unquarantine"): "EmailUnquarantineResponse",
     ("get", "/v1/email/health"): "HealthResponse",
     ("get", "/v1/email/version"): "VersionResponse",
     ("get", "/v1/email/init"): "InitResponse",
+    # Calendar surface (schema 2.1, #1780).
+    ("get", "/v1/email/calendar/events"): "CalendarEventsResponse",
+    ("post", "/v1/email/calendar/events"): "CalendarEventResponse",
+    ("post", "/v1/email/calendar/events/preview"): "CalendarEventPreviewResponse",
+    ("post", "/v1/email/calendar/events/respond"): "CalendarRespondResponse",
 }
 
 
@@ -97,11 +116,22 @@ def test_spec_info_version_is_api_version(spec):
 
 def test_contract_models_present_in_spec(spec):
     schemas = spec["components"]["schemas"]
-    for name in ("EmailTriageRequest", "EmailTriageResponse", "EmailTriageResult"):
+    for name in (
+        "EmailTriageRequest",
+        "EmailTriageResponse",
+        "EmailTriageResult",
+        # Batch models (#1887 additive)
+        "BatchTriageRequest",
+        "BatchTriageResponse",
+        "BatchItemResult",
+    ):
         assert name in schemas, f"{name} missing from exported OpenAPI components"
 
 
-@pytest.mark.parametrize("model", [EmailTriageRequest, EmailTriageResponse])
+@pytest.mark.parametrize(
+    "model",
+    [EmailTriageRequest, EmailTriageResponse, BatchTriageRequest, BatchTriageResponse],
+)
 def test_spec_schema_matches_contract_model(spec, model):
     """Field names + required set in the exported spec must match the pydantic
     contract model — drift between contract.py and the published spec fails."""
@@ -171,3 +201,1241 @@ def test_version_endpoint_rejects_unknown_field_loudly(client):
     # shape carries exactly the two documented keys (no silent extras).
     body = client.get("/v1/email/version").json()
     assert set(body) == {"apiVersion", "agentVersion"}
+
+
+# ---------------------------------------------------------------------------
+# 6. Inbox search (#1781) — read-only; backend injected via dependency_overrides
+# ---------------------------------------------------------------------------
+
+import base64  # noqa: E402
+
+from fastapi import HTTPException  # noqa: E402
+from gaia_agent_email import api_routes  # noqa: E402
+
+
+def _gmail_message(
+    mid: str, *, subject: str, frm: str, to: str, snippet: str, labels
+) -> dict:
+    """A minimal Gmail-API-v1-shaped message the production header/body
+    decoder (via ``_format_message_for_llm``) can parse."""
+    data = base64.urlsafe_b64encode(b"Body text the search list drops.").decode()
+    return {
+        "id": mid,
+        "threadId": f"t-{mid}",
+        "snippet": snippet,
+        "labelIds": list(labels),
+        "payload": {
+            "mimeType": "text/plain",
+            "headers": [
+                {"name": "Subject", "value": subject},
+                {"name": "From", "value": frm},
+                {"name": "To", "value": to},
+                {"name": "Date", "value": "Mon, 01 Jan 2026 10:00:00 +0000"},
+            ],
+            "body": {"data": data.rstrip("=")},
+        },
+    }
+
+
+class _FakeSearchBackend:
+    """Inject-only fake exposing the two read methods the search route uses.
+
+    Records the exact ``list_messages`` call so a test can assert the route
+    forwards query/labels/max_results/page_token to the backend
+    (boundary-validity, not just invocation).
+    """
+
+    def __init__(self, messages):
+        self._messages = {m["id"]: m for m in messages}
+        self.calls: list[dict] = []
+
+    def list_messages(
+        self, *, query=None, label_ids=None, max_results=25, page_token=None
+    ):
+        self.calls.append(
+            {
+                "query": query,
+                "label_ids": list(label_ids) if label_ids else None,
+                "max_results": max_results,
+                "page_token": page_token,
+            }
+        )
+        ids = list(self._messages)
+        page = ids[:max_results]
+        return {
+            "messages": [
+                {"id": i, "threadId": self._messages[i]["threadId"]} for i in page
+            ],
+            "nextPageToken": "next-tok" if len(ids) > max_results else None,
+        }
+
+    def get_message(self, message_id: str):
+        return self._messages[message_id]
+
+
+def test_search_returns_messages_via_injected_backend(client):
+    fake = _FakeSearchBackend(
+        [
+            _gmail_message(
+                "m1",
+                subject="Prod incident",
+                frm="Sarah Chen <sarah@example.com>",
+                to="me@example.com",
+                snippet="please review",
+                labels=["INBOX", "UNREAD"],
+            )
+        ]
+    )
+    client.app.dependency_overrides[api_routes.get_search_backend] = lambda: fake
+    try:
+        resp = client.post(
+            "/v1/email/search", json={"query": "is:unread", "max_results": 10}
+        )
+    finally:
+        client.app.dependency_overrides.pop(api_routes.get_search_backend, None)
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["schema_version"] == SCHEMA_VERSION
+    assert body["query"] == "is:unread"
+    assert body["count"] == 1
+    msg = body["messages"][0]
+    assert msg["id"] == "m1"
+    assert msg["thread_id"] == "t-m1"
+    assert msg["subject"] == "Prod incident"
+    # Wire alias: raw 'From' header under the key `from`, never `from_`.
+    assert msg["from"] == "Sarah Chen <sarah@example.com>"
+    assert "from_" not in msg
+    assert msg["snippet"] == "please review"
+    assert msg["label_ids"] == ["INBOX", "UNREAD"]
+    # The route must forward the query + max_results to the backend verbatim.
+    assert fake.calls == [
+        {
+            "query": "is:unread",
+            "label_ids": None,
+            "max_results": 10,
+            "page_token": None,
+        }
+    ]
+
+
+def test_search_empty_body_lists_inbox(client):
+    fake = _FakeSearchBackend([])
+    client.app.dependency_overrides[api_routes.get_search_backend] = lambda: fake
+    try:
+        resp = client.post("/v1/email/search", json={})
+    finally:
+        client.app.dependency_overrides.pop(api_routes.get_search_backend, None)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["count"] == 0
+    assert body["messages"] == []
+    # No query/labels → the route forces INBOX so the default lists the inbox.
+    # (Live Gmail with no labelIds returns ALL mail — the route must not rely on
+    # the fake's INBOX default, which would mask that divergence.)
+    assert fake.calls == [
+        {"query": None, "label_ids": ["INBOX"], "max_results": 25, "page_token": None}
+    ]
+
+
+def test_search_with_query_is_not_inbox_scoped(client):
+    # A query searches ALL mail (Gmail search semantics / agent parity) — the
+    # route must NOT silently inject an INBOX label when a query is present.
+    fake = _FakeSearchBackend([])
+    client.app.dependency_overrides[api_routes.get_search_backend] = lambda: fake
+    try:
+        resp = client.post("/v1/email/search", json={"query": "from:alice"})
+    finally:
+        client.app.dependency_overrides.pop(api_routes.get_search_backend, None)
+    assert resp.status_code == 200, resp.text
+    assert fake.calls == [
+        {
+            "query": "from:alice",
+            "label_ids": None,
+            "max_results": 25,
+            "page_token": None,
+        }
+    ]
+
+
+def test_search_forwards_labels_and_caps_max_results(client):
+    fake = _FakeSearchBackend([])
+    client.app.dependency_overrides[api_routes.get_search_backend] = lambda: fake
+    try:
+        resp = client.post(
+            "/v1/email/search",
+            json={"labels": ["STARRED"], "max_results": 5},
+        )
+    finally:
+        client.app.dependency_overrides.pop(api_routes.get_search_backend, None)
+    assert resp.status_code == 200, resp.text
+    assert fake.calls == [
+        {
+            "query": None,
+            "label_ids": ["STARRED"],
+            "max_results": 5,
+            "page_token": None,
+        }
+    ]
+
+
+def test_search_forwards_page_token_for_pagination(client):
+    # The next_page_token a response returns must be usable as the next
+    # request's page_token — otherwise pagination is a dead-end.
+    fake = _FakeSearchBackend([])
+    client.app.dependency_overrides[api_routes.get_search_backend] = lambda: fake
+    try:
+        resp = client.post(
+            "/v1/email/search",
+            json={"query": "is:unread", "page_token": "next-tok"},
+        )
+    finally:
+        client.app.dependency_overrides.pop(api_routes.get_search_backend, None)
+    assert resp.status_code == 200, resp.text
+    assert fake.calls == [
+        {
+            "query": "is:unread",
+            "label_ids": None,
+            "max_results": 25,
+            "page_token": "next-tok",
+        }
+    ]
+
+
+def test_search_rejects_unknown_field_loudly(client):
+    # _Strict contract: an unknown field is a 422, never silently dropped.
+    fake = _FakeSearchBackend([])
+    client.app.dependency_overrides[api_routes.get_search_backend] = lambda: fake
+    try:
+        resp = client.post("/v1/email/search", json={"q": "oops"})
+    finally:
+        client.app.dependency_overrides.pop(api_routes.get_search_backend, None)
+    assert resp.status_code == 422
+
+
+def test_search_rejects_out_of_range_max_results(client):
+    fake = _FakeSearchBackend([])
+    client.app.dependency_overrides[api_routes.get_search_backend] = lambda: fake
+    try:
+        resp = client.post("/v1/email/search", json={"max_results": 0})
+        resp_hi = client.post("/v1/email/search", json={"max_results": 101})
+    finally:
+        client.app.dependency_overrides.pop(api_routes.get_search_backend, None)
+    assert resp.status_code == 422
+    assert resp_hi.status_code == 422
+
+
+def test_get_search_backend_no_mailbox_fails_loud_503(monkeypatch):
+    monkeypatch.setattr(api_routes, "connected_mailbox_providers", lambda: [])
+    with pytest.raises(HTTPException) as ei:
+        api_routes.get_search_backend()
+    assert ei.value.status_code == 503
+
+
+def test_get_search_backend_ambiguous_fails_loud_400(monkeypatch):
+    monkeypatch.setattr(
+        api_routes, "connected_mailbox_providers", lambda: ["google", "microsoft"]
+    )
+    with pytest.raises(HTTPException) as ei:
+        api_routes.get_search_backend()
+    assert ei.value.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# 7. Mailbox actions — archive / quarantine (schema 2.1, #1779)
+#
+# The confirmation-token gate is the safety property under test: a destructive
+# action without a valid, action-bound token must be rejected with 403 BEFORE
+# any backend call. The happy paths use an in-memory fake Gmail backend +
+# real in-memory action log (injected via the module-level resolvers the
+# handlers call — the same seam ``send`` uses), so no live mailbox is touched.
+# ---------------------------------------------------------------------------
+
+
+class _FakeMailbox:
+    """Minimal in-memory, label-based (Gmail-style) backend for the action impls.
+
+    Tracks a label set per message id; archive removes INBOX (stable id, like
+    Gmail), quarantine adds the quarantine label and archives. Enough surface
+    for ``archive_message_impl`` / ``undo_archive_batch_impl`` /
+    ``quarantine_phishing_impl`` / ``unquarantine_impl`` to round-trip.
+    """
+
+    def __init__(self):
+        self.messages = {
+            "m1": {"labelIds": ["INBOX", "UNREAD"], "threadId": "t1"},
+            "m2": {"labelIds": ["INBOX"], "threadId": "t2"},
+        }
+        self.labels = [{"id": "INBOX", "name": "INBOX"}]
+        self._next_label = 1
+
+    def get_message(self, message_id):
+        msg = self.messages[message_id]
+        return {"labelIds": list(msg["labelIds"]), "threadId": msg["threadId"]}
+
+    def archive_message(self, message_id):
+        labels = self.messages[message_id]["labelIds"]
+        if "INBOX" in labels:
+            labels.remove("INBOX")
+        return {"id": message_id}
+
+    def unarchive_message(self, message_id, prior_labels):
+        labels = self.messages[message_id]["labelIds"]
+        for lab in prior_labels or ["INBOX"]:
+            if lab not in labels:
+                labels.append(lab)
+        return {"id": message_id}
+
+    def list_labels(self):
+        return list(self.labels)
+
+    def create_label(self, *, name):
+        self._next_label += 1
+        entry = {"id": f"Label_{self._next_label}", "name": name}
+        self.labels.append(entry)
+        return entry
+
+    def add_label(self, message_id, label_id):
+        labels = self.messages[message_id]["labelIds"]
+        if label_id not in labels:
+            labels.append(label_id)
+        return {"id": message_id}
+
+    def remove_label(self, message_id, label_id):
+        labels = self.messages[message_id]["labelIds"]
+        if label_id in labels:
+            labels.remove(label_id)
+        return {"id": message_id}
+
+
+@pytest.fixture
+def action_env(monkeypatch):
+    """Wire the action handlers to a fake backend + in-memory action log.
+
+    Returns ``(client, mailbox)`` — the mailbox is inspectable so a test can
+    assert inbox membership after archive/undo.
+    """
+    from gaia_agent_email import action_store
+    from gaia_agent_email import api_routes as email_routes
+
+    from gaia.database.mixin import DatabaseMixin
+
+    class _DB(DatabaseMixin):
+        pass
+
+    db = _DB()
+    db.init_db(":memory:")
+    action_store.init_schema(db)
+
+    mailbox = _FakeMailbox()
+    monkeypatch.setattr(email_routes, "resolve_action_db", lambda: db)
+    monkeypatch.setattr(
+        email_routes, "_resolve_mutate_backend", lambda provider: (mailbox, "google")
+    )
+    monkeypatch.setattr(
+        email_routes, "_resolve_backend_for_provider", lambda provider: mailbox
+    )
+    client = TestClient(export_openapi.build_app())
+    return client, mailbox
+
+
+def test_archive_without_token_is_rejected(client):
+    # The gate fires before any backend resolution — no fake needed.
+    resp = client.post("/v1/email/archive", json={"message_id": "m1"})
+    assert resp.status_code == 403
+    assert "confirmation token" in resp.json()["detail"].lower()
+
+
+def test_quarantine_without_token_is_rejected(client):
+    resp = client.post(
+        "/v1/email/quarantine", json={"message_id": "m1", "is_phishing": True}
+    )
+    assert resp.status_code == 403
+    assert "confirmation token" in resp.json()["detail"].lower()
+
+
+def test_confirm_then_archive_round_trips(action_env):
+    client, mailbox = action_env
+    tok = client.post(
+        "/v1/email/confirm", json={"action": "archive", "message_id": "m1"}
+    ).json()["confirmation_token"]
+
+    resp = client.post(
+        "/v1/email/archive",
+        json={"message_id": "m1", "confirmation_token": tok},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["archived"] is True
+    assert body["schema_version"] == SCHEMA_VERSION
+    assert body["post_archive_id"] == "m1"  # label-based backend keeps the id
+    assert body["undo_window_seconds"] == 30
+    assert "INBOX" not in mailbox.messages["m1"]["labelIds"]
+
+    # The same token cannot be replayed (single-use).
+    replay = client.post(
+        "/v1/email/archive", json={"message_id": "m1", "confirmation_token": tok}
+    )
+    assert replay.status_code == 403
+
+    # Undo (ungated) restores it to the inbox via the batch handle.
+    undo = client.post("/v1/email/unarchive", json={"batch_id": body["batch_id"]})
+    assert undo.status_code == 200, undo.text
+    assert undo.json()["restored"] == 1
+    assert "INBOX" in mailbox.messages["m1"]["labelIds"]
+
+
+def test_archive_token_cannot_authorize_quarantine(action_env):
+    # A token minted for archive must not authorize quarantine of the same id.
+    client, _ = action_env
+    tok = client.post(
+        "/v1/email/confirm", json={"action": "archive", "message_id": "m1"}
+    ).json()["confirmation_token"]
+    resp = client.post(
+        "/v1/email/quarantine",
+        json={"message_id": "m1", "is_phishing": True, "confirmation_token": tok},
+    )
+    assert resp.status_code == 403
+
+
+def test_confirm_then_quarantine_round_trips(action_env):
+    client, mailbox = action_env
+    tok = client.post(
+        "/v1/email/confirm", json={"action": "quarantine", "message_id": "m2"}
+    ).json()["confirmation_token"]
+    resp = client.post(
+        "/v1/email/quarantine",
+        json={"message_id": "m2", "is_phishing": True, "confirmation_token": tok},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["quarantined"] is True
+    qlabel = body["quarantine_label_id"]
+    assert qlabel in mailbox.messages["m2"]["labelIds"]
+    assert "INBOX" not in mailbox.messages["m2"]["labelIds"]
+
+    undo = client.post("/v1/email/unquarantine", json={"action_id": body["action_id"]})
+    assert undo.status_code == 200, undo.text
+    assert undo.json()["message_id"] == "m2"
+    assert qlabel not in mailbox.messages["m2"]["labelIds"]
+    assert "INBOX" in mailbox.messages["m2"]["labelIds"]
+
+
+def test_quarantine_refuses_non_phishing(action_env):
+    client, _ = action_env
+    tok = client.post(
+        "/v1/email/confirm", json={"action": "quarantine", "message_id": "m2"}
+    ).json()["confirmation_token"]
+    resp = client.post(
+        "/v1/email/quarantine",
+        json={"message_id": "m2", "is_phishing": False, "confirmation_token": tok},
+    )
+    assert resp.status_code == 400
+    assert "is_phishing" in resp.json()["detail"].lower()
+
+
+def test_unquarantine_unknown_action_fails_loudly(action_env):
+    # Unknown/expired action_id → 409 short-circuit, even before backend resolution.
+    client, _ = action_env
+    resp = client.post("/v1/email/unquarantine", json={"action_id": "nope"})
+    assert resp.status_code == 409
+    assert "undo window" in resp.json()["detail"].lower()
+
+
+def test_unarchive_expired_window_fails_loudly(action_env):
+    client, _ = action_env
+    resp = client.post("/v1/email/unarchive", json={"batch_id": "does-not-exist"})
+    assert resp.status_code == 409
+    assert "undo window" in resp.json()["detail"].lower()
+
+
+def test_action_request_rejects_unknown_field(client):
+    # _Strict contract models forbid extras → 422, never silently dropped.
+    resp = client.post(
+        "/v1/email/confirm",
+        json={"action": "archive", "message_id": "m1", "bogus": 1},
+    )
+    assert resp.status_code == 422
+
+
+class _FolderMailbox:
+    """Outlook-style fake: archive is a folder MOVE that mints a NEW id (#1738).
+
+    The whole point is to prove archive→unarchive undo uses the post-archive id,
+    not the stale request id — undo against the original id would 404 here.
+    """
+
+    def __init__(self):
+        self.inbox = {"m1"}
+        self._archived = {}  # new_id -> original_id
+        self._n = 0
+        self.unarchive_calls = []
+
+    def get_message(self, message_id):
+        return {"labelIds": ["INBOX"], "threadId": "t1"}
+
+    def archive_message(self, message_id):
+        self._n += 1
+        new_id = f"{message_id}-arch{self._n}"
+        self.inbox.discard(message_id)
+        self._archived[new_id] = message_id
+        return {"id": new_id}
+
+    def unarchive_message(self, message_id, prior_labels):
+        self.unarchive_calls.append(message_id)
+        if message_id not in self._archived:
+            # Mirrors the live #1738 failure: a stale (pre-move) id 404s.
+            raise RuntimeError(f"unknown id {message_id!r} (folder move changed it)")
+        self.inbox.add(self._archived.pop(message_id))
+        return {"id": message_id}
+
+
+def test_archive_undo_uses_post_archive_id_after_folder_move(monkeypatch):
+    # #1738: a folder-based backend mints a new id on archive. Undo MUST restore
+    # by that post-archive id (surfaced in the response), not the request id.
+    from gaia_agent_email import action_store
+    from gaia_agent_email import api_routes as email_routes
+
+    from gaia.database.mixin import DatabaseMixin
+
+    class _DB(DatabaseMixin):
+        pass
+
+    db = _DB()
+    db.init_db(":memory:")
+    action_store.init_schema(db)
+    mailbox = _FolderMailbox()
+    monkeypatch.setattr(email_routes, "resolve_action_db", lambda: db)
+    monkeypatch.setattr(
+        email_routes, "_resolve_mutate_backend", lambda p: (mailbox, "microsoft")
+    )
+    monkeypatch.setattr(
+        email_routes, "_resolve_backend_for_provider", lambda p: mailbox
+    )
+    client = TestClient(export_openapi.build_app())
+
+    tok = client.post(
+        "/v1/email/confirm", json={"action": "archive", "message_id": "m1"}
+    ).json()["confirmation_token"]
+    body = client.post(
+        "/v1/email/archive", json={"message_id": "m1", "confirmation_token": tok}
+    ).json()
+    assert body["post_archive_id"] != "m1"  # the move changed the id
+    assert "m1" not in mailbox.inbox
+
+    undo = client.post("/v1/email/unarchive", json={"batch_id": body["batch_id"]})
+    assert undo.status_code == 200, undo.text
+    # Undo restored by the NEW id, not the stale request id — the #1738 fix.
+    assert mailbox.unarchive_calls == [body["post_archive_id"]]
+    assert "m1" in mailbox.inbox
+
+
+def test_quarantine_rejected_for_outlook(monkeypatch):
+    # Quarantine is Gmail-only: an Outlook mailbox is refused with an actionable
+    # 400 rather than performing a folder move its undo cannot reverse.
+    from gaia_agent_email import api_routes as email_routes
+
+    monkeypatch.setattr(
+        email_routes, "_resolve_mutate_backend", lambda p: (object(), "microsoft")
+    )
+    monkeypatch.setattr(email_routes, "resolve_action_db", lambda: None)
+    client = TestClient(export_openapi.build_app())
+
+    tok = client.post(
+        "/v1/email/confirm", json={"action": "quarantine", "message_id": "m1"}
+    ).json()["confirmation_token"]
+    resp = client.post(
+        "/v1/email/quarantine",
+        json={"message_id": "m1", "is_phishing": True, "confirmation_token": tok},
+    )
+    assert resp.status_code == 400
+    assert "gmail" in resp.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# 8. Calendar surface (#1780) — view / preview / create (gated) / respond
+# ---------------------------------------------------------------------------
+
+
+class _FakeCalendarBackend:
+    """In-memory calendar backend matching the ``CalendarBackend`` Protocol.
+
+    Records calls so a test can assert the create gate fired (or didn't) without
+    touching a live calendar. Injected via ``resolve_calendar_backend``.
+    """
+
+    def __init__(self) -> None:
+        self.created: list = []
+        self.rsvps: list = []
+
+    def list_events(
+        self, *, calendar_id="primary", time_min=None, time_max=None, max_results=25
+    ):
+        return {
+            "items": [
+                {
+                    "id": "evt-1",
+                    "summary": "Standup",
+                    "start": {"dateTime": "2026-07-01T09:00:00Z"},
+                    "end": {"dateTime": "2026-07-01T09:15:00Z"},
+                    "location": "Zoom",
+                    "organizer": {"email": "lead@example.com"},
+                }
+            ]
+        }
+
+    def create_event(
+        self,
+        *,
+        calendar_id="primary",
+        summary,
+        start,
+        end,
+        attendees=None,
+        location=None,
+        description=None,
+    ):
+        self.created.append(
+            {"summary": summary, "start": start, "end": end, "attendees": attendees}
+        )
+        return {"id": "evt-created-1", "summary": summary}
+
+    def update_event_rsvp(
+        self, *, calendar_id="primary", event_id, attendee_email, response_status
+    ):
+        self.rsvps.append((event_id, attendee_email, response_status))
+        return {"id": event_id, "responseStatus": response_status}
+
+
+@pytest.fixture
+def fake_calendar(client, monkeypatch) -> _FakeCalendarBackend:
+    """Inject an in-memory calendar backend so calendar routes never hit a live
+    account. Patches the module-level ``resolve_calendar_backend`` indirection."""
+    from gaia_agent_email import api_routes as email_routes
+
+    backend = _FakeCalendarBackend()
+    monkeypatch.setattr(email_routes, "resolve_calendar_backend", lambda: backend)
+    return backend
+
+
+def _event_payload(**overrides) -> dict:
+    payload = {
+        "summary": "Project sync",
+        "start": {"date_time": "2026-07-01T14:00:00Z"},
+        "end": {"date_time": "2026-07-01T15:00:00Z"},
+        "attendees": ["alice@example.com"],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_calendar_view_returns_events(client, fake_calendar):
+    resp = client.get("/v1/email/calendar/events")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["schema_version"] == SCHEMA_VERSION
+    assert body["events"][0]["id"] == "evt-1"
+    assert body["events"][0]["organizer"] == "lead@example.com"
+
+
+def test_calendar_create_without_token_is_403(client, fake_calendar):
+    """The mutation gate fires FIRST: no confirmation token → 403, no create."""
+    resp = client.post("/v1/email/calendar/events", json=_event_payload())
+    assert resp.status_code == 403
+    detail = resp.json()["detail"].lower()
+    assert "confirmation_token" in detail or "preview" in detail
+    assert fake_calendar.created == []  # gate preempted the backend
+
+
+def test_calendar_create_with_invalid_token_is_403(client, fake_calendar):
+    resp = client.post(
+        "/v1/email/calendar/events",
+        json=_event_payload(confirmation_token="not-a-real-token"),
+    )
+    assert resp.status_code == 403
+    assert fake_calendar.created == []
+
+
+def test_calendar_preview_then_create_succeeds(client, fake_calendar):
+    """Golden path: preview mints a payload-bound token; echoing it creates."""
+    preview = client.post("/v1/email/calendar/events/preview", json=_event_payload())
+    assert preview.status_code == 200
+    token = preview.json()["confirmation_token"]
+    assert token
+
+    created = client.post(
+        "/v1/email/calendar/events",
+        json=_event_payload(confirmation_token=token),
+    )
+    assert created.status_code == 200, created.text
+    body = created.json()
+    assert body["event_id"] == "evt-created-1"
+    assert body["created"] is True
+    assert len(fake_calendar.created) == 1
+
+    # Single-use: replaying the same token is rejected.
+    replay = client.post(
+        "/v1/email/calendar/events",
+        json=_event_payload(confirmation_token=token),
+    )
+    assert replay.status_code == 403
+
+
+def test_calendar_create_token_is_payload_bound(client, fake_calendar):
+    """A token minted for one event cannot authorize a different event."""
+    preview = client.post("/v1/email/calendar/events/preview", json=_event_payload())
+    token = preview.json()["confirmation_token"]
+    # Same token, different summary → fingerprint mismatch → rejected.
+    resp = client.post(
+        "/v1/email/calendar/events",
+        json=_event_payload(
+            summary="A totally different meeting", confirmation_token=token
+        ),
+    )
+    assert resp.status_code == 403
+    assert fake_calendar.created == []
+
+
+def test_calendar_respond_records_rsvp(client, fake_calendar):
+    resp = client.post(
+        "/v1/email/calendar/events/respond",
+        json={
+            "event_id": "evt-1",
+            "status": "accepted",
+            "attendee_email": "me@example.com",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "accepted"
+    assert body["responded"] is True
+    assert fake_calendar.rsvps == [("evt-1", "me@example.com", "accepted")]
+
+
+def test_calendar_create_rejects_all_day_without_time_loudly(client):
+    """A start/end with neither date_time nor date is a 422 (contract validation)."""
+    bad = _event_payload(start={}, end={})
+    resp = client.post("/v1/email/calendar/events/preview", json=bad)
+    assert resp.status_code == 422
+
+
+def test_calendar_view_missing_scope_fails_loud_with_reconnect_cta(client, monkeypatch):
+    """AC2 (#1780/#1770): a missing calendar.events scope → 403 + reconnect CTA.
+
+    The token resolver raises ``ScopeMismatchError`` (a ``ConnectorsError``) when
+    the connected account never granted the calendar scope; the route must map it
+    to HTTP 403 and surface the actionable reconnect message, not a silent empty
+    calendar or an opaque 500.
+    """
+    from gaia_agent_email import api_routes as email_routes
+
+    from gaia.connectors.errors import ScopeMismatchError
+
+    class _ScopeDeniedCalendar:
+        def list_events(
+            self, *, calendar_id="primary", time_min=None, time_max=None, max_results=25
+        ):
+            raise ScopeMismatchError(
+                required=["https://www.googleapis.com/auth/calendar.events"],
+                granted=[],
+                provider="google",
+            )
+
+    monkeypatch.setattr(
+        email_routes, "resolve_calendar_backend", lambda: _ScopeDeniedCalendar()
+    )
+    resp = client.get("/v1/email/calendar/events")
+    assert resp.status_code == 403
+    detail = resp.json()["detail"].lower()
+    assert "scope" in detail and "reconnect" in detail
+
+
+def test_calendar_create_config_error_is_503(client, monkeypatch):
+    """A ConfigurationError from the backend maps to 503 (after the gate passes)."""
+    from gaia_agent_email import api_routes as email_routes
+
+    from gaia.connectors.errors import ConfigurationError
+
+    class _MisconfiguredCalendar:
+        def create_event(
+            self,
+            *,
+            calendar_id="primary",
+            summary,
+            start,
+            end,
+            attendees=None,
+            location=None,
+            description=None,
+        ):
+            raise ConfigurationError("calendar connector is not configured")
+
+    monkeypatch.setattr(
+        email_routes, "resolve_calendar_backend", lambda: _MisconfiguredCalendar()
+    )
+    token = client.post(
+        "/v1/email/calendar/events/preview", json=_event_payload()
+    ).json()["confirmation_token"]
+    resp = client.post(
+        "/v1/email/calendar/events",
+        json=_event_payload(confirmation_token=token),
+    )
+    assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# 9. Inbox pre-scan (#1778) — fake backend via app.dependency_overrides;
+#    no live mailbox, no LLM (the heuristic path classifies these messages).
+# ---------------------------------------------------------------------------
+
+
+def _prescan_gmail_message(
+    msg_id: str,
+    *,
+    subject: str,
+    sender: str,
+    label_ids: list[str],
+    snippet: str = "",
+) -> dict:
+    """Build a minimal Gmail-API-v1-shaped message the pre-scan path reads."""
+    return {
+        "id": msg_id,
+        "threadId": f"t-{msg_id}",
+        "labelIds": label_ids,
+        "snippet": snippet,
+        "payload": {
+            "headers": [
+                {"name": "Subject", "value": subject},
+                {"name": "From", "value": sender},
+            ],
+            "mimeType": "text/plain",
+            "body": {"data": ""},
+        },
+    }
+
+
+class _FakePreScanBackend:
+    """In-memory backend exposing just the read calls pre_scan_inbox_impl uses."""
+
+    def __init__(self, messages: list[dict]):
+        self._messages = {m["id"]: m for m in messages}
+
+    def list_messages(self, *, label_ids=None, max_results=25, **_):  # noqa: ANN001
+        ids = list(self._messages)[:max_results]
+        return {
+            "messages": [
+                {"id": i, "threadId": self._messages[i]["threadId"]} for i in ids
+            ],
+            "nextPageToken": None,
+        }
+
+    def get_message(self, message_id: str) -> dict:
+        return self._messages[message_id]
+
+
+@pytest.fixture
+def prescan_client() -> TestClient:
+    """A client whose pre-scan backend is a fake (a promotional message that
+    the heuristic confidently buckets as a suggested archive, plus a plain
+    informational message)."""
+    from gaia_agent_email.api_routes import get_prescan_backend
+
+    app = export_openapi.build_app()
+    backend = _FakePreScanBackend(
+        [
+            _prescan_gmail_message(
+                "m1",
+                subject="50% off this weekend!",
+                sender="deals@shop.example",
+                label_ids=["INBOX", "CATEGORY_PROMOTIONS"],
+            ),
+            _prescan_gmail_message(
+                "m2",
+                subject="Project sync notes",
+                sender="alice@corp.example",
+                label_ids=["INBOX"],
+                snippet="Sharing the notes from today's sync.",
+            ),
+        ]
+    )
+    app.dependency_overrides[get_prescan_backend] = lambda: backend
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_prescan_returns_card_envelope_shape(prescan_client):
+    resp = prescan_client.post("/v1/email/prescan", json={"max_messages": 10})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["schema_version"] == SCHEMA_VERSION
+    result = body["result"]
+    # The envelope is exactly what EmailPreScanCard consumes.
+    assert result["kind"] == "email_pre_scan"
+    assert set(result) == {
+        "kind",
+        "urgent",
+        "actionable",
+        "informational_count",
+        "suggested_archives",
+        "suggested_drafts",
+        "preferences_applied",
+        "totals",
+    }
+    for section in ("urgent", "actionable", "suggested_archives"):
+        assert isinstance(result[section], list)
+    assert isinstance(result["informational_count"], int)
+    assert result["suggested_drafts"] == []
+    # The promotional message is surfaced as a suggested archive with a reason;
+    # the plain message lands in the informational count (not listed).
+    archives = result["suggested_archives"]
+    assert any(item["message_id"] == "m1" for item in archives)
+    archived = next(item for item in archives if item["message_id"] == "m1")
+    assert archived["reason"]  # heuristic rationale present
+    assert archived["thread_id"] == "t-m1"
+    assert result["totals"]["suggested_archives"] >= 1
+
+
+def test_prescan_rejects_unknown_request_field_loudly(prescan_client):
+    # _Strict request model forbids extras → 422, never silently ignored.
+    resp = prescan_client.post(
+        "/v1/email/prescan", json={"max_messages": 5, "bogus": True}
+    )
+    assert resp.status_code == 422
+
+
+def test_prescan_no_mailbox_connected_fails_loud(monkeypatch):
+    # The real resolver must fail loud (503) when no mailbox is connected —
+    # never a silent empty pre-scan.
+    from fastapi import HTTPException
+    from gaia_agent_email.api_routes import get_prescan_backend
+
+    monkeypatch.setattr(
+        "gaia_agent_email.api_routes.connected_mailbox_providers", lambda: []
+    )
+    with pytest.raises(HTTPException) as exc:
+        get_prescan_backend()
+    assert exc.value.status_code == 503
+
+
+def test_prescan_ambiguous_mailbox_fails_loud(monkeypatch):
+    # Two connected mailboxes → 400, never a silent guess of which to scan.
+    from fastapi import HTTPException
+    from gaia_agent_email.api_routes import get_prescan_backend
+
+    monkeypatch.setattr(
+        "gaia_agent_email.api_routes.connected_mailbox_providers",
+        lambda: ["google", "microsoft"],
+    )
+    with pytest.raises(HTTPException) as exc:
+        get_prescan_backend()
+    assert exc.value.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Attachments (schema 2.2, #1542) — read/triage exposes; draft/send accept
+# ---------------------------------------------------------------------------
+
+from gaia_agent_email.contract import (  # noqa: E402
+    AttachmentMeta,
+    OutgoingAttachment,
+    parse_request,
+    parse_response,
+)
+
+_PDF_B64 = base64.b64encode(b"%PDF-1.4 sample attachment bytes").decode("ascii")
+
+
+def _attachment_payload(**overrides) -> dict:
+    payload = {
+        "filename": "q3-report.pdf",
+        "mime_type": "application/pdf",
+        "content_base64": _PDF_B64,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _draft_payload(**overrides) -> dict:
+    payload = {
+        "to": [{"email": "bob@example.com"}],
+        "subject": "Report",
+        "body": "See attached.",
+        "attachments": [_attachment_payload()],
+    }
+    payload.update(overrides)
+    return payload
+
+
+class _FakeSendBackend:
+    """Records the exact send_message call so tests assert the call SHAPE
+    (decoded bytes included), not just that a send happened."""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def send_message(self, *, to, subject, body, attachments=None):
+        self.calls.append(
+            {
+                "to": to,
+                "subject": subject,
+                "body": body,
+                "attachments": attachments,
+            }
+        )
+        return {"id": "sent-1"}
+
+
+@pytest.fixture
+def send_env(monkeypatch):
+    backend = _FakeSendBackend()
+    from gaia_agent_email import api_routes as email_routes
+
+    monkeypatch.setattr(
+        email_routes, "_resolve_backend_for_provider", lambda provider: backend
+    )
+    return TestClient(export_openapi.build_app()), backend
+
+
+def test_triage_request_sample_with_attachments_validates():
+    # AC3: the #1262 sample payload with attachment metadata validates via the
+    # contract helpers — request and response side.
+    req = parse_request(
+        {
+            "payload": {
+                "kind": "single",
+                "principal": {"email": "user@example.com"},
+                "message": {
+                    "message_id": "m1",
+                    "from": {"email": "alice@example.com"},
+                    "subject": "Q3 report attached",
+                    "body": "Please review the attached report.",
+                    "attachments": [
+                        {
+                            "filename": "q3-report.pdf",
+                            "mime_type": "application/pdf",
+                            "size_bytes": 48231,
+                            "attachment_id": "att_abc123",
+                        }
+                    ],
+                },
+            }
+        }
+    )
+    assert req.payload.message.attachments[0].filename == "q3-report.pdf"
+
+    resp = parse_response(
+        {
+            "request_kind": "single",
+            "result": {
+                "category": "NEEDS_RESPONSE",
+                "summary": "Review the attached Q3 report.",
+                "attachments": [
+                    {
+                        "filename": "q3-report.pdf",
+                        "mime_type": "application/pdf",
+                        "size_bytes": 48231,
+                    }
+                ],
+            },
+        }
+    )
+    assert resp.result.attachments[0].size_bytes == 48231
+    assert resp.schema_version == SCHEMA_VERSION
+
+
+def test_triage_result_echoes_message_attachments(monkeypatch):
+    # The service echoes the request's attachment metadata on the result so a
+    # consumer can process attachments from the response alone. Heuristicly
+    # confident path (promo label) → no LLM classify; summarizer stubbed.
+    from gaia_agent_email import api_routes as email_routes
+
+    monkeypatch.setattr(
+        email_routes.EmailTriageService, "_build_llm_chat", lambda self: object()
+    )
+    monkeypatch.setattr(
+        "gaia_agent_email.tools.summarize_tools.summarize_email_llm",
+        lambda chat, **kw: "Stub summary.",
+    )
+    monkeypatch.setattr(
+        "gaia_agent_email.tools.llm_triage.classify_email_llm",
+        lambda chat, **kw: {"category": "PROMOTIONAL", "suggested_action": "archive"},
+    )
+    req = parse_request(
+        {
+            "payload": {
+                "kind": "single",
+                "principal": {"email": "user@example.com"},
+                "message": {
+                    "message_id": "m1",
+                    "from": {"email": "deals@shop.example"},
+                    "subject": "50% off everything!",
+                    "body": "Huge savings this weekend only. Unsubscribe here.",
+                    "attachments": [
+                        {
+                            "filename": "coupon.pdf",
+                            "mime_type": "application/pdf",
+                            "size_bytes": 1024,
+                        }
+                    ],
+                },
+            }
+        }
+    )
+    out = email_routes.EmailTriageService().triage_request(req)
+    assert [a.filename for a in out.result.attachments] == ["coupon.pdf"]
+
+
+def test_draft_echoes_attachment_metadata_never_content(client):
+    resp = client.post("/v1/email/draft", json=_draft_payload())
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    (att,) = body["draft"]["attachments"]
+    assert att["filename"] == "q3-report.pdf"
+    assert att["mime_type"] == "application/pdf"
+    assert att["size_bytes"] == len(base64.b64decode(_PDF_B64))
+    # Metadata echo only — the content must not round-trip in the response.
+    assert "content_base64" not in att
+
+
+def test_send_with_attachments_reaches_backend_send(send_env):
+    client, backend = send_env
+    token = client.post("/v1/email/draft", json=_draft_payload()).json()[
+        "confirmation_token"
+    ]
+
+    resp = client.post(
+        "/v1/email/send", json=_draft_payload(confirmation_token=token)
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["sent"] is True
+    (att,) = body["attachments"]
+    assert att["filename"] == "q3-report.pdf"
+
+    # Boundary validity: the backend received the DECODED bytes + metadata.
+    (call,) = backend.calls
+    (sent_att,) = call["attachments"]
+    assert sent_att["filename"] == "q3-report.pdf"
+    assert sent_att["mime_type"] == "application/pdf"
+    assert sent_att["content"] == base64.b64decode(_PDF_B64)
+
+
+def test_send_without_attachments_passes_none_to_backend(send_env):
+    client, backend = send_env
+    payload = _draft_payload(attachments=[])
+    token = client.post("/v1/email/draft", json=payload).json()["confirmation_token"]
+
+    resp = client.post("/v1/email/send", json={**payload, "confirmation_token": token})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["attachments"] == []
+    (call,) = backend.calls
+    assert call["attachments"] is None
+
+
+def test_attachment_free_token_cannot_authorize_attachment_send(send_env):
+    # Anti-bait-and-switch: the confirmation token binds attachment digests.
+    client, backend = send_env
+    token = client.post(
+        "/v1/email/draft", json=_draft_payload(attachments=[])
+    ).json()["confirmation_token"]
+
+    resp = client.post(
+        "/v1/email/send", json=_draft_payload(confirmation_token=token)
+    )
+    assert resp.status_code == 403
+    assert backend.calls == []
+
+
+def test_swapped_attachment_content_invalidates_token(send_env):
+    client, backend = send_env
+    token = client.post("/v1/email/draft", json=_draft_payload()).json()[
+        "confirmation_token"
+    ]
+    swapped = base64.b64encode(b"different bytes entirely").decode("ascii")
+
+    resp = client.post(
+        "/v1/email/send",
+        json=_draft_payload(
+            confirmation_token=token,
+            attachments=[_attachment_payload(content_base64=swapped)],
+        ),
+    )
+    assert resp.status_code == 403
+    assert backend.calls == []
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"content_base64": "not!!valid@@base64"},
+        {"content_base64": ""},
+        {"mime_type": "not-a-mime-type"},
+        {"filename": ""},
+        {"filename": 'evil"name.pdf'},
+    ],
+)
+def test_invalid_attachment_is_422_never_dropped(client, bad):
+    resp = client.post(
+        "/v1/email/draft", json=_draft_payload(attachments=[_attachment_payload(**bad)])
+    )
+    assert resp.status_code == 422
+
+
+def test_oversize_attachment_is_422():
+    from gaia_agent_email.contract import MAX_ATTACHMENT_BYTES
+
+    import pydantic
+
+    too_big = base64.b64encode(b"\0" * (MAX_ATTACHMENT_BYTES + 1)).decode("ascii")
+    with pytest.raises(pydantic.ValidationError, match="maximum"):
+        OutgoingAttachment(
+            filename="huge.pdf", mime_type="application/pdf", content_base64=too_big
+        )
+
+
+def test_outlook_midsize_attachment_send_is_413_not_500(monkeypatch):
+    # An attachment between Outlook's 3 MB Graph simple-attach cap and the
+    # contract's 25 MB ceiling passes OutgoingAttachment validation, then must
+    # fail loudly as a 4xx at the API boundary — never an uncaught 500 out of
+    # the outlook_backend.AttachmentTooLargeError raised inside
+    # asyncio.to_thread (bot review on #1921).
+    from gaia_agent_email import api_routes as email_routes
+    from gaia_agent_email.outlook_backend import _build_graph_message
+
+    class _FakeOutlookSendBackend:
+        """Delegates to the real Graph message builder so this test exercises
+        the actual 3 MB simple-attach limit, not a re-implementation of it."""
+
+        def send_message(self, *, to, subject, body, attachments=None):
+            return _build_graph_message(
+                to=to, subject=subject, body=body, attachments=attachments
+            )
+
+    monkeypatch.setattr(
+        email_routes,
+        "_resolve_backend_for_provider",
+        lambda provider: _FakeOutlookSendBackend(),
+    )
+    client = TestClient(export_openapi.build_app())
+
+    midsize = base64.b64encode(b"\0" * (4 * 1024 * 1024)).decode("ascii")  # 4 MB > 3 MB, < 25 MB
+    payload = _draft_payload(attachments=[_attachment_payload(content_base64=midsize)])
+    token = client.post("/v1/email/draft", json=payload).json()["confirmation_token"]
+
+    resp = client.post(
+        "/v1/email/send", json={**payload, "confirmation_token": token}
+    )
+
+    assert resp.status_code == 413, resp.text
+    assert "3 MB" in resp.json()["detail"] or "3145728" in resp.json()["detail"]
+
+
+def test_outgoing_attachment_to_meta_round_trip():
+    att = OutgoingAttachment(**_attachment_payload())
+    meta = att.to_meta()
+    assert isinstance(meta, AttachmentMeta)
+    assert meta.filename == "q3-report.pdf"
+    assert meta.size_bytes == len(base64.b64decode(_PDF_B64))
+    assert meta.attachment_id is None

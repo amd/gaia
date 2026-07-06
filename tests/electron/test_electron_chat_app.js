@@ -166,7 +166,7 @@ describe('Chat App Integration', () => {
     });
 
     it('should have GAIA title', () => {
-      expect(htmlContent).toContain('<title>GAIA</title>');
+      expect(htmlContent).toContain('<title>GAIA Agent UI</title>');
     });
 
     it('should have React root div', () => {

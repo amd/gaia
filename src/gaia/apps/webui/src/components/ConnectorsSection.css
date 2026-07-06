@@ -390,6 +390,11 @@
     outline-offset: 2px;
 }
 
+.toggle-switch input:disabled + .toggle-track {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 .grant-scope-warning {
     display: flex;
     align-items: center;

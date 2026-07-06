@@ -73,7 +73,7 @@ jobs:
     timeout-minutes: 90
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -110,6 +110,9 @@ jobs:
           echo "Ground truth: tests/fixtures/email/ground_truth.json"
           echo ""
           mkdir -p eval-out
+          # mbox + ground_truth are generated artifacts (not committed) — build
+          # them from the committed seed before the eval reads them.
+          python tests/fixtures/email/generate_mbox.py
           # Drives EmailTriageAgent over FakeGmailBackend(synthetic_inbox.mbox)
           # — synthetic/sandbox only, never a live mailbox. Writes the scorecard
           # + variance for the artifact; the gate-reader step below recomputes

@@ -1,0 +1,50 @@
+---
+// Recursive file-tree renderer for the hub agent page's Files tab. Folders are
+// native <details> so expand/collapse works without JS (and is keyboard- and
+// screen-reader-accessible); text files render as a preview button.
+import { formatBytes } from '../data/catalog';
+import type { FileTreeNode } from '../data/fileTree';
+import Self from './FileTree.astro';
+
+interface Props {
+  nodes: FileTreeNode[];
+  depth?: number;
+}
+const { nodes, depth = 0 } = Astro.props;
+---
+
+<ul class="space-y-0.5">
+  {nodes.map((n) =>
+    n.isFile ? (
+      <li class="flex items-baseline justify-between gap-3 py-0.5">
+        {n.previewUrl ? (
+          <button
+            type="button"
+            data-file-preview={n.previewUrl}
+            data-file-name={n.name}
+            class="truncate text-left text-g-text/85 transition-colors hover:text-g-gold-text hover:underline"
+            title={`Preview ${n.name}`}
+          >{n.name}</button>
+        ) : (
+          <span class="truncate text-g-text/60" title={n.name}>{n.name}</span>
+        )}
+        <span class="flex-none text-[11px] text-g-muted">{formatBytes(n.size)}</span>
+      </li>
+    ) : (
+      <li>
+        <details>
+          <summary class="file-tree-summary flex cursor-pointer list-none items-center justify-between gap-3 py-0.5">
+            <span class="flex min-w-0 items-center gap-1.5 font-semibold text-g-text">
+              <svg class="file-tree-chevron h-3 w-3 flex-none text-g-muted" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4.5 2.5L8 6l-3.5 3.5"/></svg>
+              <span class="truncate">{n.name}/</span>
+            </span>
+            <span class="flex-none text-[11px] text-g-muted">{n.count} {n.count === 1 ? 'file' : 'files'} · {formatBytes(n.size)}</span>
+          </summary>
+          <div class="ml-2 border-l border-g-border/40 pl-3">
+            <Self nodes={n.children} depth={depth + 1} />
+          </div>
+        </details>
+      </li>
+    )
+  )}
+</ul>

@@ -37,8 +37,8 @@ from .sse_handler import (
 logger = logging.getLogger(__name__)
 
 
-def _stamp_builtin_chat_identity(config) -> None:
-    """Inject ``namespaced_agent_id="builtin:chat"`` into a ``ChatAgentConfig``
+def _stamp_chat_identity(config) -> None:
+    """Inject ``namespaced_agent_id="installed:chat"`` into a ``ChatAgentConfig``
     BEFORE ``ChatAgent(config)`` is constructed.
 
     Must be applied to the *config*, not to the instance after construction.
@@ -53,15 +53,16 @@ def _stamp_builtin_chat_identity(config) -> None:
     ``ChatAgent.__init__`` reads ``config.namespaced_agent_id`` at its top
     and sets ``self._gaia_namespaced_agent_id`` from it before invoking
     ``super().__init__``. This helper just centralises the
-    ``"builtin:chat"`` literal so every direct-construction site in this
-    module uses the same value and a fifth caller can't forget.
+    ``"installed:chat"`` literal so every direct-construction site in this
+    module uses the same value the registry assigns the gaia-agent-chat wheel
+    (#1102) and a fifth caller can't forget.
 
     Idempotent — only sets the field if it is still its default ``None``,
     so callers that already set a custom namespaced id (e.g. a future
     custom-Chat wrapper) are not clobbered.
     """
     if getattr(config, "namespaced_agent_id", None) is None:
-        config.namespaced_agent_id = "builtin:chat"
+        config.namespaced_agent_id = "installed:chat"
 
 
 def _register_agent_memory_ops(agent) -> None:
@@ -904,6 +905,7 @@ def _session_agent_kwargs(
     library_paths: list,
     allowed: list,
     session_id: str,
+    dynamic_tools: bool = False,
 ) -> dict:
     """Build the session-scoped ChatAgentConfig fields.
 
@@ -916,6 +918,12 @@ def _session_agent_kwargs(
     identical bundle — this PR's blocker bug was one of them forgetting a
     field.
 
+    ``dynamic_tools`` is the Beta tool-loader toggle (#1798): a valid
+    ``ChatAgentConfig`` field whose effect is only observable on the ``doc``
+    agent (``_maybe_build_tool_loader`` gates on ``prompt_profile == "doc"``).
+    Threading it here is what makes the UI toggle actually apply on the
+    loader-active path.
+
     Unknown kwargs are filtered by each factory (manifest agents via
     ``dataclasses.fields`` / ``AgentManifest``) so this stays safe to pass
     to agents that don't need RAG or a path validator.
@@ -925,6 +933,7 @@ def _session_agent_kwargs(
         "library_documents": library_paths,
         "allowed_paths": allowed,
         "ui_session_id": session_id,
+        "dynamic_tools": dynamic_tools,
     }
 
 
@@ -939,6 +948,37 @@ def _session_mail_provider(session: dict) -> str | None:
     and ignored a connected Outlook.
     """
     return session.get("mail_provider") or None
+
+
+def _build_email_proxy_agent(
+    *,
+    model_id: str,
+    device: str | None,
+    device_ctx: int,
+    mail_provider: str | None,
+    streaming: bool,
+):
+    """Construct the sidecar-backed email chat agent (#1767 cutover).
+
+    ``agent_type=email`` is served by ``EmailProxyAgent``: the local-LLM
+    tool-calling loop still runs here in the UI backend, but every tool forwards
+    to the out-of-process email sidecar over HTTP — so the UI process no longer
+    loads live Gmail/Outlook backends, and Agent UI dogfoods the shipped product.
+    Kept out of the agent registry on purpose (the registry auto-discovers the
+    in-process ``EmailTriageAgent`` wheel); this is the UI's deliberate override.
+    """
+    from gaia.ui.email_sidecar.proxy_agent import EmailProxyAgent
+
+    return EmailProxyAgent(
+        model_id=model_id,
+        mail_provider=mail_provider,
+        device=device,
+        min_context_size=device_ctx,
+        streaming=streaming,
+        # Match the chat agent: a streaming session drives the SSE console; a
+        # non-streaming one is silent (JSON-only).
+        silent_mode=not streaming,
+    )
 
 
 def _find_last_tool_step(steps: list) -> dict | None:
@@ -1149,6 +1189,10 @@ async def _get_chat_response(
             )
             model_id = custom_model
 
+        # Beta dynamic tool loader (#1798). Effective only on the doc agent;
+        # GAIA_DYNAMIC_TOOLS still overrides per ChatAgent's resolver.
+        dynamic_tools = db.get_setting("dynamic_tools", "false") == "true"
+
         session_id = request.session_id
         stored_agent_type = session.get("agent_type") or "chat"
         agent_type = request.agent_type or stored_agent_type
@@ -1215,7 +1259,14 @@ async def _get_chat_response(
                 agent_type,
             )
         elif agent_type == "chat":
-            from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+            try:
+                from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+            except ImportError as e:
+                raise RuntimeError(
+                    "The chat agent is not installed. Run "
+                    "`pip install gaia-agent-chat` (or `pip install "
+                    '"amd-gaia[agents]"`), then restart the server.'
+                ) from e
 
             logger.info(
                 "chat: Creating new chat agent (ChatAgent) for session %s",
@@ -1226,6 +1277,7 @@ async def _get_chat_response(
                 library_paths=library_paths,
                 allowed=allowed,
                 session_id=session_id,
+                dynamic_tools=dynamic_tools,
             )
             config = ChatAgentConfig(
                 model_id=model_id,
@@ -1235,10 +1287,25 @@ async def _get_chat_response(
                 min_context_size=device_ctx,
                 **_session_kwargs,
             )
-            _stamp_builtin_chat_identity(config)
+            _stamp_chat_identity(config)
             agent = ChatAgent(config)
             _store_agent(session_id, model_id, document_ids, agent, agent_type)
             _register_agent_memory_ops(agent)
+        elif agent_type == "email":
+            # #1767 cutover: agent_type=email is the out-of-process sidecar, not
+            # the in-process EmailTriageAgent. Same chat plumbing + pre_scan card.
+            logger.info(
+                "chat: Creating new email agent (sidecar) for session %s",
+                session_id[:8],
+            )
+            agent = _build_email_proxy_agent(
+                model_id=model_id,
+                device=device,
+                device_ctx=device_ctx,
+                mail_provider=_session_mail_provider(session),
+                streaming=False,
+            )
+            _store_agent(session_id, model_id, document_ids, agent, agent_type)
         else:
             # Non-chat agent: create via registry
             registry = _agent_registry
@@ -1292,6 +1359,7 @@ async def _get_chat_response(
                         library_paths=library_paths,
                         allowed=allowed,
                         session_id=session_id,
+                        dynamic_tools=dynamic_tools,
                     ),
                     # Forwarded only here (not via _session_agent_kwargs, which
                     # also feeds the strict ChatAgentConfig). Non-email factories
@@ -1510,6 +1578,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 model_id,
             )
             model_id = custom_model
+
+        # Beta dynamic tool loader (#1798). Effective only on the doc agent;
+        # GAIA_DYNAMIC_TOOLS still overrides per ChatAgent's resolver.
+        dynamic_tools = db.get_setting("dynamic_tools", "false") == "true"
         # ``session_model`` is the model_id we expect to drive the
         # session with, captured here in the outer scope so the
         # auto-title background task at the bottom of this generator
@@ -1618,7 +1690,17 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
                 elif agent_type == "chat":
                     # -- Cache miss: ChatAgent --
-                    from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+                    try:
+                        from gaia_agent_chat.agent import (
+                            ChatAgent,
+                            ChatAgentConfig,
+                        )
+                    except ImportError as e:
+                        raise RuntimeError(
+                            "The chat agent is not installed. Run "
+                            "`pip install gaia-agent-chat` (or `pip install "
+                            '"amd-gaia[agents]"`), then restart the server.'
+                        ) from e
 
                     logger.info(
                         "chat: Creating new chat agent (ChatAgent) for session %s",
@@ -1629,6 +1711,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         library_paths=library_paths,
                         allowed=allowed,
                         session_id=session_id,
+                        dynamic_tools=dynamic_tools,
                     )
                     config = ChatAgentConfig(
                         model_id=model_id,
@@ -1640,7 +1723,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         **_session_kwargs,
                     )
 
-                    _stamp_builtin_chat_identity(config)
+                    _stamp_chat_identity(config)
                     t_construct = _time.monotonic()
                     agent = ChatAgent(config)
                     logger.info(
@@ -1713,6 +1796,41 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         }
                     )
 
+                elif agent_type == "email":
+                    # -- Cache miss: email agent backed by the sidecar (#1767) --
+                    # Same chat plumbing as before; the pre_scan_inbox tool returns
+                    # the identical email_pre_scan envelope so the card renders
+                    # unchanged. Tools forward to the out-of-process sidecar.
+                    logger.info(
+                        "chat: Creating new email agent (sidecar) for session %s",
+                        session_id[:8],
+                    )
+                    t_construct = _time.monotonic()
+                    agent = _build_email_proxy_agent(
+                        model_id=model_id,
+                        device=device,
+                        device_ctx=device_ctx,
+                        mail_provider=_session_mail_provider(session),
+                        streaming=True,
+                    )
+                    agent.console = sse_handler  # tool events flow to SSE
+                    logger.info(
+                        "chat: Invoking agent email for session %s, model=%s took=%.3fs",
+                        session_id[:8],
+                        _effective_model(agent, model_id),
+                        _time.monotonic() - t_construct,
+                    )
+                    if sse_handler.cancelled.is_set():
+                        return
+                    _store_agent(session_id, model_id, document_ids, agent, agent_type)
+                    sse_handler._emit(
+                        {
+                            "type": "status",
+                            "status": "info",
+                            "message": "Sending to model...",
+                        }
+                    )
+
                 else:
                     # -- Cache miss: non-chat agent via registry --
                     registry = _agent_registry
@@ -1769,6 +1887,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                                 library_paths=library_paths,
                                 allowed=allowed,
                                 session_id=session_id,
+                                dynamic_tools=dynamic_tools,
                             ),
                             # See the non-streaming path: email-only kwarg,
                             # filtered out by non-email factories. None = scan

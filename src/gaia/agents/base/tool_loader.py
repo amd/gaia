@@ -50,6 +50,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, FrozenSet, List, Optional, Sequence
@@ -69,6 +70,21 @@ DEFAULT_THRESHOLD = 0.20
 # dynamic slots = 14 (≈62% shrink on the 37-tool doc profile, clears the
 # ≥60% Part-0 TTFT-reduction gate). See the plan deviations.
 DEFAULT_MAX_TOOLS = 14
+
+
+def dynamic_tools_env_override() -> Optional[bool]:
+    """Parse the ``GAIA_DYNAMIC_TOOLS`` override, or ``None`` when it is unset.
+
+    Returns the parsed boolean (truthy set ``1``/``true``/``yes``/``on``,
+    case-insensitive) when the env var is set, else ``None`` to signal "no
+    override — fall back to the persisted/config value". Lives in the core
+    tool-loader module so the UI settings router and the (hub-packaged) chat
+    agent share one truthy set without the router depending on the chat wheel.
+    """
+    raw = os.getenv("GAIA_DYNAMIC_TOOLS")
+    if raw is None:
+        return None
+    return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
 @dataclass(frozen=True)

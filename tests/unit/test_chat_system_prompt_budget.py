@@ -26,6 +26,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+# ChatAgent ships as the standalone gaia-agent-chat wheel (#1102); skip the
+# whole module when a framework-only env lacks it.
+pytest.importorskip("gaia_agent_chat")
+
 # Stub heavy optional deps so this test can run in a minimal env, but ONLY
 # for modules that can't actually be imported in the current environment.
 # Stubbing an installed module poisons every transitive consumer's cache —
@@ -52,10 +56,10 @@ for _mod in (
     sys.modules[_mod] = MagicMock()
     _stubbed_modules.append(_mod)
 
-# Import once: ``gaia.agents.chat.agent`` resolves its faiss/numpy/etc.
+# Import once: ``gaia_agent_chat.agent`` resolves its faiss/numpy/etc.
 # references at this point, so the cached module keeps working even after
 # we remove the stubs from ``sys.modules`` below.
-from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
+from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
 
 # Roll back the temporary stubs AND evict GAIA modules that bound them so
 # subsequent tests get a fresh import that resolves against the real
@@ -65,7 +69,7 @@ for _mod in _stubbed_modules:
 if _stubbed_modules:
     for _gaia_mod in (
         "gaia.rag.sdk",
-        "gaia.agents.chat.agent",
+        "gaia_agent_chat.agent",
         "gaia.agents.tools.rag_tools",
     ):
         sys.modules.pop(_gaia_mod, None)

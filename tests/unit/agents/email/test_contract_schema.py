@@ -331,13 +331,17 @@ def test_result_summary_required():
 
 
 def test_schema_version_unchanged_by_multi_inbox():
-    """Schema 2.0 (#1615) is the current frozen contract version.
+    """Schema 2.2 is the current frozen contract version.
 
-    The REST /triage endpoint version is "2.0" after the 5-bucket taxonomy
-    upgrade. If this fails, someone changed the version unexpectedly; that
-    requires an explicit version negotiation, not a drive-by edit.
+    2.1 was additive over the 2.0 5-bucket taxonomy (no triage shape change):
+    it added inbox search (#1781), mailbox actions (#1779), the calendar
+    surface (#1780), and inbox pre-scan (#1778). 2.2 is additive over 2.1:
+    attachment handling (#1542) — read/triage exposes attachment metadata,
+    draft/send accept attachments. If this fails, someone changed the version
+    unexpectedly; that requires an explicit version negotiation, not a
+    drive-by edit.
     """
-    assert SCHEMA_VERSION == "2.0"
+    assert SCHEMA_VERSION == "2.2"
 
 
 def test_triage_result_gained_no_new_required_field():

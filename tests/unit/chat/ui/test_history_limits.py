@@ -17,6 +17,8 @@ import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -75,12 +77,13 @@ class TestNonStreamingHistoryLimits:
         db = _make_mock_db(messages)
         session = {"document_ids": [], "model": None}
 
-        # ChatAgent/ChatAgentConfig are lazy-imported inside _do_chat(), so
-        # patch them at their source module (gaia.agents.chat.agent) which
-        # is the target of "from gaia.agents.chat.agent import ChatAgent, ..."
+        # ChatAgent/ChatAgentConfig are lazy-imported inside _do_chat() from the
+        # standalone gaia-agent-chat wheel (#1102), so patch them at their
+        # source module (gaia_agent_chat.agent).
+        pytest.importorskip("gaia_agent_chat")
         with (
-            patch("gaia.agents.chat.agent.ChatAgent", return_value=FakeAgent()),
-            patch("gaia.agents.chat.agent.ChatAgentConfig"),
+            patch("gaia_agent_chat.agent.ChatAgent", return_value=FakeAgent()),
+            patch("gaia_agent_chat.agent.ChatAgentConfig"),
         ):
             _run_sync(_get_chat_response(db, session, request))
 

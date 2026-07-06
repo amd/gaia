@@ -127,6 +127,10 @@ def publish_one(
     token: str,
     readme_bytes: bytes | None = None,
     changelog_bytes: bytes | None = None,
+    spec_bytes: bytes | None = None,
+    skill_bytes: bytes | None = None,
+    eval_scorecard_bytes: bytes | None = None,
+    package_files_bytes: bytes | None = None,
 ) -> dict:
     if not artifact_path.exists():
         raise SystemExit(f"error: artifact not found: {artifact_path}")
@@ -163,6 +167,24 @@ def publish_one(
         # `changelog`, rendered as a Changelog section on the hub agent page.
         if changelog_bytes is not None:
             files["changelog"] = ("CHANGELOG.md", changelog_bytes, "text/markdown")
+        # SPEC.md + SKILL.md ride along the same way — they become the catalog
+        # entry's `spec` / `skill`, rendered as their own doc tabs on the hub page.
+        if spec_bytes is not None:
+            files["spec"] = ("SPEC.md", spec_bytes, "text/markdown")
+        if skill_bytes is not None:
+            files["skill"] = ("SKILL.md", skill_bytes, "text/markdown")
+        # The eval scorecard rides along with the first platform binary and becomes
+        # the catalog entry's `eval_score` and `eval_scorecard_url`.
+        if eval_scorecard_bytes is not None:
+            files["eval_scorecard"] = ("eval-scorecard.md", eval_scorecard_bytes, "text/markdown")
+        # The whole-package file listing rides with the zip artifact — it becomes
+        # the catalog entry's `package.files` (the hub's file-list display).
+        if package_files_bytes is not None:
+            files["package_files"] = (
+                "package-files.json",
+                package_files_bytes,
+                "application/json",
+            )
         resp = requests.post(
             publish_url,
             headers={"authorization": f"Bearer {token}"},
@@ -243,6 +265,33 @@ def main(argv=None) -> int:
         "(POSTed as the multipart 'changelog' part the Worker accepts).",
     )
     parser.add_argument(
+        "--spec",
+        type=Path,
+        help="Path to SPEC.md to publish as the agent's catalog spec "
+        "(POSTed as the multipart 'spec' part the Worker accepts).",
+    )
+    parser.add_argument(
+        "--skill",
+        type=Path,
+        help="Path to SKILL.md to publish as the agent's catalog skill "
+        "(POSTed as the multipart 'skill' part the Worker accepts).",
+    )
+    parser.add_argument(
+        "--eval-scorecard",
+        type=Path,
+        help="Path to the eval scorecard markdown (e.g. SCORECARD.md) to "
+        "publish as the agent's catalog eval score and scorecard URL "
+        "(POSTed as the multipart 'eval_scorecard' part the Worker accepts). "
+        "Absent = publish without an eval scorecard.",
+    )
+    parser.add_argument(
+        "--package-files",
+        type=Path,
+        help='Path to a package-files.json ({"files":[{name,size_bytes}]}) to '
+        "attach to the zip artifact (POSTed as the 'package_files' part). It "
+        "becomes the catalog's package.files (the hub's file-list display).",
+    )
+    parser.add_argument(
         "--summary-out",
         type=Path,
         help="Write a JSON array of {platform,filename,executable,sha256,size}.",
@@ -279,10 +328,70 @@ def main(argv=None) -> int:
             flush=True,
         )
 
+    spec_bytes = None
+    if args.spec is not None:
+        if not args.spec.exists():
+            raise SystemExit(
+                f"error: --spec path not found: {args.spec}. Pass the agent's "
+                "SPEC.md, or omit --spec to publish without one."
+            )
+        spec_bytes = args.spec.read_bytes()
+        print(
+            f"[publish] attaching spec: {args.spec} ({len(spec_bytes)} bytes)",
+            flush=True,
+        )
+
+    skill_bytes = None
+    if args.skill is not None:
+        if not args.skill.exists():
+            raise SystemExit(
+                f"error: --skill path not found: {args.skill}. Pass the agent's "
+                "SKILL.md, or omit --skill to publish without one."
+            )
+        skill_bytes = args.skill.read_bytes()
+        print(
+            f"[publish] attaching skill: {args.skill} ({len(skill_bytes)} bytes)",
+            flush=True,
+        )
+
+    eval_scorecard_bytes = None
+    if args.eval_scorecard is not None:
+        if not args.eval_scorecard.exists():
+            raise SystemExit(
+                f"error: --eval-scorecard path not found: {args.eval_scorecard}. "
+                "Pass the scorecard markdown, or omit --eval-scorecard to publish "
+                "without one."
+            )
+        eval_scorecard_bytes = args.eval_scorecard.read_bytes()
+        print(
+            f"[publish] attaching eval scorecard: {args.eval_scorecard} "
+            f"({len(eval_scorecard_bytes)} bytes)",
+            flush=True,
+        )
+
+    package_files_bytes = None
+    if args.package_files is not None:
+        if not args.package_files.exists():
+            raise SystemExit(
+                f"error: --package-files path not found: {args.package_files}."
+            )
+        package_files_bytes = args.package_files.read_bytes()
+        print(
+            f"[publish] attaching package file list: {args.package_files} "
+            f"({len(package_files_bytes)} bytes)",
+            flush=True,
+        )
+
     results = []
     for raw in args.artifact:
         path, key = _parse_artifact_arg(raw)
-        platform_key = key or _infer_platform_key(path.name)
+        # A .zip is the whole-package artifact (not a platform binary); it has no
+        # platform key to infer, so default it to "package".
+        platform_key = key or (
+            "package"
+            if path.name.lower().endswith(".zip")
+            else _infer_platform_key(path.name)
+        )
         results.append(
             publish_one(
                 args.base_url,
@@ -293,6 +402,10 @@ def main(argv=None) -> int:
                 token,
                 readme_bytes=readme_bytes,
                 changelog_bytes=changelog_bytes,
+                spec_bytes=spec_bytes,
+                skill_bytes=skill_bytes,
+                eval_scorecard_bytes=eval_scorecard_bytes,
+                package_files_bytes=package_files_bytes,
             )
         )
 

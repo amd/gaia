@@ -180,13 +180,12 @@ class TestGemmaE2BCatalogEntry:
         )
 
     def test_e2b_min_ctx_size_matches_npu_window(self):
-        """min_ctx_size must match what the E2B/FLM NPU build actually serves.
+        """min_ctx_size must be at least the 4 K NPU floor the FLM build serves.
 
-        Validated on the Strix Halo box: the FLM build serves ctx_size=4096.
         The triage classifier clips email bodies to 4000 chars, so a single
-        email + the triage system prompt fit in the 4 K window. Asserting a
-        larger minimum than the hardware serves would be a faked requirement
-        that the model can't satisfy.
+        email + the triage system prompt fit even in the smallest 4 K window.
+        As of #1745 the E2B/FLM NPU profile defaults to 32768 to match GPU/CPU
+        and resolve the init/runtime mismatch; 4 K remains the asserted floor.
         """
         req = MODELS[self.E2B_KEY]
         assert req.min_ctx_size >= 4096, (
