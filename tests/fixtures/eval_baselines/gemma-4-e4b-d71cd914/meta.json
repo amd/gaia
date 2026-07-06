@@ -3,7 +3,6 @@
   "commit": "d71cd914",
   "date": "2026-04-24",
   "lemonade_url": "http://localhost:13305/api/v1",
-  "lemonade_url_note": "placeholder; the original run used a private tunnel to a remote Lemonade server (historical documentation only)",
   "lemonade_version": "10.2.0",
   "gemma_ctx_size": 32768,
   "categories": ["tool_selection", "rag_quality", "context_retention"],
