@@ -1357,6 +1357,22 @@ class TestEmailTriageEndpoint:
         monkeypatch.setattr(
             EmailTriageService, "_build_llm_chat", lambda self, **kw: _FakeChat()
         )
+
+        # Triage persists action items to the task store (#1605); point it at
+        # an in-memory DB so tests never write to the real ~/.gaia.
+        from gaia_agent_email import api_routes as email_routes
+        from gaia_agent_email import task_store
+
+        from gaia.database.mixin import DatabaseMixin
+
+        class _TaskDB(DatabaseMixin):
+            pass
+
+        task_db = _TaskDB()
+        task_db.init_db(":memory:")
+        task_store.init_schema(task_db)
+        monkeypatch.setattr(email_routes, "resolve_action_db", lambda: task_db)
+
         self.client = TestClient(app)
 
     def test_single_email_in_structured_out(self):
