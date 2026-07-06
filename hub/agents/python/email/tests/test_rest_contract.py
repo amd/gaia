@@ -1394,6 +1394,43 @@ def test_oversize_attachment_is_422():
         )
 
 
+def test_outlook_midsize_attachment_send_is_413_not_500(monkeypatch):
+    # An attachment between Outlook's 3 MB Graph simple-attach cap and the
+    # contract's 25 MB ceiling passes OutgoingAttachment validation, then must
+    # fail loudly as a 4xx at the API boundary — never an uncaught 500 out of
+    # the outlook_backend.AttachmentTooLargeError raised inside
+    # asyncio.to_thread (bot review on #1921).
+    from gaia_agent_email import api_routes as email_routes
+    from gaia_agent_email.outlook_backend import _build_graph_message
+
+    class _FakeOutlookSendBackend:
+        """Delegates to the real Graph message builder so this test exercises
+        the actual 3 MB simple-attach limit, not a re-implementation of it."""
+
+        def send_message(self, *, to, subject, body, attachments=None):
+            return _build_graph_message(
+                to=to, subject=subject, body=body, attachments=attachments
+            )
+
+    monkeypatch.setattr(
+        email_routes,
+        "_resolve_backend_for_provider",
+        lambda provider: _FakeOutlookSendBackend(),
+    )
+    client = TestClient(export_openapi.build_app())
+
+    midsize = base64.b64encode(b"\0" * (4 * 1024 * 1024)).decode("ascii")  # 4 MB > 3 MB, < 25 MB
+    payload = _draft_payload(attachments=[_attachment_payload(content_base64=midsize)])
+    token = client.post("/v1/email/draft", json=payload).json()["confirmation_token"]
+
+    resp = client.post(
+        "/v1/email/send", json={**payload, "confirmation_token": token}
+    )
+
+    assert resp.status_code == 413, resp.text
+    assert "3 MB" in resp.json()["detail"] or "3145728" in resp.json()["detail"]
+
+
 def test_outgoing_attachment_to_meta_round_trip():
     att = OutgoingAttachment(**_attachment_payload())
     meta = att.to_meta()

@@ -98,6 +98,7 @@ from gaia_agent_email.contract import (
     UnarchivedMessage,
     UnarchiveFailure,
 )
+from gaia_agent_email.outlook_backend import AttachmentTooLargeError
 from gaia_agent_email.tools.llm_triage import LLMTriageError
 from gaia_agent_email.tools.summarize_tools import EmailSummarizeError
 from gaia_agent_email.tools.triage_heuristics import (
@@ -1731,6 +1732,8 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
             body=request.body,
             **send_kwargs,
         )
+    except AttachmentTooLargeError as e:
+        raise HTTPException(status_code=413, detail=str(e)) from e
     except (AuthRequiredError, ScopeMismatchError, ConnectionRevokedError) as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ConfigurationError as e:

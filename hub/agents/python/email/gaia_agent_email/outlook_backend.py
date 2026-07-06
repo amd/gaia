@@ -209,6 +209,16 @@ def _recipients(addresses: str) -> List[Dict[str, Any]]:
 _GRAPH_SIMPLE_ATTACH_MAX_BYTES = 3 * 1024 * 1024
 
 
+class AttachmentTooLargeError(ValueError):
+    """An attachment passed contract validation (<=25 MB) but exceeds this
+    backend's own limit (Outlook's 3 MB Graph simple-attach cap).
+
+    Distinct from the bare ``ValueError`` CRLF-injection guards in this
+    module so the API layer can map exactly this condition to HTTP 413
+    without catching unrelated validation failures.
+    """
+
+
 def _build_graph_message(
     *,
     to: str,
@@ -249,7 +259,7 @@ def _build_graph_message(
         for att in attachments:
             content: bytes = att["content"]
             if len(content) > _GRAPH_SIMPLE_ATTACH_MAX_BYTES:
-                raise ValueError(
+                raise AttachmentTooLargeError(
                     f"attachment {att['filename']!r} is {len(content)} bytes; "
                     f"the Outlook backend supports at most "
                     f"{_GRAPH_SIMPLE_ATTACH_MAX_BYTES} bytes (3 MB) per "
