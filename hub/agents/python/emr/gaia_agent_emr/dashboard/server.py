@@ -315,6 +315,44 @@ class DashboardEventHandler:
         _broadcast_sync(event)
 
 
+def _is_positive_int(value: Any) -> bool:
+    # bool is an int subclass — a truthy `ctx_size: true` must not count.
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _derive_context_size(health: Dict[str, Any], preferred_model: str) -> int:
+    """Context size from a Lemonade health payload.
+
+    Lemonade >=10.x reports ctx per loaded model under
+    ``all_models_loaded[].recipe_options.ctx_size``; older servers reported a
+    top-level ``context_size``. Prefers ``preferred_model``'s ctx, falling back
+    to the largest loaded ctx (which may be a non-VLM model's while the VLM is
+    still loading), then 0 (rendered as "unknown" in the UI). Malformed
+    payload shapes degrade to 0 rather than raising.
+    """
+    top_level = health.get("context_size")
+    if _is_positive_int(top_level):
+        return top_level
+
+    sizes: Dict[str, int] = {}
+    models = health.get("all_models_loaded")
+    for model in models if isinstance(models, list) else []:
+        if not isinstance(model, dict):
+            continue
+        recipe_options = model.get("recipe_options")
+        ctx = recipe_options.get("ctx_size") if isinstance(recipe_options, dict) else None
+        if _is_positive_int(ctx):
+            name = model.get("model_name")
+            if isinstance(name, str) and name:
+                sizes[name] = ctx
+            else:
+                sizes[f"_unnamed_{len(sizes)}"] = ctx
+
+    if preferred_model in sizes:
+        return sizes[preferred_model]
+    return max(sizes.values(), default=0)
+
+
 def create_app(
     watch_dir: str = "./intake_forms",
     db_path: str = "./data/patients.db",
@@ -1275,7 +1313,7 @@ def create_app(
             try:
                 health = client.health_check()
                 server_running = health.get("status") == "ok"
-                context_size = health.get("context_size", 0)
+                context_size = _derive_context_size(health, vlm_model)
             except Exception:
                 return {
                     "initialized": False,
