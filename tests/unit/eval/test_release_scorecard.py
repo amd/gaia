@@ -1876,9 +1876,7 @@ class TestGenScorecardCtxSizePreRead:
 
         assert rc != 0
 
-    def test_build_payload_still_gains_no_new_file_reading_for_ctx_size(
-        self, tmp_path
-    ):
+    def test_build_payload_still_gains_no_new_file_reading_for_ctx_size(self, tmp_path):
         # Regression guard -- should already pass; proves build_payload never
         # gains ctx-file-reading. environment is embedded verbatim regardless
         # of what main() does to assemble it.

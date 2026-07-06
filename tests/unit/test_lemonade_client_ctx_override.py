@@ -26,9 +26,7 @@ class TestCtxOverrideIsInstanceScoped:
     def test_ctx_override_is_instance_scoped(self):
         """Setting the override on one instance must not leak to another
         instance constructed afterward in the same process."""
-        client_a = LemonadeClient(
-            host="localhost", port=13305, ctx_size_override=4096
-        )
+        client_a = LemonadeClient(host="localhost", port=13305, ctx_size_override=4096)
         client_b = LemonadeClient(host="localhost", port=13305)
 
         assert client_a.ctx_size_override == 4096
@@ -42,9 +40,7 @@ class TestCtxOverrideIsInstanceScoped:
         """Setting the override on an instance must not become visible as a
         class-level default for instances constructed with no override --
         i.e. it must not be implemented as a mutable class attribute."""
-        client_a = LemonadeClient(
-            host="localhost", port=13305, ctx_size_override=8192
-        )
+        client_a = LemonadeClient(host="localhost", port=13305, ctx_size_override=8192)
         assert client_a.ctx_size_override == 8192
 
         client_b = LemonadeClient(host="localhost", port=13305)
@@ -77,9 +73,7 @@ class TestEnsureModelLoadedExactPin:
         """A model loaded at ctx=16384 with override=4096 must still reload
         at exactly 4096 -- a floor check (16384 >= 4096) would wrongly no-op
         here, but exact-pin semantics require an exact match."""
-        client = LemonadeClient(
-            host="localhost", port=13305, ctx_size_override=4096
-        )
+        client = LemonadeClient(host="localhost", port=13305, ctx_size_override=4096)
         mock_status.return_value = LemonadeStatus(
             url="http://localhost:13305",
             running=True,
@@ -108,9 +102,7 @@ class TestEnsureModelLoadedExactPin:
     ):
         """When the loaded ctx already equals the override, no reload is
         needed -- exact-pin is a ``!=`` check, not always-reload."""
-        client = LemonadeClient(
-            host="localhost", port=13305, ctx_size_override=4096
-        )
+        client = LemonadeClient(host="localhost", port=13305, ctx_size_override=4096)
         mock_status.return_value = LemonadeStatus(
             url="http://localhost:13305",
             running=True,
@@ -135,9 +127,7 @@ class TestEnsureModelLoadedExactPin:
         """Sanity companion to the exact-pin test: the lower-than-override
         direction (which floor semantics also would have reloaded) must
         still reload at exactly the override value."""
-        client = LemonadeClient(
-            host="localhost", port=13305, ctx_size_override=16384
-        )
+        client = LemonadeClient(host="localhost", port=13305, ctx_size_override=16384)
         mock_status.return_value = LemonadeStatus(
             url="http://localhost:13305",
             running=True,
