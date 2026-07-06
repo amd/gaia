@@ -387,6 +387,22 @@ class EmailTriageAgent(
             output_dir=config.output_dir,
         )
 
+        # Exact ctx pin (#1892): set the instance-scoped override on the
+        # concrete LemonadeClient this agent chats through. Post-super(),
+        # the client lives at self.chat.llm_client._backend (AgentSDK →
+        # LemonadeProvider → LemonadeClient) — no SDK signature change.
+        if config.ctx_size is not None:
+            backend = getattr(self.chat.llm_client, "_backend", None)
+            if backend is None:
+                raise ConfigurationError(
+                    f"EmailAgentConfig.ctx_size={config.ctx_size} needs the "
+                    "Lemonade provider, but this agent's LLM client "
+                    f"({type(self.chat.llm_client).__name__}) exposes no "
+                    "Lemonade backend to pin. Remove ctx_size or use the "
+                    "default local Lemonade backend."
+                )
+            backend.ctx_size_override = config.ctx_size
+
         # One-shot scheduler (#1609): fires persisted scheduled-send / snooze
         # jobs. Jobs live in the same SQLite as the action log, so past-due
         # jobs from a previous run fire on the first polling pass after
