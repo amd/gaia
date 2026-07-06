@@ -15,6 +15,7 @@ The Email Triage Agent connects to your Gmail account through GAIA's connectors 
 - **Organize** — archive, label, mark read/unread, star/unstar. Reversible via the per-action undo log.
 - **Soft-delete with undo** — `trash_message` records the action; `restore_message` reverses it within a 30-second window.
 - **Draft + confirmed send** — generate replies (`draft_reply`) and forwards (`draft_forward`); `send_draft` and `send_now` require explicit user confirmation in the UI.
+- **Attachments** — reading a message exposes each attachment's name, type, and size, and `draft_reply` / `send_now` accept local file paths to attach (contract schema 2.2, #1542).
 - **Voice-matched drafting** — learn your writing style from your Sent mail (`build_voice_profile`) so drafts sound like you; the style profile is derived and stored locally, nothing leaves the device.
 - **Calendar** — list events, accept/decline invites, create events from email content (all calendar mutations gated by user confirmation).
 
@@ -202,6 +203,14 @@ are planned on the autonomy engine (#555).
 
 `cancel_scheduled_job`, `list_scheduled_jobs` — both scheduled sends and snoozes are cancellable any time before they fire; `list_scheduled_jobs` shows the pending jobs with their cancel handles. Jobs persist in the agent's SQLite, so a job whose time passed while no agent was running fires on the next start.
 
+**Attachments** (schema 2.2, #1542): `draft_reply` and `send_now` take an optional
+`attachments` parameter — a comma-separated list of full paths to local files. Checks
+are fail-loud: a missing file, an empty file, a file over 25 MB, or an extension whose
+MIME type can't be determined is an error, never a silently dropped attachment. The
+confirmation dialog shows the literal file paths alongside recipient/subject/body.
+On the read side, `get_message` exposes each attachment's filename, MIME type, size,
+and provider handle.
+
 ### Calendar (require confirmation)
 
 `list_calendar_events`, `accept_invite`, `decline_invite`, `create_event_from_email`
@@ -225,7 +234,7 @@ Each reaches whichever calendar (Google or Microsoft) the user connected; a miss
 This guarantee is enforced independently on every surface, so a missing confirmation on one path can't be a back door on another:
 
 - **Chat / Agent UI / CLI** — `send_draft`, `send_now`, `schedule_send`, and `forward_message` are confirmation-gated in the agent loop. Before the send runs (or is scheduled), you're shown the **literal** recipient, subject, and body (not an LLM paraphrase) and must approve. Decline, and nothing is sent. In unattended/background mode there's no one to approve, so the send is refused outright rather than run silently. The one deliberate variation is `schedule_send`: the confirmation happens **at creation** — you approve the exact message *and* its fire time — and only that pre-approved send later fires unattended; it is cancellable until it does.
-- **REST API** (`POST /v1/email/send`) — rejected with **HTTP 403** unless you supply a single-use confirmation token. You get that token from `POST /v1/email/draft`, and it is **bound to the exact `(to, subject, body)`**: a token minted for one message can't be replayed to send different content, and it's consumed on first use.
+- **REST API** (`POST /v1/email/send`) — rejected with **HTTP 403** unless you supply a single-use confirmation token. You get that token from `POST /v1/email/draft`, and it is **bound to the exact `(to, subject, body, attachments)`** — for each attachment the binding covers filename, MIME type, and a digest of the file content (schema 2.2): a token minted for one message can't be replayed to send different content or different files, and it's consumed on first use.
 - **REST API** (`POST /v1/email/archive`, `POST /v1/email/quarantine`) — the two mutating mailbox actions follow the **same gate** (schema 2.1): each is rejected with **HTTP 403** unless you supply a single-use token from `POST /v1/email/confirm`, bound to that exact `(action, message_id)`. Both are reversible inside the 30-second undo window via the ungated `POST /v1/email/unarchive` / `POST /v1/email/unquarantine` (which *restore*, never destroy). Archive returns a `batch_id` undo handle and a `post_archive_id` so undo survives the id change an Outlook folder-move causes. Quarantine is **Gmail-only** — an Outlook mailbox is refused with **HTTP 400**, because its label-based undo can't reverse Outlook's folder move (#1738).
 - **MCP server** (`send_email`) — same rule as REST: a send without a valid, payload-bound token returns a structured error and sends nothing.
 
@@ -319,10 +328,10 @@ isolated, and dogfoods the exact binary shipped to integrators.
 `GAIA_EMAIL_AGENT_MODE` only selects which *process* answers (`user` default /
 `dev`); there is no in-process fallback. Two surfaces run through it:
 
-- **The `/v1/email/*` REST surface** — the full schema-2.1 contract (triage,
+- **The `/v1/email/*` REST surface** — the full schema-2.2 contract (triage,
   batch triage, search, inbox pre-scan, scheduled daily briefing, draft/send +
-  confirm, archive/unarchive, quarantine/unquarantine, calendar
-  view/preview/create/respond, health, version). This is exactly what
+  confirm — attachments included, archive/unarchive, quarantine/unquarantine,
+  calendar view/preview/create/respond, health, version). This is exactly what
   third-party integrators consume, so the UI
   exercises the real product. The sidecar's connector OAuth **write** routes are
   never exposed (all grant writes stay on the backend's single-writer path).
@@ -335,7 +344,7 @@ The sidecar is spawned lazily on first email use and tree-killed on shutdown; th
 REST surface and the chat agent share one sidecar process.
 
 **Chat tool surface (in-app email agent):** the sidecar-backed chat agent exposes
-the tools the schema-2.1 REST contract serves today — inbox pre-scan, search,
+the tools the schema-2.2 REST contract serves today — inbox pre-scan, search,
 calendar view, and archive + undo. Tools that have no REST route yet (labels,
 stars, mark-read, move, trash/delete, summarize, profile, preferences, forward,
 send, scheduled send / snooze) are not exposed in the chat agent until their
