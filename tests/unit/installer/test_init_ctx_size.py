@@ -16,6 +16,7 @@ must be exercised so a future regression can't silently drop the modern path
 while only the legacy argv assertions keep passing.
 """
 
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -194,7 +195,8 @@ def test_windows_modern_auto_start_passes_ctx_size_via_env_not_argv(
     )
 
     cmd = _make_cmd(profile="chat")
-    result = cmd._ensure_server_running()
+    with patch.dict(os.environ, {"GAIA_TEST_SENTINEL": "1"}):
+        result = cmd._ensure_server_running()
 
     assert result is True
     argv = mock_popen.call_args.args[0]
@@ -209,6 +211,14 @@ def test_windows_modern_auto_start_passes_ctx_size_via_env_not_argv(
     assert (
         env.get("LEMONADE_CTX_SIZE") == "32768"
     ), f"expected LEMONADE_CTX_SIZE=32768 in Popen env, got: {env}"
+    # The spec env must be MERGED into the parent environment, never replace
+    # it — Popen(argv, env=spec.env) alone would drop PATH/LOCALAPPDATA and
+    # break LemonadeServer.exe.
+    assert env.get("GAIA_TEST_SENTINEL") == "1", (
+        "Popen env must retain the parent environment "
+        f"({{**os.environ, **spec.env}}), got keys: {sorted(env)[:10]}..."
+    )
+    assert "PATH" in env, "Popen env must retain PATH from the parent environment"
 
 
 @patch("sys.platform", "linux")
@@ -232,7 +242,8 @@ def test_linux_modern_auto_start_passes_ctx_size_via_env(
     )
 
     cmd = _make_cmd(profile="chat")
-    result = cmd._ensure_server_running()
+    with patch.dict(os.environ, {"GAIA_TEST_SENTINEL": "1"}):
+        result = cmd._ensure_server_running()
 
     assert result is True
     argv = mock_popen.call_args.args[0]
@@ -241,6 +252,9 @@ def test_linux_modern_auto_start_passes_ctx_size_via_env(
     _, popen_kwargs = mock_popen.call_args
     env = popen_kwargs.get("env", {})
     assert env.get("LEMONADE_CTX_SIZE") == "32768"
+    # Merged into parent env, never a replacement (see Windows test above).
+    assert env.get("GAIA_TEST_SENTINEL") == "1"
+    assert "PATH" in env
 
 
 # ---------------------------------------------------------------------------

@@ -189,11 +189,12 @@ def test_build_start_command_modern_windows():
     assert spec.env == {"LEMONADE_CTX_SIZE": "32768"}
 
 
-def test_build_start_command_legacy():
-    """Legacy: argv=['lemonade-server', 'serve', '--ctx-size', '32768'],
-    env={} — unchanged from today's behavior."""
+def test_build_start_command_legacy(mocker):
+    """Legacy (non-Windows): argv=['lemonade-server', 'serve', '--ctx-size',
+    '32768'], env={} — unchanged from today's behavior."""
     from gaia.llm.lemonade_launcher import LemonadeTooling
 
+    mocker.patch("platform.system", return_value="Linux")
     tooling = LemonadeTooling(
         found=True,
         kind="legacy",
@@ -204,6 +205,29 @@ def test_build_start_command_legacy():
     spec = build_start_command(tooling, ctx_size=32768)
 
     assert spec.argv == ["lemonade-server", "serve", "--ctx-size", "32768"]
+    assert spec.env == {}
+
+
+def test_build_start_command_legacy_windows_includes_no_tray(mocker):
+    """Legacy on Windows: argv gains '--no-tray' alongside '--ctx-size'
+    (preserves today's Windows auto-start argv byte-for-byte)."""
+    from gaia.llm.lemonade_launcher import LemonadeTooling
+
+    mocker.patch("platform.system", return_value="Windows")
+    tooling = LemonadeTooling(
+        found=True,
+        kind="legacy",
+        client_path=r"C:\lemonade-server.exe",
+        server_launcher=r"C:\lemonade-server.exe",
+    )
+
+    spec = build_start_command(tooling, ctx_size=32768)
+
+    assert spec.argv[0] == r"C:\lemonade-server.exe"
+    assert spec.argv[1] == "serve"
+    assert "--no-tray" in spec.argv
+    idx = spec.argv.index("--ctx-size")
+    assert spec.argv[idx + 1] == "32768"
     assert spec.env == {}
 
 

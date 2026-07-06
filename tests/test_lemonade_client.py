@@ -1729,9 +1729,10 @@ class TestLaunchServerModernLegacyDispatch(unittest.TestCase):
         # patch it out directly since launch_server() calls it unconditionally
         # today; the "skip when already healthy" behavior is asserted
         # separately below.
-        with patch.object(client, "health_check", return_value=None):
-            with patch("socket.create_connection"):
-                client.launch_server(background="silent", ctx_size=32768)
+        with patch.dict(os.environ, {"GAIA_TEST_SENTINEL": "1"}):
+            with patch.object(client, "health_check", return_value=None):
+                with patch("socket.create_connection"):
+                    client.launch_server(background="silent", ctx_size=32768)
 
         mock_popen.assert_called_once()
         call_args, call_kwargs = mock_popen.call_args
@@ -1741,6 +1742,11 @@ class TestLaunchServerModernLegacyDispatch(unittest.TestCase):
         )
         env = call_kwargs.get("env", {})
         self.assertEqual(env.get("LEMONADE_CTX_SIZE"), "32768")
+        # spec.env must be MERGED into the parent environment — a bare
+        # Popen(argv, env=spec.env) drops PATH/LOCALAPPDATA and breaks
+        # LemonadeServer.exe.
+        self.assertEqual(env.get("GAIA_TEST_SENTINEL"), "1")
+        self.assertIn("PATH", env)
 
     @patch("gaia.llm.lemonade_client.kill_process_on_port")
     @patch("subprocess.Popen")
