@@ -2172,6 +2172,26 @@ def run_dashboard(
             "FastAPI not installed. Install with: pip install 'amd-gaia[api]'"
         )
 
+    # Probe the port first — uvicorn's bind failure can exit 0 silently, leaving
+    # the Electron/browser launcher pointing at whatever app owns the port.
+    import socket
+
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    if os.name != "nt":
+        # Mirror asyncio's bind semantics: SO_REUSEADDR on POSIX (tolerate
+        # TIME_WAIT), never on Windows where it binds over live listeners.
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        probe.bind((host, port))
+    except OSError as e:
+        raise RuntimeError(
+            f"EMR dashboard cannot start: {host}:{port} is already in use "
+            f"(`gaia api` also defaults to port 8080). Stop the other server "
+            f"or pass --port to pick a different one."
+        ) from e
+    finally:
+        probe.close()
+
     app = create_app(watch_dir=watch_dir, db_path=db_path)
 
     uvicorn.run(
