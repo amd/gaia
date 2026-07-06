@@ -247,7 +247,7 @@ describe("agent-seeder", () => {
     const seeder = loadSeederWith({ fakeHome, resourcesPath: undefined });
 
     const result = await seeder.seedBundledAgents();
-    expect(result).toEqual({ seeded: [], skipped: [], errors: [] });
+    expect(result).toEqual({ seeded: [], skipped: [], errors: [], cleaned: [] });
   });
 
   test("missing agents/ directory returns empty result (not an error)", async () => {
@@ -257,7 +257,7 @@ describe("agent-seeder", () => {
     const seeder = loadSeederWith({ fakeHome, resourcesPath: fakeResources });
     const result = await seeder.seedBundledAgents();
 
-    expect(result).toEqual({ seeded: [], skipped: [], errors: [] });
+    expect(result).toEqual({ seeded: [], skipped: [], errors: [], cleaned: [] });
   });
 
   test("error isolation — one failing agent does not block others", async () => {
