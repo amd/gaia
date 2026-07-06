@@ -642,5 +642,38 @@ class TestCtxSizeEnvelope:
             )
 
 
+class TestCtxSizeOutputStamping:
+    """quality.json / scorecard.json ctx_size stamping contract (#1892)."""
+
+    def test_benchmark_outputs_stamp_ctx(self):
+        # DESIGN CHOICE (flagged for the implementer): asserting top-level
+        # placement of ctx_size on both summary["quality"] and
+        # summary["scorecard"] — not nested under "performance". If a nested
+        # placement (summary["scorecard"]["performance"]["ctx_size"]) is chosen
+        # instead, this assertion needs updating; top-level is preferred because
+        # it's the simplest, most-discoverable place for a comparison tool to
+        # read the run's ctx envelope from.
+        results = [
+            build_result(
+                _agent_result(),
+                run_id=f"r{i}",
+                timestamp="t",
+                model_id="Gemma-4-E4B-it-GGUF",
+                total_duration_ms=2000,
+                ground_truth=GT,
+            )
+            for i in range(2)
+        ]
+        # Stamp ctx_size onto the canned result dicts directly (build_result
+        # doesn't support ctx_size yet — see TestCtxSizeEnvelope above), so this
+        # test isolates the summarize_benchmark stamping contract on its own.
+        for r in results:
+            r["ctx_size"] = 16384
+
+        summary = summarize_benchmark(results, run_id="x")
+        assert summary["quality"]["ctx_size"] == 16384
+        assert summary["scorecard"]["ctx_size"] == 16384
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
