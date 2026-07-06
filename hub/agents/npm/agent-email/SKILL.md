@@ -101,8 +101,8 @@ The interface:
 | `triageBatch(req)` | Local LLM only | Same as `triage` for an `items` array (1–100). Parallel `results` array; per-item failures isolate (200 can carry errored items — inspect `results[].error`). |
 | `search(req)` | A connected mailbox | Read-only inbox search by `query`/`labels`; returns message metadata (id, subject, sender, snippet, labels), no body. No token. No mailbox → 503, two+ → 400. |
 | `prescan(req?)` | A connected mailbox | Read-only inbox pre-scan → triage-card envelope (`kind: "email_pre_scan"`: urgent / actionable / suggested-archive rows + an informational count). No mailbox connected → 503; 2+ → 400. Heuristic-only, no Lemonade call. |
-| `draft(req)` | Nothing external | Returns a single-use confirmation token. |
-| `send(req)` | Draft token + a connected mailbox | Gate fires first: no/invalid `draft` token → 403; valid token but no mailbox connected on the host → 503. |
+| `draft(req)` | Nothing external | Returns a single-use confirmation token. Optional `attachments` (schema 2.2): `{ filename, mime_type, content_base64 }` each, ≤ 25 MB decoded. |
+| `send(req)` | Draft token + a connected mailbox | Gate fires first: no/invalid `draft` token → 403; valid token but no mailbox connected on the host → 503. Attachments must exactly match the confirmed draft's (the token binds their content digests). |
 | `confirmAction(req)` | Nothing external | Mints a single-use token for `"archive"`/`"quarantine"`, bound to the `(action, message_id)`. |
 | `archive(req)` | `confirm` token + a connected mailbox | Removes from inbox. Gate fires first (no/invalid token → 403). Returns a `batch_id` undo handle (+ `post_archive_id` for the Outlook id change). |
 | `unarchive(req)` | A connected mailbox | Restores within the 30s window (ungated — pass `batch_id`); expired/unknown → 409. |
@@ -123,6 +123,13 @@ need a connected mailbox whose relevant scope was granted. Mint the gate token w
 reversible inside a 30s window via the ungated `unarchive` / `unquarantine`. Every
 non-2xx response throws `HttpError` (`status`, `url`, `bodyText`) — handle it; there is
 no silent null.
+
+**Scheduled daily briefing (#1608, REST-only):** the sidecar can run `prescan` on a
+daily timer with no prompt. Off by default — launch with
+`startSidecar({ env: { GAIA_EMAIL_BRIEFING_ENABLED: "true" } })` (fire time
+`GAIA_EMAIL_BRIEFING_TIME`, 24h local `HH:MM`, default `08:00`), then pull the latest
+run from `GET /v1/email/briefing` with plain `fetch` (no client wrapper yet). 404
+until the first scheduled run; an invalid env value fails sidecar startup loudly.
 
 ## 5. From a renderer (Electron / browser)
 
@@ -174,6 +181,11 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
   takes **no OAuth token** — the mailbox is resolved from the host's GAIA connector
   store (no mailbox connected → 503). The read-only `search` / `prescan` resolve the
   mailbox the same way (503 with none, 400 with 2+). Triage and draft need no connector.
+- **Attachments bind to the token** (schema 2.2). Re-send the exact `attachments`
+  array you drafted with — the metadata-only `draft` echo has no `content_base64`,
+  so spreading the echo into `send` loses the files. A swapped/extra/missing
+  attachment → 403; bad base64, a malformed MIME type, or > 25 MB decoded → 422;
+  Outlook additionally rejects files over 3 MB (Graph simple-attach limit).
 - **`archive` / `quarantine` are gated like `send`**, but their token comes from
   `confirmAction` (not `draft`) and is bound to the `(action, message_id)` — a token
   for one can't authorize the other. Undo with `unarchive` (pass the returned
