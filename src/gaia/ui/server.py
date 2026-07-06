@@ -19,7 +19,6 @@ Endpoint implementations are split into router modules under
 """
 
 import asyncio
-import importlib.util
 import logging
 import os
 import shutil  # noqa: F401  # pylint: disable=unused-import
@@ -609,37 +608,29 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(connectors_router_mod.router)
     # Issue #1292 — forwarded pre-authenticated connections (/v1/connections).
     app.include_router(connectors_router_mod.forwarded_router)
-    # Issue #1768 — Email REST surface (/v1/email/*).
-    # When GAIA_EMAIL_AGENT_MODE is set, an out-of-process sidecar serves the
-    # surface (no email wheel imported in core; crash-isolated). The mode is
-    # explicit (user/dev); unset keeps the in-process mount so default installs
-    # work before the frozen binary is published. The two are mutually exclusive
-    # so /v1/email/* never has two backends.
-    _email_agent_mode = os.environ.get("GAIA_EMAIL_AGENT_MODE")
-    if _email_agent_mode:
-        from gaia.ui.email_sidecar.manager import EmailSidecarManager
-        from gaia.ui.email_sidecar.router import router as email_sidecar_router
+    # Email REST surface (/v1/email/*) — out-of-process sidecar ONLY (#1767
+    # cutover / design decision 4). The core backend never imports the email
+    # wheel: it stays lightweight, crash-isolated, and dogfoods the exact binary
+    # we ship. GAIA_EMAIL_AGENT_MODE selects the backend process — user (default,
+    # frozen binary, lazy-fetched + SHA-verified) or dev (uvicorn from source);
+    # unset means user. The sidecar is the SOLE /v1/email surface — there is no
+    # in-process fallback (a missing/unpublished binary fails loudly with a
+    # remedy, never silently re-mounts the wheel).
+    from gaia.ui.email_sidecar.manager import get_shared_manager
+    from gaia.ui.email_sidecar.router import router as email_sidecar_router
 
-        # Lazily spawned on the first /v1/email request (not at startup), so
-        # users who never use email never pay for a sidecar.
-        # Pin the email REST contract MAJOR so a breaking sidecar upgrade fails loudly (no silent drift); bump in lockstep with the contract SCHEMA_VERSION major.
-        app.state.email_sidecar_manager = EmailSidecarManager(expected_api_version="2")
-        app.include_router(email_sidecar_router)
-        logger.info(
-            "Email REST surface served by out-of-process sidecar "
-            "(GAIA_EMAIL_AGENT_MODE=%s); in-process mount skipped.",
-            _email_agent_mode,
-        )
-    elif importlib.util.find_spec("gaia_agent_email") is None:
-        logger.info(
-            "Email REST routes unavailable: install the email agent "
-            "(pip install gaia-agent-email) to enable POST /v1/email/*. "
-            "(#1768)"
-        )
-    else:
-        from gaia_agent_email.api_routes import router as email_router
-
-        app.include_router(email_router)
+    # Lazily spawned on the first /v1/email request (not at startup), so users
+    # who never use email never pay for a sidecar. The shared manager is the SAME
+    # one the in-app email chat agent (agent_type=email) drives, so the REST
+    # surface and the chat agent share one sidecar process. The contract MAJOR is
+    # pinned inside get_shared_manager() so a breaking upgrade fails loudly.
+    app.state.email_sidecar_manager = get_shared_manager()
+    app.include_router(email_sidecar_router)
+    logger.info(
+        "Email REST surface served by out-of-process sidecar "
+        "(GAIA_EMAIL_AGENT_MODE=%s).",
+        os.environ.get("GAIA_EMAIL_AGENT_MODE", "user"),
+    )
 
     # ── Serve Uploaded Files ─────────────────────────────────────────────
     # Mount the uploads directory so uploaded files can be served by URL.
