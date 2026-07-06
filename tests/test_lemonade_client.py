@@ -1262,7 +1262,12 @@ class TestLemonadeClientMock(unittest.TestCase):
         self.assertIsNotNone(error)
         self.assertIn("4096", error)
         self.assertIn("32768", error)
-        self.assertIn("--ctx-size", error)
+        # The restart hint renders the resolved tooling's command: legacy
+        # uses `--ctx-size`, modern passes ctx via LEMONADE_CTX_SIZE env.
+        self.assertTrue(
+            "--ctx-size" in error or "LEMONADE_CTX_SIZE" in error,
+            f"restart hint missing ctx-size guidance: {error}",
+        )
 
     @responses.activate
     def test_validate_context_size_health_failure(self):
