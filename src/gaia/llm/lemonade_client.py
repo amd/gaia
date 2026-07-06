@@ -183,6 +183,14 @@ DEFAULT_MODEL_LOAD_TIMEOUT = 12000
 DEFAULT_MODEL_LOAD_RETRIES = 3
 MODEL_LOAD_RETRY_BACKOFF = 8  # base seconds; escalates as backoff * attempt
 
+# Exact-pin settle deadlines (#1892). Lemonade's /load and /unload are
+# ASYNCHRONOUS (observed on 10.7): /load on an already-loaded model can no-op
+# with status success, and /health transiently drops the entry mid-reload. A
+# pinned reload therefore polls /health until each phase settles.
+PIN_UNLOAD_SETTLE_DEADLINE_S = 120.0
+PIN_LOAD_SETTLE_DEADLINE_S = 300.0  # big GGUF loads are slow
+PIN_SETTLE_POLL_INTERVAL_S = 2.0
+
 
 # =========================================================================
 # Model Types and Agent Profiles
@@ -2832,6 +2840,116 @@ class LemonadeClient:
             )
         return False
 
+    @staticmethod
+    def _find_loaded_entry(status: "LemonadeStatus", model: str) -> Optional[dict]:
+        """The /health entry for ``model`` in ``status.loaded_models``, or None.
+
+        Matches tolerantly via ``_model_ids_match`` (#1952: strips the
+        ``user.`` prefix, case-insensitive) — a strict ``==`` here would miss
+        a model reported back with the ``user.`` prefix Lemonade adds to
+        locally-registered GGUFs.
+        """
+        for _m in status.loaded_models:
+            if _model_ids_match(_m.get("id"), model) or _model_ids_match(
+                _m.get("model_name"), model
+            ):
+                return _m
+        return None
+
+    def _wait_model_state(
+        self, model: str, *, present: bool, deadline_s: float
+    ) -> Optional[dict]:
+        """Poll /health until ``model`` is (not) loaded; loud on deadline (#1892).
+
+        Lemonade's /load and /unload are asynchronous — the only way to know a
+        phase completed is to watch /health settle. Returns the loaded entry
+        when waiting for presence, None when waiting for absence.
+
+        Raises:
+            LemonadeClientError: if the state does not settle within
+                ``deadline_s`` — the message names the deadline and the
+                /health state actually observed.
+        """
+        start = time.monotonic()
+        while True:
+            status = self.get_status()
+            entry = self._find_loaded_entry(status, model)
+            if present and entry is not None:
+                return entry
+            if not present and entry is None:
+                return None
+            if time.monotonic() - start > deadline_s:
+                observed = [
+                    {
+                        "model": _m.get("model_name") or _m.get("id"),
+                        "ctx_size": _m.get("recipe_options", {}).get("ctx_size"),
+                    }
+                    for _m in status.loaded_models
+                ]
+                raise LemonadeClientError(
+                    f"Timed out after {deadline_s:.0f}s waiting for model "
+                    f"'{model}' to become {'loaded' if present else 'unloaded'} "
+                    f"on {self.base_url}. /health currently reports loaded "
+                    f"models: {observed or '[]'}. Lemonade's /load and /unload "
+                    f"are asynchronous — the server may be stuck mid-reload; "
+                    f"check the Lemonade server logs or restart it, then retry."
+                )
+            time.sleep(PIN_SETTLE_POLL_INTERVAL_S)
+
+    def _ensure_pinned_load(self, model: str) -> None:
+        """Load ``model`` at exactly ``self.ctx_size_override``, settling each
+        phase against /health (#1892).
+
+        Observed on Lemonade 10.7: /load and /unload are asynchronous, and
+        /load on an already-loaded model can no-op with ``status: success`` —
+        a plain reload can leave the STALE ctx window in place while /health
+        transiently drops the entry. The only reliable re-pin is:
+        unload → poll until ABSENT → load with ctx_size → poll until PRESENT
+        → verify the settled ``recipe_options.ctx_size``.
+
+        Raises:
+            LemonadeClientError: on settle-deadline exhaustion (distinct
+                message naming the observed /health state) or when the settled
+                ctx differs from the pin (possible model ctx-ceiling clamp).
+        """
+        pin = self.ctx_size_override
+        status = self.get_status()
+        entry = self._find_loaded_entry(status, model)
+        if entry is not None:
+            loaded_ctx = entry.get("recipe_options", {}).get("ctx_size", 0) or 0
+            if loaded_ctx == pin:
+                self.log.debug(
+                    f"Model '{model}' already loaded at ctx={loaded_ctx} "
+                    f"(pinned == {pin})"
+                )
+                return
+            # Divergence from an exact pin mid-run means something else
+            # reloaded this model on the shared server — loud.
+            self.log.warning(
+                f"Model '{model}' found at ctx={loaded_ctx} but this client "
+                f"pins ctx={pin} (#1892 override); re-pinning via "
+                f"unload/settle/load. Another process likely reloaded it."
+            )
+
+        self.unload_model(model, ignore_if_not_loaded=True)
+        self._wait_model_state(
+            model, present=False, deadline_s=PIN_UNLOAD_SETTLE_DEADLINE_S
+        )
+        self.load_model(model, auto_download=True, prompt=False, ctx_size=pin)
+        settled = self._wait_model_state(
+            model, present=True, deadline_s=PIN_LOAD_SETTLE_DEADLINE_S
+        )
+        settled_ctx = settled.get("recipe_options", {}).get("ctx_size", 0) or 0
+        if settled_ctx != pin:
+            raise LemonadeClientError(
+                f"ctx pin failed for '{model}': requested ctx_size={pin} but "
+                f"the model settled at ctx_size={settled_ctx} after a fresh "
+                f"unload/load cycle. The model may clamp ctx to its own "
+                f"ceiling, or another process re-loaded it mid-pin — the run "
+                f"would measure the wrong window."
+            )
+        self.log.info(f"Model '{model}' pinned at ctx={settled_ctx} (#1892)")
+
     def _ensure_model_loaded(self, model: str, auto_download: bool = True) -> None:
         """Ensure a model is loaded on the server before making requests.
 
@@ -2851,6 +2969,13 @@ class LemonadeClient:
         if not auto_download:
             return  # Skip if auto_download disabled
 
+        # Exact-pin path (#1892): async-safe unload→settle→load→settle. Its
+        # failures PROPAGATE — never the best-effort debug-swallow below (a
+        # silently unpinned eval run would measure the wrong window).
+        if self.ctx_size_override is not None:
+            self._ensure_pinned_load(model)
+            return
+
         try:
             # Determine the ctx_size GAIA expects for this model. This lookup
             # happens BEFORE the "already loaded" check so we can detect a
@@ -2868,57 +2993,30 @@ class LemonadeClient:
             if expected_ctx is None:
                 expected_ctx = DEFAULT_CONTEXT_SIZE
 
-            # Instance ctx override (#1892): exact-pin beats the MODELS floor.
-            if self.ctx_size_override is not None:
-                expected_ctx = self.ctx_size_override
-
             # Check current server state
             status = self.get_status()
 
             # Look the model up in the actually-loaded set (health-format).
             # ``status.loaded_models`` now carries health entries enriched
             # with ``id`` + ``recipe_options`` so we can read ctx_size.
-            loaded_entry: Optional[dict] = None
-            for _m in status.loaded_models:
-                if _model_ids_match(_m.get("id"), model) or _model_ids_match(
-                    _m.get("model_name"), model
-                ):
-                    loaded_entry = _m
-                    break
+            loaded_entry = self._find_loaded_entry(status, model)
 
             if loaded_entry is not None:
                 loaded_ctx = (
                     loaded_entry.get("recipe_options", {}).get("ctx_size", 0) or 0
                 )
-                # Override → exact-pin (!=): a sweep must reload DOWN too
-                # (floor semantics would let a 4K leg silently measure 16K).
-                if (
-                    loaded_ctx == expected_ctx
-                    if self.ctx_size_override is not None
-                    else loaded_ctx >= expected_ctx
-                ):
+                if loaded_ctx >= expected_ctx:
                     self.log.debug(
                         f"Model '{model}' already loaded at ctx={loaded_ctx} "
-                        f"(expected "
-                        f"{'== ' if self.ctx_size_override is not None else '>= '}"
-                        f"{expected_ctx})"
+                        f"(expected >= {expected_ctx})"
                     )
                     return
-                # Loaded at the wrong window — fall through to the reload path
+                # Loaded but under-sized — fall through to the reload path
                 # which calls /load with explicit ctx_size.
-                if self.ctx_size_override is not None:
-                    # Divergence from an exact pin mid-run means something
-                    # else reloaded this model on the shared server — loud.
-                    self.log.warning(
-                        f"Model '{model}' found at ctx={loaded_ctx} but this "
-                        f"client pins ctx={expected_ctx} (#1892 override); "
-                        f"re-pinning. Another process likely reloaded it."
-                    )
-                else:
-                    self.log.info(
-                        f"Model '{model}' loaded at ctx={loaded_ctx} but GAIA "
-                        f"expects ctx={expected_ctx}; reloading."
-                    )
+                self.log.info(
+                    f"Model '{model}' loaded at ctx={loaded_ctx} but GAIA "
+                    f"expects ctx={expected_ctx}; reloading."
+                )
             else:
                 self.log.debug(f"Model '{model}' not loaded, loading...")
 
