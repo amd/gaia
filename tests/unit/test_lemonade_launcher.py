@@ -249,6 +249,38 @@ def test_build_start_command_modern_linux_uses_systemctl():
     assert spec.env == {"LEMONADE_CTX_SIZE": "32768"}
 
 
+def test_env_override_modern_non_exe_launched_verbatim(mocker):
+    """A modern-classified LEMONADE_SERVER_PATH override that is not a
+    Windows .exe (e.g. an explicit Linux daemon path) is launched verbatim —
+    never silently rerouted to systemctl."""
+    mocker.patch.dict(os.environ, {"LEMONADE_SERVER_PATH": "/opt/lemonade/lemond"})
+
+    tooling = resolve_lemonade()
+    assert tooling.source == "env"
+    assert tooling.kind == "modern"
+
+    spec = build_start_command(tooling, ctx_size=32768)
+
+    assert spec.argv == ["/opt/lemonade/lemond"]
+    assert spec.env == {"LEMONADE_CTX_SIZE": "32768"}
+
+
+def test_probe_resolved_modern_linux_still_uses_systemctl(mocker):
+    """Guard: a probe-resolved modern Linux tooling (no env override) keeps
+    the best-effort systemctl start — the override fast-path must not leak."""
+    mocker.patch.dict(os.environ, {}, clear=True)
+    mocker.patch("platform.system", return_value="Linux")
+    mocker.patch("pathlib.Path.exists", return_value=True)
+
+    tooling = resolve_lemonade()
+    assert tooling.source == "probe"
+    assert tooling.kind == "modern"
+
+    spec = build_start_command(tooling, ctx_size=32768)
+
+    assert spec.argv == ["systemctl", "--user", "start", "lemond"]
+
+
 # ---------------------------------------------------------------------------
 # Env-merge semantics the caller is expected to apply (AC4)
 # ---------------------------------------------------------------------------

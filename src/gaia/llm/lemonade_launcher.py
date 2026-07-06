@@ -48,6 +48,9 @@ class LemonadeTooling:
     kind: str  # "modern" | "legacy" | "none"
     client_path: Optional[str] = None
     server_launcher: Optional[str] = None
+    # "env" when resolved from LEMONADE_SERVER_PATH — an explicit override
+    # is launched verbatim, never rerouted to systemctl.
+    source: str = "probe"  # "env" | "probe"
 
 
 @dataclass
@@ -100,6 +103,7 @@ def resolve_lemonade() -> LemonadeTooling:
             kind=_classify_kind_from_name(env_path),
             client_path=env_path,
             server_launcher=env_path,
+            source="env",
         )
 
     system = platform.system()
@@ -198,6 +202,10 @@ def build_start_command(tooling: LemonadeTooling, ctx_size: Optional[int]) -> St
         launcher = tooling.server_launcher or ""
         if launcher.lower().endswith(".exe"):
             return StartSpec(argv=[launcher, "--silent"], env=env)
+        if tooling.source == "env":
+            # Explicit LEMONADE_SERVER_PATH override — run the named binary
+            # verbatim rather than silently rerouting to systemctl.
+            return StartSpec(argv=[launcher], env=env)
         # Linux daemon — best-effort user-unit start; the server is
         # normally already running under systemd.
         return StartSpec(argv=["systemctl", "--user", "start", "lemond"], env=env)

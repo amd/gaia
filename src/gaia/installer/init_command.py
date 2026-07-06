@@ -1044,6 +1044,9 @@ class InitCommand:
         """
         Find the Lemonade server launcher executable (modern or legacy).
 
+        Retained as a compatibility surface only — no in-tree callers remain;
+        new code should call :func:`gaia.llm.lemonade_launcher.resolve_lemonade`.
+
         Uses the installer's PATH refresh to pick up recent MSI changes,
         then delegates detection to
         :func:`gaia.llm.lemonade_launcher.resolve_lemonade` (which honors
