@@ -97,7 +97,7 @@ The interface:
 
 | Call | Needs | Notes |
 |------|-------|-------|
-| `triage(req)` | Local LLM only | Classify / summarize / extract action items + phishing signals on the message you pass. No mailbox read. |
+| `triage(req)` | Local LLM only | Classify / summarize / extract action items + phishing signals on the message you pass. No mailbox read. Action items also persist to the sidecar's local task list (keyed by `message_id`, de-duplicated on re-triage) — the response shape is unchanged. |
 | `triageBatch(req)` | Local LLM only | Same as `triage` for an `items` array (1–100). Parallel `results` array; per-item failures isolate (200 can carry errored items — inspect `results[].error`). |
 | `search(req)` | A connected mailbox | Read-only inbox search by `query`/`labels`; returns message metadata (id, subject, sender, snippet, labels), no body. No token. No mailbox → 503, two+ → 400. |
 | `prescan(req?)` | A connected mailbox | Read-only inbox pre-scan → triage-card envelope (`kind: "email_pre_scan"`: urgent / actionable / suggested-archive rows + an informational count). No mailbox connected → 503; 2+ → 400. Heuristic-only, no Lemonade call. |
@@ -195,6 +195,9 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
 - **Cleanup is automatic by default** — the sidecar is reaped on exit/crash/signal;
   only `autoCleanup: false` (or a hard `SIGKILL` of your process) can orphan the
   child. `shutdown` stays the graceful stop.
+- **No scheduled-send / snooze endpoints.** The agent implements them (#1609),
+  but only in its tool loop — the REST contract has no routes for them yet, so
+  don't look for a `client.scheduleSend()` / `client.snooze()`; they don't exist.
 - **ESM-only.** `require("@amd-gaia/agent-email")` fails; use `import` / dynamic
   `import()`.
 

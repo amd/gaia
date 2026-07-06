@@ -21,10 +21,15 @@ the agent runs as a frozen, self-contained REST sidecar your app launches and ow
 
 - **Triage** — classify each message (urgent / needs-response / FYI / promotional /
   personal), summarize a thread, and extract action items and phishing signals.
+  Extracted action items also persist as a local task list linked back to the
+  source message, de-duplicated on re-triage.
 - **Organize** — archive, label, move, mark read/unread — one message or in batches.
 - **Reply & send** — draft context-aware replies and forwards, then send —
   attachments included (schema 2.2): triage exposes attachment metadata, and
-  draft/send accept base64 file payloads.
+  draft/send accept base64 file payloads. The underlying agent can also
+  schedule a confirmed send for a future time and snooze messages out of the
+  inbox (agent tool loop today — not yet exposed on this package's REST
+  surface).
 - **Calendar** — detect meeting requests, flag conflicts, RSVP, and create events
   from an email.
 - **Safe by construction** — email bodies are treated as untrusted **data, never
@@ -169,7 +174,7 @@ example above). Every non-2xx response throws `HttpError` (with `status`, `url`,
 
 | Call | Needs | Does |
 |------|-------|------|
-| `triage(req)` | Local LLM only | Classifies the message you pass, summarizes it, and extracts action items + spam/phishing signals. No mailbox is read. |
+| `triage(req)` | Local LLM only | Classifies the message you pass, summarizes it, and extracts action items + spam/phishing signals. No mailbox is read. Action items also persist to the sidecar's local task list, linked to the `message_id` and de-duplicated per message — the response shape is unchanged. |
 | `triageBatch(req)` | Local LLM only | Same as `triage`, but for an `items` array (1–100). Returns a parallel `results` array; per-item failures isolate (HTTP 200 can carry errored items — inspect `results[].error`). |
 | `search(req)` | A connected Gmail/Outlook mailbox | Searches the connected inbox (**read-only**) by Gmail-style `query`/`labels` and returns message metadata — id, subject, sender, snippet, labels. No message is read in full or modified; no confirmation token needed. |
 | `prescan(req?)` | A connected Gmail/Outlook mailbox | Reads recent inbox messages and returns the triage-card envelope (urgent / needs-response / suggested-archive rows + an informational count). Read-only — nothing is archived, marked, or sent. |
