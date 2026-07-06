@@ -298,7 +298,7 @@
       <div class="chip"><div class="k">Milestone</div><div class="v g"><a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a></div></div>
     </div>
     <div style="margin-top:30px;font-family:'JetBrains Mono',monospace;font-size:13px;letter-spacing:.04em;color:var(--faint)">Spec <b style="color:var(--c1)">v2.1</b> &nbsp;·&nbsp; updated <b style="color:var(--ink)">2026-06-26</b> &nbsp;·&nbsp; contract <b style="color:var(--ink)">schema 2.1</b> implemented &nbsp;·&nbsp; status as of <b style="color:var(--ink)"><a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (<a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a>)</b></div>
-    <div style="margin-top:10px;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.03em;color:var(--faint);max-width:900px;line-height:1.6">The contract reference documents the <b style="color:var(--ink)">implemented schema 2.1</b>: a 5-bucket triage taxonomy plus a <code>suggested_action</code> verb (schema 2.0), and the schema-2.1 REST surfaces — inbox search (<a class="iss" href="https://github.com/amd/gaia/issues/1781" target="_blank" rel="noopener">#1781</a>), inbox pre-scan (<a class="iss" href="https://github.com/amd/gaia/issues/1778" target="_blank" rel="noopener">#1778</a>), archive / quarantine mailbox actions (<a class="iss" href="https://github.com/amd/gaia/issues/1779" target="_blank" rel="noopener">#1779</a>), and calendar view / create / respond (<a class="iss" href="https://github.com/amd/gaia/issues/1780" target="_blank" rel="noopener">#1780</a>).</div>
+    <div style="margin-top:10px;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.03em;color:var(--faint);max-width:900px;line-height:1.6">The contract reference documents the <b style="color:var(--ink)">implemented schema 2.1</b>: a 5-bucket triage taxonomy plus a <code>suggested_action</code> verb (schema 2.0), and the schema-2.1 REST surfaces — inbox search (<a class="iss" href="https://github.com/amd/gaia/issues/1781" target="_blank" rel="noopener">#1781</a>), inbox pre-scan (<a class="iss" href="https://github.com/amd/gaia/issues/1778" target="_blank" rel="noopener">#1778</a>), archive / quarantine mailbox actions (<a class="iss" href="https://github.com/amd/gaia/issues/1779" target="_blank" rel="noopener">#1779</a>), calendar view / create / respond (<a class="iss" href="https://github.com/amd/gaia/issues/1780" target="_blank" rel="noopener">#1780</a>), and the scheduled daily briefing (<a class="iss" href="https://github.com/amd/gaia/issues/1608" target="_blank" rel="noopener">#1608</a>, additive).</div>
   </div>
 </section>
 
@@ -355,7 +355,7 @@
         <tr><td><b>13</b></td><td><b>Search past email</b></td><td><span class="dot" style="background:var(--faint)"></span>Planned</td><td>Natural-language / keyword search across the mailbox</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>14</b></td><td><b>Task extraction → list</b></td><td><span class="dot wip"></span>Wired</td><td>Persist action items into a trackable task list</td><td><span class="pill t0">Tier 0</span></td><td><span style="color:var(--soft)">New&nbsp;mail</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>15</b></td><td><b>Follow-up tracking</b></td><td><span class="dot" style="background:var(--faint)"></span>Planned</td><td>Flag sent mail awaiting a reply; nudge when overdue</td><td><span class="pill t0">Tier 0</span></td><td><span style="color:var(--c1)">Scheduled</span></td><td><span class="opt">—</span></td></tr>
-        <tr><td><b>16</b></td><td><b>Proactive daily briefing</b></td><td><span class="dot" style="background:var(--faint)"></span>Planned</td><td>Scheduled morning inbox + calendar + tasks brief</td><td><span class="pill t0">Tier 0</span></td><td><span style="color:var(--c1)">Scheduled</span></td><td><span style="color:var(--ok)">○</span></td></tr>
+        <tr><td><b>16</b></td><td><b>Proactive daily briefing</b></td><td><span class="dot wip"></span>Wired</td><td>Scheduled morning inbox brief, no prompt (calendar + tasks planned)</td><td><span class="pill t0">Tier 0</span></td><td><span style="color:var(--c1)">Scheduled</span></td><td><span style="color:var(--ok)">○</span></td></tr>
         <tr><td><b>17</b></td><td><b>Scheduled send &amp; snooze</b></td><td><span class="dot" style="background:var(--faint)"></span>Planned</td><td>Defer a send; snooze a message out of the inbox</td><td><span class="pill t2">Tier 2</span></td><td><span style="color:var(--c1)">Scheduled</span></td><td><span class="opt">—</span></td></tr>
       </tbody>
     </table>
@@ -403,7 +403,8 @@
         <tr><td><b>9</b> · Quarantine (+ undo)</td><td>✓ <code>/v1/email/quarantine</code> · <code>/unquarantine</code> <span class="opt">(Gmail)</span></td><td>—</td><td>✓ <code>quarantine_phishing_message</code></td></tr>
         <tr><td>Inbox search <span class="opt">(read-only, <a class="iss" href="https://github.com/amd/gaia/issues/1781" target="_blank" rel="noopener">#1781</a>)</span></td><td>✓ <code>/v1/email/search</code></td><td>—</td><td>✓ <code>search_messages</code></td></tr>
         <tr><td>Calendar · view / create / respond <span class="opt">(of capability <b>12</b>)</span></td><td>✓ <code>/v1/email/calendar/*</code> <span class="opt">(2.1)</span></td><td>—</td><td>✓</td></tr>
-        <tr><td>calendar <b>detect / conflicts</b> (10–11) &nbsp;·&nbsp; <b>13–17</b> planned &nbsp;·&nbsp; <b>P1–P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
+        <tr><td><b>16</b> · Daily briefing <span class="opt">(scheduled, <a class="iss" href="https://github.com/amd/gaia/issues/1608" target="_blank" rel="noopener">#1608</a>)</span></td><td>✓ <code>/v1/email/briefing</code> <span class="opt">(read-only · off by default)</span></td><td>—</td><td>✓ <span class="opt">(reuses <code>pre_scan_inbox</code>)</span></td></tr>
+        <tr><td>calendar <b>detect / conflicts</b> (10–11) &nbsp;·&nbsp; <b>13–15, 17</b> planned &nbsp;·&nbsp; <b>P1–P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
       </tbody>
     </table>
 
@@ -463,6 +464,15 @@
 #                 "informational_count": 7,
 #                 "suggested_archives": [ … ], "suggested_drafts": [],
 #                 "totals": { "urgent": 2, "actionable": 3, "informational": 7, "suggested_archives": 4 } } }</pre>
+    <p class="body-t"><b>Daily briefing</b> (read-only, <a class="iss" href="https://github.com/amd/gaia/issues/1608" target="_blank" rel="noopener">#1608</a>) — the latest <i>scheduled</i> pre-scan, generated without a prompt by the sidecar's daily timer. Off by default: launch the sidecar with <code>GAIA_EMAIL_BRIEFING_ENABLED=true</code> (fire time via <code>GAIA_EMAIL_BRIEFING_TIME</code>, 24h local <code>HH:MM</code>, default <code>08:00</code>). <code>404</code> until a scheduled run has happened:</p>
+    <pre class="code">curl -s http://localhost:8080/v1/email/briefing
+# → { "schema_version": "2.1",
+#     "generated_at": "2026-07-01T15:00:02.114210+00:00",
+#     "briefing": { "kind": "email_pre_scan",
+#                   "urgent": [ … ], "actionable": [ … ],
+#                   "informational_count": 7,
+#                   "suggested_archives": [ … ], "suggested_drafts": [],
+#                   "totals": { "urgent": 2, "actionable": 3, "informational": 7, "suggested_archives": 4 } } }</pre>
   </div>
 </section>
 
@@ -800,12 +810,12 @@ quarantine_phishing_message → { "ok": true, "data": {
       <div class="field"><div class="fl">Tracking</div><div class="fv"><a class="iss" href="https://github.com/amd/gaia/issues/1606" target="_blank" rel="noopener">#1606</a> · <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (P3 stretch)</div></div>
     </div>
 
-    <!-- 16 · planned -->
+    <!-- 16 · wired -->
     <div class="cap">
-      <div class="cap-head"><span class="num">16</span><h3>Proactive daily briefing</h3><span class="pill planned">Planned</span><span class="pill t0">Tier 0 · read-only</span></div>
-      <div class="field"><div class="fl">Use-case</div><div class="fv">Deliver the pre-scan as a scheduled, unprompted morning brief — inbox shape, calendar for the day, and open tasks — so the user starts the day informed instead of having to ask. The content is exactly what capability 5 already produces; the planned work is the scheduling and delivery layer (a timed trigger that runs the pre-scan and pushes the result), which depends on the autonomy engine. Off by default and fully configurable.</div></div>
-      <div class="field"><div class="fl">Why it matters</div><div class="fv">A daily briefing is a flagship feature of modern email assistants, and here it is almost entirely built — only the scheduler is missing.</div></div>
-      <div class="field"><div class="fl">Backed by</div><div class="fv"><code>pre_scan_inbox</code> content (capability 5) + scheduling/delivery from the autonomy engine (<a class="iss" href="https://github.com/amd/gaia/issues/555" target="_blank" rel="noopener">#555</a>); overlaps the morning-brief <a class="iss" href="https://github.com/amd/gaia/issues/1525" target="_blank" rel="noopener">#1525</a>. <b>Content-complete, delivery-blocked.</b></div></div>
+      <div class="cap-head"><span class="num">16</span><h3>Proactive daily briefing</h3><span class="pill wip">Wired</span><span class="pill t0">Tier 0 · read-only</span></div>
+      <div class="field"><div class="fl">Use-case</div><div class="fv">Deliver the pre-scan as a scheduled, unprompted morning brief so the user starts the day informed instead of having to ask. The sidecar runs the pre-scan on a daily timer — <b>off by default</b>, enabled with <code>GAIA_EMAIL_BRIEFING_ENABLED=true</code> (fire time <code>GAIA_EMAIL_BRIEFING_TIME</code>, 24h local, default 08:00) — and delivers the <code>email_pre_scan</code> envelope by persisting it locally; any surface pulls the latest run from <code>GET /v1/email/briefing</code>. The calendar-for-the-day and open-tasks sections, plus true push delivery, remain planned on the autonomy engine.</div></div>
+      <div class="field"><div class="fl">Why it matters</div><div class="fv">A daily briefing is a flagship feature of modern email assistants — the content (capability 5) and the scheduled trigger now both ship with the sidecar.</div></div>
+      <div class="field"><div class="fl">Backed by</div><div class="fv"><code>pre_scan_inbox</code> content (capability 5) + the sidecar's daily scheduler (<code>gaia_agent_email.briefing</code>, <a class="iss" href="https://github.com/amd/gaia/issues/1608" target="_blank" rel="noopener">#1608</a>). Push delivery + cross-agent brief: autonomy engine (<a class="iss" href="https://github.com/amd/gaia/issues/555" target="_blank" rel="noopener">#555</a>), <code>gaia schedule</code> dispatch (<a class="iss" href="https://github.com/amd/gaia/pull/1371" target="_blank" rel="noopener">#1371</a>); overlaps the morning-brief <a class="iss" href="https://github.com/amd/gaia/issues/1525" target="_blank" rel="noopener">#1525</a>.</div></div>
       <div class="field"><div class="fl">Guardrails</div><div class="fv">Tier 0 — read-only; scheduled, off by default.</div></div>
       <div class="field"><div class="fl">Tracking</div><div class="fv"><a class="iss" href="https://github.com/amd/gaia/issues/1608" target="_blank" rel="noopener">#1608</a> · <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (P3 stretch)</div></div>
     </div>
