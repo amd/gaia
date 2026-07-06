@@ -152,7 +152,7 @@ jobs:
             frozen: email-agent
             required: false
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -160,7 +160,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
 
       - name: Install deps + PyInstaller (frozen-binary env)
         shell: bash
@@ -231,7 +231,7 @@ jobs:
     outputs:
       ok: ${{ steps.smoke.outputs.ok }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -271,7 +271,7 @@ jobs:
     name: Scorecard gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # full history so git describe can find previous tags
       - uses: actions/setup-python@v6
@@ -353,7 +353,7 @@ jobs:
       id-token: write   # npm trusted publishing (OIDC) — no npm token
       actions: write    # gh workflow run deploy_website.yml (redeploy on publish)
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # full history so the main-ancestry guard can resolve
 

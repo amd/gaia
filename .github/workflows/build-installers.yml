@@ -177,7 +177,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0  # full history for any version calculations
           ref: ${{ inputs.tag || github.ref }}
@@ -194,7 +194,7 @@ jobs:
       # platform. Cross-runner cache paths are listed together — actions/cache
       # silently skips paths that don't exist on the current runner.
       - name: Cache electron + electron-builder
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cache/electron
@@ -740,7 +740,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download Linux installer artifact
         uses: actions/download-artifact@v8
@@ -785,7 +785,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download macOS installer artifact
         uses: actions/download-artifact@v8
@@ -814,7 +814,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download Linux installer artifact
         uses: actions/download-artifact@v8
@@ -1073,7 +1073,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download Linux installer artifact
         uses: actions/download-artifact@v8
@@ -1180,7 +1180,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -1221,7 +1221,7 @@ jobs:
   #     needs: build
   #     runs-on: ubuntu-24.04
   #     steps:
-  #       - uses: actions/checkout@v6
+  #       - uses: actions/checkout@v7
   #       - run: sudo apt-get install --yes cage grim imagemagick libfuse2
   #       - run: cage -s -- xvfb-run "${APPIMAGE}" &
   #       - run: sleep 20 && grim -t png /tmp/shot.png
