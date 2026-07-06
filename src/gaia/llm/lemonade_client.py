@@ -845,6 +845,7 @@ class LemonadeClient:
         verbose: bool = True,
         keep_alive: bool = False,
         api_key: Optional[str] = None,
+        ctx_size_override: Optional[int] = None,
     ):
         """
         Initialize the Lemonade client.
@@ -858,6 +859,12 @@ class LemonadeClient:
             keep_alive: If True, don't terminate server in __del__
             api_key: API key for an authenticated Lemonade server (defaults to
                 LEMONADE_API_KEY env var; ``None`` for unauthenticated)
+            ctx_size_override: Pin every model load THIS client performs to this
+                exact ctx_size (#1892). Instance-scoped — other clients in the
+                same process keep the MODELS-registry floor semantics. With an
+                override set, ``_ensure_model_loaded`` reloads whenever the
+                loaded ctx differs from the override (exact-pin, not floor),
+                so a ctx sweep can step DOWN as well as up.
         """
         from urllib.parse import urlparse
 
@@ -890,6 +897,10 @@ class LemonadeClient:
         self.keep_alive = keep_alive
         self._log_file = None
         self.api_key = resolve_lemonade_api_key(api_key)
+        # Instance-scoped exact-pin ctx override (#1892). Never a class-level
+        # default or MODELS mutation — chat/RAG clients sharing this process
+        # must keep their own floor semantics.
+        self.ctx_size_override = ctx_size_override
 
         # Track active downloads for cancellation support
         self.active_downloads: Dict[str, DownloadTask] = {}
@@ -2857,6 +2868,10 @@ class LemonadeClient:
             if expected_ctx is None:
                 expected_ctx = DEFAULT_CONTEXT_SIZE
 
+            # Instance ctx override (#1892): exact-pin beats the MODELS floor.
+            if self.ctx_size_override is not None:
+                expected_ctx = self.ctx_size_override
+
             # Check current server state
             status = self.get_status()
 
@@ -2875,13 +2890,21 @@ class LemonadeClient:
                 loaded_ctx = (
                     loaded_entry.get("recipe_options", {}).get("ctx_size", 0) or 0
                 )
-                if loaded_ctx >= expected_ctx:
+                # Override → exact-pin (!=): a sweep must reload DOWN too
+                # (floor semantics would let a 4K leg silently measure 16K).
+                if (
+                    loaded_ctx == expected_ctx
+                    if self.ctx_size_override is not None
+                    else loaded_ctx >= expected_ctx
+                ):
                     self.log.debug(
                         f"Model '{model}' already loaded at ctx={loaded_ctx} "
-                        f"(expected >= {expected_ctx})"
+                        f"(expected "
+                        f"{'== ' if self.ctx_size_override is not None else '>= '}"
+                        f"{expected_ctx})"
                     )
                     return
-                # Loaded but under-sized — fall through to the reload path
+                # Loaded at the wrong window — fall through to the reload path
                 # which calls /load with explicit ctx_size.
                 self.log.info(
                     f"Model '{model}' loaded at ctx={loaded_ctx} but GAIA "
@@ -4105,6 +4128,7 @@ def create_lemonade_client(
     background: str = "terminal",
     keep_alive: bool = False,
     api_key: Optional[str] = None,
+    ctx_size_override: Optional[int] = None,
 ) -> LemonadeClient:
     """
     Factory function to create and configure a LemonadeClient instance.
@@ -4131,6 +4155,8 @@ def create_lemonade_client(
         keep_alive: If True, don't terminate server when client is deleted
         api_key: API key for an authenticated Lemonade server
                  (defaults to env var LEMONADE_API_KEY; ``None`` for unauthenticated)
+        ctx_size_override: Instance-scoped exact-pin ctx override (#1892) —
+                 forwarded verbatim to ``LemonadeClient``
 
     Returns:
         A configured LemonadeClient instance
@@ -4153,6 +4179,7 @@ def create_lemonade_client(
         verbose=verbose,
         keep_alive=keep_alive,
         api_key=api_key,
+        ctx_size_override=ctx_size_override,
     )
 
     # Auto-start server if requested
