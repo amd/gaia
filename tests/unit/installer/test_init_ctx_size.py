@@ -201,8 +201,7 @@ def test_windows_modern_auto_start_passes_ctx_size_via_env_not_argv(
     assert result is True
     argv = mock_popen.call_args.args[0]
     assert "--ctx-size" not in argv, (
-        "modern tooling must not pass --ctx-size on argv — "
-        f"got: {argv}"
+        "modern tooling must not pass --ctx-size on argv — " f"got: {argv}"
     )
     assert argv[-1] == "--silent"
 

@@ -1356,9 +1356,7 @@ class TestEnsureServerRunningAutoStartFirst(unittest.TestCase):
         with patch("builtins.input", return_value="") as mock_input:
             cmd._ensure_server_running()
 
-        self.assertTrue(
-            mock_input.called, "manual fallback prompt must be reached"
-        )
+        self.assertTrue(mock_input.called, "manual fallback prompt must be reached")
 
     @patch("time.sleep")
     @patch("subprocess.Popen")
