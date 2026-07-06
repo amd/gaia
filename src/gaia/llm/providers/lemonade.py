@@ -164,7 +164,11 @@ def _classify_lemonade_response(response: dict) -> Tuple[Optional[LemonadeError]
         # ctx will fix it, so let it try. GAIA's default expected ctx
         # is 65536 for chat / rag profiles — threshold is a deliberate
         # constant here rather than imported to avoid a circular dep
-        # with lemonade_client.
+        # with lemonade_client. NOTE (#1892): a client running under an
+        # exact ctx pin (LemonadeClient.ctx_size_override, e.g. the email
+        # eval's 16K envelope — see gaia_agent_email.context_budget)
+        # legitimately sits below this threshold; the retryable hint is
+        # wrong there, but the pinned eval path never consumes it.
         n_ctx_reported = 0
         if isinstance(nested, dict):
             n_ctx_reported = nested.get("n_ctx") or 0
