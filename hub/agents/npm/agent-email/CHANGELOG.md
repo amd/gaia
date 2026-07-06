@@ -22,7 +22,7 @@ Contract bumped to `SCHEMA_VERSION` **2.2** — additive over 2.1, so `checkVers
   also carries `scan_truncated: true` when a mailbox has more sent mail than
   that cap, so the caller knows older threads weren't checked. Agent-loop
   surface (chat / Agent UI / `gaia email`); the sidecar REST/MCP surface is
-  unchanged and `SCHEMA_VERSION` stays `2.0`.
+  unchanged and `SCHEMA_VERSION` stays `2.2`.
 - **Attachment handling (#1542).** Real email has attachments; triage and replies
   that ignored them were incomplete. Read/triage now exposes attachment metadata —
   `EmailMessage` (request) and `EmailTriageResult` / `DraftReply` (response) carry
