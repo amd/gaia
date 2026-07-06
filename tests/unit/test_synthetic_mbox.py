@@ -98,7 +98,16 @@ def test_category_coverage_and_counts(labels: dict) -> None:
 
     spam_count = sum(1 for meta in labels.values() if meta["is_spam"])
     phishing_count = sum(1 for meta in labels.values() if meta["is_phishing"])
-    assert spam_count >= 20, "spam axis must be measurable"
+    # Genuine spam = only records with promotional_subtype=="spam" (7 in the
+    # committed seed). The old >=20 threshold was set against the over-broad
+    # ground-truth that swept spamassassin/ling_spam HAM into is_spam=True (#1904).
+    assert spam_count >= 1, "spam axis must be non-empty"
+    # All spam emails must be PROMOTIONAL — is_spam can only be True for promotional
+    # records whose vendor label is promotional_subtype="spam".
+    spam_categories = {meta["category"] for meta in labels.values() if meta["is_spam"]}
+    assert spam_categories <= {
+        "PROMOTIONAL"
+    }, f"is_spam=True on non-PROMOTIONAL emails: {spam_categories - {'PROMOTIONAL'}}"
     assert phishing_count >= 8, "phishing axis must be measurable"
 
 

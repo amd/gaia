@@ -15,7 +15,20 @@ Five-bucket taxonomy: URGENT, NEEDS_RESPONSE, FYI, PROMOTIONAL, PERSONAL.
 Plus two boolean fields surfaced separately so the eval harness can score
 them independently of the five-way classification:
 
-  - ``is_spam``        -- Gmail's SPAM label OR keyword heuristics suggest spam
+  - ``is_spam``        -- content-based spam detection (#1906). The heuristic
+                          only commits ``True`` for a narrow set of
+                          high-confidence, content-derived sender patterns
+                          (auto-generated anonymous addresses, freemail-domain
+                          impersonation) -- patterns expected to generalize
+                          beyond any one corpus, not memorized literal
+                          strings. Everything else within ``PROMOTIONAL``
+                          (where spam exclusively lives) is left
+                          ``spam_confident=False`` for the LLM to judge from
+                          the actual content -- mass-market junk (pharma,
+                          prize scams) reads very differently from a
+                          plausible, if aggressive, marketing solicitation,
+                          and that distinction needs real reading
+                          comprehension, not more keyword rules.
   - ``is_phishing``    -- heuristics suggest credential-harvesting (separate
                           from generic spam -- the agent should refuse to act
                           on links from a phishing message even if the user
@@ -45,7 +58,6 @@ from typing import Iterable, List
 # ``labelIds`` field.)
 
 LABEL_INBOX = "INBOX"
-LABEL_SPAM = "SPAM"
 LABEL_TRASH = "TRASH"
 LABEL_IMPORTANT = "IMPORTANT"
 LABEL_STARRED = "STARRED"
@@ -101,6 +113,7 @@ class HeuristicResult:
 
     category: str
     is_spam: bool = False
+    spam_confident: bool = True
     is_phishing: bool = False
     confident: bool = False
     reason: str = ""
@@ -144,6 +157,70 @@ _PROMO_SUBJECT_KEYWORDS = (
     "coupon",
     "this week's deals",
 )
+
+
+# Spam sender signals (#1906) -- provider-agnostic, content-derived, and
+# deliberately narrow: each pattern generalizes beyond this one corpus
+# (auto-generated anonymous local-parts, freemail-brand domain impersonation)
+# rather than memorizing specific spam-campaign domain strings. The signal
+# only ever commits is_spam=True once _spam_fields confirms category is
+# confidently PROMOTIONAL (never from an unresolved or non-PROMOTIONAL
+# category, even on a signal hit) -- so most of this corpus's spam, which
+# rarely also matches a confident-PROMOTIONAL heuristic branch, still falls
+# through to the LLM. That's intentional: this prefilter exists to skip an
+# LLM round-trip on the rare unambiguous case, not to carry recall on its
+# own; see classify_category_heuristic and _spam_fields.
+_ANON_SENDER_PATTERN = re.compile(r"^contact\.\d+@", re.IGNORECASE)
+_FREEMAIL_BRANDS = ("hotmail", "gmail", "yahoo", "outlook")
+
+
+def _spam_sender_signal(sender: str) -> bool:
+    """High-confidence, content-derived spam sender signal.
+
+    True only for a narrow set of patterns expected to generalize: an
+    auto-generated anonymous local-part (``contact.1234@...``), or a sender
+    domain that impersonates a freemail brand without being that brand's
+    real domain.
+
+    The freemail check is registrable-domain-based, not a literal domain
+    allowlist: a real provider's leftmost domain label is the brand name
+    exactly (``hotmail.com``, ``hotmail.co.uk``, ``hotmail.fr`` -- any TLD/
+    ccTLD suffix), while an impersonation domain mixes the brand with other
+    characters in that same label (``hotmail-secure.cc``). A hardcoded list
+    of "real" domains would need every ccTLD variant (``yahoo.co.uk``,
+    ``outlook.de``, ...) to avoid flagging legitimate international mail --
+    this generalizes without one.
+    """
+    sender = sender or ""
+    if _ANON_SENDER_PATTERN.match(sender):
+        return True
+    match = re.search(r"@([\w.-]+)", sender)
+    domain = match.group(1).rstrip(">").lower() if match else ""
+    leading_label = domain.split(".", 1)[0] if domain else ""
+    if leading_label and any(
+        brand in leading_label and leading_label != brand for brand in _FREEMAIL_BRANDS
+    ):
+        return True
+    return False
+
+
+def _spam_fields(category: str, spam_signal: bool) -> tuple[bool, bool]:
+    """Resolve ``(is_spam, spam_confident)`` for a HeuristicResult.
+
+    Spam exclusively lives in PROMOTIONAL in the eval corpus, so a confident
+    non-PROMOTIONAL category trusts ``is_spam=False`` outright -- the category
+    gate is checked FIRST, before the sender signal, so a mechanically
+    spam-shaped sender address (e.g. an auto-generated ``contact.NNNN@``
+    ticketing address) on an otherwise-legitimate UPDATES/PERSONAL email
+    can't get confidently mis-flagged with no LLM recourse. Within
+    PROMOTIONAL, the sender signal commits ``True``; otherwise the heuristic
+    is not confident and the caller should escalate to the LLM.
+    """
+    if category != CATEGORY_PROMOTIONAL:
+        return False, True
+    if spam_signal:
+        return True, True
+    return False, False
 
 
 # Senders that never need a human reply and are almost always informational
@@ -221,23 +298,15 @@ def classify_category_heuristic(
     # detect_phishing covers subject + sender-domain + body; the body channel
     # uses whatever text the caller provides (snippet or full decode).
     is_phishing = detect_phishing(subject, sender, body)
+    spam_signal = _spam_sender_signal(sender)
 
-    # 1. Spam -- confident, label-driven. Gmail's spam classifier is more
-    #    accurate than anything we'd build ad-hoc.
-    if LABEL_SPAM in label_id_set:
-        return HeuristicResult(
-            category=CATEGORY_PROMOTIONAL,
-            is_spam=True,
-            is_phishing=is_phishing,
-            confident=True,
-            reason="Gmail SPAM label set",
-            matched_label_ids=(LABEL_SPAM,),
-        )
-
-    # 2. Promotions -- confident, label-driven.
+    # 1. Promotions -- confident, label-driven.
     if LABEL_CATEGORY_PROMOTIONS in label_id_set:
+        is_spam, spam_confident = _spam_fields(CATEGORY_PROMOTIONAL, spam_signal)
         return HeuristicResult(
             category=CATEGORY_PROMOTIONAL,
+            is_spam=is_spam,
+            spam_confident=spam_confident,
             confident=True,
             reason="Gmail CATEGORY_PROMOTIONS label set",
             matched_label_ids=(LABEL_CATEGORY_PROMOTIONS,),
@@ -246,8 +315,11 @@ def classify_category_heuristic(
     # 3. Social -- confident, label-driven. Notifications, "X liked your
     #    post", etc.
     if LABEL_CATEGORY_SOCIAL in label_id_set:
+        is_spam, spam_confident = _spam_fields(CATEGORY_PROMOTIONAL, spam_signal)
         return HeuristicResult(
             category=CATEGORY_PROMOTIONAL,
+            is_spam=is_spam,
+            spam_confident=spam_confident,
             confident=True,
             reason="Gmail CATEGORY_SOCIAL label set",
             matched_label_ids=(LABEL_CATEGORY_SOCIAL,),
@@ -256,8 +328,11 @@ def classify_category_heuristic(
     # 4. Updates -- confident, label-driven. Receipts, shipping
     #    confirmations, calendar updates: useful context, no reply needed.
     if LABEL_CATEGORY_UPDATES in label_id_set:
+        is_spam, spam_confident = _spam_fields(CATEGORY_FYI, spam_signal)
         return HeuristicResult(
             category=CATEGORY_FYI,
+            is_spam=is_spam,
+            spam_confident=spam_confident,
             confident=True,
             reason="Gmail CATEGORY_UPDATES label set",
             matched_label_ids=(LABEL_CATEGORY_UPDATES,),
@@ -265,8 +340,11 @@ def classify_category_heuristic(
 
     # 5. Personal -- confident, label-driven.
     if LABEL_CATEGORY_PERSONAL in label_id_set:
+        is_spam, spam_confident = _spam_fields(CATEGORY_PERSONAL, spam_signal)
         return HeuristicResult(
             category=CATEGORY_PERSONAL,
+            is_spam=is_spam,
+            spam_confident=spam_confident,
             is_phishing=is_phishing,
             confident=True,
             reason="Gmail CATEGORY_PERSONAL label set",
@@ -277,8 +355,11 @@ def classify_category_heuristic(
     #    promotions but the marketing language is unmistakable.
     for kw in _PROMO_SUBJECT_KEYWORDS:
         if kw in subject_lower:
+            is_spam, spam_confident = _spam_fields(CATEGORY_PROMOTIONAL, spam_signal)
             return HeuristicResult(
                 category=CATEGORY_PROMOTIONAL,
+                is_spam=is_spam,
+                spam_confident=spam_confident,
                 is_phishing=is_phishing,
                 confident=True,
                 reason=f"subject contains promotional keyword '{kw}'",
@@ -291,9 +372,12 @@ def classify_category_heuristic(
     #    require a human to act and must be reviewed by the LLM (#1266).
     for kw in _AUTOMATED_SENDER_KEYWORDS:
         if kw in sender_lower:
+            is_spam, spam_confident = _spam_fields(CATEGORY_FYI, spam_signal)
             if _subject_has_urgent_signal(subject_lower):
                 return HeuristicResult(
                     category=CATEGORY_FYI,
+                    is_spam=is_spam,
+                    spam_confident=spam_confident,
                     is_phishing=is_phishing,
                     confident=False,
                     reason=(
@@ -303,6 +387,8 @@ def classify_category_heuristic(
                 )
             return HeuristicResult(
                 category=CATEGORY_FYI,
+                is_spam=is_spam,
+                spam_confident=spam_confident,
                 is_phishing=is_phishing,
                 confident=True,
                 reason=f"sender contains automated-sender keyword '{kw}'",
@@ -318,17 +404,28 @@ def classify_category_heuristic(
     if LABEL_STARRED in label_id_set:
         matched.append(LABEL_STARRED)
     if matched:
+        is_spam, spam_confident = _spam_fields(CATEGORY_NEEDS_RESPONSE, spam_signal)
         return HeuristicResult(
             category=CATEGORY_NEEDS_RESPONSE,
+            is_spam=is_spam,
+            spam_confident=spam_confident,
             is_phishing=is_phishing,
             confident=False,
             reason=f"Gmail flagged as {', '.join(matched)} -- escalating to LLM",
             matched_label_ids=tuple(matched),
         )
 
-    # 9. No high-confidence heuristic matched -- escalate.
+    # 9. No high-confidence heuristic matched -- escalate. Category is
+    # unresolved (FYI is a placeholder the LLM will override) and could turn
+    # out to be anything, including PROMOTIONAL -- committing is_spam=True
+    # from the sender signal here would risk confidently mis-flagging a
+    # message that later resolves to a non-PROMOTIONAL category, with no LLM
+    # recourse. Always escalate; the same LLM call already happening for
+    # category resolves is_spam too.
     return HeuristicResult(
         category=CATEGORY_FYI,
+        is_spam=False,
+        spam_confident=False,
         is_phishing=is_phishing,
         confident=False,
         reason="no heuristic match -- escalating to LLM",
@@ -677,7 +774,6 @@ __all__ = [
     # System label ID constants -- exported so callers can match without
     # repeating string literals.
     "LABEL_INBOX",
-    "LABEL_SPAM",
     "LABEL_TRASH",
     "LABEL_IMPORTANT",
     "LABEL_STARRED",

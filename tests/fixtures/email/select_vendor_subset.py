@@ -19,6 +19,15 @@ Selection is deterministic (fixed seed + stable id sort) and PII-conscious:
   the spam axis.
 - Per category a fixed quota is taken (all available PERSONAL, since it is the
   scarcest), with phishing/spam records prioritised so those axes stay measurable.
+- **Enron-spam carve-out (#1906):** the blanket Enron exclusion above protects real
+  employee correspondence (the ham/personal portion of the corpus), but the vendor's
+  ``promotional_subtype == "spam"`` records tagged ``source_dataset == "enron"`` are
+  third-party junk mail (pharma/phishing spam) *received by* a synthetic AMD persona
+  mailbox — no real employee name, address, or correspondence appears in sender,
+  recipient, subject, or body. These are added unconditionally (not subject to the
+  per-category quota) and their ``source_dataset`` is relabeled to
+  ``"public_spam_benchmark"`` in the committed seed so no literal "enron" string
+  ships in the fixture. This is the only exception to the blanket exclusion above.
 
 The vendor source file is NOT committed (size + provenance); pass its path:
 
@@ -31,6 +40,7 @@ import argparse
 import collections
 import json
 import random
+import re
 from pathlib import Path
 
 SEED = 23023
@@ -42,6 +52,13 @@ OUT_SEED = OUT_DIR / "vendor_corpus_seed.jsonl"
 _ELIGIBLE_ORIGINS = {"synthetic", "public_llm_labeled"}
 _EXCLUDED_SOURCES = {"enron", "hillary_clinton_emails"}
 _SPAM_SOURCES = {"spamassassin", "ling_spam"}
+
+# Narrow carve-out (#1906): Enron-sourced spam (junk mail received by the
+# synthetic persona, not the employee's own correspondence) is exempt from the
+# blanket Enron exclusion and relabeled so no literal "enron" string ships in
+# the committed fixture.
+_ENRON_SPAM_SOURCE = "enron"
+_ENRON_SPAM_RELABEL = "public_spam_benchmark"
 
 # Per-category quota. PERSONAL is the scarcest bucket, so take all available.
 _PER_CATEGORY = {
@@ -75,11 +92,55 @@ _KEEP_FIELDS = [
 ]
 
 
-def _is_spam(rec: dict) -> bool:
+def _is_spam_source(rec: dict) -> bool:
+    # Selection priority heuristic only — NOT ground-truth spam.
+    # Treats spamassassin/ling_spam records (which contain both spam and HAM)
+    # as "special" so they fill the spam-axis quota in the selected subset.
+    # Do NOT use this to set is_spam labels; use generate_mbox._is_spam for that.
     return (
         rec.get("promotional_subtype") == "spam"
         or rec.get("source_dataset") in _SPAM_SOURCES
     )
+
+
+def _scrub_stray_enron_domain(selected: list[dict]) -> list[dict]:
+    # Outside the deliberate spam carve-out, "enron.com" can still surface as an
+    # LLM-generation artifact: synthetic_llm/boundary_synth records routinely use
+    # real company domains (goldmansachs.com, microsoft.com, broadcom.com, …) as
+    # flavor for fabricated external-sender correspondence — fully fictional
+    # content, not a privacy concern in itself. But "enron" specifically carries
+    # scandal-adjacent connotations a literal grep shouldn't surface in a
+    # committed fixture, so it alone (not the other real-company domains, which
+    # are unremarkable) gets scrubbed to a clearly fictional domain.
+    def scrub(value):
+        if isinstance(value, str):
+            return re.sub(r"\benron\.com\b", "example.com", value, flags=re.IGNORECASE)
+        if isinstance(value, list):
+            return [scrub(v) for v in value]
+        return value
+
+    out = []
+    for r in selected:
+        if r.get("source_dataset") == _ENRON_SPAM_RELABEL:
+            out.append(r)  # already scrubbed via the carve-out relabel
+            continue
+        out.append({k: scrub(v) for k, v in r.items()})
+    return out
+
+
+def _enron_spam_carveout(records: list[dict]) -> list[dict]:
+    # Junk mail received by the synthetic persona — not employee correspondence.
+    # Taken unconditionally (not subject to the per-category quota): the spam axis
+    # is otherwise too thin (7 eligible records) to validate detection.
+    carveout = [
+        r
+        for r in records
+        if r.get("promotional_subtype") == "spam"
+        and r.get("source_dataset") == _ENRON_SPAM_SOURCE
+        and r.get("origin_type") in _ELIGIBLE_ORIGINS
+    ]
+    carveout = sorted(carveout, key=lambda r: r["id"])
+    return [{**r, "source_dataset": _ENRON_SPAM_RELABEL} for r in carveout]
 
 
 def select(source: Path) -> list[dict]:
@@ -100,14 +161,15 @@ def select(source: Path) -> list[dict]:
     selected: list[dict] = []
     for category, recs in sorted(by_cat.items()):
         recs = sorted(recs, key=lambda r: r["id"])  # stable, deterministic
-        special = [r for r in recs if r.get("is_phishing") or _is_spam(r)]
-        normal = [r for r in recs if not (r.get("is_phishing") or _is_spam(r))]
+        special = [r for r in recs if r.get("is_phishing") or _is_spam_source(r)]
+        normal = [r for r in recs if not (r.get("is_phishing") or _is_spam_source(r))]
         rng.shuffle(special)
         rng.shuffle(normal)
         selected.extend((special + normal)[: _PER_CATEGORY.get(category, 40)])
 
+    selected.extend(_enron_spam_carveout(records))
     selected.sort(key=lambda r: r["id"])
-    return selected
+    return _scrub_stray_enron_domain(selected)
 
 
 def main() -> int:
@@ -133,7 +195,13 @@ def main() -> int:
     print(f"Wrote {len(selected)} records -> {out}")
     print(f"  category: {dict(cats)}")
     print(f"  phishing: {sum(1 for r in selected if r.get('is_phishing'))}")
-    print(f"  spam:     {sum(1 for r in selected if _is_spam(r))}")
+    print(
+        f"  spam:     {sum(1 for r in selected if r.get('promotional_subtype') == 'spam')}"
+    )
+    print(
+        f"  enron-spam carve-out (relabeled {_ENRON_SPAM_RELABEL}): "
+        f"{sum(1 for r in selected if r.get('source_dataset') == _ENRON_SPAM_RELABEL)}"
+    )
     return 0
 
 

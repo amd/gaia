@@ -2,19 +2,24 @@
 # SPDX-License-Identifier: MIT
 """Sidecar-backed ``/v1/email/*`` REST router for the Agent UI backend.
 
-When ``GAIA_EMAIL_AGENT_MODE`` is set, the UI server mounts THIS router instead of
-importing the email wheel in-process (#1768 / design decision 4: the sidecar is the
-single ``/v1/email`` surface). Each request lazily starts the sidecar (off the event
-loop) and forwards to it, preserving the sidecar's own status codes and actionable
-error detail.
+This router is the **single** ``/v1/email`` surface: the UI server mounts it
+instead of importing the email wheel in-process (#1768 / design decision 4). It
+forwards the full schema-2.1 data contract (triage, batch triage, search, inbox
+pre-scan, draft/send + confirm, archive/unarchive, quarantine/unquarantine,
+calendar view/preview/create/respond, health, version) to the out-of-process
+sidecar, preserving the sidecar's own status codes and actionable error detail.
 
-Security: only the triage / draft / send / health / version endpoints are exposed.
-The sidecar's connector OAuth *write* routes are deliberately NOT proxied — all
-connector writes stay on the Python backend's single-writer path (design "Auth &
-grants"), so a UI request can never drive a cross-process grant write.
+Each request lazily starts the sidecar (off the event loop) and forwards to it.
+
+Security: the sidecar's connector OAuth *write* routes are deliberately NOT
+proxied — all connector writes stay on the Python backend's single-writer path
+(design "Auth & grants"), so a UI request can never drive a cross-process grant
+write.
 """
 
 from __future__ import annotations
+
+from typing import Optional
 
 import requests
 from fastapi import APIRouter, HTTPException, Request
@@ -61,6 +66,7 @@ async def _forward(fn, *args):
         ) from e
 
 
+# -- Triage -----------------------------------------------------------------
 @router.post("/triage")
 async def triage(request: Request):
     proxy = await _get_proxy(request)
@@ -68,6 +74,29 @@ async def triage(request: Request):
     return await _forward(proxy.triage, body)
 
 
+@router.post("/triage/batch")
+async def triage_batch(request: Request):
+    proxy = await _get_proxy(request)
+    body = await request.json()
+    return await _forward(proxy.triage_batch, body)
+
+
+# -- Inbox read (search + pre-scan) -----------------------------------------
+@router.post("/search")
+async def search(request: Request):
+    proxy = await _get_proxy(request)
+    body = await request.json()
+    return await _forward(proxy.search_inbox, body)
+
+
+@router.post("/prescan")
+async def prescan(request: Request):
+    proxy = await _get_proxy(request)
+    body = await request.json()
+    return await _forward(proxy.pre_scan_inbox, body)
+
+
+# -- Reply (draft + send) ----------------------------------------------------
 @router.post("/draft")
 async def draft(request: Request):
     proxy = await _get_proxy(request)
@@ -82,6 +111,85 @@ async def send(request: Request):
     return await _forward(proxy.send, body)
 
 
+# -- Destructive mailbox actions (confirm-gated) + undo ----------------------
+@router.post("/confirm")
+async def confirm(request: Request):
+    proxy = await _get_proxy(request)
+    body = await request.json()
+    return await _forward(proxy.confirm, body)
+
+
+@router.post("/archive")
+async def archive(request: Request):
+    proxy = await _get_proxy(request)
+    body = await request.json()
+    return await _forward(proxy.archive, body)
+
+
+@router.post("/unarchive")
+async def unarchive(request: Request):
+    proxy = await _get_proxy(request)
+    body = await request.json()
+    return await _forward(proxy.unarchive, body)
+
+
+@router.post("/quarantine")
+async def quarantine(request: Request):
+    proxy = await _get_proxy(request)
+    body = await request.json()
+    return await _forward(proxy.quarantine, body)
+
+
+@router.post("/unquarantine")
+async def unquarantine(request: Request):
+    proxy = await _get_proxy(request)
+    body = await request.json()
+    return await _forward(proxy.unquarantine, body)
+
+
+# -- Calendar ----------------------------------------------------------------
+@router.get("/calendar/events")
+async def calendar_events(
+    request: Request,
+    time_min: Optional[str] = None,
+    time_max: Optional[str] = None,
+    provider: Optional[str] = None,
+):
+    proxy = await _get_proxy(request)
+    params = {
+        k: v
+        for k, v in (
+            ("time_min", time_min),
+            ("time_max", time_max),
+            ("provider", provider),
+        )
+        if v is not None
+    }
+    return await _forward(proxy.calendar_events, params or None)
+
+
+@router.post("/calendar/events/preview")
+async def calendar_preview(request: Request):
+    proxy = await _get_proxy(request)
+    body = await request.json()
+    return await _forward(proxy.calendar_preview, body)
+
+
+@router.post("/calendar/events")
+async def calendar_create(request: Request):
+    proxy = await _get_proxy(request)
+    body = await request.json()
+    return await _forward(proxy.calendar_create, body)
+
+
+@router.post("/calendar/events/respond")
+async def calendar_respond(request: Request):
+    proxy = await _get_proxy(request)
+    body = await request.json()
+    return await _forward(proxy.calendar_respond, body)
+
+
+# -- Health / version --------------------------------------------------------
 @router.get("/health")
 async def health(request: Request):
     proxy = await _get_proxy(request)
