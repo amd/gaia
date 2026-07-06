@@ -2152,6 +2152,34 @@ def create_app(
     return app
 
 
+def _ensure_port_free(host: str, port: int) -> None:
+    """Raise an actionable RuntimeError if (host, port) is already in use.
+
+    Only EADDRINUSE is translated; any other bind error (bad address family,
+    unresolvable host) is left for uvicorn's own bind to report accurately.
+    """
+    import errno
+    import socket
+
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    probe = socket.socket(family, socket.SOCK_STREAM)
+    if os.name != "nt":
+        # Mirror asyncio's bind semantics: SO_REUSEADDR on POSIX (tolerate
+        # TIME_WAIT), never on Windows where it binds over live listeners.
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        probe.bind((host, port))
+    except OSError as e:
+        if e.errno == errno.EADDRINUSE:
+            raise RuntimeError(
+                f"EMR dashboard cannot start: {host}:{port} is already in use "
+                f"(`gaia api` also defaults to port 8080). Stop the other server "
+                f"or pass --port to pick a different one."
+            ) from e
+    finally:
+        probe.close()
+
+
 def run_dashboard(
     watch_dir: str = "./intake_forms",
     db_path: str = "./data/patients.db",
@@ -2174,23 +2202,7 @@ def run_dashboard(
 
     # Probe the port first — uvicorn's bind failure can exit 0 silently, leaving
     # the Electron/browser launcher pointing at whatever app owns the port.
-    import socket
-
-    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    if os.name != "nt":
-        # Mirror asyncio's bind semantics: SO_REUSEADDR on POSIX (tolerate
-        # TIME_WAIT), never on Windows where it binds over live listeners.
-        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        probe.bind((host, port))
-    except OSError as e:
-        raise RuntimeError(
-            f"EMR dashboard cannot start: {host}:{port} is already in use "
-            f"(`gaia api` also defaults to port 8080). Stop the other server "
-            f"or pass --port to pick a different one."
-        ) from e
-    finally:
-        probe.close()
+    _ensure_port_free(host, port)
 
     app = create_app(watch_dir=watch_dir, db_path=db_path)
 

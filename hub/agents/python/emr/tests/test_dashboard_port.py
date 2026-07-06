@@ -28,6 +28,32 @@ class TestDashboardPortConflict(unittest.TestCase):
         finally:
             squatter.close()
 
+    def test_ipv6_host_occupied_port_raises_the_same_error(self):
+        """The probe picks AF_INET6 for IPv6 hosts instead of misfiring."""
+        from gaia_agent_emr.dashboard.server import _ensure_port_free
+
+        squatter = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        try:
+            squatter.bind(("::1", 0))
+        except OSError:
+            self.skipTest("IPv6 loopback unavailable")
+        squatter.listen(1)
+        port = squatter.getsockname()[1]
+        try:
+            with self.assertRaises(RuntimeError) as ctx:
+                _ensure_port_free("::1", port)
+            self.assertIn(str(port), str(ctx.exception))
+        finally:
+            squatter.close()
+
+    def test_non_eaddrinuse_bind_errors_are_not_misreported(self):
+        """A family/resolution error must not claim the port is in use."""
+        from gaia_agent_emr.dashboard.server import _ensure_port_free
+
+        # IPv6-shaped host forced onto a bad address: EINVAL/EADDRNOTAVAIL,
+        # not EADDRINUSE — the probe must stay silent and defer to uvicorn.
+        _ensure_port_free("::ffff:999.0.0.1", 0)  # no exception expected
+
     def test_cmd_dashboard_reports_port_conflict_and_exits_nonzero(self):
         """The CLI surfaces the conflict as an error instead of a traceback."""
         import argparse
