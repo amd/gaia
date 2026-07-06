@@ -24,6 +24,15 @@ Contract bumped to `SCHEMA_VERSION` **2.2** — additive over 2.1, so `checkVers
   limit) → a loud error, never truncation. The agent's in-loop `draft_reply` /
   `send_now` tools gain an optional comma-separated `attachments` file-path
   parameter with the same fail-loud checks.
+- **Triage action items now persist as a task list** (#1605): `triage()` /
+  `triageBatch()` write each extracted action item to the sidecar's local SQLite
+  (`~/.gaia/email/state.db`), linked back to the source `message_id` (or
+  `thread_id` for a thread) and de-duplicated per message on the normalized
+  description — re-triaging a message never duplicates tasks. Side-effect only:
+  the wire response, contract, and `SCHEMA_VERSION` are unchanged, and results
+  without a `message_id` are not persisted. Read/complete surfaces arrive with
+  GAIA's cross-agent task store (amd/gaia#1521); until then the store is the
+  email-local `email_tasks` table.
 - **Scheduled daily inbox briefing** (#1608): the sidecar can now run the inbox
   pre-scan on a daily timer — no prompt, no live caller — and expose the result on
   the new `GET /v1/email/briefing` (additive). The
