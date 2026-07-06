@@ -382,6 +382,29 @@ td:nth-child(3) {
 </div>
 
 
+<h2>Context-window envelope</h2>
+<p class="body-t">The agent is designed, measured, and released against a pinned
+  context-window envelope (<a class="iss" href="https://github.com/amd/gaia/issues/1892"
+  target="_blank" rel="noopener">#1892</a>; constants in
+  <code class="inl">gaia_agent_email/context_budget.py</code>). Published scorecards
+  and baselines are designed to state the window they were measured under
+  (<code class="inl">ctx_size</code> in the scorecard's environment block) once the
+  next baseline is recorded — no committed artifact carries that stamp yet.</p>
+<table>
+  <thead><tr><th>Bound</th><th>Tokens</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><b>Target</b></td><td><b>16,384</b></td><td>The window published numbers are measured at — fits everyday triage/draft prompts on consumer NPU/GPU KV-cache budgets</td></tr>
+    <tr><td><b>Acceptable max</b></td><td><b>32,768</b></td><td>Ceiling for deliberately larger runs (long-thread stress); above it the measurement stops representing a real device</td></tr>
+  </tbody>
+</table>
+<p class="body-t">To see what a live triage actually consumed, read the
+  <code class="inl">usage</code> block in the triage response
+  (<code class="inl">prompt_tokens</code> / <code class="inl">completion_tokens</code>).
+  <code class="inl">GET /v1/email/init</code> additionally reports the currently
+  loaded <code class="inl">ctx_size</code> on <code class="inl">model</code> when the
+  triage model is loaded and the server exposes it — null otherwise.</p>
+
+
 <h2>Convenience pages</h2>
 
 <div class="endpoint-block">

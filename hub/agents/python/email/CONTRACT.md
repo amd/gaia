@@ -505,3 +505,65 @@ response = parse_response(raw_response_dict)  # -> EmailTriageResponse
   equality, so a taxonomy change in either place fails CI.
 - **Unknown fields are errors**, not warnings — there is no silent forward-compat
   drift in either direction.
+
+---
+
+## Context-window envelope
+
+The email agent is designed, measured, and released against a pinned
+context-window envelope
+([#1892](https://github.com/amd/gaia/issues/1892), constants in
+[`gaia_agent_email/context_budget.py`](gaia_agent_email/context_budget.py)):
+
+| Bound | Tokens | Meaning |
+|---|---|---|
+| **Target** | **16,384** | The window every published accuracy/throughput number is measured at. Everyday triage/draft prompts — system prompt, tool schema, and a full thread — fit here on the KV-cache budget of the consumer NPU/GPU hardware GAIA targets. |
+| **Acceptable max** | **32,768** | The ceiling for a deliberately larger run (e.g. a long-thread stress sweep). Above it, KV-cache memory pressure makes the measurement unrepresentative of a real device. |
+
+64K — the model's registry floor that the eval path historically ran at — is
+**not** part of the envelope: it is unrealistic for the machines this agent
+ships to, and numbers measured there do not transfer.
+
+**What a consumer may assume:**
+
+- Published scorecards and baselines are designed to state the window they
+  were measured under (`recipe.environment.ctx_size` on the scorecard;
+  `ctx_size` in `baseline_accuracy.json` and the benchmark's `quality.json` /
+  `scorecard.json`). This stamp is not on any committed artifact yet — it
+  lands when the baseline is next re-recorded (the consolidated eval pass,
+  [#1319](https://github.com/amd/gaia/issues/1319) /
+  [#1892](https://github.com/amd/gaia/issues/1892)). Until then, treat every
+  existing number as measured at the unpinned 64K window and do not compare
+  it against a future pinned run.
+- Payloads that fit the 16K target are the supported case. Prompt
+  construction bounds body content with documented character limits (marked
+  `...[truncated]`, never silent), and a genuine context overflow on the
+  LLM call **raises** per the agent's fail-loud contract — a result is
+  never fabricated from an over-budget prompt.
+- Future budget work is meant to derive from the same constants: the
+  long-thread transcript budget
+  ([#1889](https://github.com/amd/gaia/issues/1889)) and the per-email body
+  limit ([#1318](https://github.com/amd/gaia/issues/1318)) are both designed
+  to import `context_budget.py` rather than invent their own numbers — as of
+  this writing neither one consumes it yet.
+
+**How to verify what a live triage actually used:** the triage response's
+`usage` block reports `prompt_tokens` / `completion_tokens` /
+`total_tokens` for the LLM calls behind the result — compare
+`prompt_tokens` against the envelope to see how much of the window a
+payload consumed. `GET /v1/email/init` additionally reports the *currently
+loaded* `ctx_size` on `model` when the triage model is loaded and the
+server exposes it — null otherwise (no config echo, no guessing).
+
+> **Note:** the **interactive `gaia email` CLI path currently loads the model
+> at 32K** (the `agent_context_sizes` registry in `src/gaia/cli.py`) — the
+> envelope's acceptable max, not the 16K target. Pinning the interactive path
+> to the target is deliberately out of #1892's scope; the envelope above
+> governs the **eval/benchmark/release** path today.
+
+**Shared-server constraint:** Lemonade Server is single-tenant per model
+slot. An agent instance with an exact ctx pin (`EmailAgentConfig.ctx_size` /
+`LemonadeClient(ctx_size_override=...)`) and any other client sharing the
+same model will fight over the loaded ctx — visible as the reported ctx
+flapping between values across successive `GET /v1/init` calls. Do not
+enable `ctx_size` against a Lemonade instance shared with other traffic.
