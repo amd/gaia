@@ -545,15 +545,22 @@ def _verify_ctx_readback(client: Any, model_id: str, requested_ctx: int) -> int:
     """Load ``model_id`` at the exact pin and verify the ctx Lemonade reports.
 
     Returns the READBACK value (what ``/health`` says is loaded — the number
-    every artifact records, never the request). Fails loud on:
+    every artifact records, never the request). The client's pinned path
+    already settles the async /unload+/load cycle against /health before
+    returning (#1892 hardware finding), so the read here is single-shot: by
+    the time ``_ensure_model_loaded`` returns, /health is settled, and a
+    fresh divergence can only mean an external process — which the one
+    corrective re-pin below handles. Fails loud on:
 
     - readback 0 → the probe could not see the model's ctx at all (a health
       / enrichment problem, NOT "loaded at 0");
-    - readback != requested after ONE corrective exact-pin reload → the
-      server will not hold the pin (likely a model ctx ceiling clamping the
-      request, or another process fighting over the slot).
+    - readback != requested after ONE corrective re-pin (through the same
+      async-safe settle path, never a raw /load — a plain reload can no-op
+      on Lemonade 10.7) → the server will not hold the pin (likely a model
+      ctx ceiling clamping the request, or another process fighting over
+      the slot).
     """
-    client._ensure_model_loaded(model_id)  # exact-pin via ctx_size_override
+    client._ensure_model_loaded(model_id)  # async-safe pin via ctx_size_override
 
     def _read() -> int:
         status = client.get_status()
@@ -572,15 +579,13 @@ def _verify_ctx_readback(client: Any, model_id: str, requested_ctx: int) -> int:
             "measurement."
         )
     if readback != requested_ctx:
-        client.load_model(
-            model_id, auto_download=True, prompt=False, ctx_size=requested_ctx
-        )
+        client._ensure_model_loaded(model_id)
         readback = _read()
         if readback != requested_ctx:
             raise RuntimeError(
                 f"ctx readback mismatch for '{model_id}': requested="
                 f"{requested_ctx} actual={readback} even after a corrective "
-                "reload. The model may clamp ctx to its own ceiling, or "
+                "re-pin. The model may clamp ctx to its own ceiling, or "
                 "another process keeps reloading it — the run would measure "
                 "the wrong window, aborting."
             )
