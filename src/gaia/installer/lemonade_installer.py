@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from gaia.llm.lemonade_launcher import get_installed_version, resolve_lemonade
 from gaia.version import LEMONADE_VERSION
 
 log = logging.getLogger(__name__)
@@ -143,6 +144,10 @@ class LemonadeInstaller:
         """
         Check if Lemonade Server is installed and get version info.
 
+        Detection is delegated to :func:`gaia.llm.lemonade_launcher.resolve_lemonade`,
+        which finds both modern tooling (``LemonadeServer.exe`` / ``lemonade``)
+        and the legacy ``lemonade-server`` CLI.
+
         Returns:
             LemonadeInfo with installation status
         """
@@ -150,50 +155,34 @@ class LemonadeInstaller:
             # Refresh PATH from registry (in case MSI just updated it)
             self.refresh_path_from_registry()
 
-            # Try to find lemonade-server executable
-            lemonade_path = shutil.which("lemonade-server")
+            tooling = resolve_lemonade()
 
-            if not lemonade_path:
+            if not tooling.found:
                 return LemonadeInfo(
-                    installed=False, error="lemonade-server not found in PATH"
+                    installed=False,
+                    error=(
+                        "Lemonade Server not found (no modern install at its "
+                        "canonical path, no lemonade-server in PATH)"
+                    ),
                 )
 
-            # Get version
-            result = subprocess.run(
-                ["lemonade-server", "--version"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-            )
+            version = get_installed_version(tooling)
 
-            if result.returncode != 0:
+            if version is None:
+                # Tooling exists but the version probe failed — still installed.
                 return LemonadeInfo(
                     installed=True,
-                    path=lemonade_path,
-                    error=f"Failed to get version: {result.stderr}",
+                    path=tooling.client_path,
+                    error=(
+                        f"Failed to get version from {tooling.client_path} "
+                        f"({tooling.kind} tooling)"
+                    ),
                 )
 
-            # Parse version from output
-            # Expected format: "lemonade-server 9.1.4" or just "9.1.4"
-            version_output = result.stdout.strip()
-            version_match = re.search(r"(\d+\.\d+\.\d+)", version_output)
-
-            if version_match:
-                version = version_match.group(1)
-            else:
-                version = version_output
-
-            return LemonadeInfo(installed=True, version=version, path=lemonade_path)
-
-        except FileNotFoundError:
             return LemonadeInfo(
-                installed=False, error="lemonade-server not found in PATH"
+                installed=True, version=version, path=tooling.client_path
             )
-        except subprocess.TimeoutExpired:
-            return LemonadeInfo(
-                installed=False, error="Timeout checking lemonade-server version"
-            )
+
         except Exception as e:
             return LemonadeInfo(installed=False, error=str(e))
 
