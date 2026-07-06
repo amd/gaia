@@ -307,31 +307,31 @@
   <div class="wrap">
     <div class="eyebrow"><span class="bar"></span>At a glance</div>
     <h2 style="margin-top:16px">The capability surface at a glance</h2>
-    <p class="body-t">Mail is read through your connected <b>Gmail or Outlook</b>. Every action runs under a <b>guardrail tier</b>: <b>Tier&nbsp;0</b> read-only, <b>Tier&nbsp;1</b> reversible (30-second undo), <b>Tier&nbsp;2</b> needs your confirmation. <b>17 capabilities</b> across three states — <b>4 validated, 8 wired, 5 planned</b> — plus a personalization track that learns how you work. Click any row to jump to its full entry.</p>
+    <p class="body-t">Mail is read through your connected <b>Gmail or Outlook</b>. Every action runs under a <b>guardrail tier</b>: <b>Tier&nbsp;0</b> read-only, <b>Tier&nbsp;1</b> reversible (30-second undo), <b>Tier&nbsp;2</b> needs your confirmation. <b>17 capabilities</b> across three states — <b>5 validated, 10 wired, 2 planned</b> — plus a personalization track that learns how you work. Click any row to jump to its full entry.</p>
 
     <div class="cards3">
       <div class="gcard" style="border-top-color:var(--ok)">
         <div class="lab" style="color:var(--ok)">Shipped</div>
-        <h3>4 validated</h3>
+        <h3>5 validated</h3>
         <ul>
-          <li>Triage, summary, draft, phishing detection</li>
+          <li>Triage, summary, draft, phishing detection, quarantine + undo</li>
           <li>Stable contract + send-confirmation gate (<a class="iss" href="https://github.com/amd/gaia/issues/1262" target="_blank" rel="noopener">#1262</a> · <a class="iss" href="https://github.com/amd/gaia/issues/1264" target="_blank" rel="noopener">#1264</a>)</li>
           <li>Gmail + Outlook connectors (<a class="iss" href="https://github.com/amd/gaia/issues/962" target="_blank" rel="noopener">#962</a> · <a class="iss" href="https://github.com/amd/gaia/issues/1275" target="_blank" rel="noopener">#1275</a>/<a class="iss" href="https://github.com/amd/gaia/issues/1276" target="_blank" rel="noopener">#1276</a>)</li>
         </ul>
       </div>
       <div class="gcard t1">
         <div class="lab">In progress</div>
-        <h3>8 wired</h3>
+        <h3>10 wired</h3>
         <ul>
-          <li>Pre-scan, threads, send, batch archive, undo, calendar — built, validation underway</li>
+          <li>Pre-scan, threads, send, batch archive, calendar, tasks, follow-ups, briefing — built, validation underway</li>
           <li>4 personalization features in flight (P1–P4)</li>
         </ul>
       </div>
       <div class="gcard" style="border-top-color:var(--faint)">
         <div class="lab" style="color:var(--faint)">Planned</div>
-        <h3>5 + schema 2.0</h3>
+        <h3>2 + schema 2.0</h3>
         <ul>
-          <li>Capabilities 13–17 + personalization P5 — <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (P3 stretch)</li>
+          <li>Capabilities 13 &amp; 17 + personalization P5 — <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (P3 stretch)</li>
           <li><b>Schema 2.0</b> (breaking) — 5-bucket taxonomy + <code>suggested_action</code></li>
         </ul>
       </div>
@@ -363,9 +363,9 @@
 
     <div class="stats">
       <div class="st"><div class="v">17</div><div class="l">Capabilities</div></div>
-      <div class="st"><div class="v g">4</div><div class="l">Completed</div></div>
-      <div class="st"><div class="v">12</div><div class="l">In progress</div></div>
-      <div class="st"><div class="v">6</div><div class="l">Planned</div></div>
+      <div class="st"><div class="v g">5</div><div class="l">Completed</div></div>
+      <div class="st"><div class="v">14</div><div class="l">In progress</div></div>
+      <div class="st"><div class="v">3</div><div class="l">Planned</div></div>
       <div class="st"><div class="v r">3</div><div class="l">Approval tiers</div></div>
     </div>
   </div>
@@ -405,7 +405,7 @@
         <tr><td>Calendar · view / create / respond <span class="opt">(of capability <b>12</b>)</span></td><td>✓ <code>/v1/email/calendar/*</code> <span class="opt">(2.1)</span></td><td>—</td><td>✓</td></tr>
         <tr><td>Attachments · read exposes / draft·send accept <span class="opt">(<b>P4</b>, <a class="iss" href="https://github.com/amd/gaia/issues/1542" target="_blank" rel="noopener">#1542</a>)</span></td><td>✓ <span class="opt">(in triage, <code>/draft</code>, <code>/send</code> — 2.2)</span></td><td>—</td><td>✓ <code>draft_reply</code> / <code>send_now</code> file paths</td></tr>
         <tr><td><b>16</b> · Daily briefing <span class="opt">(scheduled, <a class="iss" href="https://github.com/amd/gaia/issues/1608" target="_blank" rel="noopener">#1608</a>)</span></td><td>✓ <code>/v1/email/briefing</code> <span class="opt">(read-only · off by default)</span></td><td>—</td><td>✓ <span class="opt">(reuses <code>pre_scan_inbox</code>)</span></td></tr>
-        <tr><td>calendar <b>detect / conflicts</b> (10–11) &nbsp;·&nbsp; <b>13–15, 17</b> planned &nbsp;·&nbsp; <b>P1–P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
+        <tr><td>calendar <b>detect / conflicts</b> (10–11) &nbsp;·&nbsp; <b>13, 17</b> planned &nbsp;·&nbsp; <b>P1–P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
       </tbody>
     </table>
 
@@ -546,7 +546,7 @@
   <div class="wrap">
     <div class="eyebrow"><span class="bar"></span>Part 1 · Capabilities</div>
     <h2 style="margin-top:16px">Each capability, in full</h2>
-    <p class="body-t">Capabilities <b>1–12</b> are shipped or wired today; <b>13–17</b> are planned (clearly tagged). Each is defined with its use-case, why it matters, the backing tool / endpoint, its guardrail tier, and — for the shipped ones — an example and the evaluation dataset shape. Cards are collapsed by default; click a header (or an at-a-glance row above) to expand.</p>
+    <p class="body-t">Capabilities <b>1–12 and 14–16</b> are shipped or wired today; <b>13 and 17</b> are planned (clearly tagged). Each is defined with its use-case, why it matters, the backing tool / endpoint, its guardrail tier, and — for the shipped ones — an example and the evaluation dataset shape. Cards are collapsed by default; click a header (or an at-a-glance row above) to expand.</p>
 
     <!-- 1 -->
     <div class="cap">
