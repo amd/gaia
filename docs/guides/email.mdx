@@ -181,7 +181,7 @@ are planned on the autonomy engine (#555).
 
 ### Follow-up tracking (read-only)
 
-`check_followups` — answers *"who hasn't replied to me?"*. It scans the Sent folder of every connected mailbox and flags each thread whose latest message is still your own outbound mail — meaning nobody replied — once it is older than the window (default 3 days; ask for a different one, e.g. *"what's still unanswered after a week?"*). Each flagged item carries the recipient, subject, and age in days, sorted most overdue first, and threads you answered yourself or addressed only to yourself are skipped.
+`check_followups` — answers *"who hasn't replied to me?"*. It scans the Sent folder of every connected mailbox and flags each thread whose latest message is still your own outbound mail — meaning nobody replied — once it is older than the window (default 3 days; ask for a different one, e.g. *"what's still unanswered after a week?"*). Each flagged item carries the recipient, subject, and age in days, sorted most overdue first, and threads you answered yourself or addressed only to yourself are skipped. The scan caps how many Sent messages it enumerates per mailbox (default 50, max 200); when a mailbox has more sent mail than that cap, the result carries `scan_truncated: true` so you know older, possibly-overdue threads weren't checked.
 
 This is detection only, distinct from autonomous follow-ups ([#555](https://github.com/amd/gaia/issues/555)): the agent surfaces the dropped threads but never sends a chase-up on its own — if you ask it to nudge someone, that reply goes through the normal draft → confirm → send flow.
 

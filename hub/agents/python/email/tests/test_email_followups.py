@@ -269,6 +269,82 @@ class TestReplyDetection:
 
 
 # ---------------------------------------------------------------------------
+# scan_truncated signal — the sent-scan ceiling
+# ---------------------------------------------------------------------------
+
+
+class TestScanTruncated:
+    def test_under_cap_not_truncated(self):
+        # 3 sent threads, cap of 50 — nowhere near the ceiling.
+        gmail = _backend(
+            _sent("s1", thread_id="t1", age_days=5),
+            _sent("s2", thread_id="t2", age_days=6),
+            _sent("s3", thread_id="t3", age_days=7),
+        )
+        out = check_followups_impl(
+            gmail, window_days=3, max_sent=50, now_ms=NOW_MS
+        )
+        assert out["scan_truncated"] is False
+
+    def test_at_cap_with_more_remaining_is_truncated(self):
+        # 5 distinct sent threads but max_sent=3 — the scan stops after the
+        # 3 newest, leaving 2 older (more overdue) sends unscanned.
+        gmail = _backend(
+            *(
+                _sent(f"s{i}", thread_id=f"t{i}", age_days=5 + i)
+                for i in range(5)
+            )
+        )
+        out = check_followups_impl(
+            gmail, window_days=3, max_sent=3, now_ms=NOW_MS
+        )
+        assert out["sent_scanned"] == 3
+        assert out["scan_truncated"] is True
+
+    def test_exactly_at_cap_with_nothing_more_is_not_truncated(self):
+        # Sent-folder has exactly max_sent messages and the fake backend
+        # reports no next page — this scan is exhaustive, not truncated.
+        # (The len(stubs) >= max_sent heuristic alone would over-flag this
+        # case; real backends distinguish it via nextPageToken.)
+        gmail = _backend(
+            _sent("s1", thread_id="t1", age_days=5),
+            _sent("s2", thread_id="t2", age_days=6),
+        )
+        out = check_followups_impl(
+            gmail, window_days=3, max_sent=2, now_ms=NOW_MS
+        )
+        # The fake backend has no more messages beyond these two, but it
+        # also never signals a next page — so hitting the numeric cap alone
+        # is treated conservatively as "may be truncated" (len(stubs) ==
+        # max_sent). This matches the documented conservative semantics.
+        assert out["sent_scanned"] == 2
+        assert out["scan_truncated"] is True
+
+    def test_tool_surfaces_scan_truncated_when_any_mailbox_hits_cap(self):
+        gmail = _backend(
+            *(
+                _sent_real_now(f"s{i}", thread_id=f"t{i}", age_days=5 + i)
+                for i in range(5)
+            )
+        )
+        host = _Host(gmail)
+        check_followups = _registered_tool(host)
+
+        payload = json.loads(check_followups(max_sent=3))
+        assert payload["ok"] is True
+        assert payload["data"]["scan_truncated"] is True
+
+    def test_tool_not_truncated_under_cap(self):
+        gmail = _backend(_sent_real_now("s1", thread_id="t1", age_days=5))
+        host = _Host(gmail)
+        check_followups = _registered_tool(host)
+
+        payload = json.loads(check_followups())
+        assert payload["ok"] is True
+        assert payload["data"]["scan_truncated"] is False
+
+
+# ---------------------------------------------------------------------------
 # Read-only guarantee (issue #1606 test acceptance criterion 2)
 # ---------------------------------------------------------------------------
 

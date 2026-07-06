@@ -141,7 +141,13 @@ def check_followups_impl(
             ],
             "window_days": int,
             "sent_scanned": int,
+            "scan_truncated": bool,
         }
+
+    ``scan_truncated`` is True when the Sent-folder listing hit the
+    ``max_sent`` ceiling (or the backend reports another page via
+    ``nextPageToken``) — i.e. older sent messages exist that this scan never
+    looked at, so the result may be missing overdue threads.
     """
     if not isinstance(window_days, int) or window_days <= 0:
         raise ValueError(
@@ -164,6 +170,10 @@ def check_followups_impl(
 
         listing = gmail.list_messages(label_ids=["SENT"], max_results=max_sent)
         stubs = listing.get("messages", [])
+        # The listing is newest-first, so hitting the cap means the OLDEST
+        # (most overdue) sends are the ones left unscanned — never let that
+        # read as an exhaustive answer.
+        scan_truncated = bool(listing.get("nextPageToken")) or len(stubs) >= max_sent
         thread_ids: List[str] = []
         for stub in stubs:
             tid = stub.get("threadId")
@@ -222,11 +232,13 @@ def check_followups_impl(
         st["result_summary"] = {
             "awaiting": len(awaiting),
             "threads_checked": len(thread_ids),
+            "scan_truncated": scan_truncated,
         }
         return {
             "awaiting_reply": awaiting,
             "window_days": window_days,
             "sent_scanned": len(stubs),
+            "scan_truncated": scan_truncated,
         }
 
 
@@ -273,7 +285,11 @@ class FollowupToolsMixin:
                 JSON envelope with ``{"awaiting_reply": [...]}`` — per item:
                 message_id, thread_id, recipient, recipients, subject,
                 sent_at, age_days, mailbox — sorted most overdue first, plus
-                ``window_days`` and ``sent_scanned``.
+                ``window_days``, ``sent_scanned``, and ``scan_truncated``.
+                ``scan_truncated`` is true when the Sent-folder scan hit its
+                ``max_sent`` ceiling in any connected mailbox — older sent
+                threads exist beyond what was scanned, so tell the user the
+                list may be incomplete.
             """
             try:
                 effective_window = int(window_days or 0)
@@ -290,6 +306,7 @@ class FollowupToolsMixin:
                 )
                 merged: List[Dict[str, Any]] = []
                 sent_scanned = 0
+                scan_truncated = False
                 for provider, backend in agent._backends.items():
                     result = check_followups_impl(
                         backend,
@@ -305,12 +322,14 @@ class FollowupToolsMixin:
                         agent._remember_message_mailbox(item.get("thread_id"), provider)
                         merged.append(item)
                     sent_scanned += result["sent_scanned"]
+                    scan_truncated = scan_truncated or result["scan_truncated"]
                 merged.sort(key=lambda item: item["age_days"], reverse=True)
                 return _envelope_ok(
                     {
                         "awaiting_reply": merged,
                         "window_days": effective_window,
                         "sent_scanned": sent_scanned,
+                        "scan_truncated": scan_truncated,
                     }
                 )
             except ConnectorsError as exc:

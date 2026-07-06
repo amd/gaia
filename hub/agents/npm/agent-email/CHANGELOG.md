@@ -14,9 +14,12 @@ bump is always at least a package MINOR bump with a migration note.
   whose latest message is still the user's own outbound mail past a
   configurable window (default 3 days) — surfacing message id, recipient,
   subject, and age, most overdue first. Detection only: it never sends a
-  nudge (any send stays confirmation-gated). Agent-loop surface (chat /
-  Agent UI / `gaia email`); the sidecar REST/MCP surface is unchanged and
-  `SCHEMA_VERSION` stays `2.0`.
+  nudge (any send stays confirmation-gated). The scan caps how many Sent
+  messages it enumerates per mailbox (default 50, max 200); the result now
+  also carries `scan_truncated: true` when a mailbox has more sent mail than
+  that cap, so the caller knows older threads weren't checked. Agent-loop
+  surface (chat / Agent UI / `gaia email`); the sidecar REST/MCP surface is
+  unchanged and `SCHEMA_VERSION` stays `2.0`.
 - **Scheduled daily inbox briefing** (#1608): the sidecar can now run the inbox
   pre-scan on a daily timer — no prompt, no live caller — and expose the result on
   the new `GET /v1/email/briefing` (additive; `SCHEMA_VERSION` stays 2.1). The
