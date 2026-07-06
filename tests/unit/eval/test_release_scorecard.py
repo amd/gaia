@@ -1769,3 +1769,148 @@ class TestEnvironmentAdapter:
         recovered = parsed["recipe"]["environment"]
         assert recovered["gaia_commit"] == "abc1234"
         assert recovered["temperature"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# 15. Task: ctx_size pre-read (main() reads quality.json, fails loud if absent)
+# ---------------------------------------------------------------------------
+
+
+class TestGenScorecardCtxSizePreRead:
+    """main() must pre-read ctx_size from quality.json (via the existing
+    _load_quality_aggregate helper) and fail loud when it is unavailable —
+    unlike the soft/optional `_model` pre-read from scorecard.json.
+    """
+
+    def _load_gen_scorecard(self):
+        adapter_path = (
+            Path(__file__).parents[3]
+            / "hub"
+            / "agents"
+            / "python"
+            / "email"
+            / "packaging"
+            / "gen_scorecard.py"
+        )
+        spec = importlib.util.spec_from_file_location("gen_scorecard", adapter_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def _make_benchmark_dir(self, tmp_path):
+        benchmark_dir = tmp_path / "benchmark"
+        benchmark_dir.mkdir()
+        scorecard = {
+            "run_id": "ctx-fixture",
+            "scenarios": [
+                {
+                    "category": "Gemma-4-E4B-it-GGUF",
+                    "status": "PASS",
+                    "total_emails": 10,
+                    "quality": {
+                        "category_accuracy": 0.5,
+                        "within_one_bucket_accuracy": 0.8,
+                    },
+                }
+            ],
+        }
+        (benchmark_dir / "scorecard.json").write_text(json.dumps(scorecard))
+        gt = {"a": {"label": "x"}}
+        gt_path = tmp_path / "gt.json"
+        gt_path.write_text(json.dumps(gt))
+        return benchmark_dir, gt_path
+
+    def _main_argv(self, benchmark_dir, gt_path, output_dir):
+        # --lemonade-version is passed explicitly so main() never attempts a
+        # live health-endpoint query in this unit test.
+        return [
+            "--benchmark-dir",
+            str(benchmark_dir),
+            "--ground-truth",
+            str(gt_path),
+            "--output-dir",
+            str(output_dir),
+            "--lemonade-version",
+            "10.9.0",
+        ]
+
+    def test_main_emits_ctx_size_in_environment_from_quality_json(self, tmp_path):
+        mod = self._load_gen_scorecard()
+        benchmark_dir, gt_path = self._make_benchmark_dir(tmp_path)
+        (benchmark_dir / "quality.json").write_text(
+            json.dumps(
+                {
+                    "ctx_size": 16384,
+                    "within_one_bucket_accuracy": 0.8,
+                }
+            )
+        )
+        output_dir = tmp_path / "out"
+
+        rc = mod.main(self._main_argv(benchmark_dir, gt_path, output_dir))
+
+        assert rc == 0
+        card_path = output_dir / "SCORECARD.md"
+        parsed = parse_scorecard(card_path.read_text(encoding="utf-8"))
+        assert parsed["recipe"]["environment"]["ctx_size"] == 16384
+
+    def test_main_fails_loud_when_quality_json_missing(self, tmp_path):
+        mod = self._load_gen_scorecard()
+        benchmark_dir, gt_path = self._make_benchmark_dir(tmp_path)
+        # No quality.json written at all.
+        output_dir = tmp_path / "out"
+
+        rc = mod.main(self._main_argv(benchmark_dir, gt_path, output_dir))
+
+        assert rc != 0
+
+    def test_main_fails_loud_when_quality_json_lacks_ctx_size(self, tmp_path):
+        mod = self._load_gen_scorecard()
+        benchmark_dir, gt_path = self._make_benchmark_dir(tmp_path)
+        (benchmark_dir / "quality.json").write_text(
+            json.dumps({"within_one_bucket_accuracy": 0.8})
+        )
+        output_dir = tmp_path / "out"
+
+        rc = mod.main(self._main_argv(benchmark_dir, gt_path, output_dir))
+
+        assert rc != 0
+
+    def test_build_payload_still_gains_no_new_file_reading_for_ctx_size(
+        self, tmp_path
+    ):
+        # Regression guard -- should already pass; proves build_payload never
+        # gains ctx-file-reading. environment is embedded verbatim regardless
+        # of what main() does to assemble it.
+        mod = self._load_gen_scorecard()
+        benchmark_dir = tmp_path / "benchmark"
+        benchmark_dir.mkdir()
+        scorecard = {
+            "run_id": "ctx-verbatim",
+            "scenarios": [
+                {
+                    "category": "Gemma-4-E4B-it-GGUF",
+                    "status": "PASS",
+                    "total_emails": 10,
+                    "quality": {
+                        "category_accuracy": 0.5,
+                        "within_one_bucket_accuracy": 0.8,
+                    },
+                }
+            ],
+        }
+        (benchmark_dir / "scorecard.json").write_text(json.dumps(scorecard))
+        gt = {"a": {"label": "x"}}
+        gt_path = tmp_path / "gt.json"
+        gt_path.write_text(json.dumps(gt))
+
+        env = {
+            "gaia_commit": "deadbeef",
+            "lemonade_version": "10.9.0",
+            "model": "Gemma-4-E4B-it-GGUF",
+            "hardware": "AMD Ryzen AI MAX+ (Strix Halo)",
+            "ctx_size": 16384,
+        }
+        payload = mod.build_payload(benchmark_dir, gt_path, environment=env)
+
+        assert payload.environment["ctx_size"] == 16384
