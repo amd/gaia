@@ -177,6 +177,11 @@ class TestToolRegistry:
         "send_draft",
         "send_now",
         "forward_message",
+        # Scheduled send + snooze (#1609)
+        "schedule_send",
+        "snooze_message",
+        "cancel_scheduled_job",
+        "list_scheduled_jobs",
         # Delete
         "trash_message",
         "restore_message",
@@ -235,6 +240,7 @@ class TestConfirmationGating:
         [
             "send_draft",
             "send_now",
+            "schedule_send",
             "forward_message",
             "permanent_delete",
             "accept_invite",

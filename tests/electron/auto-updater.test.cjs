@@ -47,16 +47,26 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // destroy() clears init()'s check timers — leaked, they keep Jest alive.
+  for (const m of loadedModules) {
+    try {
+      m.destroy();
+    } catch {}
+  }
+  loadedModules = [];
   try {
     fs.rmSync(tmpHome, { recursive: true, force: true });
   } catch {}
 });
+
+let loadedModules = [];
 
 function loadModule() {
   let m;
   jest.isolateModules(() => {
     m = require("../../src/gaia/apps/webui/services/auto-updater.cjs");
   });
+  loadedModules.push(m);
   return m;
 }
 

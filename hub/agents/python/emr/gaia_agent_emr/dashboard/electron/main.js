@@ -66,8 +66,8 @@ function createWindow() {
   mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
     console.error(`Failed to load dashboard: ${errorDescription} (${errorCode})`);
 
-    // Show error page
-    mainWindow.loadURL(`data:text/html,
+    // Show error page (URL-encoded: a raw '#' would truncate the data: URL as a fragment)
+    mainWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(`
       <html>
         <head>
           <style>
@@ -106,7 +106,7 @@ function createWindow() {
           <button onclick="location.reload()">Retry</button>
         </body>
       </html>
-    `);
+    `));
   });
 
   mainWindow.on('closed', () => {

@@ -37,6 +37,17 @@ Contract bumped to `SCHEMA_VERSION` **2.2** — additive over 2.1, so `checkVers
   limit) → a loud error, never truncation. The agent's in-loop `draft_reply` /
   `send_now` tools gain an optional comma-separated `attachments` file-path
   parameter with the same fail-loud checks.
+- **Scheduled send + snooze in the agent tool loop** (#1609): the agent can now
+  schedule a send for a future time ("send this tomorrow at 9am") and snooze a
+  message out of the inbox until a chosen time. A scheduled send is
+  user-confirmed **at creation** (literal recipient/subject/body + fire time),
+  stored as a regular mailbox draft plus a persistent one-shot job, and fired
+  at/after its time by the agent's scheduler; snooze archives now and re-adds
+  INBOX at the chosen time. Both are cancellable before they fire, and a firing
+  failure is recorded on the job and logged — never silently swallowed.
+  **Agent-loop only — no runtime/contract change**: no new REST endpoints, no
+  new npm surface in this package (see SPEC "Agent-loop capabilities not on the
+  contract").
 - **Triage action items now persist as a task list** (#1605): `triage()` /
   `triageBatch()` write each extracted action item to the sidecar's local SQLite
   (`~/.gaia/email/state.db`), linked back to the source `message_id` (or
