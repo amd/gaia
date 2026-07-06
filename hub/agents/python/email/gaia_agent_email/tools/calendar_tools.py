@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
+from gaia_agent_email.tools.read_tools import DEFAULT_BODY_LIMIT_CHARS
 from gaia_agent_email.verbose import log_tool_call
 
 from gaia.agents.base.tools import tool
@@ -312,10 +313,6 @@ _LLM_SYSTEM_PROMPT = (
     '"reasoning" (one short sentence).'
 )
 
-# Cap body characters sent to the model — enough signal for a yes/no without
-# unbounded prompt growth on long threads. Matches llm_triage's limit.
-_BODY_CHAR_LIMIT = 4000
-
 _TRUE_STRINGS = {"true", "yes", "y", "1"}
 _FALSE_STRINGS = {"false", "no", "n", "0"}
 
@@ -346,7 +343,7 @@ def _build_llm_user_prompt(subject: str, body: str) -> str:
     # prompt is trained to treat as data.
     from gaia_agent_email.tools.read_tools import wrap_untrusted_body
 
-    clipped = (body or "").strip()[:_BODY_CHAR_LIMIT]
+    clipped = (body or "").strip()[:DEFAULT_BODY_LIMIT_CHARS]
     return (
         "Does this email ask to schedule a meeting?\n\n"
         f"Subject: {subject}\n"
