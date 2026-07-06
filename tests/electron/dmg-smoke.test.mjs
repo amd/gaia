@@ -10,16 +10,18 @@
 //   GAIA_DMG=$(ls src/gaia/apps/webui/dist-app/*.dmg) \
 //     node --test tests/electron/dmg-smoke.test.mjs
 //
-// NOTE: the AC3/T5b SHA check compares against the POST-codesign digest in
-// BUNDLED_UV_SHA256["mac-arm64"]. A local build without Apple signing certs
-// (CSC_LINK unset) will produce an ad-hoc-signed uv whose SHA will NOT match
-// the pinned CI value — T5b will fail as expected. Local smoke runs are most
-// useful for T5a (.app presence) and T5c (`uv --version` runs); T5b is only
-// meaningful for signed CI builds.
+// NOTE: the AC3/T5b check runs `codesign --verify --strict` against the
+// bundled uv, matching ensureUv()'s runtime verification (see the
+// BUNDLED_UV_SHA256 comment in backend-installer.cjs — ad-hoc-signed
+// output is not deterministic across CI runner images, so mac-arm64 has no
+// fixed SHA256 pin to compare against). A local build without Apple signing
+// certs (CSC_LINK unset) still produces an ad-hoc-signed uv (identity=-),
+// and ad-hoc signatures pass `codesign --verify --strict` — so T5b is
+// meaningful on local builds too, not just signed CI builds.
 //
 // Acceptance-criteria mapping (issue #941):
-//   - AC3 / T5: bundled mac-arm64 uv binary is present, executable, has the
-//              SHA256 declared in BUNDLED_UV_SHA256, AND `uv --version` runs.
+//   - AC3 / T5: bundled mac-arm64 uv binary is present, executable, passes
+//              `codesign --verify --strict`, AND `uv --version` runs.
 //              The exec check transitively validates DMG mode-bit
 //              preservation — if HFS+/APFS dropped the executable bit,
 //              execFileSync fails with EACCES.
@@ -142,9 +144,9 @@ if (!DMG) {
         const uvPath = bundledUvPath(resourcesDir, PLATFORM_KEY);
         const installerPath = backendInstallerPath(import.meta.url);
 
-        // ── AC3/T5b: existence + mode bit + SHA256 against pin ────────
+        // ── AC3/T5b: existence + mode bit + codesign verification ─────
         await t.test(
-          "AC3/T5b: bundled mac-arm64 uv is present, executable, sha-pinned",
+          "AC3/T5b: bundled mac-arm64 uv is present, executable, codesign-verified",
           () => {
             assertUvBinary(uvPath, PLATFORM_KEY, installerPath);
           },

@@ -77,25 +77,27 @@ const INSTALL_RETRY_BACKOFF_MS = 3000;
 // `curl | sh` path is retained only as an unpackaged-dev fallback so
 // contributors running from source keep working.
 //
-// When bumping uv, update BOTH:
+// When bumping uv, update:
 //   - .github/workflows/build-installers.yml (tarball .tar.gz SHA256 — archive)
-//   - BUNDLED_UV_SHA256 below (extracted ELF binary SHA256)
-// These are two different digests: the workflow verifies the downloaded
-// archive against upstream's published .sha256, then extracts the `uv` binary
-// which is what `ensureUv()` hashes at runtime.
+//   - BUNDLED_UV_SHA256 below (extracted binary SHA256, linux-x64/win-x64 only)
 //
-// Currently pinned: uv v0.5.14 linux-x64, mac-arm64.
-// (win-x64 deferred to a follow-up issue — its SHA must ship together with an
-// NSIS structural-smoke verifier, not on its own; see the #849 lesson.)
-//
-// IMPORTANT: per-platform SHA origin differs:
-//   - linux-x64:  raw extracted-from-tarball digest (no post-build modification).
-//   - mac-arm64:  POST-CODESIGN digest. electron-builder code-signs the bundled
-//                 uv during packaging, so this hash matches what ensureUv() sees
-//                 at runtime, NOT the upstream tarball. Bumping this pin means
-//                 running the CI build, then copying the SHA from the
-//                 dmg-structural-smoke failure message — never from `shasum`
-//                 against the freshly downloaded tarball.
+// IMPORTANT: per-platform verification strategy differs:
+//   - linux-x64 / win-x64: BUNDLED_UV_SHA256 pins the raw extracted-binary
+//     digest (no post-build modification) — deterministic across CI runs.
+//   - mac-arm64: NOT pinned here. electron-builder code-signs the bundled uv
+//     during packaging (ad-hoc `identity=-` when no Developer ID cert is
+//     configured, which is every CI build today), and ad-hoc codesign output
+//     depends on the codesign/Xcode toolchain baked into the GitHub-hosted
+//     `macos-latest` runner image — which floats and is NOT reproducible
+//     across CI runs (observed: macos-15-arm64 vs macos-26-arm64 images
+//     produced two different digests for byte-identical source). A fixed
+//     SHA256 pin is therefore not deterministic on macOS and would fail
+//     ~half of CI runs and brick first-launch on user machines whenever the
+//     runner image rolls. Instead, ensureUv() and the dmg-structural-smoke
+//     test both run `codesign --verify --strict` against the bundled binary
+//     — this validates the on-disk signature is intact/untampered without
+//     depending on the exact signing bytes, and still fails loud on
+//     corruption or an actually-invalid signature.
 const BUNDLED_UV_VERSION = "0.5.14";
 const BUNDLED_UV_SHA256 = {
   "linux-x64": "0e05d828b5708e8a927724124db3746396afddad6273c47283d7c562dc795bd6",
@@ -103,9 +105,12 @@ const BUNDLED_UV_SHA256 = {
   // build step. The placeholder MUST be replaced in CI before packaging
   // so runtime verification remains strict.
   "win-x64": "055d55eec85a91cfb5e9c8bc7f6463f9883866796c5bcb205fbcdfed9c088c88",
-  // mac-arm64: POST-codesign digest. CI should populate this value when
-  // packaging the macOS DMG and running the dmg-structural-smoke job.
-  "mac-arm64": "6099aa8cd701f0c81227ee30c304777ce151e4d47c53a75ce53cd2243448d8c8",
+  // mac-arm64: intentionally absent. See the comment block above — the
+  // post-codesign digest is not deterministic across CI runner images, so
+  // mac-arm64 is verified via codesignVerify() (identity/signature validity)
+  // instead of a fixed SHA256 pin. bundledUvPlatformKey() still returns
+  // "mac-arm64"; callers must not treat a missing entry here as "unpinned
+  // platform" for darwin — see ensureUv()/installBundledUv().
 };
 
 const MANAGED_UV_DIR = path.join(GAIA_HOME, "bin");
@@ -925,6 +930,27 @@ function sha256File(filePath) {
 }
 
 /**
+ * Verify a macOS binary's code signature is structurally intact via
+ * `codesign --verify --strict`. Used in place of a fixed SHA256 pin for
+ * mac-arm64 (see the BUNDLED_UV_SHA256 comment) — ad-hoc-signed binaries
+ * (identity=-, which is every CI build today) pass this check, but a
+ * corrupted, tampered, or actually-unsigned binary fails it. This does NOT
+ * depend on the specific bytes any given codesign/Xcode toolchain produces,
+ * so it is stable across GitHub-hosted runner image rollovers where a fixed
+ * digest pin is not.
+ *
+ * @param {string} binPath
+ * @returns {{ ok: boolean, output: string }}
+ */
+function codesignVerify(binPath) {
+  const result = spawnSync("codesign", ["--verify", "--strict", binPath], {
+    encoding: "utf8",
+  });
+  const output = `${result.stdout || ""}${result.stderr || ""}`.trim();
+  return { ok: result.status === 0, output };
+}
+
+/**
  * Resolve the bundled uv binary path inside the Electron resources dir.
  * Returns null if this isn't an Electron-packaged runtime (no
  * `process.resourcesPath`) or if the host platform isn't bundled.
@@ -945,15 +971,22 @@ function findBundledUvResource() {
 }
 
 /**
- * Atomically install the bundled uv into ~/.gaia/bin/uv after verifying
- * its SHA256 against BUNDLED_UV_SHA256. Returns the installed path.
+ * Atomically install the bundled uv into ~/.gaia/bin/uv after verifying it.
+ * Returns the installed path.
  *
- * Writes to `uv.tmp-<pid>-<rand>` with mode 0o700, verifies hash,
- * `chmod +x`, then `fs.rename()` (atomic on same filesystem).
+ * Verification strategy differs by platform (see the BUNDLED_UV_SHA256
+ * comment): mac-arm64 uses `codesign --verify --strict` (darwin only —
+ * post-codesign SHA256 is not deterministic across CI runner images);
+ * linux-x64 / win-x64 use the SHA256 pin in BUNDLED_UV_SHA256, which IS
+ * deterministic for those platforms (no post-build re-signing).
+ *
+ * Writes to `uv.tmp-<pid>-<rand>` with mode 0o700, verifies, `chmod +x`,
+ * then `fs.rename()` (atomic on same filesystem).
  */
 async function installBundledUv(sourcePath, platformKey) {
+  const isDarwin = platformKey === "mac-arm64";
   const expected = BUNDLED_UV_SHA256[platformKey];
-  if (!expected || expected.startsWith("<")) {
+  if (!isDarwin && (!expected || expected.startsWith("<"))) {
     // Enforce strict verification: builds MUST populate the expected SHA
     // for packaged binaries. Failing fast prevents shipping an unverified
     // uv binary which would be a supply-chain regression.
@@ -989,18 +1022,39 @@ async function installBundledUv(sourcePath, platformKey) {
     rs.pipe(ws);
   });
 
-  let actual;
-  try {
-    actual = await sha256File(tmpPath);
-  } catch (err) {
-    try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
-    throw new InstallError(
-      `Could not hash copied uv binary: ${err.message}`,
-      { stage: STAGES.ENSURE_UV }
-    );
-  }
+  if (isDarwin) {
+    // chmod BEFORE codesign --verify: codesign needs the execute bit to
+    // resolve the binary's designated requirement on some toolchains.
+    try {
+      fs.chmodSync(tmpPath, 0o700);
+    } catch (err) {
+      log(`Warning: chmod on tmp uv failed: ${err.message}`);
+    }
+    const { ok, output } = codesignVerify(tmpPath);
+    if (!ok) {
+      try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+      throw new InstallError(
+        `Bundled uv failed code signature verification (codesign --verify --strict): ${output || "no output"}`,
+        {
+          stage: STAGES.ENSURE_UV,
+          suggestion:
+            "The AppImage/installer may be corrupt. Re-download from https://amd-gaia.ai and try again.",
+        }
+      );
+    }
+    log("Bundled uv passed codesign --verify --strict");
+  } else {
+    let actual;
+    try {
+      actual = await sha256File(tmpPath);
+    } catch (err) {
+      try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+      throw new InstallError(
+        `Could not hash copied uv binary: ${err.message}`,
+        { stage: STAGES.ENSURE_UV }
+      );
+    }
 
-  if (expected) {
     if (actual !== expected) {
       try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
       throw new InstallError(
@@ -1012,14 +1066,12 @@ async function installBundledUv(sourcePath, platformKey) {
         }
       );
     }
-  } else {
-    log("No expected SHA registered for bundled uv; installed binary will not be verified locally.");
-  }
 
-  try {
-    if (!IS_WINDOWS) fs.chmodSync(tmpPath, 0o700);
-  } catch (err) {
-    log(`Warning: chmod on tmp uv failed: ${err.message}`);
+    try {
+      if (!IS_WINDOWS) fs.chmodSync(tmpPath, 0o700);
+    } catch (err) {
+      log(`Warning: chmod on tmp uv failed: ${err.message}`);
+    }
   }
 
   try {
@@ -1057,9 +1109,11 @@ function addManagedBinToPath() {
 
 /**
  * Ensure `uv` is available. Preference order (per issue #782 / T3):
- *   1. Managed copy at ~/.gaia/bin/uv with matching SHA256 (warm-install fast path).
+ *   1. Managed copy at ~/.gaia/bin/uv already verified (warm-install fast path):
+ *      SHA256 pin on linux-x64/win-x64, `codesign --verify --strict` on mac-arm64.
  *   2. Bundled binary in process.resourcesPath/vendor/uv/<platform>/uv:
- *      copy atomically to ~/.gaia/bin/uv with SHA256 verification.
+ *      copy atomically to ~/.gaia/bin/uv with the same platform-appropriate
+ *      verification.
  *   3. DEV-ONLY fallback (app.isPackaged === false OR no resourcesPath):
  *      the original `curl | sh` from astral.sh. Not a shipped-user path.
  *   4. System `uv` on PATH (last resort — unverified version).
@@ -1071,10 +1125,20 @@ async function ensureUv({ onProgress, isPackaged } = {}) {
   report(STAGES.ENSURE_UV, 0, "Checking uv (Python package manager)");
 
   const platformKey = bundledUvPlatformKey();
+  const isDarwin = platformKey === "mac-arm64";
   const expectedSha = platformKey ? BUNDLED_UV_SHA256[platformKey] : null;
 
-  // Fast path: warm install already on disk with correct hash.
-  if (expectedSha && fs.existsSync(MANAGED_UV_BIN)) {
+  // Fast path: warm install already on disk and still passes verification.
+  if (isDarwin && fs.existsSync(MANAGED_UV_BIN)) {
+    const { ok, output } = codesignVerify(MANAGED_UV_BIN);
+    if (ok) {
+      log(`Managed uv at ${MANAGED_UV_BIN} passed codesign --verify --strict — reusing`);
+      addManagedBinToPath();
+      report(STAGES.ENSURE_UV, 100, "uv ready (cached)");
+      return;
+    }
+    log(`Managed uv failed codesign verification (${output || "no output"}) — replacing`);
+  } else if (expectedSha && fs.existsSync(MANAGED_UV_BIN)) {
     try {
       const actual = await sha256File(MANAGED_UV_BIN);
       if (actual === expectedSha) {
@@ -1097,22 +1161,36 @@ async function ensureUv({ onProgress, isPackaged } = {}) {
     report(STAGES.ENSURE_UV, 30, "Installing bundled uv");
     log(`Using bundled uv from ${bundled}`);
 
-    // Verify the source resource matches the manifest before copying —
-    // catches AppImage corruption before we touch the user's home.
-    // Enforce that the packaged build provides an expected SHA for the
-    // bundled resource. CI replaces the placeholder with the extracted
-    // binary's SHA during the build; missing/placeholder values are a
-    // build-time error and are rejected at runtime here.
-    const srcHash = await sha256File(bundled);
-    if (srcHash !== expectedSha) {
-      throw new InstallError(
-        `Bundled uv resource SHA256 mismatch (expected ${expectedSha}, got ${srcHash}).`,
-        {
-          stage: STAGES.ENSURE_UV,
-          suggestion:
-            "The installer appears to be corrupt. Re-download GAIA from https://amd-gaia.ai and try again.",
-        }
-      );
+    // Verify the source resource before copying — catches installer
+    // corruption before we touch the user's home. mac-arm64 uses
+    // codesign --verify --strict (see BUNDLED_UV_SHA256 comment for why a
+    // fixed digest isn't viable there); other platforms use the SHA256 pin,
+    // which CI must have populated — a missing/placeholder value is a
+    // build-time error, rejected at runtime here.
+    if (isDarwin) {
+      const { ok, output } = codesignVerify(bundled);
+      if (!ok) {
+        throw new InstallError(
+          `Bundled uv resource failed code signature verification (codesign --verify --strict): ${output || "no output"}`,
+          {
+            stage: STAGES.ENSURE_UV,
+            suggestion:
+              "The installer appears to be corrupt. Re-download GAIA from https://amd-gaia.ai and try again.",
+          }
+        );
+      }
+    } else {
+      const srcHash = await sha256File(bundled);
+      if (srcHash !== expectedSha) {
+        throw new InstallError(
+          `Bundled uv resource SHA256 mismatch (expected ${expectedSha}, got ${srcHash}).`,
+          {
+            stage: STAGES.ENSURE_UV,
+            suggestion:
+              "The installer appears to be corrupt. Re-download GAIA from https://amd-gaia.ai and try again.",
+          }
+        );
+      }
     }
     await installBundledUv(bundled, platformKey);
     addManagedBinToPath();
