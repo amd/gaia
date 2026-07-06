@@ -51,7 +51,7 @@ import secrets
 import threading
 from typing import Any, Dict, Iterator, List, Literal, NoReturn, Optional, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 from gaia_agent_email.contract import (
     ActionItem,
