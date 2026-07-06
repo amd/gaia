@@ -561,32 +561,51 @@ class TestCtxSizeEnvelope:
     """
 
     def test_build_result_stamps_ctx_size(self):
-        # build_result doesn't accept ctx_size yet -> TypeError (expected red).
-        with pytest.raises(TypeError):
-            build_result(
-                _agent_result(),
-                run_id="x",
-                timestamp="t",
-                model_id="m",
-                total_duration_ms=100,
-                ctx_size=16384,
-            )
+        # TARGET: build_result accepts a ctx_size kwarg and stamps it at the top
+        # level of the returned dict. Fails RED today with TypeError (ctx_size
+        # isn't a build_result param yet); goes green when the kwarg lands.
+        result = build_result(
+            _agent_result(),
+            run_id="x",
+            timestamp="t",
+            model_id="m",
+            total_duration_ms=100,
+            ctx_size=16384,
+        )
+        assert result["ctx_size"] == 16384
+
+    def test_build_result_omits_ctx_size_when_not_given(self):
+        # TARGET: when ctx_size is omitted the key is simply absent (cleanest for
+        # downstream JSON — never a null to special-case). Passes today already,
+        # and must keep passing once the kwarg is added with a None default.
+        result = build_result(
+            _agent_result(),
+            run_id="x",
+            timestamp="t",
+            model_id="m",
+            total_duration_ms=100,
+        )
+        assert "ctx_size" not in result
 
     def test_run_benchmark_accepts_ctx_size_kwarg(self):
-        # agent_factory bypasses EmailAgentConfig construction entirely, so this
-        # only pins that run_benchmark's signature accepts ctx_size at all —
-        # today it doesn't exist as a kwarg -> TypeError (expected red).
+        # TARGET: run_benchmark accepts a ctx_size kwarg and stamps the resolved
+        # ctx into every returned result (including the agent_factory path, which
+        # bypasses EmailAgentConfig construction). Fails RED today with TypeError
+        # (no such kwarg); goes green when run_benchmark threads ctx_size into
+        # build_result for each experiment.
         class _StubAgent:
             def process_query(self, prompt):
                 return _agent_result()
 
-        with pytest.raises(TypeError):
-            run_benchmark(
-                "m",
-                mbox_path="ignored",
-                ctx_size=16384,
-                agent_factory=_StubAgent,
-            )
+        results = run_benchmark(
+            "m",
+            mbox_path="ignored",
+            ctx_size=16384,
+            experiments=1,
+            agent_factory=_StubAgent,
+        )
+        assert results
+        assert all(r["ctx_size"] == 16384 for r in results)
 
     def test_run_benchmark_records_overflow_as_errored_row(self):
         # TARGET (fixed) behavior: a single experiment's process_query raising
