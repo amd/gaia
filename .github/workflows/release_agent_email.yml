@@ -326,19 +326,37 @@ jobs:
             echo "args=" >> "$GITHUB_OUTPUT"
             echo "Acceptance enforcement OFF (report-only) — presence+regression gate only."
           fi
+      - name: Resolve ctx-stamp requirement (data-driven, #1892)
+        id: ctx
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Same data-not-code pattern as acceptance_enforce: when
+          # require_ctx_match is true, the gate hard-fails a candidate card
+          # that does not record the ctx window it was measured under.
+          MANIFEST="tests/fixtures/email/quality_gate_thresholds.json"
+          REQUIRE="$(python -c "import json;print(json.load(open('${MANIFEST}')).get('require_ctx_match',False))")"
+          if [ "${REQUIRE}" = "True" ]; then
+            echo "args=--require-ctx-match" >> "$GITHUB_OUTPUT"
+            echo "Ctx-stamp requirement ON: --require-ctx-match"
+          else
+            echo "args=" >> "$GITHUB_OUTPUT"
+            echo "Ctx-stamp requirement OFF."
+          fi
       - name: Run scorecard gate
         shell: bash
         run: |
           set -euo pipefail
           PREV="${{ steps.prev_tag.outputs.prev_tag }}"
           BARS="${{ steps.bars.outputs.args }}"
+          CTX="${{ steps.ctx.outputs.args }}"
           if [ -n "${PREV}" ]; then
             python -m gaia.eval.scorecard_gate \
               --scorecard hub/agents/npm/agent-email/SCORECARD.md \
-              --baseline-ref "${PREV}" ${BARS}
+              --baseline-ref "${PREV}" ${BARS} ${CTX}
           else
             python -m gaia.eval.scorecard_gate \
-              --scorecard hub/agents/npm/agent-email/SCORECARD.md ${BARS}
+              --scorecard hub/agents/npm/agent-email/SCORECARD.md ${BARS} ${CTX}
           fi
 
   # ── Stage 1c: email eval suite (release gate, self-hosted) ─────────
