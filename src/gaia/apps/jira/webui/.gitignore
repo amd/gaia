@@ -36,6 +36,9 @@ coverage/
 # Yarn Integrity file
 .yarn-integrity
 
+# Local config overrides (see public/js/config.local.js.example)
+public/js/config.local.js
+
 # dotenv environment variables file
 .env
 .env.local
