@@ -15,6 +15,7 @@ The Email Triage Agent connects to your Gmail account through GAIA's connectors 
 - **Organize** — archive, label, mark read/unread, star/unstar. Reversible via the per-action undo log.
 - **Soft-delete with undo** — `trash_message` records the action; `restore_message` reverses it within a 30-second window.
 - **Draft + confirmed send** — generate replies (`draft_reply`) and forwards (`draft_forward`); `send_draft` and `send_now` require explicit user confirmation in the UI.
+- **Attachments** — reading a message exposes each attachment's name, type, and size, and `draft_reply` / `send_now` accept local file paths to attach (contract schema 2.2, #1542).
 - **Voice-matched drafting** — learn your writing style from your Sent mail (`build_voice_profile`) so drafts sound like you; the style profile is derived and stored locally, nothing leaves the device.
 - **Calendar** — list events, accept/decline invites, create events from email content (all calendar mutations gated by user confirmation).
 
@@ -145,6 +146,25 @@ Preferences are stored in process memory only — restarting the agent (or quitt
 
 Senders you reply to quickly are automatically promoted to priority on the next triage run — no explicit command needed. The agent measures how long it took you to reply to each sender (using the original message's receipt timestamp as the anchor) and promotes senders whose median reply latency falls below the threshold. Promotion is applied on-demand during triage, not on a background thread, and persists across agent restarts. Works across both connected mailboxes (Gmail and Outlook).
 
+### Scheduled daily briefing (off by default)
+
+The email sidecar can run the pre-scan on a daily timer — no prompt needed — so the
+triage card is already waiting for you in the morning. It is **off by default**;
+enable it with environment variables when launching the sidecar:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `GAIA_EMAIL_BRIEFING_ENABLED` | unset (off) | `true`/`1`/`yes` turns the daily briefing on. |
+| `GAIA_EMAIL_BRIEFING_TIME` | `08:00` | Daily fire time, 24h local `HH:MM`. |
+| `GAIA_EMAIL_BRIEFING_MAX_MESSAGES` | `25` | Inbox messages to scan per run (1–100). |
+
+Each run produces the same `email_pre_scan` envelope as an on-demand pre-scan
+(the classification path is shared — nothing is re-implemented) and persists it
+locally; fetch the latest run from `GET /v1/email/briefing` (`404` until the first
+scheduled run). An invalid value fails sidecar startup with an actionable error
+rather than guessing a schedule. Push delivery and a cross-agent morning brief
+are planned on the autonomy engine (#555).
+
 ## Action surface
 
 ### Read
@@ -175,6 +195,14 @@ Senders you reply to quickly are automatically promoted to priority on the next 
 
 `draft_reply`, `draft_forward` — drafts are harmless. `send_draft`, `send_now`, `forward_message` — gated by user confirmation; the UI shows the literal recipient/subject/body before you approve.
 
+**Attachments** (schema 2.2, #1542): `draft_reply` and `send_now` take an optional
+`attachments` parameter — a comma-separated list of full paths to local files. Checks
+are fail-loud: a missing file, an empty file, a file over 25 MB, or an extension whose
+MIME type can't be determined is an error, never a silently dropped attachment. The
+confirmation dialog shows the literal file paths alongside recipient/subject/body.
+On the read side, `get_message` exposes each attachment's filename, MIME type, size,
+and provider handle.
+
 ### Calendar (require confirmation)
 
 `list_calendar_events`, `accept_invite`, `decline_invite`, `create_event_from_email`
@@ -198,7 +226,7 @@ Each reaches whichever calendar (Google or Microsoft) the user connected; a miss
 This guarantee is enforced independently on every surface, so a missing confirmation on one path can't be a back door on another:
 
 - **Chat / Agent UI / CLI** — `send_draft`, `send_now`, and `forward_message` are confirmation-gated in the agent loop. Before the send runs, you're shown the **literal** recipient, subject, and body (not an LLM paraphrase) and must approve. Decline, and nothing is sent. In unattended/background mode there's no one to approve, so the send is refused outright rather than run silently.
-- **REST API** (`POST /v1/email/send`) — rejected with **HTTP 403** unless you supply a single-use confirmation token. You get that token from `POST /v1/email/draft`, and it is **bound to the exact `(to, subject, body)`**: a token minted for one message can't be replayed to send different content, and it's consumed on first use.
+- **REST API** (`POST /v1/email/send`) — rejected with **HTTP 403** unless you supply a single-use confirmation token. You get that token from `POST /v1/email/draft`, and it is **bound to the exact `(to, subject, body, attachments)`** — for each attachment the binding covers filename, MIME type, and a digest of the file content (schema 2.2): a token minted for one message can't be replayed to send different content or different files, and it's consumed on first use.
 - **REST API** (`POST /v1/email/archive`, `POST /v1/email/quarantine`) — the two mutating mailbox actions follow the **same gate** (schema 2.1): each is rejected with **HTTP 403** unless you supply a single-use token from `POST /v1/email/confirm`, bound to that exact `(action, message_id)`. Both are reversible inside the 30-second undo window via the ungated `POST /v1/email/unarchive` / `POST /v1/email/unquarantine` (which *restore*, never destroy). Archive returns a `batch_id` undo handle and a `post_archive_id` so undo survives the id change an Outlook folder-move causes. Quarantine is **Gmail-only** — an Outlook mailbox is refused with **HTTP 400**, because its label-based undo can't reverse Outlook's folder move (#1738).
 - **MCP server** (`send_email`) — same rule as REST: a send without a valid, payload-bound token returns a structured error and sends nothing.
 
@@ -292,10 +320,11 @@ isolated, and dogfoods the exact binary shipped to integrators.
 `GAIA_EMAIL_AGENT_MODE` only selects which *process* answers (`user` default /
 `dev`); there is no in-process fallback. Two surfaces run through it:
 
-- **The `/v1/email/*` REST surface** — the full schema-2.1 contract (triage,
-  batch triage, search, inbox pre-scan, draft/send + confirm, archive/unarchive,
-  quarantine/unquarantine, calendar view/preview/create/respond, health,
-  version). This is exactly what third-party integrators consume, so the UI
+- **The `/v1/email/*` REST surface** — the full schema-2.2 contract (triage,
+  batch triage, search, inbox pre-scan, scheduled daily briefing, draft/send +
+  confirm — attachments included, archive/unarchive, quarantine/unquarantine,
+  calendar view/preview/create/respond, health, version). This is exactly what
+  third-party integrators consume, so the UI
   exercises the real product. The sidecar's connector OAuth **write** routes are
   never exposed (all grant writes stay on the backend's single-writer path).
 - **The in-app email chat agent** (`agent_type=email`) — the local-LLM tool loop
@@ -307,7 +336,7 @@ The sidecar is spawned lazily on first email use and tree-killed on shutdown; th
 REST surface and the chat agent share one sidecar process.
 
 **Chat tool surface (in-app email agent):** the sidecar-backed chat agent exposes
-the tools the schema-2.1 REST contract serves today — inbox pre-scan, search,
+the tools the schema-2.2 REST contract serves today — inbox pre-scan, search,
 calendar view, and archive + undo. Tools that have no REST route yet (labels,
 stars, mark-read, move, trash/delete, summarize, profile, preferences, forward,
 send) are not exposed in the chat agent until their routes land; the underlying

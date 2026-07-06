@@ -1,6 +1,6 @@
 # @amd-gaia/agent-email
 
-[![npm version](https://img.shields.io/npm/v/@amd-gaia/agent-email?label=version)](https://www.npmjs.com/package/@amd-gaia/agent-email) · contract `SCHEMA_VERSION` **2.1** · last updated **2026-06-26**
+[![npm version](https://img.shields.io/npm/v/@amd-gaia/agent-email?label=version)](https://www.npmjs.com/package/@amd-gaia/agent-email) · contract `SCHEMA_VERSION` **2.2** · last updated **2026-07-01**
 
 **Eval scorecard (v0.3.0): aggregate 84.67 / 100** — within-one-bucket **acceptance** accuracy (3-run mean, 95% CI [83.4, 86.0]) over 100 of 220 labeled emails ([`./SCORECARD.md`](./SCORECARD.md)). Triage priority is ordinal, so the bar (#1437) credits exact-or-adjacent buckets — what users feel — not exact 4-way match (reported as a secondary, 0.46). The linked scorecard carries the full recipe, metrics + reported secondaries, run-to-run variance/CI, a per-category breakdown, the run environment, a worked recomputation, and reproduction steps.
 
@@ -22,7 +22,9 @@ the agent runs as a frozen, self-contained REST sidecar your app launches and ow
 - **Triage** — classify each message (urgent / needs-response / FYI / promotional /
   personal), summarize a thread, and extract action items and phishing signals.
 - **Organize** — archive, label, move, mark read/unread — one message or in batches.
-- **Reply & send** — draft context-aware replies and forwards, then send.
+- **Reply & send** — draft context-aware replies and forwards, then send —
+  attachments included (schema 2.2): triage exposes attachment metadata, and
+  draft/send accept base64 file payloads.
 - **Calendar** — detect meeting requests, flag conflicts, RSVP, and create events
   from an email.
 - **Safe by construction** — email bodies are treated as untrusted **data, never
@@ -171,8 +173,8 @@ example above). Every non-2xx response throws `HttpError` (with `status`, `url`,
 | `triageBatch(req)` | Local LLM only | Same as `triage`, but for an `items` array (1–100). Returns a parallel `results` array; per-item failures isolate (HTTP 200 can carry errored items — inspect `results[].error`). |
 | `search(req)` | A connected Gmail/Outlook mailbox | Searches the connected inbox (**read-only**) by Gmail-style `query`/`labels` and returns message metadata — id, subject, sender, snippet, labels. No message is read in full or modified; no confirmation token needed. |
 | `prescan(req?)` | A connected Gmail/Outlook mailbox | Reads recent inbox messages and returns the triage-card envelope (urgent / needs-response / suggested-archive rows + an informational count). Read-only — nothing is archived, marked, or sent. |
-| `draft(req)` | Nothing external | Proposes a reply (`to` is a list of `{ email }` objects, not strings) and returns a single-use confirmation token. |
-| `send(req)` | A connected Gmail/Outlook mailbox + the token | Actually transmits the mail. |
+| `draft(req)` | Nothing external | Proposes a reply (`to` is a list of `{ email }` objects, not strings) and returns a single-use confirmation token. Optional `attachments` (schema 2.2): `{ filename, mime_type, content_base64 }` each, ≤ 25 MB decoded — the token binds to their content digests. |
+| `send(req)` | A connected Gmail/Outlook mailbox + the token | Actually transmits the mail, attachments included. Must carry the exact attachment set the token was minted for — a swapped file or a smuggled extra is rejected with **403**. |
 | `confirmAction(req)` | Nothing external | Mints a single-use token for a destructive action (`"archive"` / `"quarantine"`), bound to that exact `(action, message_id)`. |
 | `archive(req)` | A connected mailbox + the token | Removes the message from the inbox. Returns a `batch_id` undo handle. |
 | `unarchive(req)` | A connected mailbox | Restores an archived message within the 30s window (ungated — pass the `batch_id`). |
@@ -193,6 +195,27 @@ requires a single-use confirmation token (call `draft` for `send`, `confirmActio
 missing/invalid token is rejected with **403** before anything else), and each acts on
 the mailbox **connected in GAIA on the host** (under *Settings → Connectors*) — so even
 with a valid token, a headless server returns **HTTP 503** until a mailbox is connected.
+
+### Scheduled daily briefing (#1608)
+
+The sidecar can generate the `prescan` triage card on a daily schedule — no prompt,
+no caller. **Off by default**; opt in with env vars when launching:
+
+```ts
+const sidecar = await startSidecar({
+  binaryPath,
+  env: {
+    GAIA_EMAIL_BRIEFING_ENABLED: "true",
+    GAIA_EMAIL_BRIEFING_TIME: "08:00", // 24h local HH:MM (default 08:00)
+    GAIA_EMAIL_BRIEFING_MAX_MESSAGES: "25", // 1–100 (default 25)
+  },
+});
+```
+
+Each run persists the `email_pre_scan` envelope with a `generated_at` stamp; pull the
+latest one from `GET /v1/email/briefing` (plain `fetch` — no client wrapper yet). It
+returns **404** until the first scheduled run has happened, and an invalid env value
+fails sidecar startup loudly rather than guessing a schedule.
 `archive`/`quarantine` are reversible within a 30-second window via
 `unarchive`/`unquarantine` (which are *not* gated — they restore, never destroy); the
 calendar actions additionally need the account's calendar scope (a missing scope fails
@@ -214,11 +237,12 @@ When you need finer control, the steps are exported individually:
 | `checkVersion(client)` | Throw if the sidecar's contract MAJOR differs from the client's. |
 | `shutdown(sidecar)` | Kill the whole process tree. |
 
-As of `SCHEMA_VERSION` 2.1 this package exposes inbox **search** (read-only),
-the **archive** / phishing-**quarantine** mailbox actions (+ their undo), and
-calendar **view / create / respond**. The remaining mailbox **actions** (label,
-move, mark read/unread) are part of the full agent but not yet exposed through
-this package — see
+As of `SCHEMA_VERSION` 2.2 this package exposes inbox **search** (read-only),
+the **archive** / phishing-**quarantine** mailbox actions (+ their undo),
+calendar **view / create / respond**, and **attachments** (#1542: triage
+exposes metadata, draft/send accept files). The remaining mailbox **actions**
+(label, move, mark read/unread) are part of the full agent but not yet exposed
+through this package — see
 [`SPEC.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md) for the complete surface.
 
 ## Running in production
