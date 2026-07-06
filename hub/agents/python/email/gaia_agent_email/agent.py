@@ -385,6 +385,13 @@ class EmailTriageAgent(
             silent_mode=config.silent_mode,
             debug=config.debug,
             output_dir=config.output_dir,
+            # Floor == pin (#1892): ensure_ready owns its own construction-time
+            # load paths (idle preload, singleton-recheck reload) at
+            # min_context_size — left at the 32K default they fight an exact
+            # 16K pin in this same process. Unpinned keeps the default.
+            min_context_size=(
+                config.ctx_size if config.ctx_size is not None else 32768
+            ),
         )
 
         # Exact ctx pin (#1892): set the instance-scoped override on the
