@@ -69,6 +69,10 @@ jobs:
           # tests exercise the real agent instead of the missing-wheel error.
           uv pip install -e hub/agents/python/routing --python .venv\Scripts\python.exe
           uv pip install -e hub/agents/python/code --python .venv\Scripts\python.exe
+          # The email REST router only mounts when gaia-agent-email is
+          # importable; without it every /v1/email test in tests/test_api.py
+          # 404s (red on main since the email agent moved to a hub wheel).
+          uv pip install -e hub/agents/python/email --python .venv\Scripts\python.exe
 
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade

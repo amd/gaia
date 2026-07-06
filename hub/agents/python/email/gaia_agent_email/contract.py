@@ -35,6 +35,9 @@ Design notes
 
 from __future__ import annotations
 
+import base64
+import binascii
+import re
 from enum import Enum
 from typing import Annotated, Any, Dict, List, Literal, Optional, Union, cast
 
@@ -63,11 +66,23 @@ CATEGORY_PERSONAL = "PERSONAL"
 #   - archive + phishing-quarantine mailbox actions and their reversal (#1779)
 #   - calendar view/create/respond (#1780)
 #   - inbox pre-scan (#1778)
-SCHEMA_VERSION = "2.1"
+# 2.2 is additive over 2.1 (#1542 attachment handling): EmailMessage /
+# EmailTriageResult / DraftReply gain an ``attachments`` metadata list
+# (default empty), and draft/send accept ``OutgoingAttachment`` payloads.
+SCHEMA_VERSION = "2.2"
 
 # Maximum number of items in a single batch request. Protects the single-tenant
 # local model slot from runaway batches. Enforced via Pydantic max_length.
 MAX_BATCH_SIZE = 100
+
+# Maximum DECODED size of a single outgoing attachment. Gmail caps the whole
+# raw message at 25 MB; enforcing per-attachment here rejects an impossible
+# send at validation time instead of after a multi-MB upload. (The Outlook
+# backend enforces its stricter 3 MB simple-attach Graph limit itself.)
+MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+
+# ``type/subtype`` shape for outgoing MIME types, e.g. 'application/pdf'.
+_MIME_TYPE_RE = re.compile(r"^[!#$&^_.+\-\w]+/[!#$&^_.+\-\w]+$")
 
 
 class _Strict(BaseModel):
@@ -123,6 +138,110 @@ class EmailAddress(_Strict):
         return v
 
 
+class AttachmentMeta(_Strict):
+    """Metadata for one attachment on a message (schema 2.2, #1542).
+
+    Metadata only — no content. On the read path ``attachment_id`` is the
+    provider handle a caller uses to fetch the bytes (Gmail
+    ``body.attachmentId``); it is null for providers/parts that carry none.
+    """
+
+    filename: str = Field(..., description="Attachment filename, e.g. 'report.pdf'.")
+    mime_type: str = Field(
+        ..., description="MIME type as reported by the provider."
+    )
+    size_bytes: int = Field(
+        ..., ge=0, description="Attachment size in bytes (decoded)."
+    )
+    attachment_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Provider handle for fetching the content (Gmail body.attachmentId). "
+            "Null when the provider/part carries none."
+        ),
+    )
+
+    @field_validator("filename")
+    @classmethod
+    def _filename_nonempty(cls, v: str) -> str:
+        if not (v or "").strip():
+            raise ValueError("attachment filename must be non-empty")
+        return v
+
+
+class OutgoingAttachment(_Strict):
+    """One attachment to include on a draft/send (schema 2.2, #1542).
+
+    Content travels inline as standard (RFC 4648) base64. Validation is
+    fail-loud: a non-decodable payload, a malformed MIME type, or a decoded
+    size over ``MAX_ATTACHMENT_BYTES`` is a ``ValidationError`` — never
+    silently truncated or dropped.
+    """
+
+    filename: str = Field(..., description="Filename shown to the recipient.")
+    mime_type: str = Field(
+        ..., description="MIME type of the content, e.g. 'application/pdf'."
+    )
+    content_base64: str = Field(
+        ..., description="File content, standard base64 (RFC 4648)."
+    )
+
+    @field_validator("filename")
+    @classmethod
+    def _filename_safe(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("attachment filename must be non-empty")
+        # The filename lands in MIME headers — reject header-breaking bytes
+        # (CRLF injection) and quote characters that would escape the header
+        # quoting, rather than silently sanitizing.
+        if any(c in v for c in ("\r", "\n", "\x00", '"')):
+            raise ValueError(
+                f"attachment filename contains forbidden characters: {v!r}"
+            )
+        return v
+
+    @field_validator("mime_type")
+    @classmethod
+    def _mime_type_plausible(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not _MIME_TYPE_RE.match(v):
+            raise ValueError(
+                f"not a valid MIME type (expected 'type/subtype'): {v!r}"
+            )
+        return v
+
+    @field_validator("content_base64")
+    @classmethod
+    def _content_decodes_and_fits(cls, v: str) -> str:
+        try:
+            decoded = base64.b64decode(v or "", validate=True)
+        except (binascii.Error, ValueError) as e:
+            raise ValueError(
+                f"content_base64 is not valid standard base64: {e}"
+            ) from e
+        if not decoded:
+            raise ValueError("attachment content must be non-empty")
+        if len(decoded) > MAX_ATTACHMENT_BYTES:
+            raise ValueError(
+                f"attachment is {len(decoded)} bytes decoded; the maximum is "
+                f"{MAX_ATTACHMENT_BYTES} bytes ({MAX_ATTACHMENT_BYTES // (1024 * 1024)} MB)"
+            )
+        return v
+
+    def decode_content(self) -> bytes:
+        """The decoded attachment bytes (validation already guaranteed sound)."""
+        return base64.b64decode(self.content_base64, validate=True)
+
+    def to_meta(self) -> AttachmentMeta:
+        """The metadata echo (no content) for responses."""
+        return AttachmentMeta(
+            filename=self.filename,
+            mime_type=self.mime_type,
+            size_bytes=len(self.decode_content()),
+        )
+
+
 # ---------------------------------------------------------------------------
 # INPUT — AC1: principal recipient, other participants, body
 # ---------------------------------------------------------------------------
@@ -154,6 +273,13 @@ class EmailMessage(_Strict):
     )
     subject: str = Field(default="", description="Subject line.")
     body: str = Field(..., description="Plain-text message body to analyze.")
+    attachments: List[AttachmentMeta] = Field(
+        default_factory=list,
+        description=(
+            "Attachment metadata on this message (schema 2.2, #1542). Metadata "
+            "only — triage weighs names/types/sizes; content never travels here."
+        ),
+    )
 
     # Accept both the wire alias ('from') and the python name ('from_').
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
@@ -295,6 +421,14 @@ class DraftReply(_Strict):
     )
     subject: str = Field(..., description="Proposed subject line.")
     body: str = Field(..., description="Proposed reply body.")
+    attachments: List[AttachmentMeta] = Field(
+        default_factory=list,
+        description=(
+            "Metadata of the attachments the draft proposes to send (schema "
+            "2.2, #1542). Content stays in the caller's OutgoingAttachment "
+            "payload; only the echo travels here."
+        ),
+    )
 
 
 class TriageUsage(_Strict):
@@ -357,6 +491,14 @@ class EmailTriageResult(_Strict):
         description=(
             "LLM usage metrics (tokens + aggregate TPS) for this triage. Null on "
             "the heuristic-only path where no LLM call was made."
+        ),
+    )
+    attachments: List[AttachmentMeta] = Field(
+        default_factory=list,
+        description=(
+            "Attachment metadata of the analyzed message (or every message in "
+            "the thread, oldest-first), echoed for downstream processing "
+            "(schema 2.2, #1542)."
         ),
     )
 
@@ -1203,8 +1345,12 @@ def parse_response(data: dict) -> EmailTriageResponse:
 
 __all__ = [
     "SCHEMA_VERSION",
+    "MAX_ATTACHMENT_BYTES",
     "EmailCategory",
     "EmailAddress",
+    # Attachments (schema 2.2, #1542)
+    "AttachmentMeta",
+    "OutgoingAttachment",
     "EmailMessage",
     "SingleEmailInput",
     "ThreadInput",

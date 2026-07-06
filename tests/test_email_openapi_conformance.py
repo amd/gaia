@@ -691,6 +691,59 @@ def test_prescan_without_mailbox_returns_503(client, in_memory_keyring):
 
 
 # ---------------------------------------------------------------------------
+# Scheduled daily briefing (#1608 additive)
+# ---------------------------------------------------------------------------
+
+
+def test_briefing_conforms_to_spec(client, committed_spec, tmp_path, monkeypatch):
+    """GET /briefing returns the documented EmailBriefingResponse shape once a
+    scheduled run has persisted a briefing, and a documented 404 before one."""
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    resp = client.get("/v1/email/briefing")
+    assert resp.status_code == 404  # no scheduled run has happened yet
+
+    from gaia_agent_email.briefing import run_briefing_job
+
+    class _FakeBackend:
+        def list_messages(self, **_):
+            return {
+                "messages": [{"id": "m1", "threadId": "t-m1"}],
+                "nextPageToken": None,
+            }
+
+        def get_message(self, message_id):
+            return {
+                "id": message_id,
+                "threadId": f"t-{message_id}",
+                "labelIds": ["INBOX", "CATEGORY_PROMOTIONS"],
+                "snippet": "",
+                "payload": {
+                    "headers": [
+                        {"name": "Subject", "value": "50% off this weekend!"},
+                        {"name": "From", "value": "deals@shop.example"},
+                    ],
+                    "mimeType": "text/plain",
+                    "body": {"data": ""},
+                },
+            }
+
+    run_briefing_job(_FakeBackend(), max_messages=5)
+
+    resp = client.get("/v1/email/briefing")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    schema_name = _schema_name_from_response(
+        committed_spec, "get", "/v1/email/briefing"
+    )
+    assert schema_name == "EmailBriefingResponse"
+    for key in _required_keys(committed_spec, schema_name):
+        assert key in body, f"required key {key!r} missing from /briefing response"
+    assert body["schema_version"] == API_VERSION
+    assert body["briefing"]["kind"] == "email_pre_scan"
+
+
+# ---------------------------------------------------------------------------
 # 7. All documented paths are covered
 # ---------------------------------------------------------------------------
 
@@ -711,6 +764,7 @@ def test_all_documented_paths_covered(committed_spec):
         ("post", "/v1/email/triage/batch"),  # #1887 additive
         ("post", "/v1/email/search"),
         ("post", "/v1/email/prescan"),
+        ("get", "/v1/email/briefing"),  # #1608 additive
         ("post", "/v1/email/draft"),
         ("post", "/v1/email/send"),
         ("get", "/v1/email/health"),
