@@ -2,7 +2,8 @@
   "model": "Qwen3.5-35B-A3B-GGUF",
   "commit": "3b51ca92",
   "date": "2026-04-24",
-  "lemonade_url": "https://itomek-gaia-1.ngrok.app/api/v1",
+  "lemonade_url": "http://localhost:13305/api/v1",
+  "lemonade_url_note": "placeholder; the original run used a private tunnel to a remote Lemonade server (historical documentation only)",
   "categories": ["tool_selection", "rag_quality", "context_retention"],
   "purpose": "pre-swap baseline before Gemma 4 E4B migration",
   "eval_model": "claude-sonnet-4-6"
