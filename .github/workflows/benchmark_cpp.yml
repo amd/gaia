@@ -28,7 +28,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install OpenSSL (Linux)
         if: runner.os == 'Linux'
@@ -39,7 +39,7 @@ jobs:
         run: choco install openssl --no-progress -y
 
       - name: Restore FetchContent cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: cpp/build-bench/_deps
           key: fetchcontent-bench-${{ matrix.os }}-${{ hashFiles('cpp/CMakeLists.txt') }}
@@ -47,7 +47,7 @@ jobs:
       # Restore baseline from last main-branch run (prefix match gets latest)
       - name: Restore benchmark baseline
         id: restore-baseline
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: cpp/benchmark-results.json
           key: benchmark-baseline-${{ matrix.os }}-dummy
@@ -146,7 +146,7 @@ jobs:
       # Save new baseline only on pushes to main (immutable cache: unique key per run)
       - name: Save benchmark baseline
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: cpp/benchmark-results.json
           key: benchmark-baseline-${{ matrix.os }}-${{ github.run_id }}
