@@ -193,6 +193,27 @@ requires a single-use confirmation token (call `draft` for `send`, `confirmActio
 missing/invalid token is rejected with **403** before anything else), and each acts on
 the mailbox **connected in GAIA on the host** (under *Settings → Connectors*) — so even
 with a valid token, a headless server returns **HTTP 503** until a mailbox is connected.
+
+### Scheduled daily briefing (#1608)
+
+The sidecar can generate the `prescan` triage card on a daily schedule — no prompt,
+no caller. **Off by default**; opt in with env vars when launching:
+
+```ts
+const sidecar = await startSidecar({
+  binaryPath,
+  env: {
+    GAIA_EMAIL_BRIEFING_ENABLED: "true",
+    GAIA_EMAIL_BRIEFING_TIME: "08:00", // 24h local HH:MM (default 08:00)
+    GAIA_EMAIL_BRIEFING_MAX_MESSAGES: "25", // 1–100 (default 25)
+  },
+});
+```
+
+Each run persists the `email_pre_scan` envelope with a `generated_at` stamp; pull the
+latest one from `GET /v1/email/briefing` (plain `fetch` — no client wrapper yet). It
+returns **404** until the first scheduled run has happened, and an invalid env value
+fails sidecar startup loudly rather than guessing a schedule.
 `archive`/`quarantine` are reversible within a 30-second window via
 `unarchive`/`unquarantine` (which are *not* gated — they restore, never destroy); the
 calendar actions additionally need the account's calendar scope (a missing scope fails
