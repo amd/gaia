@@ -49,9 +49,10 @@ function getDynamicToolsToggle(): HTMLInputElement {
 describe('SettingsPage — Dynamic Tools toggle (#1798)', () => {
     it('renders the loaded value (off by default)', async () => {
         render(<SettingsPage />);
-        const toggle = await waitFor(getDynamicToolsToggle);
-        expect(toggle).not.toBeChecked();
-        expect(toggle).not.toBeDisabled();
+        // Disabled-while-loading: wait for the enabled (loaded) state, not
+        // just the element, or slow runners race the settings fetch.
+        await waitFor(() => expect(getDynamicToolsToggle()).not.toBeDisabled());
+        expect(getDynamicToolsToggle()).not.toBeChecked();
     });
 
     it('reflects a persisted-on value from the server', async () => {
@@ -94,10 +95,11 @@ describe('SettingsPage — Dynamic Tools toggle (#1798)', () => {
             makeSettings({ dynamic_tools: true, dynamic_tools_locked: true }),
         );
         render(<SettingsPage />);
-        const toggle = await waitFor(getDynamicToolsToggle);
+        // The toggle exists (disabled, unchecked) while settings load — wait
+        // for the loaded state, not just the element, or slow runners race.
+        await waitFor(() => expect(getDynamicToolsToggle()).toBeChecked());
 
-        expect(toggle).toBeChecked();
-        expect(toggle).toBeDisabled();
+        expect(getDynamicToolsToggle()).toBeDisabled();
         expect(screen.getByText(/GAIA_DYNAMIC_TOOLS/)).toBeInTheDocument();
     });
 
