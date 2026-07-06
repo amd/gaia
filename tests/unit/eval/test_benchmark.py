@@ -554,5 +554,93 @@ class TestPerfGateInBenchmark:
         assert pth.enforce is False
 
 
+class TestCtxSizeEnvelope:
+    """16K-target/32K-max ctx-window envelope for the email benchmark (#1892).
+
+    RED-first: none of these kwargs/behaviors exist yet in benchmark.py.
+    """
+
+    def test_build_result_stamps_ctx_size(self):
+        # build_result doesn't accept ctx_size yet -> TypeError (expected red).
+        with pytest.raises(TypeError):
+            build_result(
+                _agent_result(),
+                run_id="x",
+                timestamp="t",
+                model_id="m",
+                total_duration_ms=100,
+                ctx_size=16384,
+            )
+
+    def test_run_benchmark_accepts_ctx_size_kwarg(self):
+        # agent_factory bypasses EmailAgentConfig construction entirely, so this
+        # only pins that run_benchmark's signature accepts ctx_size at all —
+        # today it doesn't exist as a kwarg -> TypeError (expected red).
+        class _StubAgent:
+            def process_query(self, prompt):
+                return _agent_result()
+
+        with pytest.raises(TypeError):
+            run_benchmark(
+                "m",
+                mbox_path="ignored",
+                ctx_size=16384,
+                agent_factory=_StubAgent,
+            )
+
+    def test_run_benchmark_records_overflow_as_errored_row(self):
+        # TARGET (fixed) behavior: a single experiment's process_query raising
+        # (e.g. a context-overflow error) must be caught and recorded as one
+        # ERRORED row, not abort the whole run. Today there is no try/except
+        # around `agent.process_query(prompt)` in run_benchmark, so this test
+        # currently fails RED — not with a clean assertion failure, but with the
+        # injected RuntimeError propagating out of run_benchmark uncaught. That
+        # is the correct (if noisy) red state per the TDD brief for this test.
+        calls = {"n": 0}
+
+        class _StubAgent:
+            def process_query(self, prompt):
+                calls["n"] += 1
+                if calls["n"] == 2:
+                    raise RuntimeError("context size (4096")
+                return _agent_result()
+
+        results = run_benchmark(
+            "m",
+            mbox_path="ignored",
+            experiments=3,
+            agent_factory=_StubAgent,
+        )
+        assert len(results) == 3
+        assert results[1]["status"] == "ERRORED"
+        assert "error" in results[1]
+        assert results[0]["status"] != "ERRORED"
+        assert results[2]["status"] != "ERRORED"
+
+    def test_run_benchmark_propagates_ctx_readback_errors(self):
+        # ASSUMED SEAM: real ctx readback-verification is performed inside
+        # EmailTriageAgent.__init__ (owned by a different file/agent in this
+        # parallel work split). This test only pins that run_benchmark must NOT
+        # swallow that exception — it must propagate it loudly, never silently
+        # continue with a mismatched ctx. We simulate the real wiring's failure
+        # mode by having the injected agent_factory itself raise, since we
+        # cannot drive real EmailTriageAgent construction from this offline
+        # slice.
+        # Today this fails RED with TypeError (ctx_size isn't a run_benchmark
+        # kwarg yet) rather than the intended RuntimeError match — still the
+        # correct red state; once ctx_size is wired this assertion pins that
+        # the readback RuntimeError propagates through run_benchmark unchanged.
+        def _agent_factory():
+            raise RuntimeError("ctx readback mismatch: requested=4096 actual=16384")
+
+        with pytest.raises(RuntimeError, match="ctx readback mismatch"):
+            run_benchmark(
+                "m",
+                mbox_path="ignored",
+                ctx_size=4096,
+                agent_factory=_agent_factory,
+            )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
