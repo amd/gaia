@@ -13,7 +13,7 @@ endpoints, mounted on the existing OpenAI-compatible FastAPI app
                              draft proposal).
     POST /v1/email/draft   — propose a reply and obtain a single-use
                              confirmation token bound to the exact
-                             ``(to, subject, body)`` payload.
+                             ``(to, subject, body, attachments)`` payload.
     POST /v1/email/send    — send a reply. REJECTED with a 4xx unless a
                              valid confirmation token for *this* payload is
                              supplied. This is the send-confirmation gate
@@ -55,6 +55,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from gaia_agent_email.contract import (
     ActionItem,
+    AttachmentMeta,
     BatchItemError,
     BatchItemResult,
     BatchTriageRequest,
@@ -90,12 +91,14 @@ from gaia_agent_email.contract import (
     EmailUnarchiveResponse,
     EmailUnquarantineRequest,
     EmailUnquarantineResponse,
+    OutgoingAttachment,
     SingleEmailInput,
     ThreadInput,
     TriageUsage,
     UnarchivedMessage,
     UnarchiveFailure,
 )
+from gaia_agent_email.outlook_backend import AttachmentTooLargeError
 from gaia_agent_email.tools.llm_triage import LLMTriageError
 from gaia_agent_email.tools.summarize_tools import EmailSummarizeError
 from gaia_agent_email.tools.triage_heuristics import (
@@ -377,7 +380,19 @@ class EmailTriageService:
             (h.get("name") or "").lower(): h.get("value", "")
             for h in payload.get("headers", [])
         }
-        body, _attachments = decode_message_body(payload)
+        body, raw_attachments = decode_message_body(payload)
+        # The decoder also emits charset-fallback diagnostics for inline text
+        # parts; those are not attachments — only real file parts surface.
+        attachments = [
+            AttachmentMeta(
+                filename=a["filename"],
+                mime_type=a["mime_type"],
+                size_bytes=a["size_bytes"],
+                attachment_id=a.get("attachment_id"),
+            )
+            for a in raw_attachments
+            if not a.get("charset_fallback")
+        ]
         subject = headers.get("subject", "")
         sender = headers.get("from", "")
         label_ids = list(msg.get("labelIds", []))
@@ -389,6 +404,7 @@ class EmailTriageService:
             label_ids=label_ids,
             principal=principal,
             reply_to=_parse_address(sender),
+            attachments=attachments,
         )
 
     def _triage_single_llm(
@@ -405,6 +421,7 @@ class EmailTriageService:
             chat=chat,
             message_id=msg.message_id,
             context=context,
+            attachments=list(msg.attachments),
         )
 
     def _triage_thread_llm(
@@ -427,6 +444,8 @@ class EmailTriageService:
             chat=chat,
             message_id=payload.thread_id,
             context=context,
+            # Oldest-first, matching the request's message order.
+            attachments=[a for m in messages for a in m.attachments],
         )
 
     def _build_result_llm(
@@ -442,6 +461,7 @@ class EmailTriageService:
         chat: Any,
         message_id: Optional[str] = None,
         context: Any = None,
+        attachments: Optional[List[AttachmentMeta]] = None,
     ) -> EmailTriageResult:
         """Build a result using LLM escalation when heuristic confidence is low."""
         from gaia_agent_email.tools.llm_triage import classify_email_llm
@@ -501,6 +521,7 @@ class EmailTriageService:
             message_id=message_id,
             suggested_action=suggested_action,
             usage=_aggregate_usage(call_stats),
+            attachments=attachments or [],
         )
 
     def _build_result(
@@ -514,6 +535,7 @@ class EmailTriageService:
         reply_to: Optional[EmailAddress],
         summary_prefix: str = "",
         message_id: Optional[str] = None,
+        attachments: Optional[List[AttachmentMeta]] = None,
     ) -> EmailTriageResult:
         heuristic = classify_category_heuristic(
             subject=subject, sender=sender_raw, label_ids=label_ids
@@ -538,6 +560,7 @@ class EmailTriageService:
             draft=draft,
             message_id=message_id,
             suggested_action=suggested_action,
+            attachments=attachments or [],
         )
 
     def _summarize(self, subject: str, body: str) -> str:
@@ -654,14 +677,28 @@ def _parse_address(raw: str) -> Optional[EmailAddress]:
 # ---------------------------------------------------------------------------
 
 
-def _payload_fingerprint(to: List[EmailAddress], subject: str, body: str) -> str:
+def _payload_fingerprint(
+    to: List[EmailAddress],
+    subject: str,
+    body: str,
+    attachments: Optional[List[OutgoingAttachment]] = None,
+) -> str:
     """A stable fingerprint of the exact message a token authorizes.
 
     Binding the token to the payload means a token issued for one message
-    cannot be replayed to send different content.
+    cannot be replayed to send different content. Attachments are part of the
+    fingerprint (filename, MIME type, AND content digest) — a token minted for
+    an attachment-free draft cannot authorize a send that smuggles one in, nor
+    can the file bytes be swapped after confirmation (#1542).
     """
     recipients = ",".join(sorted(a.email.lower() for a in to))
-    material = "\x1f".join([recipients, subject, body])
+    material_parts = [recipients, subject, body]
+    for att in attachments or []:
+        content_digest = hashlib.sha256(att.decode_content()).hexdigest()
+        material_parts.append(
+            "\x1e".join([att.filename, att.mime_type, content_digest])
+        )
+    material = "\x1f".join(material_parts)
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
@@ -1357,6 +1394,14 @@ class EmailDraftRequest(_Strict):
     )
     subject: str = Field(..., description="Proposed subject line.")
     body: str = Field(..., description="Proposed reply body.")
+    attachments: List[OutgoingAttachment] = Field(
+        default_factory=list,
+        description=(
+            "Attachments to include on the send (schema 2.2, #1542). The "
+            "minted confirmation token binds to their content digests, so the "
+            "send must carry these exact files."
+        ),
+    )
     provider: Optional[str] = Field(
         default=None,
         description=(
@@ -1377,7 +1422,8 @@ class EmailDraftResponse(_Strict):
         ...,
         description=(
             "Echo this back to POST /v1/email/send to authorize sending "
-            "exactly this payload. Single-use; bound to (to, subject, body)."
+            "exactly this payload. Single-use; bound to (to, subject, body, "
+            "attachments)."
         ),
     )
 
@@ -1390,6 +1436,14 @@ class EmailSendRequest(_Strict):
     )
     subject: str = Field(..., description="Subject line.")
     body: str = Field(..., description="Reply body.")
+    attachments: List[OutgoingAttachment] = Field(
+        default_factory=list,
+        description=(
+            "Attachments to send (schema 2.2, #1542). Must match the set the "
+            "confirmation token was minted for — filename, MIME type, and "
+            "content digest all bind."
+        ),
+    )
     confirmation_token: Optional[str] = Field(
         default=None,
         description=(
@@ -1415,6 +1469,10 @@ class EmailSendResponse(_Strict):
         ..., description="Recipients the message was sent to."
     )
     subject: str = Field(..., description="Subject of the sent message.")
+    attachments: List[AttachmentMeta] = Field(
+        default_factory=list,
+        description="Metadata of the attachments that went out (schema 2.2).",
+    )
     sent: bool = Field(default=True, description="Always true on success.")
 
 
@@ -1597,13 +1655,20 @@ async def draft_reply(request: EmailDraftRequest) -> EmailDraftResponse:
     """Propose a reply and mint a confirmation token bound to its payload.
 
     The returned token must be echoed to :func:`send_email` to authorize
-    sending exactly this ``(to, subject, body)``. This is the explicit
+    sending exactly this ``(to, subject, body, attachments)``. This is the explicit
     user-confirmation step — the consuming app surfaces the draft to the
     user, and only a user-approved send echoes the token back.
     """
-    fingerprint = _payload_fingerprint(request.to, request.subject, request.body)
+    fingerprint = _payload_fingerprint(
+        request.to, request.subject, request.body, request.attachments
+    )
     token = confirmation_store.issue(fingerprint, provider=request.provider)
-    draft = DraftReply(to=request.to, subject=request.subject, body=request.body)
+    draft = DraftReply(
+        to=request.to,
+        subject=request.subject,
+        body=request.body,
+        attachments=[a.to_meta() for a in request.attachments],
+    )
     return EmailDraftResponse(draft=draft, confirmation_token=token)
 
 
@@ -1618,7 +1683,9 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
     and guarantees the gate fires regardless of backend health. Never
     auto-confirms.
     """
-    fingerprint = _payload_fingerprint(request.to, request.subject, request.body)
+    fingerprint = _payload_fingerprint(
+        request.to, request.subject, request.body, request.attachments
+    )
     gate_ok, bound_provider = confirmation_store.consume_with_provider(
         request.confirmation_token or "", fingerprint
     )
@@ -1628,7 +1695,8 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
             detail=(
                 "Send rejected: missing or invalid confirmation token for this "
                 "message. Call POST /v1/email/draft to obtain a confirmation "
-                "token bound to this exact (to, subject, body), then echo it in "
+                "token bound to this exact (to, subject, body, attachments), "
+                "then echo it in "
                 "'confirmation_token'. Emails are never sent without explicit "
                 "confirmation."
             ),
@@ -1644,12 +1712,28 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
     try:
         backend = _resolve_backend_for_provider(bound_provider or request.provider)
         to_header = ", ".join(_format_address(a) for a in request.to)
+        backend_attachments = [
+            {
+                "filename": a.filename,
+                "mime_type": a.mime_type,
+                "content": a.decode_content(),
+            }
+            for a in request.attachments
+        ]
+        # Attachment-free sends keep the pre-2.2 call shape so existing
+        # backend fakes/implementations without the new kwarg keep working.
+        send_kwargs: Dict[str, Any] = (
+            {"attachments": backend_attachments} if backend_attachments else {}
+        )
         result = await asyncio.to_thread(
             backend.send_message,
             to=to_header,
             subject=request.subject,
             body=request.body,
+            **send_kwargs,
         )
+    except AttachmentTooLargeError as e:
+        raise HTTPException(status_code=413, detail=str(e)) from e
     except (AuthRequiredError, ScopeMismatchError, ConnectionRevokedError) as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ConfigurationError as e:
@@ -1665,8 +1749,18 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
             status_code=502,
             detail="Email backend did not return a message id for the send.",
         )
-    logger.info("email send: id=%s to=%s", sent_id, to_header)
-    return EmailSendResponse(sent_id=sent_id, to=request.to, subject=request.subject)
+    logger.info(
+        "email send: id=%s to=%s attachments=%d",
+        sent_id,
+        to_header,
+        len(request.attachments),
+    )
+    return EmailSendResponse(
+        sent_id=sent_id,
+        to=request.to,
+        subject=request.subject,
+        attachments=[a.to_meta() for a in request.attachments],
+    )
 
 
 # ---------------------------------------------------------------------------
