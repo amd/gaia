@@ -46,8 +46,8 @@ class _MinimalCalendarBackend:
     """Satisfies the CalendarBackend protocol just enough for construction."""
 
 
-def _build_agent(tmp_path, *, ctx_size=None):
-    cfg = EmailAgentConfig(
+def _make_config(tmp_path, *, ctx_size=None):
+    return EmailAgentConfig(
         gmail_backend=_MinimalMailBackend(),
         calendar_backend=_MinimalCalendarBackend(),
         db_path=str(tmp_path / "state.db"),
@@ -56,8 +56,22 @@ def _build_agent(tmp_path, *, ctx_size=None):
         debug=False,
         ctx_size=ctx_size,
     )
+
+
+def _build_agent(tmp_path, *, ctx_size=None):
+    cfg = _make_config(tmp_path, ctx_size=ctx_size)
     with patch.object(LemonadeManager, "ensure_ready", return_value=True):
         return EmailTriageAgent(config=cfg)
+
+
+def _build_agent_capturing_ensure_ready(tmp_path, *, ctx_size=None):
+    """Construct the agent and return (agent, ensure_ready_mock) so a test
+    can assert the ``min_context_size`` floor every ``ensure_ready`` call
+    was made with during construction."""
+    cfg = _make_config(tmp_path, ctx_size=ctx_size)
+    with patch.object(LemonadeManager, "ensure_ready", return_value=True) as mock:
+        agent = EmailTriageAgent(config=cfg)
+    return agent, mock
 
 
 class TestEmailAgentConfigCtxSize:
@@ -86,6 +100,39 @@ class TestEmailAgentWiresCtxSizeOverride:
 
         backend = agent.chat.llm_client._backend
         assert backend.ctx_size_override is None
+
+
+class TestEnsureReadyFloorMatchesPin:
+    """The base ``Agent.__init__`` calls ``LemonadeManager.ensure_ready`` at a
+    ``min_context_size`` FLOOR (default 32768). That gate owns write paths
+    (idle-server preload of the default model + a singleton-recheck reload)
+    that can load/reload the model at the floor in the SAME process that wants
+    a smaller pin. So a pinned process must lower the construction-time floor
+    to the pin: ``ensure_ready(min_context_size=<pin>)``. An unpinned process
+    keeps the historical default (32768).
+    """
+
+    def test_pinned_agent_passes_pin_as_ensure_ready_floor(self, tmp_path):
+        """ctx_size=16384 -> EVERY ensure_ready call carries
+        min_context_size=16384 so the floor equals the pin. RED at HEAD:
+        EmailTriageAgent passes no min_context_size today, so the base
+        default (32768) reaches ensure_ready, not 16384."""
+        _agent, mock = _build_agent_capturing_ensure_ready(tmp_path, ctx_size=16384)
+
+        assert mock.call_count >= 1
+        for call in mock.call_args_list:
+            assert call.kwargs.get("min_context_size") == 16384
+
+    def test_unpinned_agent_keeps_default_ensure_ready_floor(self, tmp_path):
+        """ctx_size=None -> EVERY ensure_ready call keeps the historical
+        default floor (32768). Regression guard for the unpinned path: the
+        base ``Agent.__init__`` default is 32768 and EmailTriageAgent must
+        not disturb it when no pin is configured."""
+        _agent, mock = _build_agent_capturing_ensure_ready(tmp_path, ctx_size=None)
+
+        assert mock.call_count >= 1
+        for call in mock.call_args_list:
+            assert call.kwargs.get("min_context_size") == 32768
 
 
 if __name__ == "__main__":
