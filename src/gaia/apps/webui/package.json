@@ -70,7 +70,7 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
-    "electron": "^42.2.0",
+    "electron": "^43.0.0",
     "electron-builder": "^26.8.1",
     "jsdom": "^29.1.1",
     "lucide-react": "^1.17.0",
