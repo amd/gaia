@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gaia-agent-email"
-version = "0.2.2"
+version = "0.3.0"
 description = "GAIA email triage agent — read, triage, organize, and reply to Gmail/Outlook locally"
 authors = [{ name = "AMD" }]
 license = { text = "MIT" }

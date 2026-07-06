@@ -68,6 +68,17 @@ CREATE TABLE IF NOT EXISTS email_drafts (
 );
 """
 
+# Voice/style profile derived from Sent mail (#1607). One row per mailbox.
+# ``profile_json`` holds DERIVED features only (greetings, sign-offs, length,
+# formality signals) — never raw Sent content. See ``voice_profile.py``.
+EMAIL_VOICE_PROFILE_DDL = """
+CREATE TABLE IF NOT EXISTS email_voice_profile (
+    mailbox      TEXT PRIMARY KEY,
+    profile_json TEXT NOT NULL,
+    built_at     REAL NOT NULL
+);
+"""
+
 
 # 100 chars max — see plan A4 + adversarial S15. Email bodies routinely
 # carry MFA codes, password reset URLs, banking transaction summaries; a
@@ -76,9 +87,10 @@ BODY_PREVIEW_MAX_CHARS = 100
 
 
 def init_schema(db) -> None:
-    """Create both tables if they don't exist, then run migrations. Idempotent."""
+    """Create the tables if they don't exist, then run migrations. Idempotent."""
     db.execute(EMAIL_ACTIONS_DDL)
     db.execute(EMAIL_DRAFTS_DDL)
+    db.execute(EMAIL_VOICE_PROFILE_DDL)
     _migrate_email_actions_mailbox(db)
 
 
@@ -276,16 +288,74 @@ def fetch_draft(db, *, draft_id: str) -> Optional[Dict[str, Any]]:
     return result
 
 
+# ---------------------------------------------------------------------------
+# email_voice_profile API (#1607)
+# ---------------------------------------------------------------------------
+
+
+def save_voice_profile(db, *, mailbox: str, profile: Dict[str, Any]) -> None:
+    """Upsert the voice profile for *mailbox* (one row per mailbox).
+
+    Update-then-insert (not delete-then-insert) so a failure between the
+    two statements can never lose the existing profile.
+    """
+    row = {
+        "profile_json": json.dumps(profile),
+        "built_at": time.time(),
+    }
+    updated = db.update("email_voice_profile", row, "mailbox = :m", {"m": mailbox})
+    if not updated:
+        db.insert("email_voice_profile", dict(row, mailbox=mailbox))
+
+
+def fetch_voice_profile(
+    db, *, mailbox: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """Return the stored profile dict, or ``None`` when none has been built.
+
+    With ``mailbox=None`` returns the most recently built profile across
+    mailboxes — the common single-mailbox case and the system-prompt path.
+    """
+    if mailbox:
+        row = db.query(
+            "SELECT profile_json FROM email_voice_profile WHERE mailbox = :m",
+            {"m": mailbox},
+            one=True,
+        )
+    else:
+        row = db.query(
+            "SELECT profile_json FROM email_voice_profile "
+            "ORDER BY built_at DESC LIMIT 1",
+            {},
+            one=True,
+        )
+    if row is None:
+        return None
+    return json.loads(row["profile_json"])
+
+
+def delete_voice_profile(db, *, mailbox: Optional[str] = None) -> None:
+    """Delete the profile for *mailbox*, or all profiles when ``None``."""
+    if mailbox:
+        db.delete("email_voice_profile", "mailbox = :m", {"m": mailbox})
+    else:
+        db.delete("email_voice_profile", "1 = 1", {})
+
+
 __all__ = [
     "BODY_PREVIEW_MAX_CHARS",
     "EMAIL_ACTIONS_DDL",
     "EMAIL_DRAFTS_DDL",
+    "EMAIL_VOICE_PROFILE_DDL",
+    "delete_voice_profile",
     "fetch_batch_undoable",
     "fetch_draft",
     "fetch_undoable",
+    "fetch_voice_profile",
     "init_schema",
     "mark_draft_sent",
     "mark_undone",
     "record_action",
     "record_draft",
+    "save_voice_profile",
 ]

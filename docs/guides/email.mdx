@@ -1,6 +1,7 @@
 ---
 title: "Email Triage"
 description: "Read, organize, and reply to Gmail with all email content processed locally on your machine."
+icon: "envelope"
 ---
 
 # Email Triage Agent
@@ -11,9 +12,11 @@ The Email Triage Agent connects to your Gmail account through GAIA's connectors 
 
 - **Triage your inbox** — classify every message as `urgent`, `actionable`, `informational`, or `low priority`, plus separate `is_spam` and `is_phishing` flags.
 - **Follow-up tracking** — flag the mail you *sent* that never got a reply after a configurable window (default 3 days). Detection only — the agent never sends a nudge on its own.
+- **Find past mail** — search your mailbox with keyword or Gmail-syntax queries (`from:alice is:unread newer_than:7d`). Ask in chat (the `search_messages` tool) or call it from a consuming app via `POST /v1/email/search` on the REST contract; results carry metadata only (id, sender, subject, date, snippet) — never message bodies.
 - **Organize** — archive, label, mark read/unread, star/unstar. Reversible via the per-action undo log.
 - **Soft-delete with undo** — `trash_message` records the action; `restore_message` reverses it within a 30-second window.
 - **Draft + confirmed send** — generate replies (`draft_reply`) and forwards (`draft_forward`); `send_draft` and `send_now` require explicit user confirmation in the UI.
+- **Voice-matched drafting** — learn your writing style from your Sent mail (`build_voice_profile`) so drafts sound like you; the style profile is derived and stored locally, nothing leaves the device.
 - **Calendar** — list events, accept/decline invites, create events from email content (all calendar mutations gated by user confirmation).
 
 ## Setup
@@ -143,6 +146,25 @@ Preferences are stored in process memory only — restarting the agent (or quitt
 
 Senders you reply to quickly are automatically promoted to priority on the next triage run — no explicit command needed. The agent measures how long it took you to reply to each sender (using the original message's receipt timestamp as the anchor) and promotes senders whose median reply latency falls below the threshold. Promotion is applied on-demand during triage, not on a background thread, and persists across agent restarts. Works across both connected mailboxes (Gmail and Outlook).
 
+### Scheduled daily briefing (off by default)
+
+The email sidecar can run the pre-scan on a daily timer — no prompt needed — so the
+triage card is already waiting for you in the morning. It is **off by default**;
+enable it with environment variables when launching the sidecar:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `GAIA_EMAIL_BRIEFING_ENABLED` | unset (off) | `true`/`1`/`yes` turns the daily briefing on. |
+| `GAIA_EMAIL_BRIEFING_TIME` | `08:00` | Daily fire time, 24h local `HH:MM`. |
+| `GAIA_EMAIL_BRIEFING_MAX_MESSAGES` | `25` | Inbox messages to scan per run (1–100). |
+
+Each run produces the same `email_pre_scan` envelope as an on-demand pre-scan
+(the classification path is shared — nothing is re-implemented) and persists it
+locally; fetch the latest run from `GET /v1/email/briefing` (`404` until the first
+scheduled run). An invalid value fails sidecar startup with an actionable error
+rather than guessing a schedule. Push delivery and a cross-agent morning brief
+are planned on the autonomy engine (#555).
+
 ## Action surface
 
 ### Read
@@ -163,6 +185,10 @@ Senders you reply to quickly are automatically promoted to priority on the next 
 
 This is detection only, distinct from autonomous follow-ups ([#555](https://github.com/amd/gaia/issues/555)): the agent surfaces the dropped threads but never sends a chase-up on its own — if you ask it to nudge someone, that reply goes through the normal draft → confirm → send flow.
 
+### Voice-matched drafting
+
+`build_voice_profile` — ask the agent to "learn my writing style" and it samples your recent Sent mail, derives a style profile (usual greeting, sign-off, typical length, formality), and stores it on-device. From then on, drafted replies come out in your voice instead of neutral boilerplate — still returned for your approval, never auto-sent. The profile keeps derived features only (never your Sent message content) and lives in the agent's local SQLite database; nothing leaves the device. `clear_voice_profile` forgets it.
+
 ### Organize (reversible via the undo log)
 
 `archive_message`, `mark_read`, `mark_unread`, `add_star`, `remove_star`, `label_message`, `move_to_label`
@@ -179,6 +205,18 @@ This is detection only, distinct from autonomous follow-ups ([#555](https://gith
 
 `list_calendar_events`, `accept_invite`, `decline_invite`, `create_event_from_email`
 
+**On the REST contract** (schema 2.1, for the Agent UI): calendar view / create / respond
+are exposed alongside triage/draft/send:
+
+- `GET /v1/email/calendar/events` — view events on the primary calendar (read-only).
+- `POST /v1/email/calendar/events/preview` → `POST /v1/email/calendar/events` — create
+  an event, gated by the same single-use confirmation-token handshake as `/v1/email/send`
+  (mint a token with `/preview`, echo it to create; no/invalid token → **HTTP 403**).
+- `POST /v1/email/calendar/events/respond` — RSVP accepted/declined/tentative to an invite.
+
+Each reaches whichever calendar (Google or Microsoft) the user connected; a missing
+`calendar.events` scope fails loud with **HTTP 403** and the reconnect CTA.
+
 ## Sending email — safety
 
 **The agent never sends email on its own. A send always requires your explicit confirmation, and this holds no matter how you drive the agent.** Drafting a reply is harmless and unconfirmed; turning a draft into a sent message is the only step that asks for your approval, and it always asks.
@@ -187,6 +225,7 @@ This guarantee is enforced independently on every surface, so a missing confirma
 
 - **Chat / Agent UI / CLI** — `send_draft`, `send_now`, and `forward_message` are confirmation-gated in the agent loop. Before the send runs, you're shown the **literal** recipient, subject, and body (not an LLM paraphrase) and must approve. Decline, and nothing is sent. In unattended/background mode there's no one to approve, so the send is refused outright rather than run silently.
 - **REST API** (`POST /v1/email/send`) — rejected with **HTTP 403** unless you supply a single-use confirmation token. You get that token from `POST /v1/email/draft`, and it is **bound to the exact `(to, subject, body)`**: a token minted for one message can't be replayed to send different content, and it's consumed on first use.
+- **REST API** (`POST /v1/email/archive`, `POST /v1/email/quarantine`) — the two mutating mailbox actions follow the **same gate** (schema 2.1): each is rejected with **HTTP 403** unless you supply a single-use token from `POST /v1/email/confirm`, bound to that exact `(action, message_id)`. Both are reversible inside the 30-second undo window via the ungated `POST /v1/email/unarchive` / `POST /v1/email/unquarantine` (which *restore*, never destroy). Archive returns a `batch_id` undo handle and a `post_archive_id` so undo survives the id change an Outlook folder-move causes. Quarantine is **Gmail-only** — an Outlook mailbox is refused with **HTTP 400**, because its label-based undo can't reverse Outlook's folder move (#1738).
 - **MCP server** (`send_email`) — same rule as REST: a send without a valid, payload-bound token returns a structured error and sends nothing.
 
 There is no setting, flag, or "auto-send" mode that bypasses this — it's a safety invariant, not a preference. A consolidated regression test (`tests/integration/test_never_auto_send.py`) exercises all three surfaces together so the guarantee can't be quietly weakened on any one of them.
@@ -231,6 +270,76 @@ When the calendar tools run (`list_calendar_events`, `accept_invite`, `decline_i
 **Common mismatch**: both Gmail and Outlook connected, but only Outlook has `Calendars.ReadWrite`
 (Google calendar scope was skipped during consent). Without an explicit provider setting the
 agent used to pick Google and fail. It now picks Outlook correctly.
+
+## Dev mode: run the email agent from source
+
+The Agent UI talks to the email agent as an out-of-process **sidecar** — a
+self-contained HTTP service the Python backend spawns, health-checks, proxies to,
+and tree-kills. No Node.js is involved. Two modes, selected by
+`GAIA_EMAIL_AGENT_MODE`:
+
+- `user` (default) — runs the published frozen binary, fetched on first email use
+  and verified against `binaries.lock.json` (SHA-256 is the integrity gate). A
+  tampered or unpublished binary fails loudly; there is no fallback to dev mode.
+- `dev` — runs the agent from your local source with hot reload, so prompt/tool
+  edits show up live without a freeze → publish cycle:
+
+  ```bash
+  uv pip install -e hub/agents/python/email   # once
+  GAIA_EMAIL_AGENT_MODE=dev gaia chat --ui
+  ```
+
+The sidecar binds an ephemeral local port (never 4001). Dev mode loads
+`packaging/server.py` as the top-level module `server`
+(`uvicorn server:app --app-dir hub/agents/python/email/packaging`) so the
+package's `packaging/` directory does not collide with the PyPI `packaging`
+library. If the source package is missing, dev mode fails loudly with the
+`uv pip install -e` remedy — it never silently falls back to the binary.
+
+**Operational behavior:**
+- The backend spawns the sidecar with its stdout/stderr redirected to
+  `~/.gaia/agents/email/logs/sidecar-<port>.log` — check that file first when a
+  sidecar won't start (a failed start surfaces the log tail in the error too).
+- On every start the backend reads the sidecar's `/version` and records the
+  contract `apiVersion`/`agentVersion`; a major-version mismatch (when a host
+  pins an expected version) fails loudly rather than sending requests the sidecar
+  would mishandle.
+- A sidecar HTTP error (e.g. Lemonade down → `502 local LLM triage failed`) is
+  surfaced verbatim with its actionable message, not flattened into a generic
+  error.
+- If the backend exits without a clean shutdown, an `atexit` reaper tree-kills the
+  sidecar so it never leaks its port or a loaded model.
+
+### What the sidecar serves
+
+The sidecar is the **sole** backend for the email agent in the Agent UI — the
+core backend never imports the email wheel, so it stays lightweight, crash-
+isolated, and dogfoods the exact binary shipped to integrators.
+`GAIA_EMAIL_AGENT_MODE` only selects which *process* answers (`user` default /
+`dev`); there is no in-process fallback. Two surfaces run through it:
+
+- **The `/v1/email/*` REST surface** — the full schema-2.1 contract (triage,
+  batch triage, search, inbox pre-scan, scheduled daily briefing, draft/send +
+  confirm, archive/unarchive, quarantine/unquarantine, calendar
+  view/preview/create/respond, health, version). This is exactly what
+  third-party integrators consume, so the UI
+  exercises the real product. The sidecar's connector OAuth **write** routes are
+  never exposed (all grant writes stay on the backend's single-writer path).
+- **The in-app email chat agent** (`agent_type=email`) — the local-LLM tool loop
+  still runs in the UI backend, but every tool is a thin HTTP call to the
+  sidecar. The chat **pre-scan card** runs through the sidecar's `/prescan` route
+  and returns the same `email_pre_scan` envelope, so the card renders unchanged.
+
+The sidecar is spawned lazily on first email use and tree-killed on shutdown; the
+REST surface and the chat agent share one sidecar process.
+
+**Chat tool surface (in-app email agent):** the sidecar-backed chat agent exposes
+the tools the schema-2.1 REST contract serves today — inbox pre-scan, search,
+calendar view, and archive + undo. Tools that have no REST route yet (labels,
+stars, mark-read, move, trash/delete, summarize, profile, preferences, forward,
+send) are not exposed in the chat agent until their routes land; the underlying
+agent product still implements them, they are simply not reachable over the REST
+contract yet.
 
 ## Troubleshooting
 

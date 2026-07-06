@@ -34,6 +34,24 @@ import pytest
 import requests
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _ensure_email_corpus():
+    """Rebuild the email-triage corpus from its committed seed before any test.
+
+    ``synthetic_inbox.mbox`` + ``ground_truth.json`` are generated artifacts (not
+    committed — fully derived from ``vendor_corpus_seed.jsonl``), so a fresh
+    checkout has the seed but not the corpus. This session-autouse fixture
+    materialises them once so email unit/integration tests find their inputs. It
+    no-ops when the email agent extra isn't installed (those tests don't run
+    here); a missing committed seed still raises loudly inside ``ensure_corpus``.
+    """
+    try:
+        from tests.fixtures.email.generate_mbox import ensure_corpus
+    except ImportError:
+        return
+    ensure_corpus()
+
+
 def pytest_addoption(parser):
     parser.addoption(
         "--hybrid",

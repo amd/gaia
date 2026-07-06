@@ -218,9 +218,12 @@ MODELS = {
     # Issue #1282. This is the NPU-native FastFlowLM build (checkpoint
     # ``gemma4-it:e2b``), NOT the llama.cpp GGUF variant — only the FLM build
     # runs on the Strix Halo NPU. Validated on hardware: device=npu,
-    # recipe=flm, served at :13305, ctx_size=4096 (the NPU window). The triage
-    # classifier clips email bodies to 4000 chars, so a single email + the
-    # triage system prompt fit. The E2B *FLM* accuracy baseline is a follow-up:
+    # recipe=flm, served at :13305. ctx_size defaults to 32768 to match
+    # GPU/CPU (issue #1745) — the prior 4096 pin caused a config/runtime
+    # mismatch where ``gaia init --profile npu`` reported 4096 but the load
+    # path requested 32768. The triage classifier clips email bodies to 4000
+    # chars, so a single email + the triage system prompt fit either window.
+    # The E2B *FLM* accuracy baseline is a follow-up:
     # baseline_accuracy_e2b.json was recorded on the GGUF build, a different
     # variant.
     # tool_calling=False: unlike the GGUF builds (native tool calls via
@@ -233,7 +236,7 @@ MODELS = {
         model_type=ModelType.LLM,
         model_id="gemma4-it-e2b-FLM",
         display_name="Gemma 4 E2B (NPU/FLM)",
-        min_ctx_size=4096,
+        min_ctx_size=32768,
         tool_calling=False,
     ),
     # --- Legacy Qwen models: kept so existing pinned sessions/configs don't break ---

@@ -30,7 +30,7 @@ Use GAIA's built-in mixins instead of implementing tools from scratch.
 ```python step4_with_mixins.py
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
-from gaia.agents.chat.tools import RAGToolsMixin, FileToolsMixin
+from gaia.agents.tools import RAGToolsMixin, FileToolsMixin
 from gaia.agents.tools import FileSearchToolsMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
 
@@ -101,7 +101,7 @@ agent.process_query("Find research papers in my Documents folder, index them, an
     - `list_indexed_documents()` - List currently indexed files
     - `rag_status()` - Get index statistics
 
-    **Import:** `from gaia.agents.chat.tools import RAGToolsMixin`
+    **Import:** `from gaia.agents.tools import RAGToolsMixin`
   </Tab>
 
   <Tab title="FileSearchToolsMixin">
@@ -117,7 +117,7 @@ agent.process_query("Find research papers in my Documents folder, index them, an
     **Directory monitoring:**
     - `add_watch_directory(directory)` - Monitor and auto-index changes
 
-    **Import:** `from gaia.agents.chat.tools import FileToolsMixin`
+    **Import:** `from gaia.agents.tools import FileToolsMixin`
   </Tab>
 
   <Tab title="Registration">
@@ -142,7 +142,7 @@ Add file system monitoring to automatically reindex documents when they change.
 
 <CodeGroup>
 ```python step5_with_monitoring.py
-from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
 # The full ChatAgent includes file monitoring!
 config = ChatAgentConfig(
@@ -210,7 +210,7 @@ Implement session persistence to avoid re-indexing on every restart.
 
 <CodeGroup>
 ```python step6_create_session.py
-from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
 config = ChatAgentConfig(
     rag_documents=["./manual.pdf"]
@@ -227,7 +227,7 @@ if agent.save_current_session():
 ```
 
 ```python step6_load_session.py
-from gaia.agents.chat.agent import ChatAgent
+from gaia_agent_chat.agent import ChatAgent
 
 agent = ChatAgent()
 
@@ -288,7 +288,7 @@ The `ChatAgent` class combines all components. Here's how to configure and use i
 <Tabs>
   <Tab title="Full Configuration">
     ```python title="complete_agent.py"
-    from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
     from pathlib import Path
 
     # Complete configuration
@@ -437,7 +437,7 @@ Extend the agent by adding domain-specific tools.
 <Tabs>
   <Tab title="Custom Tools">
     ```python title="custom_tools.py"
-    from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
     from gaia.agents.base.tools import tool
 
     class CustomDocAgent(ChatAgent):
@@ -568,7 +568,7 @@ Override system prompts to create domain-specific behavior.
 <Tabs>
   <Tab title="Research Agent">
     ```python title="research_agent.py"
-    from gaia.agents.chat.agent import ChatAgent
+    from gaia_agent_chat.agent import ChatAgent
 
     class ResearchAgent(ChatAgent):
         """Academic research specialist."""
@@ -591,7 +591,7 @@ Override system prompts to create domain-specific behavior.
 
   <Tab title="Support Agent">
     ```python title="support_agent.py"
-    from gaia.agents.chat.agent import ChatAgent
+    from gaia_agent_chat.agent import ChatAgent
 
     class CustomerSupportAgent(ChatAgent):
         """Customer support specialist."""
@@ -637,7 +637,7 @@ Override system prompts to create domain-specific behavior.
 <Tabs>
   <Tab title="Implementation">
     ```python title="research_assistant.py"
-    from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
     from pathlib import Path
 
     research_folder = Path.home() / "Research" / "AI-Papers"
@@ -684,7 +684,7 @@ Override system prompts to create domain-specific behavior.
 <Tabs>
   <Tab title="Setup">
     ```python title="knowledge_base.py"
-    from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
     import os
 
     docs_root = "/company/shared/documentation"
@@ -709,7 +709,7 @@ Override system prompts to create domain-specific behavior.
 
   <Tab title="Team Usage">
     ```python title="load_shared_session.py"
-    from gaia.agents.chat.agent import ChatAgent
+    from gaia_agent_chat.agent import ChatAgent
 
     # Team member loads shared session
     agent = ChatAgent()
@@ -739,7 +739,7 @@ Override system prompts to create domain-specific behavior.
 <Tabs>
   <Tab title="Implementation">
     ```python title="personal_assistant.py"
-    from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
     from pathlib import Path
 
     config = ChatAgentConfig(

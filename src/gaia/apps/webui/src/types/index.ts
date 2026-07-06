@@ -117,6 +117,10 @@ export interface AgentInfo {
     avatar_url?: string;
     /** True when the publisher has deprecated this agent. */
     deprecated?: boolean;
+    /** Public URL of the eval scorecard markdown; absent when none was published. */
+    eval_scorecard_url?: string;
+    /** Aggregate eval score (0–100) from the latest published scorecard; absent when none. */
+    eval_score?: number;
 }
 
 /** Derived card state for the Agent Hub (issue #1097). */
@@ -357,6 +361,10 @@ export interface Settings {
     model_status: ModelStatus | null;
     /** Persisted context window size override (tokens). null = use default 32768. */
     context_size: number | null;
+    /** Beta dynamic tool loader (#1798). Effective value: GAIA_DYNAMIC_TOOLS wins when set, else the persisted setting. */
+    dynamic_tools: boolean;
+    /** True when GAIA_DYNAMIC_TOOLS locks the value — the toggle reflects the effective value and disables. */
+    dynamic_tools_locked: boolean;
 }
 
 /** Status of the GAIA Agent UI MCP server (exposes UI tools to Claude Code etc.). */

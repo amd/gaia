@@ -1,13 +1,26 @@
 ---
 title: "Browser Agent"
 description: "Search the web, fetch pages, and download files with a focused GAIA agent."
+icon: "globe"
 ---
 
-# Browser Agent
+<Info>
+  **First time here?** Complete the [Setup](/setup) guide first to install GAIA and its dependencies.
+</Info>
 
 The Browser Agent is a focused web-research agent for users who want GAIA's browser tools without the full Chat Agent tool surface. It can search the web, fetch readable page text, and download files through the same path validation and web-client limits used by the broader agent stack.
 
-## Quick start
+**Who it's for:** anyone doing quick, repeatable web research from the CLI — gathering links on a topic, pulling the readable text out of a page, or grabbing a file — without loading RAG, scratchpad, or file-editing tools.
+
+## Prerequisites
+
+- GAIA installed (see [Setup](/setup)).
+- A local model available — run `gaia init` if you haven't set one up. By default the agent uses the local Lemonade backend.
+- Network access for web search and page fetches.
+
+## Quick Start
+
+Run a single research task with `-q`:
 
 ```bash
 gaia browse -q "Find recent AMD Ryzen AI SDK docs and summarize the relevant links"
@@ -19,23 +32,60 @@ Use interactive mode when you want to refine a web-research task over multiple t
 gaia browse
 ```
 
-## Tool surface
+## Tool Surface
 
 `gaia browse --list-tools` shows the exact tools available in your installed version. The focused Browser Agent exposes:
 
-- `search_web` for web search.
-- `fetch_page` for extracting readable page text.
-- `download_file` for saving a user-requested URL locally.
+- `search_web` — run a web search for a query.
+- `fetch_page` — fetch a URL and return readable page text.
+- `download_file` — download a user-requested URL to a local file.
 
-The Browser Agent does not register scratchpad or file-system analysis tools. Use `gaia analyze` for structured data work, or `gaia chat` when you need the broader mixed tool set.
+The Browser Agent does not register scratchpad or file-system analysis tools. Use [`gaia analyze`](/guides/analyze) for structured data work, or [`gaia chat`](/guides/chat) when you need the broader mixed tool set.
 
-## Local model options
+## Model and Backend Options
 
 By default, `gaia browse` uses the local Lemonade backend configured for GAIA. You can override the model or backend with the common agent flags:
 
 ```bash
+# Use a smaller local model for lighter tasks
 gaia browse --model Qwen3-4B-Instruct-2507-GGUF -q "Fetch this page and list citations"
+
+# Run against the Claude API instead of local inference
 gaia browse --use-claude -q "Compare these two URLs"
 ```
 
+Other shared agent flags work here too — `--max-steps` to bound the run, `--trace` to save a JSON execution trace, `--stats` for performance metrics, and `--allowed-paths` to control where downloads may be written.
+
 In the Agent UI the browser appears as a single `web` card with a model-size selector — pick **Lite (~4B)** for shorter browser tasks on lighter hardware, or **Full** for the default model. (The old `web-lite` registry ID still resolves to `web` on the lite tier for existing sessions.)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Analyst Agent" icon="chart-column" href="/guides/analyze">
+    Load structured rows into scratchpad tables and query them with SQL.
+  </Card>
+
+  <Card title="Document Q&A" icon="message" href="/guides/chat">
+    The full chat agent with RAG, memory, and the broader tool set.
+  </Card>
+
+  <Card title="CLI Reference" icon="terminal" href="/reference/cli">
+    Every `gaia` command and flag.
+  </Card>
+
+  <Card title="All Guides" icon="book" href="/guides">
+    Browse every GAIA agent.
+  </Card>
+</CardGroup>
+
+---
+
+<small style="color: #666;">
+
+**License**
+
+Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+
+SPDX-License-Identifier: MIT
+
+</small>

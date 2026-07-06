@@ -24,12 +24,24 @@ message we're looking for".
 from __future__ import annotations
 
 import json
+import os
+import statistics as _stats
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 from gaia.eval import performance, quality_metrics
+
+# Metrics whose run-to-run spread is recorded for trustworthiness (#1894). The
+# first is the gated aggregate (within-one-bucket); the rest are reported.
+_ACCEPTANCE_SERIES_KEYS = (
+    "within_one_bucket_accuracy",
+    "urgent_vs_not_accuracy",
+    "urgent_recall",
+    "personal_recall",
+    "category_accuracy",
+)
 
 # Committed throughput bar for #1233 (non-gating for the demo).
 THROUGHPUT_BAR_TPS = 10.0
@@ -211,10 +223,26 @@ def build_result(
             for r in triage_results
             if r.get("id")
         }
+        # Acceptance metrics (#1437): within-one-bucket is the gated aggregate;
+        # urgent-vs-not + urgent-recall + exact category_accuracy are reported.
+        # One source of truth so the scorecard adapter never recomputes these
+        # a different way.
+        acceptance = quality_metrics.acceptance_metrics(
+            predicted_categories, ground_truth
+        )
         out["quality"] = {
-            "category_accuracy": quality_metrics.category_accuracy(
-                predicted_categories, ground_truth
-            ),
+            "category_accuracy": acceptance["category_accuracy"],
+            "within_one_bucket_accuracy": acceptance["within_one_bucket_accuracy"],
+            "urgent_vs_not_accuracy": acceptance["urgent_vs_not_accuracy"],
+            "urgent_recall": acceptance["urgent_recall"],
+            "personal_recall": acceptance["personal_recall"],
+            # PERSONAL-vs-rest axis (#1437 PERSONAL coverage) — same shape as
+            # needs_attention, so a personal-mail floor can gate it later.
+            "personal": quality_metrics.confusion_for_categories(
+                predicted_categories,
+                ground_truth,
+                quality_metrics.PERSONAL_CATEGORIES,
+            ).to_dict(),
             "spam": quality_metrics.confusion_for_flag(
                 predicted_spam, ground_truth, "is_spam"
             ).to_dict(),
@@ -245,9 +273,12 @@ def _aggregate_quality(results: list[dict]) -> dict[str, Any] | None:
     rates via :class:`~gaia.eval.quality_metrics.Confusion`. Returns ``None`` when
     no run carried a quality block (no ground truth) — the gate keys off that.
     """
-    axes = ("spam", "phishing", "needs_attention")
+    axes = ("spam", "phishing", "needs_attention", "personal")
     totals = {axis: quality_metrics.Confusion() for axis in axes}
-    accuracies: list[float] = []
+    # Per-run scalar series for each accuracy metric (mean across runs is the
+    # aggregate; the series feeds the variance/CI block in summarize_benchmark).
+    series_keys = _ACCEPTANCE_SERIES_KEYS
+    series: dict[str, list[float]] = {k: [] for k in series_keys}
     saw_quality = False
 
     for r in results:
@@ -255,8 +286,9 @@ def _aggregate_quality(results: list[dict]) -> dict[str, Any] | None:
         if not isinstance(q, dict):
             continue
         saw_quality = True
-        if isinstance(q.get("category_accuracy"), (int, float)):
-            accuracies.append(float(q["category_accuracy"]))
+        for key in series_keys:
+            if isinstance(q.get(key), (int, float)):
+                series[key].append(float(q[key]))
         for axis in axes:
             block = q.get(axis)
             if isinstance(block, dict):
@@ -270,10 +302,72 @@ def _aggregate_quality(results: list[dict]) -> dict[str, Any] | None:
         return None
 
     out: dict[str, Any] = {axis: totals[axis].to_dict() for axis in axes}
-    out["category_accuracy"] = (
-        round(sum(accuracies) / len(accuracies), 4) if accuracies else 0.0
-    )
+    for key in series_keys:
+        vals = series[key]
+        out[key] = round(sum(vals) / len(vals), 4) if vals else 0.0
+    # Keep the per-run series so the scorecard can record run-to-run variance/CI
+    # (#1894). Mean-of-scalars (above) is the aggregate; this is its spread.
+    out["per_run"] = {k: series[k] for k in series_keys}
     return out
+
+
+def _accuracy_variance(values: list[float]) -> dict[str, Any]:
+    """Run-to-run spread of one accuracy metric (#1894).
+
+    Records mean/stdev/min/max/CV% plus a normal-approximation 95% CI on the mean
+    (half-width = 1.96·stdev/√n). Computed at full float precision here rather than
+    via :func:`gaia.eval.statistics.compute_variance` (which rounds to 2 d.p. for
+    ms/token magnitudes — too coarse for a [0,1] accuracy the gate's ±k·stdev band
+    keys off). For n<2 there is no spread: stdev/CI are 0 and ``n`` flags it. The
+    normal approximation is acknowledged-coarse at small n; the honest signal is
+    mean ± stdev and the observed [min, max].
+    """
+    n = len(values)
+    if n == 0:
+        return {
+            "n": 0,
+            "mean": 0.0,
+            "stdev": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "cv_pct": 0.0,
+            "ci95_half_width": 0.0,
+            "ci95_low": 0.0,
+            "ci95_high": 0.0,
+        }
+    mean = sum(values) / n
+    stdev = _stats.stdev(values) if n >= 2 else 0.0
+    half = 1.96 * stdev / (n**0.5) if n >= 2 else 0.0
+    cv = (stdev / mean * 100.0) if mean else 0.0
+    return {
+        "n": n,
+        "mean": round(mean, 4),
+        "stdev": round(stdev, 4),
+        "min": round(min(values), 4),
+        "max": round(max(values), 4),
+        "cv_pct": round(cv, 2),
+        "ci95_half_width": round(half, 4),
+        "ci95_low": round(mean - half, 4),
+        "ci95_high": round(mean + half, 4),
+    }
+
+
+def _acceptance_variance(aggregate_quality: dict) -> dict[str, Any]:
+    """Variance/CI block over the per-run acceptance series (#1894).
+
+    Keys off the ``per_run`` series :func:`_aggregate_quality` attached. The
+    primary metric (within-one-bucket) is the gated aggregate, so its spread is
+    what the variance-aware gate consumes; the others are reported.
+    """
+    per_run = aggregate_quality.get("per_run", {})
+    block: dict[str, Any] = {
+        "n_runs": max(
+            (len(per_run.get(k, [])) for k in _ACCEPTANCE_SERIES_KEYS), default=0
+        )
+    }
+    for k in _ACCEPTANCE_SERIES_KEYS:
+        block[k] = _accuracy_variance([float(v) for v in per_run.get(k, [])])
+    return block
 
 
 def _aggregate_perf(results: list[dict]) -> dict[str, Any] | None:
@@ -367,6 +461,12 @@ def summarize_benchmark(
 
     aggregate_quality = _aggregate_quality(results)
     if aggregate_quality is not None:
+        # Multi-run variance/CI on the acceptance metrics (#1894). Additive — the
+        # gate keys off aggregate.value (the mean); this records its spread so a
+        # noisy single draw can't masquerade as a regression.
+        aggregate_quality["acceptance_variance"] = _acceptance_variance(
+            aggregate_quality
+        )
         summary["quality"] = aggregate_quality
 
     if thresholds is not None:
@@ -439,71 +539,90 @@ def run_benchmark(
     omitted a real agent is built lazily so importing this module stays cheap.
     """
     model_slug = model_id.replace("/", "-").lower()
-    # Steer the agent to triage_inbox (whose envelope carries per-email
-    # ``results``) rather than pre_scan_inbox, so throughput AND quality are
-    # both harvestable and the run is deterministic across model whims.
-    prompt = (
-        f"Call triage_inbox for up to {limit} messages in my inbox, "
-        "then give me a short summary."
-    )
-    results: list[dict[str, Any]] = []
-
-    for exp in range(1, experiments + 1):
-        if agent_factory is not None:
-            agent = agent_factory()
-        else:
-            # Lazy import: keep `import gaia.eval.benchmark` free of the agent
-            # stack. EmailTriageAgent ships as the standalone gaia-agent-email
-            # wheel (#1102).
-            try:
-                from gaia_agent_email.agent import EmailTriageAgent
-                from gaia_agent_email.config import EmailAgentConfig
-            except ImportError as exc:
-                raise RuntimeError(
-                    "The email throughput benchmark needs the email agent. "
-                    "Install it with `pip install gaia-agent-email` (or "
-                    '`pip install "amd-gaia[agents]"`). '
-                    f"Original import error: {exc}"
-                ) from exc
-
-            try:
-                from tests.fixtures.email.fake_gmail import FakeGmailBackend
-            except ImportError as exc:
-                raise RuntimeError(
-                    "The email throughput benchmark must run from a GAIA repo "
-                    "checkout — it drives the synthetic corpus in "
-                    "tests/fixtures/email and is not available in a packaged "
-                    f"install. Original import error: {exc}"
-                ) from exc
-
-            config = EmailAgentConfig(
-                model_id=model_id,
-                base_url=base_url,
-                gmail_backend=FakeGmailBackend(mbox_path),
-                db_path=db_path,
-                show_stats=True,
-                silent_mode=True,
-            )
-            agent = EmailTriageAgent(config=config)
-
-        run_id = f"{run_id_prefix}-{model_slug}-exp{exp}"
-        start = time.monotonic()
-        agent_result = agent.process_query(prompt)
-        total_duration_ms = int((time.monotonic() - start) * 1000)
-
-        results.append(
-            build_result(
-                agent_result,
-                run_id=run_id,
-                timestamp=_utc_now_iso(),
-                model_id=model_id,
-                total_duration_ms=total_duration_ms,
-                ground_truth=ground_truth,
-                is_cold_start=(exp == 1),
-            )
+    # The benchmark scores a fixed labelled corpus and must cover all of it for
+    # a representative, category-balanced result. The LLM-facing triage tool
+    # otherwise clamps each call to its interactive default (100), silently
+    # truncating a larger corpus to its first N (and skewing the category mix).
+    # Raise the ceiling to ``limit`` so ``--limit`` actually governs coverage;
+    # per-email decisions are batch-size-independent, so this changes only how
+    # many emails are scored, never how any one is classified.
+    # Scope the override: save/restore so run_benchmark never permanently
+    # mutates the process env — a shared-process caller (a test or a future
+    # harness interleaving benchmark + agent calls) must keep the interactive
+    # default ceiling once the benchmark returns.
+    _prev_ceiling = os.environ.get("GAIA_EMAIL_TRIAGE_MAX_MESSAGES")
+    os.environ["GAIA_EMAIL_TRIAGE_MAX_MESSAGES"] = str(limit)
+    try:
+        # Steer the agent to triage_inbox (whose envelope carries per-email
+        # ``results``) rather than pre_scan_inbox, so throughput AND quality are
+        # both harvestable and the run is deterministic across model whims.
+        prompt = (
+            f"Call triage_inbox for up to {limit} messages in my inbox, "
+            "then give me a short summary."
         )
+        results: list[dict[str, Any]] = []
 
-    return results
+        for exp in range(1, experiments + 1):
+            if agent_factory is not None:
+                agent = agent_factory()
+            else:
+                # Lazy import: keep `import gaia.eval.benchmark` free of the
+                # agent stack. EmailTriageAgent ships as the standalone
+                # gaia-agent-email wheel (#1102).
+                try:
+                    from gaia_agent_email.agent import EmailTriageAgent
+                    from gaia_agent_email.config import EmailAgentConfig
+                except ImportError as exc:
+                    raise RuntimeError(
+                        "The email throughput benchmark needs the email agent. "
+                        "Install it with `pip install gaia-agent-email` (or "
+                        '`pip install "amd-gaia[agents]"`). '
+                        f"Original import error: {exc}"
+                    ) from exc
+
+                try:
+                    from tests.fixtures.email.fake_gmail import FakeGmailBackend
+                except ImportError as exc:
+                    raise RuntimeError(
+                        "The email throughput benchmark must run from a GAIA "
+                        "repo checkout — it drives the synthetic corpus in "
+                        "tests/fixtures/email and is not available in a packaged "
+                        f"install. Original import error: {exc}"
+                    ) from exc
+
+                config = EmailAgentConfig(
+                    model_id=model_id,
+                    base_url=base_url,
+                    gmail_backend=FakeGmailBackend(mbox_path),
+                    db_path=db_path,
+                    show_stats=True,
+                    silent_mode=True,
+                )
+                agent = EmailTriageAgent(config=config)
+
+            run_id = f"{run_id_prefix}-{model_slug}-exp{exp}"
+            start = time.monotonic()
+            agent_result = agent.process_query(prompt)
+            total_duration_ms = int((time.monotonic() - start) * 1000)
+
+            results.append(
+                build_result(
+                    agent_result,
+                    run_id=run_id,
+                    timestamp=_utc_now_iso(),
+                    model_id=model_id,
+                    total_duration_ms=total_duration_ms,
+                    ground_truth=ground_truth,
+                    is_cold_start=(exp == 1),
+                )
+            )
+
+        return results
+    finally:
+        if _prev_ceiling is None:
+            os.environ.pop("GAIA_EMAIL_TRIAGE_MAX_MESSAGES", None)
+        else:
+            os.environ["GAIA_EMAIL_TRIAGE_MAX_MESSAGES"] = _prev_ceiling
 
 
 def load_ground_truth(path: str | Path) -> dict[str, dict]:

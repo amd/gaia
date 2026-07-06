@@ -1,0 +1,35 @@
+id: routing
+name: Routing Agent
+version: 0.1.0
+description: "GAIA routing agent — meta-agent that routes requests to the right concrete agent"
+author: AMD
+license: MIT
+
+category: infrastructure
+tags: [routing, meta, infrastructure]
+icon: route
+tools_count: 0
+
+language: python
+min_gaia_version: "0.20.0"
+models: [Qwen3.5-35B-A3B-GGUF]
+
+python:
+  entry_module: gaia_agent_routing
+  entry_class: RoutingAgent
+  dependencies:
+    - "amd-gaia>=0.20.0"
+
+requirements:
+  min_memory_gb: 8
+  platforms: [win-x64, linux-x64, darwin-arm64]
+
+# RoutingAgent is infrastructure, not a user-selectable registry agent: it is
+# loaded by class path from gaia.api.agent_registry (the OpenAI-compatible API
+# server) and has no `gaia.agent` entry point.
+interfaces:
+  tui: false
+  cli: false
+  pipe: false
+  api_server: true
+  mcp_server: false

@@ -191,10 +191,18 @@ export interface IndexEntry {
   readme: string;
   /** CHANGELOG.md markdown of the latest version; empty string if none was published. */
   changelog: string;
+  /** SPEC.md (technical reference) markdown of the latest version; "" if none was published. */
+  spec: string;
+  /** SKILL.md (AI-integration playbook) markdown of the latest version; "" if none was published. */
+  skill: string;
   /** npm package name when the agent is distributed via npm; absent otherwise. */
   npm_package?: string;
   /** Localhost playground URL served by the agent's sidecar; absent otherwise. */
   playground_url?: string;
+  /** Public URL of the eval scorecard markdown for the latest version; absent when none was published. */
+  eval_scorecard_url?: string;
+  /** Aggregate eval score (0–100) parsed from the latest version's scorecard front matter; absent when none was published or parseable. */
+  eval_score?: number;
   /**
    * Whole-package download: a single zip (all platform binaries + client + docs)
    * plus its file listing. Present only when a `package_files` manifest was

@@ -55,6 +55,7 @@ class TestPlaygroundHtml:
         for path in (
             '"/v1/email/version"',
             '"/v1/email/triage"',
+            '"/v1/email/triage/batch"',
             '"/v1/email/draft"',
             '"/v1/email/init"',
             '"/v1/email/send"',

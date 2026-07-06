@@ -101,10 +101,11 @@ INIT_PROFILES = {
         "models": ["gemma4-it-e2b-FLM"],
         "approx_size": "~3 GB",
         "min_lemonade_version": "10.2.0",
-        # FLM default context on NPU. Smaller than GPU (32768) because NPU
-        # memory is more constrained; 4096 is the FLM --ctx-size default.
-        # Adjust upward if FLM supports larger windows on newer hardware.
-        "min_context_size": 4096,
+        # NPU context window. Matches GPU/CPU (32768) so the init report and
+        # the runtime load path agree (issue #1745) — the prior 4096 pin made
+        # `gaia init --profile npu` report 4096 while the loader requested
+        # 32768. FLM at 32k is confirmed loading on a Ryzen AI 7 350 / 16 GB.
+        "min_context_size": 32768,
         "pip_extras": [],
         # NPU-specific keys (not present on other profiles):
         "recipe": "flm",
@@ -592,12 +593,19 @@ class InitCommand:
 
             # Persist profile choice to ~/.gaia/config.json
             try:
-                from gaia.config import GaiaConfig
+                from gaia.config import GaiaConfig, GaiaConfigError
 
-                config = GaiaConfig(
-                    profile=self.profile,
-                    default_device="npu" if self.profile == "npu" else "gpu",
-                )
+                # Load-then-update so a user-set default_model (or any future
+                # field) survives re-running `gaia init`. init is also the
+                # natural recovery path, so if the existing file is corrupt,
+                # reset to a fresh config rather than leaving the bad file.
+                try:
+                    config = GaiaConfig.load()
+                except GaiaConfigError as e:
+                    log.warning(f"Resetting corrupt config: {e}")
+                    config = GaiaConfig()
+                config.profile = self.profile
+                config.default_device = "npu" if self.profile == "npu" else "gpu"
                 config.save()
             except Exception as e:
                 log.warning(f"Failed to save config: {e}")

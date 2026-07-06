@@ -51,6 +51,1460 @@
 
 ---
 
+## 0. v2 Architecture: Sidecar-First (supersedes the in-process model below)
+
+> Realizes the **Architecture (v2 — sidecar-first)** section of
+> [`agent-ui.mdx`](agent-ui.mdx). The Milestone A/B wiring below assumes agents
+> run **in-process** inside the UI backend; v2 inverts that — agents are
+> out-of-process **sidecars** and the UI is a **thin host**. Where a section
+> below wires a capability into in-process `ChatAgent`, read it as "a capability
+> the *sidecar* exposes over REST and the host relays," not "Python loaded into
+> the UI backend." PR #1910 (in-UI `EmailProxyAgent`) is **superseded**.
+
+### 0.§ Reading map
+
+§0 grew comprehensive; here's the shape so you can jump to what you need.
+
+- **Foundations:** §0.0 the host is a headless daemon (not the web UI) · §0.3 the
+  sidecar supervisor.
+- **The agent contract:** §0.1 REST surface (fixed-function + `/query`) · §0.2
+  `/query` SSE event schema · §0.4 mid-workflow confirmation · §0.18 dispatch ·
+  §0.32 multi-agent orchestration · §0.33 `/query` on the `gaia api` REST server.
+- **Autonomy:** §0.22 the scheduler clock · §0.34 autonomy-readiness (the
+  human-in-the-loop → policy-driven gap).
+- **Structure & framing:** §0.35 architecture-review refinements (two-tier custody
+  contract, naming, module seams, v1-hardening scope, render primitives) · §0.36
+  third-party integration ergonomics (the tiered capability matrix) · §0.37
+  **pluggable custody** (one sidecar = rich *and* stateless; refines §0.9) · §0.38
+  memory/resource footprint · §0.39 **custody-modes comparison table** · §0.40
+  **hybrid custody** (per-store shared/private — the embedded↔delegated spectrum) ·
+  §0.41 **the unified capability-mediation model** (collapses the modes — the capstone).
+- **Auth & security:** §0.6 OAuth forward · §0.11 the three auth legs + per-agent
+  authorization · §0.24 third-party **containment** (signing, tiers, egress,
+  encrypt-at-rest, audit integrity, taint) 🔒.
+- **Shared resources (host custody):** §0.9 memory/RAG/sessions/audit/MCP/model
+  table · §0.12 the model-slot broker · §0.19 audit sink · §0.29 store consistency.
+- **Data & contracts:** §0.28 the agent manifest schema · §0.29 custody-store
+  consistency · §0.30 identifier catalog · §0.31 the `/host/v1/*` callback API ·
+  §0.15 contract evolution.
+- **Lifecycle & ops:** §0.5 install (+model provisioning) · §0.13 concurrency /
+  cancel / failure / reaper · §0.14 one daemon per machine · §0.15 version
+  negotiation · §0.16 dev-mode · §0.20 uninstall · §0.21 offline/footprint · §0.22
+  autonomy clock · §0.25 daemon lifecycle · §0.26 on-disk layout.
+- **Delivery & context:** §0.7 CLI parity · §0.8 what's superseded · §0.10
+  migration (strangler-fig + data) · §0.17 eval/test · §0.23 feasibility & build
+  order · §0.27 relationship to sibling plans.
+- **Open decisions needing sign-off:** confirmation model (§0.4) · memory/RAG home
+  (§0.9) · third-party trust-root + containment (§0.24) 🔒.
+
+### 0.0 "The host" is a headless daemon, not the web UI
+
+Throughout §0, **the host** is a **headless custody/supervisor daemon** — a
+distinct, always-on machine process — *not* the web UI. It serves `/host/v1/*`
+(custody: OAuth/memory/RAG/sessions/audit — §0.9, §0.11, §0.19), supervises
+sidecars (§0.3), and holds the scheduler clock (§0.22). The **thin web UI** and the
+**`gaia <agent>` CLI** are *both* thin clients that attach to this one daemon
+(machine-wide, discovered per §0.14). This split is load-bearing:
+
+- **CLI-only / no-UI works.** `gaia email "what did I say about X last week"` and
+  its audit writes reach `/host/v1/*` because the daemon — not the browser tab — is
+  the custody server. Without this split, any sidecar spawned while the UI is closed
+  would have no callback target (the exact hole §0.11/§0.19 exist to prevent).
+- **The daemon is the always-on component** that survives the web UI closing, owns
+  the machine-wide single-instance registry, and is the wake-up owner for autonomy
+  (§0.22). Starting the UI or a CLI command **auto-starts the daemon** if not
+  already running.
+
+### 0.1 The agent REST contract (one per sidecar)
+
+Every agent sidecar exposes the **same** HTTP contract, presenting the agent's
+**full capability set** (`specification.html`, schema 2.x, is the reference — the
+deterministic core *and* the advanced tier: task extraction, follow-up tracking,
+daily briefing, scheduled send/snooze, sender prioritization, inbox profiling,
+persistent preferences). Two co-equal surfaces:
+
+- **Fixed-function endpoints** — the *deterministic core* as one call each
+  (`POST /v1/<agent>/<capability>`: triage, search, pre-scan, archive, calendar-
+  create, …). No LLM in the loop; for scripted/integrator use. **Not every
+  capability is a fixed-function call** — the spec's `Capability → surface` table
+  marks the advanced/personalization/detect-and-reason tier **"agent only"**, so
+  those are reached via `/query` + the §0.22 scheduler, *not* a deterministic
+  endpoint. (So "exposes ALL capabilities" is true of the *sidecar*, split across
+  the two surfaces — not "every capability has a fixed endpoint.")
+- **`POST /v1/<agent>/query` — the agent loop, exposed over REST like any other
+  endpoint.** NL request in; the sidecar reasons and chains tools into multi-step
+  workflows; **response is `text/event-stream` (SSE)**. This is the surface the
+  UI's chat experience and the `gaia <agent>` CLI both drive.
+- `GET /health`, `GET /version` — readiness + contract-version handshake.
+- Connector surfaces: self-service OAuth routes (bare integrators) **and**
+  forwarded-connection intake `POST /v1/connections` gated by `X-Gaia-UI: 1`
+  (the Agent UI host path — see §0.6).
+
+**`/query` request body (define it — currently only the response is specced):**
+`{ query, run_id, context, model?, provider?, max_steps? }`. Two rules that avoid
+real bugs:
+
+- **The host mints `run_id`**, not the sidecar. §0.13's `cancel/{run_id}` and the
+  confirmation flow key off it; if the sidecar minted it, a "Stop" pressed before
+  the first SSE event would have no id to cancel (a race window). Host-minted
+  `run_id` is cancellable from the instant the request is sent.
+- **Context is pushed in the body**, not pulled. The host owns the transcript
+  (§0.9) and passes the relevant slice as `context`; the sidecar stays stateless
+  and never reads other sessions back over the callback (which §0.11's scoping
+  would forbid anyway). The `GET /host/v1/sessions` callback is host-internal, not
+  a sidecar transcript-access path — so a pushed slice and a pulled one can't
+  disagree.
+
+### 0.2 `/query` SSE event schema
+
+One JSON object per SSE `data:` line, discriminated on `type`:
+
+| `type` | Payload | UI effect |
+|---|---|---|
+| `status` | `{message}` | progress line / spinner label |
+| `token` | `{delta}` | stream assistant text |
+| `tool_call` | `{tool, args}` | "using tool" card |
+| `tool_result` | `{tool, render?, data}` | if `render` set (e.g. `email_pre_scan`), draw the typed card from `data`; else a generic result card |
+| `needs_confirmation` | `{run_id, action, summary, confirm_url}` | show approve/deny; on approve POST the token (see §0.4) |
+| `final` | `{answer, usage}` | finalize the message |
+| `error` | `{detail, status}` | surface the actionable error verbatim |
+
+`render` replaces the in-process SSE "fence injection" hack: the sidecar declares
+the card type explicitly, so the host needs no per-tool knowledge. **Frontend
+change required (be honest about "thin"):** today `MessageBubble.tsx` renders
+cards by *fence-parsing* the assistant text (`STRUCTURED_PAYLOAD_LANGS`); v2 moves
+it to a `render`→component map keyed off `tool_result` events. The host stays
+generic, but each `render` type needs a frontend component, so a new agent that
+introduces a new card ships that component with it.
+
+**Build reality — the loop→SSE seam already exists; this table is a re-spec of it.**
+`src/gaia/ui/sse_handler.py` (`SSEOutputHandler(OutputHandler)`) already turns every
+agent-loop `console.print_*` call into a typed JSON event on a `queue.Queue` a
+streaming endpoint can drain — so `/query` is "run the agent with an SSE handler and
+expose the queue as `text/event-stream`," **not** net-new agent instrumentation.
+BUT the existing handler emits its *own* vocabulary
+(`status`/`step`/`thinking`/`tool_start`/`tool_end`/`tool_result`/`chunk`/`answer`),
+which is **not** the vocabulary above. The table is therefore the **target contract**;
+a small **translation layer** maps the handler's events onto it. Spec the mapping
+explicitly (it is the wire contract integrators depend on) rather than assuming the
+two vocabularies already agree — they don't.
+
+### 0.3 Host: the per-agent sidecar supervisor
+
+Generalize the email `EmailSidecarManager` into an **`AgentSidecarManager`
+registry** keyed by agent id. Per agent: mode (`user` frozen binary / `dev`
+uvicorn-from-source), verified download (SHA-256 vs the agent's lock), ephemeral
+port (never 4001), lazy spawn on first use, health + `/version` handshake,
+tree-kill on shutdown, one shared instance per agent. Host routes:
+
+- `GET  /v1/agents` — installed + catalog (hub mirror, §0.5).
+- `POST /v1/agents/{id}/install` · `DELETE /v1/agents/{id}` — one-click install/uninstall.
+- `ANY  /v1/<agent>/*` — reverse-proxy to that agent's running sidecar (lazy-start),
+  preserving SSE for `/query` and the sidecar's own status codes + actionable detail.
+
+**Build reality — this is a NEW streaming proxy, not "generalize the existing one."**
+Today's `EmailSidecarProxy` is a synchronous `requests.Session` that ends every call
+in `resp.json()` (`src/gaia/ui/email_sidecar/proxy.py`) — it **fully buffers** and
+has no streaming, no client-disconnect propagation, no cancel path. SSE passthrough
+(§0.13 cancel-on-disconnect + the synthetic-crash `error` event) must be rebuilt on
+`httpx.AsyncClient(stream=True)` + `StreamingResponse`. Standard work, but net-new —
+the deterministic (buffered) proxy is what's reusable; the streaming path is not.
+
+### 0.4 Mid-workflow confirmation (over SSE, no WebSocket)
+
+Destructive steps keep the single-use **confirmation-token gate**. Flow:
+
+1. Sidecar reaches a gated step, emits `needs_confirmation{run_id, action, summary, confirm_url}` and **pauses the run** (kept alive server-side, keyed by `run_id`).
+2. UI shows approve/deny with the literal `summary` (recipient/subject/body, etc.).
+3. On approve the host `POST`s to `confirm_url` (`/v1/<agent>/query/{run_id}/confirm`) with the minted token; the sidecar resumes emitting on the **same** SSE stream. Deny ends the run with a `final` "skipped" answer.
+
+Trade-off: the resume model makes an in-flight run **stateful** in the sidecar (a
+`run_id`→continuation map with a TTL), which cuts against the email contract's
+explicit **"HTTP, stateless"** ethos and is fragile across dev-reload / crash /
+uninstall. The alternative — emit `needs_confirmation`, *end* the stream, let the
+host call the deterministic endpoint (`/send` with the token) itself, then issue a
+fresh `/query` carrying the prior context to continue — keeps the sidecar
+**stateless** at the cost of the host stitching the workflow across calls.
+
+**Recommendation: stateless stop-and-hand-off for v1** (preserves the sidecar's
+stateless design; the host, which already holds session context, orchestrates the
+continue). Promote to the resume model **only if** real workflows prove they need
+many confirmations in one unbroken run and host-side stitching is too clumsy.
+*Decision pending sign-off.*
+
+**Approve-what-you-saw invariant (critical).** In the stateless model the sidecar
+*re-reasons* on the continuation, so it can produce a plan that **diverges from the
+action the user just approved** — the approved summary and the re-executed step are
+no longer guaranteed identical. The payload-fingerprint token protects a single
+`/send`, but not the workflow continuation. Resolution: the continuation must
+**resume the exact approved step**, not re-plan it — either scope the confirmation
+token to the whole approved multi-step segment, or have the host pass the sidecar
+the exact prior tool-plan/step state so it executes rather than re-decides. This
+constraint holds under *either* confirmation model and is a hard requirement.
+
+**Which artifacts belong to which model (avoid the mixed-model trap).** `run_id` is
+the **streaming-run handle** and exists under *both* models — it is what §0.13's
+`cancel/{run_id}` targets. The `confirm_url = /v1/<agent>/query/{run_id}/confirm`
+in the numbered flow above is **resume-model-only** (it keeps a paused run alive).
+Under the **recommended stateless model** there is no paused run to resume: a
+`needs_confirmation` event *ends* the stream, the host performs the deterministic
+call (`/send` with the token) itself, then issues a **fresh `/query`** carrying the
+approved-step state to continue. So if stateless is adopted, drop `confirm_url` and
+the server-side run-continuation store; keep `run_id` purely for cancellation.
+
+### 0.5 Agent Hub mirror (install / uninstall)
+
+The UI embeds a catalog mirror (existing `agentHub.ts` / `AgentInstallDialog` /
+`AgentHubGrid` are the starting point). **Install** = resolve the agent's
+platform binary from its lock → verified download (SHA-256) → cache under
+`~/.gaia/agents/<id>/` → register so it appears as a launchable agent.
+**Uninstall** = stop any running sidecar → remove the cached binary + registration.
+Reuses the email sidecar's verified-fetch + lifecycle primitives; **no Node on the
+runtime path**. **Install/update/forward are trust decisions — SHA-256 verifies
+integrity, not authenticity; they must go through the signing + tier + least-
+privilege + containment model in §0.24 before a third-party agent is trusted or
+handed a live connection.**
+
+**Install must provision the model, not just the binary (cold-start).** A freshly
+installed agent whose model (e.g. `Gemma-4-E4B`) isn't downloaded spawns fine, then
+its first `/query` dies deep in the broker/Lemonade path with model-not-found — the
+hidden-cold-state failure CLAUDE.md warns about (#1655). The agent's lock/manifest
+**declares its required model(s)**; install (or first spawn) pulls them **through the
+host broker** (§0.12) with progress in the UI, before the agent is marked launchable.
+Define the full **cold sequence**: open UI → no daemon (start it, §0.25) → no agents
+(hub grid) → install agent (binary **+ model**) → optional connector consent (§0.6,
+§0.24) → first `/query`.
+
+### 0.6 OAuth: host owns consent + refresh, forwards to the sidecar
+
+`grants.json` keeps a single writer. The host runs the OAuth consent flow once and
+**forwards** the pre-authenticated connection *out* to each agent sidecar via the
+sidecar's `POST /v1/connections` intake (`X-Gaia-UI: 1`; refresh-token/client-secret
+are inputs, never returned). Sidecars never run the UI-facing consent write. A bare
+integrator (no host) may instead use the sidecar's self-service connector routes.
+
+**Two things the current code makes non-trivial (flag for the build):**
+
+- **Role inversion.** Today `/v1/connections` is a *host-side intake* — external
+  apps forward connections INTO gaia (`src/gaia/ui/routers/connectors.py:94`
+  `forwarded_router`; `src/gaia/connectors/api.py:266` `import_forwarded_connection`).
+  In v2 the host becomes the *forwarder OUT*, and the **sidecar** exposes the
+  intake (it bundles `gaia.connectors`). The primitive exists; the direction and
+  the per-agent wiring are new.
+- **Token refresh ownership.** With N sidecars sharing one Google grant, each
+  holding a refresh token would race to refresh and rotate each other out. The
+  single-writer host should **own refresh** and forward short-lived *access*
+  tokens (re-forward on expiry), so sidecars never touch the refresh token.
+
+### 0.7 CLI ↔ sidecar parity
+
+`gaia <agent>` becomes a thin client of the **host daemon** (§0.0), exactly like the
+web UI: it **auto-starts the daemon if none is running, then attaches to it** — it
+does **not** run `AgentSidecarManager` or spawn the sidecar itself. The daemon owns
+sidecar lifecycle (§0.3) and custody; the CLI just calls the **identical** contract
+through it — `gaia email "triage my inbox"` drives `POST /v1/email/query` exactly as
+the UI does, via the same daemon. One contract, one supervisor, no second in-process
+code path to keep in sync. (If the CLI spawned its own sidecar, that sidecar's
+callback base-URL would point at the ephemeral CLI process and its `/host/v1/audit`
++ memory writes would vanish when the command exits — the §0.0 hole. The daemon
+being the sole spawner is what closes it.)
+
+### 0.8 What's superseded
+
+- In-process agent construction in `src/gaia/ui/_chat_helpers.py` (the
+  `agent_type=…` factory) → replaced by proxying to sidecars.
+- `EmailProxyAgent` + the in-UI tool loop (PR #1910) → replaced by relaying to the
+  sidecar's `/query`.
+- Fat UI routers whose logic belongs to an agent (chat loop, scheduling) → migrate
+  into the relevant sidecar; the host keeps UI serving, shared-user-data custody
+  (§0.9), and sidecar supervision.
+
+### 0.9 Shared services (host custody) — the biggest open call
+
+> **Refined by §0.37:** custody is a **pluggable provider**, not intrinsically the host.
+> The rationale below holds for the *multi-agent Agent UI* (N sidecars sharing one
+> user's data ⇒ single writer ⇒ the host). A **standalone** sidecar is its own single
+> writer and uses an **embedded** provider. So read this table as "the provider the GAIA
+> host implements," not "the only place custody can live."
+
+Not everything in the fat backend is "agent logic." Three chunks are **user-scoped
+data that spans agents** and would fragment/corrupt if each sidecar owned a copy —
+so in the Agent UI they belong to the host's custody layer (same single-writer rationale
+as OAuth), queried by sidecars rather than duplicated:
+
+| Current router | LoC | v2 home (recommended) |
+|---|---|---|
+| `memory.py` | ~1634 | **Host custody** — one user memory store; sidecars query it. Per-*agent* private memory (e.g. email session prefs) stays in the sidecar. |
+| `documents.py` (RAG) | ~739 | **Host custody** — one document/RAG store the user uploads into; any agent queries it. |
+| `sessions.py` | ~368 | **Host** — session index **and the durable conversation transcript**. See below: a stateless, uninstall-able sidecar cannot be the system of record for chat history. The host feeds the relevant transcript to the sidecar as input per `/query`. |
+| `connectors.py` | ~977 | **Host** — OAuth custody (§0.6). |
+| `files.py` | ~665 | **Host** — upload storage the UI serves. |
+| `mcp.py` | ~349 | **Host** — the user-configured MCP *server registry* is shared (like connectors); each sidecar connects to the servers its agent needs. Host owns the config, not the connections. |
+| (Lemonade — **all** model families) | — | **Host broker** — single-tenant per model slot; a host-owned queue serializes loads of LLM **and** embedder / VLM / ASR / TTS / SD across agents *and* host-custody RAG (§0.12). The most-contended shared resource. |
+| (audit trail) | — | **Host custody sink** — consequential actions (incl. autonomous + fixed-function + direct-integrator paths) are appended to a host-owned log, NOT kept agent-private, or the observability dashboard is blind and uninstall erases the record (§0.19). |
+| `hub.py`, `agents.py`, `system.py`, `tunnel.py` | ~1700 | **Host** — supervision, settings, remote access. |
+| `chat.py` | ~304 | **Sidecar** — agent chat loop moves into the owning agent. |
+| `goals.py`, `schedules.py` | ~522 | **Split** — the trigger **registry + cron clock is host** (the daemon is the always-on wake-up owner); the job **executes in the owning sidecar**, spawned at fire time (§0.22). A reaped sidecar can't fire its own cron, so the clock cannot live inside it. |
+
+**Conversation history must be host custody (was a contradiction).** An earlier
+draft had the sidecar own message history — but §0.3 makes the sidecar *ephemeral*
+(lazy-spawn, tree-kill, dev-reload, and **uninstall deletes the cached binary**),
+and §0.4 leans on it being *stateless*. A disposable process cannot be the system
+of record for the user's chat log: uninstalling or crashing an agent would destroy
+it, and the stateless `/query` model needs the host to *replay* context anyway. So
+the **host owns the transcript** (extending the session index it already owns); the
+sidecar is fed the slice it needs per call and persists nothing durable itself.
+
+**Session ownership across clients.** Run-isolation (§0.13) namespaces concurrent
+runs *inside* the sidecar, but two clients (two UI tabs, or UI + CLI) pointed at the
+**same** host-owned session would interleave writes into one transcript — braided
+turns or a lost-update race. The host needs a session-focus model: **one active
+writer per session** (others read-only/observing), or **per-client sessions** so two
+tabs are simply two conversations. Cheap to decide now, confusing to retrofit.
+
+**Alternative considered:** make user-memory and RAG their *own* dedicated
+sidecars (purest "all logic in a sidecar"). Rejected for v1 — it multiplies
+cross-process user-data writers (the exact problem the OAuth single-writer rule
+avoids) and adds two more supervised processes before we've proven one. Revisit if
+the host custody layer grows its own heavy reasoning. **This is the single
+decision that most shapes the migration — needs explicit sign-off.**
+
+### 0.10 Migration path (strangler-fig — no big-bang)
+
+Retire the ~19K-LoC backend incrementally; the app stays shippable throughout.
+**This is code migration — existing user *data* needs its own step:**
+
+0. **Data migration (one-time, idempotent, versioned).** The current `~/.gaia`
+   state predates host custody: today's transcripts (`sessions.py` store) have no
+   agent tag, and the single memory store has no host/agent-private partition.
+   Migrate on first v2 launch: existing sessions → host session index with a
+   default agent tag; existing memory → host **user** memory (the conservative
+   default — it was cross-agent already), with a documented rule for what becomes
+   agent-private. Stamp an on-disk schema version so the migration is detectable and
+   runs once. Without this, upgraders lose past chats or see them reattach to a
+   wrong/null agent, and memory either leaks cross-agent or is stranded.
+1. **Email first** — already sidecar-shaped; add `/query` (SSE) and route the UI's
+   email session through it. All other agents remain in-process, untouched.
+2. **Host supervisor** — generalize `EmailSidecarManager` → `AgentSidecarManager`
+   + hub install/uninstall, so in-process and sidecar agents run side by side.
+3. **Per-agent migration** — move one agent at a time behind the proxy; delete its
+   in-process router logic only after its sidecar ships.
+4. **Extract shared services** — lift user memory / RAG / session index into the
+   host custody layer (§0.9) as agents stop owning them in-process.
+
+No step requires all agents migrated at once; each is independently releasable.
+
+### 0.11 Auth: three legs (client↔daemon, daemon↔sidecar, sidecar↔daemon)
+
+The §0.0 daemon split creates **three** trust legs, all currently **undefined** in
+the code (`email_sidecar/router.py`/`proxy.py` do no auth; the port is loopback-only).
+
+- **Client → daemon (new with the §0.0 split — 🔒).** The daemon is now a standalone
+  process exposing, on a loopback port, the whole custody API (`/host/v1/memory|rag|
+  sessions|audit`) **and** the `ANY /v1/<agent>/*` proxy that can drive any sidecar.
+  The UI and CLI are *external clients* of it, and loopback is not an auth boundary
+  (same threat model as below) — so without a credential, **any local process can
+  read the entire cross-agent memory/RAG/transcript store or drive any sidecar
+  through the proxy.** The daemon mints a **client-auth token** at startup, stored
+  `0600` in its `~/.gaia/host/instance.json` (§0.14); UI and CLI read it and present
+  it on every daemon call. (A unix-domain socket with SO_PEERCRED is a stronger
+  alternative where available.) This is distinct from the per-spawn secret below,
+  which is daemon↔sidecar only.
+- **Per-spawn secret (daemon → sidecar).** Loopback binding is **not** an auth
+  boundary — any local process (another user on a shared box, a browser tab via
+  CSRF/DNS-rebinding, a malicious `npm postinstall`) can `POST /v1/<agent>/query
+  "archive everything"` on an unauthenticated port that can send mail. The host
+  **mints a random secret per spawn**, passes it to the sidecar via env at launch,
+  and the sidecar **requires it** (bearer header) on every request — fixed-function,
+  `/query`, and `/confirm`. `X-Gaia-UI: 1` is CSRF hygiene, not authentication.
+  (In the daemon-less **bare-integrator** topology of §0.6, the process that
+  launches the sidecar supplies this launch secret — the sidecar always requires
+  it; only the injector changes.)
+- **The reverse contract (sidecar → host).** The custody model (§0.9) needs
+  sidecars to *read* host-owned data. Define a first-class host callback API —
+  `GET /host/v1/memory`, `POST /host/v1/rag/query`, `GET /host/v1/sessions/{id}` —
+  that the sidecar calls, authenticated with the **same per-spawn secret** (the
+  host injects its own callback base-URL + the secret at launch). Symmetric to the
+  forward proxy; without it, "the host stores it, the sidecar queries it" has no
+  transport and agents silently re-fork their own copies.
+- **Authorization, not just authentication (🔒 the decisive one).** The per-spawn
+  secret only proves "the host spawned me" — it does not say *which* agent, and
+  unscoped callback routes turn the custody store into a **single-reader
+  exfiltration surface**: a hub-installed third-party agent could read the entire
+  cross-agent user memory, the whole RAG corpus, and *any* session transcript by id
+  — including other agents' conversations. **The host must bind the secret to the
+  agent id at mint time and scope every callback per-agent:** `/host/v1/memory` and
+  `/host/v1/rag` return only rows tagged to that agent (or an explicitly
+  user-granted shared scope), and `/host/v1/sessions/{id}` verifies the session
+  belongs to the caller. Shared-memory/RAG read access becomes a **per-agent grant**
+  surfaced at install, like connector grants. This is an architecture-level security
+  decision — settle it before the callback contract is frozen.
+- **Secret delivery.** Passing the secret via env is readable by other same-user
+  processes on some OSes — the exact "another local process" threat the auth exists
+  to stop. Prefer a pipe/inherited fd or a short-lived `0600` file over the
+  environment.
+
+### 0.12 Shared model backend — a host-owned model-slot broker
+
+Lemonade is **single-tenant per model slot** (this is why evals must run serially —
+CLAUDE.md). N sidecars each loading models independently will **race-evict each
+other** exactly as concurrent evals do — chaotic ctx-size errors and
+`model_load_error` in production, not just CI. The custody layer must arbitrate the
+*most*-contended shared resource: a **host-owned broker** that serializes model
+loads and grants a **model-slot lease** per request/run. Agents request inference
+through the broker (or the host proxies the backend), never contend directly. A
+hard requirement for more than one concurrently-active agent.
+
+- **All model families, not just the chat LLM.** Host-custody RAG needs the
+  **embedder** to serve `/host/v1/rag/query`; a VLM agent needs the VLM; voice
+  (host I/O) needs Whisper/Kokoro; SD needs SDXL. A host RAG call mid-`/query`
+  evicting the chat model is the exact silent-ctx-cap regression #1030 warns about.
+  The lease must cover embedder + LLM + VLM (+ voice/SD) together for a run —
+  host-custody RAG/VLM/voice are broker *clients*, not privileged bypass paths.
+- **Priority + preemption.** Serialization prevents corruption, not stalls. A
+  Phase-C autonomous brief runs in-sidecar and also draws the slot, so it can block
+  the user's interactive turn behind it. The broker needs **interactive > background
+  priority** (and preemption), or a background job silently makes a chat turn wait.
+- **Affinity + legibility.** A hot-model **affinity hint** keeps agents sharing a
+  model from reloading on every switch; the host emits a **`switching model…`
+  status event** so an unavoidable evict+reload stall (seconds, worse on NPU) is a
+  visible state, not a frozen UI.
+
+### 0.13 Concurrency, cancellation & failure semantics
+
+- **Run isolation.** §0.3 mandates one shared sidecar per agent, but a `/query`
+  run is a stateful multi-step loop and today's confirmation store is a single
+  process-wide dict. Two simultaneous callers (UI + a scheduled brief, two tabs)
+  must not collide: **namespace all per-run state by `run_id`** (token store, tool
+  state), forbid shared mutable module state, and document a **parallelism limit**
+  (or a per-run worker). "Shared instance" must not silently imply "safely reentrant."
+- **Cancellation.** Define `POST /v1/<agent>/query/{run_id}/cancel`; the host
+  propagates a UI "Stop" **and** a dropped SSE connection to it (a relayed stream
+  hides the client disconnect from the sidecar), and the agent loop checks a
+  cancel flag between tool steps — so a stopped run stops burning the model slot
+  and fires no further tools.
+- **Failure semantics.** On sidecar crash mid-SSE the host injects a synthetic
+  terminal `error` event (the UI otherwise sees a truncated stream with no
+  `final`), cleans up the orphaned `run_id`/session-index entry, and surfaces the
+  actionable cause. Download/spawn failure fails loud via the hub (§0.5).
+- **Lifecycle/resource limits.** Every installed agent is a long-lived process
+  holding a port + memory + a model-slot claim. Lazy-spawn is not enough: add an
+  **idle-timeout / LRU reaper** and a **cap on concurrent live sidecars**, or ten
+  installed agents = ten resident processes.
+
+### 0.14 One daemon per machine; the daemon holds one sidecar per agent
+
+Because the **daemon (§0.0) is the sole spawner/supervisor**, the old "UI and CLI
+race to spawn rival sidecars" problem is structurally gone — no client spawns a
+sidecar. What remains is single-instancing the *daemon* itself and letting clients
+find it:
+
+- **One daemon per machine.** A daemon lockfile/registry
+  (`~/.gaia/host/instance.json` → pid + client-auth token — see §0.11) makes the
+  first UI/CLI invocation start the daemon and every later one **attach**. Two
+  daemons would re-create two writers into `grants.json` and two forwarders, so the
+  lock is what guarantees a **single forwarder-of-record**.
+- **One sidecar per agent, owned by the daemon.** The daemon keeps its own
+  per-agent registry (`AgentSidecarManager`, §0.3) → pid + ephemeral port +
+  per-spawn secret; UI and CLI never see it, they go through the daemon's proxy. So
+  "one shared instance per agent" is now a property of the single daemon, not a race
+  between client processes.
+
+### 0.15 Contract-version negotiation at install + render fallback
+
+`GET /version` exists but the policy on mismatch does not. Installing an agent
+built against contract 3.x into a 2.x host would silently diverge on the SSE schema,
+`render` types, and `/v1/connections` shape. Define: the **host advertises a
+supported contract-major range**; hub **install rejects out-of-range agents with a
+loud, actionable error** (never a silent partial-compat install); and the frontend
+renders an explicit **"unsupported card"** fallback for an unknown `render` type
+rather than nothing.
+
+**Custom cards are first-party in v1.** A sidecar binary cannot inject a React
+component into the pre-built, signed thin-UI bundle without a dynamic
+component-load path (itself a security surface) — so **custom `render` types are
+first-party / AMD-verified only in v1**; a third-party agent's novel card
+gracefully degrades to the generic result card via the fallback above. Don't plan a
+dynamic-component-load path unless/until that's explicitly sanctioned.
+
+**Evolution doesn't stop at the install gate.** Install negotiates only the contract
+*MAJOR*; §0.25's daemon self-update then makes skew inevitable (the daemon updates,
+installed sidecars don't). Cover the after-install cases:
+
+- **Reverse callback skew (new daemon → old sidecar).** §0.25 versions the
+  *client↔daemon* API; the mirror case — an old installed sidecar calling a changed
+  `/host/v1/*` — is uncovered. **Version the callback API too**, symmetric to §0.25:
+  refuse + prompt reinstall on a MAJOR the daemon can't serve, or hold N-1 compat.
+- **Unknown SSE event `type` (§0.2).** A newer agent emitting a new top-level event
+  `type` to an older host must **surface a visible "unsupported event," never silently
+  drop it** (the CLAUDE.md no-silent-fallback rule) — parity with the `render`-type
+  fallback above.
+- **Additive vs deprecation.** A new endpoint/capability/event is a backward-compatible
+  **MINOR**; removing one needs a stated **deprecation/sunset window**, not a silent
+  break. (The MAJOR gate alone can't express either.)
+
+### 0.16 Dev-mode discovery for *unpublished* agents
+
+`GAIA_<AGENT>_MODE=dev` runs a *known* agent from source, but `AgentSidecarManager`
+is keyed by hub id + lock — a brand-new agent an author is building has no catalog
+entry, no lock, no binary, so it can't be registered or spawned, defeating "the UI
+doubles as dev mode." Add a **local-agent registration path**: point the manager at
+a source dir + port (skip SHA/lock, no catalog entry) so an in-development agent is
+launchable and appears in the UI before it is ever published.
+
+### 0.17 Testing & eval strategy (`/query` + the distributed seams)
+
+`/query` is a multi-step LLM loop — the most LLM-affecting surface, which CLAUDE.md
+mandates evals for — but v2 also adds a **daemon, a cross-process broker, an SSE
+relay, three auth legs, and a data migration**, each with its own failure modes. The
+strategy spans four tiers:
+
+- **`/query` behavior (eval).** A **sidecar eval harness** drives `/query` over REST
+  and asserts on the **event sequence** (`tool_call` → `tool_result` →
+  `needs_confirmation` → `final`), not just a final string; eval baselines move into
+  each agent's hub package. Runs stay **serial** against the shared broker (§0.12) —
+  the per-agent sidecar model must not reintroduce concurrent model-slot contention.
+- **The distributed seams (deterministic unit/integration, no LLM):**
+  - *SSE relay* — streaming passthrough (assert no buffering), cancel-on-disconnect
+    (§0.13), and the synthetic-crash `error` event, against a fake sidecar.
+  - *Auth legs (§0.11)* — assert **all three** reject a missing/wrong credential
+    (client→daemon token, daemon→sidecar per-spawn secret, sidecar→daemon callback),
+    and that callback authorization is **per-agent scoped** (agent A cannot read
+    agent B's memory/session) — the security property, tested as a boundary, not a
+    mock that only proves "we called it."
+  - *Broker (§0.12)* — a concurrency test proving two agents requesting different
+    models **serialize** rather than race-evict (the property CLAUDE.md's serial-eval
+    rule protects), plus priority (interactive preempts background).
+  - *Daemon lifecycle (§0.25)* — stale-`instance.json` reclaim after a killed pid,
+    atomic write, and daemon restart-on-version-skew draining in-flight runs.
+- **Data migration (§0.10 step 0)** — **idempotency + cold-state** test (CLAUDE.md's
+  "test from the user's real initial state"): run the one-time migration twice, and
+  from a *real pre-v2* `~/.gaia` fixture, asserting transcripts/memory land tagged
+  correctly and a second run is a no-op.
+- **End-to-end golden path** — one on-hardware test per the `gaia-testing` tiers: UI
+  (or CLI) → daemon → sidecar → Lemonade, a real `/query` inbox triage, confirming
+  the `email_pre_scan` card renders and a destructive step surfaces the confirmation
+  gate. This is the "the call is valid, not just invoked" proof for the whole chain.
+
+### 0.18 Dispatch — which sidecar answers a free-form message
+
+`/query` "is what the UI's chat drives," but with N installed sidecars nothing
+chooses the target. `gaia email "…"` is explicit; the UI's single chat box is not —
+the "host renders, sidecar reasons" split has a hole exactly where the user types.
+Pick one model and put it in the call graph:
+
+- **(a) Explicit per-session agent selection** (recommended v1) — the UI's active-
+  agent picker names the sidecar; matches the CLI; zero extra LLM cost.
+- **(b) A routing *sidecar*** the host calls first — flexible, but routing is itself
+  an LLM loop, so it draws the model slot (§0.12) and adds a hop before every turn.
+
+Cross-agent requests ("summarize this and email it") need either the user to switch
+agents or an orchestrator agent that itself calls other sidecars — **designed in
+§0.32** (later than v1, but a first-class agent on the same contract, so the v1
+picker isn't mistaken for the end state).
+
+### 0.19 Audit trail — a host-custody sink, not agent-private
+
+The observability dashboard (security-model.mdx) promises "everything the agent
+did," but v2 moves the *acting* into sidecars, so the host sees only what crosses
+its SSE relay. Three blind spots: fixed-function calls from the CLI/integrators
+bypass the host; Phase-C autonomous schedules fire in-sidecar with no host in the
+loop; and email's action log is agent-*private* (§0.9) so the dashboard can't read
+it and uninstall deletes it. **Every consequential action** (send, archive,
+calendar-create, autonomous or scripted) must be appended to a **host-owned audit
+log** via `POST /host/v1/audit` (per-agent scoped, §0.11) — not just host-relayed
+`/query`. Otherwise the trail is a partial, self-erasing view.
+
+### 0.20 Uninstall — data lifecycle
+
+§0.5 uninstall stops the sidecar + removes the binary, but is silent on data.
+Define the policy explicitly (tie to §0.11 per-agent scoping so "this agent's data"
+is a well-defined set):
+
+- **Forwarded connection** — the host **withdraws/revokes** the OAuth connection it
+  forwarded, so a removed agent doesn't retain live mailbox access.
+- **Host-custody transcripts** tagged to the agent — offer **keep or delete** (they
+  survive the binary; dangling "ghost" sessions that can't reopen are the failure to
+  avoid); on reinstall, keep = reattach.
+- **Agent-private state** (`~/.gaia/agents/<id>/`, e.g. the action log) — wipe by
+  default (state a default), with an option to retain.
+- **Shared user-memory rows** the agent wrote — governed by its §0.11 grant scope.
+
+### 0.21 Offline / sideload install + install footprint
+
+- **Sideload.** Every §0.5 path *downloads* from the lock's `baseUrl` — but GAIA is
+  privacy-first and targets air-gapped + OEM-preloaded deployments (a stated Phase-D
+  goal). Add a **local install source**: point the manager at a pre-staged directory
+  of verified binaries (still SHA-check against the lock, skip the network), covering
+  the *first* agent too. This also unblocks OEM factory-image bundling — cheap to
+  reconcile now rather than retrofit.
+- **Footprint (honest downgrade).** The email binary is ~90 MB **only because** its
+  freeze `--exclude-module`s torch/transformers/faiss/scipy/pandas — legal solely
+  because email runs no in-process ML (it calls Lemonade over HTTP;
+  `packaging/freeze.py`). Any agent that needs an in-process embedder/VLM/SD (RAG,
+  vision) **cannot** use those excludes → multi-GB per binary. And PyInstaller
+  produces self-contained bundles with **no cross-binary linking**, so a "shared
+  runtime layer the per-agent binaries link against" is **not a PyInstaller
+  capability** — it needs a different packaging strategy (a shared base venv, a
+  host-side model-runtime service the sidecars call, or non-frozen deployment).
+  Treat §0.21 shared-runtime as **aspirational**, not a config tweak, and prefer
+  keeping in-process ML *out* of sidecars (route it through the host model broker,
+  §0.12) to preserve the lightweight-binary property.
+
+### 0.22 Autonomy — the host holds the clock, the sidecar does the work
+
+§0.9 runs autonomy (schedules/goals) in the owning sidecar, but §0.13 idle-reaps
+sidecars and caps live ones — so a reaped email sidecar has nothing alive at 8am to
+fire the daily brief, and the job silently never runs (passing every unit test).
+Resolve by splitting the clock from the work:
+
+- The **host daemon (§0.0) owns the trigger registry + cron clock** — always-on, it
+  is the wake-up owner. Schedule *metadata* is host custody.
+- At fire time the host **spawns the owning sidecar** (if not resident) and hands it
+  the job over `/query` (or a fixed endpoint), then lets the reaper reclaim it after.
+- Alternatively, mark specific agents **pinned-resident** (exempt from the reaper +
+  live-cap) when sub-minute latency matters. State which agents qualify; default is
+  wake-on-fire, since holding every autonomous agent resident defeats §0.13.
+
+Either way the wake-up owner is the daemon, never a reapable sidecar.
+
+### 0.23 Feasibility & build sequencing (grounded in the current code)
+
+A feasibility pass against the codebase found **no fatal blocker** — the design is
+buildable — but the "thin" framing rests on some primitives that are reuse and
+others that are genuinely net-new. Naming which is which sets an honest build order.
+
+**Already exists (de-risks the plan):**
+
+- **The agent-loop → SSE seam** (`src/gaia/ui/sse_handler.py` `SSEOutputHandler`) —
+  `/query` reuses it (§0.2 build note), not net-new instrumentation.
+- **Mid-workflow confirmation over SSE** — the pause/resume primitive §0.4 describes
+  (`_confirm_event`, `_user_input_queue`, `permission_request` events) **ships
+  in-process today**; the only new work is carrying the Event across the process
+  boundary (which is exactly what makes a resumed run stateful — the §0.4 tension is
+  real, not hypothetical).
+- **OAuth forward + short-lived-token refresh** — `import_forwarded_connection` and
+  `get_access_token` (`src/gaia/connectors/api.py`) already exist and the refresh
+  engine is client-neutral, so §0.6's "host refreshes, forwards short-lived tokens"
+  maps onto real code.
+
+**Net-new, load-bearing (sequence first):**
+
+1. **Lemonade broker (§0.12) — the critical path.** Today the only lock is an
+   *in-process* `_downloads_lock` (`lemonade_client.py`); "one model slot" literally
+   means last-writer-wins across processes. The host broker (serialized loads +
+   cross-process lease + priority) has **zero existing scaffolding** and gates the
+   plan's headline (more than one concurrently-active agent). Build + prove first.
+2. **Streaming reverse-proxy (§0.3, §0.13)** — net-new `httpx` streaming + cancel;
+   the current proxy buffers. Prove with a one-endpoint **freeze spike** (SSE through
+   a PyInstaller binary is unproven here, though low-risk — uvicorn loops/protocols
+   are collected in the freeze) before committing.
+3. **`/query` endpoint + event-vocab translation (§0.1, §0.2)** — de-risked by the
+   SSE seam, but the sidecar has no `/query` today and the handler's vocabulary must
+   be translated to the §0.2 contract.
+4. **CLI rewrite (§0.7)** — `gaia email` is fully in-process (`cli.py` builds
+   `EmailTriageAgent` and calls `process_query`); converting it to a daemon client is
+   a real rewrite that must stay behaviorally identical.
+5. **Forward-OUT intake on the sidecar (§0.6)** — primitive exists; the sidecar
+   `/v1/connections` intake route + role inversion is new wiring (low risk).
+
+Build order: **broker + streaming-proxy spike → `/query` + vocab → CLI → OAuth
+forward-out**, migrating email first (§0.10) as the reference.
+
+### 0.24 Security & privacy — containing a sidecar that is itself the adversary
+
+The prior auth work (§0.11) *authenticates* the sidecar↔host channels well, but the
+plan had **no story for containing a hostile agent** — critical the moment
+**one-click, third-party** hub agents (§0.5) are installable. A security review
+surfaced these. The first three are one coupled trust-root + containment decision;
+**settle before the first third-party agent ships (🔒 @kovtcharov-amd).**
+
+- **Sign the lock/catalog — SHA-256 alone is not authentication (🔒).** The hash
+  proves a binary matches the lock; it says nothing about *who wrote the lock*. A
+  controlled catalog/`baseUrl`/CDN can serve attacker code + a matching hash, or a
+  known-vuln *older* version. Sign the lock/catalog with an AMD key and verify the
+  signature *before* trusting any hash inside it; add **anti-rollback** (record
+  highest-installed version, refuse silent downgrade); third-party publishers get a
+  publisher signature + TOFU pin.
+- **Tier-gate + least-privilege the OAuth forward (🔒).** §0.5 one-click + §0.6
+  forward means a third-party agent can be handed a **live mailbox token**. Nothing
+  consults the Phase-D trust tiers (Verified/Community/Experimental) before
+  forwarding, and the forward hands the *whole* grant. Make forwarding + shared
+  scopes **tier-aware**, require an **explicit install consent** naming the exact
+  OAuth scopes forwarded, and forward the **minimum** scope the agent declares.
+- **Constrain sidecar network egress (🔒 the decisive containment gap).** A hostile
+  sidecar holds a mailbox token *and*, as an ordinary process, unrestricted outbound
+  network — it can read mail through the sanctioned connection and POST it anywhere,
+  invisible to the callback-authorization model (which guards host custody, not the
+  agent's own sockets). This is the difference between "sandboxed agent" and
+  "trusted arbitrary code with your mailbox," and it negates "100% local."
+  No-network-by-default + a **declared, install-surfaced egress allowlist** (the
+  manifest names hosts, e.g. `googleapis.com`) enforced via a host-controlled
+  network namespace/proxy. **Carve-out (do not sever the control channel):** the
+  daemon's own loopback endpoints — the §0.11 callback API, the §0.12 broker, and
+  the reverse-proxy — are an **always-allowed control channel**, separate from the
+  external-host egress allowlist. The proxy enforcement variant satisfies this
+  automatically (it *is* the host); a network-namespace variant must explicitly
+  plumb the daemon socket into the namespace, or it would cut the very
+  callback/broker paths the custody model depends on.
+- **Encrypt data at rest — but separate the two secret classes (don't break §0.11).**
+  `0600` stops other *users*, not the threats that matter on a single-user desktop
+  (stolen laptop, synced backup, same-user malware). Two distinct classes:
+  - **Durable custody secrets** — OAuth **refresh tokens** (`grants.json`) and the
+    custody stores (memory/RAG/transcripts) → **OS keychain** (Keychain/DPAPI/
+    libsecret) + **encrypt at rest**. Pull Phase-C's "encrypted credential vault"
+    **forward to whenever §0.6 lands**, not v0.23. These are the high-value,
+    long-lived secrets a stolen disk exposes.
+  - **The §0.11 client-auth token** (`instance.json`) — must stay **client-readable**
+    (UI/CLI read it to call the daemon), so it legitimately remains **`0600` in
+    `instance.json`**: it is *ephemeral, re-minted every daemon startup*, so losing
+    it is harmless. Do **not** move it to the keychain — that would break the read
+    path §0.11 relies on. (The daemon↔sidecar per-spawn secret is likewise ephemeral;
+    keychain is for durable secrets only.)
+- **Make the audit log tamper-evident.** §0.19 appends actions to a host sink, but
+  nothing enforces append-only — a compromised process can rewrite/truncate it,
+  defeating the observability promise. Hash-chain / rolling-MAC each entry (sealing
+  the prior), restrictive perms, write-only exposure to agents, gap/rewrite detection
+  surfaced in the dashboard.
+- **Cross-agent prompt-injection taint (name it in §0.18 now).** The email agent
+  hardens *its own* body-as-data, but the cross-agent path (orchestrator, "summarize
+  this and email it") carries untrusted mailbox content from agent A into agent B's
+  `/query`, where it can drive B's destructive action — compounded by §0.4's
+  re-plan divergence. **Taint must travel with the data across the boundary** (mark
+  cross-agent-sourced context untrusted so the receiver treats it as data), with the
+  confirmation gate as backstop. A hard requirement for the orchestrator, not v1.
+- **MCP auto-install must not reintroduce the supply-chain hole.** §0.11 names "a
+  malicious `npm postinstall`" as a threat, yet §13.1 proposes auto-installing
+  `mcp-server-*` from npm/GitHub on demand — unpinned/unsigned npm runs arbitrary
+  postinstall code. Restrict auto-discovery to a **curated, version-pinned,
+  integrity-checked allowlist**; never auto-execute an unpinned package; disable
+  lifecycle scripts; gate installs behind the same signature/tier model as agents.
+- **Signed updates + re-consent.** §0.5 specs install/uninstall but not **update**.
+  Silent catalog auto-update is the classic vector (push malicious "update" to an
+  agent already granted mailbox + memory scope). Make update a first-class,
+  **signature-verified** op (reusing the signed lock), with anti-rollback and
+  **re-consent when the new version widens declared scopes/egress**.
+- **Telemetry vs "100% local."** Any phone-home (incl. Phase-D "cost savings
+  telemetry") punctures the privacy promise and rides the same egress as above.
+  **Local-only aggregation by default**; any network telemetry is explicit opt-in
+  with a visible disclosure. State the default here.
+
+The through-line: the plan authenticates the channel but must also **contain the
+endpoint**. Containment (egress + least-privilege connection + host-custody scope +
+signed/tiered trust root) is the security decision that gates third-party agents.
+
+### 0.25 The daemon's OWN lifecycle — birth, death, control, update
+
+§0 specs the daemon's *responsibilities* (custody, broker, supervision, clock) and
+its *singleton identity* (§0.14) but treats it as a process that simply exists. It
+never says how it starts, recovers, is controlled, or updates — the single
+highest-leverage hole, because a daemon that can silently die strands the scheduler
+clock (§0.22), the broker (§0.12), and every sidecar, undercutting the "always-on
+agent" headline.
+
+- **Birth + rebirth (fixes the §0.0↔§0.22 contradiction).** §0.0 says the daemon
+  "auto-starts on the first UI/CLI call," but §0.22 makes it the always-on cron
+  clock — after an overnight reboot with no human present, nothing starts it and the
+  8am brief never fires. Register the daemon with the **OS process manager**
+  (launchd/LaunchAgent, Windows Scheduled Task/service, systemd user unit) so it
+  **starts at login/boot and restarts on crash** — a supervisor-of-the-supervisor.
+  The Phase-C system-tray app is the natural long-term home, but it lands two phases
+  after the daemon ships, so name the **interim** manager. On restart, define whether
+  pinned-resident sidecars (§0.22) are respawned or left to lazy-spawn.
+- **Stale `instance.json` recovery.** On SIGKILL/OOM/power-loss the §0.14 lock file
+  is left pointing at a dead pid / freed port; the next client either hangs or
+  attaches to an unrelated process now on that port. On attach, **liveness-check the
+  pid and probe the port + auth token before trusting the file**; if dead, atomically
+  reclaim it. Write it temp-then-rename so a crash mid-write can't corrupt it.
+- **Control surface + cross-tier diagnostics.** Add `gaia daemon status|stop|restart|
+  logs` — an always-on process needs a way to see/stop/recover it (`gaia kill` is too
+  blunt; it also kills the clock). Give each sidecar a log file under its state dir,
+  **stamp `run_id` (§0.1) into every daemon/sidecar/relay log line**, and extend
+  `gaia diagnostics` to gather daemon + all sidecar logs correlated by `run_id` — so
+  a run spanning UI→daemon→sidecar→Lemonade is reconstructable and third-party-agent
+  bug reports are actionable, not "it froze."
+- **Daemon↔client version skew on update.** §0.15 negotiates the *agent* contract;
+  the *UI/CLI↔daemon* boundary is uncovered. An app update replaces the CLI/UI while
+  the **old daemon keeps running**, so the new client attaches to a stale host API.
+  **Version the host API**; on attach, mismatch the client can't speak → **drain
+  in-flight runs and cleanly restart the daemon** into the new binary. Decide where
+  the daemon binary ships (core wheel vs hub) so "update the daemon" has an owner.
+
+### 0.26 On-disk state layout & update survival
+
+The `~/.gaia` layout is specified piecemeal (`host/instance.json` §0.14, `agents/<id>/`
+§0.5, custody stores + schema version §0.10, keychain secrets §0.24) with **no single
+map** — and daemon *config* (pinned agents §0.22, broker priorities §0.12, egress
+allowlists §0.24, reaper timeout + live-cap §0.13) has **no assigned home**. Add one
+layout table classifying every path as **runtime-ephemeral** (rebuildable —
+`instance.json`, caches, spawned-sidecar records), **durable user data** (must be
+backed up — custody: OAuth/memory/RAG/transcripts/audit), or **config**
+(daemon settings + per-agent settings), and state the **update-survival guarantee**:
+custody + config survive an app update; ephemeral is rebuilt. One source of truth
+prevents an update from silently orphaning grants, memory, or pinned-agent config.
+
+### 0.27 Relationship to sibling plans (supersedes / depends / reconcile)
+
+v2 is a fundamental architecture change, so several sibling plan docs — which still
+describe the in-process model — must be superseded or reconciled, or a reader
+following the wrong one builds the wrong thing.
+
+**Supersedes (the sibling doc is now wrong for out-of-process agents):**
+
+- **`connectors.mdx` + `email-sidecar-agent-ui.md` — "the sidecar reads
+  `grants.json` directly" is superseded by §0.6.** Those docs bundle
+  `gaia.connectors` into the freeze so the binary can read the grant + keyring;
+  v2 **inverts** this — the host owns consent+refresh and *forwards a short-lived
+  access token* to the sidecar via `/v1/connections`; **sidecars never touch the
+  refresh token or the ledger.** A sidecar reading `grants.json` is exactly the
+  cross-process-writer race §0.6 removes. (Most material — it changes what the
+  email cutover builds.)
+- **`security-model.mdx` "localhost-only is the trust boundary; CLI+UI are
+  TRUSTED" is superseded by §0.11/§0.24.** v2 states loopback is **not** an auth
+  boundary and mandates the three auth legs + per-agent authorization + egress
+  containment. An implementer reading only `security-model.mdx` would wrongly
+  conclude localhost binding suffices.
+- **`email-sidecar-agent-ui.md` decision 4 (fixed-call forwarding only, no
+  `/query`) is superseded** — v2 makes `/query` (SSE) the primary UI chat surface
+  (§0.10 step 1). PR #1910's `EmailProxyAgent` is already flagged superseded (§0
+  header); the standalone doc needs a top banner pointing here.
+- **`email-sidecar-agent-ui-implementation.md` "the UI backend spawns/owns the
+  sidecar; `EmailSidecarManager` lives in `src/gaia/ui/`" is the *interim*
+  (email-first, §0.10 step 1) shape, not the v2 end state.** In v2 the
+  supervisor **relocates into the headless daemon** (§0.0/§0.3/§0.14); the UI and
+  CLI only attach.
+
+**Reconcile (decide the boundary, then state it in both docs):**
+
+- **`autonomy-engine.mdx` — the v2 host daemon IS the Autonomy Engine's always-on
+  background service.** Both independently define an always-on process with a cron
+  clock; they are the **same process** (recommended). The shipped in-UI
+  `/api/schedules` router (`schedules.py`, #550) moves per §0.9: the **clock +
+  trigger registry are host/daemon**, the job **executes in the owning sidecar**
+  spawned at fire time (§0.22). Self-scheduling writes to the host clock, never
+  sidecar-local state.
+- **MCP server ownership (`connectors.mdx` mirrors servers for an in-process
+  `MCPClient`).** v2 split: the **host owns the MCP server *registry/config***
+  (user-configured, shared — §0.9); a **sidecar spawns/manages its own client
+  connections** to the servers its agent needs. The host does not proxy MCP
+  traffic; it owns the config the sidecar reads (per-agent scoped, §0.11).
+- **`setup-wizard.mdx` model download vs §0.5 per-agent install-time provisioning.**
+  Two model-download triggers exist (wizard first-run, profile-level; §0.5 per-agent
+  at install). Decide ownership + sequencing: the wizard handles the *base profile*
+  model at first run; §0.5 handles *additional* per-agent models at install, both
+  pulling through the host broker (§0.12); daemon auto-start (§0.25) must compose
+  with wizard first-run detection so they don't both fight over `setup-state.json`.
+
+**Depends on / same work (cross-link, not conflict):**
+
+- **`agent-ui-hub-publish.mdx` Part 2 "in-app Agent Hub + dynamic install" IS §0.5.**
+  Same work — cross-link them. Its multi-component model also resolves "is the UI an
+  agent?" cleanly: **the UI is an `app`, not an installable agent.** Two requirements
+  v2 layers on top that the hub docs must carry: install **provisions the model, not
+  just the binary** (§0.5 cold-start), and **sign the lock/catalog + anti-rollback**
+  (§0.24) — the hub docs specify SHA-256 + tiers, but SHA is integrity, not
+  authenticity.
+
+### 0.28 The agent manifest — the load-bearing artifact (was undefined)
+
+~8 sections say "the manifest/lock declares X," but no section defined it — and the
+artifact that exists today (`hub/agents/npm/agent-email/binaries.lock.json`) is a
+**binary-integrity map only** (`schemaVersion`, `agentVersion`, `baseUrl`, per-platform
+`{filename, executable, sha256, size}`) — it carries **none** of the policy/capability
+fields §0 leans on. So the plan conflated two different artifacts:
+
+- **The lock** = binary integrity (exists). SHA/signature-verified (§0.24).
+- **The manifest** = capability + policy declaration (**new; define it**). It drives
+  *authorization* decisions (egress, scopes, tier), so it **must ride inside the
+  §0.24 signature envelope** — the recommended shape is a separate `manifest.json`
+  **referenced by digest from the signed lock**, so its security fields can't be
+  swapped independently of the binary. A manifest outside the signed envelope is
+  forgeable and worthless for authorization.
+
+**Schema (fields → the section that requires each):**
+
+| Field | Required by |
+|---|---|
+| `id`, `displayName`, `agentVersion` | §0.3/§0.14 registry key, §0.5 |
+| `contractMajor` (+ supported range) | §0.15, §0.1 |
+| `requiredModels[]` (LLM + embedder/VLM/…, min ctx) | §0.5 cold-start, §0.12 broker pull |
+| `capabilities[]` + which are `fixedFunctionEndpoints[]` vs agent-only | §0.1 two-surface split, §0.18 dispatch |
+| `renderTypes[]` the agent emits | §0.2, §0.15 (first-party gate + fallback) |
+| `oauthScopes[]` (minimum forwarded) | §0.6, §0.24 least-privilege + install consent |
+| `egressAllowlist[]` (hosts) | §0.24 |
+| `trustTier` (Verified/Community/Experimental) | §0.24 tier-gating |
+| `publisher` + signature / TOFU pin | §0.24 (SHA ≠ authenticity) |
+| `mcpServers[]` needed | §0.9, §0.24 curated allowlist |
+| `sharedScopes[]` requested (memory/RAG read grants) | §0.11, §0.20 |
+| `pinnedResident` + `schedules[]`/triggers | §0.22 |
+| `devSourcePath` (dev-mode) | §0.16 |
+
+**Authoring + validation.** The publisher checks `manifest.json` into the hub package
+next to the lock. The install-time validator **fails loud** on: unknown
+`contractMajor`, missing `requiredModels`, a capability with no matching `renderType`/
+endpoint, or egress/scope fields absent when `trustTier != Verified`. This one artifact
+unblocks §0.5, §0.12, §0.15, §0.18, §0.20, and §0.24 at once.
+
+### 0.29 Custody store consistency model (concurrent daemon + N sidecars)
+
+§0.9 moves memory/RAG/sessions/transcript/audit into host custody, read/written by the
+daemon **and** N sidecars — but only `grants.json` got a single-writer rule (§0.6). The
+same rule must generalize, and one case is a hard correctness requirement:
+
+- **Single physical writer.** All custody writes go **through the daemon**; sidecars
+  *request* writes via `/host/v1/*`, they never touch the files. This extends §0.6's
+  single-writer rationale to memory, RAG, sessions, and audit — so N sidecars writing
+  "shared user-memory rows" (§0.20) still resolve to one physical writer.
+- **Serialized audit appends (hard requirement of §0.24's hash-chain).** §0.24's
+  tamper-evident chain needs a **strict total order** — "each entry seals the prior."
+  N sidecars `POST /host/v1/audit` concurrently would both seal entry *k* and **fork
+  the chain**, which the gap-detector reads as tampering. The daemon must serialize
+  appends behind a **single append queue**, or the tamper-evidence guarantee is
+  undefined.
+- **Storage engine.** The current UI stores are SQLite (single-writer; `SQLITE_BUSY`
+  under concurrent writers). Specify **WAL + `busy_timeout`** (or a host-side write
+  queue) and RAG **read-during-index** isolation, or "host stores it, sidecars query
+  it" hits lock contention the first time two agents write.
+
+(Sessions is partly covered — §0.9 already flags the two-client interleave and proposes
+a single-active-writer focus model.)
+
+### 0.30 Identifier catalog
+
+`run_id` is the model (host-minted §0.1; cancel target §0.13; confirm key §0.4;
+log-correlation stamp §0.25). The rest need the same rigor — minter / scope / lifetime /
+consumer:
+
+- **`session id`** — host-minted, host-owned (§0.9); it is the **authorization key** the
+  callback verifies (`/host/v1/sessions/{id}`, §0.11), so leaving its mint point +
+  per-client-vs-per-session semantics undefined (the open §0.9 focus decision) leaves a
+  *security check keyed off an undefined id*. Resolve with §0.9.
+- **`action_id`** — mint on **every consequential action**; it's the handle the §0.19
+  audit entry and §0.20 uninstall-scoping ("withdraw/revoke this action") both need, and
+  it appears nowhere in §0 today. Stamp it into the audit record.
+- **`batch_id`** — batch-archive/undo handle (email spec); define its mint + lifetime.
+- **per-spawn secret vs client-auth token** — already cleanly separated (§0.11/§0.24); no
+  gap.
+
+### 0.31 The `/host/v1/*` callback API (the reverse contract, specified)
+
+§0.11/§0.9/§0.19/§0.29 lean on the daemon's reverse contract but never list it. Like the
+manifest (§0.28), it's load-bearing and must be pinned. Every route requires the
+per-spawn secret **and** resolves the calling agent id from it (§0.11 authorization);
+every response is scoped to that agent (or its granted shared scope).
+
+| Route | Shape | Scope / notes |
+|---|---|---|
+| `POST /host/v1/rag/query` | `{query, k}` → `{chunks[]}` | agent-scoped corpus (or `sharedScopes`); read-during-index isolation (§0.29) |
+| `GET /host/v1/memory` | `?scope=&query=` → `{items[]}` | agent-private memory, or user memory only if the manifest declares the `sharedScopes` grant (§0.28/§0.11) |
+| `POST /host/v1/memory` | `{scope, item}` → `{id}` | write goes through the daemon's single writer (§0.29) |
+| `GET /host/v1/sessions/{id}` | → `{transcript_slice}` | daemon verifies the session belongs to the caller (§0.30 `session id` = authz key) |
+| `POST /host/v1/audit` | `{action_id, action, summary, ts}` → `{seq}` | serialized append onto the hash-chain (§0.29); write-only to agents (§0.24) |
+| `POST /host/v1/models/lease` | `{model}` → `{lease}` / 429 | the §0.12 broker slot lease; blocks/queues by priority |
+| `POST /host/v1/agents/{id}/invoke` | `{query|capability, args}` → SSE/JSON | **orchestrator-scoped** agent-to-agent call (§0.32); not open to ordinary sidecars |
+
+**Versioning:** this API carries its own MAJOR, negotiated on the sidecar↔daemon leg and
+subject to the §0.15 evolution rules (new-daemon/old-sidecar skew). **Errors:** every
+route fails loud with an actionable, typed error (`403` unauthorized/wrong-scope, `409`
+audit-chain conflict, `429` no model slot, `503` store unavailable) — never a silent
+empty result, per the no-silent-fallback rule. The daemon's **client-facing** API
+(UI/CLI → daemon: sessions list, agent install/uninstall, `/query` proxy) is a separate
+surface under the client-auth token (§0.11), versioned per §0.25.
+
+### 0.32 Multi-agent orchestration (the headline "complex workflow automation")
+
+The stated goal is workflow automation that "reasons and calls the necessary tools,"
+including **cross-agent** ("summarize this doc and email it to Bob"). §0.18 rightly
+ships a v1 **explicit agent picker** (one sidecar per turn), but the cross-agent case
+needs a design, or the headline capability has no home. Shape it now even if it lands
+after v1:
+
+- **An orchestrator is itself an agent (a sidecar), not host logic.** Keeping the host
+  thin (§0.0), the orchestrator is a first-class agent whose `/query` **plans a
+  multi-step, multi-agent workflow** and invokes other agents. The host stays the
+  router/custodian; the reasoning lives in the orchestrator sidecar.
+- **Agent-to-agent calls go *through the host*, never sidecar-to-sidecar directly.**
+  The host mediates so every hop is **authorized (§0.11 per-agent scope), audited
+  (§0.19 `action_id`), broker-leased (§0.12), and taint-tracked** — a direct
+  sidecar→sidecar mesh would bypass all four. Add a host route
+  (`POST /host/v1/agents/{id}/invoke`, client-auth + orchestrator-scoped) so the
+  orchestrator reaches sub-agents under the same controls as any client.
+- **Taint + confirmation are the safety backbone (§0.24 / §0.4).** Untrusted content
+  read by agent A (a mailbox body) that becomes agent B's input is **marked tainted so
+  B treats it as data, not instructions** (§0.24 cross-agent injection), and **every
+  destructive cross-agent step keeps the confirmation gate** (§0.4 approve-what-you-saw)
+  — the orchestrator cannot launder an injected instruction into an un-approved send.
+- **Cost is real and must be legible.** A cross-agent workflow is N agent loops + M
+  model switches on one slot (§0.12) — the orchestrator's own loop plus each sub-agent's.
+  Surface it as streamed `status` (which agent is working) and hold **interactive
+  priority** so a foreground orchestration preempts background jobs (§0.12).
+- **Sequencing:** v1 = explicit picker (§0.18); the orchestrator is a **later,
+  first-class agent** built on the same contract — not a special host mode. This keeps
+  "the UI is thin, the sidecar reasons" intact even for multi-agent flows.
+
+**A2A across the §0.37 custody modes (A2A is a host-role capability).** Agent-to-agent
+mediation is a coordinator responsibility, exactly like custody (§0.37) and model
+brokering (§0.12) — so safe A2A exists only when a coordinator (host) is present:
+
+- **Delegated (host present):** full A2A as above — `invoke` through the host, which
+  authorizes + audits + leases the slot + carries taint on every hop.
+- **Embedded, single agent:** no A2A — one agent, no peers, no coordinator needed.
+- **Embedded, multi-agent (a vendor runs several sidecars):** needs a coordinator — run
+  the GAIA host *or* implement its `invoke`+custody+broker interfaces. **Direct
+  sidecar→sidecar is possible but loses the guarantees** (taint doesn't travel → §0.24
+  injection risk; no unified audit; the two agents contend for the model slot → the
+  §0.12 eviction bug). Fine for trusted simple chaining; unsafe as a general pattern.
+- **Ephemeral:** A2A is **caller-orchestrated call-chaining** — the caller invokes A,
+  passes its output into B's request; nothing shared or persisted; the caller owns all
+  coordination.
+
+**Unifying point:** the host is the **multi-agent coordination plane** — it bundles the
+three responsibilities that only matter with *multiple* agents on one user/machine:
+custody (single writer, §0.37), model brokering (single slot, §0.12), and A2A mediation
+(safe routing). A single embedded agent needs none; multi-agent needs all three — which
+is exactly what "the host" provides. Same pluggable host role as §0.37.
+
+### 0.33 The GAIA REST API agent server exposes `/query` too (`src/gaia/api/`)
+
+`/query` is not UI-specific — it belongs on **every agent-serving REST surface**. GAIA's
+OpenAI-compatible API server (`src/gaia/api/openai_server.py`, `gaia api`) is a
+first-class front-door for **programmatic** agent access; today it serves
+`POST /v1/chat/completions` (agents-as-models), `GET /v1/models`, and an in-process
+`/v1/email/*` mount. It must also expose the **agentic `/query` loop**.
+
+- **Add `POST /v1/<agent>/query` (SSE) to the API server**, the *same* contract
+  (§0.1/§0.2) — so a REST consumer gets tool-calling, multi-step workflows, and the
+  typed event stream, not only OpenAI-style chat. **One agent-loop implementation:** the
+  API server **proxies to the sidecar** (via the daemon/broker, §0.3/§0.12), exactly as
+  the UI and CLI do — it does not run its own in-process loop.
+- **Relationship to `/v1/chat/completions`.** Keep both: chat-completions is the
+  OpenAI-SDK-compatible surface (drop-in for existing tooling); `/query` is the richer
+  **agentic superset** (SSE tool events + `needs_confirmation` + workflows). Consumers
+  choose by need; neither is removed.
+- **Supersedes the API server's in-process email mount.** `openai_server.py:143`
+  mounts `gaia_agent_email.api_routes` in-process — the same in-process pattern the UI
+  cutover removed (this surface was explicitly left out of PR #1910's scope). Under v2
+  it likewise becomes **sidecar-backed** (proxy to the email sidecar), so core stays
+  lightweight and there is one email implementation.
+- **Auth is stricter here than the loopback daemon (🔒).** `gaia api` is a
+  *network-exposed* surface (and reachable remotely via the tunnel), unlike the
+  daemon's loopback custody API — so `/query` on it must sit behind the API server's
+  **API-key auth** and still enforce the §0.4 confirmation gate + §0.24 containment on
+  every destructive step. Do not inherit the loopback trust assumptions of §0.11 here.
+
+### 0.34 Autonomy readiness — infrastructure-ready, policy-hostile
+
+GAIA's roadmap is "always-on background agent" (Phase C), so assess v2 against **full
+autonomy** (the agent acting unattended, on its own initiative). The verdict: the
+architecture is a **strong foundation but not yet a fit for full autonomy**, because its
+safety + interaction model is **human-in-the-loop by construction**.
+
+**Already fits (the substrate is right):** the always-on **daemon** (§0.0/§0.25) +
+**scheduler clock** (§0.22); **tamper-evident audit** for unattended review (§0.19/§0.24);
+**persistent memory** (§0.9); **interactive > background broker priority** so autonomous
+jobs yield to the user (§0.12); and **containment** (egress/least-privilege/taint, §0.24)
+— the exact guardrails high-stakes unattended action needs.
+
+**Fights full autonomy (all assume a human is present) — the autonomy layer to design:**
+
+1. **Confirmation assumes a watcher.** §0.4's "approve-what-you-saw" pauses the SSE
+   stream for *synchronous* approval — but unattended there's nobody to approve. Full
+   autonomy needs a **policy / pre-authorization model**: the user pre-grants categories
+   of action (e.g. "auto-archive promotions," "auto-decline conflicting invites") with
+   undo + audit, *replacing* per-action approval when unattended. This is the central
+   missing piece.
+2. **Cron-only triggering (§0.22).** Autonomy is largely **event-driven** ("urgent mail
+   arrived → act"); needs a trigger/event bus + mailbox-watch, not just a clock.
+3. **No long-lived goals / self-initiation.** The contract is request → `/query` → done;
+   autonomy means the agent **initiates** from standing objectives it tracks over time
+   (`goals.py` is noted moving to a sidecar, §0.9, but autonomous goal-pursuit is
+   undesigned).
+4. **No async escalation.** An unattended agent that hits uncertainty should **notify and
+   resume later** when the user answers — but §0.4 confirmation is synchronous. Needs a
+   notify-and-resume path (push notification → deferred approval → continue).
+5. **No autonomy levels.** There are third-party *trust tiers* (§0.24) but no **graduated
+   autonomy** (observe → suggest → act-with-undo → act-freely) governing what an agent may
+   do unattended, per capability.
+6. **Ephemeral vs. continuous.** §0.13 reaps idle sidecars; a *monitoring* agent doesn't
+   fit "spawn-at-fire, reap-after." Pinned-resident (§0.22) is the exception, not a
+   first-class monitoring model.
+
+**Structural implication:** autonomy is a **new layer above the agent contract**, not a
+change to it — a host-side **autonomy engine** (policy store + event bus + goal tracker +
+async-escalation + autonomy-level enforcement) that drives `/query`/fixed-function calls
+on the user's behalf under pre-authorization, reusing audit (§0.19) + containment (§0.24)
++ broker priority (§0.12) as its guardrails. It also reconciles with `autonomy-engine.mdx`
+(§0.27): that engine **is** this layer, hosted in the daemon. Sequence it after the
+human-in-the-loop v1 — the v1 confirmation model is the *safe default*, and the autonomy
+layer is what lets the user progressively hand off.
+
+### 0.35 Structural refinements (from the architecture review)
+
+A holistic architecture review found the design **structurally sound** — the daemon is
+a *coherent custodian* (everything it owns needs a single writer, a single arbiter, or
+is the trust root — one responsibility, not ten; and §0.9's rejection of dedicated
+memory/RAG sidecars is *correct* because decomposing would reintroduce the multi-writer
+problem the design exists to avoid), the sidecar↔host coupling is a *versioned runtime
+cycle*, not a build cycle, and the deferrals are honest. The remaining work is framing +
+trimming premature hardening. The refinements (priority order):
+
+1. **Sidecar independence is a two-tier contract, not a flat claim.** The sidecar owns
+   no durable state (§0.9), so custody-backed `/query` needs a host. Make it honest:
+   publish **`/host/v1/*` (§0.31) as a first-class, third-party-implementable custody
+   interface** (a third party can bring their own custodian), and formalize the
+   **bare-integrator degraded tier** (§0.6) as a *shipped, tested product* with a
+   capability matrix — **works without a host:** fixed-function + stateless `/query`;
+   **needs a host:** memory, RAG, sessions/transcript, audit. Converts the biggest hidden
+   coupling into an explicit contract tier. (Reflected in the mdx overview.)
+2. **Naming: never call the daemon "thin."** "The host" = the **custodian daemon**, the
+   most responsibility-dense process; "thin" is the UI only. (Applied across the docs.)
+3. **Assert the daemon's internal module seams.** One *process* is right; one *module*
+   would rot into a monolith. Commit — even inside the process — to separated
+   **custody-store / broker / supervisor / proxy-router / clock** modules with defined
+   interfaces. Mark the **broker (§0.12) as the one designed to be later-extractable** to
+   its own process: it arbitrates a hardware resource contended by non-agents (host RAG
+   embedder, voice, SD), a different axis + lifecycle from data custody.
+4. **Slogan: "one *agent* contract, many front-doors; two *control-plane* contracts
+   behind it"** (the callback §0.31 and the client↔daemon §0.11/§0.25) — so B/C get
+   first-class versioning/auth, not footnote status. (Reflected in the mdx.)
+5. **Trim three pieces of premature hardening to "third-party gate, not v1 build"**
+   (all additive later; acceptable under the first-party single-user threat model):
+   - **Audit:** v1 = a plain **append-only** host-owned log (the single writer already
+     gives order); the §0.24 **hash-chain** + §0.29 **global single-append-queue** are
+     the third-party addition, not day-one.
+   - **Egress:** v1 = the **proxy-enforced allowlist** (§0.24); the full **network-
+     namespace sandbox** is research-grade/per-OS — defer.
+   - **Broker:** v1 = **priority *queueing*** (foreground jumps the queue); defer
+     **mid-run preemption** (§0.12) — you can't cleanly pause a llama-server generation.
+6. **Make the render boundary real (layering fix).** The "thin UI" has a hidden
+   compile-time dependency on first-party agents' card set (§0.2/§0.15). Ship a **small
+   fixed set of generic render primitives** (table / key-value / list / image / diff)
+   once; **agents default to them**, a bespoke component is the *first-party exception* —
+   so "the thin UI renders *any* agent" is true rather than an ever-growing first-party
+   component map.
+
+None re-shape the core; they make the existing shape teachable and stop three claims
+(thin UI, one contract, independent sidecar) from being louder than the design supports.
+
+### 0.36 Third-party integration ergonomics (a first-class design goal)
+
+"Agents as products" only works if a third-party vendor can **digest a sidecar easily**.
+The design is built for this, but ease is **tiered**, and the plan should treat that as a
+goal to hit, not an accident.
+
+**Already digestible (keep):** it's a **language-agnostic HTTP service** (no Python
+import, no running our UI); it speaks **familiar protocols** — fixed-function endpoints
+for "just do X" and **OpenAI-compatible `/v1/chat/completions`** (§0.33) so a vendor
+aims their existing OpenAI SDK at it; it ships as a **self-contained frozen binary + npm
+package** via the Hub, each agent carrying `README`/`SPEC`/`SKILL.md`/`specification.html`
+/OpenAPI; and the contract is **versioned + negotiated** (§0.15).
+
+**The two frictions that block "drop-in" for the *full* agent — design to remove them:**
+
+1. **Custody (the §0.35 #1 seam).** The sidecar owns no durable state (§0.9), so the
+   rich agentic experience (memory/RAG/audit-backed `/query`) needs a host. **Make the
+   tier a product:** publish `/host/v1/*` (§0.31) as a first-class, third-party-
+   implementable interface **and** ship the bare-integrator tier (§0.6) as a *tested*
+   product with a published **capability matrix** (below). Then "run our custodian,"
+   "bring your own custodian," and "degraded standalone" are three documented choices,
+   not a cliff.
+2. **The LLM backend.** The sidecar needs a reachable model backend (Lemonade), and some
+   agents (email) *force local-only* by policy — so the artifact is "agent + LLM backend,"
+   not one binary. **Make the backend an explicit, documented dependency** with a
+   configurable `base_url`, and state per-agent whether a cloud/remote backend is allowed
+   (email = local-only by design; others may differ). A vendor must know "you also
+   provide the model host" up front.
+
+**Published integration matrix (what works at each tier):**
+
+| Tier | Setup | Works | Doesn't |
+|---|---|---|---|
+| **Standalone (low effort)** | run binary + point at an LLM | fixed-function calls, stateless `/query`, OpenAI-compat chat | memory, RAG, audit, transcripts |
+| **+ OAuth (medium)** | + self-service connector setup | live mailbox/calendar actions | (as above) |
+| **Full (high)** | run the GAIA custodian *or* implement `/host/v1/*` | the complete memory/RAG/audit-backed agent | — |
+
+Treating this matrix as a **shipped contract** (not implicit) is what makes the sidecars
+genuinely easy for vendors to adopt — they pick a tier with eyes open instead of hitting
+the custody/LLM frictions by surprise.
+
+### 0.37 Pluggable custody — one sidecar, both experiences (rich *and* stateless)
+
+§0.36's tiers can collapse from a cliff into a config switch, resolving the §0.35 #1 risk
+at its root. The key realization: §0.9 put custody in the host because **N sidecars
+sharing one user's data need a single writer** — but that constraint exists *only* in the
+multi-agent Agent UI. A **standalone** single agent is trivially its own single writer.
+So custody is **not** intrinsically "the host"; it's a **pluggable provider**, and
+host-custody is one deployment's chosen backend.
+
+**Design (ports & adapters).** The sidecar depends on a **`CustodyProvider` interface**
+(memory / RAG / sessions / audit / grant-read — the same surface as `/host/v1/*`, §0.31)
+and ships three adapters, auto-selected at launch:
+
+| Provider | Selected when | Result |
+|---|---|---|
+| **Embedded** (default) | no host custody endpoint injected | **Full, self-contained rich agent** — its own bundled SQLite + file store; the sidecar is its *own* single writer |
+| **Delegated** | the host injects its `/host/v1/*` URL + per-spawn secret at spawn | shared single-writer host across N agents (the §0.9 model) |
+| **Ephemeral** | explicit stateless flag | no persistence; context passed per request → the drop-in stateless tier |
+
+The sidecar calls the interface and **doesn't know which backend answers** (auto: *host
+endpoint present → delegate; else embed*). Same code path; the backend swaps by config.
+
+**Pros / cons per provider:**
+
+- **Embedded** (self-custody).
+  - *Pros:* fully self-contained rich agent — one binary, no external custody dep;
+    trivially its own single writer (no coordination); works offline/air-gapped;
+    simplest deployment; ideal for a third-party vendor who wants "rich, standalone."
+  - *Cons:* state is **siloed per agent** — no shared cross-agent user memory (each agent
+    has its own), so a multi-agent setup fragments the user's memory + duplicates shared
+    data (e.g. grants); the sidecar owns store lifecycle (schema, migration, backup,
+    encryption); audit is local + per-agent (uninstall can lose it).
+- **Delegated** (host custody).
+  - *Pros:* **one coherent user** — memory/RAG/audit unified across every agent; one
+    place to encrypt-at-rest, back up, govern, and enforce uninstall lifecycle; the
+    sidecar stays truly light (no store in the binary); enables cross-agent orchestration
+    over shared memory (§0.32).
+  - *Cons:* **requires a running host** (the coupling — custody-backed features don't work
+    standalone); a network hop + auth on every memory/RAG call; the host is a single point
+    of failure for all agents' custody; carries the full cross-process contract cost
+    (`/host/v1/*` + auth legs + versioning).
+- **Ephemeral** (stateless).
+  - *Pros:* nothing on disk — simplest, most portable, most secure at rest; horizontally
+    scalable (any instance serves any request); no migration/backup/encryption concerns;
+    easiest to test; ideal for one-shot/scriptable/serverless integration.
+  - *Cons:* **no memory or learning** — no personalization, follow-up tracking, or
+    cross-session context; the **caller must pass all context every request** (bigger
+    payloads, caller owns state); no persisted audit trail; it's a *function*, not an
+    assistant.
+
+**Why it's correct, not a workaround — the single-writer invariant holds in every mode:**
+embedded = one agent is its own writer; delegated = the host is the one writer across N;
+ephemeral = nothing persisted. There is *never* multi-writer, so §0.9's driving invariant
+is fully preserved — and "custody = host" is revealed as a property of the **Agent-UI
+deployment**, not of the sidecar.
+
+**Consequences (all favorable):**
+- **One binary does both:** a vendor gets a rich, self-contained agent *or* plugs in their
+  own custody host; GAIA gets shared multi-agent custody. §0.36's "high-effort" tier
+  becomes low-effort (embedded is the default).
+- **Footprint stays light:** embedded custody is *storage* (SQLite + index files), not ML
+  libs — the embedder *compute* still runs through the external model backend, so §0.21 is
+  untouched.
+- **`/host/v1/*` is now doubly justified:** it's both the delegated-mode wire protocol
+  *and* the third-party-implementable interface (§0.35 #1) — the embedded adapter is simply
+  GAIA's own reference implementation of it.
+- **Cost:** mode migration (embedded→hosted / export) reuses the §0.10 machinery; the
+  embedded and delegated adapters must pass the *same* conformance tests (§0.17) so
+  behavior is identical across backends.
+
+**This supersedes §0.9's "custody must be the host" framing:** custody is pluggable; the
+host is the provider the *Agent UI* selects. Read §0.9's custody table as "the provider
+the GAIA host implements," not "the only place custody can live."
+
+### 0.38 Practical memory / resource footprint
+
+The sidecar-first + pluggable-custody design has real RAM implications on a Ryzen laptop;
+two effects dominate, and the mode choice is a *memory* decision as much as a feature one.
+
+- **The model dominates; the broker (§0.12) is the primary memory governor.** A 4B GGUF
+  is ~2–4 GB resident. The broker's single model slot keeps **~one model resident
+  regardless of agent count** — without it, N agents wanting models = N models = OOM. So
+  §0.12 is a memory-protection mechanism, not only a correctness one.
+- **Per-sidecar overhead (~50–150 MB RSS each) is bounded by reaping.** N *installed*
+  agents ≠ N *resident* processes — lazy-spawn + the idle-reaper + the live-sidecar cap
+  (§0.13) keep only *active* agents in memory. Second governor.
+- **Custody mode changes the multiplier:** **embedded** duplicates the store *and the RAG
+  index in RAM* per agent (heaviest multi-agent); **delegated** holds shared custody +
+  **one** RAG index in the host (leanest multi-agent; host RSS grows instead);
+  **ephemeral** holds no store (lightest). The **RAG/FAISS index** (tens–hundreds of MB in
+  RAM per query) is the sneaky duplicator — embedded = N copies, delegated = 1.
+- **Model switching is churn, not resident bloat** — different-model agents evict+reload
+  (~GB I/O + a stall), serialized by the broker; hot-model affinity (§0.12) reduces thrash.
+- **Steady state ≈ one model + the daemon + the *active* sidecars + (Electron UI ~300 MB,
+  only when open)** — not "sum of everything installed."
+
+**Guidance:** **embedded** for a *single* standalone agent (minimal, no host); **delegated
+shared custody** for a *multi-agent* daily-driver (avoids store + RAG-index duplication).
+This is the concrete "whole-system resource budget" the operational review flagged as
+downstream — the governors (broker + reaper + live-cap) exist; set their limits from a
+stated target. (RAM is distinct from the *disk* footprint of §0.21.)
+
+### 0.39 Custody modes at a glance — consolidated comparison
+
+One table across all three sidecar custody modes (§0.37), pulling together capabilities,
+A2A (§0.32), memory (§0.38), and pros/cons.
+
+| Dimension | **Embedded** (default, standalone) | **Delegated** (GAIA host) | **Ephemeral** (stateless) |
+|---|---|---|---|
+| **Durable state** | own bundled SQLite + file store | host `/host/v1/*` (shared) | none |
+| **Rich agentic (memory/RAG/audit)** | ✅ full, self-contained | ✅ full, shared across agents | ❌ none (fixed-function + stateless `/query`) |
+| **Host/coordinator required?** | ❌ no — fully standalone | ✅ yes — needs the daemon | ❌ no |
+| **Single-writer** | the sidecar itself (one agent) | the host (across N agents) | n/a — nothing persisted |
+| **Cross-agent shared memory** | ❌ siloed per agent | ✅ unified user memory | ❌ none |
+| **A2A communication** | single: none · multi: needs a coordinator (host or 3rd-party impl); **direct sidecar→sidecar loses taint/audit/broker** | ✅ **mediated** via `POST /host/v1/agents/{id}/invoke` — authz + audit + broker-lease + taint | caller-orchestrated **call-chaining** (caller passes context A→B) |
+| **Model backend** | external, configured `base_url` | external, via the host **broker** (slot lease) | external, configured `base_url` |
+| **RAM footprint (multi-agent)** | heaviest — store **+ RAG index** duplicated per process | leanest — shared store + **one** RAG index (host RSS grows) | lightest — no store |
+| **Encryption / backup / audit** | per-agent, the vendor's responsibility | central: one place to encrypt-at-rest, back up, govern, audit | none persisted |
+| **OAuth / connectors** | self-service on the sidecar | host forwards short-lived tokens (§0.6) | self-service (per call) |
+| **Third-party digestibility** | ✅ rich **and** drop-in (one binary) | needs the GAIA host *or* a `/host/v1/*` impl | ✅ simplest drop-in |
+| **Pros** | self-contained; offline/air-gapped; simplest deploy; own writer; no host | coherent single user; central govern/encrypt/backup/audit; thin light sidecars; enables cross-agent orchestration | nothing on disk; portable; horizontally scalable; trivial to test |
+| **Cons** | siloed state; per-agent duplication (RAM + shared data); owns store lifecycle; local/losable audit | requires a running host; per-call hop + auth; host = single point of failure; cross-process contract cost | no memory/learning; caller must pass all context each call; no persisted audit; a *function*, not an assistant |
+| **Best for** | a single standalone agent; a vendor wanting **rich + self-contained** | the **GAIA Agent UI**; a multi-agent daily-driver | one-shot / scriptable / serverless; pure request→response |
+
+**Selection:** auto — *host custody endpoint injected → Delegated; else → Embedded;* Ephemeral by explicit flag. Same sidecar binary, same code path (§0.37); the invariant (single writer, never multi-writer) holds in all three.
+
+### 0.40 Hybrid custody — per-store provider (the embedded↔delegated spectrum)
+
+Embedded and delegated are not two points but the **endpoints of a spectrum**. Custody is
+not one blob — it's several **stores** — so §0.37's provider choice generalizes to a
+**per-store** choice: a **composite `CustodyProvider`** where each store is independently
+embedded or delegated.
+
+**A "store" = one named, independently-addressable custody data-domain** — a coherent
+slice of user state with its own data kind, its own interface (a specific set of
+`/host/v1/*` routes / `CustodyProvider` methods), its own persistence + lifecycle, and its
+own natural sharing scope. The custody stores:
+
+| Store | Holds | Interface | Natural scope |
+|---|---|---|---|
+| **grants** | OAuth tokens (Google/MS refresh + access) | `/v1/connections` + host refresh (§0.6) | **shared** (one login) |
+| **memory** | the assistant's learned facts/prefs about the user | `GET/POST /host/v1/memory` | shared *or* private |
+| **rag** | the document/vector index retrieved over | `POST /host/v1/rag/query` | shared *or* private |
+| **sessions** | conversation transcripts + the session index | `GET /host/v1/sessions/{id}` | per-agent (host-indexed) |
+| **audit** | the append-only log of consequential actions | `POST /host/v1/audit` | shared *or* private |
+
+**Boundary test (what *is* a store):** a data domain is its own store when it has (a) a
+**distinct single-writer requirement** (it needs one clear owner) and (b) a **coherent,
+independently-swappable interface**. State that always shares a lifecycle + writer is *one*
+store (a transcript and its session-index entry travel together → one `sessions` store) —
+this keeps the list at ~5 stores, not per-field granularity. **"Per-store"** = each store
+independently picks embedded or delegated.
+
+**Governing rule (preserves §0.9's invariant, now per-store):** the *sharing scope* of a
+store decides its provider — a store **shared across agents ⇒ delegated** (host is its
+single writer); an **agent-private store ⇒ embedded** (the agent is its single writer).
+Never a shared store with multiple writers; the invariant just applies per store.
+
+**High-value configurations:**
+
+| Hybrid | Split | What it gives |
+|---|---|---|
+| **Shared identity, private cognition** | grants delegated · memory/RAG/sessions embedded | agents share the user's **logins** but **not their memories** — real isolation (a 3rd-party agent can't read another agent's memory) with no repeated OAuth |
+| **Shared memory, private corpus** | memory + grants delegated · RAG + sessions embedded | one coherent cross-agent user memory; each agent's document index stays its own |
+| **Central audit, local rest** | audit delegated · rest embedded | one compliance-grade trail, minimal other coupling |
+
+**Why it's better, not just more knobs:** fine-grained sharing (share identity/coherent
+memory, isolate per-agent memory/corpus — the "shared auth + private data" split that SSO
++ local app state uses); and **weaker coupling / graceful degradation** — an agent needs
+the host only for its *delegated* stores, so a host outage degrades shared features while
+embedded ones keep working (partial-host becomes a real, tolerable state).
+
+**Costs:** more config surface — the **manifest declares** per-store shared-vs-private
+(extends §0.28); per-agent authorization (§0.11) already scopes shared reads, so it
+composes; mixed backends complicate export/migration (§0.10, now per store); and "where
+does X live" is per-store, so §0.39's table is read per-store, not per-mode.
+
+This makes **Embedded** (all-private) and **Delegated** (all-shared) the two ends, with
+the hybrid any point between — one rule, arbitrary granularity.
+
+### 0.41 Separation of concerns — one clean authorization plane, not one god-grant
+
+An adversarial stress-test (+ prior-art research, §0.42) showed an earlier draft here
+overreached: it relabeled **five orthogonal mechanisms** as "one grant." That was a
+*vocabulary*, not an architecture — and it even contradicted §0.34 and §0.24. The
+**simpler** and correct model is clean **separation of concerns**: orthogonal
+single-purpose planes beat one kernel pretending to do five jobs. (Simplicity =
+orthogonality, not collapse.)
+
+**What genuinely unifies (keep this):** the **capability grant** is *one* clean thing —
+the **authorization / isolation plane**: which agent may touch which store (§0.40 scope),
+connector (§0.6), or peer (§0.32 *routing*). §0.11 per-agent authz + §0.40 per-store scope
++ §0.32 A2A-routing really are one primitive (a scoped, host-checked grant). Keep them one.
+
+**What does NOT fold into the grant (four separate planes):**
+
+| Concern | Its own plane | Why it's separate (not a grant field) |
+|---|---|---|
+| **Authorization / isolation** | the **capability grant** | who may touch what — the one thing the grant *is* |
+| **Information-flow / safety** | the **pragmatic stack**: process isolation + egress sandbox (§0.24) + confirmation (§0.4) + audit (§0.19) + treat cross-agent/untrusted input as *data* | access-control's orthogonal dual (Denning) — the grant authorizes the *hop*; this secures the *content*. A2A results carry B's data; the grant can't stop that. **Not formal IFC** — the field doesn't ship it (§0.42) |
+| **Human confirmation** | the **confirmation gate** (§0.4) | an intent oracle for LLM non-determinism — orthogonal to whether the cap is *held* |
+| **Resource arbitration** | the **broker** (§0.12) | a mutex/lease, not a permission — *holding the cap ≠ holding the slot* |
+| **Autonomy** | the **§0.34 host-side layer** | a policy + temporal engine (event bus, goals, escalation — six parts), not one enum field. Reference §0.34; do not fold it |
+
+**Consequences of getting the boundary right (all corrections to the overreach):**
+
+- **The grant checks the tool boundary, not the reasoning.** In an LLM loop the tools *are*
+  the capabilities but the *model* chooses which to call over tainted context — a static
+  "may A call tool T" cannot judge "should *this* call, with these args, happen." That
+  judgment is the confirmation gate + treat-input-as-data (the confused-deputy answer),
+  **not** the grant. Don't claim the grant secures the reasoning.
+- **Revocation (simple, concrete).** Grants are **mutable host state keyed by agent-id**;
+  the mediator **re-reads the grant per mediated call** (cheap, in-memory) — revoke = update
+  the grant. An in-flight autonomous batch re-checks per op (already mediated); revoking A
+  stops further A2A invokes while B's in-flight call completes under *B's own* grant. (No new
+  machinery — it's a lookup the mediator already does.)
+- **Embedded has NO mediation plane — say so.** Embedded single-agent is a **trust boundary
+  of one** — a storage *adapter* (§0.37), not a policy-enforcement point. The mediation
+  plane exists only where multiple mutually-distrusting agents share a host (delegated).
+  Drop the "embedded = a minimal host that enforces" claim (it would ship a stub PEP that
+  enforces nothing). So the modes are **not** "one architecture, varying host" — they're
+  *one contract*, with a real PEP only in the multi-agent (delegated) case.
+- **Audit *actions*, not reads.** §0.24/§0.29's serialized hash-chain covers consequential
+  *actions* (low-frequency, tamper-evident) — do **not** put a machine-wide append-lock on
+  every store read. Audit is host-if-present, not part of the per-store hybrid (§0.40) freedom.
+- **Taint is a defense-in-depth *hint*, not a guarantee** — it dies through LLM
+  summarization (§0.42) and is non-durable across a daemon restart. The real backstops are
+  isolation + egress + confirmation + audit. Treat cross-agent/untrusted input as data
+  regardless of taint.
+
+**Net:** the capability grant is the right core abstraction for **authorization/isolation**
+— clean and genuinely unifying. Safety, confirmation, arbitration, and autonomy are
+**co-equal separate planes**. That is both more honest and *simpler* than the god-grant.
+
+### 0.42 Prior art & learnings (OpenClaw · Hermes · MCP/A2A)
+
+Benchmarking v2 against the field both validates the shape and yields concrete adopt-items.
+
+**Convergent validation (the shape is sound):**
+- **Coordinator + one agent core.** OpenClaw's **Gateway** (one port multiplexing sessions,
+  tool dispatch, routing, orchestration) and **Hermes**'s single `AIAgent` core reused by
+  CLI / gateway / ACP server / cron are the *same* pattern as our custodian daemon +
+  one-contract-many-front-doors (§0.33). Independent convergence → sound.
+- **OpenAI-compatible server** (Hermes exposes `/v1/chat/completions`) = our §0.33.
+- **Shared-or-scoped skills** (OpenClaw scopes skills global↔per-agent) = our shared/private
+  custody axis (§0.40).
+- **Persistent memory is table-stakes** — Hermes ("grows with you," a GraphRAG "second
+  brain") validates our custody/memory direction; consider **GraphRAG** for RAG.
+
+**Learnings to adopt:**
+1. **Align with the MCP + A2A two-layer standard — don't invent.** **MCP** (Anthropic's
+   tool layer; ~97M monthly SDK downloads; adopted by Anthropic/OpenAI/Google/Microsoft/
+   Amazon) is the vertical *tool* protocol → expose our **fixed-function endpoints as MCP
+   tools** (the email agent already ships `mcp_server.py` — make it first-class). **Google's
+   A2A protocol** is the horizontal *agent-coordination* layer → align §0.32 A2A with **A2A
+   Agent Cards** (capability discovery), **signed payloads**, and **delegation control**
+   instead of a proprietary invoke route. Payoff: any MCP/A2A client consumes our agents
+   out of the box → §0.36 third-party digestibility jumps.
+2. **Process isolation is our security *advantage* — lean in.** OpenClaw's documented core
+   flaw — *"a single compromised skill inherits ALL permissions"* (plus multiple arXiv
+   injection/trojan papers) — is a **shared-runtime** problem. Our per-agent **process-
+   isolated sidecars + per-agent grants** contain a compromised agent to its own grant.
+   Strictly better isolation; position it as a differentiator.
+3. **Use a permission *cascade* to blunt consent fatigue.** OpenClaw's global→provider→
+   agent→session→sandbox cascade sets sensible **defaults** at each level so the user
+   consents only to *deviations*. Adopt trust-tier defaults → user overrides (§0.24), far
+   better than per-capability prompts.
+4. **Nobody ships formal information-flow control — this confirms the §0.41 correction.**
+   MCP's own security guidance is *"read-only for untrusted agents, scoped permissions,
+   network restrictions"* — i.e. the **same pragmatic stack** (isolation + scopes + egress
+   + human approval + audit) we landed on. Don't build formal IFC.
+5. **A2A protocol's "prevents unauthorized delegation" is the confused-deputy answer** —
+   adopt its delegation-control + payload signing for our A2A hops.
+
+**Sources:** [OpenClaw architecture guide](https://vallettasoftware.com/blog/post/openclaw-2026-guide) · [Security analysis of OpenClaw (arXiv)](https://arxiv.org/pdf/2603.27517) · [Securing a personal agent with OpenClaw](https://www.freecodecamp.org/news/how-to-build-and-secure-a-personal-ai-agent-with-openclaw/) · [NousResearch/hermes-agent](https://github.com/nousresearch/hermes-agent) · [Hermes docs](https://hermes-agent.nousresearch.com/docs/) · [MCP vs A2A protocols](https://onereach.ai/blog/guide-choosing-mcp-vs-a2a-protocols/) · [Agent interoperability 2026: MCP/A2A/ACP convergence](https://zylos.ai/research/2026-03-26-agent-interoperability-protocols-mcp-a2a-acp-convergence/) · [Permission Manifests for Web Agents (arXiv)](https://arxiv.org/pdf/2601.02371)
+
+---
+
 ## 1. Current GAIA SDK Capability Inventory
 
 ### 1.1 Agents
@@ -64,7 +1518,7 @@
 | **DockerAgent** | `DockerAgent(MCPAgent)` | `agents/docker/agent.py` | Docker container management via MCP |
 | **SDAgent** | `SDAgent(Agent, SDToolsMixin, VLMToolsMixin)` | `agents/sd/agent.py` | Image generation + visual analysis |
 | **MedicalIntakeAgent** | `MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin)` | `hub/agents/python/emr/gaia_agent_emr/agent.py` | Medical form processing with VLM |
-| **RoutingAgent** | `RoutingAgent` | `agents/routing/agent.py` | Intelligent agent selection |
+| **RoutingAgent** | `RoutingAgent` | `hub/agents/python/routing/gaia_agent_routing/agent.py` | Intelligent agent selection |
 | **SummarizerAgent** | `SummarizerAgent(Agent)` | `agents/summarize/agent.py` | Document summarization |
 
 ### 1.2 ChatAgent Tools (Current — What the Agent UI Uses)
@@ -122,7 +1576,7 @@
 | **MCP Bridge** | `gaia/mcp/mcp_bridge.py` | External tool integration via MCP |
 | **Database** | `gaia/database/` | `DatabaseMixin` for persistent storage |
 | **Multi-provider LLM** | `gaia/llm/providers/` | Claude, OpenAI, Lemonade backends |
-| **Agent Routing** | `agents/routing/agent.py` | Intelligent multi-agent routing |
+| **Agent Routing** | `hub/agents/python/routing/gaia_agent_routing/agent.py` | Intelligent multi-agent routing |
 
 ---
 

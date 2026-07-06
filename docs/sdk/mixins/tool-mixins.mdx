@@ -10,11 +10,11 @@ icon: "puzzle-piece"
 </Note>
 
 <Info>
-  **Source Code:** [`src/gaia/agents/chat/tools/`](https://github.com/amd/gaia/tree/main/src/gaia/agents/chat/tools/), [`src/gaia/agents/code/tools/`](https://github.com/amd/gaia/tree/main/src/gaia/agents/code/tools/)
+  **Source Code:** [`src/gaia/agents/tools/`](https://github.com/amd/gaia/tree/main/src/gaia/agents/tools/), [`src/gaia/agents/code/tools/`](https://github.com/amd/gaia/tree/main/src/gaia/agents/code/tools/)
 </Info>
 
 <Note>
-**Import:** `from gaia.agents.chat.tools.file_tools import FileToolsMixin`
+**Import:** `from gaia.agents.tools.file_monitor_tools import FileToolsMixin`
 </Note>
 ---
 
@@ -33,7 +33,7 @@ for new documents; it does not register read/write/list tools. Use
 
 ```python
 from gaia.agents.base.agent import Agent
-from gaia.agents.chat.tools.file_tools import FileToolsMixin
+from gaia.agents.tools.file_monitor_tools import FileToolsMixin
 
 class MyAgent(Agent, FileToolsMixin):
     """Agent that can watch directories for new files."""

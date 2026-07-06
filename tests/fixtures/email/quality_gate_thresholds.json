@@ -3,5 +3,9 @@
   "fp_max": 0.05,
   "fn_max": 0.02,
   "axis": "needs_attention",
-  "enforce": false
+  "enforce": false,
+  "_acceptance_comment": "Release-gate acceptance bar (#1437): the per-version scorecard gate (gaia.eval.scorecard_gate) enforces 'acceptance_target' as --min-aggregate (on the within-one-bucket aggregate, ×100) and 'urgent_recall_floor' as --min-urgent-recall (anti-gaming). 'acceptance_enforce' is the switch the release_agent_email.yml gate keys off: when true it passes the bar/floor flags so a sub-bar candidate blocks; when false it runs report-only. These keys are read by the workflow, not by load_quality_thresholds (which ignores extras). RE-MEASURED on the vendor-derived 249-email corpus, full-corpus scoring, Strix Halo / Gemma-4-E4B, 3 runs: within-one acceptance 0.834 (stdev 0.0116) >= 0.80 target; urgent_recall 0.9938 (per-run [0.9907, 1.0, 0.9907], stdev 0.0054). urgent_recall_floor raised 0.65 -> 0.90: the vendor corpus's needs-attention recall is near-ceiling without help, so the floor is locked ~0.09 below the measured min-run (0.9907) — tight because the metric is near-deterministic here (small stdev), loose enough to absorb run-to-run jitter. It is a floor, NOT an aspiration; raise it as the agent's urgent recall improves. (The #1903 escalation levers, tuned on the prior synthetic corpus, were reverted from this corpus: they regressed within-one 0.834->0.797 and needs-attention FPR 0.376->0.485 while improving nothing.)",
+  "acceptance_target": 0.80,
+  "urgent_recall_floor": 0.90,
+  "acceptance_enforce": true
 }

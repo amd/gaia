@@ -618,7 +618,7 @@ class TestToolMixins:
 
     def test_file_tools_mixin_exists(self):
         """Verify FileToolsMixin can be imported."""
-        from gaia.agents.chat.tools.file_tools import FileToolsMixin
+        from gaia.agents.tools import FileToolsMixin
 
         assert FileToolsMixin is not None
 
@@ -738,7 +738,7 @@ class TestAgentIntegration:
         from gaia.agents.base.agent import Agent
         from gaia.agents.base.api_agent import ApiAgent
         from gaia.agents.base.console import SilentConsole
-        from gaia.agents.chat.tools.file_tools import FileToolsMixin
+        from gaia.agents.tools import FileToolsMixin
 
         class MultiMixinAgent(ApiAgent, Agent, FileToolsMixin):
             def _get_system_prompt(self) -> str:
@@ -887,7 +887,7 @@ class TestSDKDocumentation:
 
         # Tool Mixins
         try:
-            from gaia.agents.chat.tools.file_tools import FileToolsMixin  # noqa: F401
+            from gaia.agents.tools import FileToolsMixin  # noqa: F401
             from gaia.agents.tools.file_tools import FileSearchToolsMixin  # noqa: F401
             from gaia.agents.tools.rag_tools import RAGToolsMixin  # noqa: F401
             from gaia.agents.tools.shell_tools import ShellToolsMixin  # noqa: F401
@@ -1246,8 +1246,12 @@ class TestRoutingAgent:
         """Verify RoutingAgent imports cleanly and exposes process_query.
 
         We don't instantiate — RoutingAgent.__init__ constructs a LemonadeClient.
+
+        RoutingAgent ships as the standalone gaia-agent-routing wheel (#1102);
+        skip when a framework-only env lacks it.
         """
-        from gaia.agents.routing.agent import RoutingAgent
+        pytest.importorskip("gaia_agent_routing")
+        from gaia_agent_routing.agent import RoutingAgent
 
         assert hasattr(RoutingAgent, "process_query")
 
@@ -1262,7 +1266,8 @@ class TestSpecializedAgents:
 
     def test_chat_agent_exists(self):
         """Verify ChatAgent can be imported."""
-        from gaia.agents.chat.agent import ChatAgent
+        pytest.importorskip("gaia_agent_chat")
+        from gaia_agent_chat.agent import ChatAgent
 
         assert ChatAgent is not None
 
@@ -1294,11 +1299,12 @@ class TestSpecializedAgents:
         """Verify all specialized agents inherit from Agent base class."""
         pytest.importorskip("gaia_agent_blender")
         pytest.importorskip("gaia_agent_jira")
+        pytest.importorskip("gaia_agent_chat")
         from gaia_agent_blender.agent import BlenderAgent
+        from gaia_agent_chat.agent import ChatAgent
         from gaia_agent_jira.agent import JiraAgent
 
         from gaia.agents.base.agent import Agent
-        from gaia.agents.chat.agent import ChatAgent
 
         assert issubclass(ChatAgent, Agent)
         assert issubclass(JiraAgent, Agent)

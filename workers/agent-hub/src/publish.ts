@@ -4,26 +4,11 @@
 /**
  * POST /publish handler.
  *
- * Two upload paths, selected by Content-Type:
- *
- * 1. multipart/form-data (EXISTING) — per-platform binaries and wheels. The
- *    artifact rides in the `artifact` form part (buffered). README, CHANGELOG,
- *    and package_files are optional form parts. All artifacts under ~128 MB
- *    (the Cloudflare Worker per-request memory limit).
- *
- * 2. application/octet-stream (NEW, streaming) — the whole-package zip (~177 MB).
- *    The raw request body is the artifact; metadata travels in X-Gaia-* headers.
- *    The body is passed directly to R2 without buffering, so memory usage is
- *    independent of artifact size. R2-side sha256 integrity is enforced via the
- *    X-Gaia-Sha256 header.
- *
- * Both paths share the same tail: makeVersionEntry → upsertVersion →
- * writeAgentManifest → rebuildIndex → 201.
- *
- * Flow for each path:
- *   authenticate → parse inputs → validate manifest → enforce publisher scope
- *   → enforce version immutability → store artifact → write ancillary objects
- *   → rebuild index. Every guard fails loudly with a structured error.
+ * Flow: authenticate -> parse multipart -> validate manifest -> enforce
+ * publisher scope -> enforce version immutability -> generate server-side
+ * SHA-256 -> store artifact + raw manifest + optional README + optional
+ * CHANGELOG + per-agent manifest -> rebuild index.json. Every guard fails
+ * loudly with a structured error.
  */
 
 import { assertAuthorAllowed, authenticate } from "./auth";
@@ -33,19 +18,20 @@ import { parseManifest } from "./manifest";
 import {
   artifactKey,
   changelogKey,
+  evalScorecardKey,
   packageFilesKey,
   rawManifestKey,
   readAgentManifest,
   readmeKey,
+  skillKey,
+  specKey,
   writeAgentManifest,
 } from "./storage";
-import type { ArtifactInfo, AgentManifest, Env, ParsedManifest } from "./types";
+import type { ArtifactInfo, Env } from "./types";
 
 const DEFAULT_MAX_BYTES = 262_144_000; // 250 MiB
 // Artifact filename: a single safe path segment (no traversal, no separators).
 const FILENAME_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
-// Lowercase hex sha256: exactly 64 hex digits.
-const SHA256_RE = /^[0-9a-f]{64}$/;
 
 /** Lowercase hex SHA-256 of the given bytes, computed in the Worker. */
 export async function sha256Hex(bytes: ArrayBuffer | Uint8Array): Promise<string> {
@@ -95,11 +81,15 @@ async function optionalMarkdownPart(
 }
 
 /**
- * Validate the package_files JSON text: must be `{ files: [{ name, size_bytes }] }`.
- * Returns the canonically re-serialized text on success. Throws HttpError on malformed input.
- * Used by both the multipart and streaming paths.
+ * Read + validate the optional `package_files` part: the listing of files inside
+ * the published whole-package zip. Must be JSON of shape
+ * `{ files: [{ name, size_bytes }] }`. Absent → null (no package zip). A
+ * present-but-malformed part fails loudly rather than storing junk.
  */
-function validatePackageFilesJson(text: string): string {
+async function optionalPackageFiles(form: FormData): Promise<string | null> {
+  const part = form.get("package_files");
+  if (part == null) return null;
+  const text = typeof part === "string" ? part : await (part as Blob).text();
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -107,8 +97,8 @@ function validatePackageFilesJson(text: string): string {
     throw new HttpError(
       400,
       "invalid_request",
-      `The 'package_files' value is not valid JSON: ${(e as Error).message}. Expected ` +
-        `{ "files": [{ "name": "...", "size_bytes": 0 }] }, or omit it.`
+      `The 'package_files' part is not valid JSON: ${(e as Error).message}. Expected ` +
+        `{ "files": [{ "name": "...", "size_bytes": 0 }] }, or omit the part.`
     );
   }
   const files = (parsed as { files?: unknown }).files;
@@ -125,241 +115,12 @@ function validatePackageFilesJson(text: string): string {
     throw new HttpError(
       400,
       "invalid_request",
-      "The 'package_files' value must be { \"files\": [{ \"name\": string, " +
+      "The 'package_files' part must be { \"files\": [{ \"name\": string, " +
         '"size_bytes": number }, ...] } with at least one file.'
     );
   }
   // Re-serialize canonically (compact) so the stored object is byte-stable.
   return JSON.stringify({ files });
-}
-
-/**
- * Read + validate the optional `package_files` form part. Returns null when absent.
- */
-async function optionalPackageFiles(form: FormData): Promise<string | null> {
-  const part = form.get("package_files");
-  if (part == null) return null;
-  const text = typeof part === "string" ? part : await (part as Blob).text();
-  return validatePackageFilesJson(text);
-}
-
-/**
- * UTF-8-safe base64 decode: handles non-ASCII characters in the encoded payload.
- */
-function decodeBase64Utf8(b64: string): string {
-  return new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)));
-}
-
-/**
- * Shared publish tail: write ancillary objects → update catalog → rebuild index → 201.
- *
- * Currently called only by the streaming path; the multipart path inlines an
- * equivalent tail (which also writes the optional README/CHANGELOG parts).
- * Keep the two in sync until the multipart path is migrated here.
- */
-async function finishPublish(
-  env: Env,
-  manifest: ParsedManifest,
-  artifact: ArtifactInfo,
-  manifestText: string,
-  packageFilesText: string | null,
-  existing: AgentManifest | null,
-  versionExists: boolean,
-  publisher: string,
-  now: Date
-): Promise<Response> {
-  // The raw gaia-agent.yaml, README, and CHANGELOG are per-version records.
-  // Write only on the first publish of a version; a later artifact in the same
-  // version must not overwrite them.
-  if (!versionExists) {
-    await env.BUCKET.put(rawManifestKey(manifest.id, manifest.version), manifestText, {
-      httpMetadata: { contentType: "application/x-yaml; charset=utf-8" },
-    });
-  }
-
-  // The package file listing rides the whole-package zip POST.  It must not be
-  // gated on !versionExists: the zip arrives AFTER per-platform binaries have
-  // already created the version.  Write it once (head check prevents re-write).
-  if (
-    packageFilesText != null &&
-    !(await env.BUCKET.head(packageFilesKey(manifest.id, manifest.version)))
-  ) {
-    await env.BUCKET.put(packageFilesKey(manifest.id, manifest.version), packageFilesText, {
-      httpMetadata: { contentType: "application/json; charset=utf-8" },
-    });
-  }
-
-  const versionEntry = makeVersionEntry(manifest, artifact, publisher, now.toISOString());
-  const updated = upsertVersion(existing, manifest, versionEntry);
-  await writeAgentManifest(env.BUCKET, updated);
-
-  const index = await rebuildIndex(env.BUCKET, now);
-
-  return json(
-    {
-      published: {
-        id: manifest.id,
-        version: manifest.version,
-        artifact,
-        version_artifacts: updated.versions[manifest.version].artifacts.length,
-        latest_version: updated.latest_version,
-      },
-      catalog_agents: index.agents.length,
-    },
-    201
-  );
-}
-
-/**
- * Handle a streaming application/octet-stream publish.
- *
- * Metadata travels in X-Gaia-* headers; the raw request body is passed
- * directly to R2 without buffering.
- */
-async function handleStreamingPublish(
-  request: Request,
-  env: Env,
-  publisher: { publisher: string; authors: string[] },
-  now: Date
-): Promise<Response> {
-  // Read required headers.
-  const manifestB64 = request.headers.get("x-gaia-manifest");
-  if (!manifestB64) {
-    throw new HttpError(400, "invalid_request", "Missing required header X-Gaia-Manifest.");
-  }
-  const filename = request.headers.get("x-gaia-filename");
-  if (!filename) {
-    throw new HttpError(400, "invalid_request", "Missing required header X-Gaia-Filename.");
-  }
-  const sha256 = request.headers.get("x-gaia-sha256");
-  if (!sha256) {
-    throw new HttpError(400, "invalid_request", "Missing required header X-Gaia-Sha256.");
-  }
-  if (!SHA256_RE.test(sha256)) {
-    throw new HttpError(
-      400,
-      "invalid_request",
-      `X-Gaia-Sha256 must be a lowercase 64-hex-digit SHA-256 hash; got: ${JSON.stringify(sha256)}.`
-    );
-  }
-
-  let manifestText: string;
-  try {
-    manifestText = decodeBase64Utf8(manifestB64);
-  } catch {
-    throw new HttpError(400, "invalid_request", "X-Gaia-Manifest is not valid base64.");
-  }
-
-  if (!FILENAME_RE.test(filename)) {
-    throw new HttpError(
-      400,
-      "invalid_artifact",
-      `Artifact filename ${JSON.stringify(filename)} is invalid. Use a single path ` +
-        `segment of letters, digits, '.', '_', '+', '-' (e.g. 'agent-email-0.1.0.zip').`
-    );
-  }
-
-  // Optional X-Gaia-Package-Files: base64 of package-files.json text.
-  let packageFilesText: string | null = null;
-  const packageFilesB64 = request.headers.get("x-gaia-package-files");
-  if (packageFilesB64) {
-    let raw: string;
-    try {
-      raw = decodeBase64Utf8(packageFilesB64);
-    } catch {
-      throw new HttpError(400, "invalid_request", "X-Gaia-Package-Files is not valid base64.");
-    }
-    packageFilesText = validatePackageFilesJson(raw);
-  }
-
-  const contentType =
-    request.headers.get("x-gaia-content-type") ?? "application/octet-stream";
-
-  const manifest = parseManifest(manifestText);
-  assertAuthorAllowed(publisher, manifest.author);
-
-  // Size guard without buffering. Content-Length is advisory (a client could
-  // under-declare it); R2's own object-size limit is the real ceiling, and the
-  // streamed body is never buffered in the Worker regardless.
-  const declaredLenRaw = request.headers.get("content-length");
-  const declaredLen = declaredLenRaw ? Number(declaredLenRaw) : NaN;
-  if (!declaredLen || declaredLen <= 0 || !Number.isFinite(declaredLen)) {
-    throw new HttpError(400, "invalid_artifact", "Content-Length is missing or zero; cannot determine artifact size.");
-  }
-  const limit = maxBytes(env);
-  if (declaredLen > limit) {
-    throw new HttpError(
-      413,
-      "artifact_too_large",
-      `Content-Length ${declaredLen} bytes exceeds the ${limit}-byte limit.`
-    );
-  }
-
-  // Ownership check.
-  const existing = await readAgentManifest(env.BUCKET, manifest.id);
-  if (existing && existing.author !== manifest.author) {
-    throw new HttpError(
-      403,
-      "forbidden_scope",
-      `Agent '${manifest.id}' is owned by author '${existing.author}'. A publish ` +
-        `with author '${manifest.author}' cannot update it.`
-    );
-  }
-  const versionExists = Boolean(existing?.versions[manifest.version]);
-
-  const key = artifactKey(manifest.id, manifest.version, filename);
-
-  // Per-filename immutability.
-  if (await env.BUCKET.head(key)) {
-    throw new HttpError(
-      409,
-      "version_exists",
-      `Artifact already exists at ${key} and is immutable. To add another ` +
-        `platform binary use a distinct filename; to change this one, bump the version.`
-    );
-  }
-
-  // Stream-store with R2-side integrity — no buffering.
-  if (!request.body) {
-    throw new HttpError(400, "invalid_artifact", "Request body is empty.");
-  }
-  let stored: { size: number } | null = null;
-  try {
-    stored = await env.BUCKET.put(key, request.body, {
-      httpMetadata: { contentType },
-      sha256,
-    });
-  } catch (e) {
-    throw new HttpError(
-      400,
-      "integrity_check_failed",
-      `Stored bytes did not match X-Gaia-Sha256=${sha256} (or the R2 put failed): ${(e as Error).message}.`
-    );
-  }
-  if (!stored) {
-    throw new HttpError(500, "store_error", "R2 put returned null; artifact status unknown.");
-  }
-
-  const sizeBytes = stored.size;
-  const artifact: ArtifactInfo = {
-    filename,
-    path: key,
-    size_bytes: sizeBytes,
-    sha256,
-    content_type: contentType,
-  };
-
-  return finishPublish(
-    env,
-    manifest,
-    artifact,
-    manifestText,
-    packageFilesText,
-    existing,
-    versionExists,
-    publisher.publisher,
-    now
-  );
 }
 
 export async function handlePublish(
@@ -370,25 +131,15 @@ export async function handlePublish(
   const publisher = authenticate(request, env);
 
   const contentType = request.headers.get("content-type") ?? "";
-
-  // Route to the streaming path for application/octet-stream.
-  if (contentType.toLowerCase().startsWith("application/octet-stream")) {
-    return handleStreamingPublish(request, env, publisher, now);
-  }
-
   if (!contentType.toLowerCase().includes("multipart/form-data")) {
     throw new HttpError(
       415,
       "unsupported_media_type",
-      "POST /publish expects either multipart/form-data (per-platform binaries/wheels) " +
-        "or application/octet-stream (streaming whole-package zip with X-Gaia-* headers). " +
-        "See workers/agent-hub/README.md for the full protocol."
+      "POST /publish expects multipart/form-data with 'manifest' (gaia-agent.yaml " +
+        "text), 'artifact' (the wheel or binary file), and optionally 'readme' " +
+        "(README.md markdown text) and 'changelog' (CHANGELOG.md markdown text) parts."
     );
   }
-
-  // --------------------------------------------------------------------------
-  // Multipart path (EXISTING — unchanged behavior)
-  // --------------------------------------------------------------------------
 
   let form: FormData;
   try {
@@ -418,6 +169,14 @@ export async function handlePublish(
   // pages). Both are optional; an empty part is rejected (omit it instead).
   const readmeText = await optionalMarkdownPart(form, "readme", "README.md");
   const changelogText = await optionalMarkdownPart(form, "changelog", "CHANGELOG.md");
+  // Optional SPEC.md (technical reference) + SKILL.md (AI-integration playbook),
+  // rendered as their own doc tabs on the hub page. Same per-version, first-POST
+  // semantics as README/CHANGELOG.
+  const specText = await optionalMarkdownPart(form, "spec", "SPEC.md");
+  const skillText = await optionalMarkdownPart(form, "skill", "SKILL.md");
+  // Optional eval scorecard markdown (the agent's benchmark results, rendered on
+  // the hub listing as an aggregate score + link). Per-version, first-POST semantics.
+  const evalScorecardText = await optionalMarkdownPart(form, "eval_scorecard", "SCORECARD.md");
   // Optional whole-package file listing (the zip's contents, for the hub's file
   // list). The zip itself rides in as a normal `artifact`; this is just the
   // manifest of what's inside it.
@@ -494,7 +253,6 @@ export async function handlePublish(
     httpMetadata: { contentType: artifact.content_type },
     sha256,
   });
-
   // The raw gaia-agent.yaml, README, and CHANGELOG are per-version records:
   // write them only on the first publish of a version so a later platform binary
   // joining the same version cannot rewrite them.
@@ -509,6 +267,21 @@ export async function handlePublish(
     }
     if (changelogText != null) {
       await env.BUCKET.put(changelogKey(manifest.id, manifest.version), changelogText, {
+        httpMetadata: { contentType: "text/markdown; charset=utf-8" },
+      });
+    }
+    if (specText != null) {
+      await env.BUCKET.put(specKey(manifest.id, manifest.version), specText, {
+        httpMetadata: { contentType: "text/markdown; charset=utf-8" },
+      });
+    }
+    if (skillText != null) {
+      await env.BUCKET.put(skillKey(manifest.id, manifest.version), skillText, {
+        httpMetadata: { contentType: "text/markdown; charset=utf-8" },
+      });
+    }
+    if (evalScorecardText != null) {
+      await env.BUCKET.put(evalScorecardKey(manifest.id, manifest.version), evalScorecardText, {
         httpMetadata: { contentType: "text/markdown; charset=utf-8" },
       });
     }
@@ -532,7 +305,8 @@ export async function handlePublish(
   const updated = upsertVersion(existing, manifest, versionEntry);
   await writeAgentManifest(env.BUCKET, updated);
 
-  const index = await rebuildIndex(env.BUCKET, now);
+  const baseUrl = new URL(request.url).origin;
+  const index = await rebuildIndex(env.BUCKET, now, baseUrl);
 
   return json(
     {

@@ -1,6 +1,8 @@
 # @amd-gaia/agent-email
 
-[![npm version](https://img.shields.io/npm/v/@amd-gaia/agent-email?label=version)](https://www.npmjs.com/package/@amd-gaia/agent-email) · contract `SCHEMA_VERSION` **2.0** · last updated **2026-06-24**
+[![npm version](https://img.shields.io/npm/v/@amd-gaia/agent-email?label=version)](https://www.npmjs.com/package/@amd-gaia/agent-email) · contract `SCHEMA_VERSION` **2.1** · last updated **2026-06-26**
+
+**Eval scorecard (v0.3.0): aggregate 84.67 / 100** — within-one-bucket **acceptance** accuracy (3-run mean, 95% CI [83.4, 86.0]) over 100 of 220 labeled emails ([`./SCORECARD.md`](./SCORECARD.md)). Triage priority is ordinal, so the bar (#1437) credits exact-or-adjacent buckets — what users feel — not exact 4-way match (reported as a secondary, 0.46). The linked scorecard carries the full recipe, metrics + reported secondaries, run-to-run variance/CI, a per-category breakdown, the run environment, a worked recomputation, and reproduction steps.
 
 Embed the **GAIA email agent** in your JS/TS app. It triages, organizes, replies
 to, and schedules from Gmail and Outlook — with every email body analyzed
@@ -88,6 +90,36 @@ console.log(res.result.category, res.result.summary);
 await shutdown(sidecar); // kills the whole process tree
 ```
 
+### Triage many at once
+
+`triageBatch` sends up to 100 emails or threads in a single request and returns a
+parallel `results` array (one entry per item, order-preserved). It's additive — the
+single `triage()` above is unchanged. Per-item failures are isolated, so an HTTP 200
+can still carry errored items: inspect each `results[].error`, never just the status.
+
+```ts
+const batch = await sidecar.client.triageBatch({
+  items: [
+    {
+      kind: "single",
+      principal: { email: "me@example.com" },
+      message: { message_id: "m1", from: { email: "sarah@example.com" },
+        subject: "Prod incident", body: "Reply by Friday." },
+    },
+    {
+      kind: "single",
+      principal: { email: "me@example.com" },
+      message: { message_id: "m2", from: { email: "promo@shop.example" },
+        subject: "Sale", body: "Shop now." },
+    },
+  ],
+});
+for (const item of batch.results) {
+  if (item.error) console.warn(`item ${item.index} failed: ${item.error.message}`);
+  else console.log(`item ${item.index}:`, item.result!.category);
+}
+```
+
 ### Browser / Electron renderer
 
 The `.` entry uses Node built-ins, so it can't be bundled for a browser or an
@@ -136,17 +168,58 @@ example above). Every non-2xx response throws `HttpError` (with `status`, `url`,
 | Call | Needs | Does |
 |------|-------|------|
 | `triage(req)` | Local LLM only | Classifies the message you pass, summarizes it, and extracts action items + spam/phishing signals. No mailbox is read. |
+| `triageBatch(req)` | Local LLM only | Same as `triage`, but for an `items` array (1–100). Returns a parallel `results` array; per-item failures isolate (HTTP 200 can carry errored items — inspect `results[].error`). |
+| `search(req)` | A connected Gmail/Outlook mailbox | Searches the connected inbox (**read-only**) by Gmail-style `query`/`labels` and returns message metadata — id, subject, sender, snippet, labels. No message is read in full or modified; no confirmation token needed. |
+| `prescan(req?)` | A connected Gmail/Outlook mailbox | Reads recent inbox messages and returns the triage-card envelope (urgent / needs-response / suggested-archive rows + an informational count). Read-only — nothing is archived, marked, or sent. |
 | `draft(req)` | Nothing external | Proposes a reply (`to` is a list of `{ email }` objects, not strings) and returns a single-use confirmation token. |
 | `send(req)` | A connected Gmail/Outlook mailbox + the token | Actually transmits the mail. |
+| `confirmAction(req)` | Nothing external | Mints a single-use token for a destructive action (`"archive"` / `"quarantine"`), bound to that exact `(action, message_id)`. |
+| `archive(req)` | A connected mailbox + the token | Removes the message from the inbox. Returns a `batch_id` undo handle. |
+| `unarchive(req)` | A connected mailbox | Restores an archived message within the 30s window (ungated — pass the `batch_id`). |
+| `quarantine(req)` | A connected **Gmail** mailbox + the token | Applies the `GAIA_PHISHING_QUARANTINE` label + archives a phishing message. Refuses `is_phishing: false`; Gmail-only (an Outlook mailbox → 400, since label-undo can't reverse a folder move). |
+| `unquarantine(req)` | A connected mailbox | Restores a quarantined message's prior labels within the 30s window (ungated — pass the `action_id`). |
+| `listCalendarEvents(opts?)` | A connected mailbox + calendar scope | Views events on the primary calendar (read-only). Optional `timeMin`/`timeMax` RFC 3339 bounds; `provider` only when >1 account is connected. |
+| `previewCalendarEvent(req)` | Nothing external | Mints a single-use confirmation token bound to a proposed event — the calendar analogue of `draft`. |
+| `createCalendarEvent(req)` | A connected mailbox + calendar scope + the token | Creates the event. Requires the token from `previewCalendarEvent`; a missing/invalid token is rejected with **403** before any backend call. |
+| `respondToCalendarEvent(req)` | A connected mailbox + calendar scope | RSVPs `accepted`/`declined`/`tentative` to an existing invite. |
 
-**Everything except `send` is standalone** — you can build and verify the whole
-flow with zero connector setup. `send` is different on two counts: it requires the
-single-use confirmation token from `draft` (call `draft` first; a missing/invalid
-token is rejected with **403** before anything else), and it transmits through the
-mailbox **connected in GAIA on the host** (under *Settings → Connectors*) — so even
-with a valid token, a headless server returns **HTTP 503** until a mailbox is
-connected. For a server integration, treat `triage` and `draft` as your surface and
-handle sending out of band.
+**`triage`, `draft`, `confirmAction`, and `previewCalendarEvent` are standalone** — you
+can build and verify those flows with zero connector setup. The read-only `search` and
+`prescan` need a connected mailbox (they read the live inbox) but **no** confirmation
+token (`503` with none connected, `400` with two). The mutating calls — `send`,
+`archive`, `quarantine`, and `createCalendarEvent` — are different on two counts: each
+requires a single-use confirmation token (call `draft` for `send`, `confirmAction` for
+`archive`/`quarantine`, or `previewCalendarEvent` for `createCalendarEvent`; a
+missing/invalid token is rejected with **403** before anything else), and each acts on
+the mailbox **connected in GAIA on the host** (under *Settings → Connectors*) — so even
+with a valid token, a headless server returns **HTTP 503** until a mailbox is connected.
+
+### Scheduled daily briefing (#1608)
+
+The sidecar can generate the `prescan` triage card on a daily schedule — no prompt,
+no caller. **Off by default**; opt in with env vars when launching:
+
+```ts
+const sidecar = await startSidecar({
+  binaryPath,
+  env: {
+    GAIA_EMAIL_BRIEFING_ENABLED: "true",
+    GAIA_EMAIL_BRIEFING_TIME: "08:00", // 24h local HH:MM (default 08:00)
+    GAIA_EMAIL_BRIEFING_MAX_MESSAGES: "25", // 1–100 (default 25)
+  },
+});
+```
+
+Each run persists the `email_pre_scan` envelope with a `generated_at` stamp; pull the
+latest one from `GET /v1/email/briefing` (plain `fetch` — no client wrapper yet). It
+returns **404** until the first scheduled run has happened, and an invalid env value
+fails sidecar startup loudly rather than guessing a schedule.
+`archive`/`quarantine` are reversible within a 30-second window via
+`unarchive`/`unquarantine` (which are *not* gated — they restore, never destroy); the
+calendar actions additionally need the account's calendar scope (a missing scope fails
+loud with **403** and the reconnect CTA). For a server integration, treat the standalone
+calls as your surface and handle the mailbox/calendar-mutating calls where a connector is
+available.
 
 ### Lifecycle
 
@@ -162,8 +235,11 @@ When you need finer control, the steps are exported individually:
 | `checkVersion(client)` | Throw if the sidecar's contract MAJOR differs from the client's. |
 | `shutdown(sidecar)` | Kill the whole process tree. |
 
-Mailbox and calendar **actions** beyond send (read, archive, label, RSVP, create
-events) are part of the full agent but not yet exposed through this package — see
+As of `SCHEMA_VERSION` 2.1 this package exposes inbox **search** (read-only),
+the **archive** / phishing-**quarantine** mailbox actions (+ their undo), and
+calendar **view / create / respond**. The remaining mailbox **actions** (label,
+move, mark read/unread) are part of the full agent but not yet exposed through
+this package — see
 [`SPEC.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md) for the complete surface.
 
 ## Running in production
@@ -216,9 +292,10 @@ timeout surfaces as `HttpError` with `status === 0` (not an HTTP code).
 |---------|---------|--------|
 | `HttpError` 502 (from `triage`) | Lemonade is down or the model is cold/missing | **Yes** — transient; back off and retry |
 | `HttpError` 0 (network/timeout) | Sidecar not reachable / crashed | **Yes** — after re-spawning the sidecar |
-| `HttpError` 403 (from `send`) | Missing/invalid confirmation token | **No** — call `draft` first and pass its token |
-| `HttpError` 503 (from `send`) | No mailbox connected on the host | **No** — configuration, not transient |
-| `HttpError` 400 | Bad request, or 2+ mailboxes connected for `send` | **No** — fix the call/config |
+| `HttpError` 403 (from `send` / `archive` / `quarantine`) | Missing/invalid confirmation token | **No** — call `draft` (for `send`) or `confirmAction` (for `archive`/`quarantine`) first and pass its token |
+| `HttpError` 503 (from `send` / `archive` / `quarantine`) | No mailbox connected on the host | **No** — configuration, not transient |
+| `HttpError` 409 (from `unarchive` / `unquarantine`) | Undo window expired or handle unknown | **No** — past the 30s window; restore manually in the mail client |
+| `HttpError` 400 | Bad request, 2+ mailboxes connected without a provider, or `quarantine` with `is_phishing: false` | **No** — fix the call/config |
 | `HealthTimeoutError` / `VersionMismatchError` / `IntegrityError` | Startup faults (port taken, contract mismatch, bad binary) | **No** — fail fast at boot |
 
 ## Playground
