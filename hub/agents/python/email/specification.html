@@ -3,7 +3,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <script>(function(){try{var t=localStorage.getItem('amd-site-theme');if(!t)t=(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();</script>
-<title>Email Agent — Capability &amp; API Specification · v2.1</title>
+<title>Email Agent — Capability &amp; API Specification · v2.2</title>
 <link rel="icon" href="data:image/svg+xml,&lt;svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'&gt;&lt;rect width='32' height='32' rx='5' fill='%23111114'/&gt;&lt;g fill='none' stroke='%23c9a24a' stroke-width='2.4' stroke-linecap='round'&gt;&lt;path d='M8 9 L15 16 L8 23'/&gt;&lt;path d='M16 9 L23 16 L16 23'/&gt;&lt;/g&gt;&lt;/svg&gt;">
 <style>
   /* Self-hosted latin webfonts, base64-embedded so this spec is a single
@@ -289,16 +289,16 @@
     <h1 style="margin-top:24px">The Email Agent,<br><span class="c1">Defined End to End</span></h1>
     <p class="lead">GAIA's Email Agent reads, triages, drafts, sends, organizes, and schedules your mail — running <em>locally on Ryzen&nbsp;AI</em>, so nothing leaves the device. This spec walks through how to integrate it (REST, MCP, or the full agent), its seventeen capabilities and the guardrails that gate them, the workflows that chain them, the personalization and always-on tracks, the evaluation dataset, and the contract reference — with examples throughout.</p>
     <div class="chips">
-      <div class="chip"><div class="k">Implemented</div><div class="v">schema 2.1</div></div>
-      <div class="chip"><div class="k">New in 2.1</div><div class="v g">REST calendar</div></div>
+      <div class="chip"><div class="k">Implemented</div><div class="v">schema 2.2</div></div>
+      <div class="chip"><div class="k">New in 2.2</div><div class="v g">Attachments</div></div>
       <div class="chip"><div class="k">Capabilities</div><div class="v g">17</div></div>
       <div class="chip"><div class="k">Personalization</div><div class="v">5</div></div>
       <div class="chip"><div class="k">Workflows</div><div class="v">10</div></div>
       <div class="chip"><div class="k">Inference</div><div class="v">100% on-device</div></div>
       <div class="chip"><div class="k">Milestone</div><div class="v g"><a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a></div></div>
     </div>
-    <div style="margin-top:30px;font-family:'JetBrains Mono',monospace;font-size:13px;letter-spacing:.04em;color:var(--faint)">Spec <b style="color:var(--c1)">v2.1</b> &nbsp;·&nbsp; updated <b style="color:var(--ink)">2026-06-26</b> &nbsp;·&nbsp; contract <b style="color:var(--ink)">schema 2.1</b> implemented &nbsp;·&nbsp; status as of <b style="color:var(--ink)"><a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (<a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a>)</b></div>
-    <div style="margin-top:10px;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.03em;color:var(--faint);max-width:900px;line-height:1.6">The contract reference documents the <b style="color:var(--ink)">implemented schema 2.1</b>: a 5-bucket triage taxonomy plus a <code>suggested_action</code> verb (schema 2.0), and the schema-2.1 REST surfaces — inbox search (<a class="iss" href="https://github.com/amd/gaia/issues/1781" target="_blank" rel="noopener">#1781</a>), inbox pre-scan (<a class="iss" href="https://github.com/amd/gaia/issues/1778" target="_blank" rel="noopener">#1778</a>), archive / quarantine mailbox actions (<a class="iss" href="https://github.com/amd/gaia/issues/1779" target="_blank" rel="noopener">#1779</a>), calendar view / create / respond (<a class="iss" href="https://github.com/amd/gaia/issues/1780" target="_blank" rel="noopener">#1780</a>), and the scheduled daily briefing (<a class="iss" href="https://github.com/amd/gaia/issues/1608" target="_blank" rel="noopener">#1608</a>, additive).</div>
+    <div style="margin-top:30px;font-family:'JetBrains Mono',monospace;font-size:13px;letter-spacing:.04em;color:var(--faint)">Spec <b style="color:var(--c1)">v2.2</b> &nbsp;·&nbsp; updated <b style="color:var(--ink)">2026-07-01</b> &nbsp;·&nbsp; contract <b style="color:var(--ink)">schema 2.2</b> implemented &nbsp;·&nbsp; status as of <b style="color:var(--ink)"><a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (<a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a>)</b></div>
+    <div style="margin-top:10px;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.03em;color:var(--faint);max-width:900px;line-height:1.6">The contract reference documents the <b style="color:var(--ink)">implemented schema 2.2</b>: a 5-bucket triage taxonomy plus a <code>suggested_action</code> verb (schema 2.0), the schema-2.1 REST surfaces — inbox search (<a class="iss" href="https://github.com/amd/gaia/issues/1781" target="_blank" rel="noopener">#1781</a>), inbox pre-scan (<a class="iss" href="https://github.com/amd/gaia/issues/1778" target="_blank" rel="noopener">#1778</a>), archive / quarantine mailbox actions (<a class="iss" href="https://github.com/amd/gaia/issues/1779" target="_blank" rel="noopener">#1779</a>), calendar view / create / respond (<a class="iss" href="https://github.com/amd/gaia/issues/1780" target="_blank" rel="noopener">#1780</a>), and the scheduled daily briefing (<a class="iss" href="https://github.com/amd/gaia/issues/1608" target="_blank" rel="noopener">#1608</a>, additive) — and the schema-2.2 attachment handling (<a class="iss" href="https://github.com/amd/gaia/issues/1542" target="_blank" rel="noopener">#1542</a>: read/triage exposes attachment metadata; draft/send accept files).</div>
   </div>
 </section>
 
@@ -388,7 +388,7 @@
     </div>
 
     <h3 style="margin-top:40px">Capability → surface</h3>
-    <p class="body-t">REST and MCP expose the <b>analysis + reply + send</b> core (capabilities 1–4, 6, 7). As of <b>schema 2.1</b> the <b>REST</b> surface additionally exposes the reversible mailbox mutations <b>archive</b> and <b>phishing-quarantine</b> (capabilities 8, 9) — each gated on a single-use confirmation token like <code>/send</code>, each reversible within a 30-second undo window — plus <b>calendar view / create / respond</b> (<a class="iss" href="https://github.com/amd/gaia/issues/1780" target="_blank" rel="noopener">#1780</a>; calendar <i>detect</i> and <i>conflicts</i> remain agent-only). MCP does not surface these. The remaining mailbox/calendar capabilities run through the <b>full agent</b>, which acts via a forwarded connection.</p>
+    <p class="body-t">REST and MCP expose the <b>analysis + reply + send</b> core (capabilities 1–4, 6, 7). As of <b>schema 2.1</b> the <b>REST</b> surface additionally exposes the reversible mailbox mutations <b>archive</b> and <b>phishing-quarantine</b> (capabilities 8, 9) — each gated on a single-use confirmation token like <code>/send</code>, each reversible within a 30-second undo window — plus <b>calendar view / create / respond</b> (<a class="iss" href="https://github.com/amd/gaia/issues/1780" target="_blank" rel="noopener">#1780</a>; calendar <i>detect</i> and <i>conflicts</i> remain agent-only). As of <b>schema 2.2</b> it also handles <b>attachments</b> (<a class="iss" href="https://github.com/amd/gaia/issues/1542" target="_blank" rel="noopener">#1542</a>): triage exposes attachment metadata, and <code>/draft</code> · <code>/send</code> accept base64 file payloads bound into the confirmation token. MCP does not surface these. The remaining mailbox/calendar capabilities run through the <b>full agent</b>, which acts via a forwarded connection.</p>
     <table class="tbl">
       <thead><tr><th>Capability</th><th>REST</th><th>MCP</th><th>Agent</th></tr></thead>
       <tbody>
@@ -403,6 +403,7 @@
         <tr><td><b>9</b> · Quarantine (+ undo)</td><td>✓ <code>/v1/email/quarantine</code> · <code>/unquarantine</code> <span class="opt">(Gmail)</span></td><td>—</td><td>✓ <code>quarantine_phishing_message</code></td></tr>
         <tr><td>Inbox search <span class="opt">(read-only, <a class="iss" href="https://github.com/amd/gaia/issues/1781" target="_blank" rel="noopener">#1781</a>)</span></td><td>✓ <code>/v1/email/search</code></td><td>—</td><td>✓ <code>search_messages</code></td></tr>
         <tr><td>Calendar · view / create / respond <span class="opt">(of capability <b>12</b>)</span></td><td>✓ <code>/v1/email/calendar/*</code> <span class="opt">(2.1)</span></td><td>—</td><td>✓</td></tr>
+        <tr><td>Attachments · read exposes / draft·send accept <span class="opt">(<b>P4</b>, <a class="iss" href="https://github.com/amd/gaia/issues/1542" target="_blank" rel="noopener">#1542</a>)</span></td><td>✓ <span class="opt">(in triage, <code>/draft</code>, <code>/send</code> — 2.2)</span></td><td>—</td><td>✓ <code>draft_reply</code> / <code>send_now</code> file paths</td></tr>
         <tr><td><b>16</b> · Daily briefing <span class="opt">(scheduled, <a class="iss" href="https://github.com/amd/gaia/issues/1608" target="_blank" rel="noopener">#1608</a>)</span></td><td>✓ <code>/v1/email/briefing</code> <span class="opt">(read-only · off by default)</span></td><td>—</td><td>✓ <span class="opt">(reuses <code>pre_scan_inbox</code>)</span></td></tr>
         <tr><td>calendar <b>detect / conflicts</b> (10–11) &nbsp;·&nbsp; <b>13–15, 17</b> planned &nbsp;·&nbsp; <b>P1–P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
       </tbody>
@@ -606,7 +607,7 @@
     <!-- 3 -->
     <div class="cap">
       <div class="cap-head"><span class="num">3</span><h3>Draft reply</h3><span class="pill ok">Validated</span><span class="pill t0">Tier 0 · sends nothing</span></div>
-      <div class="field"><div class="fl">Use-case</div><div class="fv">Produce a ready-to-edit reply scaffold for a message: recipient pre-filled to the original sender, subject prefixed with <code>Re:</code>, and a body the agent drafts from the thread context. It is a proposal only — nothing is sent — so the user reviews and edits rather than starting from a blank compose window. Over REST, the <a class="eplink" href="#ep-draft"><code>/draft</code></a> call also mints a single-use confirmation token bound to the exact <code>(to, subject, body)</code>, which is what later authorizes an actual send.</div></div>
+      <div class="field"><div class="fl">Use-case</div><div class="fv">Produce a ready-to-edit reply scaffold for a message: recipient pre-filled to the original sender, subject prefixed with <code>Re:</code>, and a body the agent drafts from the thread context. It is a proposal only — nothing is sent — so the user reviews and edits rather than starting from a blank compose window. Over REST, the <a class="eplink" href="#ep-draft"><code>/draft</code></a> call also mints a single-use confirmation token bound to the exact <code>(to, subject, body, attachments)</code>, which is what later authorizes an actual send.</div></div>
       <div class="field"><div class="fl">Why it matters</div><div class="fv">Removes the blank-page cost of replying — the user edits rather than composes.</div></div>
       <div class="field"><div class="fl">Backed by</div><div class="fv"><code>draft_reply</code> · <a class="eplink" href="#ep-draft"><code>POST /v1/email/draft</code></a> (returns a single-use <code>confirmation_token</code> bound to the payload).</div></div>
       <div class="field"><div class="fl">Guardrails</div><div class="fv">Drafting sends nothing. <b>Safety refusal:</b> never proposes a draft for spam/phishing, nor for replying to yourself. The token only matters at send time (capability 7).</div></div>
@@ -869,11 +870,11 @@ quarantine_phishing_message → { "ok": true, "data": {
     </div>
 
     <div class="cap">
-      <div class="cap-head"><span class="num">P4</span><h3>Attachment handling</h3><span class="pill wip">In flight</span><span class="pill t0">read · T0</span><span class="pill t2">send · T2</span></div>
-      <div class="field"><div class="fl">Use-case</div><div class="fv">Make attachments first-class: the read path exposes them (name, type, size) so triage and summaries account for them, and the draft/send path accepts attachment references so replies can carry files. A reply that silently drops an attachment the sender asked about is worse than no reply.</div></div>
+      <div class="cap-head"><span class="num">P4</span><h3>Attachment handling</h3><span class="pill wip">Wired</span><span class="pill t0">read · T0</span><span class="pill t2">send · T2</span></div>
+      <div class="field"><div class="fl">Use-case</div><div class="fv">Make attachments first-class: the read path exposes them (name, type, size) so triage and summaries account for them, and the draft/send path accepts attachment payloads so replies can carry files. A reply that silently drops an attachment the sender asked about is worse than no reply.</div></div>
       <div class="field"><div class="fl">Why it matters</div><div class="fv">Real email has attachments — triage and replies that ignore them are incomplete.</div></div>
-      <div class="field"><div class="fl">Backed by</div><div class="fv">Attachment exposure in the read path + draft/send accepting attachment references.</div></div>
-      <div class="field"><div class="fl">Guardrails</div><div class="fv">Reading is Tier 0; sending with an attachment stays <b>Tier 2</b> (confirmation), with the attachment surfaced in the confirmation payload.</div></div>
+      <div class="field"><div class="fl">Backed by</div><div class="fv"><b>On the REST contract</b> (schema 2.2, <a class="iss" href="https://github.com/amd/gaia/issues/1542" target="_blank" rel="noopener">#1542</a>): triage requests/results and <code>DraftReply</code> carry <code>attachments</code> metadata (<code>AttachmentMeta</code>: name / MIME / size / provider handle), and <a class="eplink" href="#ep-draft"><code>/draft</code></a> · <a class="eplink" href="#ep-send"><code>/send</code></a> accept <code>OutgoingAttachment</code> base64 payloads (≤ 25 MB decoded; Outlook ≤ 3 MB per Graph's simple-attach limit). In the agent loop, <code>draft_reply</code> / <code>send_now</code> take local file paths.</div></div>
+      <div class="field"><div class="fl">Guardrails</div><div class="fv">Reading is Tier 0; sending with an attachment stays <b>Tier 2</b> (confirmation), with the attachment surfaced in the confirmation payload — the REST token binds each file's name, MIME type, and content digest, so a confirmed send can't have files swapped in. Bad base64 / MIME / oversize fail loudly (422), never a silent drop.</div></div>
       <div class="field"><div class="fl">Milestone</div><div class="fv"><a class="iss" href="https://github.com/amd/gaia/issues/1542" target="_blank" rel="noopener">#1542</a> · <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a></div></div>
     </div>
 
@@ -1361,17 +1362,18 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
 
     <div class="endpoint" id="ep-draft">
       <span class="badge">POST</span><span class="path">/v1/email/draft</span>
-      <p class="desc">Propose a reply and mint a single-use confirmation token bound to its exact <code>(to, subject, body)</code>. The token authorizes sending that payload — and only that payload.</p>
+      <p class="desc">Propose a reply and mint a single-use confirmation token bound to its exact <code>(to, subject, body, attachments)</code> — attachment binding covers filename, MIME type, and content digest (schema 2.2, <a class="iss" href="https://github.com/amd/gaia/issues/1542" target="_blank" rel="noopener">#1542</a>). The token authorizes sending that payload — and only that payload.</p>
       <h4>Request body — EmailDraftRequest</h4>
       <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
         <tr><td><code>to</code></td><td>list[EmailAddress] <span class="req">required</span></td><td>Proposed recipients (non-empty).</td></tr>
         <tr><td><code>subject</code></td><td>string <span class="req">required</span></td><td>Proposed subject line.</td></tr>
         <tr><td><code>body</code></td><td>string <span class="req">required</span></td><td>Proposed reply body.</td></tr>
+        <tr><td><code>attachments</code></td><td>list[OutgoingAttachment] <span class="opt">optional</span></td><td>Files to send (schema 2.2): each <code>{ filename, mime_type, content_base64 }</code>, standard base64, ≤ 25 MB decoded. Bad base64 / MIME / oversize → 422, never a silent drop.</td></tr>
         <tr><td><code>provider</code></td><td>string <span class="opt">optional</span></td><td>Provider binding (<code>"google"</code> / <code>"microsoft"</code>). When set, the minted token is bound to this provider so the send routes to the correct mailbox even when more than one is connected.</td></tr>
       </tbody></table>
       <h4>Response body — EmailDraftResponse</h4>
       <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
-        <tr><td><code>draft</code></td><td>DraftReply</td><td>The proposed reply (to / subject / body).</td></tr>
+        <tr><td><code>draft</code></td><td>DraftReply</td><td>The proposed reply (to / subject / body / attachments — the attachment echo is <code>AttachmentMeta</code> metadata only, never content).</td></tr>
         <tr><td><code>confirmation_token</code></td><td>string</td><td>Echo to <a class="eplink" href="#ep-send"><code>/send</code></a> to authorize this exact payload. Single-use; payload-bound. Held in memory for the life of the server process — draft and send within the same session.</td></tr>
       </tbody></table>
     </div>
@@ -1384,6 +1386,7 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
         <tr><td><code>to</code></td><td>list[EmailAddress] <span class="req">required</span></td><td>Recipients (non-empty).</td></tr>
         <tr><td><code>subject</code></td><td>string <span class="req">required</span></td><td>Subject line.</td></tr>
         <tr><td><code>body</code></td><td>string <span class="req">required</span></td><td>Reply body.</td></tr>
+        <tr><td><code>attachments</code></td><td>list[OutgoingAttachment] <span class="opt">optional</span></td><td>Files to send (schema 2.2). Must exactly match the confirmed draft's set — the token binds filename, MIME type, and content digest, so a swapped or smuggled file is a 403. Outlook mailboxes cap each file at 3 MB (Graph simple-attach limit) and fail loudly beyond it.</td></tr>
         <tr><td><code>confirmation_token</code></td><td>string <span class="opt">optional</span></td><td>Token from <a class="eplink" href="#ep-draft"><code>/draft</code></a>. A send without a valid token for this exact payload is rejected (403).</td></tr>
         <tr><td><code>provider</code></td><td>string <span class="opt">optional</span></td><td>Fallback provider, used only when the token carries no binding. A token's bound provider always wins; with two mailboxes connected and neither set, the send is rejected as ambiguous (400).</td></tr>
       </tbody></table>
@@ -1392,6 +1395,7 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
         <tr><td><code>sent_id</code></td><td>string</td><td>Provider message id of the sent email.</td></tr>
         <tr><td><code>to</code></td><td>list[EmailAddress]</td><td>Recipients sent to.</td></tr>
         <tr><td><code>subject</code></td><td>string</td><td>Subject of the sent message.</td></tr>
+        <tr><td><code>attachments</code></td><td>list[AttachmentMeta]</td><td>Metadata of the attachments that went out (schema 2.2; empty when none).</td></tr>
         <tr><td><code>sent</code></td><td>bool</td><td>Always true on success.</td></tr>
       </tbody></table>
     </div>
@@ -1675,12 +1679,12 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
 <footer class="footer">
   <div class="wrap">
     <p>
-      GAIA Email Agent — Capability &amp; API Specification &nbsp;·&nbsp; <b>v2.1</b> &nbsp;·&nbsp; updated <b>2026-06-26</b> &nbsp;·&nbsp; documents contract <b>schema 2.1</b> (5-bucket triage + REST search / pre-scan / archive · quarantine / calendar) &nbsp;·&nbsp; status as of <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (<a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a>)<br>
+      GAIA Email Agent — Capability &amp; API Specification &nbsp;·&nbsp; <b>v2.2</b> &nbsp;·&nbsp; updated <b>2026-07-01</b> &nbsp;·&nbsp; documents contract <b>schema 2.2</b> (5-bucket triage + REST search / pre-scan / archive · quarantine / calendar / attachments) &nbsp;·&nbsp; status as of <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (<a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">v0.21.0</a>)<br>
       Source of truth:
       <a href="https://github.com/amd/gaia/blob/main/hub/agents/python/email/gaia_agent_email/contract.py" target="_blank" rel="noopener">contract.py</a> ·
       <a href="https://github.com/amd/gaia/blob/main/hub/agents/python/email/gaia_agent_email/api_routes.py" target="_blank" rel="noopener">api_routes.py</a> ·
       <a href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a><br>
-      The contract reference reflects the current schema 2.1 models; the capability, guardrail,
+      The contract reference reflects the current schema 2.2 models; the capability, guardrail,
       and workflow sections describe intended behaviour.
     </p>
   </div>
