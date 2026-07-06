@@ -7,6 +7,23 @@ bump is always at least a package MINOR bump with a migration note.
 
 ## Unreleased
 
+Contract bumped to `SCHEMA_VERSION` **2.2** — additive over 2.1, so `checkVersion`
+(MAJOR-only) keeps accepting existing clients.
+
+- **Attachment handling (#1542).** Real email has attachments; triage and replies
+  that ignored them were incomplete. Read/triage now exposes attachment metadata —
+  `EmailMessage` (request) and `EmailTriageResult` / `DraftReply` (response) carry
+  an `attachments` array of `{ filename, mime_type, size_bytes, attachment_id? }`
+  — and `draft` / `send` accept an `attachments` array of
+  `{ filename, mime_type, content_base64 }` (standard base64, ≤ 25 MB decoded
+  each) that reaches the mailbox as real MIME/Graph file attachments. The
+  draft→send confirmation token binds each attachment's filename, MIME type, and
+  content digest, so a confirmed payload can't have files swapped in or smuggled
+  past the user. Fail-loud validation throughout: bad base64 / MIME / oversize →
+  `422`, mismatched attachment set → `403`, Outlook > 3 MB (Graph simple-attach
+  limit) → a loud error, never truncation. The agent's in-loop `draft_reply` /
+  `send_now` tools gain an optional comma-separated `attachments` file-path
+  parameter with the same fail-loud checks.
 - **Triage action items now persist as a task list** (#1605): `triage()` /
   `triageBatch()` write each extracted action item to the sidecar's local SQLite
   (`~/.gaia/email/state.db`), linked back to the source `message_id` (or
@@ -18,7 +35,7 @@ bump is always at least a package MINOR bump with a migration note.
   email-local `email_tasks` table.
 - **Scheduled daily inbox briefing** (#1608): the sidecar can now run the inbox
   pre-scan on a daily timer — no prompt, no live caller — and expose the result on
-  the new `GET /v1/email/briefing` (additive; `SCHEMA_VERSION` stays 2.1). The
+  the new `GET /v1/email/briefing` (additive). The
   briefing payload is the same `email_pre_scan` envelope as `POST /v1/email/prescan`,
   produced by the agent's own `pre_scan_inbox` path, plus a `generated_at` stamp.
   **Off by default**: opt in by launching the sidecar with

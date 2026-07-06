@@ -27,10 +27,13 @@
  *     confirm-token handshake (#1779)
  *   - calendar view/create/respond (#1780)
  *   - inbox pre-scan (POST /v1/email/prescan, #1778)
+ * Schema 2.2 (additive over 2.1, #1542): attachment handling — AttachmentMeta
+ * on EmailMessage / EmailTriageResult / DraftReply / EmailSendResponse, and
+ * OutgoingAttachment accepted by draft/send.
  */
 
 /** Frozen contract version echoed by the server's `/version` endpoint. */
-export const SCHEMA_VERSION = "2.1" as const;
+export const SCHEMA_VERSION = "2.2" as const;
 
 /**
  * The five-bucket triage taxonomy (schema 2.0 — contract.py: EmailCategory).
@@ -49,6 +52,32 @@ export interface EmailAddress {
   name?: string | null;
   /** Bare email address, e.g. "a@b.com". Required. */
   email: string;
+}
+
+/** Attachment metadata — no content (contract.py: AttachmentMeta, schema 2.2, #1542). */
+export interface AttachmentMeta {
+  /** Attachment filename, e.g. "report.pdf". */
+  filename: string;
+  /** MIME type as reported by the provider. */
+  mime_type: string;
+  /** Attachment size in bytes (decoded). */
+  size_bytes: number;
+  /** Provider handle for fetching the content (Gmail body.attachmentId), or null. */
+  attachment_id?: string | null;
+}
+
+/**
+ * One attachment to include on a draft/send (contract.py: OutgoingAttachment,
+ * schema 2.2, #1542). Content travels as standard base64, ≤ 25 MB decoded;
+ * invalid base64 / MIME / oversize is a 422, never a silent drop.
+ */
+export interface OutgoingAttachment {
+  /** Filename shown to the recipient. */
+  filename: string;
+  /** MIME type of the content, e.g. "application/pdf". */
+  mime_type: string;
+  /** File content, standard base64 (RFC 4648). */
+  content_base64: string;
 }
 
 /** One email message (contract.py: EmailMessage). */
@@ -71,6 +100,8 @@ export interface EmailMessage {
   subject?: string;
   /** Plain-text message body to analyze. */
   body: string;
+  /** Attachment metadata on this message (schema 2.2; metadata only). */
+  attachments?: AttachmentMeta[];
 }
 
 /** A single email to triage (contract.py: SingleEmailInput). */
@@ -142,6 +173,8 @@ export interface DraftReply {
   subject: string;
   /** Proposed reply body. */
   body: string;
+  /** Metadata of the attachments the draft proposes to send (schema 2.2). */
+  attachments?: AttachmentMeta[];
 }
 
 /**
@@ -182,6 +215,8 @@ export interface EmailTriageResult {
   message_id?: string | null;
   /** LLM usage metrics; null on the heuristic-only path. */
   usage?: TriageUsage | null;
+  /** Attachment metadata of the analyzed message/thread, echoed (schema 2.2). */
+  attachments?: AttachmentMeta[];
 }
 
 /** Top-level triage response envelope (contract.py: EmailTriageResponse). */
@@ -388,6 +423,8 @@ export interface EmailDraftRequest {
   subject: string;
   /** Proposed reply body. */
   body: string;
+  /** Attachments to send (schema 2.2); the token binds their content digests. */
+  attachments?: OutgoingAttachment[];
   /** Optional provider binding ("google" or "microsoft"). */
   provider?: string | null;
 }
@@ -408,6 +445,8 @@ export interface EmailSendRequest {
   subject: string;
   /** Reply body. */
   body: string;
+  /** Attachments to send (schema 2.2) — must match the confirmed draft's exactly. */
+  attachments?: OutgoingAttachment[];
   /** Confirmation token from POST /v1/email/draft. Required for a real send. */
   confirmation_token?: string | null;
   /** Optional provider ("google" or "microsoft") fallback. */
@@ -422,6 +461,8 @@ export interface EmailSendResponse {
   to: EmailAddress[];
   /** Subject of the sent message. */
   subject: string;
+  /** Metadata of the attachments that went out (schema 2.2). */
+  attachments?: AttachmentMeta[];
   /** Always true on success. */
   sent: boolean;
 }

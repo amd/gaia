@@ -203,8 +203,29 @@ def _recipients(addresses: str) -> List[Dict[str, Any]]:
     return out
 
 
+# Graph's simple-attach path (attachments inline on the message resource) caps
+# each file at 3 MB; larger files need an uploadSession, which this backend
+# does not implement. Enforced loudly — never silently truncated.
+_GRAPH_SIMPLE_ATTACH_MAX_BYTES = 3 * 1024 * 1024
+
+
+class AttachmentTooLargeError(ValueError):
+    """An attachment passed contract validation (<=25 MB) but exceeds this
+    backend's own limit (Outlook's 3 MB Graph simple-attach cap).
+
+    Distinct from the bare ``ValueError`` CRLF-injection guards in this
+    module so the API layer can map exactly this condition to HTTP 413
+    without catching unrelated validation failures.
+    """
+
+
 def _build_graph_message(
-    *, to: str, subject: str, body: str, headers: Optional[Dict[str, str]] = None
+    *,
+    to: str,
+    subject: str,
+    body: str,
+    headers: Optional[Dict[str, str]] = None,
+    attachments: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Build a Graph ``message`` resource for draft creation / sendMail.
 
@@ -214,6 +235,10 @@ def _build_graph_message(
     (``In-Reply-To``/``References``); those are dropped here (Outlook threads by
     ``conversationId``/subject, so a reply still threads). Only ``x-`` headers
     are forwarded, after CRLF validation.
+
+    ``attachments`` (dicts of ``filename``/``mime_type``/``content`` bytes,
+    #1542) map to Graph ``fileAttachment`` resources. Files over the 3 MB
+    simple-attach limit are rejected loudly.
     """
     _validate_no_crlf("to", to)
     _validate_no_crlf("subject", subject)
@@ -229,6 +254,26 @@ def _build_graph_message(
     }
     if custom_headers:
         message["internetMessageHeaders"] = custom_headers
+    if attachments:
+        graph_attachments: List[Dict[str, Any]] = []
+        for att in attachments:
+            content: bytes = att["content"]
+            if len(content) > _GRAPH_SIMPLE_ATTACH_MAX_BYTES:
+                raise AttachmentTooLargeError(
+                    f"attachment {att['filename']!r} is {len(content)} bytes; "
+                    f"the Outlook backend supports at most "
+                    f"{_GRAPH_SIMPLE_ATTACH_MAX_BYTES} bytes (3 MB) per "
+                    f"attachment. Send it from a Gmail mailbox or shrink the file."
+                )
+            graph_attachments.append(
+                {
+                    "@odata.type": "#microsoft.graph.fileAttachment",
+                    "name": att["filename"],
+                    "contentType": att["mime_type"],
+                    "contentBytes": base64.b64encode(content).decode("ascii"),
+                }
+            )
+        message["attachments"] = graph_attachments
     return message
 
 
@@ -497,9 +542,10 @@ class LiveOutlookBackend:
         subject: str,
         body: str,
         headers: Optional[Dict[str, str]] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         message = _build_graph_message(
-            to=to, subject=subject, body=body, headers=headers
+            to=to, subject=subject, body=body, headers=headers, attachments=attachments
         )
         # Returns the created draft message resource; ``id`` is the draft id.
         return self._post("/me/messages", json_body=message)
@@ -518,9 +564,10 @@ class LiveOutlookBackend:
         subject: str,
         body: str,
         headers: Optional[Dict[str, str]] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         message = _build_graph_message(
-            to=to, subject=subject, body=body, headers=headers
+            to=to, subject=subject, body=body, headers=headers, attachments=attachments
         )
         self._post(
             "/me/sendMail",

@@ -51,6 +51,47 @@
         "title": "ActionItem",
         "type": "object"
       },
+      "AttachmentMeta": {
+        "additionalProperties": false,
+        "description": "Metadata for one attachment on a message (schema 2.2, #1542).\n\nMetadata only — no content. On the read path ``attachment_id`` is the\nprovider handle a caller uses to fetch the bytes (Gmail\n``body.attachmentId``); it is null for providers/parts that carry none.",
+        "properties": {
+          "attachment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Provider handle for fetching the content (Gmail body.attachmentId). Null when the provider/part carries none.",
+            "title": "Attachment Id"
+          },
+          "filename": {
+            "description": "Attachment filename, e.g. 'report.pdf'.",
+            "title": "Filename",
+            "type": "string"
+          },
+          "mime_type": {
+            "description": "MIME type as reported by the provider.",
+            "title": "Mime Type",
+            "type": "string"
+          },
+          "size_bytes": {
+            "description": "Attachment size in bytes (decoded).",
+            "minimum": 0.0,
+            "title": "Size Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "filename",
+          "mime_type",
+          "size_bytes"
+        ],
+        "title": "AttachmentMeta",
+        "type": "object"
+      },
       "BatchItemError": {
         "additionalProperties": false,
         "description": "Why one batch item could not be triaged (surfaced loudly, never swallowed).\n\nKept as an object (not a bare string) so a future ``code``/``type`` field is\nadditive rather than another breaking change.",
@@ -146,7 +187,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -171,7 +212,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -248,7 +289,7 @@
             "title": "Provider"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -435,7 +476,7 @@
             "title": "Location"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -475,7 +516,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -506,7 +547,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -542,7 +583,7 @@
             "title": "Provider"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -582,7 +623,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -609,6 +650,14 @@
         "additionalProperties": false,
         "description": "A drafted reply the agent proposes. Never sent without confirmation\n(#1264) — this is a proposal, not an action.",
         "properties": {
+          "attachments": {
+            "description": "Metadata of the attachments the draft proposes to send (schema 2.2, #1542). Content stays in the caller's OutgoingAttachment payload; only the echo travels here.",
+            "items": {
+              "$ref": "#/components/schemas/AttachmentMeta"
+            },
+            "title": "Attachments",
+            "type": "array"
+          },
           "body": {
             "description": "Proposed reply body.",
             "title": "Body",
@@ -699,7 +748,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -812,7 +861,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -847,7 +896,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -876,6 +925,14 @@
         "additionalProperties": false,
         "description": "Propose a reply and obtain a confirmation token for it.",
         "properties": {
+          "attachments": {
+            "description": "Attachments to include on the send (schema 2.2, #1542). The minted confirmation token binds to their content digests, so the send must carry these exact files.",
+            "items": {
+              "$ref": "#/components/schemas/OutgoingAttachment"
+            },
+            "title": "Attachments",
+            "type": "array"
+          },
           "body": {
             "description": "Proposed reply body.",
             "title": "Body",
@@ -921,7 +978,7 @@
         "description": "The proposed reply plus a single-use confirmation token bound to it.",
         "properties": {
           "confirmation_token": {
-            "description": "Echo this back to POST /v1/email/send to authorize sending exactly this payload. Single-use; bound to (to, subject, body).",
+            "description": "Echo this back to POST /v1/email/send to authorize sending exactly this payload. Single-use; bound to (to, subject, body, attachments).",
             "title": "Confirmation Token",
             "type": "string"
           },
@@ -941,6 +998,14 @@
         "additionalProperties": false,
         "description": "One email message. Shared by the single-email and thread inputs.",
         "properties": {
+          "attachments": {
+            "description": "Attachment metadata on this message (schema 2.2, #1542). Metadata only — triage weighs names/types/sizes; content never travels here.",
+            "items": {
+              "$ref": "#/components/schemas/AttachmentMeta"
+            },
+            "title": "Attachments",
+            "type": "array"
+          },
           "bcc": {
             "description": "Blind-carbon-copy recipients.",
             "items": {
@@ -1031,7 +1096,7 @@
             "type": "integer"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1049,7 +1114,7 @@
             "description": "The pre-scan envelope."
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1214,7 +1279,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1286,7 +1351,7 @@
             "title": "Query"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1337,7 +1402,7 @@
             "title": "Query"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1419,6 +1484,14 @@
         "additionalProperties": false,
         "description": "Send a reply. Requires a valid confirmation token for this payload.",
         "properties": {
+          "attachments": {
+            "description": "Attachments to send (schema 2.2, #1542). Must match the set the confirmation token was minted for — filename, MIME type, and content digest all bind.",
+            "items": {
+              "$ref": "#/components/schemas/OutgoingAttachment"
+            },
+            "title": "Attachments",
+            "type": "array"
+          },
           "body": {
             "description": "Reply body.",
             "title": "Body",
@@ -1474,6 +1547,14 @@
       "EmailSendResponse": {
         "additionalProperties": false,
         "properties": {
+          "attachments": {
+            "description": "Metadata of the attachments that went out (schema 2.2).",
+            "items": {
+              "$ref": "#/components/schemas/AttachmentMeta"
+            },
+            "title": "Attachments",
+            "type": "array"
+          },
           "sent": {
             "default": true,
             "description": "Always true on success.",
@@ -1542,7 +1623,7 @@
             "title": "Payload"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1572,7 +1653,7 @@
             "description": "The structured analysis."
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1595,6 +1676,14 @@
               "$ref": "#/components/schemas/ActionItem"
             },
             "title": "Action Items",
+            "type": "array"
+          },
+          "attachments": {
+            "description": "Attachment metadata of the analyzed message (or every message in the thread, oldest-first), echoed for downstream processing (schema 2.2, #1542).",
+            "items": {
+              "$ref": "#/components/schemas/AttachmentMeta"
+            },
+            "title": "Attachments",
             "type": "array"
           },
           "category": {
@@ -1730,7 +1819,7 @@
             "type": "integer"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1798,7 +1887,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.1",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1844,6 +1933,34 @@
           }
         },
         "title": "HealthResponse",
+        "type": "object"
+      },
+      "OutgoingAttachment": {
+        "additionalProperties": false,
+        "description": "One attachment to include on a draft/send (schema 2.2, #1542).\n\nContent travels inline as standard (RFC 4648) base64. Validation is\nfail-loud: a non-decodable payload, a malformed MIME type, or a decoded\nsize over ``MAX_ATTACHMENT_BYTES`` is a ``ValidationError`` — never\nsilently truncated or dropped.",
+        "properties": {
+          "content_base64": {
+            "description": "File content, standard base64 (RFC 4648).",
+            "title": "Content Base64",
+            "type": "string"
+          },
+          "filename": {
+            "description": "Filename shown to the recipient.",
+            "title": "Filename",
+            "type": "string"
+          },
+          "mime_type": {
+            "description": "MIME type of the content, e.g. 'application/pdf'.",
+            "title": "Mime Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "filename",
+          "mime_type",
+          "content_base64"
+        ],
+        "title": "OutgoingAttachment",
         "type": "object"
       },
       "PreScanItem": {
@@ -2228,7 +2345,7 @@
   "info": {
     "description": "REST surface for the GAIA Email Triage agent (/v1/email/*). Cross-implementation contract for the npm client and native builds.",
     "title": "GAIA Email Agent API",
-    "version": "2.1"
+    "version": "2.2"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -2546,7 +2663,7 @@
     },
     "/v1/email/draft": {
       "post": {
-        "description": "Propose a reply and mint a confirmation token bound to its payload.\n\nThe returned token must be echoed to :func:`send_email` to authorize\nsending exactly this ``(to, subject, body)``. This is the explicit\nuser-confirmation step — the consuming app surfaces the draft to the\nuser, and only a user-approved send echoes the token back.",
+        "description": "Propose a reply and mint a confirmation token bound to its payload.\n\nThe returned token must be echoed to :func:`send_email` to authorize\nsending exactly this ``(to, subject, body, attachments)``. This is the explicit\nuser-confirmation step — the consuming app surfaces the draft to the\nuser, and only a user-approved send echoes the token back.",
         "operationId": "draft_reply_v1_email_draft_post",
         "requestBody": {
           "content": {
