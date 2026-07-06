@@ -68,7 +68,7 @@ jobs:
     timeout-minutes: 90
     steps:
       - name: Checkout (the pushed branch)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.head_ref || github.ref_name }}
           fetch-depth: 0   # full history for git describe (cross-version baseline)

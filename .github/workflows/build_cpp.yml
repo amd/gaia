@@ -46,7 +46,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install OpenSSL (Linux)
         if: runner.os == 'Linux'
@@ -58,7 +58,7 @@ jobs:
 
       - name: Restore FetchContent cache
         id: cache-deps
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: cpp/build/_deps
           key: fetchcontent-${{ matrix.os }}-${{ hashFiles('cpp/CMakeLists.txt') }}
@@ -84,14 +84,14 @@ jobs:
         os: [ubuntu-latest, windows-latest]
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install OpenSSL (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libssl-dev
 
       - name: Restore FetchContent cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: cpp/build/_deps
           key: fetchcontent-install-${{ matrix.os }}-${{ hashFiles('cpp/CMakeLists.txt') }}
@@ -133,7 +133,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install OpenSSL (Linux)
         if: runner.os == 'Linux'
@@ -144,7 +144,7 @@ jobs:
         run: choco install openssl --no-progress -y
 
       - name: Restore FetchContent cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: cpp/build-shared/_deps
           key: fetchcontent-shared-${{ matrix.os }}-${{ hashFiles('cpp/CMakeLists.txt') }}
@@ -165,7 +165,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Python environment
         uses: ./.github/actions/setup-venv
@@ -243,7 +243,7 @@ jobs:
           Write-Host "Build tools ready"
 
       - name: Restore FetchContent cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: cpp/build-integration/_deps
           key: fetchcontent-integration-windows-${{ hashFiles('cpp/CMakeLists.txt') }}
