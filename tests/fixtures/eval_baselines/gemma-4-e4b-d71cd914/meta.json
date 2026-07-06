@@ -5,6 +5,7 @@
   "lemonade_url": "http://localhost:13305/api/v1",
   "lemonade_version": "10.2.0",
   "gemma_ctx_size": 32768,
+  "ctx_size": 32768,
   "categories": ["tool_selection", "rag_quality", "context_retention"],
   "purpose": "post-swap baseline, first eval on Gemma 4 E4B with native tool_calls on Lemonade v10.2.0",
   "eval_model": "claude-sonnet-4-6",
