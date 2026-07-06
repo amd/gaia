@@ -1432,7 +1432,15 @@ def _persist_triage_tasks(result: EmailTriageResult) -> None:
     Side-effect only — the inline ``action_items`` response shape is
     untouched. Skipped when the result carries no ``message_id`` (no source
     message to link back to) or no action items. ``record_action_items``
-    de-duplicates per message, so re-triaging never duplicates tasks.
+    de-duplicates per message (including the concurrent-insert race, handled
+    inside ``task_store`` as a dedup-skip), so re-triaging never duplicates
+    tasks and never raises for that race specifically.
+
+    Any other persistence failure (e.g. the sqlite file is locked or
+    unwritable) is a real error, but it must never turn an already-computed,
+    successful triage result into a failed response — callers catch and log
+    it instead of letting it propagate. See ``_triage_and_persist`` /
+    ``_triage_batch_and_persist``.
     """
     from gaia_agent_email import task_store
 
@@ -1447,15 +1455,37 @@ def _persist_triage_tasks(result: EmailTriageResult) -> None:
 
 def _triage_and_persist(request: EmailTriageRequest) -> EmailTriageResponse:
     response = _service.triage_request(request)
-    _persist_triage_tasks(response.result)
+    try:
+        _persist_triage_tasks(response.result)
+    except Exception:
+        # Task persistence is a side effect of a triage that already
+        # succeeded — never turn that success into a 500 for the caller.
+        logger.exception(
+            "email triage: task persistence failed for message_id=%s; "
+            "triage result is still returned",
+            response.result.message_id,
+        )
     return response
 
 
 def _triage_batch_and_persist(request: BatchTriageRequest) -> BatchTriageResponse:
     response = _service.triage_batch(request)
     for item in response.results:
-        if item.result is not None:
+        if item.result is None:
+            continue
+        try:
             _persist_triage_tasks(item.result)
+        except Exception:
+            # Isolate per item (#1887's documented contract): one item's
+            # persistence failure must not collapse the whole batch into a
+            # 500 and must not flip this item's already-successful `result`
+            # into an `error` (triage itself did not fail).
+            logger.exception(
+                "email triage batch: task persistence failed for index=%d "
+                "message_id=%s; item result is still returned",
+                item.index,
+                item.result.message_id,
+            )
     return response
 
 

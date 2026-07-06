@@ -29,6 +29,7 @@ argument, mirroring ``action_store``. They never reach into the agent class.
 
 from __future__ import annotations
 
+import sqlite3
 import time
 import uuid
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
@@ -83,6 +84,13 @@ def record_action_items(
     Items already captured for this message (same normalized description) are
     skipped, so re-triaging a message is idempotent. Returns the task_ids of
     the rows actually created — ``[]`` when every item was a duplicate.
+
+    The pre-insert dedup check and the insert are not atomic, so two
+    concurrent triages of the same message can both pass the check and race
+    the UNIQUE index. That race is the dedup invariant firing, not a real
+    failure: ``sqlite3.IntegrityError`` from the ``idx_email_tasks_msg_desc``
+    constraint is caught and treated as a duplicate-skip. Any other
+    exception is not ours to interpret and propagates.
     """
     if not message_id:
         raise ValueError(
@@ -104,21 +112,27 @@ def record_action_items(
             continue
         existing.add(norm)
         task_id = uuid.uuid4().hex
-        db.insert(
-            "email_tasks",
-            {
-                "task_id": task_id,
-                "message_id": message_id,
-                "description": item.description,
-                "description_norm": norm,
-                "due_hint": item.due_hint,
-                "item_type": item.type,
-                "url": item.url,
-                "status": "open",
-                "created_at": time.time(),
-                "completed_at": None,
-            },
-        )
+        try:
+            db.insert(
+                "email_tasks",
+                {
+                    "task_id": task_id,
+                    "message_id": message_id,
+                    "description": item.description,
+                    "description_norm": norm,
+                    "due_hint": item.due_hint,
+                    "item_type": item.type,
+                    "url": item.url,
+                    "status": "open",
+                    "created_at": time.time(),
+                    "completed_at": None,
+                },
+            )
+        except sqlite3.IntegrityError:
+            # A concurrent triage of the same message won the race and
+            # already recorded this (message_id, description_norm) pair —
+            # the UNIQUE index invariant, not an error.
+            continue
         created.append(task_id)
     return created
 
