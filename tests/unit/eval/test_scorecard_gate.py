@@ -320,9 +320,11 @@ def _make_acceptance_card(
     within_one: float,
     urgent_recall: float = 0.85,
     stdev: float | None = None,
+    environment: dict | None = None,
 ) -> Path:
     """Write a SCORECARD.md whose gated aggregate is within-one-bucket, with an
-    urgent_recall secondary and (optionally) a recorded within-one stdev."""
+    urgent_recall secondary and (optionally) a recorded within-one stdev and/or
+    a run environment (e.g. {"ctx_size": 16384})."""
     metrics = [
         {"name": "within_one_bucket_accuracy", "value": within_one, "weight": 1.0},
         {"name": "urgent_recall", "value": urgent_recall, "weight": 0.0},
@@ -348,6 +350,8 @@ def _make_acceptance_card(
         generated_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
         inherited_from=None,
     )
+    if environment is not None:
+        payload.environment = environment
     path.write_text(render_scorecard(payload))
     return path
 
