@@ -195,6 +195,9 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
 - **Cleanup is automatic by default** — the sidecar is reaped on exit/crash/signal;
   only `autoCleanup: false` (or a hard `SIGKILL` of your process) can orphan the
   child. `shutdown` stays the graceful stop.
+- **No scheduled-send / snooze endpoints.** The agent implements them (#1609),
+  but only in its tool loop — the REST contract has no routes for them yet, so
+  don't look for a `client.scheduleSend()` / `client.snooze()`; they don't exist.
 - **ESM-only.** `require("@amd-gaia/agent-email")` fails; use `import` / dynamic
   `import()`.
 

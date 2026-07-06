@@ -26,7 +26,10 @@ the agent runs as a frozen, self-contained REST sidecar your app launches and ow
 - **Organize** — archive, label, move, mark read/unread — one message or in batches.
 - **Reply & send** — draft context-aware replies and forwards, then send —
   attachments included (schema 2.2): triage exposes attachment metadata, and
-  draft/send accept base64 file payloads.
+  draft/send accept base64 file payloads. The underlying agent can also
+  schedule a confirmed send for a future time and snooze messages out of the
+  inbox (agent tool loop today — not yet exposed on this package's REST
+  surface).
 - **Calendar** — detect meeting requests, flag conflicts, RSVP, and create events
   from an email.
 - **Safe by construction** — email bodies are treated as untrusted **data, never

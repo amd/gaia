@@ -122,6 +122,16 @@ await client.unquarantine({ action_id: q.action_id });
 > invite and can be changed by responding again. The REST caller (the Agent UI's
 > accept/decline controls) is the human-in-the-loop for that reversible action.
 
+### Agent-loop capabilities not on the contract
+
+Scheduled send + snooze (#1609) are implemented in the **agent tool loop**
+(`schedule_send`, `snooze_message`, `cancel_scheduled_job`, `list_scheduled_jobs`
+in the Python agent): a send is user-confirmed at creation, persisted as a
+mailbox draft plus a one-shot job in the agent's SQLite, and fired by the
+agent's scheduler at/after its time. **No REST endpoints exist for them yet**,
+so this package's `EmailClient` cannot schedule or snooze — they reach hosts
+through the agent chat surface until routes land in a future schema bump.
+
 ### Readiness vs liveness
 
 `health()` is **liveness-only** — a green `/health` means "the REST surface is up,"
