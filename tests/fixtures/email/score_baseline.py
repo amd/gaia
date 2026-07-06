@@ -244,7 +244,9 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    scorecard = score(args.model, ctx_size=args.ctx_size, max_messages=args.max_messages)
+    scorecard = score(
+        args.model, ctx_size=args.ctx_size, max_messages=args.max_messages
+    )
     print(json.dumps({k: v for k, v in scorecard.items() if k != "_misses"}, indent=2))
     print(f"\nMisses: {len(scorecard['_misses'])}")
 
