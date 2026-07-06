@@ -186,7 +186,7 @@ is a working reference for both `oauth_pkce` (Google) and `mcp_server`
 
 ## Export and import agents
 
-Custom agents can be packaged into a single `.zip` bundle and shared between machines, teammates, or environments. GAIA supports export and import from both the Agent UI and the CLI.
+Custom agents can be packaged into a single `.zip` bundle and shared between machines, teammates, or environments. GAIA supports export and import from both the Agent UI and the CLI. Exports include every `~/.gaia/agents/*` directory with an `agent.py` — the installer-seeded bundled example included; imported copies land as user-owned agents the seeder never touches.
 
 ### From the Agent UI
 
@@ -254,34 +254,37 @@ The UI endpoints (`POST /api/agents/export` and `POST /api/agents/import`) are l
 ## Examples
 
 <AccordionGroup>
-  <Accordion title="Zoo Agent — simple personality">
+  <Accordion title="Example Agent — simple personality">
     ```python
     from gaia.agents.base.agent import Agent
     from gaia.agents.base.console import AgentConsole
-    from gaia.agents.base.tools import _TOOL_REGISTRY
 
 
-    class ZooAgent(Agent):
-        AGENT_ID = "zoo-agent"
-        AGENT_NAME = "Zoo Agent"
-        AGENT_DESCRIPTION = "A zookeeper who loves animals"
+    class ExampleAgent(Agent):
+        AGENT_ID = "example-agent"
+        AGENT_NAME = "Example Agent"
+        AGENT_DESCRIPTION = (
+            "A bundled example agent that shows how installer-seeded custom agents work"
+        )
         CONVERSATION_STARTERS = [
-            "Hello! What's happening at the zoo today?",
-            "Tell me a fun fact about one of your animals.",
+            "What are you an example of?",
+            "How do I build my own agent like you?",
         ]
 
         def _get_system_prompt(self) -> str:
             return (
-                "You are a funny and enthusiastic zookeeper! You work at the world's "
-                "best zoo and every response you give includes a fun fact or a playful "
-                "reference to one of your beloved zoo animals."
+                "You are GAIA's bundled Example Agent — a working demonstration of a "
+                "custom agent seeded by the installer. Explain plainly that you exist "
+                "to show how custom agents are packaged and loaded, and point anyone "
+                "who wants to build their own to "
+                "https://amd-gaia.ai/docs/guides/custom-agent."
             )
 
         def _create_console(self) -> AgentConsole:
             return AgentConsole()
 
         def _register_tools(self) -> None:
-            _TOOL_REGISTRY.clear()
+            pass
     ```
   </Accordion>
 
