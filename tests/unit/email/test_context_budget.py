@@ -27,3 +27,25 @@ def test_context_budget_values():
     assert CONTEXT_TARGET_TOKENS == 16384
     assert CONTEXT_MAX_TOKENS == 32768
     assert len(context_budget.__doc__ or "") > 50
+
+
+def test_calendar_tools_no_local_body_limit_constant():
+    """calendar_tools must source its body-char cap from read_tools'
+    single ``DEFAULT_BODY_LIMIT_CHARS`` constant, not a local duplicate.
+
+    A local ``_BODY_CHAR_LIMIT`` silently drifts from read_tools' limit
+    whenever one changes and not the other (the docstring even claimed
+    parity with a limit it never actually referenced).
+    """
+    from gaia_agent_email.tools import calendar_tools, read_tools
+
+    assert not hasattr(calendar_tools, "_BODY_CHAR_LIMIT")
+
+    long_body = "A" * 10000
+    prompt = calendar_tools._build_llm_user_prompt(subject="x", body=long_body)
+
+    # The truncated run of "A"s embedded in the prompt must be exactly
+    # read_tools.DEFAULT_BODY_LIMIT_CHARS long -- not some coincidental
+    # hardcoded local value.
+    assert "A" * read_tools.DEFAULT_BODY_LIMIT_CHARS in prompt
+    assert "A" * (read_tools.DEFAULT_BODY_LIMIT_CHARS + 1) not in prompt
