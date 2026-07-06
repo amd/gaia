@@ -2906,10 +2906,19 @@ class LemonadeClient:
                     return
                 # Loaded at the wrong window — fall through to the reload path
                 # which calls /load with explicit ctx_size.
-                self.log.info(
-                    f"Model '{model}' loaded at ctx={loaded_ctx} but GAIA "
-                    f"expects ctx={expected_ctx}; reloading."
-                )
+                if self.ctx_size_override is not None:
+                    # Divergence from an exact pin mid-run means something
+                    # else reloaded this model on the shared server — loud.
+                    self.log.warning(
+                        f"Model '{model}' found at ctx={loaded_ctx} but this "
+                        f"client pins ctx={expected_ctx} (#1892 override); "
+                        f"re-pinning. Another process likely reloaded it."
+                    )
+                else:
+                    self.log.info(
+                        f"Model '{model}' loaded at ctx={loaded_ctx} but GAIA "
+                        f"expects ctx={expected_ctx}; reloading."
+                    )
             else:
                 self.log.debug(f"Model '{model}' not loaded, loading...")
 
