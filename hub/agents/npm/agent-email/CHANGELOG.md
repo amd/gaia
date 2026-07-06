@@ -24,6 +24,17 @@ Contract bumped to `SCHEMA_VERSION` **2.2** — additive over 2.1, so `checkVers
   limit) → a loud error, never truncation. The agent's in-loop `draft_reply` /
   `send_now` tools gain an optional comma-separated `attachments` file-path
   parameter with the same fail-loud checks.
+- **Scheduled daily inbox briefing** (#1608): the sidecar can now run the inbox
+  pre-scan on a daily timer — no prompt, no live caller — and expose the result on
+  the new `GET /v1/email/briefing` (additive). The
+  briefing payload is the same `email_pre_scan` envelope as `POST /v1/email/prescan`,
+  produced by the agent's own `pre_scan_inbox` path, plus a `generated_at` stamp.
+  **Off by default**: opt in by launching the sidecar with
+  `GAIA_EMAIL_BRIEFING_ENABLED=true` (fire time `GAIA_EMAIL_BRIEFING_TIME`, 24h local
+  `HH:MM`, default `08:00`; scan size `GAIA_EMAIL_BRIEFING_MAX_MESSAGES`, 1–100,
+  default 25), e.g. via `startSidecar({ env: {...} })`. An invalid value fails sidecar
+  startup loudly; the endpoint returns `404` until the first scheduled run. REST-only
+  for now — no npm client wrapper method yet.
 
 ## 0.3.0
 

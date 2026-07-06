@@ -882,6 +882,33 @@
         "title": "EmailArchiveResponse",
         "type": "object"
       },
+      "EmailBriefingResponse": {
+        "additionalProperties": false,
+        "description": "Latest scheduled inbox briefing (#1608). LOCAL model — the briefing\npayload itself is the frozen contract's ``EmailPreScanResult``.",
+        "properties": {
+          "briefing": {
+            "$ref": "#/components/schemas/EmailPreScanResult",
+            "description": "The email_pre_scan envelope the scheduled run produced."
+          },
+          "generated_at": {
+            "description": "UTC ISO-8601 timestamp of the scheduled run.",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "schema_version": {
+            "default": "2.2",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "generated_at",
+          "briefing"
+        ],
+        "title": "EmailBriefingResponse",
+        "type": "object"
+      },
       "EmailCategory": {
         "description": "The five-bucket triage taxonomy (schema 2.0, #1615). Values MUST match\n``triage_heuristics.ALL_CATEGORIES`` — the contract tests assert this.",
         "enum": [
@@ -2359,6 +2386,28 @@
           }
         },
         "summary": "Archive Email",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/briefing": {
+      "get": {
+        "description": "Return the latest scheduled inbox briefing (#1608).\n\nThe briefing is generated without a user prompt by the sidecar's daily\nscheduler (off by default — ``GAIA_EMAIL_BRIEFING_ENABLED``) and\npersisted by ``gaia_agent_email.briefing``; this endpoint is the pull\nsurface any host reads it from. 404 until a scheduled run has happened.",
+        "operationId": "get_briefing_v1_email_briefing_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailBriefingResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Briefing",
         "tags": [
           "email"
         ]

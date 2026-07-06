@@ -1591,6 +1591,64 @@ async def prescan_inbox(
     return EmailPreScanResponse(result=EmailPreScanResult.model_validate(out))
 
 
+class EmailBriefingResponse(_Strict):
+    """Latest scheduled inbox briefing (#1608). LOCAL model — the briefing
+    payload itself is the frozen contract's ``EmailPreScanResult``."""
+
+    schema_version: str = Field(
+        default=API_VERSION, description="Echoes the contract version."
+    )
+    generated_at: str = Field(
+        ..., description="UTC ISO-8601 timestamp of the scheduled run."
+    )
+    briefing: EmailPreScanResult = Field(
+        ..., description="The email_pre_scan envelope the scheduled run produced."
+    )
+
+
+@router.get("/briefing", response_model=EmailBriefingResponse)
+async def get_briefing() -> EmailBriefingResponse:
+    """Return the latest scheduled inbox briefing (#1608).
+
+    The briefing is generated without a user prompt by the sidecar's daily
+    scheduler (off by default — ``GAIA_EMAIL_BRIEFING_ENABLED``) and
+    persisted by ``gaia_agent_email.briefing``; this endpoint is the pull
+    surface any host reads it from. 404 until a scheduled run has happened.
+    """
+    from gaia_agent_email.briefing import (
+        BriefingUnavailableError,
+        load_latest_briefing,
+    )
+
+    try:
+        record = load_latest_briefing()
+    except BriefingUnavailableError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No inbox briefing has been generated yet. Enable the daily "
+                "schedule (GAIA_EMAIL_BRIEFING_ENABLED=true on the email "
+                "sidecar) or POST /v1/email/prescan for an on-demand scan."
+            ),
+        )
+    try:
+        return EmailBriefingResponse(
+            generated_at=record["generated_at"],
+            briefing=EmailPreScanResult.model_validate(record["briefing"]),
+        )
+    except (KeyError, ValueError) as e:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Persisted briefing does not match the email_pre_scan "
+                f"envelope: {e}. Delete ~/.gaia/email/briefing_latest.json "
+                "and let the next scheduled run regenerate it."
+            ),
+        ) from e
+
+
 @router.post("/draft", response_model=EmailDraftResponse)
 async def draft_reply(request: EmailDraftRequest) -> EmailDraftResponse:
     """Propose a reply and mint a confirmation token bound to its payload.
@@ -2165,6 +2223,7 @@ __all__ = [
     "resolve_action_db",
     "_resolve_mutate_backend",
     "_action_fingerprint",
+    "EmailBriefingResponse",
     "EmailDraftRequest",
     "EmailDraftResponse",
     "EmailSendRequest",

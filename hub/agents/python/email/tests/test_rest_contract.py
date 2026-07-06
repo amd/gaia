@@ -48,6 +48,9 @@ _EXPECTED_RESPONSE_MODELS = {
     ("post", "/v1/email/triage/batch"): "BatchTriageResponse",  # #1887 additive
     ("post", "/v1/email/search"): "EmailSearchResponse",
     ("post", "/v1/email/prescan"): "EmailPreScanResponse",
+    # Scheduled daily briefing (#1608 additive) — the pull surface for the
+    # sidecar's scheduled pre-scan runs.
+    ("get", "/v1/email/briefing"): "EmailBriefingResponse",
     ("post", "/v1/email/draft"): "EmailDraftResponse",
     ("post", "/v1/email/send"): "EmailSendResponse",
     # Mailbox actions (schema 2.1, #1779).

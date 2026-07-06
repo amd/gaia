@@ -124,6 +124,13 @@ reversible inside a 30s window via the ungated `unarchive` / `unquarantine`. Eve
 non-2xx response throws `HttpError` (`status`, `url`, `bodyText`) — handle it; there is
 no silent null.
 
+**Scheduled daily briefing (#1608, REST-only):** the sidecar can run `prescan` on a
+daily timer with no prompt. Off by default — launch with
+`startSidecar({ env: { GAIA_EMAIL_BRIEFING_ENABLED: "true" } })` (fire time
+`GAIA_EMAIL_BRIEFING_TIME`, 24h local `HH:MM`, default `08:00`), then pull the latest
+run from `GET /v1/email/briefing` with plain `fetch` (no client wrapper yet). 404
+until the first scheduled run; an invalid env value fails sidecar startup loudly.
+
 ## 5. From a renderer (Electron / browser)
 
 The sidecar serves **same-origin only — no CORS**. A renderer on a different origin
