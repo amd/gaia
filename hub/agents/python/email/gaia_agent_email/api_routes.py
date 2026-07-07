@@ -107,6 +107,7 @@ from gaia_agent_email.tools.triage_heuristics import (
 )
 from gaia_agent_email.version import AGENT_VERSION, API_VERSION
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.concurrency import iterate_in_threadpool
 
 from gaia.connectors.api import connected_mailbox_providers
 from gaia.connectors.errors import (
@@ -2558,8 +2559,10 @@ async def email_provision() -> StreamingResponse:
 
         return StreamingResponse(_unreachable(), media_type=media_type, status_code=503)
 
+    # The generator does blocking requests.* I/O (incl. a long model pull) —
+    # iterate it in a worker thread so it never runs on the event loop.
     return StreamingResponse(
-        _provision_progress(probe_base, model_id),
+        iterate_in_threadpool(_provision_progress(probe_base, model_id)),
         media_type=media_type,
         status_code=200,
     )
