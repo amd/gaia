@@ -70,10 +70,10 @@ async def upload_file(file: UploadFile = File(...)):
     Constraints:
     - Maximum file size: 20 MB
     - Allowed types: common images (png, jpg, jpeg, gif, webp, bmp, svg)
-      and the document types listed in ALLOWED_EXTENSIONS (pdf, txt, md,
-      csv, json, xlsx, html, xml, yaml, and code files). Legacy Office
-      formats (.doc/.docx/.ppt/.xls) are NOT allowed — GAIA does
-      not currently ship extractors for them.
+      and the document types listed in ALLOWED_EXTENSIONS (pdf, pptx, docx,
+      txt, md, csv, json, xlsx, html, xml, yaml, and code files). Legacy Office
+      formats (.doc/.ppt/.xls) are NOT allowed — GAIA reads only the modern
+      XML-based Office formats.
 
     Returns:
         FileUploadResponse with the saved filename, URL, size, and metadata.
@@ -91,9 +91,9 @@ async def upload_file(file: UploadFile = File(...)):
             detail=(
                 f"File type '{ext}' is not allowed. "
                 f"Supported types: images (png, jpg, jpeg, gif, webp, bmp, svg) "
-                f"and documents (pdf, pptx, txt, md, csv, json, xlsx, html, code files, etc.). "
-                f"Microsoft Word (.doc/.docx), legacy PowerPoint (.ppt), and legacy Excel (.xls) "
-                f"are not yet supported — save as PDF, .pptx, or .xlsx."
+                f"and documents (pdf, pptx, docx, txt, md, csv, json, xlsx, html, code files, etc.). "
+                f"Legacy Office formats (.doc, .ppt, .xls) are not supported — "
+                f"re-save as .docx, .pptx, or .xlsx."
             ),
         )
 
