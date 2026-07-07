@@ -307,31 +307,31 @@
   <div class="wrap">
     <div class="eyebrow"><span class="bar"></span>At a glance</div>
     <h2 style="margin-top:16px">The capability surface at a glance</h2>
-    <p class="body-t">Mail is read through your connected <b>Gmail or Outlook</b>. Every action runs under a <b>guardrail tier</b>: <b>Tier&nbsp;0</b> read-only, <b>Tier&nbsp;1</b> reversible (30-second undo), <b>Tier&nbsp;2</b> needs your confirmation. <b>17 capabilities</b> across three states — <b>4 validated, 9 wired, 4 planned</b> — plus a personalization track that learns how you work. Click any row to jump to its full entry.</p>
+    <p class="body-t">Mail is read through your connected <b>Gmail or Outlook</b>. Every action runs under a <b>guardrail tier</b>: <b>Tier&nbsp;0</b> read-only, <b>Tier&nbsp;1</b> reversible (30-second undo), <b>Tier&nbsp;2</b> needs your confirmation. <b>17 capabilities</b> across three states — <b>5 validated, 11 wired, 1 planned</b> — plus a personalization track that learns how you work. Click any row to jump to its full entry.</p>
 
     <div class="cards3">
       <div class="gcard" style="border-top-color:var(--ok)">
         <div class="lab" style="color:var(--ok)">Shipped</div>
-        <h3>4 validated</h3>
+        <h3>5 validated</h3>
         <ul>
-          <li>Triage, summary, draft, phishing detection</li>
+          <li>Triage, summary, draft, phishing detection, quarantine + undo</li>
           <li>Stable contract + send-confirmation gate (<a class="iss" href="https://github.com/amd/gaia/issues/1262" target="_blank" rel="noopener">#1262</a> · <a class="iss" href="https://github.com/amd/gaia/issues/1264" target="_blank" rel="noopener">#1264</a>)</li>
           <li>Gmail + Outlook connectors (<a class="iss" href="https://github.com/amd/gaia/issues/962" target="_blank" rel="noopener">#962</a> · <a class="iss" href="https://github.com/amd/gaia/issues/1275" target="_blank" rel="noopener">#1275</a>/<a class="iss" href="https://github.com/amd/gaia/issues/1276" target="_blank" rel="noopener">#1276</a>)</li>
         </ul>
       </div>
       <div class="gcard t1">
         <div class="lab">In progress</div>
-        <h3>9 wired</h3>
+        <h3>11 wired</h3>
         <ul>
-          <li>Pre-scan, threads, send, batch archive, undo, calendar, scheduled send &amp; snooze — built, validation underway</li>
+          <li>Pre-scan, threads, send, batch archive, calendar, tasks, follow-ups, briefing, scheduled send &amp; snooze — built, validation underway</li>
           <li>4 personalization features in flight (P1–P4)</li>
         </ul>
       </div>
       <div class="gcard" style="border-top-color:var(--faint)">
         <div class="lab" style="color:var(--faint)">Planned</div>
-        <h3>4 + schema 2.0</h3>
+        <h3>1 + schema 2.0</h3>
         <ul>
-          <li>Capabilities 13, 15 + personalization P5 — <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (P3 stretch)</li>
+          <li>Capability 13 + personalization P5 — <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (P3 stretch)</li>
           <li><b>Schema 2.0</b> (breaking) — 5-bucket taxonomy + <code>suggested_action</code></li>
         </ul>
       </div>
@@ -354,7 +354,7 @@
         <tr><td><b>12</b></td><td><b>Calendar — create</b></td><td><span class="dot wip"></span>Wired</td><td>Create events from email context</td><td><span class="pill t2">Tier 2</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>13</b></td><td><b>Search past email</b></td><td><span class="dot" style="background:var(--faint)"></span>Planned</td><td>Natural-language / keyword search across the mailbox</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>14</b></td><td><b>Task extraction → list</b></td><td><span class="dot wip"></span>Wired</td><td>Persist action items into a trackable task list</td><td><span class="pill t0">Tier 0</span></td><td><span style="color:var(--soft)">New&nbsp;mail</span></td><td><span class="opt">—</span></td></tr>
-        <tr><td><b>15</b></td><td><b>Follow-up tracking</b></td><td><span class="dot" style="background:var(--faint)"></span>Planned</td><td>Flag sent mail awaiting a reply; nudge when overdue</td><td><span class="pill t0">Tier 0</span></td><td><span style="color:var(--c1)">Scheduled</span></td><td><span class="opt">—</span></td></tr>
+        <tr><td><b>15</b></td><td><b>Follow-up tracking</b></td><td><span class="dot wip"></span>Wired</td><td>Flag sent mail awaiting a reply past a configurable window (detection only)</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>16</b></td><td><b>Proactive daily briefing</b></td><td><span class="dot wip"></span>Wired</td><td>Scheduled morning inbox brief, no prompt (calendar + tasks planned)</td><td><span class="pill t0">Tier 0</span></td><td><span style="color:var(--c1)">Scheduled</span></td><td><span style="color:var(--ok)">○</span></td></tr>
         <tr><td><b>17</b></td><td><b>Scheduled send &amp; snooze</b></td><td><span class="dot wip"></span>Wired</td><td>Defer a send; snooze a message out of the inbox</td><td><span class="pill t2">Tier 2</span></td><td><span style="color:var(--c1)">Scheduled</span></td><td><span class="opt">—</span></td></tr>
       </tbody>
@@ -363,9 +363,9 @@
 
     <div class="stats">
       <div class="st"><div class="v">17</div><div class="l">Capabilities</div></div>
-      <div class="st"><div class="v g">4</div><div class="l">Completed</div></div>
-      <div class="st"><div class="v">12</div><div class="l">In progress</div></div>
-      <div class="st"><div class="v">5</div><div class="l">Planned</div></div>
+      <div class="st"><div class="v g">5</div><div class="l">Completed</div></div>
+      <div class="st"><div class="v">15</div><div class="l">In progress</div></div>
+      <div class="st"><div class="v">2</div><div class="l">Planned</div></div>
       <div class="st"><div class="v r">3</div><div class="l">Approval tiers</div></div>
     </div>
   </div>
@@ -405,7 +405,7 @@
         <tr><td>Calendar · view / create / respond <span class="opt">(of capability <b>12</b>)</span></td><td>✓ <code>/v1/email/calendar/*</code> <span class="opt">(2.1)</span></td><td>—</td><td>✓</td></tr>
         <tr><td>Attachments · read exposes / draft·send accept <span class="opt">(<b>P4</b>, <a class="iss" href="https://github.com/amd/gaia/issues/1542" target="_blank" rel="noopener">#1542</a>)</span></td><td>✓ <span class="opt">(in triage, <code>/draft</code>, <code>/send</code> — 2.2)</span></td><td>—</td><td>✓ <code>draft_reply</code> / <code>send_now</code> file paths</td></tr>
         <tr><td><b>16</b> · Daily briefing <span class="opt">(scheduled, <a class="iss" href="https://github.com/amd/gaia/issues/1608" target="_blank" rel="noopener">#1608</a>)</span></td><td>✓ <code>/v1/email/briefing</code> <span class="opt">(read-only · off by default)</span></td><td>—</td><td>✓ <span class="opt">(reuses <code>pre_scan_inbox</code>)</span></td></tr>
-        <tr><td>calendar <b>detect / conflicts</b> (10–11) &nbsp;·&nbsp; <b>13–15, 17</b> planned &nbsp;·&nbsp; <b>P1–P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
+        <tr><td>calendar <b>detect / conflicts</b> (10–11) &nbsp;·&nbsp; <b>13</b> planned &nbsp;·&nbsp; <b>P1–P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
       </tbody>
     </table>
 
@@ -546,7 +546,7 @@
   <div class="wrap">
     <div class="eyebrow"><span class="bar"></span>Part 1 · Capabilities</div>
     <h2 style="margin-top:16px">Each capability, in full</h2>
-    <p class="body-t">Capabilities <b>1–12, 14, 16–17</b> are shipped or wired today; <b>13, 15</b> are planned (clearly tagged). Each is defined with its use-case, why it matters, the backing tool / endpoint, its guardrail tier, and — for the shipped ones — an example and the evaluation dataset shape. Cards are collapsed by default; click a header (or an at-a-glance row above) to expand.</p>
+    <p class="body-t">Capabilities <b>1–12 and 14–17</b> are shipped or wired today; only <b>13</b> is planned (clearly tagged). Each is defined with its use-case, why it matters, the backing tool / endpoint, its guardrail tier, and — for the shipped ones — an example and the evaluation dataset shape. Cards are collapsed by default; click a header (or an at-a-glance row above) to expand.</p>
 
     <!-- 1 -->
     <div class="cap">
@@ -801,12 +801,12 @@ quarantine_phishing_message → { "ok": true, "data": {
       <div class="field"><div class="fl">Tracking</div><div class="fv"><a class="iss" href="https://github.com/amd/gaia/issues/1605" target="_blank" rel="noopener">#1605</a> · <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (P3 stretch)</div></div>
     </div>
 
-    <!-- 15 · planned -->
+    <!-- 15 · wired -->
     <div class="cap">
-      <div class="cap-head"><span class="num">15</span><h3>Follow-up tracking</h3><span class="pill planned">Planned</span><span class="pill t0">Tier 0 · read-only</span></div>
+      <div class="cap-head"><span class="num">15</span><h3>Follow-up tracking</h3><span class="pill wip">Wired</span><span class="pill t0">Tier 0 · read-only</span></div>
       <div class="field"><div class="fl">Use-case</div><div class="fv">Watch the messages the user has <em>sent</em> and flag the ones that have gone unanswered past a configurable window, so a dropped thread resurfaces instead of disappearing. The agent scans the Sent folder, matches each outbound message against later inbound replies on the same thread, and surfaces the still-open ones (recipient, subject, age) for a nudge. It only detects and surfaces; it never auto-sends a follow-up (that is a separate, confirmation-gated action).</div></div>
       <div class="field"><div class="fl">Why it matters</div><div class="fv">The unanswered email you forgot you sent is the inbox's biggest silent failure mode — and a top-billed feature in every comparable assistant.</div></div>
-      <div class="field"><div class="fl">Backed by</div><div class="fv">Sent-folder scan + reply detection. Distinct from autonomy <a class="iss" href="https://github.com/amd/gaia/issues/555" target="_blank" rel="noopener">#555</a> (which proactively <em>sends</em> follow-ups). <b>Highest-impact gap.</b></div></div>
+      <div class="field"><div class="fl">Backed by</div><div class="fv"><code>check_followups</code> — Sent-folder scan + same-thread reply detection across every connected mailbox (window default 3 days, configurable). Distinct from autonomy <a class="iss" href="https://github.com/amd/gaia/issues/555" target="_blank" rel="noopener">#555</a> (which proactively <em>sends</em> follow-ups); the scheduled sweep rides the autonomy engine.</div></div>
       <div class="field"><div class="fl">Guardrails</div><div class="fv">Tier 0 — read-only detection; never auto-sends.</div></div>
       <div class="field"><div class="fl">Tracking</div><div class="fv"><a class="iss" href="https://github.com/amd/gaia/issues/1606" target="_blank" rel="noopener">#1606</a> · <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (P3 stretch)</div></div>
     </div>
@@ -1000,7 +1000,7 @@ quarantine_phishing_message → { "ok": true, "data": {
       <ol>
         <li>Triage marks a message <code>NEEDS_RESPONSE</code> and extracts its action items <span class="pill t0">T0</span></li>
         <li>Action items are persisted to the task list, de-duplicated and linked to the source message <span class="pill t0">T0</span> <span class="opt">(14, wired)</span></li>
-        <li>Days later, the reply you sent gets no response → <b>follow-up tracking</b> surfaces a nudge <span class="pill t0">T0</span> <span class="opt">(15, planned)</span></li>
+        <li>Days later, the reply you sent gets no response → <b>follow-up tracking</b> surfaces a nudge <span class="pill t0">T0</span> <span class="opt">(15, wired)</span></li>
       </ol>
       <div class="ds"><b>Dataset:</b> an inbox + sent items over time. Expected: tasks created and de-duplicated, the unanswered sent message flagged after the window, and nothing auto-sent.</div>
     </div>

@@ -83,6 +83,7 @@ _FOLDER_DELETED = "deleteditems"
 _LABEL_INBOX = "INBOX"
 _LABEL_UNREAD = "UNREAD"
 _LABEL_STARRED = "STARRED"
+_LABEL_SENT = "SENT"
 
 # ``$select`` for ``get_message`` — pull exactly the fields the Gmail-shape
 # translation needs (Graph returns a large default projection otherwise).
@@ -413,6 +414,11 @@ class LiveOutlookBackend:
                 params["$filter"] = "isRead eq false"
                 params["$orderby"] = "receivedDateTime desc"
                 path = "/me/mailFolders/inbox/messages"
+            elif _LABEL_SENT in labels:
+                # Sent-folder scan (follow-up tracking, #1606) — falling
+                # through to the inbox would silently scan the wrong mail.
+                params["$orderby"] = "receivedDateTime desc"
+                path = "/me/mailFolders/sentitems/messages"
             else:
                 # Default (INBOX or unspecified) -> inbox folder, newest first.
                 params["$orderby"] = "receivedDateTime desc"

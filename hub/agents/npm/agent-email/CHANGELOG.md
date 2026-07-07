@@ -10,6 +10,19 @@ bump is always at least a package MINOR bump with a migration note.
 Contract bumped to `SCHEMA_VERSION` **2.2** — additive over 2.1, so `checkVersion`
 (MAJOR-only) keeps accepting existing clients.
 
+### Added
+
+- **Follow-up tracking (#1606).** The agent gains a read-only `check_followups`
+  tool that scans the Sent folder of every connected mailbox and flags threads
+  whose latest message is still the user's own outbound mail past a
+  configurable window (default 3 days) — surfacing message id, recipient,
+  subject, and age, most overdue first. Detection only: it never sends a
+  nudge (any send stays confirmation-gated). The scan caps how many Sent
+  messages it enumerates per mailbox (default 50, max 200); the result now
+  also carries `scan_truncated: true` when a mailbox has more sent mail than
+  that cap, so the caller knows older threads weren't checked. Agent-loop
+  surface (chat / Agent UI / `gaia email`); the sidecar REST/MCP surface is
+  unchanged and `SCHEMA_VERSION` stays `2.2`.
 - **Attachment handling (#1542).** Real email has attachments; triage and replies
   that ignored them were incomplete. Read/triage now exposes attachment metadata —
   `EmailMessage` (request) and `EmailTriageResult` / `DraftReply` (response) carry

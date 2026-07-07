@@ -11,6 +11,7 @@ The Email Triage Agent connects to your Gmail account through GAIA's connectors 
 ## What it does
 
 - **Triage your inbox** — classify every message as `urgent`, `actionable`, `informational`, or `low priority`, plus separate `is_spam` and `is_phishing` flags.
+- **Follow-up tracking** — flag the mail you *sent* that never got a reply after a configurable window (default 3 days). Detection only — the agent never sends a nudge on its own.
 - **Capture action items as tasks** — action items extracted during triage persist to a local task list, each linked back to its source message and de-duplicated so re-triaging never duplicates a task.
 - **Find past mail** — search your mailbox with keyword or Gmail-syntax queries (`from:alice is:unread newer_than:7d`). Ask in chat (the `search_messages` tool) or call it from a consuming app via `POST /v1/email/search` on the REST contract; results carry metadata only (id, sender, subject, date, snippet) — never message bodies.
 - **Organize** — archive, label, mark read/unread, star/unstar. Reversible via the per-action undo log.
@@ -170,7 +171,7 @@ are planned on the autonomy engine (#555).
 
 ### Read
 
-`list_inbox`, `get_message`, `get_thread`, `search_messages`, `list_labels`, `triage_inbox`, `pre_scan_inbox`
+`list_inbox`, `get_message`, `get_thread`, `search_messages`, `list_labels`, `triage_inbox`, `pre_scan_inbox`, `check_followups`
 
 ### Session preferences (in-memory; wiped on agent restart)
 
@@ -179,6 +180,12 @@ are planned on the autonomy engine (#555).
 ### Inbox profiling
 
 `profile_inbox` — asks "who emails me most?" and returns a frequency ranking of senders with their dominant category (e.g. *urgent*, *informational*) and the timestamp of their most recent message. Profiling is built from the interaction history the agent accumulates during triage, so it improves the more you use the agent.
+
+### Follow-up tracking (read-only)
+
+`check_followups` — answers *"who hasn't replied to me?"*. It scans the Sent folder of every connected mailbox and flags each thread whose latest message is still your own outbound mail — meaning nobody replied — once it is older than the window (default 3 days; ask for a different one, e.g. *"what's still unanswered after a week?"*). Each flagged item carries the recipient, subject, and age in days, sorted most overdue first, and threads you answered yourself or addressed only to yourself are skipped. The scan caps how many Sent messages it enumerates per mailbox (default 50, max 200); when a mailbox has more sent mail than that cap, the result carries `scan_truncated: true` so you know older, possibly-overdue threads weren't checked.
+
+This is detection only, distinct from autonomous follow-ups ([#555](https://github.com/amd/gaia/issues/555)): the agent surfaces the dropped threads but never sends a chase-up on its own — if you ask it to nudge someone, that reply goes through the normal draft → confirm → send flow.
 
 ### Voice-matched drafting
 

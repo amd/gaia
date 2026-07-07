@@ -152,6 +152,8 @@ class TestToolRegistry:
         "triage_inbox",
         "pre_scan_inbox",
         "profile_inbox",
+        # Follow-up tracking (#1606) — read-only detection
+        "check_followups",
         # Organize
         "archive_message",
         "mark_read",

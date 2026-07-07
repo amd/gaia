@@ -107,6 +107,7 @@ def build_registration():
         conversation_starters=[
             "Run a pre-scan",
             "Triage my inbox",
+            "Which of my sent emails are still waiting on a reply?",
             "Summarize my unread emails",
             "Draft a reply to my most recent message",
             "Show me today's calendar",
