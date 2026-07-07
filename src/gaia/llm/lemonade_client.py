@@ -325,6 +325,21 @@ MODELS = {
         recipe="llamacpp",
         embedding=True,
     ),
+    # --- NPU-native FLM embedder for the NPU profile (#1744) ---
+    # EmbeddingGemma 300M built for the FastFlowLM/NPU backend. On a shared-
+    # memory Ryzen AI APU the GGUF nomic embedder runs on Vulkan/llama.cpp and
+    # reclaims the memory the FLM chat model holds, so loading it evicts the
+    # chat model — every chat turn then thrashes NPU<->Vulkan (#1676). Keeping
+    # the embedder on the same FLM/NPU backend as the chat model lets both stay
+    # co-resident. Built-in Lemonade *-FLM model: pull by name only (no recipe;
+    # passing recipe triggers user-model registration and 400s — #1655).
+    "embed-gemma-flm": ModelRequirement(
+        model_type=ModelType.EMBEDDING,
+        model_id="embed-gemma-300m-FLM",
+        display_name="EmbeddingGemma 300M (NPU/FLM)",
+        min_ctx_size=2048,
+        tool_calling=False,
+    ),
 }
 
 # Define agent profiles with their model requirements

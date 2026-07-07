@@ -21,7 +21,7 @@ from gaia_agent_chat.tool_bundles import DOC_BUNDLES, DOC_CORE_TOOLS
 
 from gaia.agents.base.agent import Agent, default_max_steps
 from gaia.agents.base.console import AgentConsole
-from gaia.agents.base.memory import EMBEDDING_MODEL, MemoryMixin
+from gaia.agents.base.memory import MemoryMixin
 
 # dynamic_tools_env_override is re-exported so callers importing it from
 # gaia_agent_chat.agent keep working; its canonical home is the core tool_loader
@@ -29,6 +29,7 @@ from gaia.agents.base.memory import EMBEDDING_MODEL, MemoryMixin
 from gaia.agents.base.tool_loader import dynamic_tools_env_override  # noqa: F401
 from gaia.agents.base.tool_loader import ToolLoader
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.registry import get_embedding_model_for_device
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
 from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.agents.tools import (  # Web browsing and search; Shared tools
@@ -259,10 +260,17 @@ class ChatAgent(
             else os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
         )
 
+        # Embedder is device-scoped: the NPU profile uses the FLM-native
+        # embedder so chat and embeddings stay co-resident on the NPU backend
+        # (a GGUF embedder runs on Vulkan and evicts the FLM chat model every
+        # turn — #1744). GPU/CPU keep the GGUF nomic embedder.
+        effective_embedding_model = get_embedding_model_for_device(config.device)
+
         # Initialize RAG SDK (optional - will be None if dependencies not installed)
         try:
             rag_config = RAGConfig(
                 model=effective_model_id,
+                embedding_model=effective_embedding_model,
                 chunk_size=config.chunk_size,
                 chunk_overlap=config.chunk_overlap,  # Configurable overlap for context preservation
                 max_chunks=config.max_chunks,
@@ -352,7 +360,7 @@ class ChatAgent(
         self.tool_loader = self._maybe_build_tool_loader()
 
         # Initialize memory subsystem (before super().__init__ which calls _register_tools)
-        self.init_memory()
+        self.init_memory(embedding_model=effective_embedding_model)
 
         # Store base URL for use in _register_tools() (VLM, etc.)
         self._base_url = effective_base_url
@@ -503,7 +511,7 @@ class ChatAgent(
         """
         import numpy as np
 
-        results = self._get_embedder().embed(list(texts), model=EMBEDDING_MODEL)
+        results = self._get_embedder().embed(list(texts), model=self._embedding_model)
         vecs = np.asarray(results, dtype=np.float32)
         norms = np.linalg.norm(vecs, axis=1, keepdims=True)
         norms[norms == 0] = 1.0

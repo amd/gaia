@@ -420,9 +420,10 @@ class TestDownloadModels(unittest.TestCase):
     def test_npu_profile_pulls_builtin_model_without_recipe(self, mock_installer_class):
         """NPU/FLM models are built-in; pulling with a recipe 400s (#1655).
 
-        The npu profile must download ``gemma4-it-e2b-FLM`` via
-        ensure_model_downloaded (pull by name), never pull_model(recipe=...),
-        which Lemonade rejects unless the name carries a ``user.`` prefix.
+        The npu profile must download both the FLM chat model and the FLM-native
+        embedder (#1744) via ensure_model_downloaded (pull by name), never
+        pull_model(recipe=...), which Lemonade rejects unless the name carries a
+        ``user.`` prefix.
         """
         from gaia.installer.init_command import InitCommand
 
@@ -435,9 +436,10 @@ class TestDownloadModels(unittest.TestCase):
 
             result = cmd._download_models()
             self.assertTrue(result)
-            mock_client.ensure_model_downloaded.assert_called_once_with(
-                "gemma4-it-e2b-FLM"
-            )
+            pulled = {
+                c.args[0] for c in mock_client.ensure_model_downloaded.call_args_list
+            }
+            self.assertEqual(pulled, {"gemma4-it-e2b-FLM", "embed-gemma-300m-FLM"})
             # Regression guard: no recipe-bearing pull_model call.
             mock_client.pull_model.assert_not_called()
 

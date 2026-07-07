@@ -3775,9 +3775,8 @@ class TestStoreEmbedding:
             i["id"] for i in store.get_items_without_embeddings(limit=10)
         ]
 
-        result = store.clear_all_embeddings()
-        assert result["knowledge"] == 1
-        assert "procedures" in result
+        # Returns total rows cleared (knowledge + procedures).
+        assert store.clear_all_embeddings() == 1
 
         # Row survives; its embedding is now NULL (eligible for re-backfill).
         assert store.get_items_with_embeddings(include_sensitive=True) == []

@@ -147,12 +147,16 @@ def _changed_software_versions(existing: List[Dict]) -> List[str]:
 # Constants
 # ============================================================================
 
-#: Embedding model served by Lemonade — EmbeddingGemma 300M, 768-dim.
-#: Replaced nomic-embed-text-v2-moe (broken on the current llama.cpp server).
+#: Default embedder served by Lemonade — EmbeddingGemma 300M, 768-dim GGUF
+#: (GPU/CPU profiles). Replaced nomic-embed-text-v2-moe, which the current
+#: llama.cpp server cannot load. The active embedder is per-instance
+#: (``self._embedding_model``) and may be the NPU-native FLM embedder instead;
+#: see ``init_memory`` (#1744). These module constants remain the fallback default.
 EMBEDDING_MODEL = DEFAULT_EMBEDDING_MODEL
 
-#: Embedding dimensionality for EmbeddingGemma 300M (matches the prior nomic dim,
-#: so existing FAISS index shapes stay valid across the model swap).
+#: Default embedding dimensionality (EmbeddingGemma 300M / nomic are both 768).
+#: The active dim is derived from the live embedder at startup
+#: (``self._embedding_dim``); this is only the pre-probe fallback.
 EMBEDDING_DIM = 768
 
 #: Cross-encoder model for reranking (~22 MB, runs on CPU).
@@ -311,7 +315,10 @@ class MemoryMixin(ProceduralMemoryMixin):
     """
 
     def init_memory(
-        self, db_path: Optional[Path] = None, context: str = "global"
+        self,
+        db_path: Optional[Path] = None,
+        context: str = "global",
+        embedding_model: Optional[str] = None,
     ) -> None:
         """Initialize the memory subsystem (v2 startup sequence).
 
@@ -324,6 +331,11 @@ class MemoryMixin(ProceduralMemoryMixin):
         Args:
             db_path: Optional path for the DB file. Default: ~/.gaia/memory.db
             context: Active context scope (e.g., 'work', 'personal', 'global').
+            embedding_model: Embedder model id. Defaults to ``EMBEDDING_MODEL``
+                (GGUF nomic). The NPU profile passes the FLM-native embedder so
+                chat and embeddings stay co-resident on the NPU backend (#1744).
+                The embedding dimension is derived from the live embedder, not
+                this id, so a model with a different dim works without changes.
 
         Raises:
             RuntimeError: If Lemonade embedding service is unreachable
@@ -334,6 +346,10 @@ class MemoryMixin(ProceduralMemoryMixin):
         # Explicit opt-out for environments that don't need memory (security
         # tests, lint-time imports, etc.).  This is NOT a silent fallback —
         # the user/test author has explicitly set the env var.
+        self._embedding_model = embedding_model or EMBEDDING_MODEL
+        # Pre-probe default; refined from the live embedder below.
+        self._embedding_dim = EMBEDDING_DIM
+
         if os.environ.get("GAIA_MEMORY_DISABLED") == "1":
             logger.info(
                 "[MemoryMixin] memory disabled via GAIA_MEMORY_DISABLED=1; "
@@ -408,17 +424,39 @@ class MemoryMixin(ProceduralMemoryMixin):
         # via ``_memory_store is None`` checks at every memory operation.
         try:
             self._get_embedder()
-            # Validate connectivity with a small test embedding
+            # Validate connectivity AND derive the embedding dimension from the
+            # live embedder — different embedders (e.g. the NPU FLM embedder)
+            # have different dims, so the FAISS index must match the active
+            # model rather than a hardcoded constant (#1744).
             test_vec = self._embed_text("connectivity test")
-            if test_vec.shape[0] != EMBEDDING_DIM:
+            dim = int(test_vec.shape[0])
+            if dim <= 0:
                 raise RuntimeError(
-                    f"Embedding dimension mismatch: expected {EMBEDDING_DIM}, "
-                    f"got {test_vec.shape[0]}"
+                    f"Embedder '{self._embedding_model}' returned a 0-length "
+                    "vector. Check that the model is loaded in Lemonade."
                 )
+            self._embedding_dim = dim
             logger.info(
-                "[MemoryMixin] Lemonade embedding service validated (%d-dim)",
-                EMBEDDING_DIM,
+                "[MemoryMixin] Lemonade embedding service validated "
+                "(model=%s, %d-dim)",
+                self._embedding_model,
+                self._embedding_dim,
             )
+            # Invalidate stored vectors when the embedder changed. Vectors from
+            # a different model live in a different vector space (even at the
+            # same dim), so reusing them silently corrupts similarity search.
+            # Clearing forces backfill to re-embed with the active model.
+            prior = self._memory_store.get_embedder_id()
+            if prior is not None and prior != self._embedding_model:
+                cleared = self._memory_store.clear_all_embeddings()
+                logger.warning(
+                    "[MemoryMixin] embedder changed (%s -> %s); cleared %d stored "
+                    "embedding(s) for re-embedding",
+                    prior,
+                    self._embedding_model,
+                    cleared,
+                )
+            self._memory_store.set_embedder_id(self._embedding_model)
         except Exception as e:
             logger.warning(
                 "[MemoryMixin] Lemonade embedding service unreachable — "
@@ -435,24 +473,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             self._memory_session_id = str(uuid4())
             return
 
-        # Step 2b: Embedding-model migration. Vectors are model-specific — if the
-        # stored embedder differs from the current one (e.g. the nomic →
-        # EmbeddingGemma switch), old vectors aren't comparable to new queries.
-        # Clear them so backfill regenerates every embedding with the new model.
-        # The dim check alone can't catch this (both models are 768-dim).
-        settings = _load_memory_settings()
-        if settings.get("embedding_model") != EMBEDDING_MODEL:
-            cleared = self._memory_store.clear_all_embeddings()
-            if cleared.get("knowledge") or cleared.get("procedures"):
-                logger.info(
-                    "[MemoryMixin] embedding model changed to %s — cleared stale "
-                    "embeddings (knowledge=%d procedures=%d) for re-embedding",
-                    EMBEDDING_MODEL,
-                    cleared.get("knowledge", 0),
-                    cleared.get("procedures", 0),
-                )
-            settings["embedding_model"] = EMBEDDING_MODEL
-            _save_memory_settings(settings)
+        # (Embedder-change migration is handled above via the store's
+        # get_embedder_id / set_embedder_id + clear_all_embeddings, #1744.)
 
         # Step 3: Backfill embeddings for items missing them
         backfilled = self._backfill_embeddings(limit=100)
@@ -655,7 +677,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         try:
             from gaia.llm.providers.lemonade import LemonadeProvider
 
-            self._embedder = LemonadeProvider(model=EMBEDDING_MODEL)
+            self._embedder = LemonadeProvider(model=self._embedding_model)
             logger.debug("[MemoryMixin] LemonadeProvider initialized for embeddings")
             return self._embedder
         except Exception as e:
@@ -664,7 +686,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             ) from e
 
     def _embed_text(self, text: str) -> np.ndarray:
-        """Embed text via Lemonade (EmbeddingGemma 300M, 768-dim).
+        """Embed text via Lemonade using the active embedder.
 
         Required, not optional. Raises RuntimeError if embedding fails.
 
@@ -672,12 +694,12 @@ class MemoryMixin(ProceduralMemoryMixin):
             text: Text to embed.
 
         Returns:
-            L2-normalized float32 numpy array of shape (768,).
+            L2-normalized float32 numpy array of shape ``(self._embedding_dim,)``.
         """
         embedder = self._get_embedder()
         try:
             # LemonadeProvider.embed() returns list[list[float]]
-            results = embedder.embed([text], model=EMBEDDING_MODEL)
+            results = embedder.embed([text], model=self._embedding_model)
             vec = np.array(results[0], dtype=np.float32)
 
             # L2-normalize for cosine similarity via IndexFlatIP
@@ -735,13 +757,13 @@ class MemoryMixin(ProceduralMemoryMixin):
         # Get all active knowledge items that have embeddings
         items = store.get_items_with_embeddings(include_sensitive=True)
 
-        index = faiss.IndexFlatIP(EMBEDDING_DIM)
+        index = faiss.IndexFlatIP(self._embedding_dim)
         id_map = []
 
         for item in items:
             try:
                 vec = _blob_to_embedding(item["embedding"])
-                if vec.shape[0] != EMBEDDING_DIM:
+                if vec.shape[0] != self._embedding_dim:
                     logger.debug(
                         "[MemoryMixin] skipping embedding for %s: wrong dim %d",
                         item["id"],
@@ -801,11 +823,11 @@ class MemoryMixin(ProceduralMemoryMixin):
             # Reconstruct all vectors except the removed one
             n = self._faiss_index.ntotal
             if n <= 1:
-                self._faiss_index = faiss.IndexFlatIP(EMBEDDING_DIM)
+                self._faiss_index = faiss.IndexFlatIP(self._embedding_dim)
                 self._faiss_id_map = []
                 return
 
-            all_vecs = np.zeros((n, EMBEDDING_DIM), dtype=np.float32)
+            all_vecs = np.zeros((n, self._embedding_dim), dtype=np.float32)
             for i in range(n):
                 all_vecs[i] = self._faiss_index.reconstruct(i)
 
@@ -813,7 +835,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             keep_vecs = np.delete(all_vecs, idx, axis=0)
             keep_ids = self._faiss_id_map[:idx] + self._faiss_id_map[idx + 1 :]
 
-            new_index = faiss.IndexFlatIP(EMBEDDING_DIM)
+            new_index = faiss.IndexFlatIP(self._embedding_dim)
             new_index.add(keep_vecs)
             self._faiss_index = new_index
             self._faiss_id_map = keep_ids
@@ -1500,7 +1522,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         for item in items:
             try:
                 vec = _blob_to_embedding(item["embedding"])
-                if vec.shape[0] != EMBEDDING_DIM:
+                if vec.shape[0] != self._embedding_dim:
                     continue
                 norm = np.linalg.norm(vec)
                 if norm > 0:
@@ -1520,7 +1542,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         try:
             import faiss
 
-            temp_index = faiss.IndexFlatIP(EMBEDDING_DIM)
+            temp_index = faiss.IndexFlatIP(self._embedding_dim)
             temp_index.add(mat)
 
             # Search each item for its top-5 neighbors
