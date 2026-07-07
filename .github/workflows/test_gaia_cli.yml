@@ -140,7 +140,7 @@ jobs:
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    needs: [lint, unit-tests, test-windows, test-linux, test-mcp, test-code-agent, test-chat-agent, test-connectors-demo, test-analyst-agent, test-browser-agent, test-email-agent, test-docqa-agent, test-routing-agent, test-security]
+    needs: [lint, unit-tests, test-windows, test-linux, test-mcp, test-code-agent, test-chat-agent, test-connectors-demo, test-analyst-agent, test-browser-agent, test-docqa-agent, test-routing-agent, test-email-agent, test-security]
     # Run always except when workflow or any dependency is cancelled (e.g., by cancel-in-progress)
     if: >-
       ${{ always() && !cancelled() &&

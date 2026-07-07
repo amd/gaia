@@ -147,6 +147,7 @@ setup(
             "pymupdf>=1.24.0",
             "pypdf",
             "python-pptx>=0.6.21",
+            "python-docx>=1.1.0",
             "sentence-transformers",
             "safetensors",
             # torch is pinned lower-bound only. The "audio" extra caps
@@ -233,6 +234,7 @@ setup(
             "pymupdf>=1.24.0",
             "pypdf",
             "python-pptx>=0.6.21",
+            "python-docx>=1.1.0",
             "sentence-transformers",
         ],
         "lint": [
@@ -270,8 +272,6 @@ setup(
         "agent-docqa": ["gaia-agent-docqa"],
         "agent-routing": ["gaia-agent-routing"],
         "agent-email": ["gaia-agent-email"],
-        "agent-docqa": ["gaia-agent-docqa"],
-        "agent-routing": ["gaia-agent-routing"],
         "agent-chat": ["gaia-agent-chat"],
         "agents": [
             "gaia-agent-summarize",
@@ -288,8 +288,6 @@ setup(
             "gaia-agent-docqa",
             "gaia-agent-routing",
             "gaia-agent-email",
-            "gaia-agent-docqa",
-            "gaia-agent-routing",
             "gaia-agent-chat",
         ],
     },
