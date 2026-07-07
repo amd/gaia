@@ -336,7 +336,8 @@ isolated, and dogfoods the exact binary shipped to integrators.
 `GAIA_EMAIL_AGENT_MODE` only selects which *process* answers (`user` default /
 `dev`); there is no in-process fallback. Two surfaces run through it:
 
-- **The `/v1/email/*` REST surface** — the full schema-2.2 contract (triage,
+- **The `/v1/email/*` REST surface** — the full schema-2.2 contract (init
+  readiness probe + provisioning, triage,
   batch triage, search, inbox pre-scan, scheduled daily briefing, draft/send +
   confirm — attachments included, archive/unarchive, quarantine/unquarantine,
   calendar view/preview/create/respond, health, version). This is exactly what

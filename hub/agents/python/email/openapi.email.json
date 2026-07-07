@@ -1935,6 +1935,130 @@
         "title": "HealthResponse",
         "type": "object"
       },
+      "InitLemonadeStatus": {
+        "additionalProperties": false,
+        "description": "Reachability AND version-compatibility of the local Lemonade Server.",
+        "properties": {
+          "base_url": {
+            "description": "The /api/v1 base URL that was probed.",
+            "title": "Base Url",
+            "type": "string"
+          },
+          "compatible": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "True when version >= min_version. Null when the version could not be determined (the check was indeterminate, not a pass).",
+            "title": "Compatible"
+          },
+          "min_version": {
+            "description": "Minimum Lemonade version the triage stack requires (gaia_agent_email.version.MIN_LEMONADE_VERSION).",
+            "title": "Min Version",
+            "type": "string"
+          },
+          "reachable": {
+            "description": "True when Lemonade answered the /health probe.",
+            "title": "Reachable",
+            "type": "boolean"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Lemonade's self-reported server version (from /health). Null when the server doesn't advertise one.",
+            "title": "Version"
+          }
+        },
+        "required": [
+          "reachable",
+          "base_url",
+          "min_version"
+        ],
+        "title": "InitLemonadeStatus",
+        "type": "object"
+      },
+      "InitModelStatus": {
+        "additionalProperties": false,
+        "description": "Presence (and, when cheap, loadability) of the triage model.",
+        "properties": {
+          "id": {
+            "description": "Resolved Lemonade model id for triage.",
+            "title": "Id",
+            "type": "string"
+          },
+          "loadable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether the model actually loads. Not probed in v1 (forcing a load is heavy), so this is null — `present` is the readiness signal. Reserved for an opt-in deeper check.",
+            "title": "Loadable"
+          },
+          "present": {
+            "description": "True when the model is downloaded on the server.",
+            "title": "Present",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "present"
+        ],
+        "title": "InitModelStatus",
+        "type": "object"
+      },
+      "InitResponse": {
+        "additionalProperties": false,
+        "description": "Readiness preflight for the whole triage stack (#1795).\n\n``ready`` is True only when Lemonade is reachable AND the triage model is\npresent. The route returns HTTP 200 when ready and 503 when not, with an\nactionable ``hint`` naming what to fix — so an integrator can verify \"ready\nto triage,\" not just \"process up.\" Read-only: probes only, no model pull.",
+        "properties": {
+          "hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Actionable next step when not ready (what failed / what to do). Null when ready.",
+            "title": "Hint"
+          },
+          "lemonade": {
+            "$ref": "#/components/schemas/InitLemonadeStatus",
+            "description": "Lemonade Server reachability."
+          },
+          "model": {
+            "$ref": "#/components/schemas/InitModelStatus",
+            "description": "Triage model status."
+          },
+          "ready": {
+            "description": "True when the triage stack is ready to serve.",
+            "title": "Ready",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ready",
+          "lemonade",
+          "model"
+        ],
+        "title": "InitResponse",
+        "type": "object"
+      },
       "OutgoingAttachment": {
         "additionalProperties": false,
         "description": "One attachment to include on a draft/send (schema 2.2, #1542).\n\nContent travels inline as standard (RFC 4648) base64. Validation is\nfail-loud: a non-decodable payload, a malformed MIME type, or a decoded\nsize over ``MAX_ATTACHMENT_BYTES`` is a ``ValidationError`` — never\nsilently truncated or dropped.",
@@ -2720,6 +2844,38 @@
           }
         },
         "summary": "Email Health",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/init": {
+      "get": {
+        "description": "Readiness preflight: validate the whole triage stack (#1795).\n\nReturns HTTP 200 when ready, 503 when not (with an actionable ``hint``).\nUnlike ``/health`` (liveness-only — never touches the LLM), this probes the\nlocal Lemonade Server, checks it is at a compatible VERSION (>= the agent's\n``MIN_LEMONADE_VERSION``), and confirms the triage model is downloaded — so a\nhost can verify \"ready to triage,\" not just \"process up.\" Read-only — no\nmodel pull or provisioning is triggered.",
+        "operationId": "email_init_v1_email_init_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InitResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InitResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Email Init",
         "tags": [
           "email"
         ]

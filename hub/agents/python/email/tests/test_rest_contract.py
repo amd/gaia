@@ -61,6 +61,7 @@ _EXPECTED_RESPONSE_MODELS = {
     ("post", "/v1/email/unquarantine"): "EmailUnquarantineResponse",
     ("get", "/v1/email/health"): "HealthResponse",
     ("get", "/v1/email/version"): "VersionResponse",
+    ("get", "/v1/email/init"): "InitResponse",
     # Calendar surface (schema 2.1, #1780).
     ("get", "/v1/email/calendar/events"): "CalendarEventsResponse",
     ("post", "/v1/email/calendar/events"): "CalendarEventResponse",
@@ -1304,9 +1305,7 @@ def test_send_with_attachments_reaches_backend_send(send_env):
         "confirmation_token"
     ]
 
-    resp = client.post(
-        "/v1/email/send", json=_draft_payload(confirmation_token=token)
-    )
+    resp = client.post("/v1/email/send", json=_draft_payload(confirmation_token=token))
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["sent"] is True
@@ -1336,13 +1335,11 @@ def test_send_without_attachments_passes_none_to_backend(send_env):
 def test_attachment_free_token_cannot_authorize_attachment_send(send_env):
     # Anti-bait-and-switch: the confirmation token binds attachment digests.
     client, backend = send_env
-    token = client.post(
-        "/v1/email/draft", json=_draft_payload(attachments=[])
-    ).json()["confirmation_token"]
+    token = client.post("/v1/email/draft", json=_draft_payload(attachments=[])).json()[
+        "confirmation_token"
+    ]
 
-    resp = client.post(
-        "/v1/email/send", json=_draft_payload(confirmation_token=token)
-    )
+    resp = client.post("/v1/email/send", json=_draft_payload(confirmation_token=token))
     assert resp.status_code == 403
     assert backend.calls == []
 
@@ -1383,9 +1380,8 @@ def test_invalid_attachment_is_422_never_dropped(client, bad):
 
 
 def test_oversize_attachment_is_422():
-    from gaia_agent_email.contract import MAX_ATTACHMENT_BYTES
-
     import pydantic
+    from gaia_agent_email.contract import MAX_ATTACHMENT_BYTES
 
     too_big = base64.b64encode(b"\0" * (MAX_ATTACHMENT_BYTES + 1)).decode("ascii")
     with pytest.raises(pydantic.ValidationError, match="maximum"):
@@ -1419,13 +1415,13 @@ def test_outlook_midsize_attachment_send_is_413_not_500(monkeypatch):
     )
     client = TestClient(export_openapi.build_app())
 
-    midsize = base64.b64encode(b"\0" * (4 * 1024 * 1024)).decode("ascii")  # 4 MB > 3 MB, < 25 MB
+    midsize = base64.b64encode(b"\0" * (4 * 1024 * 1024)).decode(
+        "ascii"
+    )  # 4 MB > 3 MB, < 25 MB
     payload = _draft_payload(attachments=[_attachment_payload(content_base64=midsize)])
     token = client.post("/v1/email/draft", json=payload).json()["confirmation_token"]
 
-    resp = client.post(
-        "/v1/email/send", json={**payload, "confirmation_token": token}
-    )
+    resp = client.post("/v1/email/send", json={**payload, "confirmation_token": token})
 
     assert resp.status_code == 413, resp.text
     assert "3 MB" in resp.json()["detail"] or "3145728" in resp.json()["detail"]

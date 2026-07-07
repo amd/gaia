@@ -2872,8 +2872,19 @@ Examples:
         "--profile",
         "-p",
         default="chat",
-        choices=["minimal", "sd", "chat", "code", "rag", "mcp", "vlm", "npu", "all"],
-        help="Profile to initialize: minimal, sd (image gen), chat, code, rag, mcp, vlm (vision), npu (Ryzen AI NPU), all (default: chat)",
+        choices=[
+            "minimal",
+            "sd",
+            "chat",
+            "code",
+            "rag",
+            "mcp",
+            "vlm",
+            "email",
+            "npu",
+            "all",
+        ],
+        help="Profile to initialize: minimal, sd (image gen), chat, code, rag, mcp, vlm (vision), email (Gmail/Outlook triage), npu (Ryzen AI NPU), all (default: chat)",
     )
     init_parser.add_argument(
         "--minimal",
