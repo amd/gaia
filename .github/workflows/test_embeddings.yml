@@ -8,6 +8,8 @@ on:
   push:
     branches: [ main ]
     paths:
+      - 'src/gaia/version.py'
+      - '.github/actions/install-lemonade/**'
       - 'src/gaia/rag/**'
       - 'src/gaia/llm/**'
       - 'tests/test_lemonade_embeddings.py'
@@ -17,6 +19,8 @@ on:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
+      - 'src/gaia/version.py'
+      - '.github/actions/install-lemonade/**'
       - 'src/gaia/rag/**'
       - 'src/gaia/llm/**'
       - 'tests/test_lemonade_embeddings.py'
