@@ -141,6 +141,11 @@ jobs:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Scheduled runs execute as a bot actor (e.g. github-merge-queue), which the
+          # action's actor gate rejects unless allow-listed. This workflow only triggers
+          # via schedule / workflow_dispatch — both trusted, no untrusted-fork path — so
+          # allowing bot actors here adds no new exposure.
+          allowed_bots: "*"
           prompt: |
             REPO: ${{ github.repository }}
             CURRENT LEMONADE VERSION: ${{ steps.detect.outputs.current_version }}
