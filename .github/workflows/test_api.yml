@@ -77,6 +77,10 @@ jobs:
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
 
+      - name: Free Lemonade port (reap stray processes from prior jobs)
+        shell: powershell
+        run: .\installer\scripts\cleanup-lemonade.ps1 -Port 13305
+
       - name: Start Lemonade Server and Run Tests
         shell: powershell
         run: |
