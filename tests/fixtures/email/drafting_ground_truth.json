@@ -1,0 +1,489 @@
+{
+  "_meta": {
+    "fixture": "drafting_ground_truth.json",
+    "fixture_kind": "hand-authored-seed",
+    "schema_version": 1,
+    "description": "Labeled seed corpus for the voice/style drafting quality eval (#1607 feature, #1269 metric, #1948 tracking). Each case is one draft-composition scenario: an incoming email, the user's Sent history (the style signal the #1607 voice profile is derived from), the reply intent the user asked for, and a rubric of what an approvable draft must and must not do. Scored by gaia.eval.draft_quality: the agent composes the draft locally (Lemonade), an LLM judge scores it against the rubric, and the aggregate draft_approval_rate is compared to drafting_gate_thresholds.json in report mode.",
+    "case_schema": {
+      "persona": "str — short label for the writing voice the sent_history encodes",
+      "incoming": "{from: str, subject: str, body: str} — the email being replied to",
+      "sent_history": "list[str] (>=3) — the user's own Sent bodies; fed to gaia_agent_email.voice_profile.analyze_sent_bodies to build the voice profile, and shown to the judge as voice exemplars",
+      "reply_intent": "str — what the user asked the agent to say",
+      "rubric": "{must: list[str], must_not: list[str]} — approval criteria the judge scores against"
+    }
+  },
+  "draft-001": {
+    "persona": "sam-casual-pm",
+    "incoming": {
+      "from": "Dana Kim <dana@acme.io>",
+      "subject": "Design review + onboarding flow",
+      "body": "Hey Sam,\n\nTwo things: can we move Thursday's design review from 1pm to 3pm? Rachel has a conflict. Also, did you get a chance to look at the new onboarding flow I shared on Monday?\n\nDana"
+    },
+    "sent_history": [
+      "Hey Alice,\n\nThanks for sending this over! I'll take a look tonight and get back to you tomorrow. Quick heads up — we're shipping the beta on Friday, so things are a bit hectic.\n\nCheers,\nSam",
+      "Hey Marcus,\n\nGood catch on the pricing page — that's definitely a typo. I've pinged design and it'll be fixed by EOD. Let me know if anything else looks off!\n\nCheers,\nSam",
+      "Hey Dana,\n\nLet's do Tuesday at 10 — works better for the team. I'll send an invite in a sec. Can't wait to see the new mockups!\n\nCheers,\nSam",
+      "Hey Priya,\n\nWe can't make the offsite this quarter, sadly — budget's tight. Totally up for a virtual session though, maybe early next month?\n\nCheers,\nSam"
+    ],
+    "reply_intent": "Agree to moving the design review to 3pm Thursday, and say I'll send onboarding-flow feedback tomorrow.",
+    "rubric": {
+      "must": [
+        "Agree to the 3pm Thursday time for the design review",
+        "Say feedback on the onboarding flow is coming tomorrow",
+        "Sound casual and brief, like the sent history (contractions, informal greeting/sign-off)"
+      ],
+      "must_not": [
+        "Invent other meetings, attendees, or scheduling constraints not in the thread",
+        "Promise feedback earlier than or on anything beyond the onboarding flow"
+      ]
+    }
+  },
+  "draft-002": {
+    "persona": "margaret-formal-counsel",
+    "incoming": {
+      "from": "Robert Alvarez <ralvarez@dunmorelaw.com>",
+      "subject": "RE: Licensing agreement — clause 7.2",
+      "body": "Dear Ms. Chen,\n\nFollowing up on the licensing agreement: when can we expect your marked revision? My client would also like confirmation that you accept the revised indemnity language in clause 7.2 as circulated.\n\nRegards,\nRobert Alvarez"
+    },
+    "sent_history": [
+      "Dear Mr. Alvarez,\n\nThank you for your message regarding the licensing agreement. I have reviewed the proposed amendments and will provide a marked revision by Thursday, 12 June. Please note that clause 7.2 requires further discussion with our compliance team before we can agree to the revised indemnity language.\n\nPlease do not hesitate to contact me should you require anything further.\n\nKind regards,\nMargaret Chen",
+      "Dear Ms. Osei,\n\nThank you for the updated schedule. I confirm receipt of the exhibits and will circulate them to the working group this afternoon. We remain on track for the 30 June filing date.\n\nKind regards,\nMargaret Chen",
+      "Dear Dr. Feld,\n\nI appreciate your patience on this matter. The board has approved the engagement letter, and a signed copy will follow by courier. Our first review call is scheduled for Monday at 2:00 PM.\n\nKind regards,\nMargaret Chen",
+      "Dear Mr. Whitfield,\n\nI regret that I am unable to attend Thursday's session in person. I would welcome the opportunity to join by video conference, and I have asked my assistant to coordinate a suitable time.\n\nKind regards,\nMargaret Chen"
+    ],
+    "reply_intent": "Tell him the marked revision will arrive Thursday, and that we cannot yet agree to the clause 7.2 indemnity language — compliance review is still pending.",
+    "rubric": {
+      "must": [
+        "State the marked revision will be provided by Thursday",
+        "Decline (for now) to accept the clause 7.2 indemnity language, citing pending compliance review",
+        "Use a formal register consistent with the sent history (formal salutation and sign-off, no contractions)"
+      ],
+      "must_not": [
+        "Accept or agree to the indemnity language",
+        "Commit to a date for the compliance decision that was not given"
+      ]
+    }
+  },
+  "draft-003": {
+    "persona": "priya-warm-academic",
+    "incoming": {
+      "from": "Elena Vasquez <evasquez@jmlr-editors.org>",
+      "subject": "Review request: manuscript #2214",
+      "body": "Dear Dr. Rao,\n\nWe would be grateful if you could review manuscript #2214, 'Sparse Attention for Long-Context Retrieval'. The review would be due by June 20. Please let us know if you can take this on.\n\nBest wishes,\nElena Vasquez"
+    },
+    "sent_history": [
+      "Hi Tom,\n\nThanks for the draft — I've added comments in the margins. I think the second section could use a stronger example, but overall it's in great shape. Happy to talk it through on Thursday if that helps.\n\nBest,\nPriya",
+      "Hi Lena,\n\nI'd be glad to serve on the committee. My only constraint is that I'm traveling the first week of October, so I'll miss the kickoff — happy to catch up async.\n\nBest,\nPriya",
+      "Hi Sofia,\n\nThe dataset looks solid. I'd suggest we rerun the ablation with the larger split before we submit — reviewers will ask. I can have results by Monday.\n\nBest,\nPriya",
+      "Hi James,\n\nThanks for the invitation. I can't commit to the full workshop, but I'd be happy to give the opening talk and stay for the morning discussion.\n\nBest,\nPriya"
+    ],
+    "reply_intent": "Accept the review, but ask for a one-week extension to June 27 because of grant deadlines.",
+    "rubric": {
+      "must": [
+        "Accept the review of manuscript #2214",
+        "Ask for an extension to June 27 (one week past the June 20 due date)",
+        "Sound warm and collegial like the sent history"
+      ],
+      "must_not": [
+        "Decline the review",
+        "Invent details about the manuscript's content or quality"
+      ]
+    }
+  },
+  "draft-004": {
+    "persona": "viktor-terse-engineer",
+    "incoming": {
+      "from": "Maya Okafor <maya.okafor@nexusops.dev>",
+      "subject": "Cache bug — root cause + timeline?",
+      "body": "Viktor,\n\nLeadership is asking about the stale-data reports from yesterday. Do we have a root cause, and when does the fix ship? Also, do we need to backport?\n\nMaya"
+    },
+    "sent_history": [
+      "Deploy went out at 14:05. Rollback plan is in the runbook if error rates spike. I'll watch the dashboards for the next hour.\n\nThanks,\nViktor",
+      "Repro'd the bug. It's the cache invalidation path — fix is a two-liner, PR up shortly. We should backport to 2.4 as well.\n\nThanks,\nViktor",
+      "Can't join the 9am — conflict with the vendor call. Notes are fine, I'll read them after. Ping me if anything needs a decision.\n\nThanks,\nViktor",
+      "Benchmarks attached. p99 dropped 18% after the pool change. I'd hold the second patch until we have a week of data.\n\nThanks,\nViktor"
+    ],
+    "reply_intent": "Root cause is the cache invalidation path; the fix is in a PR now. A 2.4 backport makes sense but don't commit to a backport date yet.",
+    "rubric": {
+      "must": [
+        "Name the cache invalidation path as the root cause",
+        "Say the fix is in a PR / shipping shortly",
+        "Recommend backporting to 2.4 without committing to a date",
+        "Be terse and direct like the sent history"
+      ],
+      "must_not": [
+        "Commit to a specific backport date or release date not provided",
+        "Blame a component other than cache invalidation"
+      ]
+    }
+  },
+  "draft-005": {
+    "persona": "sam-casual-pm",
+    "incoming": {
+      "from": "Trevor Bell <trevor@launchmetrics.co>",
+      "subject": "Quick demo of LaunchMetrics for your team?",
+      "body": "Hi Sam,\n\nI lead sales at LaunchMetrics — we help product teams cut activation-funnel drop-off by up to 30%. Do you have 20 minutes this week or next for a quick demo?\n\nTrevor"
+    },
+    "sent_history": [
+      "Hey Alice,\n\nThanks for sending this over! I'll take a look tonight and get back to you tomorrow. Quick heads up — we're shipping the beta on Friday, so things are a bit hectic.\n\nCheers,\nSam",
+      "Hey Marcus,\n\nGood catch on the pricing page — that's definitely a typo. I've pinged design and it'll be fixed by EOD. Let me know if anything else looks off!\n\nCheers,\nSam",
+      "Hey Dana,\n\nLet's do Tuesday at 10 — works better for the team. I'll send an invite in a sec. Can't wait to see the new mockups!\n\nCheers,\nSam",
+      "Hey Priya,\n\nWe can't make the offsite this quarter, sadly — budget's tight. Totally up for a virtual session though, maybe early next month?\n\nCheers,\nSam"
+    ],
+    "reply_intent": "Decline politely — no budget this quarter — but say I'm open to revisiting next quarter.",
+    "rubric": {
+      "must": [
+        "Decline the demo for now, citing no budget this quarter",
+        "Leave the door open for next quarter",
+        "Stay friendly and brief like the sent history"
+      ],
+      "must_not": [
+        "Agree to a demo, call, or meeting now",
+        "Share internal metrics or commit to a purchase"
+      ]
+    }
+  },
+  "draft-006": {
+    "persona": "margaret-formal-counsel",
+    "incoming": {
+      "from": "Dr. Samuel Feld <sfeld@feldadvisory.com>",
+      "subject": "Engagement letter + first call",
+      "body": "Dear Ms. Chen,\n\nHas the board reached a decision on the engagement letter? If so, I would like to schedule our first review call — would Monday at 2:00 PM suit you?\n\nWith thanks,\nSamuel Feld"
+    },
+    "sent_history": [
+      "Dear Mr. Alvarez,\n\nThank you for your message regarding the licensing agreement. I have reviewed the proposed amendments and will provide a marked revision by Thursday, 12 June. Please note that clause 7.2 requires further discussion with our compliance team before we can agree to the revised indemnity language.\n\nPlease do not hesitate to contact me should you require anything further.\n\nKind regards,\nMargaret Chen",
+      "Dear Ms. Osei,\n\nThank you for the updated schedule. I confirm receipt of the exhibits and will circulate them to the working group this afternoon. We remain on track for the 30 June filing date.\n\nKind regards,\nMargaret Chen",
+      "Dear Dr. Feld,\n\nI appreciate your patience on this matter. The board has approved the engagement letter, and a signed copy will follow by courier. Our first review call is scheduled for Monday at 2:00 PM.\n\nKind regards,\nMargaret Chen",
+      "Dear Mr. Whitfield,\n\nI regret that I am unable to attend Thursday's session in person. I would welcome the opportunity to join by video conference, and I have asked my assistant to coordinate a suitable time.\n\nKind regards,\nMargaret Chen"
+    ],
+    "reply_intent": "Confirm the board approved the engagement letter (signed copy follows by courier) and accept the Monday 2:00 PM call.",
+    "rubric": {
+      "must": [
+        "Confirm the board approved the engagement letter",
+        "Mention the signed copy follows by courier",
+        "Accept Monday at 2:00 PM for the first call",
+        "Use the formal register of the sent history"
+      ],
+      "must_not": [
+        "Propose a different time",
+        "Add engagement terms or fees not in the thread"
+      ]
+    }
+  },
+  "draft-007": {
+    "persona": "priya-warm-academic",
+    "incoming": {
+      "from": "Daniel Wu <dwu@student.northgate.edu>",
+      "subject": "Reference letter for PhD applications",
+      "body": "Dear Dr. Rao,\n\nI'm applying to PhD programs this cycle and the first deadline is June 15. Would you be willing to write me a reference letter? I took your ML systems course last spring and worked in your lab over the summer.\n\nThank you,\nDaniel Wu"
+    },
+    "sent_history": [
+      "Hi Tom,\n\nThanks for the draft — I've added comments in the margins. I think the second section could use a stronger example, but overall it's in great shape. Happy to talk it through on Thursday if that helps.\n\nBest,\nPriya",
+      "Hi Lena,\n\nI'd be glad to serve on the committee. My only constraint is that I'm traveling the first week of October, so I'll miss the kickoff — happy to catch up async.\n\nBest,\nPriya",
+      "Hi Sofia,\n\nThe dataset looks solid. I'd suggest we rerun the ablation with the larger split before we submit — reviewers will ask. I can have results by Monday.\n\nBest,\nPriya",
+      "Hi James,\n\nThanks for the invitation. I can't commit to the full workshop, but I'd be happy to give the opening talk and stay for the morning discussion.\n\nBest,\nPriya"
+    ],
+    "reply_intent": "Agree to write the letter. Ask him to send his CV and a short list of points to highlight by June 10.",
+    "rubric": {
+      "must": [
+        "Agree to write the reference letter",
+        "Ask for his CV and highlight points by June 10",
+        "Sound warm and encouraging like the sent history"
+      ],
+      "must_not": [
+        "Decline or express doubt about his qualifications",
+        "Invent details about his coursework or lab performance beyond what the thread states"
+      ]
+    }
+  },
+  "draft-008": {
+    "persona": "viktor-terse-engineer",
+    "incoming": {
+      "from": "Priyanka Shah <pshah@nexusops.dev>",
+      "subject": "Ship patch 2 this week?",
+      "body": "Viktor,\n\nProduct wants the second connection-pool patch in this week's release. Your call — are the numbers good enough?\n\nPriyanka"
+    },
+    "sent_history": [
+      "Deploy went out at 14:05. Rollback plan is in the runbook if error rates spike. I'll watch the dashboards for the next hour.\n\nThanks,\nViktor",
+      "Repro'd the bug. It's the cache invalidation path — fix is a two-liner, PR up shortly. We should backport to 2.4 as well.\n\nThanks,\nViktor",
+      "Can't join the 9am — conflict with the vendor call. Notes are fine, I'll read them after. Ping me if anything needs a decision.\n\nThanks,\nViktor",
+      "Benchmarks attached. p99 dropped 18% after the pool change. I'd hold the second patch until we have a week of data.\n\nThanks,\nViktor"
+    ],
+    "reply_intent": "Recommend holding the second patch until we have a full week of benchmark data; the first pool change already dropped p99 by 18%.",
+    "rubric": {
+      "must": [
+        "Recommend holding the second patch this week",
+        "Cite wanting a full week of data",
+        "Reference the 18% p99 improvement from the first change",
+        "Be terse like the sent history"
+      ],
+      "must_not": [
+        "Agree to ship the second patch this week",
+        "Invent different benchmark numbers"
+      ]
+    }
+  },
+  "draft-009": {
+    "persona": "sam-casual-pm",
+    "incoming": {
+      "from": "Accounts <billing@brighthost.com>",
+      "subject": "Invoice #4417 — due June 15",
+      "body": "Hello,\n\nPlease find attached invoice #4417 for $12,400, due June 15, covering your Q2 hosting plan.\n\nBrightHost Billing"
+    },
+    "sent_history": [
+      "Hey Alice,\n\nThanks for sending this over! I'll take a look tonight and get back to you tomorrow. Quick heads up — we're shipping the beta on Friday, so things are a bit hectic.\n\nCheers,\nSam",
+      "Hey Marcus,\n\nGood catch on the pricing page — that's definitely a typo. I've pinged design and it'll be fixed by EOD. Let me know if anything else looks off!\n\nCheers,\nSam",
+      "Hey Dana,\n\nLet's do Tuesday at 10 — works better for the team. I'll send an invite in a sec. Can't wait to see the new mockups!\n\nCheers,\nSam",
+      "Hey Priya,\n\nWe can't make the offsite this quarter, sadly — budget's tight. Totally up for a virtual session though, maybe early next month?\n\nCheers,\nSam"
+    ],
+    "reply_intent": "Flag that our purchase order was for $11,900, not $12,400 — ask them to send a corrected invoice before we pay.",
+    "rubric": {
+      "must": [
+        "Point out the discrepancy: invoice #4417 says $12,400 but the PO was $11,900",
+        "Ask for a corrected invoice before payment",
+        "Keep the numbers exactly as stated ($12,400 invoiced, $11,900 on the PO)"
+      ],
+      "must_not": [
+        "Agree to pay the invoiced amount",
+        "Misquote either amount or the invoice number"
+      ]
+    }
+  },
+  "draft-010": {
+    "persona": "margaret-formal-counsel",
+    "incoming": {
+      "from": "Charles Whitfield <cwhitfield@sentinelforum.org>",
+      "subject": "Panel invitation — Thursday session",
+      "body": "Dear Ms. Chen,\n\nWe would be honoured to have you join Thursday's regulatory panel in person at our London forum. May I confirm your attendance?\n\nYours sincerely,\nCharles Whitfield"
+    },
+    "sent_history": [
+      "Dear Mr. Alvarez,\n\nThank you for your message regarding the licensing agreement. I have reviewed the proposed amendments and will provide a marked revision by Thursday, 12 June. Please note that clause 7.2 requires further discussion with our compliance team before we can agree to the revised indemnity language.\n\nPlease do not hesitate to contact me should you require anything further.\n\nKind regards,\nMargaret Chen",
+      "Dear Ms. Osei,\n\nThank you for the updated schedule. I confirm receipt of the exhibits and will circulate them to the working group this afternoon. We remain on track for the 30 June filing date.\n\nKind regards,\nMargaret Chen",
+      "Dear Dr. Feld,\n\nI appreciate your patience on this matter. The board has approved the engagement letter, and a signed copy will follow by courier. Our first review call is scheduled for Monday at 2:00 PM.\n\nKind regards,\nMargaret Chen",
+      "Dear Mr. Whitfield,\n\nI regret that I am unable to attend Thursday's session in person. I would welcome the opportunity to join by video conference, and I have asked my assistant to coordinate a suitable time.\n\nKind regards,\nMargaret Chen"
+    ],
+    "reply_intent": "Decline in-person attendance with regret, but offer to join by video conference and say my assistant will coordinate.",
+    "rubric": {
+      "must": [
+        "Decline in-person attendance politely",
+        "Offer to join by video conference",
+        "Mention the assistant will coordinate timing",
+        "Use the formal register of the sent history"
+      ],
+      "must_not": [
+        "Confirm in-person attendance",
+        "Invent travel plans or reasons not given"
+      ]
+    }
+  },
+  "draft-011": {
+    "persona": "priya-warm-academic",
+    "incoming": {
+      "from": "Sofia Marchetti <sofia.marchetti@uni-crest.edu>",
+      "subject": "Should we push the submission?",
+      "body": "Hi Priya,\n\nI'm nervous about the ablation results — should we push the submission to the next cycle, or can we still make this deadline?\n\nSofia"
+    },
+    "sent_history": [
+      "Hi Tom,\n\nThanks for the draft — I've added comments in the margins. I think the second section could use a stronger example, but overall it's in great shape. Happy to talk it through on Thursday if that helps.\n\nBest,\nPriya",
+      "Hi Lena,\n\nI'd be glad to serve on the committee. My only constraint is that I'm traveling the first week of October, so I'll miss the kickoff — happy to catch up async.\n\nBest,\nPriya",
+      "Hi Sofia,\n\nThe dataset looks solid. I'd suggest we rerun the ablation with the larger split before we submit — reviewers will ask. I can have results by Monday.\n\nBest,\nPriya",
+      "Hi James,\n\nThanks for the invitation. I can't commit to the full workshop, but I'd be happy to give the opening talk and stay for the morning discussion.\n\nBest,\nPriya"
+    ],
+    "reply_intent": "Reassure her: keep the current deadline. I'll rerun the ablation on the larger split and have results by Monday.",
+    "rubric": {
+      "must": [
+        "Recommend keeping the current submission deadline",
+        "Say the ablation rerun on the larger split will be done with results by Monday",
+        "Sound reassuring and warm like the sent history"
+      ],
+      "must_not": [
+        "Agree to push to the next cycle",
+        "Promise results earlier than Monday"
+      ]
+    }
+  },
+  "draft-012": {
+    "persona": "viktor-terse-engineer",
+    "incoming": {
+      "from": "Tom Reyes <treyes@nexusops.dev>",
+      "subject": "9am architecture sync tomorrow",
+      "body": "Viktor — adding you to the 9am architecture sync tomorrow. Can you make it? We're deciding on the queue migration.\n\nTom"
+    },
+    "sent_history": [
+      "Deploy went out at 14:05. Rollback plan is in the runbook if error rates spike. I'll watch the dashboards for the next hour.\n\nThanks,\nViktor",
+      "Repro'd the bug. It's the cache invalidation path — fix is a two-liner, PR up shortly. We should backport to 2.4 as well.\n\nThanks,\nViktor",
+      "Can't join the 9am — conflict with the vendor call. Notes are fine, I'll read them after. Ping me if anything needs a decision.\n\nThanks,\nViktor",
+      "Benchmarks attached. p99 dropped 18% after the pool change. I'd hold the second patch until we have a week of data.\n\nThanks,\nViktor"
+    ],
+    "reply_intent": "Can't make the 9am — vendor call conflict. Ask for the notes and say to ping me if the queue-migration decision needs my input.",
+    "rubric": {
+      "must": [
+        "Decline the 9am citing the vendor-call conflict",
+        "Ask for notes afterwards",
+        "Offer to weigh in on the queue-migration decision if pinged",
+        "Be terse like the sent history"
+      ],
+      "must_not": [
+        "Accept the meeting",
+        "State a position on the queue migration itself"
+      ]
+    }
+  },
+  "draft-013": {
+    "persona": "sam-casual-pm",
+    "incoming": {
+      "from": "Jordan Lee <jordan.lee@ferngate.app>",
+      "subject": "Export button broken on Safari",
+      "body": "Hi Sam,\n\nHeads up — the CSV export button does nothing on Safari 18. Works fine in Chrome. A few of our analysts are blocked. Any chance of a quick fix, or should we expect a refund for this month?\n\nJordan"
+    },
+    "sent_history": [
+      "Hey Alice,\n\nThanks for sending this over! I'll take a look tonight and get back to you tomorrow. Quick heads up — we're shipping the beta on Friday, so things are a bit hectic.\n\nCheers,\nSam",
+      "Hey Marcus,\n\nGood catch on the pricing page — that's definitely a typo. I've pinged design and it'll be fixed by EOD. Let me know if anything else looks off!\n\nCheers,\nSam",
+      "Hey Dana,\n\nLet's do Tuesday at 10 — works better for the team. I'll send an invite in a sec. Can't wait to see the new mockups!\n\nCheers,\nSam",
+      "Hey Priya,\n\nWe can't make the offsite this quarter, sadly — budget's tight. Totally up for a virtual session though, maybe early next month?\n\nCheers,\nSam"
+    ],
+    "reply_intent": "Acknowledge the Safari export bug, say engineering is on it and a fix should land this week. Don't promise a refund — say I'll follow up once the fix ships.",
+    "rubric": {
+      "must": [
+        "Acknowledge the Safari CSV-export bug",
+        "Say a fix is expected this week",
+        "Defer the refund question rather than granting or refusing it",
+        "Stay friendly and apologetic-but-brief like the sent history"
+      ],
+      "must_not": [
+        "Promise or refuse a refund",
+        "Commit to a specific day or hour for the fix"
+      ]
+    }
+  },
+  "draft-014": {
+    "persona": "margaret-formal-counsel",
+    "incoming": {
+      "from": "Abena Osei <aosei@garrickpartners.com>",
+      "subject": "Exhibits C through F attached",
+      "body": "Dear Ms. Chen,\n\nPlease find attached exhibits C through F, updated per Friday's discussion. Kindly confirm receipt, and that the 30 June filing date still stands.\n\nBest regards,\nAbena Osei"
+    },
+    "sent_history": [
+      "Dear Mr. Alvarez,\n\nThank you for your message regarding the licensing agreement. I have reviewed the proposed amendments and will provide a marked revision by Thursday, 12 June. Please note that clause 7.2 requires further discussion with our compliance team before we can agree to the revised indemnity language.\n\nPlease do not hesitate to contact me should you require anything further.\n\nKind regards,\nMargaret Chen",
+      "Dear Ms. Osei,\n\nThank you for the updated schedule. I confirm receipt of the exhibits and will circulate them to the working group this afternoon. We remain on track for the 30 June filing date.\n\nKind regards,\nMargaret Chen",
+      "Dear Dr. Feld,\n\nI appreciate your patience on this matter. The board has approved the engagement letter, and a signed copy will follow by courier. Our first review call is scheduled for Monday at 2:00 PM.\n\nKind regards,\nMargaret Chen",
+      "Dear Mr. Whitfield,\n\nI regret that I am unable to attend Thursday's session in person. I would welcome the opportunity to join by video conference, and I have asked my assistant to coordinate a suitable time.\n\nKind regards,\nMargaret Chen"
+    ],
+    "reply_intent": "Confirm receipt of exhibits C through F and confirm we remain on track for the 30 June filing.",
+    "rubric": {
+      "must": [
+        "Confirm receipt of exhibits C through F",
+        "Confirm the 30 June filing date stands",
+        "Use the formal register of the sent history"
+      ],
+      "must_not": [
+        "Raise new issues with the exhibits that the user did not mention",
+        "Alter the filing date"
+      ]
+    }
+  },
+  "draft-015": {
+    "persona": "priya-warm-academic",
+    "incoming": {
+      "from": "James Okonkwo <j.okonkwo@mlsummit.org>",
+      "subject": "Full-day workshop chair role",
+      "body": "Dear Dr. Rao,\n\nWould you chair our full-day efficient-inference workshop in November? It involves the opening talk, moderating all four sessions, and the closing panel.\n\nWarm regards,\nJames Okonkwo"
+    },
+    "sent_history": [
+      "Hi Tom,\n\nThanks for the draft — I've added comments in the margins. I think the second section could use a stronger example, but overall it's in great shape. Happy to talk it through on Thursday if that helps.\n\nBest,\nPriya",
+      "Hi Lena,\n\nI'd be glad to serve on the committee. My only constraint is that I'm traveling the first week of October, so I'll miss the kickoff — happy to catch up async.\n\nBest,\nPriya",
+      "Hi Sofia,\n\nThe dataset looks solid. I'd suggest we rerun the ablation with the larger split before we submit — reviewers will ask. I can have results by Monday.\n\nBest,\nPriya",
+      "Hi James,\n\nThanks for the invitation. I can't commit to the full workshop, but I'd be happy to give the opening talk and stay for the morning discussion.\n\nBest,\nPriya"
+    ],
+    "reply_intent": "Decline the full-day chair role, but offer to give the opening talk and stay for the morning sessions.",
+    "rubric": {
+      "must": [
+        "Decline the full-day chair commitment",
+        "Offer the opening talk plus morning attendance instead",
+        "Sound appreciative and warm like the sent history"
+      ],
+      "must_not": [
+        "Accept the full chair role",
+        "Commit to moderating sessions or the closing panel"
+      ]
+    }
+  },
+  "draft-016": {
+    "persona": "viktor-terse-engineer",
+    "incoming": {
+      "from": "Maya Okafor <maya.okafor@nexusops.dev>",
+      "subject": "Postmortem: yesterday's outage?",
+      "body": "Viktor,\n\nFor the postmortem doc: how long was yesterday's outage after the 14:05 deploy, and what was the error-rate peak?\n\nMaya"
+    },
+    "sent_history": [
+      "Deploy went out at 14:05. Rollback plan is in the runbook if error rates spike. I'll watch the dashboards for the next hour.\n\nThanks,\nViktor",
+      "Repro'd the bug. It's the cache invalidation path — fix is a two-liner, PR up shortly. We should backport to 2.4 as well.\n\nThanks,\nViktor",
+      "Can't join the 9am — conflict with the vendor call. Notes are fine, I'll read them after. Ping me if anything needs a decision.\n\nThanks,\nViktor",
+      "Benchmarks attached. p99 dropped 18% after the pool change. I'd hold the second patch until we have a week of data.\n\nThanks,\nViktor"
+    ],
+    "reply_intent": "Correct the record: there was no outage. The 14:05 deploy went out clean, error rates never spiked, and I watched the dashboards for an hour after.",
+    "rubric": {
+      "must": [
+        "State clearly that there was no outage after the 14:05 deploy",
+        "Say error rates never spiked and the dashboards were monitored",
+        "Be terse and factual like the sent history"
+      ],
+      "must_not": [
+        "Apologize for or describe an outage that did not happen",
+        "Invent an outage duration or error-rate figure"
+      ]
+    }
+  },
+  "draft-017": {
+    "persona": "sam-casual-pm",
+    "incoming": {
+      "from": "Nina Petrova <nina@haloventures.vc>",
+      "subject": "Intro: Sam <> Omar (Cloudpath)",
+      "body": "Hi both,\n\nSam — meet Omar, CTO at Cloudpath. I think there's a real integration story between your products. Omar — Sam runs product at Ferngate. I'll let you two take it from here!\n\nNina"
+    },
+    "sent_history": [
+      "Hey Alice,\n\nThanks for sending this over! I'll take a look tonight and get back to you tomorrow. Quick heads up — we're shipping the beta on Friday, so things are a bit hectic.\n\nCheers,\nSam",
+      "Hey Marcus,\n\nGood catch on the pricing page — that's definitely a typo. I've pinged design and it'll be fixed by EOD. Let me know if anything else looks off!\n\nCheers,\nSam",
+      "Hey Dana,\n\nLet's do Tuesday at 10 — works better for the team. I'll send an invite in a sec. Can't wait to see the new mockups!\n\nCheers,\nSam",
+      "Hey Priya,\n\nWe can't make the offsite this quarter, sadly — budget's tight. Totally up for a virtual session though, maybe early next month?\n\nCheers,\nSam"
+    ],
+    "reply_intent": "Thank Nina for the intro (moving her to BCC), welcome Omar, and propose a 30-minute call next week to explore the integration idea.",
+    "rubric": {
+      "must": [
+        "Thank Nina for the introduction",
+        "Greet Omar and propose a 30-minute call next week",
+        "Stay casual and enthusiastic like the sent history"
+      ],
+      "must_not": [
+        "Commit to a partnership, pricing, or an integration plan",
+        "Invent product details about Cloudpath"
+      ]
+    }
+  },
+  "draft-018": {
+    "persona": "margaret-formal-counsel",
+    "incoming": {
+      "from": "Robert Alvarez <ralvarez@dunmorelaw.com>",
+      "subject": "Settlement proposal — $240,000",
+      "body": "Dear Ms. Chen,\n\nMy client is prepared to settle the matter for $240,000, inclusive of costs, provided we reach agreement by the end of the month. Please advise your client's position.\n\nRegards,\nRobert Alvarez"
+    },
+    "sent_history": [
+      "Dear Mr. Alvarez,\n\nThank you for your message regarding the licensing agreement. I have reviewed the proposed amendments and will provide a marked revision by Thursday, 12 June. Please note that clause 7.2 requires further discussion with our compliance team before we can agree to the revised indemnity language.\n\nPlease do not hesitate to contact me should you require anything further.\n\nKind regards,\nMargaret Chen",
+      "Dear Ms. Osei,\n\nThank you for the updated schedule. I confirm receipt of the exhibits and will circulate them to the working group this afternoon. We remain on track for the 30 June filing date.\n\nKind regards,\nMargaret Chen",
+      "Dear Dr. Feld,\n\nI appreciate your patience on this matter. The board has approved the engagement letter, and a signed copy will follow by courier. Our first review call is scheduled for Monday at 2:00 PM.\n\nKind regards,\nMargaret Chen",
+      "Dear Mr. Whitfield,\n\nI regret that I am unable to attend Thursday's session in person. I would welcome the opportunity to join by video conference, and I have asked my assistant to coordinate a suitable time.\n\nKind regards,\nMargaret Chen"
+    ],
+    "reply_intent": "Acknowledge receipt of the settlement proposal and say we will respond after consulting our client. Take no position on the number.",
+    "rubric": {
+      "must": [
+        "Acknowledge receipt of the $240,000 settlement proposal",
+        "Say a response will follow after client consultation",
+        "Use the formal register of the sent history"
+      ],
+      "must_not": [
+        "Accept, reject, or counter the proposal",
+        "State any view on the amount or the end-of-month condition"
+      ]
+    }
+  }
+}
