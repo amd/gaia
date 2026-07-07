@@ -64,7 +64,10 @@ INIT_PROFILES = {
         "agent": "chat",
         "models": ["Gemma-4-E4B-it-GGUF", "user.embeddinggemma-300m-GGUF"],
         "approx_size": "~4 GB",
-        "min_lemonade_version": "10.2.0",
+        # EmbeddingGemma is validated on Lemonade v10.9.0; older bundled
+        # llama.cpp builds fail to load it. Floor the version so init fails
+        # loudly instead of the embedder failing at first RAG index.
+        "min_lemonade_version": "10.9.0",
         "min_context_size": 32768,
         "pip_extras": ["rag"],
     },
@@ -82,7 +85,8 @@ INIT_PROFILES = {
         "agent": "rag",
         "models": ["Gemma-4-E4B-it-GGUF", "user.embeddinggemma-300m-GGUF"],
         "approx_size": "~4 GB",
-        "min_lemonade_version": "10.2.0",
+        # EmbeddingGemma loads only on Lemonade v10.9.0+ (see chat profile).
+        "min_lemonade_version": "10.9.0",
         "min_context_size": 32768,
         "pip_extras": ["rag"],
     },
@@ -117,7 +121,8 @@ INIT_PROFILES = {
         "agent": "all",
         "models": None,
         "approx_size": "~26 GB",
-        "min_lemonade_version": "9.2.0",  # Includes SD, so needs v9.2.0+
+        # Includes EmbeddingGemma, which loads only on Lemonade v10.9.0+.
+        "min_lemonade_version": "10.9.0",
         "min_context_size": 32768,  # Max requirement across all agents
         "pip_extras": ["rag"],
     },
@@ -1516,19 +1521,25 @@ class InitCommand:
                 self._print("")
                 mr = registry_by_id.get(model_id)
                 is_custom = model_id.startswith("user.")
-                checkpoint = mr.checkpoint if (mr and is_custom) else None
-                model_recipe = mr.recipe if (mr and is_custom) else None
-                embedding = mr.embedding if (mr and is_custom) else None
                 label = f"{model_id} (recipe={recipe})" if recipe else model_id
                 self.agent_console.print(
                     f"   [bold cyan]Downloading:[/bold cyan] {label}"
                 )
-                if client.ensure_model_downloaded(
-                    model_id,
-                    checkpoint=checkpoint,
-                    recipe=model_recipe,
-                    embedding=embedding,
-                ):
+                # Built-in models are pulled by name only. Passing recipe (even
+                # =None) can make Lemonade treat the call as a custom-model
+                # registration, which 400s on built-in names (#1655). Only
+                # user.-namespaced models carry checkpoint + recipe + the
+                # embedding label.
+                pull_kwargs = (
+                    {
+                        "checkpoint": mr.checkpoint,
+                        "recipe": mr.recipe,
+                        "embedding": mr.embedding,
+                    }
+                    if (mr and is_custom)
+                    else {}
+                )
+                if client.ensure_model_downloaded(model_id, **pull_kwargs):
                     self._print_success(f"Downloaded {model_id}")
                 else:
                     self._print_error(f"Failed to download {model_id}")
