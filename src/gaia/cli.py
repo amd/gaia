@@ -1941,6 +1941,69 @@ def build_parser():
 
     telegram_parser.set_defaults(action="telegram")
 
+    # Schedule command — cron-based recurring skill/prompt dispatch (issue #892)
+    schedule_parser = subparsers.add_parser(
+        "schedule",
+        help="Run a skill or prompt on a cron schedule "
+        "(add|list|show|remove|pause|resume|run|daemon)",
+        parents=[parent_parser],
+    )
+    schedule_subparsers = schedule_parser.add_subparsers(
+        dest="schedule_action", help="schedule action to perform"
+    )
+
+    s_add = schedule_subparsers.add_parser("add", help="Register a new schedule")
+    s_add.add_argument("--name", required=True, help="Unique schedule name")
+    s_add.add_argument(
+        "--cron", required=True, help='Cron expression, e.g. "0 7 * * 1-5"'
+    )
+    s_add_what = s_add.add_mutually_exclusive_group(required=True)
+    s_add_what.add_argument("--prompt", help="One-shot prompt to run on each fire")
+    s_add_what.add_argument(
+        "--skill", help="Skill to run (pending skill-format support, #888)"
+    )
+    s_add.add_argument(
+        "--sink",
+        default="stdout",
+        help="Where output goes: stdout (default) | file:<path> | notification | telegram",
+    )
+    s_add.add_argument(
+        "--to", help="Recipient for the telegram sink (Telegram user/chat id)"
+    )
+
+    s_list = schedule_subparsers.add_parser(
+        "list", help="List schedules with next fire time"
+    )
+    s_list.set_defaults(schedule_action="list")
+
+    s_show = schedule_subparsers.add_parser("show", help="Show one schedule")
+    s_show.add_argument("name", help="Schedule name")
+
+    s_remove = schedule_subparsers.add_parser("remove", help="Remove a schedule")
+    s_remove.add_argument("name", help="Schedule name")
+
+    s_pause = schedule_subparsers.add_parser(
+        "pause", help="Disable a schedule without deleting it"
+    )
+    s_pause.add_argument("name", help="Schedule name")
+
+    s_resume = schedule_subparsers.add_parser(
+        "resume", help="Re-enable a paused schedule"
+    )
+    s_resume.add_argument("name", help="Schedule name")
+
+    s_run = schedule_subparsers.add_parser(
+        "run", help="Fire a schedule once now (for testing)"
+    )
+    s_run.add_argument("name", help="Schedule name")
+
+    s_daemon = schedule_subparsers.add_parser(
+        "daemon", help="Run the long-lived scheduler (blocks until interrupted)"
+    )
+    s_daemon.set_defaults(schedule_action="daemon")
+
+    schedule_parser.set_defaults(action="schedule")
+
     # Knowledge command — web research via the Tavily wrapper
     knowledge_parser = subparsers.add_parser(
         "knowledge",
@@ -2963,6 +3026,90 @@ Examples:
     return parser
 
 
+def _handle_schedule(args):
+    """Dispatch `gaia schedule <action>` (issue #892)."""
+    from gaia.schedule import daemon as schedule_daemon
+    from gaia.schedule import runner as schedule_runner
+    from gaia.schedule.store import Schedule, TomlScheduleStore
+
+    action = getattr(args, "schedule_action", None)
+    store = TomlScheduleStore()
+
+    if action == "add":
+        sink_args = {}
+        if getattr(args, "to", None):
+            sink_args["to"] = args.to
+        schedule = Schedule(
+            name=args.name,
+            cron=args.cron,
+            skill=getattr(args, "skill", None),
+            prompt=getattr(args, "prompt", None),
+            sink=args.sink,
+            sink_args=sink_args,
+        )
+        store.add(schedule)
+        print(f"✅ Added schedule {schedule.name!r} ({schedule.cron})")
+        return
+
+    if action == "list":
+        schedules = store.load()
+        if not schedules:
+            print("No schedules registered. Add one with `gaia schedule add`.")
+            return
+        for s in schedules.values():
+            state = "enabled" if s.enabled else "paused"
+            nxt = schedule_daemon.next_fire_time(s.cron) if s.enabled else None
+            print(
+                f"{s.name}  [{state}]  cron={s.cron!r}  sink={s.sink}"
+                + (f"  next={nxt}" if nxt else "")
+            )
+        return
+
+    if action == "show":
+        s = store.get(args.name)
+        print(f"name:       {s.name}")
+        print(f"cron:       {s.cron}")
+        print(f"target:     {'skill=' + s.skill if s.skill else 'prompt=' + s.prompt}")
+        print(f"sink:       {s.sink}  args={s.sink_args}")
+        print(f"enabled:    {s.enabled}")
+        print(f"created_at: {s.created_at}")
+        print(f"next_fire:  {schedule_daemon.next_fire_time(s.cron)}")
+        return
+
+    if action == "remove":
+        store.remove(args.name)
+        print(f"✅ Removed schedule {args.name!r}")
+        return
+
+    if action in ("pause", "resume"):
+        enabled = action == "resume"
+        store.set_enabled(args.name, enabled)
+        print(f"✅ {'Resumed' if enabled else 'Paused'} schedule {args.name!r}")
+        return
+
+    if action == "run":
+        from datetime import datetime, timezone
+
+        schedule = store.get(args.name)
+        schedule_runner.fire(schedule)
+        store.mark_run(
+            schedule.name,
+            datetime.now(timezone.utc).isoformat(),
+            next_run=schedule_daemon.next_fire_time(schedule.cron),
+        )
+        return
+
+    if action == "daemon":
+        schedule_daemon.run_daemon()
+        return
+
+    print(
+        "No schedule action specified. Use: "
+        "gaia schedule add|list|show|remove|pause|resume|run|daemon",
+        file=sys.stderr,
+    )
+
+
 def main():
     parser = build_parser()
     log = get_logger(__name__)
@@ -3133,6 +3280,10 @@ def main():
             "No telegram action specified. Use: gaia telegram start|stop|status",
             file=sys.stderr,
         )
+        return
+
+    if args.action == "schedule":
+        _handle_schedule(args)
         return
 
     # Handle core Gaia CLI commands
