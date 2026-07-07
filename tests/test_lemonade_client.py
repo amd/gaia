@@ -875,6 +875,41 @@ class TestLemonadeClientMock(unittest.TestCase):
         self.assertIs(body["embedding"], True)
 
     @responses.activate
+    def test_ensure_model_downloaded_matches_user_namespace_display_id(self):
+        """A ``user.``-registered model is listed by /v1/models under its STRIPPED
+        id (e.g. ``embeddinggemma-300m-GGUF``), but referenced elsewhere as
+        ``user.embeddinggemma-300m-GGUF``. ensure_model_downloaded must treat the
+        two as the same model — otherwise the availability check never matches and
+        it re-pulls forever (observed hang against a live Lemonade server).
+        """
+        from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL, _model_ids_match
+
+        # The matcher is namespace-tolerant and case-insensitive, but not a
+        # substring match (must not confuse distinct models).
+        self.assertTrue(
+            _model_ids_match(DEFAULT_EMBEDDING_MODEL, "embeddinggemma-300m-GGUF")
+        )
+        self.assertTrue(_model_ids_match("user.Foo-GGUF", "foo-gguf"))
+        self.assertFalse(
+            _model_ids_match(DEFAULT_EMBEDDING_MODEL, "nomic-embed-text-v2-moe-GGUF")
+        )
+
+        # Server lists the stripped id; requesting the user.-prefixed name must
+        # resolve to "already downloaded" without issuing a pull.
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/models",
+            json={"data": [{"id": "embeddinggemma-300m-GGUF", "downloaded": True}]},
+            status=200,
+        )
+        result = self.client.ensure_model_downloaded(
+            DEFAULT_EMBEDDING_MODEL, show_progress=False
+        )
+        self.assertTrue(result)
+        # No /pull call was made — only the /models availability probe.
+        self.assertTrue(all("/pull" not in c.request.url for c in responses.calls))
+
+    @responses.activate
     def test_delete_model(self):
         """Test deleting a model."""
         delete_response = {

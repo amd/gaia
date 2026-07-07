@@ -125,6 +125,26 @@ DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 DEFAULT_EMBEDDING_MODEL = "user.embeddinggemma-300m-GGUF"
 DEFAULT_EMBEDDING_CHECKPOINT = "ggml-org/embeddinggemma-300M-GGUF:Q8_0"
 
+
+def _model_ids_match(a: Optional[str], b: Optional[str]) -> bool:
+    """Compare two Lemonade model names, tolerating the ``user.`` namespace.
+
+    A model registered as ``user.embeddinggemma-300m-GGUF`` is listed by
+    ``/v1/models`` under the *stripped* id ``embeddinggemma-300m-GGUF`` — but
+    ``/load`` and ``/embeddings`` accept either form. Comparing the raw strings
+    would make availability checks miss the registered model and re-pull forever.
+    Strip a leading ``user.`` from both sides and compare case-insensitively.
+    """
+
+    def norm(n: Optional[str]) -> str:
+        n = (n or "").strip()
+        if n.lower().startswith("user."):
+            n = n[len("user.") :]
+        return n.lower()
+
+    return norm(a) == norm(b)
+
+
 # Minimum context window (in tokens) that GAIA agents assume is loaded. The
 # bundled ChatAgent system prompt alone runs >7000 tokens before any user
 # message; running below this silently truncates prompts and yields empty
@@ -2440,7 +2460,7 @@ class LemonadeClient:
             # Check if model is already downloaded
             models_response = self.list_models()
             for model in models_response.get("data", []):
-                if model.get("id") == model_name:
+                if _model_ids_match(model.get("id"), model_name):
                     if model.get("downloaded", False):
                         if show_progress:
                             self.log.info(
@@ -2633,7 +2653,7 @@ class LemonadeClient:
                 # Check if model is now downloaded
                 models_response = self.list_models()
                 for model in models_response.get("data", []):
-                    if model.get("id") == model_name:
+                    if _model_ids_match(model.get("id"), model_name):
                         if model.get("downloaded", False):
                             if show_progress:
                                 minutes = elapsed // 60
@@ -2707,7 +2727,9 @@ class LemonadeClient:
             # with ``id`` + ``recipe_options`` so we can read ctx_size.
             loaded_entry: Optional[dict] = None
             for _m in status.loaded_models:
-                if _m.get("id") == model or _m.get("model_name") == model:
+                if _model_ids_match(_m.get("id"), model) or _model_ids_match(
+                    _m.get("model_name"), model
+                ):
                     loaded_entry = _m
                     break
 
@@ -2739,7 +2761,7 @@ class LemonadeClient:
             try:
                 models_data = self.list_models()
                 for _m in models_data.get("data", []):
-                    if _m.get("id") == model:
+                    if _model_ids_match(_m.get("id"), model):
                         is_downloaded = bool(_m.get("downloaded", False))
                         break
             except Exception as _e:  # pylint: disable=broad-except
@@ -3470,7 +3492,7 @@ class LemonadeClient:
             # Use list_models with show_all=True to get download status
             models = self.list_models(show_all=True)
             for model in models.get("data", []):
-                if model.get("id", "").lower() == model_id.lower():
+                if _model_ids_match(model.get("id"), model_id):
                     return model.get("downloaded", False)
         except Exception:
             pass
@@ -3565,7 +3587,7 @@ class LemonadeClient:
         try:
             models_response = self.list_models()
             for model in models_response.get("data", []):
-                if model.get("id", "").lower() == model_id.lower():
+                if _model_ids_match(model.get("id"), model_id):
                     return True
                 # Also check for partial match
                 if model_id.lower() in model.get("id", "").lower():

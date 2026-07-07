@@ -47,7 +47,7 @@ lemonade-server serve
 ```
 
 <Note>
-The default embedder is now `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M), replacing `nomic-embed-text-v2-moe-GGUF` because the current llama.cpp server cannot load the nomic MOE embedder. Both are 768-dim, so retrieval behavior is unchanged. If you built an index with the old model, it is re-indexed automatically on the next run — the changed model name invalidates the cache under `~/.gaia/code_index/`.
+The default embedder is now `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M), replacing `nomic-embed-text-v2-moe-GGUF` because the current llama.cpp server cannot load the nomic MOE embedder. Both are 768-dim, so retrieval behavior is unchanged. A cached index (under `~/.gaia/code_index/`) records the model it was built with: re-running `gaia-code index` rebuilds every embedding with the new model, and searching a stale index fails loudly with a model-mismatch error until you rebuild.
 </Note>
 
 If FAISS or numpy are missing at runtime you'll see exactly:
