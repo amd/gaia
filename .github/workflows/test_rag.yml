@@ -164,9 +164,9 @@ jobs:
             # matching the original behavior. CI drives Lemonade through our
             # client, not raw REST.
             Write-Host "`n=== Pre-pulling LLM + VLM via LemonadeClient ==="
-            python tests/ci_lemonade_check.py --model Qwen3-4B-Instruct-2507-GGUF --pull-only
+            uv run python tests/ci_lemonade_check.py --model Qwen3-4B-Instruct-2507-GGUF --pull-only
             if ($LASTEXITCODE -ne 0) { Write-Host "   [WARN] LLM pre-pull failed; continuing (auto-downloads on load)" }
-            python tests/ci_lemonade_check.py --model Qwen3-VL-4B-Instruct-GGUF --pull-only
+            uv run python tests/ci_lemonade_check.py --model Qwen3-VL-4B-Instruct-GGUF --pull-only
             if ($LASTEXITCODE -ne 0) { Write-Host "   [WARN] VLM pre-pull failed; continuing (auto-downloads on load)" }
 
             # Load + verify the embedding model THROUGH GAIA's LemonadeClient so
@@ -174,7 +174,7 @@ jobs:
             # retry that absorbs the transient AMD-Vulkan "llama-server failed
             # to start" fault. Raw REST here would bypass that resilience.
             Write-Host "`n=== Load + verify embedding model via LemonadeClient ==="
-            python tests/ci_lemonade_check.py --model nomic-embed-text-v2-moe-GGUF --embeddings
+            uv run python tests/ci_lemonade_check.py --model nomic-embed-text-v2-moe-GGUF --embeddings
             if ($LASTEXITCODE -ne 0) {
                 if ($env:LEMONADE_JOB_ID) {
                     Write-Host "Server output:"

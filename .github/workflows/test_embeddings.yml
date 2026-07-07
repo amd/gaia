@@ -113,7 +113,7 @@ jobs:
             # AMD-Vulkan "llama-server failed to start" fault) rather than raw
             # REST, which would bypass that resilience and flake.
             Write-Host "`n=== Pull + load + verify embedding model via LemonadeClient ==="
-            python tests/ci_lemonade_check.py --model nomic-embed-text-v2-moe-GGUF --embeddings
+            uv run python tests/ci_lemonade_check.py --model nomic-embed-text-v2-moe-GGUF --embeddings
             if ($LASTEXITCODE -ne 0) {
                 if ($env:LEMONADE_JOB_ID) {
                     Write-Host "Server output:"
