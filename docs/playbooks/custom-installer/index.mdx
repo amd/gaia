@@ -1,6 +1,6 @@
 ---
 title: "Custom Installer Playbook"
-description: "Ship the Zoo Agent pre-loaded in a branded GAIA installer. Three-OS walkthrough."
+description: "Ship the Example Agent pre-loaded in a branded GAIA installer. Three-OS walkthrough."
 icon: "play"
 ---
 
@@ -12,7 +12,7 @@ icon: "play"
 </Info>
 
 **Time to complete:** 45–75 minutes
-**What you'll build:** A branded GAIA installer for Windows, macOS, or Ubuntu with the **Zoo Agent** preloaded
+**What you'll build:** A branded GAIA installer for Windows, macOS, or Ubuntu with the **Example Agent** preloaded
 **What you'll learn:** How bundled agents flow from a staging directory through `electron-builder` into the first-launch seeder, plus how to share agents between existing GAIA installations without rebuilding an installer
 
 ---
@@ -30,7 +30,7 @@ Two paths are covered:
 
 ## Path A — Branded installer
 
-The running example is the **Zoo Agent**. It is a minimal Python agent that plays an enthusiastic zookeeper.
+The running example is the **Example Agent** — the same minimal Python agent that ships preloaded in the stock GAIA installer.
 
 <Steps>
 
@@ -56,35 +56,42 @@ All subsequent steps assume your working directory is `gaia/src/gaia/apps/webui/
 
 </Step>
 
-<Step title="Create the Zoo Agent">
+<Step title="Create the Example Agent">
 
 Create the bundled-agent staging directory and drop in a Python `agent.py`:
 
 ```bash
-mkdir -p build/bundled-agents/zoo-agent
+mkdir -p build/bundled-agents/example-agent
 ```
 
-Create `build/bundled-agents/zoo-agent/agent.py`:
+Create `build/bundled-agents/example-agent/agent.py`:
 
-```python title="build/bundled-agents/zoo-agent/agent.py"
+```python title="build/bundled-agents/example-agent/agent.py"
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
 
 
-class ZooAgent(Agent):
-    AGENT_ID = "zoo-agent"
-    AGENT_NAME = "Zoo Agent"
-    AGENT_DESCRIPTION = "A zookeeper who loves animals"
+class ExampleAgent(Agent):
+    AGENT_ID = "example-agent"
+    AGENT_NAME = "Example Agent"
+    AGENT_DESCRIPTION = (
+        "A bundled example agent that shows how installer-seeded custom agents work"
+    )
     CONVERSATION_STARTERS = [
-        "Hello! What's happening at the zoo today?",
-        "Tell me a fun fact about one of your animals.",
+        "What are you an example of?",
+        "How do I build my own agent like you?",
     ]
 
     def _get_system_prompt(self) -> str:
         return (
-            "You are a funny and enthusiastic zookeeper! You work at the world's "
-            "best zoo and every response you give includes a fun fact or a playful "
-            "reference to one of your beloved zoo animals."
+            "You are GAIA's bundled Example Agent — a working demonstration of a "
+            "custom agent seeded by the installer. Explain plainly that you exist "
+            "to show how custom agents are packaged and loaded, and point anyone "
+            "who wants to build their own to "
+            "https://amd-gaia.ai/docs/guides/custom-agent."
         )
 
     def _create_console(self) -> AgentConsole:
@@ -103,7 +110,7 @@ extraResources:
     filter: ["**/*"]
 ```
 
-At install time the contents end up under `process.resourcesPath/agents/<agent-id>/` inside the installed app. On first launch, `seedBundledAgents()` in [`src/gaia/apps/webui/services/agent-seeder.cjs`](https://github.com/amd/gaia/blob/main/src/gaia/apps/webui/services/agent-seeder.cjs) copies them into `~/.gaia/agents/<agent-id>/` and writes a `.seeded` sentinel so the copy runs exactly once per agent.
+At install time the contents end up under `process.resourcesPath/agents/<agent-id>/` inside the installed app. On first launch, `seedBundledAgents()` in [`src/gaia/apps/webui/services/agent-seeder.cjs`](https://github.com/amd/gaia/blob/main/src/gaia/apps/webui/services/agent-seeder.cjs) copies them into `~/.gaia/agents/<agent-id>/`, writes a `.seeded` sentinel inside the agent directory, and records a marker at `~/.gaia/seeder/<agent-id>.seeded`. The marker is what makes seeding one-time-per-machine: as long as it exists the agent is never seeded again — even if the user deletes the agent directory. Deleting a seeded agent is honored permanently.
 
 <Warning>
   **Agent code runs with user privileges.** The `agent.py` file you bundle executes when the user selects your agent. Only bundle code you wrote or have audited.
@@ -113,7 +120,7 @@ At install time the contents end up under `process.resourcesPath/agents/<agent-i
 
 <Step title="Build the installer">
 
-Pick your target platform. Each command builds the full GAIA Agent UI installer with your Zoo Agent baked in.
+Pick your target platform. Each command builds the full GAIA Agent UI installer with your Example Agent baked in.
 
 <Tabs>
   <Tab title="Windows">
@@ -181,15 +188,15 @@ Pick your target platform. Each command builds the full GAIA Agent UI installer 
 
 **Verify the seeder ran:**
 
-1. Open the Agent UI. On first launch, `seedBundledAgents()` copies every directory under `<resources>/agents/` into `~/.gaia/agents/` and writes a `.seeded` marker so re-launches are no-ops.
-2. Open the agent dropdown in the UI header — **Zoo Agent** should appear alongside the built-in agents.
-3. Select **Zoo Agent** and send "What's happening at the zoo today?". You should get an enthusiastic zookeeper response with a fun animal fact.
+1. Open the Agent UI. On first launch, `seedBundledAgents()` copies every directory under `<resources>/agents/` into `~/.gaia/agents/`, writing a `.seeded` sentinel in each agent directory and a per-agent marker under `~/.gaia/seeder/` so each agent is seeded at most once per machine.
+2. Open the agent dropdown in the UI header — **Example Agent** should appear alongside the built-in agents.
+3. Select **Example Agent** and send "What are you an example of?". It should introduce itself as the bundled example and point you at the custom-agent guide.
 
 If the agent does not appear:
 
-- Confirm `~/.gaia/agents/zoo-agent/agent.py` exists on the target machine.
-- Confirm `~/.gaia/agents/zoo-agent/.seeded` exists — if it's missing, the seeder did not run; check the Electron main-process logs.
-- If `.seeded` exists but the directory is incomplete, delete `~/.gaia/agents/zoo-agent/` and relaunch to trigger a fresh seed.
+- Confirm `~/.gaia/agents/example-agent/agent.py` exists on the target machine.
+- Confirm `~/.gaia/agents/example-agent/.seeded` exists — if it's missing, the seeder did not run; check the Electron main-process logs and `~/.gaia/logs/seeder.log`.
+- To force a fresh seed (for example after a bad or incomplete copy), delete **both** `~/.gaia/agents/example-agent/` and the marker `~/.gaia/seeder/example-agent.seeded`, then relaunch. Deleting the agent directory alone will NOT re-seed — the surviving marker means "the user deleted this agent" and the seeder honors that permanently.
 
 </Step>
 
@@ -197,8 +204,8 @@ If the agent does not appear:
 
 Most users ship with the default GAIA branding and only customize the agent. If you want a branded installer, edit [`src/gaia/apps/webui/electron-builder.yml`](https://github.com/amd/gaia/blob/main/src/gaia/apps/webui/electron-builder.yml) before re-running the `package:*` command:
 
-- `productName` → user-facing app name (e.g., `Zoo GAIA`)
-- `appId` → your reverse-DNS namespace (e.g., `com.acme.zoo-gaia`)
+- `productName` → user-facing app name (e.g., `Acme GAIA`)
+- `appId` → your reverse-DNS namespace (e.g., `com.acme.gaia`)
 
 Icons, sidebar bitmaps, and installer graphics are referenced by path inside the same file — replace the assets in place.
 

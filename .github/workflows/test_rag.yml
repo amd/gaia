@@ -42,7 +42,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Free disk space
       uses: ./.github/actions/free-disk-space
@@ -77,7 +77,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Setup Python environment
       uses: ./.github/actions/setup-venv
@@ -93,6 +93,10 @@ jobs:
 
     - name: Install Lemonade Server
       uses: ./.github/actions/install-lemonade
+
+    - name: Free Lemonade port (reap stray processes from prior jobs)
+      shell: powershell
+      run: .\installer\scripts\cleanup-lemonade.ps1 -Port 13305
 
     - name: Start Lemonade Server and Run Tests
       shell: powershell

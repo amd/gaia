@@ -49,6 +49,13 @@ RAG searches your documents and answers using real information.
 - **Augmented** → Add that information to the LLM's context
 - **Generation** → LLM generates an answer using your documents
 
+<Note>
+**Supported document formats:** PDF, Word (`.docx`), PowerPoint (`.pptx`),
+Excel (`.xlsx`), plus plain text, Markdown, CSV, JSON, HTML, and common source
+code files. Legacy binary Office formats (`.doc`, `.ppt`, `.xls`) are not
+supported — re-save them as the modern `.docx` / `.pptx` / `.xlsx` formats.
+</Note>
+
 ---
 
 ## How RAG Works: A Mental Model
@@ -62,7 +69,7 @@ This happens once when you index documents:
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
-    A(["PDF / PPTX Document"]) --> B(["EXTRACT TEXT"])
+    A(["PDF / DOCX / PPTX / XLSX Document"]) --> B(["EXTRACT TEXT"])
     B --> C(["SPLIT INTO CHUNKS"])
     C --> D(["GENERATE EMBEDDINGS"])
     D --> E[("STORE IN FAISS")]

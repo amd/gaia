@@ -45,7 +45,7 @@ fixture; new tests should use `synthetic_inbox.mbox`.
 - Distribution: **54** each of URGENT / NEEDS_RESPONSE / FYI / PROMOTIONAL, and
   **33** PERSONAL (the scarcest bucket in the source — all eligible PERSONAL are
   taken). Balanced on purpose so per-category accuracy is meaningful and PERSONAL
-  (#1437) is measurable. The spam/phishing axes are non-empty (≈63 spam, ≈48
+  (#1437) is measurable. The spam/phishing axes are non-empty (≈7 spam, ≈48
   phishing) so they stay scoreable.
 - The corpus stays under the 1 MB CI size guard (~312 KB).
 

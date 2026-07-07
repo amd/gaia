@@ -62,20 +62,10 @@ try {
     Write-Host "=========================================="
     Write-Host ""
 
-    # Check port availability
-    Write-Host "=== Checking Port $Port ==="
-    $portInUse = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
-    if ($portInUse) {
-        # Get unique PIDs (may have multiple connections on same port)
-        $processIds = $portInUse.OwningProcess | Select-Object -Unique
-        foreach ($processId in $processIds) {
-            Write-Host "[WARN] Port $Port in use by PID: $processId - killing orphaned process"
-            Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
-        }
-        Start-Sleep -Seconds 2
-    } else {
-        Write-Host "[OK] Port $Port is available"
-    }
+    # Free the port and reap stray Lemonade/llama-server processes from prior
+    # jobs on this shared runner (otherwise the server dies with a winerror
+    # 10048 bind collision). Shared with the inline-start CI workflows.
+    & "$PSScriptRoot\cleanup-lemonade.ps1" -Port $Port
     Write-Host ""
 
     # Check installation. v10.x ships:
