@@ -190,8 +190,9 @@ def test_uninstall_success(client, monkeypatch):
 
 
 def test_uninstall_builtin_refused(client):
-    # Real uninstall refuses builtins -> 400 (no mock needed).
-    resp = client.delete("/api/agents/chat", headers=UI)
+    # Real uninstall refuses builtins -> 400 (no mock needed). ``builder`` is the
+    # only remaining framework builtin after the #1102 hub migrations.
+    resp = client.delete("/api/agents/builder", headers=UI)
     assert resp.status_code == 400
 
 

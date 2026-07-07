@@ -71,16 +71,22 @@ class TestFormatUserErrorFiltering:
         expected_paths = [
             "gaia/agents/base",
             "gaia/agents/blender",
-            "gaia/agents/chat",
             "gaia/agents/code",
             "gaia/agents/docker",
             "gaia/agents/jira",
-            "gaia/agents/routing",
             "gaia/agents/tools",
+            # Hub-migrated agents (#1102): chat ships as the gaia-agent-chat
+            # wheel, filtered via gaia_agent_chat / the hub editable path.
+            "hub/agents/python/",
+            "gaia_agent_chat",
             "site-packages/",
         ]
         for path in expected_paths:
             assert path in FRAMEWORK_PATHS, f"Missing framework path: {path}"
+        # RoutingAgent migrated to the gaia-agent-routing wheel (#1102); its
+        # frames are now filtered via the "site-packages/" entry, so the old
+        # "gaia/agents/routing" path must no longer be listed.
+        assert "gaia/agents/routing" not in FRAMEWORK_PATHS
 
     def test_framework_paths_no_redundant_entries(self):
         """Verify no redundant site-packages entries."""

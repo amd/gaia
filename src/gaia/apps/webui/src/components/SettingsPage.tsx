@@ -34,6 +34,12 @@ export function SettingsPage() {
     const [justSaved, setJustSaved] = useState(false);
     const justSavedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+    // Dynamic Tools (Beta) toggle — #1798
+    const [dynamicTools, setDynamicTools] = useState(false);
+    const [dynamicToolsLocked, setDynamicToolsLocked] = useState(false);
+    const [savingDynamicTools, setSavingDynamicTools] = useState(false);
+    const [dynamicToolsError, setDynamicToolsError] = useState<string | null>(null);
+
     useEffect(() => {
         log.system.info('Checking system status...');
         const t = log.system.time();
@@ -66,6 +72,8 @@ export function SettingsPage() {
                 const value = s.custom_model ?? '';
                 setCustomModel(value);
                 setSavedCustomModel(value);
+                setDynamicTools(s.dynamic_tools);
+                setDynamicToolsLocked(s.dynamic_tools_locked);
             })
             .catch((err) => {
                 log.system.error('Failed to load settings', err);
@@ -100,6 +108,30 @@ export function SettingsPage() {
             setSavingModel(false);
         }
     }, [customModel]);
+
+    const toggleDynamicTools = useCallback(async () => {
+        if (dynamicToolsLocked || savingDynamicTools) return;
+        const previous = dynamicTools;
+        const next = !previous;
+        setDynamicTools(next); // optimistic
+        setSavingDynamicTools(true);
+        setDynamicToolsError(null);
+        try {
+            log.system.info('Saving dynamic_tools setting', { dynamic_tools: next });
+            const updated = await api.updateSettings({ dynamic_tools: next });
+            // Trust the server's effective value (env override may win).
+            setDynamicTools(updated.dynamic_tools);
+            setDynamicToolsLocked(updated.dynamic_tools_locked);
+        } catch (err) {
+            // No silent fallback: revert the optimistic flip and surface the error.
+            const msg = err instanceof Error ? err.message : String(err);
+            log.system.error('Failed to save dynamic_tools', err);
+            setDynamicTools(previous);
+            setDynamicToolsError(msg);
+        } finally {
+            setSavingDynamicTools(false);
+        }
+    }, [dynamicTools, dynamicToolsLocked, savingDynamicTools]);
 
     const customModelDirty = customModel.trim() !== savedCustomModel.trim();
 
@@ -431,6 +463,46 @@ export function SettingsPage() {
                         Current: <code>{currentCtx != null ? `${currentCtx.toLocaleString()} tokens` : 'unknown'}</code>
                         {status?.model_loaded && <> on <code>{status.model_loaded}</code></>}.
                     </p>
+                </section>
+
+                {/* Dynamic Tools (Beta) — #1798 */}
+                <section className="settings-section">
+                    <h4>Dynamic Tools <span className="beta-badge">BETA</span></h4>
+                    <p className="model-override-desc">
+                        Trim each turn&rsquo;s tool list to a semantically-matched subset to
+                        speed up the first response. Currently affects the Doc Agent only.
+                    </p>
+                    {/* <label> wraps the row so a click on the text or the track
+                        forwards to the visually-hidden checkbox (matches the
+                        working connector/grant toggles). */}
+                    <label className="setting-row">
+                        <span>Enable dynamic tool loading</span>
+                        <span className="toggle-switch">
+                            <input
+                                type="checkbox"
+                                checked={dynamicTools}
+                                onChange={() => void toggleDynamicTools()}
+                                disabled={!settingsLoaded || savingDynamicTools || dynamicToolsLocked}
+                                aria-label={dynamicTools ? 'Disable dynamic tools' : 'Enable dynamic tools'}
+                            />
+                            <span className="toggle-track" />
+                        </span>
+                    </label>
+                    {dynamicToolsLocked && (
+                        <p className="model-status-hint">
+                            Controlled by <code>GAIA_DYNAMIC_TOOLS</code> &mdash; unset that
+                            environment variable to change this here.
+                        </p>
+                    )}
+                    {dynamicToolsError && (
+                        <div className="model-warning" role="alert">
+                            <AlertCircle size={14} />
+                            <div className="model-warning-content">
+                                <strong>Could not save</strong>
+                                <p>{dynamicToolsError}</p>
+                            </div>
+                        </div>
+                    )}
                 </section>
 
                 {/* Memory Warnings */}

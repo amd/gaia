@@ -31,14 +31,14 @@ export interface BinaryLock {
   schemaVersion: string;
   agentVersion: string;
   /**
-   * Default download base URL (an R2 bucket). Overridable at fetch time. Until
-   * real R2 wiring lands (#1648) this may be a placeholder.
+   * Default download base URL. Overridable at fetch time. May be a placeholder
+   * if no binaries are published for this build.
    */
   baseUrl: string;
   binaries: Record<string, BinaryLockEntry>;
 }
 
-/** Supported platform-arch keys (the milestone's 4-platform matrix). */
+/** Supported platform-arch keys. */
 export const SUPPORTED_PLATFORMS = [
   "win32-x64",
   "darwin-arm64",
@@ -103,8 +103,8 @@ export function resolveEntry(lock: BinaryLock, platformKey: string): BinaryLockE
   if (!entry.sha256 || !entry.filename || !entry.executable) {
     throw new PlatformError(
       `binaries.lock.json entry for '${platformKey}' is incomplete ` +
-        "(needs filename, sha256, executable). " +
-        "Likely a placeholder pending R2 wiring (#1648).",
+        "(needs filename, sha256, executable) — likely a placeholder entry with " +
+        "no published binary for this platform.",
     );
   }
   return entry;

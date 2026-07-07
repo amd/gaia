@@ -19,7 +19,7 @@ User guides show you how to **use** GAIA's pre-built agents and SDKs. Each guide
 
 ---
 
-## Hardware & System
+## Setup & Hardware
 
 <CardGroup cols={2}>
   <Card
@@ -29,11 +29,19 @@ User guides show you how to **use** GAIA's pre-built agents and SDKs. Each guide
   >
     Determine what LLMs your system can run based on RAM, GPU, and NPU capabilities.
   </Card>
+
+  <Card
+    title="NPU Acceleration"
+    icon="bolt"
+    href="/guides/npu"
+  >
+    Run GAIA agents on AMD Ryzen AI NPU for power-efficient local inference.
+  </Card>
 </CardGroup>
 
 ---
 
-## Conversational AI
+## Core Agents
 
 <CardGroup cols={2}>
   <Card
@@ -51,11 +59,27 @@ User guides show you how to **use** GAIA's pre-built agents and SDKs. Each guide
   >
     Natural voice conversations using Whisper (ASR) and Kokoro (TTS).
   </Card>
+
+  <Card
+    title="Browser Agent"
+    icon="globe"
+    href="/guides/browse"
+  >
+    Search the web, fetch pages, and download files with a focused agent.
+  </Card>
+
+  <Card
+    title="Analyst Agent"
+    icon="chart-column"
+    href="/guides/analyze"
+  >
+    Load structured rows into scratchpad tables and query them with SQL.
+  </Card>
 </CardGroup>
 
 ---
 
-## Development Tools
+## Developer Tools
 
 <CardGroup cols={2}>
   <Card
@@ -67,11 +91,41 @@ User guides show you how to **use** GAIA's pre-built agents and SDKs. Each guide
   </Card>
 
   <Card
+    title="Code Index"
+    icon="magnifying-glass-code"
+    href="/guides/code-index"
+  >
+    Semantic search over your codebase using local AMD-accelerated embeddings.
+  </Card>
+
+  <Card
     title="Docker Agent"
     icon="docker"
     href="/guides/docker"
   >
     Natural language interface for containerizing applications.
+  </Card>
+</CardGroup>
+
+---
+
+## Connected Agents
+
+<CardGroup cols={2}>
+  <Card
+    title="Email Triage"
+    icon="envelope"
+    href="/guides/email"
+  >
+    Read, organize, and reply to Gmail with email content processed locally.
+  </Card>
+
+  <Card
+    title="Telegram Adapter"
+    icon="paper-plane"
+    href="/guides/telegram-adapter"
+  >
+    Talk to GAIA from Telegram on any device, with per-user sessions.
   </Card>
 
   <Card
@@ -89,11 +143,11 @@ User guides show you how to **use** GAIA's pre-built agents and SDKs. Each guide
 
 <CardGroup cols={2}>
   <Card
-    title="Medical Intake (EMR)"
-    icon="notes-medical"
-    href="/guides/emr"
+    title="Image Generation"
+    icon="image"
+    href="/guides/sd"
   >
-    Automate patient intake form processing with VLM extraction and local database storage.
+    Multi-modal image generation with LLM prompt enhancement and VLM story creation.
   </Card>
 
   <Card
@@ -102,6 +156,14 @@ User guides show you how to **use** GAIA's pre-built agents and SDKs. Each guide
     href="/guides/blender"
   >
     Natural language 3D scene creation and manipulation in Blender.
+  </Card>
+
+  <Card
+    title="Medical Intake (EMR)"
+    icon="hospital"
+    href="/guides/emr"
+  >
+    Automate patient intake form processing with VLM extraction and local database storage.
   </Card>
 
   <Card
@@ -115,13 +177,35 @@ User guides show you how to **use** GAIA's pre-built agents and SDKs. Each guide
 
 ---
 
+## Build & Extend
+
+<CardGroup cols={2}>
+  <Card
+    title="Custom Agents"
+    icon="wand-magic-sparkles"
+    href="/guides/custom-agent"
+  >
+    Create your own AI agents and add them to the GAIA Agent UI.
+  </Card>
+
+  <Card
+    title="Publishing to the Hub"
+    icon="upload"
+    href="/guides/hub-publishing"
+  >
+    Build, version, and publish a GAIA agent to the Agent Hub.
+  </Card>
+</CardGroup>
+
+---
+
 ## MCP Integration
 
 <CardGroup cols={2}>
   <Card
     title="MCP Client"
     icon="plug"
-    href="/sdk/sdks/mcp"
+    href="/guides/mcp/client"
   >
     Connect your agent to any MCP server - filesystem, GitHub, databases, and hundreds more.
   </Card>
@@ -144,13 +228,20 @@ User guides show you how to **use** GAIA's pre-built agents and SDKs. Each guide
 | Check what models your hardware can run | [Hardware Advisor](/guides/hardware-advisor) |
 | Build a chatbot or document Q&A | [Document Q&A](/guides/chat) |
 | Add voice to your agent | [Voice Interaction](/guides/talk) |
+| Research the web from the CLI | [Browser Agent](/guides/browse) |
+| Run SQL over structured rows | [Analyst Agent](/guides/analyze) |
 | Generate Next.js applications | [Code Agent](/guides/code) |
+| Search your codebase semantically | [Code Index](/guides/code-index) |
 | Containerize applications | [Docker Agent](/guides/docker) |
+| Triage your Gmail inbox locally | [Email Triage](/guides/email) |
+| Chat with GAIA from your phone | [Telegram Adapter](/guides/telegram-adapter) |
 | Work with Jira tickets | [Jira Agent](/guides/jira) |
-| Process medical intake forms | [Medical Intake](/guides/emr) |
+| Generate images from text | [Image Generation](/guides/sd) |
 | Create 3D scenes with AI | [Blender Agent](/guides/blender) |
+| Process medical intake forms | [Medical Intake](/guides/emr) |
 | Route requests to specialized agents | [Routing Agent](/guides/routing) |
-| Connect agents to external MCP tools | [MCP Client](/sdk/sdks/mcp) |
+| Build and publish your own agent | [Custom Agents](/guides/custom-agent) |
+| Connect agents to external MCP tools | [MCP Client](/guides/mcp/client) |
 | Monitor Windows system health | [Windows System Health](/guides/mcp/windows-system-health) |
 
 ---

@@ -1,0 +1,65 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Tests the GAIA Document Q&A agent, which ships as the standalone gaia-agent-docqa
+# wheel (#1102).
+
+name: DocQA Agent Tests
+
+on:
+  workflow_call:
+  push:
+    branches: [ main ]
+    paths:
+      - 'hub/agents/python/docqa/**'
+      - 'src/gaia/agents/base/**'
+      - 'src/gaia/agents/tools/**'
+      - 'src/gaia/agents/chat/tools/**'
+      - 'setup.py'
+      - '.github/workflows/test_docqa_agent.yml'
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'hub/agents/python/docqa/**'
+      - 'src/gaia/agents/base/**'
+      - 'src/gaia/agents/tools/**'
+      - 'src/gaia/agents/chat/tools/**'
+      - 'setup.py'
+      - '.github/workflows/test_docqa_agent.yml'
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test-docqa-agent:
+    name: Test DocQA Agent
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system -e .[dev]
+          # DocumentQAAgent ships as the standalone gaia-agent-docqa wheel (#1102)
+          uv pip install --system -e hub/agents/python/docqa
+
+      - name: Run DocQA Agent Tests
+        run: |
+          python -m pytest hub/agents/python/docqa/tests/ -v --tb=short

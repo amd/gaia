@@ -88,6 +88,30 @@ def test_format_connector_error_email_agent_grant_migration():
     assert "Reconnect" in msg
 
 
+def test_format_connector_error_email_agent_microsoft_falls_through():
+    """
+    A Microsoft grant gap for ``installed:email`` must NOT show the Google
+    "Reconnect" migration text (issue #1751). The override is keyed by
+    ``(agent_id, provider)``, so a Microsoft failure falls through to the
+    generic provider-aware branch — naming Microsoft and the missing Graph
+    scopes, not Google.
+    """
+    err = AuthRequiredError(
+        AuthRequiredError.Reason.AGENT_NOT_GRANTED,
+        provider="microsoft",
+        agent_id="installed:email",
+        missing_scopes=["Mail.ReadWrite", "Mail.Send"],
+    )
+    msg = format_connector_error(err)
+    assert "AGENT_NOT_GRANTED" in msg
+    assert "microsoft" in msg
+    assert "Mail.ReadWrite" in msg
+    assert "Mail.Send" in msg
+    # The Google migration string must not leak onto a Microsoft failure.
+    assert "Google" not in msg
+    assert "gmail.modify" not in msg
+
+
 def test_format_connector_error_unknown_agent_falls_back_to_generic():
     """An agent without a registered override gets the generic message."""
     err = AuthRequiredError(

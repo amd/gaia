@@ -74,27 +74,62 @@
                 "group": "User Guides",
                 "pages": [
                   "guides/index",
-                  "guides/hardware-advisor",
-                  "guides/npu",
-                  "guides/chat",
-                  "guides/browse",
-                  "guides/analyze",
-                  "guides/talk",
-                  "guides/code",
-                  "guides/telegram-adapter",
-                  "guides/code-index",
-                  "guides/sd",
-                  "guides/emr",
-                  "guides/blender",
-                  "guides/jira",
-                  "guides/email",
-                  "guides/docker",
-                  "guides/routing",
-                  "guides/custom-agent",
-                  "guides/hub-publishing",
-                  "guides/mcp/agent-ui",
-                  "guides/mcp/client",
-                  "guides/mcp/windows-system-health"
+                  {
+                    "group": "Setup & Hardware",
+                    "pages": [
+                      "guides/hardware-advisor",
+                      "guides/npu"
+                    ]
+                  },
+                  {
+                    "group": "Core Agents",
+                    "pages": [
+                      "guides/chat",
+                      "guides/talk",
+                      "guides/browse",
+                      "guides/analyze"
+                    ]
+                  },
+                  {
+                    "group": "Developer Tools",
+                    "pages": [
+                      "guides/code",
+                      "guides/code-index",
+                      "guides/docker"
+                    ]
+                  },
+                  {
+                    "group": "Connected Agents",
+                    "pages": [
+                      "guides/email",
+                      "guides/telegram-adapter",
+                      "guides/jira"
+                    ]
+                  },
+                  {
+                    "group": "Specialized Agents",
+                    "pages": [
+                      "guides/sd",
+                      "guides/blender",
+                      "guides/emr",
+                      "guides/routing"
+                    ]
+                  },
+                  {
+                    "group": "Build & Extend",
+                    "pages": [
+                      "guides/custom-agent",
+                      "guides/hub-publishing"
+                    ]
+                  },
+                  {
+                    "group": "MCP Integration",
+                    "pages": [
+                      "guides/mcp/agent-ui",
+                      "guides/mcp/client",
+                      "guides/mcp/windows-system-health"
+                    ]
+                  }
                 ]
               },
               {
@@ -356,6 +391,7 @@
                 "group": "Evaluation Framework",
                 "pages": [
                   "reference/eval",
+                  "reference/eval-scorecard",
                   "eval"
                 ]
               },
@@ -382,7 +418,8 @@
             "pages": [
               "integrations/vscode",
               "integrations/mcp",
-              "integrations/n8n"
+              "integrations/n8n",
+              "integrations/guard-proxy"
             ]
           },
           {
@@ -422,6 +459,7 @@
             "pages": [
               "plans/agent-hub",
               "plans/agent-hub-ui",
+              "plans/agent-ui-hub-publish",
               "plans/email-agent-packaging",
               "spec/agent-hub-restructure",
               "spec/agent-skills",

@@ -139,6 +139,14 @@ def _agent_two_backends(tmp_path, monkeypatch, *, google_ids, microsoft_ids):
     )
     with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:
         mock_sdk.return_value = MagicMock()
+        # is_spam is now content-judged (#1906): a CATEGORY_PROMOTIONS-tagged
+        # message is category-confident but not spam-confident, so the
+        # classifier IS invoked even though these tests are about routing,
+        # not classification -- give it a valid no-op response so it doesn't
+        # crash on the mock's unconfigured .text attribute.
+        mock_sdk.return_value.send_messages.return_value.text = (
+            '{"category": "PROMOTIONAL", "is_spam": false, "confidence": 1.0}'
+        )
         agent = EmailTriageAgent(config=cfg)
     return agent, spy_g, spy_m
 
@@ -238,6 +246,48 @@ class TestMultiInboxTriageMergeAndTag:
             # Some item was produced and every one carries a mailbox tag.
             assert items, "pre-scan produced no section items"
             assert all(it.get("mailbox") in {"google", "microsoft"} for it in items)
+        finally:
+            agent.close_db()
+
+    def test_pre_scan_refreshes_backends_connected_after_agent_construction(
+        self, tmp_path, monkeypatch
+    ):
+        """A cached Agent UI email agent must see mailboxes connected later."""
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        spy_g = SpyBackend("google", ["g1"])
+        spy_m = SpyBackend("microsoft", ["m1"])
+        cfg = EmailAgentConfig(
+            outlook_backend=spy_m,
+            calendar_backend=object(),
+            db_path=str(tmp_path / "state.db"),
+            silent_mode=True,
+            mail_provider=None,
+        )
+        with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:
+            mock_sdk.return_value = MagicMock()
+            # is_spam is content-judged (#1906): give the mocked chat a valid
+            # no-op response so a spam-only classifier escalation (see the
+            # other mock_sdk setups in this file) doesn't crash.
+            mock_sdk.return_value.send_messages.return_value.text = (
+                '{"category": "PROMOTIONAL", "is_spam": false, "confidence": 1.0}'
+            )
+            agent = EmailTriageAgent(config=cfg)
+
+        try:
+            assert set(agent._backends) == {"microsoft"}
+
+            # Simulate connecting Gmail after the Agent UI cached this agent.
+            agent.config.gmail_backend = spy_g
+
+            envelope = json.loads(_registered_tool("pre_scan_inbox")(20))
+            assert envelope["ok"] is True, envelope
+            data = envelope["data"]
+            items = data["urgent"] + data["actionable"] + data["suggested_archives"]
+            mailboxes = {it["mailbox"] for it in items}
+
+            assert mailboxes == {"google", "microsoft"}
+            assert agent._message_mailbox.get("g1") == "google"
+            assert agent._message_mailbox.get("m1") == "microsoft"
         finally:
             agent.close_db()
 
@@ -394,6 +444,12 @@ class TestSingleBackendRoutingUnchanged:
         )
         with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:
             mock_sdk.return_value = MagicMock()
+            # is_spam is content-judged (#1906): give the mocked chat a valid
+            # no-op response so a spam-only classifier escalation (see the
+            # other mock_sdk setups in this file) doesn't crash.
+            mock_sdk.return_value.send_messages.return_value.text = (
+                '{"category": "PROMOTIONAL", "is_spam": false, "confidence": 1.0}'
+            )
             agent = EmailTriageAgent(config=cfg)
         try:
             assert set(agent._backends) == {"google"}

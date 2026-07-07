@@ -18,6 +18,8 @@ import asyncio
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from gaia.ui.database import SESSION_DEFAULT_MODEL as _DB_DEFAULT
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -301,6 +303,84 @@ class TestStaticRegressionGuard:
         )
 
 
+class TestDynamicToolsContractShape:
+    """#1798: prove the Beta tool-loader toggle isn't a no-op — the persisted
+    ``dynamic_tools`` setting must reach the outgoing factory kwargs on BOTH
+    chat paths, so the loader-active doc agent actually sees it.
+
+    "Mocks prove the call is valid, not just invoked": we assert the SHAPE of
+    the create_agent kwargs (does it carry ``dynamic_tools``?), not merely that
+    create_agent was called (CLAUDE.md contract-shape guard)."""
+
+    @staticmethod
+    def _db_with_settings(settings: dict):
+        db = MagicMock()
+        db.get_messages.return_value = []
+        db.list_documents.return_value = []
+        db.update_session.return_value = None
+        db.get_session.return_value = {}
+        db.get_setting.side_effect = lambda key, default=None: settings.get(
+            key, default
+        )
+        return db
+
+    def test_non_streaming_forwards_persisted_true(self):
+        """Persisted dynamic_tools="true" ⇒ create_agent receives
+        dynamic_tools=True (non-streaming registered/doc path)."""
+        registry, captured = _make_registry()
+        db = self._db_with_settings({"dynamic_tools": "true"})
+        session = _make_session(model=_DB_DEFAULT)
+
+        with (
+            patch("gaia.ui._chat_helpers._agent_registry", registry),
+            patch("gaia.ui._chat_helpers._maybe_load_expected_model"),
+        ):
+            _call_non_streaming(session, db)
+
+        assert captured["kwargs"].get("dynamic_tools") is True
+
+    def test_non_streaming_forwards_default_false(self):
+        """Cold state (no dynamic_tools key) ⇒ create_agent receives
+        dynamic_tools=False — byte-identical to the pre-#1798 default-off path."""
+        registry, captured = _make_registry()
+        db = self._db_with_settings({})  # nothing persisted
+        session = _make_session(model=_DB_DEFAULT)
+
+        with (
+            patch("gaia.ui._chat_helpers._agent_registry", registry),
+            patch("gaia.ui._chat_helpers._maybe_load_expected_model"),
+        ):
+            _call_non_streaming(session, db)
+
+        assert captured["kwargs"].get("dynamic_tools") is False
+
+    def test_streaming_registered_agent_forwards_dynamic_tools(self):
+        """Streaming registered-agent path threads dynamic_tools into
+        _session_agent_kwargs. Source-shape (like the double-index guard):
+        the streaming generator needs Lemonade HTTP + SSE + a background
+        thread to drive, so a source assertion gives the same ratcheting
+        regression cover at a fraction of the cost."""
+        import re
+
+        src = (Path(__file__).parents[4] / "src/gaia/ui/_chat_helpers.py").read_text()
+        m = re.search(
+            r"registry\.create_agent\(\s*agent_type,\s*\*\*_build_create_kwargs\("
+            r"[^)]*?streaming=True[^)]*?\),\s*\*\*_session_agent_kwargs\(([^)]+)\)",
+            src,
+            re.DOTALL,
+        )
+        assert m, (
+            "Could not locate the streaming registered-agent factory call in "
+            "_chat_helpers.py. Did the call-site structure change?"
+        )
+        block = m.group(1).replace(" ", "").replace("\n", "")
+        assert "dynamic_tools=dynamic_tools" in block, (
+            "Streaming registered-agent branch must forward "
+            "dynamic_tools=dynamic_tools into _session_agent_kwargs, or the "
+            "#1798 toggle is a no-op on the streaming doc path."
+        )
+
+
 class TestPostConstructionPreflight:
     """Verify pre-flight uses agent.model_id (not pre-call model_id variable)."""
 
@@ -362,7 +442,7 @@ class TestDeviceModelOverride:
         kwargs = captured["kwargs"]
         assert kwargs.get("model_id") == "gemma4-it-e2b-FLM"
         assert kwargs.get("device") == "npu"
-        assert kwargs.get("min_context_size") == 4096
+        assert kwargs.get("min_context_size") == 32768
 
     def test_explicit_npu_overrides_session_pinned_model(self):
         """A non-GPU device wins even over a session-pinned model (it can't run there)."""
@@ -425,11 +505,12 @@ class TestBuiltinChatAgentUnchanged:
         fake_agent.indexed_files = set()
         fake_agent.rag = None
 
+        pytest.importorskip("gaia_agent_chat")
         with (
             patch("gaia.ui._chat_helpers._agent_registry", registry),
             patch("gaia.ui._chat_helpers._maybe_load_expected_model"),
-            patch("gaia.agents.chat.agent.ChatAgent", return_value=fake_agent),
-            patch("gaia.agents.chat.agent.ChatAgentConfig"),
+            patch("gaia_agent_chat.agent.ChatAgent", return_value=fake_agent),
+            patch("gaia_agent_chat.agent.ChatAgentConfig"),
         ):
             _call_non_streaming(session, db, agent_type_override=None)
 

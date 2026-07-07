@@ -4,11 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gaia-agent-email"
-version = "0.1.0"
+version = "0.3.0"
 description = "GAIA email triage agent — read, triage, organize, and reply to Gmail/Outlook locally"
 authors = [{ name = "AMD" }]
 license = { text = "MIT" }
-readme = "README.md"
 requires-python = ">=3.10"
 # Depend on the [api] extra (not bare amd-gaia) so a consuming app's
 # `pip install gaia-agent-email` pulls the REST-server deps (fastapi/uvicorn)
@@ -18,8 +17,13 @@ requires-python = ">=3.10"
 # release ships keyring-in-[api] for a hard version guarantee.
 dependencies = ["amd-gaia[api]>=0.20.0"]
 
-[project.entry-points."gaia.agent"]
-email = "gaia_agent_email:build_registration"
+# Agent registration temporarily disabled: with the entry point commented out,
+# `AgentRegistry.discover()` no longer surfaces the in-process email agent (it's
+# being superseded by the packaged REST sidecar). The package still ships the
+# `/v1/email` REST router + Python API — only the chat-agent registration is off.
+# Re-enable by uncommenting (and reinstalling the wheel).
+# [project.entry-points."gaia.agent"]
+# email = "gaia_agent_email:build_registration"
 
 [project.optional-dependencies]
 test = ["pytest"]

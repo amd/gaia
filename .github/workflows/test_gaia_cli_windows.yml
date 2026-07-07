@@ -16,6 +16,8 @@ on:
       - "tests/**"
       - "setup.py"
       - "pyproject.toml"
+      - "installer/scripts/**"
+      - ".github/workflows/test_gaia_cli_windows.yml"
   pull_request:
     branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -24,6 +26,8 @@ on:
       - "tests/**"
       - "setup.py"
       - "pyproject.toml"
+      - "installer/scripts/**"
+      - ".github/workflows/test_gaia_cli_windows.yml"
   merge_group:
   workflow_dispatch:
 
@@ -41,7 +45,7 @@ jobs:
     runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Python Environment
         uses: ./.github/actions/setup-venv

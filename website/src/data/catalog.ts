@@ -48,6 +48,30 @@ export interface Agent {
   deprecation_message?: string;
   requirements: AgentRequirements;
   readme: string;
+  // CHANGELOG.md markdown of the latest version; "" if none was published.
+  // Optional at the type level so the site stays resilient to an older index.json
+  // served before the hub Worker that adds this field is redeployed.
+  changelog?: string;
+  // SPEC.md (technical reference) + SKILL.md (AI-integration playbook) markdown of
+  // the latest version, rendered as their own doc tabs. "" / absent if none was
+  // published. Optional for the same older-index.json resilience as `changelog`.
+  spec?: string;
+  skill?: string;
+  // npm package name (e.g. "@amd-gaia/agent-email") when the agent is
+  // distributed as an npm client + frozen sidecar. Present → npm is the install
+  // path. Absent → the agent installs via pip/GAIA (language-driven).
+  npm_package?: string;
+  // Localhost URL of the agent's interactive playground, served by its sidecar
+  // (e.g. "http://127.0.0.1:8131/v1/email/playground"). Only resolves once the
+  // package is installed and the sidecar is running — a best-effort dev link.
+  playground_url?: string;
+  // Whole-package download: a single zip (all platform binaries + client + docs)
+  // and its file listing. Present only when the latest version published one.
+  package?: {
+    filename: string;
+    size_bytes: number;
+    files: { name: string; size_bytes: number }[];
+  };
 }
 
 interface CatalogFile {
@@ -58,10 +82,17 @@ interface CatalogFile {
 
 async function fetchLiveCatalog(baseUrl: string): Promise<CatalogFile> {
   const url = `${baseUrl.replace(/\/+$/, '')}/index.json`;
+  // Cache-bust the edge. A release publishes the new index.json moments before the
+  // website redeploy runs, but the Cloudflare edge in front of hub.amd-gaia.ai can
+  // still serve a stale copy (the deploy races the cache invalidation) — which would
+  // build the site from the previous version's catalog. A unique per-build query
+  // param + `no-store` forces a fresh origin fetch, so every build reflects the
+  // just-published catalog. Build-time only, so there's no runtime cost.
+  const fetchUrl = `${url}?t=${Date.now()}`;
   console.log(`[catalog] HUB_CATALOG_URL is set — fetching live catalog from ${url}`);
   let res: Response;
   try {
-    res = await fetch(url);
+    res = await fetch(fetchUrl, { cache: 'no-store' });
   } catch (e) {
     throw new Error(
       `[catalog] Failed to fetch the live catalog from ${url}: ${(e as Error).message}. ` +
@@ -163,6 +194,18 @@ export function securityTierLabel(tier: SecurityTier): string {
   return SECURITY_TIER_LABELS[tier] ?? tier;
 }
 
+/**
+ * Absolute URL of an agent's whole-package zip, served from the same hub origin
+ * as the catalog (`${HUB_CATALOG_URL}/agents/<id>/<version>/<filename>`). Returns
+ * null when the agent has no published package zip. Build-time only.
+ */
+export function packageDownloadUrl(agent: Agent): string | null {
+  if (!agent.package) return null;
+  const base = process.env.HUB_CATALOG_URL;
+  if (!base) return null;
+  return `${base.replace(/\/+$/, '')}/agents/${agent.id}/${agent.latest_version}/${agent.package.filename}`;
+}
+
 /** Human-readable download size, e.g. "2.3 MB". */
 export function formatBytes(bytes: number): string {
   if (bytes <= 0) return '0 B';
@@ -198,12 +241,28 @@ export interface InstallMethod {
 }
 
 /**
- * Install methods for an agent, derived from the MANIFEST (its `language`) —
- * never from README markup. Every agent installs through the GAIA app; Python
- * agents also ship a pip package; source install is always available. The hub
- * index has no per-channel field today, so language is the source of truth.
+ * Install methods for an agent, derived from the MANIFEST — never from README
+ * markup. We only ever show channels that actually work:
+ *
+ *  - An agent with `npm_package` (the email sidecar) is distributed as an npm
+ *    client + frozen binary, NOT a PyPI wheel. npm is its single supported path,
+ *    so we show only that — no broken `pip install` (there's no wheel) and no
+ *    unverified source build.
+ *  - Otherwise: the GAIA app install, a pip package for Python agents, and a
+ *    source build (language-driven, the long-standing default).
  */
 export function installMethods(agent: Agent): InstallMethod[] {
+  if (agent.npm_package) {
+    return [
+      {
+        key: 'npm',
+        label: 'npm',
+        command: `npm i ${agent.npm_package}`,
+        note: '',
+      },
+    ];
+  }
+
   const methods: InstallMethod[] = [
     {
       key: 'gaia',

@@ -595,9 +595,17 @@ async def async_main(action, **kwargs):
                 return {"response": response, "stats": stats}
         return {"response": response}
     elif action == "chat":
-        # Use Chat Agent with RAG, file search, and shell execution
-        from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
-        from gaia.agents.chat.app import interactive_mode
+        # Use Chat Agent with RAG, file search, and shell execution.
+        # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102).
+        try:
+            from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+            from gaia_agent_chat.app import interactive_mode
+        except ImportError as e:
+            raise RuntimeError(
+                "The chat agent is not installed. Install it with "
+                '`pip install gaia-agent-chat` (or `pip install "amd-gaia[agents]"` '
+                "for all agents), then re-run `gaia chat`."
+            ) from e
 
         try:
             # Use silent mode when debug is off to hide intermediate processing
@@ -1011,8 +1019,16 @@ def _launch_interactive_cli(log=None):
         if not success:
             sys.exit(1)
 
-        from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
-        from gaia.agents.chat.app import interactive_mode
+        # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102).
+        try:
+            from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+            from gaia_agent_chat.app import interactive_mode
+        except ImportError as e:
+            raise RuntimeError(
+                "The chat agent is not installed. Install it with "
+                '`pip install gaia-agent-chat` (or `pip install "amd-gaia[agents]"` '
+                "for all agents), then re-run `gaia chat`."
+            ) from e
 
         config = ChatAgentConfig(
             base_url=base_url or os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL),
@@ -1242,6 +1258,17 @@ def build_parser():
         default="INFO",
         help="Set the logging level (default: INFO)",
     )
+    # Shared --config flag. Attached only to commands that read the persistent
+    # config (chat/llm/prompt + the `gaia config` subcommands) — NOT to
+    # parent_parser, since `gaia summarize` already defines its own --config.
+    config_path_parser = argparse.ArgumentParser(add_help=False)
+    config_path_parser.add_argument(
+        "--config",
+        default=None,
+        metavar="PATH",
+        help="Path to a GAIA config file (default: ~/.gaia/config.json or "
+        "$GAIA_CONFIG_FILE). Used to resolve default_model.",
+    )
 
     # Generic LLM backend options (available to all agents)
     parent_parser.add_argument(
@@ -1312,7 +1339,9 @@ def build_parser():
 
     # Add prompt-specific options
     prompt_parser = subparsers.add_parser(
-        "prompt", help="Send a single prompt to Gaia", parents=[parent_parser]
+        "prompt",
+        help="Send a single prompt to Gaia",
+        parents=[parent_parser, config_path_parser],
     )
     prompt_parser.add_argument(
         "message",
@@ -1334,7 +1363,7 @@ def build_parser():
     chat_parser = subparsers.add_parser(
         "chat",
         help="Interactive chat with RAG, file search, and shell execution",
-        parents=[parent_parser],
+        parents=[parent_parser, config_path_parser],
     )
     chat_parser.add_argument(
         "--query",
@@ -2115,7 +2144,7 @@ Available agents: chat, code, talk, rag, blender, jira, docker, vlm, minimal, mc
     llm_parser = subparsers.add_parser(
         "llm",
         help="Run simple LLM queries using LLMClient wrapper",
-        parents=[parent_parser],
+        parents=[parent_parser, config_path_parser],
     )
     llm_parser.add_argument("query", help="The query/prompt to send to the LLM")
     llm_parser.add_argument(
@@ -2804,6 +2833,35 @@ Examples:
 
     connectors_cli.add_subparser(subparsers)
 
+    # Persistent CLI config (~/.gaia/config.json) — e.g. a default model so
+    # users don't have to pass --model on every chat/llm/prompt (issue #98).
+    config_parser = subparsers.add_parser(
+        "config",
+        help="Manage persistent GAIA config (~/.gaia/config.json)",
+    )
+    config_subparsers = config_parser.add_subparsers(
+        dest="config_action", help="Config action"
+    )
+    config_subparsers.add_parser(
+        "show",
+        help="Show current config and the config file path",
+        parents=[config_path_parser],
+    )
+    config_get_parser = config_subparsers.add_parser(
+        "get",
+        help="Get a config value, e.g. `gaia config get default_model`",
+        parents=[config_path_parser],
+    )
+    config_get_parser.add_argument("key", help="Config key to read")
+    config_set_parser = config_subparsers.add_parser(
+        "set",
+        help="Set a config value, e.g. `gaia config set default_model Qwen3.5-35B-A3B-GGUF`",
+        parents=[config_path_parser],
+    )
+    config_set_parser.add_argument("key", help="Config key to set")
+    config_set_parser.add_argument("value", help="Value to assign")
+    config_parser.set_defaults(action="config")
+
     # Init command (one-stop GAIA setup)
     # Note: Does not use parent_parser to avoid showing irrelevant global options
     init_parser = subparsers.add_parser(
@@ -2934,6 +2992,29 @@ def main():
     if hasattr(args, "logging_level"):
         log_manager.set_level("gaia", getattr(logging, args.logging_level))
 
+    # Apply the persistent default_model (issue #98) for model-bearing commands.
+    # Precedence: explicit --model flag > config default_model > built-in default.
+    # An explicit `chat --device` requests a device-specific model, so it keeps
+    # precedence over the config default there.
+    if (
+        args.action in ("prompt", "chat", "llm")
+        and getattr(args, "model", None) is None
+    ):
+        from gaia.config import GaiaConfig, GaiaConfigError
+
+        try:
+            _cfg = GaiaConfig.load(getattr(args, "config", None))
+        except GaiaConfigError as e:
+            print(f"❌ {e}", file=sys.stderr)
+            sys.exit(1)
+        # builtin_default=None: leave args.model unset when no config default so
+        # each command keeps applying its own built-in default downstream.
+        if not (args.action == "chat" and getattr(args, "device", None)):
+            resolved = _cfg.resolve_model(args.model, None)
+            if resolved:
+                args.model = resolved
+                log.debug("Using default_model from config: %s", resolved)
+
     # Handle chat --ui: launch Agent UI server (backward compat)
     if args.action == "chat" and getattr(args, "ui", False):
         max_files = getattr(args, "max_indexed_files", 0)
@@ -3048,6 +3129,9 @@ def main():
         kwargs = {
             k: v for k, v in vars(args).items() if v is not None and k != "action"
         }
+        # --config is only an input to model resolution (already applied to
+        # args.model above); it's not a runtime parameter for the agents.
+        kwargs.pop("config", None)
         log.debug(f"Executing {args.action} with parameters: {kwargs}")
         try:
             result = run_cli(args.action, **kwargs)
@@ -4175,9 +4259,19 @@ Let me know your answer!
                     json.dumps(summary["variance"], indent=2, ensure_ascii=False),
                     encoding="utf-8",
                 )
+                wrote_quality = ""
+                if isinstance(summary.get("quality"), dict):
+                    # Aggregate acceptance metrics + run-to-run variance/CI (#1437,
+                    # #1894). The scorecard adapter reads this (never the harness),
+                    # preserving the harness→file→adapter loose coupling.
+                    (outdir / "quality.json").write_text(
+                        json.dumps(summary["quality"], indent=2, ensure_ascii=False),
+                        encoding="utf-8",
+                    )
+                    wrote_quality = " / quality.json"
                 print(
-                    f"[OUT] wrote scorecard.json / summary.md / variance.json "
-                    f"→ {outdir}"
+                    f"[OUT] wrote scorecard.json / summary.md / variance.json"
+                    f"{wrote_quality} → {outdir}"
                 )
 
             if getattr(args, "save_baseline", False):
@@ -4214,6 +4308,11 @@ Let me know your answer!
     # Handle MCP command
     if args.action == "mcp":
         handle_mcp_command(args)
+        return
+
+    # Handle Config command
+    if args.action == "config":
+        handle_config_command(args)
         return
 
     # Handle Cache command
@@ -5216,6 +5315,61 @@ def handle_knowledge_command(args):
         client.close()
 
 
+def handle_config_command(args):
+    """Handle `gaia config show|get|set` (persistent ~/.gaia/config.json)."""
+    from gaia.config import GaiaConfig, GaiaConfigError
+
+    path = getattr(args, "config", None)
+    config_file = GaiaConfig.config_path(path)
+
+    action = getattr(args, "config_action", None)
+    if not action:
+        print(
+            "No config action specified. Use: gaia config show|get|set",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    try:
+        cfg = GaiaConfig.load(path)
+    except GaiaConfigError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if action == "show":
+        exists = config_file.exists()
+        print(f"Config file: {config_file}")
+        print(
+            "  (file exists)"
+            if exists
+            else "  (file not created yet — showing built-in defaults)"
+        )
+        for key in cfg.field_names():
+            value = cfg.get(key)
+            print(f"  {key} = {value if value is not None else '(unset)'}")
+        return
+
+    if action == "get":
+        try:
+            value = cfg.get(args.key)
+        except GaiaConfigError as e:
+            print(f"❌ {e}", file=sys.stderr)
+            sys.exit(1)
+        print(value if value is not None else "")
+        return
+
+    if action == "set":
+        try:
+            cfg.set(args.key, args.value)
+        except GaiaConfigError as e:
+            print(f"❌ {e}", file=sys.stderr)
+            sys.exit(1)
+        cfg.save(path)
+        print(f"✅ Set {args.key} = {args.value}")
+        print(f"   Saved to {config_file}")
+        return
+
+
 def handle_cache_command(args):
     """Handle the cache management command.
 
@@ -5383,6 +5537,18 @@ def _handle_memory_status():
         if t["total_calls"] > 0:
             print(f"    Success rate:  {t['overall_success_rate']:.0%}")
             print(f"    Total errors:  {t['total_errors']}")
+
+        # Procedures section (procedural memory / skills, #887). Counts come
+        # from get_stats() COUNT(*) queries — synthesis is the only writer, so
+        # every row is "synthesized"; recall uses the enabled, non-superseded
+        # subset.
+        proc = stats["procedures"]
+        print(f"\n  Procedures (skills): {proc['total']} synthesized")
+        if proc["total"]:
+            if proc["active"] != proc["total"]:
+                print(f"    Active (recallable): {proc['active']}")
+            if proc["last_recalled"]:
+                print(f"    Last recalled: {proc['last_recalled'][:10]}")
 
         # Temporal section
         tp = stats["temporal"]

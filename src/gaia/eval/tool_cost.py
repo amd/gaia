@@ -51,7 +51,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from unittest.mock import MagicMock, patch
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from gaia.agents.chat.agent import ChatAgent
+    from gaia_agent_chat.agent import ChatAgent
 
 # Tokenizer proxy — see module docstring for why tiktoken (not Gemma's own).
 TOKENIZER_ENCODING = "cl100k_base"
@@ -147,8 +147,30 @@ def _isolated_registry():
         tools_mod._TOOL_REGISTRY.update(saved)
 
 
+def _build_skeleton_tool_loader(dynamic_tools: bool):
+    """Return a real ToolLoader over the doc config, or ``None`` when off.
+
+    Registration only consults ``self.tool_loader is not None``; it never embeds
+    or selects, so a trivial zero-vector embedder is enough to attach a loader.
+    """
+    if not dynamic_tools:
+        return None
+    import numpy as np
+    from gaia_agent_chat.tool_bundles import DOC_BUNDLES, DOC_CORE_TOOLS
+
+    from gaia.agents.base.tool_loader import ToolLoader
+
+    return ToolLoader(
+        core_tools=DOC_CORE_TOOLS,
+        bundles=DOC_BUNDLES,
+        embed_fn=lambda text: np.zeros(1, dtype=np.float32),
+    )
+
+
 def build_doc_agent_skeleton(
-    profile: str = DEFAULT_PROFILE, deterministic: bool = True
+    profile: str = DEFAULT_PROFILE,
+    deterministic: bool = True,
+    dynamic_tools: bool = False,
 ) -> "ChatAgent":
     """Build a ChatAgent skeleton with the *profile* tools registered.
 
@@ -157,6 +179,12 @@ def build_doc_agent_skeleton(
     closures capture ``self`` but never execute here, so stub backends
     (memory store, rag) are enough to let ``_register_tools`` populate the
     registry.
+
+    With ``dynamic_tools=True`` a real :class:`ToolLoader` is attached **before**
+    ``_register_tools`` runs, so the ``load_tools`` meta-tool (#1450) registers
+    (registry +1, ``load_tools``). A trivial embedder suffices — registration
+    never embeds or selects; only the loader's presence is consulted. Default
+    ``False`` keeps the unfiltered baseline path unchanged (no ``load_tools``).
 
     With ``deterministic=True`` the environment-conditional external tools
     (``search_documentation`` / ``search_web``, gated on npx and
@@ -176,7 +204,7 @@ def build_doc_agent_skeleton(
     """
     stubbed = _ensure_optional_deps_stubbed()
     try:
-        from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+        from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
         cfg = ChatAgentConfig(
             rag_documents=[],
@@ -213,6 +241,7 @@ def build_doc_agent_skeleton(
                 agent._web_client = None
                 agent._fs_index = None
                 agent._scratchpad = None
+                agent.tool_loader = _build_skeleton_tool_loader(dynamic_tools)
                 agent._register_tools()
                 agent._instance_tools = dict(tools_mod._TOOL_REGISTRY)
 

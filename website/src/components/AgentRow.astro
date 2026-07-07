@@ -30,6 +30,7 @@ const { agent } = Astro.props;
   <span class="min-w-0 flex-1">
     <span class="flex items-baseline gap-2.5">
       <span class="text-[15px] font-semibold text-g-text">{agent.name}</span>
+      <span class="font-mono text-[11px] text-g-muted">v{agent.latest_version}</span>
       {agent.security_tier === 'verified' && (
         <span class="text-[10px] font-bold tracking-wide uppercase text-g-gold-text">{securityTierLabel(agent.security_tier)}</span>
       )}

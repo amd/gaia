@@ -1,0 +1,6 @@
+# Generated email-triage corpus — fully derived from the committed
+# vendor_corpus_seed.jsonl by generate_mbox.py. Not checked in: the seed is the
+# single source of truth; the pytest session, the baseline scorer, and the eval
+# harness rebuild these on demand via generate_mbox.ensure_corpus().
+synthetic_inbox.mbox
+ground_truth.json

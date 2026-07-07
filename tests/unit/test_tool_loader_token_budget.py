@@ -30,8 +30,13 @@ import os
 
 import pytest
 
-from gaia.agents.chat.tool_bundles import DOC_CORE_TOOLS
-from gaia.eval.tool_cost import (
+# DOC_CORE_TOOLS ships with the standalone gaia-agent-chat wheel (#1102); skip
+# the whole module when a framework-only env lacks it.
+pytest.importorskip("gaia_agent_chat")
+
+from gaia_agent_chat.tool_bundles import DOC_CORE_TOOLS  # noqa: E402
+
+from gaia.eval.tool_cost import (  # noqa: E402
     FIXED_SUBSET_DEFAULT,
     build_doc_agent_skeleton,
     get_tokenizer,
@@ -68,8 +73,27 @@ def _within(value: float, baseline: float, tol: float = TOLERANCE) -> bool:
 
 @pytest.fixture(scope="module")
 def doc_agent():
-    """A deterministic doc-profile skeleton (built once for the module)."""
+    """A deterministic doc-profile skeleton (built once for the module).
+
+    Loader-off, so the registry is the pinned 37-tool unfiltered baseline
+    (``load_tools`` is *not* registered) — keep it that way for the baseline
+    and slope/distribution pins below.
+    """
     return build_doc_agent_skeleton(profile="doc", deterministic=True)
+
+
+@pytest.fixture(scope="module")
+def doc_agent_loader_on():
+    """Doc skeleton with the loader active, so ``load_tools`` is registered.
+
+    The CORE-floor guard must measure the set that actually ships every active
+    turn, which includes the always-on ``load_tools`` escape hatch (#1450). The
+    loader-off ``doc_agent`` fixture omits it, and a filtered render silently
+    drops any name absent from the registry — so the floor would under-count.
+    """
+    return build_doc_agent_skeleton(
+        profile="doc", deterministic=True, dynamic_tools=True
+    )
 
 
 def test_harness_runs_and_pins_baseline(doc_agent):
@@ -191,14 +215,18 @@ def _filtered_text_tokens(agent, names, tok) -> int:
     return len(tok.encode(agent._format_tools_for_prompt(filter_to=names)))
 
 
-def test_core_only_is_the_reduction_best_case(doc_agent):
-    """CORE-only (the always-on floor) renders well under half the baseline cost."""
+def test_core_only_is_the_reduction_best_case(doc_agent_loader_on):
+    """CORE-only (the always-on floor) renders well under half the baseline cost.
+
+    Uses the loader-on skeleton so ``load_tools`` — a CORE member that ships
+    every active turn — is in the registry and counted in the floor.
+    """
     tok = get_tokenizer()
     if tok is None:
         pytest.skip("tiktoken not installed — token proxy unavailable")
     core = sorted(DOC_CORE_TOOLS)
-    native = _filtered_native_tokens(doc_agent, core, tok)
-    text = _filtered_text_tokens(doc_agent, core, tok)
+    native = _filtered_native_tokens(doc_agent_loader_on, core, tok)
+    text = _filtered_text_tokens(doc_agent_loader_on, core, tok)
     # Headroom over the measured ~40% native / ~37% text so an incidental
     # docstring edit doesn't flip the gate, but real CORE bloat is caught.
     assert native <= 0.45 * BASELINE_NATIVE_TOKENS, (

@@ -80,7 +80,7 @@ class TestDefaultDeviceConfigs:
         assert npu.model == "gemma4-it-e2b-FLM"
         assert npu.recipe == "flm"
         assert npu.backend == "flm:npu"
-        assert npu.ctx_size == 4096
+        assert npu.ctx_size == 32768
 
 
 class TestAgentRegistrationDeviceConfigs:
@@ -115,6 +115,7 @@ class TestGaiaConfig:
         cfg = GaiaConfig()
         assert cfg.profile == "chat"
         assert cfg.default_device == "gpu"
+        assert cfg.default_model is None
 
     def test_save_and_load(self, tmp_path):
         from gaia.config import GaiaConfig
@@ -146,13 +147,18 @@ class TestGaiaConfig:
             assert cfg.default_device == "gpu"
 
     def test_load_corrupt_file(self, tmp_path):
-        from gaia.config import GaiaConfig
+        # A corrupt config must fail loudly (no silent fallback to defaults).
+        import pytest
+
+        from gaia.config import GaiaConfig, GaiaConfigError
 
         bad_file = tmp_path / "config.json"
         bad_file.write_text("not valid json{{{")
         with patch("gaia.config.GAIA_CONFIG_FILE", bad_file):
-            cfg = GaiaConfig.load()
-            assert cfg.profile == "chat"  # falls back to defaults
+            with pytest.raises(GaiaConfigError) as exc:
+                GaiaConfig.load()
+            # Error names the file and how to recover.
+            assert str(bad_file) in str(exc.value)
 
 
 # ── LemonadeClient backend methods ───────────────────────────────────────
@@ -271,7 +277,7 @@ class TestCLIArgs:
         assert npu["backend"] == "flm:npu"
         assert npu["required_device"] == "amd_npu"
         assert "gemma4-it-e2b-FLM" in npu["models"]
-        assert npu["min_context_size"] == 4096
+        assert npu["min_context_size"] == 32768
 
 
 # ── Init command NPU steps ───────────────────────────────────────────────

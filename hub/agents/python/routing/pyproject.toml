@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gaia-agent-routing"
+version = "0.1.0"
+description = "GAIA Routing agent — meta-agent that routes requests to the right concrete agent"
+authors = [{ name = "AMD" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["amd-gaia>=0.20.0"]
+
+# NOTE: no `gaia.agent` entry point. RoutingAgent is infrastructure loaded by
+# class path from gaia.api.agent_registry, not a GAIA registry agent.
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["gaia_agent_routing*"]

@@ -43,16 +43,43 @@ DEFAULT_HOST = "127.0.0.1"
 
 
 def build_app():
-    """Build the minimal FastAPI app hosting the email REST surface."""
+    """Build the minimal FastAPI app hosting the email REST surface.
+
+    Also mounts the playground's mailbox-connector routes
+    (``/v1/email/connectors*``) so the always-served playground page can connect
+    Gmail/Outlook and exercise live send. They reuse GAIA's connector framework
+    (already linked in via the send path) and are excluded from the OpenAPI
+    contract — a playground convenience, not part of the frozen email REST
+    contract.
+    """
+    from contextlib import asynccontextmanager
+
     from fastapi import FastAPI
     from gaia_agent_email import __version__ as agent_version
     from gaia_agent_email.api_routes import router as email_router
+    from gaia_agent_email.briefing import BriefingScheduleConfig, BriefingScheduler
+    from gaia_agent_email.connector_routes import router as connector_router
     from gaia_agent_email.contract import SCHEMA_VERSION
+
+    # Daily inbox briefing (#1608) — env config is read at build time so an
+    # invalid value aborts startup loudly, not at the first scheduled fire.
+    # Off by default: without the env opt-in no scheduler task is created.
+    briefing_config = BriefingScheduleConfig.from_env()
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        scheduler = BriefingScheduler(briefing_config)
+        scheduler.start()
+        try:
+            yield
+        finally:
+            await scheduler.stop()
 
     app = FastAPI(
         title="GAIA Email Agent Sidecar",
         version=agent_version,
         description="Frozen-binary email triage REST sidecar.",
+        lifespan=lifespan,
     )
 
     @app.get("/health", include_in_schema=True)
@@ -66,7 +93,16 @@ def build_app():
         return {"apiVersion": SCHEMA_VERSION, "agentVersion": agent_version}
 
     app.include_router(email_router)
+    app.include_router(connector_router)
     return app
+
+
+# Module-level app for uvicorn's import-string form (dev mode's `--reload`).
+# Loaded as the TOP-LEVEL module `server` via `uvicorn server:app --app-dir
+# <this dir>` — NOT `packaging.server:app`, which would resolve to the PyPI
+# `packaging` library (this dir has no __init__.py by design). main() reuses this
+# same instance, so the app is built exactly once per process.
+app = build_app()
 
 
 def main(argv=None) -> int:
@@ -81,8 +117,6 @@ def main(argv=None) -> int:
         help="Print the OpenAPI JSON to stdout and exit (no server).",
     )
     args = parser.parse_args(argv)
-
-    app = build_app()
 
     if args.print_openapi:
         print(json.dumps(app.openapi()))

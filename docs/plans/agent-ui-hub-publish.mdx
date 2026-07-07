@@ -1,0 +1,565 @@
+---
+title: "Agent UI on the Hub — Publishing, In-App Marketplace & Multi-Component Model"
+description: "Scope for publishing the Agent UI to the Agent Hub (R2 + npm) as a first-class app, an in-app marketplace that installs Hub units on demand, and generalizing the Hub from agents-only to a multi-component registry (app · component · agent)."
+---
+
+# Scope
+
+Three related bodies of work over one substrate (Agent Hub Worker + R2 + catalog):
+
+- **Part 1 — Publish Agent UI to the Agent Hub (R2 + npm)** — make the Agent UI itself a Hub package the way `email` is (it's an `app`-type unit).
+- **Part 2 — In-app Agent Hub + dynamic install** — let the running Agent UI browse the Hub and install other published units on demand.
+- **Multi-component model** — generalize the Hub from agents-only to `app · component · agent` (see the section below); this reshapes the manifest, catalog, and install paths used by Parts 1–2.
+
+They share one substrate (the Agent Hub Worker + R2 + the wrapper/catalog contract), so they're scoped together.
+
+**Why this matters — independent versioning.** Moving the Agent UI onto the
+Hub package model decouples it from the core `amd-gaia` wheel's release train:
+the app, each agent, and the Hub catalog can ship on their own cadence and
+SemVer line. A user can update one agent (or the UI shell) without a full GAIA
+release, the Worker's per-version immutable artifacts give every release a
+stable, pinnable URL, and `min_gaia_version` in each manifest lets the catalog
+gate compatibility instead of forcing lockstep upgrades. Same machinery that
+publishes the email agent independently today — extended to the UI and to
+in-app installs.
+
+# The Hub is multi-component (app · component · agent)
+
+The Agent Hub is **not** an agents-only registry. It hosts multiple kinds of
+publishable units, and the Agent UI is one of them:
+
+| Type | Examples | What it is | How it's consumed |
+|------|----------|------------|-------------------|
+| `app` | **Agent UI** | A standalone desktop/host application | Installed by the user (platform installer); *hosts* agents & components |
+| `component` | **RAG**, **memory** | A reusable capability/library | Consumed by apps & agents (a dependency), not "run" on its own |
+| `agent` | **email**, browser, code | A discrete AI tool | Installed into a host, then run |
+
+**This resolves the earlier "is the UI an agent?" tension.** The Agent UI is an
+`app`, not an agent — so it does **not** get co-listed in the same installable-
+agent list it renders in-app (which would be circular). It lives in its own Hub
+lane. Concretely, the multi-component model adds these requirements on top of
+Parts 1–2:
+
+- **Manifest needs a `type` discriminator.** `gaia-agent.yaml` is agent-shaped
+  today (id/name/version/language/category/interfaces). Generalize to a top-level
+  `type: app | component | agent` (the manifest/file naming likely generalizes
+  beyond `gaia-agent.yaml`). Per-type required fields differ — an `app` carries
+  installers + an update channel; a `component` carries a library artifact + a
+  consumption contract (API/version range); an `agent` carries the binary/wheel +
+  interfaces it already has.
+- **Catalog (`index.json`) needs the type field + lanes.** `IndexEntry` gains
+  `type`; the website and in-app Hub filter/segment by it (Apps · Components ·
+  Agents) instead of one flat list.
+- **Worker validation forks by type.** `manifest.ts` validates each type's
+  schema; `/publish` accepts app/component artifacts, not just agent binaries.
+- **Install/run semantics differ by type.** `app` → run the platform installer;
+  `agent` → land + register + run in the host; `component` → resolve as a
+  dependency (version range), not a launchable. The in-app "Install" action must
+  branch on `type` (you don't "launch" RAG; you enable/attach it).
+- **Dependency edges between types.** Agents/apps can *require* components (an
+  agent may need the `rag` or `memory` component at a version range). This is a
+  new dependency-resolution surface the catalog + installer must model — beyond
+  the per-agent `requirements`/`REQUIRED_CONNECTORS` that exist today.
+
+Parts 1–2 below are the **`app`** (Agent UI) and **`agent`** install paths; the
+`component` lane (RAG/memory as independently versioned Hub units) is a third
+track that shares the same Worker/R2/catalog substrate and is scoped at the same
+altitude here, with its own decisions called out in the inventory (section E).
+
+## Extension workstream — making the registry multi-component
+
+The Hub is agent-shaped end-to-end today. Extending it touches **two validators,
+the Worker catalog/storage, the Python hub SDK, and both UIs**. Concrete changes,
+grounded in the current code:
+
+1. **Manifest schema — add a `type` discriminator (both validators).**
+   The canonical validator is `src/gaia/hub/manifest.py` (`VALID_LANGUAGES`,
+   per-language required blocks — `cpp` already requires a `cpp.binaries` map,
+   the precedent for per-*type* required blocks); the Worker's
+   `workers/agent-hub/src/manifest.ts` is a gate-only mirror. Add
+   `type: app | component | agent` (**default `agent` when absent** so all 15
+   existing manifests stay valid) with per-type required sections:
+   - `app:` → installers per platform + update channel + min OS;
+   - `component:` → library artifact + a *consumption contract* (capability id +
+     API/SemVer range it `provides`);
+   - `agent:` → today's `python:` / `cpp:` + `interfaces`.
+   Decide whether the file stays `gaia-agent.yaml` or generalizes (e.g.
+   `gaia-hub.yaml`); keep the old name as an alias for back-compat.
+
+2. **Catalog schema — `workers/agent-hub/src/{types,catalog}.ts`.**
+   Add `type` to `IndexEntry`; bump `CatalogIndex.schema_version` **1 → 2**
+   (currently hardcoded `schema_version: 1` in `catalog.ts:150`). Keep the
+   `agents[]` field as a back-compat alias and/or add `units[]`; readers default
+   a missing `type` to `agent`. `VersionEntry.artifacts[]` already stores
+   multiple artifacts per version (it carries the email agent's 4 platform
+   binaries today), so the app's multi-file release reuses that — no new
+   per-version array needed at the manifest layer.
+
+3. **R2 storage namespace — `workers/agent-hub/src/storage.ts`.**
+   `AGENTS_PREFIX = "agents/"` and `listAgentIds()` parse an agent-only layout.
+   Decide: (a) keep `agents/` and add sibling `apps/` + `components/` prefixes
+   with a typed `listUnits()`, or (b) a single `units/<type>/<id>/` namespace.
+   Either way **leave existing `agents/<id>/…` keys in place** (the 15 published
+   agents) and make listing tolerate both. **Decision.**
+
+4. **Worker validation + publish — `manifest.ts`, `publish.ts`.**
+   Validate per type; `/publish` accepts app installers and component libraries,
+   not just wheels/binaries. Server-side SHA-256 + immutability are type-agnostic
+   and carry over unchanged.
+
+5. **Python hub SDK — `src/gaia/hub/{installer,lifecycle,native_launcher,compatibility,packager,publisher,catalog}.py`.**
+   These all assume "agent". Branch by type: **`installer.py`** → app: run the
+   platform installer; agent: land + register + run; component: resolve as a
+   dependency (not launchable). **`compatibility.py`** → add component
+   version-range resolution. **`packager.py` / `publisher.py`** → learn app /
+   component artifact kinds.
+
+6. **Consumption / dependency resolution (the new hard problem).**
+   A `component` declares what it `provides`; an app/agent declares what it
+   `requires` (component id + version range) — a layer above today's per-agent
+   `requirements` / `REQUIRED_CONNECTORS`. The resolver must answer: where the
+   component physically lives (host venv vs. shared store), how conflicts between
+   two agents needing different ranges are handled, and lazy vs. eager install.
+   This is the least-defined contract and the one to design first for the
+   `component` lane. **Decision.**
+
+7. **Surfaces — website + in-app Hub + CLI.**
+   Segment the catalog into **Apps · Components · Agents** lanes (website
+   `hub/index.astro` + the in-app Hub page); generalize the planned `gaia agent …`
+   commands toward `gaia hub …` so non-agent types are addressable.
+
+8. **Back-compat + migration.** `type` defaults to `agent`; `schema_version`
+   bumps with reader tolerance; existing `agents/` R2 keys and published manifests
+   are untouched. No re-publish of the current catalog required.
+
+# Part 1: Publish Agent UI to the Agent Hub (R2 + npm)
+
+**Status:** scoping only — no code yet.
+**Goal:** make `agent-ui` a first-class Agent Hub package the same way `email`
+is — installers published to **R2 through the Agent Hub Worker**, a thin **npm
+wrapper** that fetches + SHA-verifies artifacts from R2, and **R2 as the primary
+download + auto-update source**.
+
+## The gap today
+
+| | Email agent | Agent UI today |
+|---|---|---|
+| Artifact | One PyInstaller server binary per platform | Electron installers: NSIS `.exe`, DMG (+`.zip`), `.deb`, AppImage |
+| R2 / Agent Hub | ✅ `POST /publish` → `agents/email/<v>/…`, immutable, server-side SHA-256 | ❌ nothing published to R2 |
+| npm package | Thin wrapper `@amd-gaia/agent-email` — fetches binary from R2, verifies vs `binaries.lock.json` | `@amd-gaia/agent-ui` **is the Electron app source** (built by electron-builder) |
+| Primary download / auto-update | n/a | GitHub Releases (electron-updater `provider: github`) |
+| Release workflow | `release_agent_email.yml`, tag `agent-pkg-email-*`, `agent-publish` approval gate | `build-installers.yml` + `publish.yml`, tag `v*` |
+
+**Locked decisions (from scoping):**
+1. **Mirror email exactly** — `@amd-gaia/agent-ui` becomes a thin wrapper that downloads its artifact from R2 and verifies against `binaries.lock.json`.
+2. **R2 becomes primary** — `hub.amd-gaia.ai` is the primary download *and* the electron-updater feed; GitHub Releases is demoted to (optional) mirror.
+
+## The core mismatch to resolve first
+
+The email pattern is "fetch one binary, spawn it as a sidecar." Agent UI is a
+**GUI desktop app shipped as platform installers** — you can't "spawn an
+installer as a sidecar," and a release is **N files per platform**, not one:
+
+- `win32-x64` → `…-x64-setup.exe` **+** `.exe.blockmap` **+** `latest.yml`
+- `darwin-arm64` → `…-arm64.dmg` **+** `…-arm64.zip` (updater needs the zip) **+** `latest-mac.yml`
+- `linux-x64` → `…-x64.AppImage` **+** `…-x64.deb` **+** `latest-linux.yml`
+
+Two things follow that the email pipeline does **not** have to handle:
+
+- **`binaries.lock.json` is single-file-per-platform.** It must be extended to a
+  *list* of files per platform (artifact + blockmap + update manifest + zip), or
+  the wrapper needs a different manifest shape. **Schema change required.**
+- **What does the npm wrapper actually do?** Recommended: the `gaia-ui` bin
+  downloads the platform **installer** from R2, SHA-verifies it against the lock,
+  then hands off to the OS installer (or launches a portable bundle). Decide
+  installer-launch vs. portable-bundle-launch — see Open Questions.
+
+## Workstreams
+
+### 1. Hub manifest + package layout
+- Author the manifest for agent-ui (id, version `0.21.x`, platforms,
+  `type: app`, installers/update-channel block — see the multi-component model).
+  Agent-UI is **not** a Python freeze, so it
+  does **not** belong in `hub/agents/python/`. Proposed home:
+  `hub/agents/desktop/agent-ui/` (manifest + lock + packaging scripts) or colocated
+  with `src/gaia/apps/webui/`.
+- **Do NOT add agent-ui to `setup.py[agents]`** — that list drives `gaia-agent-*`
+  **wheel** builds (`util/list_agent_packages.py`). Agent-UI has no wheel; keep it
+  out and document the divergence so the publish-validation tests don't expect one.
+
+### 2. Agent Hub Worker (`workers/agent-hub/`) changes
+- **Mutable "latest" channel vs. immutability.** The Worker guarantees
+  immutable per-filename artifacts (409 on re-upload). electron-updater needs a
+  **stable, mutable** feed URL (`…/latest.yml`) that re-points each release. This
+  is a direct conflict with the current model and the **single biggest Worker
+  design decision**: add a mutable channel pointer (e.g. `agents/agent-ui/stable/latest*.yml`
+  rewritten on publish) while keeping the versioned artifacts immutable.
+- Confirm/extend GET passthrough so `latest.yml`, `latest-mac.yml`,
+  `latest-linux.yml`, and `.blockmap` files are served at the URLs
+  electron-updater expects.
+- `manifest.ts` validation must accept the `app` manifest type (see §E / E8).
+- New/extended Worker tests for desktop artifacts + channel rewrite.
+
+### 3. electron-builder / auto-updater repoint
+- `electron-builder.yml`: change `publish.provider: github` → `generic` with
+  `url` pointing at the R2 channel path; this bakes the feed into `app-update.yml`.
+- Ensure `latest*.yml` + blockmaps are generated and uploaded (the macOS `.zip`
+  target already exists for this reason).
+- `services/auto-updater.cjs` is currently a stub ("Phase F wires up the actual
+  electron-updater logic") — wiring it to the generic R2 feed is part of this work.
+- **Code signing / notarization:** installers fetched from R2 are the *same
+  bytes* signed in CI today, so Gatekeeper/SmartScreen behavior is unchanged —
+  but verify the signed artifacts (not unsigned intermediates) are what gets
+  POSTed to R2.
+
+### 4. Release workflow (`release_agent_ui.yml`)
+- New workflow, tag namespace **`agent-pkg-agent-ui-*`** (NOT `v*` — that fires
+  core `publish.yml`/`build-installers.yml`).
+- Reuse `build-installers.yml` via `workflow_call` to produce the signed
+  installers + update manifests, then a `publish` job:
+  1. POST all per-platform files to the Worker `/publish` (reuse
+     `publish_to_r2.py` — **needs multi-file-per-platform support**).
+  2. Regenerate `binaries.lock.json` with real hashes (extend
+     `gen_binaries_lock.py` for the list-per-platform schema).
+  3. Rewrite the mutable `latest*.yml` channel pointers.
+  4. Fetch-verify every published object before npm publish (email's atomicity gate).
+  5. `npm publish` the wrapper (OIDC trusted publishing, `--provenance`).
+- `agent-publish` environment + `GAIA_HUB_TOKEN`, version triple-check
+  (tag ↔ `package.json` ↔ `gaia-agent.yaml`), main-ancestry guard — all mirrored
+  from `release_agent_email.yml`.
+
+### 5. npm wrapper package — **name collision**
+- "Mirror email exactly" means `@amd-gaia/agent-ui` becomes the thin wrapper.
+  But that name is **already** the published Electron-app package. Resolve:
+  - **Recommended:** the Electron app stops being npm-published (its output is
+    installers in R2); `@amd-gaia/agent-ui` is re-taken by the wrapper. The
+    `gaia-ui` bin fetches the installer from R2, verifies vs lock, launches.
+  - Alternative: wrapper takes a new name (`@amd-gaia/agent-ui-launcher`) — diverges from "mirror exactly."
+- Wrapper TS (`cli.ts`, `fetch.ts`, `platform.ts`, `lifecycle.ts`, `errors.ts`)
+  templated from `hub/agents/npm/agent-email/`, adapted for installer-launch and
+  the multi-file lock.
+
+### 6. Catalog, website, docs, tests
+- agent-ui appears in Hub `index.json`; the website/hub download page consumes it.
+- Docs: update `docs/deployment/ui.mdx` and the agent-hub docs; add this plan to nav if desired.
+- Tests: Worker (publish + channel rewrite), wrapper fetch/integrity, a smoke
+  test that launches the fetched app, and a test asserting the multi-file lock shape.
+
+## Open questions / risks
+1. **Mutable auto-update channel vs. Worker immutability** — must add a channel
+   pointer; decide path convention (`stable/`, per-channel).
+2. **npm name collision** on `@amd-gaia/agent-ui` — confirm the app stops
+   self-publishing under that name.
+3. **Installer-launch vs. portable-bundle-launch** for the wrapper's `gaia-ui` bin.
+4. **`binaries.lock.json` multi-file-per-platform** schema extension (touches
+   `gen_binaries_lock.py`, `fetch.ts`, Worker types).
+5. **R2 egress / cost** — installers are ~100–300 MB each vs. email's ~90 MB binary.
+6. **Signing/notarization** path must point at signed artifacts before R2 upload.
+
+## Suggested phasing
+- **Phase 1 — Worker:** serve desktop artifacts + mutable `latest*` channel pointer.
+- **Phase 2 — Pipeline:** `release_agent_ui.yml` reuses `build-installers.yml`, publishes to R2, regenerates the (extended) lock, fetch-verifies.
+- **Phase 3 — Clients:** npm wrapper replaces the app as the published package; electron-updater repointed to the R2 generic feed.
+- **Phase 4 — Surface:** catalog/website integration, docs, tests, baseline.
+
+# Part 2: In-app Agent Hub + dynamic install
+
+Three requirements, one dependency chain: a **hub page** (browse) → an **install
+action** (click) → a **dynamic-install runtime** (import the unit). The
+front-half UI scaffolding already exists; the back-half install service does not.
+
+> The install *unit and path* are not fixed to npm. The Hub is multi-component, so
+> the runtime branches by `type` (app/agent/component); for an `agent` the choice
+> between a **uv-installed wheel** and a **native-binary sidecar** is open (B2/B4).
+> "npm wrapper" below is one candidate, not a settled decision.
+
+## What already exists (don't rebuild)
+
+| Layer | State today | File |
+|---|---|---|
+| Renderer store + install state | `installAgent`/`uninstallAgent` actions, `installProgress` map | `src/gaia/apps/webui/src/stores/agentStore.ts` |
+| Catalog-merge helpers | `isInstalling`, `mergeCatalogStatus`, `splitAvailable`, `countUpdates` | `src/gaia/apps/webui/src/utils/agentHub.ts` |
+| Install dialog component | present (stub-driven) | `src/gaia/apps/webui/src/components/AgentInstallDialog.tsx` |
+| IPC surface | `agent:install` / `agent:uninstall` exposed via preload | `src/gaia/apps/webui/preload.cjs` |
+| Backend hot-register | `register_from_dir`, `POST /api/agents/import` register live without restart | `src/gaia/ui/routers/agents.py` |
+| Catalog API | `GET /index.json` (`CatalogIndex` + 23-field `IndexEntry`), `GET /agents/<id>/manifest.json` | `workers/agent-hub/src/{index,catalog,types}.ts` |
+| Public Hub website (mirror target) | Astro hub index + detail pages, `gaia://hub/install/<id>` deep link | `website/src/pages/hub/`, `website/src/data/catalog.ts` |
+
+**The gap (confirmed):** the in-app install path is a stub —
+`agent:install` / `agent:uninstall` in `agent-process-manager.cjs` `throw new
+Error("… not yet implemented")`. **The Agent UI does not import published npm
+agents today.**
+
+## Feature 1 — Thin app layer that installs agents on demand
+
+Implement the `agent:install` / `agent:uninstall` service in the Electron main
+process. Pipeline: resolve the unit from the catalog → fetch its artifact from R2
+→ integrity-check (`binaries.lock.json` for the wrapper path) → land in
+`~/.gaia/agents/<id>/` (or the host venv for a wheel) → register → emit progress
+to the renderer.
+
+Key design decisions to settle:
+- **How to install the npm wrapper without a bundled npm CLI.** The app bundles
+  `uv` (for Python), **not** Node/npm. Options: (a) fetch the npm tarball via the
+  registry HTTP API and unpack in-process (no npm needed), or (b) bundle npm.
+  Recommend (a) — a minimal tarball fetcher mirrors how the wrapper already
+  fetches from R2.
+- **Python wheel path vs native-binary path.** Published agents currently ship
+  *both* a wheel and native frozen binaries. The user wants the **npm-wrapper**
+  unit. Decide whether the installed agent runs as a **Python wheel** (uv-install
+  into `~/.gaia/venv`, register via `gaia.agents` entry points) or as a **native
+  sidecar** (the wrapper's fetched binary, run by `agent-process-manager.cjs`).
+- **Sidecar protocol mismatch.** `agent-process-manager.cjs` manages **stdio
+  JSON-RPC / MCP** children, but the frozen agent binaries expose a **FastAPI
+  `api_server`** (`/health`, `/v1/...`). Reconcile: either the wrapper exposes an
+  MCP/stdio interface, or the process manager learns to supervise `api_server`
+  sidecars (HTTP health + routing). This is the single biggest runtime decision.
+- **Registration after install.** Write the `~/.gaia/agent-manifest.json` native
+  entry and/or hot-register via the existing `register_from_dir` path so the
+  agent appears in `/api/agents` without a backend restart.
+- **Uninstall** must stop any running sidecar, remove `~/.gaia/agents/<id>/`,
+  and de-register.
+
+## Feature 2 — In-app Hub mirror page
+
+A React page in the renderer that mirrors the public Astro Hub. Fetch
+`GET {HUB_BASE_URL}/index.json`, render the catalog, merge install state.
+
+- **Reuse the contract:** port (or share) `website/src/data/catalog.ts` types +
+  helpers (`formatBytes`, `platformLabel`, `categoryLabel`, sort order) and the
+  `AgentRow` / `FeaturedCard` / detail layout so the in-app page matches the site.
+- **Merge installed ↔ catalog:** `/api/agents` (installed) ∪ `/index.json`
+  (catalog) via the existing `agentHub.ts` helpers → per-card state
+  (installed / available / update_available), with an updates badge.
+- **CORS (resolve — see B8):** the Worker sets no explicit CORS headers today, so
+  a renderer `fetch` of `index.json` may be blocked by Chromium. Either add
+  `Access-Control-Allow-Origin` on the Worker GETs or proxy the fetch through the
+  Electron main process. Cache the last-fetched catalog for offline browsing.
+- **Config:** catalog base URL (`hub.amd-gaia.ai`) as a setting; honor the same
+  channel/base as Part 1.
+
+## Feature 3 — Click an agent → auto-install
+
+Wire the hub card's **Install** button and the website's **deep link** to the
+Feature-1 service.
+
+- **In-app:** card Install → `agentStore.installAgent(id)` → `agent:install` IPC
+  → install service → progress events stream into `AgentInstallDialog` → agent
+  appears in the list on success.
+- **Deep link bridge:** register the `gaia://` protocol
+  (`app.setAsDefaultProtocolClient` + single-instance + per-OS handlers) and
+  handle `gaia://hub/install/<id>` (used by the website's "Open in GAIA" button)
+  → same install flow. This is what makes website → app one-click work.
+- **Trust gate before install:** show the agent's `security_tier`, `permissions`,
+  and `requirements` and require explicit confirmation; refuse non-`verified`
+  tiers without an override. Don't silently install.
+
+## Cross-cutting dependencies & risks (Part 2)
+1. **Depends on Part 1's contract:** there must be a published `@amd-gaia/agent-*`
+   wrapper + `binaries.lock.json` + R2 artifacts to install, and the agent must
+   appear in `index.json`. Part 2 install is only as real as Part 1's pipeline.
+2. **Sidecar protocol** (api_server vs stdio MCP) — see Feature 1.
+3. **No bundled npm** — tarball-fetch-in-process vs bundling Node/npm.
+4. **Protocol-handler security** — `gaia://hub/install/<id>` is web-triggerable;
+   the trust gate (Feature 3) is the guard, not optional.
+5. **Disk/footprint** — installed native agents are large; surface size from the
+   catalog (`download_size_bytes`) and enforce a confirm.
+6. **Versioning/updates** — `countUpdates` exists in the UI but the update *apply*
+   path reuses the same install service; scope update-in-place explicitly.
+
+## Suggested phasing (Part 2)
+- **Phase A — Install service:** implement `agent:install`/`agent:uninstall`
+  (tarball fetch → R2 verify → land → register → progress events). Headless-testable.
+- **Phase B — Hub page:** in-app catalog browse + install-state merge.
+- **Phase C — One-click + deep link:** wire Install button and register `gaia://`.
+- **Phase D — Trust gate, updates, offline cache, uninstall polish.**
+
+# Part 3: What's missing for a fast, easy, polished experience
+
+Audit of the current install/UX paths. Several things already exist (streamed
+bootstrap progress dialog, auto-update IPC, a full hardware scanner) — the gaps
+below are ranked by user impact, not effort.
+
+## The #1 gap (underneath Parts 1–2): first *use* is minutes-long, not seconds
+
+Part 1 can make the Electron **installer** instant, but the app is unusable until
+its **Python backend** finishes a cold bootstrap: `backend-installer.cjs` runs
+`uv pip install amd-gaia[ui]`, which pulls **torch/scipy/numpy from PyPI
+(~5–10 min)**, then `gaia init` downloads a **~4 GB model (~2–5 min)**. So a
+"fast install" still lands the user on a multi-minute wait.
+
+- **Highest-leverage fix:** ship a **frozen/prebuilt backend** instead of a
+  runtime pip install, so first-run is seconds and the PyPI/network failure mode
+  is gone. **Caveat (verify first):** the email freeze
+  (`hub/agents/python/email/packaging/freeze.py`) gets to &lt;90 MB by *excluding*
+  torch/transformers/faiss — but the UI backend can't, because `[ui]` directly
+  declares `faiss-cpu` + `sentence-transformers` + `torch` and
+  `gaia.ui.server` **boots faiss + sentence_transformers eagerly** (`setup.py:143`,
+  #845). So this is **not** a drop-in reuse of the email recipe. Real options,
+  in order of leverage: (a) **move embeddings to remote Lemonade** so the backend
+  can be slimmed and *then* frozen small; (b) ship a **prebuilt venv / wheelhouse**
+  (no PyInstaller) — bigger artifact but avoids freezing torch/faiss native libs,
+  which is notoriously fragile; (c) accept a large (~GB) frozen artifact. Pick
+  before committing — the "&lt;90 MB like email" expectation is wrong as written.
+- **Measure the baseline:** the "7–20 min" figure is an estimate, not a measured
+  cold run. Time a real first-run on a clean machine before anchoring the roadmap
+  to it.
+- **Model setup is silent + non-fatal:** `gaia init` runs in the background with
+  no in-app visual, and a failure is swallowed (user lands on a terminal hint).
+  Need an **in-app model downloader** with visible progress + a smaller default
+  model option for the first run.
+
+## Hub-fit gaps (install correctness)
+
+- **No hardware pre-flight gating.** The scanner exists (`/api/system/status`:
+  NPU/GPU/memory/disk), and the catalog carries `requirements`
+  (`min_memory_gb`, `npu`, `gpu_vram_gb`, `platforms`) — but nothing checks one
+  against the other **before** install/select. Add: block/warn "NPU required, not
+  detected" / "needs 8 GB, you have 6" on the hub card and the install confirm.
+- **No connector flow from install/select.** Agents declare `REQUIRED_CONNECTORS`
+  (email → Google), and `/api/connectors` exposes `configured` state — but the
+  user only finds out at *runtime* via an `AuthRequiredError`. Add an inline
+  "This agent needs Google — Connect" step in the install/first-run flow that
+  launches the existing OAuth path, instead of a buried Settings page.
+- **Permissions shown but not enforced.** Catalog `permissions` (e.g.
+  `gmail.send`) should be surfaced at the trust gate *and* actually constrained.
+- **Bundled vs. hub dedup + updates.** Seeded bundled agents and hub-installed
+  agents share `~/.gaia/agents/<id>/`; reserved IDs exist but the
+  install/update/rollback path (`countUpdates` is wired, apply is not) needs an
+  explicit version-in-place + rollback story to avoid clobbering.
+- **Catalog freshness/offline.** Cache `index.json` (ETag/If-None-Match) for fast,
+  offline-tolerant browsing; show a "last synced" state.
+
+## Discoverability & onboarding gaps
+
+- **No onboarding wizard.** `docs/plans/setup-wizard.mdx` is still **DRAFT**;
+  today first-run is a text hint telling users to run `gaia init --profile chat`
+  in a terminal — a hard blocker for non-technical users. Replace with a guided
+  first-run (scan hardware → pick/download model → optional connector → done).
+- **Update banner not rendered.** `auto-updater.cjs` broadcasts
+  `gaia:update:status` and has the native restart dialog, but **no renderer
+  component consumes it** — wire a non-blocking "Update ready · Restart" banner.
+- **Deep-link when app isn't installed.** `gaia://hub/install/<id>` (website
+  "Open in GAIA") has no fallback — register the protocol (Part 2 Feature 3) and
+  have the website detect "no app" → route to the download page.
+
+## Resilience & trust gaps
+
+- **Signed/notarized installers fetched from R2.** Ensure the *signed* artifacts
+  (not unsigned intermediates) are what's published, or macOS Gatekeeper /
+  Windows SmartScreen friction undoes the "easy install" goal.
+- **Resumable/retryable installs + rollback.** Resume interrupted artifact
+  downloads, retry on transient R2 errors, and roll back a failed agent install
+  cleanly (don't leave a half-written `~/.gaia/agents/<id>/`).
+- **One-click diagnostics on failure.** `gaia diagnostics` already bundles
+  logs+system info — surface a "Copy diagnostics" button on every failure dialog
+  (install, model, connector) so bug reports are actionable.
+
+## Priority order (recommendation)
+1. **Frozen/prebuilt backend** (kills the minutes-long first-use wait) — note this
+   does **not** cleanly reuse the email freeze; pick the approach in C1 first.
+2. **Guided onboarding + in-app model download** (replaces the terminal hint).
+3. **Hardware pre-flight + connector-on-install** (correct, non-surprising installs).
+4. **Update banner + offline catalog cache + diagnostics button** (polish).
+5. **Resumable installs + rollback + signing verification** (resilience/trust).
+
+# Appendix: Consolidated gap inventory
+
+Every gap surfaced during this investigation, in one checklist. Severity:
+**Critical** (blocks the whole goal) · **High** (blocks a stated requirement) ·
+**Medium** (needed for a good experience) · **Low** (operational/polish).
+"Decision" = a design choice to settle before building, not just missing code.
+
+## A. Publishing pipeline (Part 1 — R2 + npm)
+
+| # | Gap | Today | Needed | Sev |
+|---|-----|-------|--------|-----|
+| A1 | Agent UI publishes nothing to R2 / the Agent Hub | installers → GitHub Releases + npm only | `release_agent_ui.yml` POSTs installers to the Worker `/publish` | High |
+| A2 | No `gaia-agent.yaml` manifest / Hub catalog entry for agent-ui | absent | author manifest; agent-ui appears in `index.json` | High |
+| A3 | `@amd-gaia/agent-ui` is the Electron app, not a thin R2 wrapper | app source self-publishes under that name | wrapper that fetches + verifies from R2 (mirror email) | High |
+| A4 | **npm name collision** on `@amd-gaia/agent-ui` | name already taken by the app | app stops self-publishing; wrapper reclaims name (**Decision**) | High |
+| A5 | `binaries.lock.json` is single-file-per-platform | email = 1 binary/platform | extend to a **list** per platform (installer + blockmap + update manifest + `.zip`) — touches `gen_binaries_lock.py`, `fetch.ts`, Worker types | High |
+| A6 | Mutable auto-update channel vs. Worker immutability | Worker 409s on re-upload | add a mutable `latest*.yml` channel pointer alongside immutable artifacts (**Decision**) | High |
+| A7 | Auto-update feed is `provider: github` + stubbed updater | `electron-builder.yml` → github; `auto-updater.cjs` not wired | switch to `generic` R2 feed; wire `auto-updater.cjs` | Medium |
+| A8 | Installer-launch vs. portable-bundle-launch for the wrapper bin | n/a | decide what `gaia-ui` does after fetch (**Decision**) | Medium |
+| A9 | `publish_to_r2.py` / `gen_binaries_lock.py` assume one binary/platform | single-file | extend for multi-file-per-platform | Medium |
+| A10 | Signing/notarization may point at unsigned intermediates | CI signs before GitHub Release | ensure **signed** artifacts are what's POSTed to R2 | High |
+| A11 | agent-ui has no wheel but the publish-validation expects `setup.py[agents]` members to have one | n/a | keep agent-ui **out** of `setup.py[agents]`; document the divergence | Low |
+| A12 | Manifest/catalog are agent-shaped; no component `type` | `gaia-agent.yaml` + `IndexEntry` model only agents | add `type: app\|component\|agent` discriminator end-to-end (see §E) | High |
+| A13 | R2 egress / storage cost | ~90 MB email binary | installers are ~100–300 MB each — budget egress | Low |
+
+## B. In-app marketplace + dynamic install (Part 2)
+
+| # | Gap | Today | Needed | Sev |
+|---|-----|-------|--------|-----|
+| B1 | `agent:install` / `agent:uninstall` are stubs | `throw "not yet implemented"` in `agent-process-manager.cjs` | implement the install service | High |
+| B2 | No bundled npm CLI | app bundles `uv` only | fetch the npm tarball in-process **or** bundle Node/npm (**Decision**) | Medium |
+| B3 | Sidecar protocol mismatch | process manager = stdio JSON-RPC/MCP; frozen binaries = FastAPI `api_server` | reconcile (wrapper exposes MCP, or manager supervises HTTP sidecars) (**Decision**) | High |
+| B4 | Installed-agent runtime undecided | both wheel and native binary published | choose wheel (uv + entry points) vs. native sidecar (**Decision**) | High |
+| B5 | Registration after install | hot-register path exists (`register_from_dir`) but unused by install | write `agent-manifest.json` / call `register_from_dir` so the agent appears without restart | Medium |
+| B6 | Uninstall path | none | stop sidecar + remove `~/.gaia/agents/<id>/` + de-register | Medium |
+| B7 | No in-app Hub page | website hub exists; renderer has merge helpers but no page | build the React Hub mirror (`index.json` → cards + detail) | High |
+| B8 | Worker sets no CORS headers | renderer `fetch` of `index.json` may be blocked by Chromium | add `Access-Control-Allow-Origin` on GETs **or** fetch via main process | Medium |
+| B9 | No catalog offline cache / freshness | live fetch only | cache `index.json` (ETag/If-None-Match) + "last synced" state | Medium |
+| B10 | `gaia://` protocol not registered | website emits `gaia://hub/install/<id>`; app ignores it | `setAsDefaultProtocolClient` + single-instance + per-OS handler | Medium |
+| B11 | No trust gate before install | install would be silent | confirm `security_tier` + `permissions` + `requirements`; refuse non-`verified` without override | High |
+| B12 | Update-in-place + rollback path | `countUpdates` wired in UI; apply not built | reuse install service for version-in-place; roll back on failure | Medium |
+| B13 | Bundled-vs-hub agent dedup | both share `~/.gaia/agents/<id>/` | collision/precedence rules beyond reserved IDs | Medium |
+| B14 | Disk footprint not surfaced pre-install | `download_size_bytes` in catalog, unused | show size + confirm on large installs | Low |
+| B15 | Hub CLI commands largely unbuilt | `agent-hub.mdx` lists `gaia agent list/search/info/install/run/update/uninstall`; only export/import exist | build for CLI parity with in-app install | Medium |
+
+## C. First-use speed & onboarding (Part 3)
+
+| # | Gap | Today | Needed | Sev |
+|---|-----|-------|--------|-----|
+| C1 | First *use* is minutes cold (est. 7–20, unmeasured) | `[ui]` directly pulls faiss + sentence-transformers + torch (`setup.py:143`); not a transitive accident | frozen/prebuilt backend — but **cannot** reuse email's slim freeze (UI boots faiss+embeddings eagerly); needs remote-embeddings or a wheelhouse first | Critical |
+| C2 | Model setup is silent + non-fatal | `gaia init` runs in background; failure swallowed → terminal hint | in-app model downloader with visible progress + retry | High |
+| C3 | No lightweight first-run model option | default pulls ~4 GB Gemma-4-E4B | offer a smaller default for the first run | Medium |
+| C4 | No hardware pre-flight gating | scanner (`/api/system/status`) + catalog `requirements` both exist, never cross-checked | block/warn "NPU required, not detected" / "needs 8 GB" on card + install confirm | High |
+| C5 | No connector-on-install flow | `REQUIRED_CONNECTORS` surfaced only at runtime via `AuthRequiredError` | inline "needs Google — Connect" step launching existing OAuth | High |
+| C6 | No onboarding wizard | `setup-wizard.mdx` is **DRAFT**; first-run = terminal hint | guided first-run: scan → pick/download model → optional connector | High |
+| C7 | Update banner not rendered | `auto-updater.cjs` broadcasts `gaia:update:status`; no renderer component | non-blocking "Update ready · Restart" banner | Medium |
+
+## D. Cross-cutting trust, resilience & observability
+
+| # | Gap | Today | Needed | Sev |
+|---|-----|-------|--------|-----|
+| D1 | `permissions` shown but not enforced | catalog carries `permissions` (e.g. `gmail.send`) | enforce/constrain at the trust gate, not just display | Medium |
+| D2 | No resumable/retryable artifact downloads | n/a | resume interrupted downloads; retry transient R2 errors | Medium |
+| D3 | No rollback on failed install | could leave half-written `~/.gaia/agents/<id>/` | atomic install + clean rollback | Medium |
+| D4 | No one-click diagnostics on failure | `gaia diagnostics` exists but isn't surfaced | "Copy diagnostics" button on every failure dialog | Low |
+| D5 | OS-gate friction for R2-fetched installers | n/a | verify Gatekeeper/SmartScreen pass on signed artifacts (overlaps A10) | High |
+| D6 | Deep-link when app isn't installed | `gaia://hub/install/<id>` has no fallback | website detects "no app" → route to download | Low |
+| D7 | No install/usage telemetry | `agent-hub.mdx` envisions download stats | optional, privacy-respecting install counters / observability | Low |
+
+## E. Multi-component Hub model (app · component · agent)
+
+| # | Gap | Today | Needed | Sev |
+|---|-----|-------|--------|-----|
+| E1 | No component `type` discriminator | manifest + catalog model only agents | top-level `type: app\|component\|agent`; per-type required fields | High |
+| E2 | Catalog is a flat agent list | `index.json` / website / in-app hub list agents | `type` field + segmented lanes (Apps · Components · Agents) | High |
+| E3 | Worker validates only agent manifests | `manifest.ts` agent-shaped; `/publish` expects agent artifacts | per-type schema validation + accept app/component artifacts | High |
+| E4 | Install action assumes "run an agent" | install = land + register + run | branch on `type`: app→installer, agent→register+run, component→resolve as dependency (not launchable) | High |
+| E5 | No inter-component dependency model | per-agent `requirements`/`REQUIRED_CONNECTORS` only | agents/apps can require a `component` (e.g. `rag`/`memory`) at a version range — catalog + installer must resolve it | Medium |
+| E6 | RAG/memory aren't independently versioned Hub units | shipped inside the `amd-gaia` wheel | extract as publishable `component` packages on their own SemVer line | Medium |
+| E7 | Agent UI risks self-listing in its own hub | agent-ui would land in the same list it renders | keep `app` in a separate lane / download surface, not the in-app installable-agent list | Medium |
+| E8 | Two validators to extend, kept in sync | canonical `src/gaia/hub/manifest.py` + gate-only `manifest.ts` | add the `type` discriminator + per-type blocks in **both**; `cpp.binaries` is the per-type precedent | High |
+| E9 | R2 namespace is agent-only | `AGENTS_PREFIX="agents/"`, `listAgentIds()` (`storage.ts`) | typed prefixes or `units/<type>/<id>/`; keep existing `agents/` keys working | Medium |
+| E10 | Catalog `schema_version` bump + back-compat | `schema_version: 1` (`catalog.ts:150`), `agents[]` field | bump to 2, add `type`, keep `agents[]` alias, default missing `type`→`agent` | Medium |
+| E11 | Python hub SDK assumes "agent" | `src/gaia/hub/{installer,lifecycle,native_launcher,compatibility,packager,publisher}.py` | branch install/run/resolve by `type` | High |
+| E12 | Component consumption/dependency contract undefined | per-agent `requirements`/`REQUIRED_CONNECTORS` only | `provides`/`requires` + version-range resolver, physical location, conflict handling (design first) | High |
+| E13 | CLI + manifest filename are agent-named | `gaia agent …`, `gaia-agent.yaml` | generalize to `gaia hub …`; alias the manifest filename | Low |
+
+## Reference files
+- In-app agent runtime: `src/gaia/apps/webui/services/{agent-process-manager,agent-seeder}.cjs`, `preload.cjs`
+- Renderer agent state: `src/gaia/apps/webui/src/stores/agentStore.ts`, `src/utils/agentHub.ts`, `src/components/AgentInstallDialog.tsx`
+- Backend registry + import: `src/gaia/agents/registry.py`, `src/gaia/ui/routers/agents.py`
+- Catalog API + types: `workers/agent-hub/src/{index,catalog,manifest,types}.ts`
+- Public Hub website (mirror target): `website/src/pages/hub/`, `website/src/data/catalog.ts`, `website/src/components/{AgentRow,FeaturedCard}.astro`
+- Agent Hub plan: `docs/plans/agent-hub.mdx`
+- Email release pipeline: `.github/workflows/release_agent_email.yml`
+- Email packaging scripts: `hub/agents/python/email/packaging/{publish_to_r2,gen_binaries_lock,freeze,smoke_test}.py`
+- Email npm wrapper: `hub/agents/npm/agent-email/` (`binaries.lock.json`, `src/{cli,fetch,platform,lifecycle}.ts`)
+- Agent Hub Worker: `workers/agent-hub/` (`src/{index,publish,auth,manifest,catalog,storage}.ts`)
+- Agent UI app: `src/gaia/apps/webui/{package.json,electron-builder.yml,bin/gaia-ui.cjs,services/auto-updater.cjs}`
+- Current installer/publish CI: `.github/workflows/{build-installers,publish}.yml`

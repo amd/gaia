@@ -783,6 +783,9 @@ app.whenReady().then(async () => {
     if (seedResult.seeded.length > 0) {
       console.log("[main] Seeded agents:", seedResult.seeded);
     }
+    if (seedResult.cleaned.length > 0) {
+      console.log("[main] Cleaned legacy agents:", seedResult.cleaned);
+    }
     if (seedResult.errors.length > 0) {
       console.warn(
         "[main] Agent seeding errors:",

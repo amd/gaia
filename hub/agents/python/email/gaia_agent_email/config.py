@@ -103,6 +103,9 @@ class EmailAgentConfig:
       ``mail_provider="google"`` and ``outlook_backend`` for
       ``"microsoft"``; ``calendar_backend`` is honored for either calendar
       provider. An injected backend always wins over the live one.
+    - ``scheduler_poll_seconds`` / ``start_scheduler``: the one-shot scheduler
+      for scheduled send + snooze (#1609). ``start_scheduler=False`` skips the
+      polling thread — tests drive ``fire_due_jobs()`` deterministically.
     """
 
     base_url: Optional[str] = None
@@ -122,6 +125,11 @@ class EmailAgentConfig:
     outlook_backend: Optional[Any] = None
     calendar_backend: Optional[Any] = None
     force_llm: bool = False
+    # One-shot scheduler (#1609): scheduled send + snooze. ``start_scheduler``
+    # controls the built-in polling thread; tests set it False and drive
+    # ``EmailJobScheduler.fire_due_jobs()`` deterministically instead.
+    scheduler_poll_seconds: float = 30.0
+    start_scheduler: bool = True
 
     def validate(self) -> None:
         """Run startup-time invariants. Called from the agent's __init__.
@@ -129,6 +137,12 @@ class EmailAgentConfig:
         Raises ``ConfigurationError`` on any failure — never silently
         downgrades.
         """
+        if self.scheduler_poll_seconds <= 0:
+            raise ConfigurationError(
+                "EmailAgentConfig.scheduler_poll_seconds must be > 0, got "
+                f"{self.scheduler_poll_seconds!r}. Scheduled send / snooze "
+                "need a positive polling interval to fire."
+            )
         if self.base_url:
             host = urlparse(self.base_url).hostname
             allowed = _allowed_hosts()

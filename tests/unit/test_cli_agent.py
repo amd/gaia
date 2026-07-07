@@ -88,6 +88,7 @@ def test_init_scaffolds_expected_files(scaffolded_python):
     assert (pkg / "gaia-agent.yaml").exists()
     assert (pkg / "pyproject.toml").exists()
     assert (pkg / "README.md").exists()
+    assert (pkg / "CHANGELOG.md").exists()
     assert (pkg / "gaia_agent_demo_agent" / "__init__.py").exists()
     assert (pkg / "gaia_agent_demo_agent" / "agent.py").exists()
     assert (pkg / "tests" / "test_agent.py").exists()
@@ -126,6 +127,8 @@ def test_init_cpp_scaffold(tmp_path):
     cli_agent.cmd_init(_init_args("native-demo", tmp_path, language="cpp"))
     pkg = tmp_path / "native-demo"
     assert (pkg / "CMakeLists.txt").exists()
+    assert (pkg / "README.md").exists()
+    assert (pkg / "CHANGELOG.md").exists()
     assert (pkg / "src" / "agent.cpp").exists()
     assert (pkg / "tests" / "test_agent.cpp").exists()
     parsed = hub_manifest.parse(pkg)
@@ -144,9 +147,29 @@ def test_lint_passes_on_fresh_python_scaffold(scaffolded_python):
     cli_agent.cmd_test(_test_args(scaffolded_python, lint=True))
 
 
+def test_scaffold_persona_has_no_zoo_references(scaffolded_python):
+    # The starter persona must be a neutral self-describing example, not the
+    # retired zookeeper demo (issue #1908).
+    content = (scaffolded_python / "gaia_agent_demo_agent" / "agent.py").read_text(
+        encoding="utf-8"
+    )
+    assert "zookeeper" not in content.lower()
+    assert "zoo" not in content.lower()
+
+
 def test_lint_passes_on_fresh_cpp_scaffold(tmp_path):
     cli_agent.cmd_init(_init_args("native-demo", tmp_path, language="cpp"))
     cli_agent.cmd_test(_test_args(tmp_path / "native-demo", lint=True))
+
+
+def test_lint_warns_but_passes_when_changelog_missing(scaffolded_python, capsys):
+    # A missing CHANGELOG.md is a WARNING, not a failure: lint still passes,
+    # but the author is nudged because the hub page renders it.
+    (scaffolded_python / "CHANGELOG.md").unlink()
+    cli_agent.cmd_test(_test_args(scaffolded_python, lint=True))  # must not raise
+    out = capsys.readouterr().out
+    assert "[WARN]" in out
+    assert "CHANGELOG.md" in out
 
 
 def test_lint_catches_broken_manifest(scaffolded_python):

@@ -37,9 +37,9 @@ Misconfigured reverse proxies can reflect the `Authorization` header back in a 4
 - `src/gaia/llm/providers/lemonade.py` — `LemonadeProvider.__init__` uses `backend_kwargs` dict to forward to `LemonadeClient`; add new params with `if param is not None: backend_kwargs["param"] = param`
 - `src/gaia/llm/vlm_client.py` — `VLMClient.__init__` uses deferred import of `LemonadeClient`
 - `src/gaia/ui/routers/system.py` — already imports `DEFAULT_CONTEXT_SIZE` from `lemonade_client` (established cross-package import precedent)
-- `src/gaia/ui/_chat_helpers.py` — 4 Lemonade-bound httpx call sites: auto-title POST (~305), health GET (~836, ~887), stats GET (~2082)
-- `src/gaia/ui/server.py` — 2 health probe httpx GET sites (~266, ~278)
-- `src/gaia/agents/base/agent.py` — `_is_loaded_ctx_too_small()` (~1784) — DEFERRED import pattern
+- `src/gaia/ui/_chat_helpers.py` — 4 Lemonade-bound httpx call sites: auto-title POST (~337), health GET (~1006, ~1058), stats GET (~2289). (Line numbers drift — grep the call, don't trust the offset.)
+- `src/gaia/ui/server.py` — 2 health probe httpx GET sites (~299, ~311)
+- `src/gaia/agents/base/agent.py` — `_is_loaded_ctx_too_small()` (~2177) — DEFERRED import pattern
 - `tests/test_lemonade_client.py` — uses `responses` library for `requests` interception; `TestLemonadeClientMock` class
 - `docs/.env.example` — This is a Mintlify/docs-proxy config file, NOT GAIA's env var file. GAIA env vars go in `.env.example` at the repo root.
 

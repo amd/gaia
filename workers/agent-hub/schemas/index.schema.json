@@ -44,7 +44,8 @@
         "permissions",
         "deprecated",
         "requirements",
-        "readme"
+        "readme",
+        "changelog"
       ],
       "properties": {
         "id": {
@@ -132,6 +133,51 @@
         "readme": {
           "type": "string",
           "description": "README.md markdown of the latest version; empty string if none was published."
+        },
+        "changelog": {
+          "type": "string",
+          "description": "CHANGELOG.md markdown of the latest version; empty string if none was published."
+        },
+        "spec": {
+          "type": "string",
+          "description": "SPEC.md (technical reference) markdown of the latest version; empty string if none was published."
+        },
+        "skill": {
+          "type": "string",
+          "description": "SKILL.md (AI-integration playbook) markdown of the latest version; empty string if none was published."
+        },
+        "npm_package": {
+          "type": "string",
+          "description": "npm package name when the agent is distributed via npm (e.g. \"@amd-gaia/agent-email\"); absent otherwise."
+        },
+        "playground_url": {
+          "type": "string",
+          "description": "Localhost playground URL served by the agent's sidecar; absent otherwise."
+        },
+        "package": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Whole-package download (all platform binaries + client + docs) as a single zip plus its file listing. Present only when a package_files manifest was published for the latest version.",
+          "required": ["filename", "size_bytes", "files"],
+          "properties": {
+            "filename": {
+              "type": "string",
+              "description": "Zip artifact filename under the version dir, e.g. \"agent-email-0.2.1.zip\"."
+            },
+            "size_bytes": { "type": "integer", "minimum": 0 },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "size_bytes"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "size_bytes": { "type": "integer", "minimum": 0 }
+                }
+              }
+            }
+          }
         }
       }
     }

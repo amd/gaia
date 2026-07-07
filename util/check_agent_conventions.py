@@ -40,9 +40,11 @@ GUIDES_DIR = REPO_ROOT / "docs" / "guides"
 # Directories under src/gaia/agents/ that are NOT agents.
 _NON_AGENT_DIRS = {"__pycache__", "base", "tools"}
 
-# Agent classes that are documented as "not-a-subclass-of-Agent-directly"
-# (e.g. RoutingAgent wraps other agents) — accepted without the Agent base.
-_STANDALONE_ALLOWED = {"RoutingAgent"}
+# Agent classes scanned under src/gaia/agents/ that are documented as
+# "not-a-subclass-of-Agent-directly" — accepted without the Agent base.
+# RoutingAgent (the canonical example) now ships as the standalone
+# gaia-agent-routing wheel (#1102) and is no longer scanned here.
+_STANDALONE_ALLOWED: set = set()
 
 
 def _has_copyright_header(text: str) -> bool:

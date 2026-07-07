@@ -138,6 +138,12 @@ class SettingsResponse(BaseModel):
         None  # Persisted ctx_size override; None = use default
     )
     agent_mode: str = "autonomous"  # "manual" | "goal_driven" | "autonomous"
+    # Beta dynamic tool loader (#1798). Effective value: env override
+    # (GAIA_DYNAMIC_TOOLS) wins when set, else the persisted setting.
+    dynamic_tools: bool = False
+    # True when GAIA_DYNAMIC_TOOLS is set ⇒ the env wins ⇒ the UI toggle
+    # reflects the effective value and disables (no silent no-op).
+    dynamic_tools_locked: bool = False
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -167,6 +173,15 @@ class SettingsUpdateRequest(BaseModel):
             "'goal_driven' (execute approved goals), "
             "'autonomous' (observe, infer, and execute own goals). "
             "Default: 'autonomous'."
+        ),
+    )
+    dynamic_tools: Optional[bool] = Field(
+        None,
+        description=(
+            "Beta: enable the semantic dynamic tool loader (#1798), which trims "
+            "each turn's tool prompt to a matched subset to cut first-turn TTFT. "
+            "Default off. GAIA_DYNAMIC_TOOLS overrides this at runtime when set. "
+            "Omit the field to leave the persisted value unchanged."
         ),
     )
 
