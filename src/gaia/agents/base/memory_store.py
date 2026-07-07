@@ -248,6 +248,15 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_sensitive ON knowledge(sensitive)
 -- Knowledge FTS5 (standalone, manually synced, porter stemmer for morphological matching)
 CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(content, domain, category, tokenize='porter unicode61');
 
+-- Key/value metadata (e.g. the embedder id that produced stored vectors).
+-- Lives in the DB (not a sidecar file) so it is atomic with the data it
+-- describes and visible to every connection — the agent and the UI memory
+-- router open the same DB from different code paths (#1744).
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
+
 -- Tool history
 CREATE TABLE IF NOT EXISTS tool_history (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1456,6 +1465,55 @@ class MemoryStore:
                 ).rowcount
                 self._conn.commit()
                 return rowcount > 0
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def clear_all_embeddings(self) -> int:
+        """Null out every stored embedding so they get re-embedded on backfill.
+
+        Used when the active embedder changes: vectors from a different model
+        live in a different vector space (and possibly a different dimension),
+        so reusing them would silently corrupt similarity search. Returns the
+        number of rows cleared.
+        """
+        with self._lock:
+            try:
+                rowcount = self._conn.execute(
+                    "UPDATE knowledge SET embedding = NULL WHERE embedding IS NOT NULL"
+                ).rowcount
+                self._conn.commit()
+                return rowcount
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    #: ``meta`` key recording which embedder produced the stored vectors.
+    _EMBEDDER_META_KEY = "embedder_id"
+
+    def get_embedder_id(self) -> Optional[str]:
+        """Return the embedder model id that produced the stored embeddings.
+
+        ``None`` when nothing has been stamped yet (fresh DB) — callers treat
+        that as "no change to detect". Read from the ``meta`` table so every
+        connection (agent + UI router) sees the same value.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value FROM meta WHERE key = ?", (self._EMBEDDER_META_KEY,)
+            ).fetchone()
+        return row[0] if row else None
+
+    def set_embedder_id(self, model_id: str) -> None:
+        """Record the embedder model id that produced the stored embeddings."""
+        with self._lock:
+            try:
+                self._conn.execute(
+                    "INSERT INTO meta (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (self._EMBEDDER_META_KEY, model_id),
+                )
+                self._conn.commit()
             except Exception:
                 self._conn.rollback()
                 raise

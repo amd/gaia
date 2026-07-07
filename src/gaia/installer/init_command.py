@@ -98,7 +98,11 @@ INIT_PROFILES = {
     "npu": {
         "description": "Ryzen AI NPU acceleration via FLM backend (requires XDNA2 NPU)",
         "agent": "chat",
-        "models": ["gemma4-it-e2b-FLM"],
+        # FLM chat model + FLM-native embedder so chat and embeddings stay
+        # co-resident on the NPU backend. A GGUF embedder would run on Vulkan
+        # and evict the FLM chat model every turn (#1744). Both are built-in
+        # Lemonade *-FLM models, pulled by name only (no recipe — #1655).
+        "models": ["gemma4-it-e2b-FLM", "embed-gemma-300m-FLM"],
         "approx_size": "~3 GB",
         "min_lemonade_version": "10.2.0",
         # NPU context window. Matches GPU/CPU (32768) so the init report and
