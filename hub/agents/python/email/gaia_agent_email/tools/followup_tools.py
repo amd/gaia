@@ -25,6 +25,7 @@ Detection semantics (per thread reached from a Sent-folder scan):
 
 from __future__ import annotations
 
+import re
 import time
 from datetime import datetime, timezone
 from email.utils import getaddresses
@@ -74,8 +75,10 @@ def _timestamp_ms(msg: Dict[str, Any]) -> int:
         return int(text)
     except ValueError:
         pass
+    # Graph emits 7-digit (100 ns) fractions; py3.10 fromisoformat caps at 6.
+    iso = re.sub(r"(\.\d{6})\d+", r"\1", text.replace("Z", "+00:00"))
     try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(iso)
     except ValueError as exc:
         raise ValueError(
             f"message {msg.get('id')!r} internalDate {raw!r} is neither epoch "

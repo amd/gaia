@@ -235,15 +235,24 @@ class TestReplyDetection:
         out = _run(gmail, window_days=3)
         assert [i["message_id"] for i in out["awaiting_reply"]] == ["s_old", "s_new"]
 
-    def test_iso8601_internal_date_supported(self):
+    @pytest.mark.parametrize(
+        "fmt",
+        [
+            "%Y-%m-%dT%H:%M:%SZ",  # no fraction
+            # Graph's real receivedDateTime carries 7-digit (100 ns) fractions,
+            # which py3.10 fromisoformat rejects unless truncated to 6 digits.
+            "%Y-%m-%dT%H:%M:%S.0000000Z",
+        ],
+    )
+    def test_iso8601_internal_date_supported(self, fmt):
         # The Outlook backend translates Graph messages with an ISO-8601
-        # ``internalDate`` (e.g. "2026-06-24T10:00:00Z"), not epoch millis —
-        # exercised via a minimal Outlook-shaped backend (the Gmail fake
-        # models millis only).
+        # ``internalDate`` (e.g. "2026-06-24T10:00:00.0000000Z"), not epoch
+        # millis — exercised via a minimal Outlook-shaped backend (the Gmail
+        # fake models millis only).
         from datetime import datetime, timezone
 
         sent_dt = datetime.fromtimestamp((NOW_MS - 5 * DAY_MS) / 1000, tz=timezone.utc)
-        iso = sent_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        iso = sent_dt.strftime(fmt)
         message = _sent("s1", thread_id="t1", age_days=5, internal_date=iso)
 
         class _IsoBackend:
@@ -301,11 +310,12 @@ class TestScanTruncated:
         assert out["sent_scanned"] == 3
         assert out["scan_truncated"] is True
 
-    def test_exactly_at_cap_with_nothing_more_is_not_truncated(self):
-        # Sent-folder has exactly max_sent messages and the fake backend
-        # reports no next page — this scan is exhaustive, not truncated.
-        # (The len(stubs) >= max_sent heuristic alone would over-flag this
-        # case; real backends distinguish it via nextPageToken.)
+    def test_exactly_at_cap_conservatively_treated_as_truncated(self):
+        # Sent-folder has exactly max_sent messages and no next page, yet
+        # ``len(stubs) >= max_sent`` still flags the scan: hitting the
+        # numeric cap alone cannot prove the scan was exhaustive, so it is
+        # conservatively reported as "may be truncated" — never let an
+        # at-cap result read as an exhaustive answer.
         gmail = _backend(
             _sent("s1", thread_id="t1", age_days=5),
             _sent("s2", thread_id="t2", age_days=6),
@@ -313,10 +323,6 @@ class TestScanTruncated:
         out = check_followups_impl(
             gmail, window_days=3, max_sent=2, now_ms=NOW_MS
         )
-        # The fake backend has no more messages beyond these two, but it
-        # also never signals a next page — so hitting the numeric cap alone
-        # is treated conservatively as "may be truncated" (len(stubs) ==
-        # max_sent). This matches the documented conservative semantics.
         assert out["sent_scanned"] == 2
         assert out["scan_truncated"] is True
 
