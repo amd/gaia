@@ -118,6 +118,13 @@ def lemonade_auth_headers(api_key: Optional[str]) -> Dict[str, str]:
 # in minimal setups. The UI default lives in ui/routers/system.py.
 DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 
+# Default embedding model. EmbeddingGemma 300M (768-dim) replaces
+# nomic-embed-text-v2-moe, which the current llama.cpp server cannot load.
+# Not a Lemonade built-in — registered as a ``user.`` custom model on first
+# pull via checkpoint + recipe + the ``embedding`` label (see MODELS entry).
+DEFAULT_EMBEDDING_MODEL = "user.embeddinggemma-300m-GGUF"
+DEFAULT_EMBEDDING_CHECKPOINT = "ggml-org/embeddinggemma-300M-GGUF:Q8_0"
+
 # Minimum context window (in tokens) that GAIA agents assume is loaded. The
 # bundled ChatAgent system prompt alone runs >7000 tokens before any user
 # message; running below this silently truncates prompts and yields empty
@@ -169,6 +176,15 @@ class ModelRequirement:
     tool_calling: bool = (
         True  # True for GGUF models via Lemonade --jinja (Tier 0 empirical)
     )
+    # For custom (``user.``-namespaced) models that must be registered on first
+    # pull: the HuggingFace checkpoint and recipe. Built-in models leave these
+    # None and are pulled by name only (passing recipe 400s on built-ins, #1655).
+    checkpoint: Optional[str] = None
+    recipe: Optional[str] = None
+    # Marks an embedding model — sets the ``embedding`` flag on /v1/pull so
+    # Lemonade applies the ``embeddings`` label explicitly (avoids the #1745
+    # auto-label-from-name bug).
+    embedding: bool = False
 
 
 @dataclass
@@ -276,12 +292,18 @@ MODELS = {
         tool_calling=True,
     ),
     # Embedding Models
-    "nomic-embed": ModelRequirement(
+    # EmbeddingGemma 300M (768-dim). Custom user-model: registered on first pull
+    # from the HF checkpoint with the ``embedding`` label. Replaced nomic-embed,
+    # which the current llama.cpp server cannot load.
+    "embeddinggemma": ModelRequirement(
         model_type=ModelType.EMBEDDING,
-        model_id="nomic-embed-text-v2-moe-GGUF",
-        display_name="Nomic Embed Text v2",
+        model_id=DEFAULT_EMBEDDING_MODEL,
+        display_name="EmbeddingGemma 300M",
         min_ctx_size=2048,
         tool_calling=False,
+        checkpoint=DEFAULT_EMBEDDING_CHECKPOINT,
+        recipe="llamacpp",
+        embedding=True,
     ),
 }
 
@@ -290,7 +312,7 @@ AGENT_PROFILES = {
     "chat": AgentProfile(
         name="chat",
         display_name="Chat Agent",
-        models=["gemma-4-e4b", "nomic-embed"],
+        models=["gemma-4-e4b", "embeddinggemma"],
         # 64K so doc-Q&A (RAG retrieval + history) doesn't crush the
         # window. See ``gemma-4-e4b`` ModelRequirement note.
         min_ctx_size=65536,
@@ -320,7 +342,7 @@ AGENT_PROFILES = {
     "rag": AgentProfile(
         name="rag",
         display_name="RAG System",
-        models=["gemma-4-e4b", "nomic-embed"],
+        models=["gemma-4-e4b", "embeddinggemma"],
         # 64K — doc Q&A is the headline use case here; smaller windows
         # break summarize_document and large multi-chunk retrievals.
         min_ctx_size=65536,
@@ -364,7 +386,7 @@ AGENT_PROFILES = {
     "mcp": AgentProfile(
         name="mcp",
         display_name="MCP Bridge",
-        models=["gemma-4-e4b", "nomic-embed"],
+        models=["gemma-4-e4b", "embeddinggemma"],
         min_ctx_size=32768,
         description="Model Context Protocol bridge server with vision",
     ),
@@ -1849,7 +1871,7 @@ class LemonadeClient:
 
         Args:
             input_texts: Single string or list of strings to embed
-            model: Embedding model to use (defaults to self.model or nomic-embed-text-v2)
+            model: Embedding model to use (defaults to self.model or DEFAULT_EMBEDDING_MODEL)
             timeout: Request timeout in seconds
 
         Returns:
@@ -1861,7 +1883,7 @@ class LemonadeClient:
                 input_texts = [input_texts]
 
             # Use specified model or default
-            embedding_model = model or self.model or "nomic-embed-text-v2"
+            embedding_model = model or self.model or DEFAULT_EMBEDDING_MODEL
 
             payload = {"model": embedding_model, "input": input_texts}
 
@@ -2077,6 +2099,7 @@ class LemonadeClient:
         recipe: Optional[str] = None,
         reasoning: Optional[bool] = None,
         mmproj: Optional[str] = None,
+        embedding: Optional[bool] = None,
         timeout: int = DEFAULT_MODEL_LOAD_TIMEOUT,
     ) -> Dict[str, Any]:
         """
@@ -2088,6 +2111,8 @@ class LemonadeClient:
             recipe: Lemonade API recipe to load the model with (for registering new models)
             reasoning: Whether the model is a reasoning model (for registering new models)
             mmproj: Multimodal Projector file for vision models (for registering new models)
+            embedding: Whether the model is an embedding model — sets the
+                'embeddings' label on registration (for registering new models)
             timeout: Request timeout in seconds (longer for model installation)
 
         Returns:
@@ -2108,6 +2133,8 @@ class LemonadeClient:
             request_data["reasoning"] = reasoning
         if mmproj:
             request_data["mmproj"] = mmproj
+        if embedding is not None:
+            request_data["embedding"] = embedding
 
         url = f"{self.base_url}/pull"
         try:
@@ -2378,6 +2405,9 @@ class LemonadeClient:
         model_name: str,
         show_progress: bool = True,
         timeout: int = 7200,
+        checkpoint: Optional[str] = None,
+        recipe: Optional[str] = None,
+        embedding: Optional[bool] = None,
     ) -> bool:
         """
         Ensure a model is downloaded, downloading if necessary.
@@ -2391,6 +2421,11 @@ class LemonadeClient:
             model_name: Model name to ensure is downloaded
             show_progress: Show progress messages during download
             timeout: Download timeout in seconds (default: 7200 = 2 hours)
+            checkpoint: HuggingFace checkpoint — required to register a custom
+                (``user.``-namespaced) model on first pull. Built-ins omit it.
+            recipe: Lemonade recipe for a custom-model registration (e.g. ``llamacpp``).
+            embedding: Set True for a custom embedding model so the ``embeddings``
+                label is applied on registration.
 
         Returns:
             True if model is available (was already downloaded or successfully downloaded),
@@ -2422,8 +2457,15 @@ class LemonadeClient:
                     "   This may take minutes to hours depending on model size..."
                 )
 
-            # Download via pull_model
-            self.pull_model(model_name, timeout=timeout)
+            # Download via pull_model. checkpoint/recipe/embedding register a
+            # custom ``user.`` model on first pull; built-ins pull by name only.
+            self.pull_model(
+                model_name,
+                checkpoint=checkpoint,
+                recipe=recipe,
+                embedding=embedding,
+                timeout=timeout,
+            )
 
             # Use the centralized download waiter
             return self._wait_for_model_download(

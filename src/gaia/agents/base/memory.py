@@ -12,7 +12,7 @@ Provides 5 LLM-facing tools: remember, recall, update_memory, forget, search_pas
 Valid categories: fact, preference, error, skill, note, reminder, system.
 
 v2 additions:
-- Embedding pipeline (Lemonade nomic-embed-text-v2-moe-GGUF, 768-dim)
+- Embedding pipeline (Lemonade EmbeddingGemma 300M, 768-dim)
 - FAISS IndexFlatIP for cosine similarity search
 - Hybrid search: vector + BM25 + RRF fusion + cross-encoder reranking
 - Complexity-aware recall depth (3/5/10 top_k)
@@ -52,6 +52,7 @@ from gaia.agents.base.memory_store import (
     VALID_CATEGORIES,
 )
 from gaia.agents.base.procedural_memory import ProceduralMemoryMixin
+from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -146,10 +147,12 @@ def _changed_software_versions(existing: List[Dict]) -> List[str]:
 # Constants
 # ============================================================================
 
-#: Embedding model served by Lemonade — 768-dim, MOE architecture.
-EMBEDDING_MODEL = "nomic-embed-text-v2-moe-GGUF"
+#: Embedding model served by Lemonade — EmbeddingGemma 300M, 768-dim.
+#: Replaced nomic-embed-text-v2-moe (broken on the current llama.cpp server).
+EMBEDDING_MODEL = DEFAULT_EMBEDDING_MODEL
 
-#: Embedding dimensionality for nomic-embed-text-v2-moe.
+#: Embedding dimensionality for EmbeddingGemma 300M (matches the prior nomic dim,
+#: so existing FAISS index shapes stay valid across the model swap).
 EMBEDDING_DIM = 768
 
 #: Cross-encoder model for reranking (~22 MB, runs on CPU).
@@ -432,6 +435,25 @@ class MemoryMixin(ProceduralMemoryMixin):
             self._memory_session_id = str(uuid4())
             return
 
+        # Step 2b: Embedding-model migration. Vectors are model-specific — if the
+        # stored embedder differs from the current one (e.g. the nomic →
+        # EmbeddingGemma switch), old vectors aren't comparable to new queries.
+        # Clear them so backfill regenerates every embedding with the new model.
+        # The dim check alone can't catch this (both models are 768-dim).
+        settings = _load_memory_settings()
+        if settings.get("embedding_model") != EMBEDDING_MODEL:
+            cleared = self._memory_store.clear_all_embeddings()
+            if cleared.get("knowledge") or cleared.get("procedures"):
+                logger.info(
+                    "[MemoryMixin] embedding model changed to %s — cleared stale "
+                    "embeddings (knowledge=%d procedures=%d) for re-embedding",
+                    EMBEDDING_MODEL,
+                    cleared.get("knowledge", 0),
+                    cleared.get("procedures", 0),
+                )
+            settings["embedding_model"] = EMBEDDING_MODEL
+            _save_memory_settings(settings)
+
         # Step 3: Backfill embeddings for items missing them
         backfilled = self._backfill_embeddings(limit=100)
         if backfilled > 0:
@@ -642,7 +664,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             ) from e
 
     def _embed_text(self, text: str) -> np.ndarray:
-        """Embed text via Lemonade (nomic-embed-text-v2-moe-GGUF, 768-dim).
+        """Embed text via Lemonade (EmbeddingGemma 300M, 768-dim).
 
         Required, not optional. Raises RuntimeError if embedding fails.
 

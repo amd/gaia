@@ -7,7 +7,7 @@ memory loop.  It turns clusters of successful tool sequences (recorded in
 ``tool_history``) into reusable, ``SKILL.md``-shaped procedures stored in the
 ``procedures`` table.
 
-The pipeline reuses the #606 memory primitives (the nomic-768 embedder, the
+The pipeline reuses the #606 memory primitives (the 768-dim embedder, the
 ``self.chat`` LLM seam, the ``MemoryStore``).  The functions here are pure-ish
 (they take the store / an embed callable / a send-messages callable as
 arguments) so they can be unit-tested without a live backend; the
@@ -445,7 +445,7 @@ def cluster_by_goal(
 ) -> List[GoalCluster]:
     """CLUSTER — group sessions whose goals embed within ``similarity_tau``.
 
-    Embeds each session's goal with ``embed_fn`` (the #606 nomic-768 embedder)
+    Embeds each session's goal with ``embed_fn`` (the #606 768-dim embedder)
     and agglomerates greedily: a seed session opens a cluster and every
     not-yet-assigned session whose goal cosine-similarity to the seed is
     ``>= similarity_tau`` joins it.  Embeddings are assumed L2-normalized

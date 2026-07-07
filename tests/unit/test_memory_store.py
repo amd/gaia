@@ -3757,6 +3757,33 @@ class TestStoreEmbedding:
         stored = np.frombuffer(row[0], dtype=np.float32)
         assert np.allclose(stored, vec2)
 
+    def test_clear_all_embeddings_nulls_vectors_keeps_rows(self, store):
+        """clear_all_embeddings() NULLs stored vectors but keeps the rows.
+
+        Used on an embedding-model change (nomic → EmbeddingGemma): old vectors
+        aren't comparable to new-model queries, so they must be regenerated —
+        but the knowledge itself must survive so backfill can re-embed it.
+        """
+        import numpy as np
+
+        kid = store.store(category="fact", content="Vector to be cleared on migration")
+        store.store_embedding(kid, np.random.rand(768).astype(np.float32).tobytes())
+
+        # Precondition: the item has an embedding, so it isn't "missing" one.
+        assert len(store.get_items_with_embeddings(include_sensitive=True)) == 1
+        assert kid not in [
+            i["id"] for i in store.get_items_without_embeddings(limit=10)
+        ]
+
+        result = store.clear_all_embeddings()
+        assert result["knowledge"] == 1
+        assert "procedures" in result
+
+        # Row survives; its embedding is now NULL (eligible for re-backfill).
+        assert store.get_items_with_embeddings(include_sensitive=True) == []
+        missing_ids = [i["id"] for i in store.get_items_without_embeddings(limit=10)]
+        assert kid in missing_ids
+
     def test_embedding_survives_roundtrip(self, store):
         """Store bytes, read bytes back, compare — lossless roundtrip."""
         import numpy as np

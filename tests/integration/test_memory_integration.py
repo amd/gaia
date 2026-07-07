@@ -856,7 +856,7 @@ class TestConversationPipeline:
         memory_store.store_turn(
             session,
             "assistant",
-            "GAIA uses nomic-embed-text for embeddings via Lemonade.",
+            "GAIA uses EmbeddingGemma for embeddings via Lemonade.",
         )
 
         # Search conversations
@@ -865,7 +865,7 @@ class TestConversationPipeline:
         assert any("RAG" in r["content"] for r in results)
 
         # Search for embedding model
-        results = memory_store.search_conversations("nomic-embed")
+        results = memory_store.search_conversations("EmbeddingGemma")
         assert len(results) >= 1
 
     def test_conversation_context_filtering(self, memory_store):

@@ -86,7 +86,7 @@ def test_known_tool_calling_model_true():
 
 
 def test_known_embedding_model_false():
-    assert is_tool_calling_model("nomic-embed-text-v2-moe-GGUF") is False
+    assert is_tool_calling_model("user.embeddinggemma-300m-GGUF") is False
 
 
 def test_none_returns_false():
@@ -215,15 +215,15 @@ def test_streaming_preserved_without_tools():
 
 
 def test_tools_not_passed_for_non_tool_calling_model():
-    """Non-tool-calling models (e.g. nomic-embed) must not receive tools."""
+    """Non-tool-calling models (e.g. embeddinggemma) must not receive tools."""
     with patch("gaia.llm.providers.lemonade.LemonadeClient") as MockBackend:
         backend = MockBackend.return_value
         backend.chat_completions.return_value = _chat_response_plain_text()
 
-        provider = LemonadeProvider(model="nomic-embed-text-v2-moe-GGUF")
+        provider = LemonadeProvider(model="user.embeddinggemma-300m-GGUF")
         provider.chat(
             messages=[{"role": "user", "content": "hi"}],
-            model="nomic-embed-text-v2-moe-GGUF",
+            model="user.embeddinggemma-300m-GGUF",
             stream=False,
             tools=[{"type": "function", "function": {"name": "search_docs"}}],
         )
@@ -581,7 +581,7 @@ def test_format_template_absent_for_tool_calling_model(clear_tool_registry):
 def test_format_template_present_for_legacy_model(clear_tool_registry):
     """For a non-tool-calling model the embedded-JSON format block IS appended."""
     # Use the embedding model, which has tool_calling=False in MODELS.
-    agent = _make_bare_agent(model_id="nomic-embed-text-v2-moe-GGUF")
+    agent = _make_bare_agent(model_id="user.embeddinggemma-300m-GGUF")
     composed = agent._compose_system_prompt()
     assert "==== RESPONSE FORMAT ====" in composed
     assert "You must respond ONLY in valid JSON" in composed

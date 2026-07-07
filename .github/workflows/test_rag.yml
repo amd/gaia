@@ -172,13 +172,19 @@ jobs:
                 Write-Host "   [WARN] Pull may have failed: $($_.Exception.Message)"
             }
 
-            # Pull embedding model (actual RAG default)
-            Write-Host "Pulling nomic-embed-text-v2-moe-GGUF..."
+            # Pull embedding model (actual RAG default). EmbeddingGemma is a
+            # custom user-model: register with checkpoint + recipe + embedding=true.
+            Write-Host "Pulling user.embeddinggemma-300m-GGUF..."
             try {
-                $body = @{ model_name = "nomic-embed-text-v2-moe-GGUF" } | ConvertTo-Json
+                $body = @{
+                    model_name = "user.embeddinggemma-300m-GGUF"
+                    checkpoint = "ggml-org/embeddinggemma-300M-GGUF:Q8_0"
+                    recipe = "llamacpp"
+                    embedding = $true
+                } | ConvertTo-Json
                 $response = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/pull" `
                     -Method POST -ContentType "application/json" -Body $body -TimeoutSec 600
-                Write-Host "   [OK] nomic-embed-text-v2-moe-GGUF pull initiated"
+                Write-Host "   [OK] user.embeddinggemma-300m-GGUF pull initiated"
             } catch {
                 Write-Host "   [WARN] Pull may have failed: $($_.Exception.Message)"
             }
@@ -198,10 +204,10 @@ jobs:
             Write-Host "`n=== Loading Embedding Model ==="
             try {
                 $loadRequest = @{
-                    model_name = "nomic-embed-text-v2-moe-GGUF"
+                    model_name = "user.embeddinggemma-300m-GGUF"
                 } | ConvertTo-Json
 
-                Write-Host "Loading model: nomic-embed-text-v2-moe-GGUF"
+                Write-Host "Loading model: user.embeddinggemma-300m-GGUF"
                 $loadResponse = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/load" `
                     -Method POST -Body $loadRequest -ContentType "application/json" -TimeoutSec 60
                 Write-Host "[OK] Model loaded successfully: $($loadResponse | ConvertTo-Json -Compress)"
@@ -249,7 +255,7 @@ jobs:
 
             while ($retryCount -lt $maxRetries -and -not $modelReady) {
                 try {
-                    $testBody = @{ input = @("test embedding"); model = "nomic-embed-text-v2-moe-GGUF" } | ConvertTo-Json
+                    $testBody = @{ input = @("test embedding"); model = "user.embeddinggemma-300m-GGUF" } | ConvertTo-Json
                     # Use localhost consistently and increased timeout for first embedding request
                     $response = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/embeddings" `
                         -Method POST -ContentType "application/json" -Body $testBody -TimeoutSec 300

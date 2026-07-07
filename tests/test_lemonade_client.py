@@ -705,7 +705,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         responses.add(
             responses.POST, f"{API_BASE}/unload", json=unload_response, status=200
         )
-        embed_model = "nomic-embed-text-v2-moe-GGUF"
+        embed_model = "user.embeddinggemma-300m-GGUF"
         result = self.client.unload_model(embed_model)
         self.assertEqual(result, unload_response)
         self.assertEqual(
@@ -729,7 +729,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         into a no-op; every other failure — and the default strict mode — still
         raises, so a global unload or a real outage is never swallowed.
         """
-        embed_model = "nomic-embed-text-v2-moe-GGUF"
+        embed_model = "user.embeddinggemma-300m-GGUF"
         not_loaded = {"error": f"Model not loaded: {embed_model}"}
 
         # 404 "not loaded" + flag ON → no-op, no raise.
@@ -828,6 +828,51 @@ class TestLemonadeClientMock(unittest.TestCase):
             reasoning=False,
         )
         self.assertEqual(result, pull_response)
+
+    @responses.activate
+    def test_pull_embedding_model_request_shape(self):
+        """The embedder registration must send a VALID /pull body, not just any
+        pull. EmbeddingGemma is a custom user-model: the request must carry the
+        ``user.`` prefix, the checkpoint, ``recipe=llamacpp`` AND ``embedding=true``
+        together. The ``embedding`` flag is what sets the 'embeddings' label —
+        omitting it reproduces the #1745 501 "server does not support embeddings".
+        Asserts shape (per CLAUDE.md: mocks prove validity, not just invocation).
+        """
+        from gaia.llm.lemonade_client import (
+            DEFAULT_EMBEDDING_CHECKPOINT,
+            DEFAULT_EMBEDDING_MODEL,
+            MODELS,
+        )
+
+        # The registry entry that drives init/RAG/code-index registration.
+        mr = MODELS["embeddinggemma"]
+        self.assertEqual(mr.model_id, DEFAULT_EMBEDDING_MODEL)
+        self.assertTrue(mr.model_id.startswith("user."))
+        self.assertEqual(mr.checkpoint, DEFAULT_EMBEDDING_CHECKPOINT)
+        self.assertEqual(mr.recipe, "llamacpp")
+        self.assertTrue(mr.embedding)
+        self.assertFalse(mr.tool_calling)
+
+        responses.add(
+            responses.POST,
+            f"{API_BASE}/pull",
+            json={"status": "success", "message": "ok"},
+            status=200,
+        )
+
+        self.client.pull_model(
+            model_name=mr.model_id,
+            checkpoint=mr.checkpoint,
+            recipe=mr.recipe,
+            embedding=mr.embedding,
+        )
+
+        body = json.loads(responses.calls[-1].request.body)
+        self.assertEqual(body["model_name"], DEFAULT_EMBEDDING_MODEL)
+        self.assertTrue(body["model_name"].startswith("user."))
+        self.assertEqual(body["checkpoint"], DEFAULT_EMBEDDING_CHECKPOINT)
+        self.assertEqual(body["recipe"], "llamacpp")
+        self.assertIs(body["embedding"], True)
 
     @responses.activate
     def test_delete_model(self):
@@ -1049,7 +1094,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         model_ids = self.client.get_required_models("chat")
 
         self.assertIn("Gemma-4-E4B-it-GGUF", model_ids)
-        self.assertIn("nomic-embed-text-v2-moe-GGUF", model_ids)
+        self.assertIn("user.embeddinggemma-300m-GGUF", model_ids)
 
     def test_get_required_models_for_code(self):
         """Test get_required_models returns correct models for code agent."""
@@ -1069,9 +1114,9 @@ class TestLemonadeClientMock(unittest.TestCase):
         """Test get_required_models returns all unique models."""
         model_ids = self.client.get_required_models("all")
 
-        # All profiles use gemma-4-e4b; some also use nomic-embed
+        # All profiles use gemma-4-e4b; some also use embeddinggemma
         self.assertIn("Gemma-4-E4B-it-GGUF", model_ids)
-        self.assertIn("nomic-embed-text-v2-moe-GGUF", model_ids)
+        self.assertIn("user.embeddinggemma-300m-GGUF", model_ids)
         self.assertEqual(len(model_ids), 2)
 
     def test_get_required_models_unknown_agent(self):

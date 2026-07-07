@@ -1460,6 +1460,33 @@ class MemoryStore:
                 self._conn.rollback()
                 raise
 
+    def clear_all_embeddings(self) -> Dict:
+        """NULL out every stored embedding (knowledge + procedures).
+
+        Used when the embedding model changes: vectors from a different model
+        aren't comparable, so they must be regenerated. The rows themselves are
+        kept — ``backfill_embeddings`` / skill synthesis re-embed lazily with the
+        new model. Returns per-table counts of cleared embeddings.
+        """
+        with self._lock:
+            try:
+                knowledge = self._conn.execute(
+                    "UPDATE knowledge SET embedding = NULL WHERE embedding IS NOT NULL"
+                ).rowcount
+                procedures = self._conn.execute(
+                    "UPDATE procedures SET embedding = NULL WHERE embedding IS NOT NULL"
+                ).rowcount
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        logger.info(
+            "[MemoryStore] cleared embeddings (model change): knowledge=%d procedures=%d",
+            knowledge,
+            procedures,
+        )
+        return {"knowledge": knowledge, "procedures": procedures}
+
     def get_items_with_embeddings(
         self,
         category: str | None = None,

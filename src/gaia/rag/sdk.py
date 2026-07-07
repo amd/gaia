@@ -46,6 +46,7 @@ except Exception:  # pylint: disable=broad-except
     faiss = None
 
 from gaia.chat.sdk import AgentConfig, AgentSDK
+from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL
 from gaia.logger import get_logger
 from gaia.security import PathValidator
 
@@ -94,9 +95,7 @@ class RAGConfig:
     chunk_size: int = 500
     chunk_overlap: int = 100  # Increased to 20% overlap for better context preservation
     max_chunks: int = 5  # Increased to retrieve more context
-    embedding_model: str = (
-        "nomic-embed-text-v2-moe-GGUF"  # Lemonade GGUF embedding model
-    )
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL  # Lemonade GGUF embedding model
     cache_dir: str = ".gaia"
     show_stats: bool = False
     use_local_llm: bool = True
@@ -482,10 +481,36 @@ class RAGSDK:
                 f"Loading embedding model via Lemonade: {self.config.embedding_model}"
             )
 
-            from gaia.llm.lemonade_client import LemonadeClient
+            from gaia.llm.lemonade_client import MODELS, LemonadeClient
 
             if not hasattr(self, "llm_client") or self.llm_client is None:
                 self.llm_client = LemonadeClient()
+
+            # Register + download the embedder before loading. Custom
+            # (``user.``) embedders aren't Lemonade built-ins — they need
+            # checkpoint + recipe + the embedding label on first pull. Fail
+            # loudly if registration fails (no silent fall-back to nomic).
+            mr = next(
+                (
+                    m
+                    for m in MODELS.values()
+                    if m.model_id == self.config.embedding_model
+                ),
+                None,
+            )
+            if mr and self.config.embedding_model.startswith("user."):
+                if not self.llm_client.ensure_model_downloaded(
+                    self.config.embedding_model,
+                    checkpoint=mr.checkpoint,
+                    recipe=mr.recipe,
+                    embedding=mr.embedding,
+                ):
+                    raise RuntimeError(
+                        f"Failed to register/download embedding model "
+                        f"{self.config.embedding_model!r}. Ensure Lemonade Server "
+                        f"is running and reachable, then retry "
+                        f"(or run `gaia init --profile rag`)."
+                    )
 
             # Scoped unload of the embedder ONLY — a global /unload would evict
             # the co-resident chat model and trigger a ~100s cold reload (#1544).
