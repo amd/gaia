@@ -37,6 +37,9 @@ jobs:
   test-embeddings:
     name: Test Lemonade Embeddings API
     runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
+    # Bound a wedged model pull/load — the LemonadeClient pull timeout alone
+    # is 200 min; don't let one hold the self-hosted runner for the 6h default.
+    timeout-minutes: 30
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:

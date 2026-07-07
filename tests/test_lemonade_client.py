@@ -804,6 +804,55 @@ class TestLemonadeClientMock(unittest.TestCase):
             logger.setLevel(original_level)
 
     @responses.activate
+    def test_load_model_retry_stops_when_error_turns_corrupt(self):
+        """A retry error that turns corrupt stops the loop and enters repair."""
+        logger = logging.getLogger("gaia.llm.lemonade_client")
+        original_level = logger.level
+        logger.setLevel(logging.CRITICAL)
+        try:
+            corrupt_body = {
+                "error": {
+                    "code": "model_load_error",
+                    "message": (
+                        f"Failed to load model '{TEST_MODEL}': "
+                        f"download validation failed"
+                    ),
+                    "type": "model_load_error",
+                }
+            }
+            # First call fails transiently; the retry surfaces a corrupt
+            # download. The loop must break (no further retries) and the
+            # corrupt-repair path must take over.
+            responses.add(
+                responses.POST,
+                f"{API_BASE}/load",
+                json=self._TRANSIENT_LOAD_BODY,
+                status=500,
+            )
+            responses.add(
+                responses.POST,
+                f"{API_BASE}/load",
+                json=corrupt_body,
+                status=500,
+            )
+            with patch("gaia.llm.lemonade_client.time.sleep") as mock_sleep:
+                with patch.object(
+                    self.client, "_consume_pull_stream", return_value=False
+                ) as mock_pull:
+                    with self.assertRaises(LemonadeClientError) as ctx:
+                        self.client.load_model(
+                            model_name=TEST_MODEL, load_retries=3, prompt=False
+                        )
+            # 1 initial + 1 retry, NOT 4: the corrupt error stopped the loop.
+            self.assertEqual(len(responses.calls), 2)
+            mock_sleep.assert_called_once()
+            # The repair path ran (resume attempted) instead of more retries.
+            mock_pull.assert_called_once_with(TEST_MODEL, "resume")
+            self.assertIn("download validation failed", str(ctx.exception))
+        finally:
+            logger.setLevel(original_level)
+
+    @responses.activate
     def test_unload_model_scoped_vs_global(self):
         """unload_model(name) targets only that model; unload_model() stays global.
 

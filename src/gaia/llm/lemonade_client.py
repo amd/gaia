@@ -1326,6 +1326,54 @@ class LemonadeClient:
         error_message = (error_info.get("message") or "").lower()
         return any(phrase in error_message for phrase in self._TRANSIENT_LOAD_PHRASES)
 
+    def _post_load_with_transient_retry(
+        self,
+        url: str,
+        request_data: Dict[str, Any],
+        timeout: int,
+        model_name: str,
+        load_retries: int,
+    ) -> Dict[str, Any]:
+        """POST /load, retrying the transient backend-startup fault.
+
+        Retries only :meth:`_is_transient_load_error` failures (e.g. the AMD
+        Vulkan iGPU intermittently aborting llama-server), with an escalating
+        backoff, then re-raises the last error so the caller's existing
+        handling (corrupt repair, auto-download, fail-loud re-raise) takes
+        over. Non-transient failures raise immediately.
+        """
+        try:
+            return self._send_request("post", url, request_data, timeout=timeout)
+        except Exception as e:
+            if not (load_retries > 0 and self._is_transient_load_error(e)):
+                raise
+            last_error = e
+            for retry_num in range(1, load_retries + 1):
+                backoff = MODEL_LOAD_RETRY_BACKOFF * retry_num
+                self.log.warning(
+                    f"{_emoji('⚠️', '[RETRY]')} Transient load failure for "
+                    f"'{model_name}' (retry {retry_num}/{load_retries}): "
+                    f"{last_error}. Backing off "
+                    f"{backoff}s for the backend to recover..."
+                )
+                time.sleep(backoff)
+                try:
+                    response = self._send_request(
+                        "post", url, request_data, timeout=timeout
+                    )
+                    self.log.info(
+                        f"{_emoji('✅', '[OK]')} Loaded {model_name} after "
+                        f"{retry_num} retr{'y' if retry_num == 1 else 'ies'}"
+                    )
+                    return response
+                except Exception as retry_err:  # noqa: BLE001
+                    last_error = retry_err
+                    if not self._is_transient_load_error(retry_err):
+                        break
+            # Retries exhausted (or the error changed nature): surface the
+            # latest error to the caller's handling. Fail-loudly is preserved.
+            raise last_error
+
     def _execute_with_auto_download(
         self, api_call: Callable, model: str, auto_download: bool = True
     ):
@@ -2875,6 +2923,8 @@ class LemonadeClient:
                          24s...). Default 3; pass 0 to disable. Only the
                          transient fault is retried — corrupt/missing-model errors
                          fail through to their normal handling immediately.
+                         Applies to every load attempt in this call, including
+                         the reload after an auto-download or corrupt repair.
 
         Returns:
             Dict containing the status of the load operation
@@ -2896,46 +2946,14 @@ class LemonadeClient:
         url = f"{self.base_url}/load"
 
         try:
-            response = self._send_request("post", url, request_data, timeout=timeout)
+            response = self._post_load_with_transient_retry(
+                url, request_data, timeout, model_name, load_retries
+            )
             self.log.debug(f"Loaded {model_name} successfully: response={response}")
             self.model = model_name
             return response
         except Exception as e:
             original_error = str(e)
-
-            # Transient backend-startup fault (e.g. the AMD Vulkan iGPU
-            # intermittently aborting llama-server): retry the SAME load a
-            # bounded number of times before any other handling — it usually
-            # succeeds once the GPU/driver state settles. Corrupt/missing-model
-            # errors are excluded and fall straight through.
-            if load_retries > 0 and self._is_transient_load_error(e):
-                for retry_num in range(1, load_retries + 1):
-                    backoff = MODEL_LOAD_RETRY_BACKOFF * retry_num
-                    self.log.warning(
-                        f"{_emoji('⚠️', '[RETRY]')} Transient load failure for "
-                        f"'{model_name}' (retry {retry_num}/{load_retries}): "
-                        f"{original_error}. Backing off "
-                        f"{backoff}s for the backend to recover..."
-                    )
-                    time.sleep(backoff)
-                    try:
-                        response = self._send_request(
-                            "post", url, request_data, timeout=timeout
-                        )
-                        self.log.info(
-                            f"{_emoji('✅', '[OK]')} Loaded {model_name} after "
-                            f"{retry_num} retr{'y' if retry_num == 1 else 'ies'}"
-                        )
-                        self.model = model_name
-                        return response
-                    except Exception as retry_err:  # noqa: BLE001
-                        e = retry_err
-                        original_error = str(retry_err)
-                        if not self._is_transient_load_error(retry_err):
-                            break
-                # Retries exhausted (or the error changed nature): fall through
-                # to the existing handling below with the latest error, which
-                # re-raises with context. Fail-loudly is preserved.
 
             # Check if this is a corrupt/incomplete download error
             is_corrupt = self._is_corrupt_download_error(e)
@@ -2968,8 +2986,8 @@ class LemonadeClient:
                     # First attempt: resume download
                     if self._consume_pull_stream(model_name, "resume"):
                         # Retry loading
-                        response = self._send_request(
-                            "post", url, request_data, timeout=timeout
+                        response = self._post_load_with_transient_retry(
+                            url, request_data, timeout, model_name, load_retries
                         )
                         self.log.info(
                             f"{_emoji('✅', '[OK]')} Loaded {model_name} after resume"
@@ -3003,8 +3021,8 @@ class LemonadeClient:
                         )
                         if self._consume_pull_stream(model_name, "fresh download"):
                             # Retry loading
-                            response = self._send_request(
-                                "post", url, request_data, timeout=timeout
+                            response = self._post_load_with_transient_retry(
+                                url, request_data, timeout, model_name, load_retries
                             )
                             self.log.info(
                                 f"{_emoji('✅', '[OK]')} Loaded {model_name} after fresh download"
@@ -3121,8 +3139,8 @@ class LemonadeClient:
                     self.log.info(
                         f"{_emoji('🔄', '[RETRY]')} Retrying model load: {model_name}"
                     )
-                    response = self._send_request(
-                        "post", url, request_data, timeout=timeout
+                    response = self._post_load_with_transient_retry(
+                        url, request_data, timeout, model_name, load_retries
                     )
                     self.log.info(
                         f"{_emoji('✅', '[OK]')} Loaded {model_name} successfully after download"
