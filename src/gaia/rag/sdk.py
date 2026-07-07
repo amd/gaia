@@ -169,6 +169,7 @@ class RAGSDK:
         self.embedder = None
         self.llm_client = None
         self.use_lemonade_embeddings = False
+        self._embedding_cache = None  # content-keyed query-embed cache (lazy)
         self.index = None
         self.chunks = []
         self.indexed_files = set()
@@ -629,6 +630,34 @@ class RAGSDK:
 
         # Convert to numpy array
         return np.array(all_embeddings, dtype=np.float32)
+
+    def _get_embedding_cache(self):
+        """Lazy-init the content-keyed embedding cache (per-instance)."""
+        cache = getattr(self, "_embedding_cache", None)
+        if cache is None:
+            from gaia.llm.embedding_cache import EmbeddingCache
+
+            cache = EmbeddingCache()
+            self._embedding_cache = cache
+        return cache
+
+    def _encode_query(self, query: str) -> "np.ndarray":
+        """Encode a single query to a (1, dim) array, served from the
+        content-keyed cache so identical queries across turns skip the embed.
+
+        Falls back to ``_encode_texts`` on a miss. Stored/doc-chunk vectors
+        are persisted elsewhere; this targets repeated *query* embeds only.
+        """
+        cache = self._get_embedding_cache()
+        model_id = self.config.embedding_model
+        cached = cache.get(model_id, None, query)
+        if cached is not None:
+            return np.array([cached], dtype=np.float32)
+
+        embedding = self._encode_texts([query], show_progress=False)
+        if embedding.shape[0] > 0:
+            cache.put(model_id, None, query, embedding[0])
+        return embedding
 
     def _get_file_type(self, file_path: str) -> str:
         """Detect file type from extension."""
@@ -3041,7 +3070,7 @@ These positions indicate where to split the text."""
 
         # Encode query only once
         self._load_embedder()
-        query_embedding = self._encode_texts([query], show_progress=False)
+        query_embedding = self._encode_query(query)
 
         # Search in cached file-specific index
         k = min(self.config.max_chunks, len(file_chunks))
@@ -3119,7 +3148,7 @@ These positions indicate where to split the text."""
         if self.config.show_stats:
             print(f"🔍 Searching through {len(chunks_snapshot)} chunks...")
         self.log.debug(f"Encoding query: {query[:50]}...")
-        query_embedding = self._encode_texts([query], show_progress=False)
+        query_embedding = self._encode_query(query)
 
         # Search for similar chunks
         k = min(self.config.max_chunks, len(chunks_snapshot))
