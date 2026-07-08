@@ -8,6 +8,14 @@ icon: "envelope"
 
 The Email Triage Agent connects to your Gmail account through GAIA's connectors framework and runs every email-body inference **locally on your machine** via Lemonade. No email content ever leaves your device.
 
+<Note>
+  **Embedding the agent in your own app?** If you're building an application that owns the
+  mailbox UX and OAuth and wants GAIA's email agent as a local processing component, see
+  [Email Integration (API)](/guides/email-integration) — it covers self-OAuth → connection
+  forwarding → triage/draft/send over REST or MCP. This page covers the flow where GAIA
+  owns the UX.
+</Note>
+
 ## What it does
 
 - **Triage your inbox** — classify every message as `urgent`, `actionable`, `informational`, or `low priority`, plus separate `is_spam` and `is_phishing` flags.
