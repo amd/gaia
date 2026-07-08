@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: MIT
 """Reply / send / forward tools.
 
-``send_draft``, ``send_now``, and ``forward_message`` are registered in
-``TOOLS_REQUIRING_CONFIRMATION`` at the agent level — they never
+``send_draft``, ``send_now``, and ``forward_message`` are declared in the
+agent's ``CONFIRMATION_REQUIRED_TOOLS`` (merged with the generic base set
+via ``confirmation_required_tools()``, #1440) — they never
 auto-execute. The confirmation payload includes the LITERAL ``to``,
 ``subject``, and ``body[:200]`` (Phase I2 / S2.M1) so the user sees what
 will actually be sent, not an LLM-generated paraphrase.

@@ -5,7 +5,8 @@ detect meeting requests embedded in an email body, and flag scheduling
 conflicts against the user's calendar.
 
 ``accept_invite``, ``decline_invite``, ``create_event_from_email`` are
-registered in ``TOOLS_REQUIRING_CONFIRMATION`` at the agent level —
+declared in the agent's ``CONFIRMATION_REQUIRED_TOOLS`` (merged with the
+generic base set via ``confirmation_required_tools()``, #1440) —
 calendar mutations are externally visible to other attendees.
 ``detect_meeting_request`` and ``detect_calendar_conflicts`` are read-only
 (they inspect text / read the calendar but make no changes) and are NOT

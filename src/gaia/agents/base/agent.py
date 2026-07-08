@@ -134,9 +134,15 @@ class ToolExecutionTimeout(Exception):
         )
 
 
-# Tools that require explicit user confirmation before execution.
-# Adding a tool name here causes _execute_tool() to call
-# console.confirm_tool_execution() and block until the user responds.
+# Generic dangerous tools that require explicit user confirmation before
+# execution, regardless of which agent runs them (shell / file mutation).
+# Agent-specific gated tools (e.g. email send/RSVP) are declared on the owning
+# agent class via ``Agent.CONFIRMATION_REQUIRED_TOOLS`` and merged with this
+# base set at runtime — see ``Agent.confirmation_required_tools`` (#1440).
+#
+# Adding a tool name here (or to a subclass's ``CONFIRMATION_REQUIRED_TOOLS``)
+# causes _execute_tool() to call console.confirm_tool_execution() and block
+# until the user responds.
 TOOLS_REQUIRING_CONFIRMATION = {
     "run_shell_command",
     "run_cli_command",
@@ -147,21 +153,6 @@ TOOLS_REQUIRING_CONFIRMATION = {
     "write_markdown_file",
     "replace_function",
     "update_gaia_md",
-    # Email Triage Agent (#962) — destructive / external. The
-    # confirmation payload surfaces the literal recipient/subject/body
-    # so the user sees what will actually happen, not an LLM paraphrase
-    # (Phase I2 / S2.M1).
-    "send_draft",
-    "send_now",
-    "forward_message",
-    "permanent_delete",
-    "accept_invite",
-    "decline_invite",
-    "create_event_from_email",
-    # Phishing quarantine (#1271) — mutates message state (removes from INBOX
-    # and applies a quarantine label). Reversible via unquarantine_message but
-    # must not auto-execute without explicit user confirmation.
-    "quarantine_phishing_message",
 }
 
 
@@ -296,6 +287,14 @@ class Agent(abc.ABC):
 
     # Registry reads this to include dynamic MCP consumers in the Settings "Active for" panel.
     CONSUMES_MCP_SERVERS: ClassVar[bool] = False
+
+    # Agent-specific tools that must be gated behind explicit user confirmation
+    # (#1440). Subclasses override this to declare their own destructive/external
+    # tools (e.g. email send, calendar RSVP). It is UNIONED with the generic
+    # ``TOOLS_REQUIRING_CONFIRMATION`` base set at runtime — see
+    # ``confirmation_required_tools`` — so an agent never has to re-list the
+    # generic shell/file-mutation tools. Empty by default.
+    CONFIRMATION_REQUIRED_TOOLS: ClassVar[frozenset] = frozenset()
 
     # Declarative per-agent hardware requirement.  Agents that need a
     # minimum tier (e.g., NPU) should set this ClassVar to a
@@ -1894,6 +1893,19 @@ Do NOT wrap conversational replies in JSON.
             raise holder["exc"]
         return holder.get("result")
 
+    @classmethod
+    def confirmation_required_tools(cls) -> frozenset:
+        """The full set of tool names gated behind explicit user confirmation
+        for this agent (#1440): the generic dangerous base set
+        (``TOOLS_REQUIRING_CONFIRMATION``) unioned with the agent's own
+        ``CONFIRMATION_REQUIRED_TOOLS``. ``_execute_tool`` consults this so
+        subclasses declare only their agent-specific tools without re-listing
+        the shared shell/file-mutation ones.
+        """
+        return frozenset(TOOLS_REQUIRING_CONFIRMATION) | frozenset(
+            cls.CONFIRMATION_REQUIRED_TOOLS
+        )
+
     def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """
         Execute a tool by name with the provided arguments.
@@ -1966,7 +1978,7 @@ Do NOT wrap conversational replies in JSON.
         # Guardrail: require explicit user confirmation for high-risk tools.
         # The SSEOutputHandler overrides this to block until the frontend
         # responds; the default implementation auto-approves (CLI path).
-        if tool_name in TOOLS_REQUIRING_CONFIRMATION:
+        if tool_name in self.confirmation_required_tools():
             if not self.console.confirm_tool_execution(tool_name, tool_args):
                 return {
                     "status": "denied",

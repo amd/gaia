@@ -238,9 +238,7 @@ class TestConfirmationGating:
         ],
     )
     def test_destructive_tool_is_confirmation_gated(self, tool_name):
-        from gaia.agents.base.agent import TOOLS_REQUIRING_CONFIRMATION
-
-        assert tool_name in TOOLS_REQUIRING_CONFIRMATION
+        assert tool_name in EmailTriageAgent.confirmation_required_tools()
 
 
 class TestAC3LocalLLMOnly:

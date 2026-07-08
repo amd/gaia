@@ -316,7 +316,9 @@ renders all pending requests; each is resolved independently by `request_id`.
 ### 5.4 Background Mode: Destructive Tool Handling
 
 When a tick runs in the background (no user actively watching), any tool
-in `TOOLS_REQUIRING_CONFIRMATION` behaves differently:
+in the agent's confirmation set (`confirmation_required_tools()` — the
+generic base set merged with the agent's own `CONFIRMATION_REQUIRED_TOOLS`)
+behaves differently:
 
 | Context | Behavior |
 |---------|----------|
