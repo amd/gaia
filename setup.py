@@ -28,6 +28,7 @@ setup(
         "gaia.llm.providers",
         "gaia.audio",
         "gaia.chat",
+        "gaia.schedule",
         "gaia.ui",
         "gaia.ui.routers",
         "gaia.ui.email_sidecar",
@@ -105,6 +106,11 @@ setup(
         "beautifulsoup4",
         "watchdog>=2.1.0",
         "pillow>=9.0.0",
+        # Cron-based scheduler (issue #892): apscheduler drives the daemon;
+        # tomli/tomli-w read+write ~/.gaia/schedules.toml (tomllib is stdlib on 3.11+).
+        "apscheduler>=3.10.0",
+        "tomli-w>=1.0.0",
+        "tomli>=2.0.0; python_version < '3.11'",
         # Required by the `gaia-mcp` bridge (base console_script), which parses
         # multipart uploads via python_multipart at import time. Base — not an
         # extra — so a plain `pip install amd-gaia` ships a working gaia-mcp.
