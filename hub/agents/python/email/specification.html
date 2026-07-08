@@ -1318,6 +1318,24 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
 
     <h3 style="margin-top:34px">Endpoints</h3>
 
+    <div class="endpoint" id="ep-init">
+      <span class="badge">GET</span><span class="path">/v1/email/init</span>
+      <p class="desc">Readiness preflight for the whole triage stack (<a class="iss" href="https://github.com/amd/gaia/issues/1795" target="_blank" rel="noopener">#1795</a>). Returns <b>200</b> when ready and <b>503</b> when not, with an actionable <code>hint</code>. Unlike <code class="inl">/health</code> (liveness-only — never touches the LLM), this probes the local Lemonade Server, checks it is at a compatible <b>version</b> (&ge; the agent's <code>min_lemonade_version</code>), and confirms the triage model is downloaded, so a host can verify &ldquo;ready to triage,&rdquo; not just &ldquo;process up.&rdquo; Read-only — probes only, no model pull or provisioning is triggered.</p>
+      <h4>Response body — InitResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>ready</code></td><td>bool</td><td>True only when Lemonade is reachable, at a compatible version, <b>and</b> the triage model is present.</td></tr>
+        <tr><td><code>lemonade</code></td><td>object</td><td><code>{ reachable, base_url, version, min_version, compatible }</code>. <code>version</code> is Lemonade's self-reported version (null if not advertised); <code>compatible</code> is <code>version &ge; min_version</code> (<code>null</code> = indeterminate, not a pass).</td></tr>
+        <tr><td><code>model</code></td><td>object</td><td><code>{ id: string, present: bool, loadable: bool|null }</code>. <code>present</code> is a cheap model-list lookup; <code>loadable</code> is <code>null</code> in v1 (forcing a load is heavy).</td></tr>
+        <tr><td><code>hint</code></td><td>string | null</td><td>Actionable next step when not ready (e.g. &ldquo;Lemonade x.y.z &lt; required a.b.c — upgrade&rdquo;); <code>null</code> when ready.</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="endpoint" id="ep-provision">
+      <span class="badge">POST</span><span class="path">/v1/email/init</span>
+      <p class="desc">Provision the triage stack and <b>stream terminal-style progress</b> (<a class="iss" href="https://github.com/amd/gaia/issues/1795" target="_blank" rel="noopener">#1795</a>). Tells the running local Lemonade Server to download the configured email model, streaming newline-delimited progress lines (<code>text/plain</code>) a consumer can render line by line. A line beginning <code>✓</code> marks success, <code>✗</code> a failure; the final line is authoritative.</p>
+      <p class="body-t"><b>Scope (frozen-binary reality):</b> the sidecar can’t run the full <code>gaia init</code> or install Lemonade itself (chicken-and-egg). If Lemonade is unreachable it returns <b>503</b> with an actionable line and pulls nothing. Once a pull starts the response is a committed <b>200</b> — the HTTP status can’t change mid-stream, so the trailing <code>✓</code>/<code>✗</code> line carries the real outcome. On success, re-run <a class="eplink" href="#ep-init"><code>GET /v1/email/init</code></a> to confirm readiness.</p>
+    </div>
+
     <div class="endpoint" id="ep-triage">
       <span class="badge">POST</span><span class="path">/v1/email/triage</span>
       <p class="desc">Triage a single email or a full thread. Returns category, spam/phishing signals, summary, action items, and an optional draft proposal. Reads/sends no mail — analyzes only the payload. Extracted action items also persist to the local task store, linked to the source <code>message_id</code> and de-duplicated per message (capability 14) — the response shape is unchanged.</p>
@@ -1591,7 +1609,7 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
         <tr><td><code>409</code></td><td>Undo window expired</td><td><a class="eplink" href="#ep-unarchive"><code>/unarchive</code></a> or <a class="eplink" href="#ep-unquarantine"><code>/unquarantine</code></a> called past the 30s window, or the handle is unknown/already undone. Restore manually in the mail client.</td></tr>
         <tr><td><code>422</code></td><td>Validation error</td><td>Request violates the contract — unknown field, missing required field, or malformed address. The contract is strict (extra fields are rejected).</td></tr>
         <tr><td><code>502</code></td><td>Upstream error</td><td><code>/triage</code>: the local-LLM triage call failed. <code>/send</code> · <code>/archive</code> · <code>/quarantine</code>: the mail backend errored (or send returned no message id).</td></tr>
-        <tr><td><code>503</code></td><td>Backend unavailable</td><td>The mailbox account isn't connected. Connect the provider before sending, archiving, or quarantining.</td></tr>
+        <tr><td><code>503</code></td><td>Backend unavailable / not ready</td><td><code>/send</code> · <code>/archive</code> · <code>/quarantine</code>: the mailbox account isn't connected — connect the provider first. <a class="eplink" href="#ep-init"><code>/v1/email/init</code></a>: the triage stack isn't ready (Lemonade unreachable or the model not downloaded); the <code>hint</code> names the fix.</td></tr>
       </tbody>
     </table>
 

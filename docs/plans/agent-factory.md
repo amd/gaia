@@ -6,9 +6,9 @@
 > the artifacts the runtime consumes: the **manifest** (§0.28), the **Hub** (§0.5), and
 > **signing** (§0.24). The factory *produces* those; the runtime *enforces* them.
 >
-> **Dependency:** the `§0.x` cross-references live in the **Agent UI v2 runtime PR
-> (#1913)** — this doc is the sibling half and assumes that PR's
-> `agent-ui-agent-capabilities-plan.md §0` as context.
+> **Dependency:** the `§0.x` cross-references live in
+> `agent-ui-agent-capabilities-plan.md §0`, landed on `main` via the **Agent UI v2
+> runtime PR (#1913, merged)** — this doc is the sibling half and assumes it as context.
 
 **Reading map** (§ jump-list):
 - **Why & what** — §0 thesis (SDLC automated) · §1 the live-SDK keystone · §1.5 the *recipe* (the one authored input)
@@ -79,11 +79,11 @@ existing schema):
 ```yaml
 id: email
 purpose: "Triage, search, and organize a personal Gmail/Outlook mailbox, locally."
-model:      { llm: Gemma-4-E4B-it-GGUF, min_ctx: 8192 }   # → manifest.requiredModels
+model:      { llm: Gemma-4-E4B-it-GGUF, min_ctx: 65536 }   # → manifest.requiredModels (matches MODELS[…].min_ctx_size)
 tools:      [rag, file_io]                                 # KNOWN_TOOLS mixins
-skills:     [triage-inbox, follow-up-tracking]             # SKILL.md (skill-format)
+skills:     [triage-inbox, follow-up-tracking]             # SKILL.md (skill-format; illustrative names)
 mcp:        [gmail, google-calendar]                       # MCP servers (tool-loader)
-connectors: { google: [gmail.modify, calendar] }           # → manifest.oauthScopes (least-priv)
+connectors: { google: [gmail.modify, calendar.events] }    # → manifest.oauthScopes (least-priv; catalog scope names)
 egress:     [googleapis.com]                                # → manifest.egressAllowlist (§0.24)
 eval:                                                       # the gate (§5, §5.5)
   held_out_oracle: oracles/email/            # human-curated, curator ≠ spec author; split by thread-id
@@ -106,7 +106,7 @@ recipe names the **held-out oracle path** but not its contents (that stays human
 ```
    ┌──────────────── FACTORY ORCHESTRATOR (per agent, per SDK-delta) ────────────────┐
    │  Claude Code (skills + memory)  ─and/or─  custom Agent-SDK orchestrator          │
-   │      ├─► GAIA coder (CodeAgent, origin/coder: orchestration, validators, infer)  │
+   │      ├─► GAIA coder (gaia-agent-code on main; newer CoderAgent on origin/coder)  │
    │      ├─► skills: brainstorming · writing-plans · TDD · debugging · review        │
    │      ├─► memory: prior spec, eval baselines, past failures, SDK-change history    │
    │      └─► tools: git worktree · gh (issues/PRs) · gaia eval · packaging line       │
@@ -123,8 +123,8 @@ spec, baseline, failure modes, and *what changed in the SDK since last build*.
 
 The factory is a **supervised** pipeline, not a fully-autonomous one. Every risky stage
 carries an **approve/deny gate** — the *same* confirmation model the agents themselves use
-(runtime §0.4 confirmation gate, §0.34 autonomy *policy layer* — a policy engine, not an
-enum of levels). A human (or a policy) accepts or
+(runtime §0.4 confirmation gate, §0.34 autonomy *policy layer* — a policy engine with
+graduated levels as one component, not a bare enum of levels). A human (or a policy) accepts or
 rejects at each checkpoint before the pipeline proceeds:
 
 | Checkpoint | What the human approves / denies |
@@ -200,8 +200,8 @@ is mostly net-new automation; **Back (ship)** cites the pipeline that *already e
 | 3 | **Spec** — author the design/spec doc | `brainstorming` → `writing-plans` skills | this session's method (*skills exist*) | — |
 | 4 | **Iterate spec** 🚦 | adversarial review loop to convergence | review agents + memory (*exists*) | converges |
 | 5 | **Dev/optimize corpus** — generate the *training* corpus (seed-from-real, labels-by-construction, §5.5) | dataset generators (*automated*) | `generate_mbox.py` · `vendor_corpus_seed` · `pdf_document_generator` (*exists*) | 🚦 PII-scrub on seed |
-| 5b | **Held-out oracle** — curate/extend to cover the *current capability surface* (§5.5) | **human, NOT the factory** (curator ≠ spec author) | `ground_truth.json` + `quality_gate_thresholds.json` pattern (*exists*) | 🚦 coverage-delta |
-| 6 | **Implement** — write agent code **against the live SDK** | GAIA coder + TDD | `origin/coder` `CodeAgent` *(on a branch)* + `agents/base/*` | compiles/lints |
+| 5b | **Held-out oracle** — curate/extend to cover the *current capability surface* (§5.5) | **human, NOT the factory** (curator ≠ spec author) | `quality_gate_thresholds.json` (*committed*); a *committed* oracle set is net-new — `ground_truth.json` today is derived + gitignored (§5.5) | 🚦 coverage-delta |
+| 6 | **Implement** — write agent code **against the live SDK** | GAIA coder + TDD | `gaia-agent-code` `CodeAgent` *(on main)*; newer `src/gaia/coder/` `CoderAgent` *(unmerged, `origin/coder`)* + `agents/base/*` | compiles/lints |
 | 7 | **Eval + optimize** 🚦 | eval → analyze failures → repair → re-eval | `gaia eval agent [--fix]` · `scorecard.py` · `analyze_failures.py` (*exists*) | scorecard ≥ bar |
 | 8 | **PR** 🚦 | open PR(s) into the codebase (agent code — *and SDK changes it needs*) | orchestrator + `gh` (PR authoring) | `claude.yml` PR-review bot + CI (*exists*) | review + CI green |
 
@@ -210,15 +210,15 @@ is mostly net-new automation; **Back (ship)** cites the pipeline that *already e
 | # | Stage | What it does | Component (status) | Gate |
 |---|---|---|---|---|
 | 9 | **Docs: generate SCORECARD, publish the rest** | `SCORECARD.md` is CI-generated; README/SPEC/SKILL/CHANGELOG are authored/committed and *published* (not emitted), kept in sync (§4) | `gen_scorecard.py` (gen) · committed docs · CLAUDE.md sync rule (*exists, manual sync*) | docs-in-sync |
-| 10 | **Manifest emit** | derive `manifest.json` (§0.28) from recipe + compose/eval outputs | net-new emitter (schema in #1913) | schema-valid |
+| 10 | **Manifest emit** | derive `manifest.json` (§0.28) from recipe + compose/eval outputs | net-new emitter (schema landed with #1913) | schema-valid |
 | 11 | **Multi-platform freeze** 🚦 | freeze win32-x64 · darwin-arm64 · darwin-x64 · linux-x64; smoke-test each; **assert required platforms** | `packaging/freeze.py` · `smoke_test.py` · `release_agent_email.yml` (*exists*) | smoke + platforms |
 | 12 | **OS-compat verify** 🚦 | run a newer-OS-built binary on an **older OS** — *darwin-x64 leg only today* (macos-26 build → macOS 15); other platforms have no older-OS verify | `release_agent_email.yml` verify job (*exists, darwin-x64*) | older-OS smoke |
-| 13 | **Eval gate** 🚦 | on the **held-out oracle** (§5.5); **fixed** acceptance bar + safety floor (#1437); prev-release as a **non-inferiority band** `≥ prev − k·stdev` (§5) | `scorecard_gate.py` (*exists*) | point-estimate `min-aggregate` today; non-inferiority band = **M2** |
+| 13 | **Eval gate** 🚦 | on the **held-out oracle** (§5.5); **fixed** acceptance bar + safety floor (#1437); prev-release as a **non-inferiority band** `≥ prev − k·stdev` (§5) | `scorecard_gate.py` (*exists*) | floors + band ship today for email (#1894); per-agent adoption + oracle = **M2** |
 | 14 | **Package assemble** | npm tarball (client + docs + lock) + R2 binaries + `package-files.json`. ⚠️ single whole-package **zip DISABLED** (`if: false`, Cloudflare 413) | `gen_package_files.py` · npm build (*exists; zip disabled*) | manifest complete |
 | 15 | **Sign + real-hash lock + provenance** 🚦 | SHA-256, **npm OIDC trusted-publishing provenance**, regenerate `binaries.lock.json` with **real hashes**, embed provenance (spec · scorecard · SDK commit) | `gen_binaries_lock.py` · npm OIDC (*exists; signing partial*) | signature/provenance |
 | 16 | **Publish** | cut-from-main + token gates; POST `/publish` to Hub Worker; npm publish; **redeploy catalog site** | `publish_to_r2.py` · Hub Worker · website deploy (*exists*) | governance gates |
 | 17 | **Post-publish edge verify** 🚦 | fetch **every published object via the real fetch CLI** at the CDN edge (#1655 "user's real state") — *per-object verify works; the zip-verify leg is disabled with the zip (§6)* | fetch-verify steps (*exists; zip leg off*) | real download OK |
-| 18 | **Maintain (continuous)** 🚦 | on an SDK delta that regresses the agent's eval, re-run 1–17 for the delta | net-new trigger + the above | eval stays ≥ bar |
+| 18 | **Maintain (continuous)** 🚦 | on an SDK delta that regresses the agent's eval, re-run the affected stages 1–17 for the delta (5b only when the capability surface changed, §5.5) | net-new trigger + the above | eval stays ≥ bar |
 
 Stages 9–17 already run in CI (`release_agent_email.yml`, `build_agents.yml`,
 `publish_agents.yml`, `email_scorecard_refresh.yml`) — **the factory generalizes them
@@ -237,8 +237,9 @@ deliverable** — doc drift is a real published-defect class, but the checker do
 yet and M0 shouldn't block on building it.
 
 **The scorecard is a shipped, refreshed artifact — not just a gate.** `SCORECARD.md`
-publishes *with* the agent and is refreshed on a cadence (`email_scorecard_refresh.yml`),
-so the eval result is both (a) the stage-13 gate and (b) provenance the product carries
+publishes *with* the agent and is refreshable on demand (`email_scorecard_refresh.yml`
+is `workflow_dispatch`-only today — a scheduled cadence is a one-line upgrade), so the
+eval result is both (a) the stage-13 gate and (b) provenance the product carries
 and keeps current.
 
 ## 5. The eval gate is data-driven, not "≥ a committed baseline"
@@ -249,7 +250,9 @@ draft reinventing the shipped gate in a strictly worse form):
 
 - **Two FIXED hard gates (no drift):** a **fixed acceptance bar** and **fixed safety
   floors** — constants, exactly as #1437's `--min-aggregate` / `--min-urgent-recall`. A
-  fixed bar is ratchet-free.
+  fixed bar is ratchet-free. (The constants live in the committed fixture —
+  `quality_gate_thresholds.json` — and the CI wiring that passes the flags; the gate's
+  flags default to off, so enforcement is a property of the workflow, not the script.)
 - **Previous-release comparison is a NON-INFERIORITY BAND, never a moving bar.** The shipped
   gate (`scorecard_gate.py`) is `candidate_point ≥ baseline_point − k·stdev` — the noise
   band sits *below* the baseline, so flat-true-capability passes and the accepted point can
@@ -260,8 +263,10 @@ draft reinventing the shipped gate in a strictly worse form):
 - **`k` is the stdev-band multiplier (default 1.0), NOT a run count.** Repetitions are
   `n_runs` (3 in the shipped fixture) — enough for a crude band, not a reliable CI (n≈5
   normal-approx is anti-conservative; use t or bootstrap). Conflating the two silently 5×'s
-  the serial-eval cost (§11.5). *Today's gate is a point-estimate `min-aggregate ≥ bar`;
-  the non-inferiority band is the **M2 upgrade**, not existing behavior.*
+  the serial-eval cost (§11.5). *For email, today's shipped gate already runs BOTH the
+  fixed floors AND the `− k·stdev` band (#1894 — `_within_one_stdev` in
+  `scorecard_gate.py`); the **M2 upgrade** is adopting that gate per-agent (17 more
+  adapters + oracles, §10), not inventing the band.*
 - **Know which pipeline the metric comes from** (different noise): structured agents (email)
   gate on **deterministic confusion-matrix** metrics vs `ground_truth.json` (small spread —
   the band matters little); generic scenario scorecards gate on **LLM-judge `avg_score`**
@@ -282,16 +287,19 @@ rebuild* — the eval isn't a one-time ship check, it's the continuous regressio
 
 Stage 5 is where the review's circularity bites hardest: if the factory generates the eval
 data *and* the agent *and* the labels, a green score is self-certification. GAIA's existing
-practice already avoids the naive trap — the email corpus is **seeded from a real vendor
-corpus** (`vendor_corpus_seed.jsonl` → `generate_mbox.py`/`select_vendor_subset.py`), its
-**ground truth is committed/curated** (`ground_truth.json`), and `pdf_document_generator.py`
+practice already avoids the naive trap — the email corpus is **seeded from a real,
+PII-scrubbed public-benchmark corpus** (`vendor_corpus_seed.jsonl` →
+`generate_mbox.py`/`select_vendor_subset.py`), its **ground truth is derived by
+construction from that committed seed** (`ground_truth.json` itself is regenerated on
+demand and gitignored — the seed is the committed source of truth), and `pdf_document_generator.py`
 generates from **templates** — so the factory must generalize *that discipline*, not just
 "ask an LLM for test cases." Three rules:
 
 1. **Seed from real, anonymized data — don't hallucinate the distribution.** Synthetic
    *volume* over a *real* distribution (the vendor-seed pattern) reflects inputs users
    actually send, not what a model imagines they send. Refresh the seed to catch drift.
-   **🔒 Because the seed is real user data on a *recurring* intake (every refresh), a
+   **🔒 Because seed refreshes are a *recurring* intake that may draw on real user data
+   (today's seed is a scrubbed public benchmark; a future refresh may not be), a
    PII-scrub + consent/provenance gate 🚦 is mandatory *before* any seeded corpus is
    committed** — "anonymized" is a requirement with an owning gate, not an adjective
    (escalated to @kovtcharov-amd; see §11.5).
@@ -317,8 +325,9 @@ generates from **templates** — so the factory must generalize *that discipline
    - **Dev/optimize corpus (M3, factory-generated):** fuel for the eval-optimize (`--fix`)
      loop; the factory may generate it freely (rules 1–2) — overfitting *to it* is fine.
    - **Held-out gate oracle (M2, human-curated):** what stage 13 / regression gates on —
-     versioned, committed (as `ground_truth.json` + `quality_gate_thresholds.json` today),
-     curated by **a human who is *not* the spec author** (the circular source is the person
+     versioned, committed (today only `quality_gate_thresholds.json` is committed;
+     `ground_truth.json` is derived + gitignored, so *committing* the oracle is new
+     discipline, not current practice), curated by **a human who is *not* the spec author** (the circular source is the person
      who defined the task, *not* the LLM implementer — "different from the implementer" is
      trivially true), and **never** used in the optimize loop. Make that a **mechanism, not
      discipline:** the oracle lives at a path the `gaia eval agent --fix` run *cannot read*,
@@ -369,7 +378,8 @@ The sidecar pipeline encodes hard-won rigor. The factory orchestrates it and kee
 property:
 
 - **Multi-platform matrix + "assert required platforms present"** (stage 11) — a partial
-  build never publishes.
+  build never publishes. (darwin-x64 is explicitly *best-effort* in the matrix: if its
+  older-OS compat check fails, its lock entry is dropped and the release ships without it.)
 - **Cross-OS-version compatibility** (stage 12) — a binary built on a newer OS is verified
   on an older one; catches glibc/macOS-SDK regressions users would hit.
 - **Real-hash lock regeneration** (stage 15) — `binaries.lock.json` is rewritten from the
@@ -407,7 +417,8 @@ So "roll the catalog back" is *not* a thing; the workable levers are:
   (`gaia agent install email@<good>` / `npm i …@<good>`); its *immutable bundled*
   `binaries.lock.json` still points at present R2 binaries, so no rebuild — the version pin
   is the lever, not "re-pinning the lock" (the lock is fixed content of each version). Needs
-  the Hub-CLI install path to support pinning a **non-latest** version.
+  a Hub-CLI install command *at all* — today the only hub-install path is the Agent UI
+  (`POST /api/agents/setup`); the CLI command and non-latest version-pinning are both net-new.
 - **The escape becomes an oracle case:** the failing real scenario is curated into the
   held-out oracle (stage 5b) so it can never re-ship — recovery *feeds* M2.
 
@@ -425,7 +436,8 @@ bumped; the factory must decide both from the change's contract impact.
 ## 7. The product is multi-component, not a single binary
 
 A shipped agent = **R2 platform binaries + the npm tarball (TS client `fetch`/`lifecycle`
-+ the five docs + bundled `binaries.lock.json` + examples/tests)**. The factory produces and
++ the five docs + bundled `binaries.lock.json`)** — examples/tests live in-repo only; the
+npm `files` whitelist excludes them from the tarball. The factory produces and
 ships all of it as one versioned release; "the binary" is one component, not the product.
 (This is why stage 9 owns docs and the lock is bundled per-version.) A *single* whole-package
 zip would be convenient but is currently disabled (§6) — the shipped multi-component form is
@@ -448,8 +460,10 @@ the npm tarball + R2 binaries, not one zip.
 
 ## 9. Component inventory — exists vs net-new
 
-**Exists (orchestrate, don't rebuild):** the **GAIA coder** (`origin/coder` `CodeAgent`) ·
-**Claude Code in CI** (`claude.yml`, `claude-run.yml`) + skills + memory — note `claude.yml`'s
+**Exists (orchestrate, don't rebuild):** the **GAIA coder** (`gaia-agent-code` `CodeAgent`
+on main; a newer `src/gaia/coder/` `CoderAgent` sits unmerged on `origin/coder`) ·
+**Claude Code in CI** (`claude.yml`, `claude-run.yml`; skills + memory exist in *local*
+sessions only — CI wires neither yet, that wiring is part of net-new #1) — note `claude.yml`'s
 **`auto-fix`** (issue → locatable bug → branch → PR + test steps) is a *shipped, scoped
 instance of the dev-half loop*, real evidence M3 isn't vapor · the **eval
 framework** (`eval/{runner,benchmark,scorecard,analyze_failures,audit}.py`, baselines,
@@ -490,10 +504,10 @@ work from M2. Each milestone is independently valuable and shippable.
 | M | Milestone | Automates | Difficulty | Why here / gate |
 |---|---|---|---|---|
 | **M0** | **Generalize the *sidecar* lane** (recipe-driven, per-agent) | the *deterministic packaging spine* — stages **9, 11, 12, 14, 16** — for *any* agent: turn `release_agent_email.yml` + `packaging/*` into a reusable, recipe-parametrized pipeline. **The wheel lane needs no generalizing** — `publish_agents.yml` is already per-agent + gated + OIDC (§6); M0 orchestrates it and generalizes the *sidecar* lane (M1 adds provenance stages 10/15/17; M2 the trustworthy gate 13). The `agent-hub-release` skill is the existing runbook to automate | **Easiest — but not risk-free**: deterministic/no-LLM, yet per-agent OIDC-publisher provisioning is **supply-chain work**, and the ship half exists *only for email* (a 2nd agent may lack `packaging/*` parity) | **Prove on a *second, non-email* agent** (browser/analyst) — the empirical reuse-vs-rewrite *and* parity check; includes per-agent OIDC publisher provisioning, tags, R2 prefixes |
-| **M1** | **Provenance + edge-verified releases** | manifest emit (stage 10) · signing + source-hash + SDK-commit provenance (stage 15) · post-publish edge verify (stage 17) | **Easy** — mechanical (*but the manifest schema lives in unmerged #1913*) | integrity/traceability (not "reproducibility," §11.5); docs-in-sync becomes a hard gate |
+| **M1** | **Provenance + edge-verified releases** | manifest emit (stage 10) · signing + source-hash + SDK-commit provenance (stage 15) · post-publish edge verify (stage 17) | **Easy** — mechanical (manifest schema landed with #1913) | integrity/traceability (not "reproducibility," §11.5); docs-in-sync becomes a hard gate |
 | **M2** | **Independent eval oracle + noise-aware gate** | the *trustworthy* eval gate: a **human-curated, held-out** ground-truth set per agent + fixed safety floors; gate = **fixed bar + non-inferiority band** `≥ prev − k·stdev` over `n_runs` repetitions (§5 — *not* LCB-vs-moving-baseline, §11.5). **Adoption reality: 1 of 18 agents has a scorecard today** (email) — M2 is 17 harness→payload adapters + oracles; the `adding-eval-scorecard` skill is the per-agent runbook. **M2 also owns stage 5b** (oracle curation/extension) **and its coverage-delta gate** (§5.5) | **Medium** — mostly discipline, but the oracle is **human judgment the factory does NOT automate** | **Prerequisite for everything generative** (M3–M4) — without an independent oracle the gate is self-certification (§11.5 #1) |
-| **M3** | **Assisted dev automation** | the *mechanical* dev stages: scaffold (build on the existing `gaia agent init` starter-package generator + Builder templates), tool/skill/MCP wiring, synthetic-data gen, the eval-optimize (`--fix`) loop, PR authoring | **Harder** — net-new agentic coding (*needs `origin/coder` merged to main*), human-in-the-loop | human still owns **scope, spec, the oracle (M2, curator ≠ spec author), PR-approve, ship**; the GAIA coder + Claude Code loop assist, they don't decide |
-| **M4** | **SDK-delta maintenance loop** (stage 18 — the keystone) | on an SDK delta that regresses an agent (measured on M2's held-out oracle via the §5 noise-band gate), re-run M3+M0 for that agent | **Hardest** — the differentiator *and* the highest risk | **Last, and only after M2.** Built-in: (a) **serial-eval throughput cap** (one eval/backend — CLAUDE.md), size cadence against it; (b) SDK changes ship via **PR + tag through the existing release process**, gated by the **human approve/deny at the SDK-release checkpoint over a pre-cut all-agent blast-radius dry-run** (§2.5) — approve the radius, not the tag; the all-agent re-eval is the *intended* regression net |
+| **M3** | **Assisted dev automation** | the *mechanical* dev stages: scaffold (build on the existing `gaia agent init` starter-package generator + Builder templates), tool/skill/MCP wiring, synthetic-data gen, the eval-optimize (`--fix`) loop, PR authoring | **Harder** — net-new agentic coding (*needs the `src/gaia/coder/` `CoderAgent` ported from `origin/coder` — ~420 commits behind main; the orchestration/validators `CodeAgent` it builds on already ships as `gaia-agent-code`*), human-in-the-loop | human still owns **scope, spec, the oracle (M2, curator ≠ spec author), PR-approve, ship**; the GAIA coder + Claude Code loop assist, they don't decide |
+| **M4** | **SDK-delta maintenance loop** (stage 18 — the keystone) | on an SDK delta that regresses an agent (measured on M2's held-out oracle via the §5 noise-band gate), re-run M3+M0/M1 for that agent | **Hardest** — the differentiator *and* the highest risk | **Last, and only after M2.** Built-in: (a) **serial-eval throughput cap** (one eval/backend — CLAUDE.md), size cadence against it; (b) SDK changes ship via **PR + tag through the existing release process**, gated by the **human approve/deny at the SDK-release checkpoint over a pre-cut all-agent blast-radius dry-run** (§2.5) — approve the radius, not the tag; the all-agent re-eval is the *intended* regression net |
 
 **Reading the order:** M0–M1 ship *any* agent reproducibly-packaged and provenance-verified
 with **no LLM in the loop** — pure, high-value CI. M2 buys the trust bar. Only then does
@@ -501,10 +515,11 @@ M3 add agentic authoring (human-gated), and M4 the continuous maintenance loop. 
 (M4) is *last* because it depends on M2's oracle and is the unsolved-research part — you do
 not build the loop before you can trust the gate it runs on.
 
-**Merge-prerequisites (not laundered as "exists"):** M1 depends on **#1913** (the manifest
-schema §0.28); M3–M4 depend on **`origin/coder`** (the GAIA coder) merged to `main`. Both are
-unmerged today (§11.5) — so the value that lands with *zero* external merge-dependency is M0
-alone, and the differentiator (M4) sits behind two branch merges *and* M2's oracle work.
+**Merge-prerequisites (not laundered as "exists"):** M1's manifest schema (§0.28) landed
+with **#1913 (merged)** — M0 *and* M1 now carry no external merge-dependency. M3–M4 still
+depend on the **`src/gaia/coder/` `CoderAgent`** (unmerged on `origin/coder`, ~420 commits
+behind `main` — a port, not a fast-forward). The differentiator (M4) sits behind that
+port *and* M2's oracle work.
 
 **M0 day-1 prerequisites (settle before the first line of workflow code):**
 1. **The npm-OIDC publisher topology** — npm's trusted-publisher subject matches the
@@ -549,7 +564,7 @@ normative sections**; this table is the traceability record, one row per finding
 | Adversarial #2 | The SDK-release gate fired *blind to blast radius* (approving a tag before the N-agent fan-out is computed) | Pre-cut **all-agent dry-run**; approve the radius, not the tag → **§2.5** |
 | Adversarial #2 | Non-convergence handling had no capacity model — escalations are un-eliminated manual maintenance | Escalation checkpoint; sustained rate = mis-sized M4 cadence signal → **§2.5** |
 | Adversarial #2 | 🔒 Seed-from-real is a **recurring PII intake** with no owning gate | PII-scrub + consent/provenance gate 🚦 on every refresh → **§5.5** (escalated to @kovtcharov-amd) |
-| Adversarial #2 | Unmerged branches laundered as "exists" (`origin/coder`, #1913) | Named merge-prerequisites → **§10** |
+| Adversarial #2 | Unmerged branches laundered as "exists" (`origin/coder`, #1913) | Named merge-prerequisites → **§10** (#1913 has since merged; the surviving dep is the `src/gaia/coder/` port) |
 | Eval-engineer | `LCB(candidate) ≥ prev_point` with a moving baseline is a **ratchet** (locks out releases in ~2–3 cycles); also reinvented the shipped gate in a worse form | **Fixed bar + fixed floors + non-inferiority band** `≥ prev − k·stdev`, matching `scorecard_gate.py` → **§5, §1.5, stage 13** |
 | Eval-engineer | `k` overloaded (real `--regression-k` = stdev-band multiplier, not run count) — conflation also 5×'d the serial-eval cost | `k` = band multiplier (default 1.0); `n_runs` = repetitions (3) → **§5, §1.5** |
 | Eval-engineer | 0.95 safety floor unsized (95%-confidence needs ≈59 positives); wrong axis name | Point *tripwire* at 0.90 on the **needs-attention** axis (URGENT+NEEDS_RESPONSE); size or label → **§5** |
@@ -575,9 +590,10 @@ with **no LLM in the loop**; the research risk is quarantined to M3–M4 behind 
 
 ## 12. Open decisions (need sign-off)
 
-1. **Orchestrator substrate** — Claude Code (skills + memory, already in CI) + GAIA coder
-   vs. a custom Anthropic Agent-SDK build. *Rec:* start on Claude Code + GAIA coder (Claude
-   Code is in CI today; the coder needs `origin/coder` merged — §10 prerequisites); evaluate
+1. **Orchestrator substrate** — Claude Code (in CI today; skills + memory are local-session
+   capabilities the orchestrator must wire — §9) + GAIA coder vs. a custom Anthropic
+   Agent-SDK build. *Rec:* start on Claude Code + GAIA coder (`gaia-agent-code` ships; the
+   newer `CoderAgent` needs the `origin/coder` port — §10 prerequisites); evaluate
    a custom build if the loop needs tighter control.
 2. **Autonomy at the gates** — *resolved* (§2.5): per-stage approve/deny mirroring the agent
    confirmation model; configurable per trust level, halting-by-default on the
