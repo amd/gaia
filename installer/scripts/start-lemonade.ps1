@@ -147,7 +147,10 @@ try {
     Write-Host "[OK] Started server PID: $($serverProcess.Id)"
     Write-Host "     Logs: lemonade-server-stdout.log, lemonade-server-stderr.log"
 
-    # Export process ID for cleanup (GitHub Actions)
+    # Export process ID for cleanup. Set it on the live process env too (not
+    # just GITHUB_ENV, which only reaches *later* steps) so a caller that starts
+    # the server and runs its tests in the SAME step can stop it in a finally.
+    $env:LEMONADE_PROCESS_ID = "$($serverProcess.Id)"
     if ($env:GITHUB_OUTPUT) {
         "lemonade-process-id=$($serverProcess.Id)" >> $env:GITHUB_OUTPUT
     }

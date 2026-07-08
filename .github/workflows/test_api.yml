@@ -81,17 +81,7 @@ jobs:
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
 
-      # Start the server via the shared launcher (its own step): it reaps stray
-      # procs, frees the port, launches LemonadeServer.exe --port directly (the
-      # `lemonade-server serve` shim was removed in Lemonade v10.5 and no longer
-      # exists on the runner), captures stdout/stderr to logs, waits for health
-      # (dumping the logs on failure), and exports LEMONADE_PROCESS_ID (via
-      # GITHUB_ENV) for the test + cleanup steps.
-      - name: Start Lemonade Server
-        shell: powershell
-        run: .\installer\scripts\start-lemonade.ps1 -Port 13305 -NoModel
-
-      - name: Start API server and run API tests
+      - name: Start Lemonade + API server and run API tests
         shell: powershell
         run: |
           # Set console to UTF-8 for Unicode support
@@ -103,10 +93,19 @@ jobs:
           chcp 65001 | Out-Null
 
           try {
+              # Start Lemonade via the shared launcher (server + tests run in ONE
+              # step so the detached server survives for the test run). It launches
+              # LemonadeServer.exe --port directly (the `lemonade-server serve`
+              # shim was removed in Lemonade v10.5), captures stdout/stderr to
+              # logs, waits for health (dumping the logs on failure), and sets
+              # LEMONADE_PROCESS_ID for cleanup.
+              .\installer\scripts\start-lemonade.ps1 -Port 13305 -NoModel
+              if ($LASTEXITCODE -ne 0) { throw "Lemonade server failed to start" }
+
               # Pull + load + verify the LLM via GAIA's LemonadeClient so CI
               # validates our interface to Lemonade (incl. the model-load retry),
               # not raw REST.
-              Write-Host "=== Pull + load + verify LLM via LemonadeClient ==="
+              Write-Host "`n=== Pull + load + verify LLM via LemonadeClient ==="
               uv run python tests/ci_lemonade_check.py --model Qwen3-0.6B-GGUF --chat
               if ($LASTEXITCODE -ne 0) {
                   Write-Host "=== Server stdout (last 100 lines) ==="
@@ -161,25 +160,18 @@ jobs:
               uv run pytest tests/test_api.py -v --tb=short --capture=no
               if ($LASTEXITCODE -ne 0) { throw "Tests failed with exit code $LASTEXITCODE" }
           } finally {
-              # Stop the API server job (same-session var); Lemonade is stopped
-              # in the always() cleanup step.
+              # Always cleanup both servers (same-session vars).
+              Write-Host "`n=== Stopping Servers ==="
               if ($env:API_JOB_ID) {
-                  Write-Host "`n=== Stopping API server ==="
                   Stop-Job -Id $env:API_JOB_ID -ErrorAction SilentlyContinue
                   Remove-Job -Id $env:API_JOB_ID -ErrorAction SilentlyContinue
                   Write-Host "[OK] API server stopped"
               }
+              if ($env:LEMONADE_PROCESS_ID) {
+                  Stop-Process -Id $env:LEMONADE_PROCESS_ID -Force -ErrorAction SilentlyContinue
+                  Write-Host "[OK] Lemonade server stopped (PID $env:LEMONADE_PROCESS_ID)"
+              }
           }
-
-      - name: Stop Lemonade Server
-        if: always()
-        shell: powershell
-        run: |
-          if ($env:LEMONADE_PROCESS_ID) {
-              Write-Host "Stopping Lemonade Server (PID $env:LEMONADE_PROCESS_ID)..."
-              Stop-Process -Id $env:LEMONADE_PROCESS_ID -Force -ErrorAction SilentlyContinue
-          }
-          .\installer\scripts\cleanup-lemonade.ps1 -Port 13305
 
       - name: Upload API Server Logs
         if: failure()
