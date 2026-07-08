@@ -5,13 +5,34 @@ follows [SemVer](https://semver.org/): the **MAJOR** of the on-the-wire
 `SCHEMA_VERSION` is what `checkVersion` enforces at startup, so a contract MAJOR
 bump is always at least a package MINOR bump with a migration note.
 
-## Unreleased
+## 0.4.0 — 2026-07-08
 
 Contract bumped to `SCHEMA_VERSION` **2.2** — additive over 2.1, so `checkVersion`
 (MAJOR-only) keeps accepting existing clients.
 
 ### Added
 
+- **Readiness preflight — `GET /v1/email/init` (#1795).** A green `/health` never
+  meant "ready to triage": on a fresh host the binary boots fine but the first
+  `triage` 502s until Lemonade is up and the model is pulled. The new endpoint
+  probes the whole triage stack — Lemonade reachable **and** version-compatible
+  **and** the triage model downloaded — and returns `200` when ready, `503` with
+  an actionable `hint` when not (same `InitResponse` envelope either way).
+  Read-only: no model pull. The companion `POST /v1/email/init` asks the running
+  Lemonade to download the model and streams `text/plain` progress (it can't
+  install Lemonade itself — a host prerequisite — so an unreachable server is a
+  loud `503`, not a silent no-op). New exported types: `InitResponse`,
+  `InitLemonadeStatus`, `InitModelStatus`; no client wrapper yet (call with
+  `fetch`). `SCHEMA_VERSION` stays `2.2`.
+- **Voice / style-matched drafting (#1607).** The agent can now draft replies in
+  the user's **own voice** instead of a neutral scaffold. `build_voice_profile`
+  samples the user's Sent mail into a local style profile — top greetings /
+  sign-offs, typical length, contraction & exclamation rate (derived features
+  only, never raw content, stored on-device) — and the agent's system prompt
+  injects that guidance every turn so `draft_reply` bodies match how the user
+  writes; `clear_voice_profile` forgets it. **Agent-loop only** (chat / Agent UI /
+  `gaia email`) — no REST endpoint, no npm client method, `SCHEMA_VERSION` stays
+  `2.2`.
 - **Follow-up tracking (#1606).** The agent gains a read-only `check_followups`
   tool that scans the Sent folder of every connected mailbox and flags threads
   whose latest message is still the user's own outbound mail past a

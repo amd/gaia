@@ -361,6 +361,21 @@ export interface EmailPreScanResponse {
   result: EmailPreScanResult;
 }
 
+/**
+ * Response of `GET /v1/email/briefing` (api_routes.py: EmailBriefingResponse,
+ * #1608). The latest scheduled daily inbox briefing — the same `email_pre_scan`
+ * envelope as `prescan`, produced by the sidecar's daily timer without a prompt,
+ * plus a `generated_at` stamp. `404` until the first scheduled run has happened.
+ */
+export interface EmailBriefingResponse {
+  /** Echoes the contract version. */
+  schema_version: string;
+  /** UTC ISO-8601 timestamp of the scheduled run that produced this briefing. */
+  generated_at: string;
+  /** The pre-scan envelope the scheduled run produced. */
+  briefing: EmailPreScanResult;
+}
+
 // ---------------------------------------------------------------------------
 // Batch triage (#1887) — ADDITIVE beside the single-email triage above.
 // POST /v1/email/triage/batch: an items array in, a results array out. The
@@ -624,6 +639,53 @@ export interface VersionResponse {
   apiVersion: string;
   /** Package build version. */
   agentVersion: string;
+}
+
+// ---------------------------------------------------------------------------
+// Readiness preflight (api_routes.py — GET /v1/email/init, #1795). Unlike the
+// liveness-only /health, this probes the whole triage stack: Lemonade reachable
+// AND at a compatible version AND the triage model downloaded. Returns HTTP 200
+// when ready, 503 when not — with the same envelope either way, plus a `hint`.
+// ---------------------------------------------------------------------------
+
+/** Lemonade reachability + version compatibility (api_routes.py: InitLemonadeStatus). */
+export interface InitLemonadeStatus {
+  /** True when Lemonade answered the /health probe. */
+  reachable: boolean;
+  /** The /api/v1 base URL that was probed. */
+  base_url: string;
+  /** Lemonade's self-reported version, or null when it advertises none. */
+  version?: string | null;
+  /** Minimum Lemonade version the triage stack requires. */
+  min_version: string;
+  /** version >= min_version; null when the version could not be determined. */
+  compatible?: boolean | null;
+}
+
+/** Triage-model presence (api_routes.py: InitModelStatus). */
+export interface InitModelStatus {
+  /** Resolved Lemonade model id for triage. */
+  id: string;
+  /** True when the model is downloaded on the server. */
+  present: boolean;
+  /** Whether it actually loads — not probed in v1 (heavy), so null; `present` is the signal. */
+  loadable?: boolean | null;
+}
+
+/**
+ * Response of `GET /v1/email/init` (api_routes.py: InitResponse, #1795). The
+ * route returns HTTP 200 when `ready` and 503 when not (same shape); `hint`
+ * names the fix when not ready. Read-only — no model pull is triggered.
+ */
+export interface InitResponse {
+  /** True only when Lemonade is reachable/compatible AND the triage model is present. */
+  ready: boolean;
+  /** Lemonade Server reachability + version compatibility. */
+  lemonade: InitLemonadeStatus;
+  /** Triage-model status. */
+  model: InitModelStatus;
+  /** Actionable next step when not ready; null when ready. */
+  hint?: string | null;
 }
 
 // ---------------------------------------------------------------------------
