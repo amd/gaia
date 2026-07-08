@@ -174,9 +174,9 @@ canonical choices list):
 |---------|--------|-------------|-------------|
 | `minimal` | Gemma-4-E4B-it-GGUF | Fast setup with Gemma 4 E4B multimodal model | ~3 GB |
 | `sd` | SDXL-Turbo, Gemma-4-E4B-it-GGUF | Image generation with multi-modal AI (LLM + SD) | ~10 GB |
-| `chat` | Gemma-4-E4B-it-GGUF, nomic-embed-text-v2-moe-GGUF | Interactive chat with RAG and vision support | ~4 GB |
+| `chat` | Gemma-4-E4B-it-GGUF, user.embeddinggemma-300m-GGUF | Interactive chat with RAG and vision support | ~4 GB |
 | `code` | Gemma-4-E4B-it-GGUF | Autonomous coding assistant | ~3 GB |
-| `rag` | Gemma-4-E4B-it-GGUF, nomic-embed-text-v2-moe-GGUF | Document Q&A with retrieval | ~4 GB |
+| `rag` | Gemma-4-E4B-it-GGUF, user.embeddinggemma-300m-GGUF | Document Q&A with retrieval | ~4 GB |
 | `vlm` | Gemma-4-E4B-it-GGUF | Vision pipeline for document and image extraction | ~3 GB |
 | `npu` | gemma4-it-e2b-FLM | Ryzen AI NPU acceleration via FLM backend (requires XDNA2 NPU) | ~3 GB |
 | `all` | All models | All models for all agents | ~26 GB |
@@ -1604,7 +1604,7 @@ gaia download --agent code
    ...
    ✅ Download complete
 
-✅ nomic-embed-text-v2-moe-GGUF (already downloaded)
+✅ user.embeddinggemma-300m-GGUF (already downloaded)
 
 ==================================================
 📊 Download Summary:
@@ -1903,6 +1903,95 @@ Manage agent memory: run day-zero onboarding and view memory statistics.
 </Tabs>
 
 [→ Full Memory Guide](/guides/memory) · [→ Memory SDK Reference](/sdk/sdks/memory)
+
+---
+
+## Schedule
+
+Run a prompt on a recurring cron schedule and route its output to a sink. Schedules are stored in `~/.gaia/schedules.toml` (hand-editable). The `daemon` action runs a long-lived scheduler that fires each enabled schedule when due.
+
+```bash
+gaia schedule {add,list,show,remove,pause,resume,run,daemon} [OPTIONS]
+```
+
+### Subcommands
+
+| Action | Description |
+|--------|-------------|
+| `add` | Register a new schedule (requires `--name`, `--cron`, and exactly one of `--prompt`/`--skill`) |
+| `list` | List all schedules with their next fire time |
+| `show <name>` | Show one schedule's full configuration and next fire time |
+| `remove <name>` | Delete a schedule |
+| `pause <name>` | Disable a schedule without deleting it |
+| `resume <name>` | Re-enable a paused schedule |
+| `run <name>` | Fire a schedule once now (for testing) |
+| `daemon` | Run the long-lived scheduler (blocks until interrupted) |
+
+### `add` Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--name` | string | _required_ | Unique schedule name |
+| `--cron` | string | _required_ | Cron expression, e.g. `"0 7 * * 1-5"` |
+| `--prompt` | string | - | One-shot prompt to run on each fire (mutually exclusive with `--skill`) |
+| `--skill` | string | - | Skill to run (mutually exclusive with `--prompt`) — see note below |
+| `--sink` | string | stdout | Where output goes: `stdout` \| `file:<path>` \| `notification` \| `telegram` |
+| `--to` | string | - | Recipient for the `telegram` sink (Telegram user/chat id) |
+
+**Examples:**
+
+<CodeGroup>
+```bash Add a Weekday Morning Brief
+gaia schedule add \
+  --name morning-brief \
+  --cron "0 7 * * 1-5" \
+  --prompt "Give me a 3-bullet summary of today's priorities"
+```
+
+```bash List Schedules
+gaia schedule list
+```
+
+```bash Fire Once (Test)
+gaia schedule run morning-brief
+```
+
+```bash Pause and Resume
+gaia schedule pause morning-brief
+gaia schedule resume morning-brief
+```
+
+```bash Run the Scheduler
+gaia schedule daemon
+```
+</CodeGroup>
+
+### Sinks
+
+A sink decides where each scheduled run's output goes. Set it with `--sink` on `add` (default `stdout`):
+
+| Sink | Description |
+|------|-------------|
+| `stdout` | Print output to the terminal (default) |
+| `file:<path>` | Append output to the given file (created if missing) |
+| `notification` | Desktop notification (macOS `osascript` / Linux `notify-send`) |
+| `telegram` | Send via a Telegram bot — needs a bot token (`GAIA_TELEGRAM_TOKEN` env var or `sink_args.token` in `schedules.toml`) and a recipient via `--to` |
+
+**Telegram example:**
+
+```bash
+export GAIA_TELEGRAM_TOKEN="<bot-token>"
+gaia schedule add \
+  --name daily-digest \
+  --cron "0 18 * * *" \
+  --prompt "Summarize what changed today" \
+  --sink telegram \
+  --to 123456789
+```
+
+<Note>
+`--skill` is not yet implemented — running a skill-backed schedule raises an error pending the skill format ([#888](https://github.com/amd/gaia/issues/888)). Use `--prompt` for now.
+</Note>
 
 ---
 

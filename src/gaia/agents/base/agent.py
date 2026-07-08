@@ -153,6 +153,10 @@ TOOLS_REQUIRING_CONFIRMATION = {
     # (Phase I2 / S2.M1).
     "send_draft",
     "send_now",
+    # Scheduled send (#1609) — confirmation at CREATION: the user approves the
+    # literal recipient/subject/body and fire time, then the send fires
+    # unattended at/after that time.
+    "schedule_send",
     "forward_message",
     "permanent_delete",
     "accept_invite",

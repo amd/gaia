@@ -36,7 +36,7 @@ config = CodeIndexConfig(
     max_files=5000,
     max_file_size_mb=1.0,
     chunk_overlap=50,
-    embedding_model="nomic-embed-text-v2-moe-GGUF",
+    embedding_model="user.embeddinggemma-300m-GGUF",
     cache_dir="~/.gaia/code_index",
     embedding_base_url=None,
 )
@@ -48,7 +48,7 @@ config = CodeIndexConfig(
 | `max_files` | `int` | `5000` | Max files to scan |
 | `max_file_size_mb` | `float` | `1.0` | Skip files larger than this |
 | `chunk_overlap` | `int` | `50` | Token overlap between chunks |
-| `embedding_model` | `str` | `"nomic-embed-text-v2-moe-GGUF"` | Lemonade embedding model |
+| `embedding_model` | `str` | `"user.embeddinggemma-300m-GGUF"` | Lemonade embedding model |
 | `cache_dir` | `str` | `"~/.gaia/code_index"` | Cache directory |
 | `embedding_base_url` | `Optional[str]` | `None` | Custom Lemonade base URL |
 
@@ -95,7 +95,7 @@ status = sdk.get_status()
 # {
 #   "indexed": True,
 #   "repo_path": "/abs/path",
-#   "embedding_model": "nomic-embed-text-v2-moe-GGUF",
+#   "embedding_model": "user.embeddinggemma-300m-GGUF",
 #   "total_chunks": 1234,
 #   "code_chunks": 1234,
 #   "files_tracked": 312,

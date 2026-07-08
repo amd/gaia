@@ -33,6 +33,7 @@ request header.
 from __future__ import annotations
 
 import base64
+import uuid
 from html.parser import HTMLParser
 from typing import (
     Any,
@@ -168,8 +169,13 @@ class GmailBackend(Protocol):
         subject: str,
         body: str,
         headers: Optional[Dict[str, str]] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
-        """Create a draft and return its id."""
+        """Create a draft and return its id.
+
+        ``attachments``: optional list of dicts, each with ``filename`` (str),
+        ``mime_type`` (str), and ``content`` (raw bytes) — #1542.
+        """
         ...
 
     def send_draft(self, draft_id: str) -> Dict[str, Any]:
@@ -183,8 +189,10 @@ class GmailBackend(Protocol):
         subject: str,
         body: str,
         headers: Optional[Dict[str, str]] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
-        """Send a one-shot message (no draft step)."""
+        """Send a one-shot message (no draft step). ``attachments`` as in
+        :meth:`create_draft`."""
         ...
 
     def create_label(
@@ -560,8 +568,15 @@ class LiveGmailBackend:
         subject: str,
         body: str,
         headers: Optional[Dict[str, str]] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
-        raw = _build_rfc822(to=to, subject=subject, body=body, extra_headers=headers)
+        raw = _build_rfc822(
+            to=to,
+            subject=subject,
+            body=body,
+            extra_headers=headers,
+            attachments=attachments,
+        )
         return self._post(
             "/drafts",
             json_body={"message": {"raw": raw}},
@@ -577,8 +592,15 @@ class LiveGmailBackend:
         subject: str,
         body: str,
         headers: Optional[Dict[str, str]] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
-        raw = _build_rfc822(to=to, subject=subject, body=body, extra_headers=headers)
+        raw = _build_rfc822(
+            to=to,
+            subject=subject,
+            body=body,
+            extra_headers=headers,
+            attachments=attachments,
+        )
         return self._post(
             "/messages/send",
             json_body={"raw": raw},
@@ -606,6 +628,7 @@ def _build_rfc822(
     subject: str,
     body: str,
     extra_headers: Optional[Dict[str, str]] = None,
+    attachments: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """Build an RFC 2822 message wrapped in URL-safe base64.
 
@@ -613,6 +636,11 @@ def _build_rfc822(
     construct manually instead of using ``email.message.EmailMessage`` to
     avoid double-encoding edge cases — Gmail expects the raw bytes
     base64url-encoded in a single ``raw`` field.
+
+    With ``attachments`` (dicts of ``filename``/``mime_type``/``content``
+    bytes, #1542) the message becomes ``multipart/mixed``: the text body
+    first, then one base64 part per attachment. Without them the output is
+    byte-identical to the pre-2.2 single-part shape.
     """
     headers = {
         "To": to,
@@ -621,20 +649,57 @@ def _build_rfc822(
     }
     if extra_headers:
         headers.update(extra_headers)
+    boundary = ""
+    if attachments:
+        boundary = f"=_gaia_{uuid.uuid4().hex}"
+        headers["MIME-Version"] = "1.0"
+        headers["Content-Type"] = f'multipart/mixed; boundary="{boundary}"'
     # Defense-in-depth against CRLF header injection. ``to`` and
     # ``subject`` can be LLM-decided or lifted from inbound mail (e.g.
     # ``forward_message_impl`` passes the original Subject verbatim).
     # A CRLF in any header value terminates the current header and starts
     # a new one, which an attacker could use to inject ``Bcc:``, ``Cc:``,
-    # or body-prefix lines.
+    # or body-prefix lines. Attachment filenames land in part headers, so
+    # they get the same check.
     for k, v in headers.items():
         if "\r" in v or "\n" in v:
             raise ValueError(
                 f"refusing to send: header {k!r} contains a newline — "
                 f"possible CRLF injection attempt"
             )
+    for att in attachments or []:
+        fname = att["filename"]
+        if any(c in fname for c in ("\r", "\n", '"')):
+            raise ValueError(
+                f"refusing to send: attachment filename {fname!r} contains a "
+                f"newline or quote — possible header injection attempt"
+            )
     header_block = "\r\n".join(f"{k}: {v}" for k, v in headers.items())
-    rfc822 = f"{header_block}\r\n\r\n{body}"
+    if not attachments:
+        rfc822 = f"{header_block}\r\n\r\n{body}"
+    else:
+        parts = [
+            f"--{boundary}\r\n"
+            f'Content-Type: text/plain; charset="utf-8"\r\n'
+            f"\r\n"
+            f"{body}"
+        ]
+        for att in attachments:
+            content_b64 = base64.b64encode(att["content"]).decode("ascii")
+            # RFC 2045 wants encoded lines capped at 76 chars.
+            wrapped = "\r\n".join(
+                content_b64[i : i + 76] for i in range(0, len(content_b64), 76)
+            )
+            parts.append(
+                f"--{boundary}\r\n"
+                f'Content-Type: {att["mime_type"]}; name="{att["filename"]}"\r\n'
+                f'Content-Disposition: attachment; filename="{att["filename"]}"\r\n'
+                f"Content-Transfer-Encoding: base64\r\n"
+                f"\r\n"
+                f"{wrapped}"
+            )
+        mime_body = "\r\n".join(parts) + f"\r\n--{boundary}--"
+        rfc822 = f"{header_block}\r\n\r\n{mime_body}"
     return base64.urlsafe_b64encode(rfc822.encode("utf-8")).decode("ascii").rstrip("=")
 
 

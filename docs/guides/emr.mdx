@@ -45,7 +45,7 @@ flowchart TD
 
 2. **LLM Validation & Querying** - The Qwen3.5-35B-A3B-GGUF model (a Mixture-of-Experts architecture that activates only 3B parameters per inference) validates extracted data, handles natural language queries, and generates SQL to search the patient database. When you ask "Which patients have penicillin allergies?", the LLM translates this to proper SQL.
 
-3. **Embedding Model** - The nomic-embed model creates vector embeddings for semantic similarity search, enabling fuzzy matching when looking up returning patients or finding related records.
+3. **Embedding Model** - The `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M) model creates vector embeddings for semantic similarity search, enabling fuzzy matching when looking up returning patients or finding related records.
 
 <Info>
   **Why Local Matters:** Running on-device with AMD Ryzen AI means sub-second inference latency, no per-request API costs, and complete data sovereignty. A typical intake form processes in 10-15 seconds on AMD Ryzen AI MAX+ hardware.
@@ -70,7 +70,7 @@ The EMR agent uses three models, downloaded automatically on first run via `gaia
 |-------|------|---------|
 | Qwen3.5-35B-A3B-GGUF | 18.6 GB | LLM for chat queries and patient search |
 | Gemma-4-E4B-it-GGUF | ~3 GB | Vision language model for form extraction |
-| nomic-embed-text-v2-moe-GGUF | 522 MB | Embedding model for similarity search |
+| user.embeddinggemma-300m-GGUF | ~334 MB | Embedding model for similarity search |
 
 <Note>
   **Disk Space:** Ensure you have at least 25 GB of free disk space for model downloads.
@@ -143,7 +143,7 @@ This command:
 - Downloads and loads all required models:
   - **VLM**: Gemma-4-E4B-it-GGUF (form extraction)
   - **LLM**: Qwen3.5-35B-A3B-GGUF (chat/query processing)
-  - **Embedding**: nomic-embed-text-v2-moe-GGUF (similarity search)
+  - **Embedding**: user.embeddinggemma-300m-GGUF (similarity search)
 - Verifies all models are loaded and ready
 
 <Tip>
@@ -385,7 +385,7 @@ The agent accepts scanned or photographed intake forms in these formats:
 ## Under the Hood
 
 - **Image preprocessing** — Before reaching the VLM, forms are auto-rotated from EXIF orientation (critical for phone photos), scaled to a max 1024px dimension, and JPEG-compressed (quality 85) to balance extraction quality against image token count.
-- **Returning-patient detection** — A multi-signal lookup combines exact name + DOB match, fuzzy matching for misspellings ("Jon Smith" → "John Smith"), and `nomic-embed` vector similarity. When a returning patient is detected, changes from their previous record (new allergies, updated insurance) are highlighted.
+- **Returning-patient detection** — A multi-signal lookup combines exact name + DOB match, fuzzy matching for misspellings ("Jon Smith" → "John Smith"), and `user.embeddinggemma-300m-GGUF` vector similarity. When a returning patient is detected, changes from their previous record (new allergies, updated insurance) are highlighted.
 - **Real-time dashboard** — The FastAPI backend streams processing events to the React frontend over Server-Sent Events (SSE), so the UI updates within ~100ms of file detection without polling or WebSockets.
 - **Safe DB queries** — Natural language questions are answered via LLM tool calling: the model never writes SQL directly, it calls predefined, validated tools (e.g. `search_patients`) that construct queries safely.
 

@@ -19,26 +19,38 @@ const featured = agents.filter((a) => !a.deprecated).slice(0, 3);
 const DOCS = 'https://amd-gaia.ai/docs';
 const QUICKSTART = `${DOCS}/quickstart`;
 
-// The factory pipeline — the spine of the page.
-const pipeline = [
+// The three ways to use GAIA, easiest → hardest. Equal billing — each is a real
+// front door, not a funnel step.
+const paths = [
   {
-    step: 'Build',
-    icon: 'wrench',
-    body: 'Write an agent in a few dozen lines of Python — a system prompt and a few @tool functions. Reuse built-in toolsets, or scaffold a new package with one command.',
-    code: 'gaia agent init my-agent',
-  },
-  {
-    step: 'Run',
+    n: '01',
+    level: 'No code',
     icon: 'cpu',
-    body: 'It runs locally on AI PCs — AMD Ryzen AI first-class, via Lemonade. Private by default, no API keys required; cloud models are opt-in.',
-    code: 'python my_agent.py',
+    title: 'Run agents',
+    body: 'Install the Agent UI desktop app, pick an agent from the Hub, and go — a local AI that sees your files and never calls the cloud.',
+    code: 'npm install -g @amd-gaia/agent-ui',
+    cta: { label: 'Get the Agent UI', href: `${DOCS}/guides/agent-ui` },
+    secondary: { label: 'Browse agents →', href: '/hub' },
   },
   {
-    step: 'Distribute',
+    n: '02',
+    level: 'Integrate',
     icon: 'package',
-    badge: 'Coming soon',
-    body: 'Publish to the Agent Hub — versioned, checksummed, immutable. Users install in one click, or one command. Distribute openly on PyPI and npm too.',
-    code: 'gaia agent publish',
+    title: 'Embed agents in your app',
+    body: 'Drop a published agent into your own product — a local REST sidecar, an MCP server, or the OpenAI-compatible API. No Python for your users.',
+    code: 'npm i @amd-gaia/agent-email',
+    cta: { label: 'Browse the Agent Hub', href: '/hub' },
+    secondary: { label: 'Integration SDK →', href: `${DOCS}/sdk` },
+  },
+  {
+    n: '03',
+    level: 'Build',
+    icon: 'wrench',
+    title: 'Build & publish your own',
+    body: 'Write an agent with the SDK in a few dozen lines of Python, then publish it to the Hub via a PR so anyone can install it.',
+    code: 'gaia agent init my-agent',
+    cta: { label: 'Build & publish guide', href: `${DOCS}/guides/custom-agent` },
+    secondary: { label: 'Publishing →', href: `${DOCS}/guides/hub-publishing` },
   },
 ];
 
@@ -99,27 +111,32 @@ const sidecar = await startSidecar({ binaryPath, port: 8131 });`;
       </div>
     </section>
 
-    <!-- 2. The pipeline: Build → Run → Distribute -->
+    <!-- 2. Three ways to use GAIA — equal front doors, easiest → hardest -->
     <section class="max-w-6xl mx-auto px-6 py-24">
       <div class="text-center mb-12">
-        <Eyebrow class="mb-3">The factory floor</Eyebrow>
-        <h2 class="text-2xl sm:text-3xl font-bold tracking-tight">Build → Run → Distribute.</h2>
-        <p class="mt-3 text-g-muted max-w-xl mx-auto">From an idea to an installable agent — entirely on local hardware.</p>
+        <Eyebrow class="mb-3">Three ways to use GAIA</Eyebrow>
+        <h2 class="text-2xl sm:text-3xl font-bold tracking-tight">Run it, integrate it, or build it.</h2>
+        <p class="mt-3 text-g-muted max-w-xl mx-auto">Pick your level — from a one-click desktop app to building and publishing your own agent. All local, all private.</p>
       </div>
       <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
-        {pipeline.map((p) => (
-          <div class="rounded-xl border border-g-border bg-g-surface p-6">
-            <span class="flex w-10 h-10 rounded-lg border border-g-border items-center justify-center text-g-gold-text">
-              <AgentIcon name={p.icon} class="w-5 h-5" />
-            </span>
-            <div class="mt-4 flex items-center gap-2">
-              <h3 class="text-lg font-semibold text-g-text">{p.step}</h3>
-              {p.badge && (
-                <span class="rounded border border-g-border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-g-muted">{p.badge}</span>
-              )}
+        {paths.map((p) => (
+          <div class="flex flex-col rounded-xl border border-g-border bg-g-surface p-6">
+            <div class="flex items-center justify-between">
+              <span class="flex w-10 h-10 rounded-lg border border-g-border items-center justify-center text-g-gold-text">
+                <AgentIcon name={p.icon} class="w-5 h-5" />
+              </span>
+              <span class="font-mono text-[12px] text-g-muted">{p.n}</span>
             </div>
+            <div class="mt-4 text-[11px] font-bold uppercase tracking-wide text-g-gold-text">{p.level}</div>
+            <h3 class="mt-1 text-lg font-semibold text-g-text">{p.title}</h3>
             <p class="mt-2 text-[14px] text-g-muted leading-relaxed">{p.body}</p>
             <CodeBlock code={p.code} lang="bash" class="mt-4" />
+            <div class="mt-auto pt-5 flex flex-wrap items-center gap-x-4 gap-y-2">
+              <a href={p.cta.href} class="rounded-md bg-g-gold px-4 py-2 text-[13px] font-semibold text-black hover:brightness-110 transition">
+                {p.cta.label}
+              </a>
+              <a href={p.secondary.href} class="text-[13px] font-medium text-g-gold-text hover:underline">{p.secondary.label}</a>
+            </div>
           </div>
         ))}
       </div>

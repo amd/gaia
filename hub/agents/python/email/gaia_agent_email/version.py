@@ -34,4 +34,15 @@ AGENT_VERSION = "0.3.0"
 # SCHEMA_VERSION so a contract bump is an API bump — no second number to forget.
 API_VERSION = SCHEMA_VERSION
 
-__all__ = ["AGENT_VERSION", "API_VERSION"]
+# Minimum Lemonade Server version the triage stack requires (#1795 readiness).
+# This is the RUNTIME source of truth for the GET /v1/email/init version check:
+# the frozen sidecar bundles this module but NOT ``gaia.installer`` or the
+# ``gaia-agent.yaml`` manifest, so the value cannot be read from either at run
+# time. ``gaia-agent.yaml``'s ``requirements.min_lemonade_version`` mirrors this
+# literal for ``gaia init`` / manifest tooling, and
+# ``test_init_endpoint.py::test_min_lemonade_version_locksteps_with_manifest``
+# fails if the two drift — keep them in lock-step when bumping (mirrors the
+# INIT_PROFILES lock-step note in ``gaia.llm.lemonade_client``).
+MIN_LEMONADE_VERSION = "10.2.0"
+
+__all__ = ["AGENT_VERSION", "API_VERSION", "MIN_LEMONADE_VERSION"]

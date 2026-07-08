@@ -31,7 +31,7 @@ The memory system has three layers:
 ```
 Agent
   ├── MemoryMixin (hooks into prompt, tool exec, post-query)
-  │     ├── Embedding pipeline (Lemonade → nomic-embed-text-v2, 768-dim)
+  │     ├── Embedding pipeline (Lemonade → user.embeddinggemma-300m-GGUF, 768-dim)
   │     ├── FAISS index (IndexFlatIP, cosine similarity)
   │     ├── Cross-encoder reranker (ms-marco-MiniLM-L-6-v2)
   │     └── MemoryStore (SQLite: ~/.gaia/memory.db)
@@ -237,7 +237,11 @@ Lazy-initializes a `LemonadeProvider` for embedding. Cached for the process life
 def _embed_text(self, text: str) -> np.ndarray
 ```
 
-Embeds a single text string into a 768-dimensional vector via `nomic-embed-text-v2-moe-GGUF`. Returns a normalized `numpy` array suitable for cosine similarity via FAISS `IndexFlatIP`.
+Embeds a single text string into a 768-dimensional vector via `user.embeddinggemma-300m-GGUF`. Returns a normalized `numpy` array suitable for cosine similarity via FAISS `IndexFlatIP`.
+
+<Note>
+The embedder switched from `nomic-embed-text-v2-moe-GGUF` to `user.embeddinggemma-300m-GGUF` because the current llama.cpp server cannot load the nomic MOE embedder. Both are 768-dim, so the schema is unchanged — but old nomic vectors are not comparable to EmbeddingGemma vectors, so the changed model name invalidates the stored embeddings and existing memory stores are re-embedded automatically on the next run.
+</Note>
 
 ```python
 def _backfill_embeddings(self, limit: int = 100) -> int
@@ -263,7 +267,7 @@ def _hybrid_search(
 
 Combines vector similarity (FAISS) and keyword matching (FTS5 BM25) via Reciprocal Rank Fusion (RRF), then reranks with a cross-encoder. The full pipeline:
 
-1. Embed query via Lemonade (`nomic-embed-text-v2`, 768-dim)
+1. Embed query via Lemonade (`user.embeddinggemma-300m-GGUF`, 768-dim)
 2. FAISS cosine search: top-K × 4 candidates (oversample)
 3. FTS5 BM25 search: top-K × 4 candidates (oversample)
 4. Deduplicate by ID, apply RRF weights: `0.6 / (60 + rank_vector) + 0.4 / (60 + rank_bm25)`
@@ -940,7 +944,7 @@ These map to CRUD operations: `remember` = create, `recall` = read, `update_memo
 | `set_memory_context(context)` | Switch active context |
 | `reset_memory_session()` | New session ID + confidence decay |
 | `_get_embedder()` | Lazy-init Lemonade embedding provider |
-| `_embed_text(text)` | Embed text to 768-dim vector via nomic-embed-text-v2 |
+| `_embed_text(text)` | Embed text to 768-dim vector via user.embeddinggemma-300m-GGUF |
 | `_backfill_embeddings(limit)` | Embed items missing embeddings |
 | `_hybrid_search(query, ...)` | Vector + BM25 + RRF + cross-encoder search |
 | `_classify_query_complexity(query)` | Returns adaptive top_k: 3, 5, or 10 |

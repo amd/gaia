@@ -70,11 +70,24 @@ class TestClassifyEmailLLM:
         )
         assert out == {
             "category": "URGENT",
+            "is_spam": False,
             "confidence": 0.92,
             "reasoning": "boss asap",
             "suggested_action": "reply",
         }
         assert chat.calls == 1
+
+    def test_is_spam_true_is_parsed(self):
+        chat = _FakeChat(
+            '{"category": "PROMOTIONAL", "is_spam": true, "confidence": 0.95}'
+        )
+        out = classify_email_llm(chat, subject="s", sender="f", body="b")
+        assert out["is_spam"] is True
+
+    def test_is_spam_absent_defaults_false(self):
+        chat = _FakeChat('{"category": "PROMOTIONAL", "confidence": 0.5}')
+        out = classify_email_llm(chat, subject="s", sender="f", body="b")
+        assert out["is_spam"] is False
 
     def test_category_normalized_case_insensitively(self):
         chat = _FakeChat('{"category": "promotional", "confidence": 0.5}')
@@ -152,13 +165,14 @@ class TestClassifyEmailLLM:
 # --------------------------------------------------------------------------
 
 
-def _recorder(category: str = "urgent"):
+def _recorder(category: str = "urgent", is_spam: bool = False):
     calls: list[str] = []
 
     def clf(*, subject, sender, body, message_id=""):
         calls.append(message_id)
         return {
             "category": category,
+            "is_spam": is_spam,
             "confidence": 0.9,
             "reasoning": "stub-llm",
             "suggested_action": "none",
@@ -190,9 +204,13 @@ class TestTriageInboxImplWiring:
             assert r["id"] in clf.calls
             assert r["confident"] is True
             assert r["category"] == "NEEDS_RESPONSE"
-        # Heuristic-confident messages were NOT sent to the LLM.
+        # Heuristic-confident messages were NOT sent to the LLM for category --
+        # except a PROMOTIONAL message with no spam sender signal, which still
+        # needs an LLM call for is_spam (#1906) even though category stays
+        # heuristic-sourced (covered separately by
+        # test_spam_only_escalation_applies_is_spam_without_overriding_category).
         for r in results:
-            if r.get("source") == "heuristic":
+            if r.get("source") == "heuristic" and r["category"] != "PROMOTIONAL":
                 assert r["id"] not in clf.calls
 
     def test_force_llm_routes_every_message(self):
@@ -212,6 +230,59 @@ class TestTriageInboxImplWiring:
 
         with pytest.raises(LLMTriageError):
             triage_inbox_impl(gmail, max_messages=100, classifier=boom, force_llm=True)
+
+    def test_spam_only_escalation_applies_is_spam_without_overriding_category(self):
+        """A confident-category PROMOTIONAL message with no spam sender
+        signal must still get an LLM call for is_spam (#1906) -- and that
+        call must not silently override the already-confident category."""
+        gmail = FakeGmailBackend(STUB_INBOX)
+        clf = _recorder(category="URGENT", is_spam=True)  # wrong category on purpose
+        out = triage_inbox_impl(gmail, max_messages=100, classifier=clf)
+        results = out["results"]
+        flash_sale = next(r for r in results if "flash sale" in r["subject"].lower())
+        # Category came from the heuristic (PROMOTIONAL, confident, "50% off"
+        # keyword match) and must NOT be clobbered by the spam-only LLM call.
+        assert flash_sale["category"] == "PROMOTIONAL"
+        assert flash_sale["source"] == "heuristic"
+        assert flash_sale["confident"] is True
+        # is_spam DID come from the LLM, since the heuristic had no sender
+        # signal and could not be confident about it.
+        assert flash_sale["is_spam"] is True
+        assert flash_sale["id"] in clf.calls
+
+    def test_spam_confident_heuristic_skips_llm_entirely(self):
+        """A message with a confident category AND a confident spam signal
+        (e.g. an auto-generated anonymous sender) needs no LLM call at all."""
+
+        class _SingleMessageGmail:
+            def list_messages(self, label_ids=None, max_results=25):
+                return {"messages": [{"id": "spam-1"}]}
+
+            def get_message(self, msg_id):
+                return {
+                    "id": "spam-1",
+                    "threadId": "t1",
+                    "labelIds": ["INBOX"],
+                    "snippet": "",
+                    "payload": {
+                        "headers": [
+                            {"name": "Subject", "value": "50% off everything"},
+                            {
+                                "name": "From",
+                                "value": "contact.9981@dealsnow.biz",
+                            },
+                        ],
+                        "body": {},
+                    },
+                }
+
+        clf = _recorder(category="FYI", is_spam=False)  # would be wrong if called
+        out = triage_inbox_impl(_SingleMessageGmail(), max_messages=10, classifier=clf)
+        result = out["results"][0]
+        assert result["category"] == "PROMOTIONAL"
+        assert result["is_spam"] is True
+        assert result["source"] == "heuristic"
+        assert clf.calls == []  # never called -- both axes were confident
 
 
 # --------------------------------------------------------------------------

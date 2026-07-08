@@ -39,7 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -135,12 +135,17 @@ jobs:
 
       - name: Open Lemonade bump PR
         if: steps.detect.outputs.should_bump == 'true'
-        uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1  # v1.0.140
+        uses: anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a  # v1.0.165
         with:
           # Prefer subscription OAuth, fall back to API key — same wiring as claude.yml.
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Scheduled runs execute as a bot actor (e.g. github-merge-queue), which the
+          # action's actor gate rejects unless allow-listed. This workflow only triggers
+          # via schedule / workflow_dispatch — both trusted, no untrusted-fork path — so
+          # allowing bot actors here adds no new exposure.
+          allowed_bots: "*"
           prompt: |
             REPO: ${{ github.repository }}
             CURRENT LEMONADE VERSION: ${{ steps.detect.outputs.current_version }}

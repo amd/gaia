@@ -6,7 +6,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SettingsPage } from '../SettingsPage';
 import { useChatStore } from '../../stores/chatStore';
-import type { Settings } from '../../types';
+import type { Settings, SystemStatus } from '../../types';
 import * as api from '../../services/api';
 
 vi.mock('../../services/api');
@@ -29,11 +29,47 @@ function makeSettings(overrides: Partial<Settings> = {}): Settings {
     };
 }
 
+function makeSystemStatus(): SystemStatus {
+    return {
+        lemonade_running: true,
+        model_loaded: null,
+        embedding_model_loaded: false,
+        disk_space_gb: 100,
+        memory_available_gb: 16,
+        initialized: true,
+        version: '0.0.0-test',
+        lemonade_version: null,
+        model_size_gb: null,
+        model_device: null,
+        model_context_size: null,
+        model_labels: null,
+        gpu_name: null,
+        gpu_vram_gb: null,
+        tokens_per_second: null,
+        time_to_first_token: null,
+        processor_name: null,
+        device_supported: true,
+        context_size_sufficient: true,
+        model_downloaded: true,
+        default_model_name: null,
+        default_model_size_gb: null,
+        lemonade_url: null,
+        expected_model_loaded: true,
+        download_progress: null,
+    };
+}
+
+// Resolve on a macrotask, like a real HTTP response — an immediately-resolved
+// mock can flush before the first waitFor() check and mask load-order races.
+function respondWith<T>(value: T): Promise<T> {
+    return new Promise((resolve) => setTimeout(() => resolve(value), 30));
+}
+
 beforeEach(() => {
     vi.clearAllMocks();
-    mockedApi.getSystemStatus.mockResolvedValue(null as never);
+    mockedApi.getSystemStatus.mockImplementation(() => respondWith(makeSystemStatus()));
     mockedApi.getMCPRuntimeStatus.mockResolvedValue({ servers: [] } as never);
-    mockedApi.getSettings.mockResolvedValue(makeSettings());
+    mockedApi.getSettings.mockImplementation(() => respondWith(makeSettings()));
     mockedApi.updateSettings.mockImplementation(async (patch) =>
         makeSettings(patch as Partial<Settings>),
     );
@@ -46,23 +82,36 @@ function getDynamicToolsToggle(): HTMLInputElement {
         ?? screen.getByLabelText('Disable dynamic tools')) as HTMLInputElement;
 }
 
+// The toggle exists (disabled, unchecked) from first paint; waiting for mere
+// presence races the async getSettings() load. Wait for the settled state:
+// the toggle stays disabled until settingsLoaded flips true.
+async function findLoadedDynamicToolsToggle(): Promise<HTMLInputElement> {
+    return waitFor(() => {
+        const toggle = getDynamicToolsToggle();
+        expect(toggle).not.toBeDisabled();
+        return toggle;
+    });
+}
+
 describe('SettingsPage — Dynamic Tools toggle (#1798)', () => {
     it('renders the loaded value (off by default)', async () => {
         render(<SettingsPage />);
-        const toggle = await waitFor(getDynamicToolsToggle);
+        const toggle = await findLoadedDynamicToolsToggle();
         expect(toggle).not.toBeChecked();
         expect(toggle).not.toBeDisabled();
     });
 
     it('reflects a persisted-on value from the server', async () => {
-        mockedApi.getSettings.mockResolvedValue(makeSettings({ dynamic_tools: true }));
+        mockedApi.getSettings.mockImplementation(() =>
+            respondWith(makeSettings({ dynamic_tools: true })),
+        );
         render(<SettingsPage />);
         await waitFor(() => expect(getDynamicToolsToggle()).toBeChecked());
     });
 
     it('persists dynamic_tools: true when toggled on', async () => {
         render(<SettingsPage />);
-        const toggle = await waitFor(getDynamicToolsToggle);
+        const toggle = await findLoadedDynamicToolsToggle();
 
         await userEvent.click(toggle);
 
@@ -79,7 +128,7 @@ describe('SettingsPage — Dynamic Tools toggle (#1798)', () => {
         // directly (as the other tests do) would pass even if that wiring is
         // missing — so click the visible label text here, the way a user does.
         render(<SettingsPage />);
-        await waitFor(getDynamicToolsToggle);
+        await findLoadedDynamicToolsToggle();
 
         await userEvent.click(screen.getByText('Enable dynamic tool loading'));
 
@@ -90,15 +139,17 @@ describe('SettingsPage — Dynamic Tools toggle (#1798)', () => {
     });
 
     it('is disabled and reflects the env value when locked', async () => {
-        mockedApi.getSettings.mockResolvedValue(
-            makeSettings({ dynamic_tools: true, dynamic_tools_locked: true }),
+        mockedApi.getSettings.mockImplementation(() =>
+            respondWith(makeSettings({ dynamic_tools: true, dynamic_tools_locked: true })),
         );
         render(<SettingsPage />);
-        const toggle = await waitFor(getDynamicToolsToggle);
+        // Locked keeps the toggle disabled even after load, so the enabled-state
+        // wait can't apply here; the lock note only renders once settings land.
+        await screen.findByText(/GAIA_DYNAMIC_TOOLS/);
 
+        const toggle = getDynamicToolsToggle();
         expect(toggle).toBeChecked();
         expect(toggle).toBeDisabled();
-        expect(screen.getByText(/GAIA_DYNAMIC_TOOLS/)).toBeInTheDocument();
     });
 
     it('guards against a double-click while a save is in flight (single PUT)', async () => {
@@ -109,7 +160,7 @@ describe('SettingsPage — Dynamic Tools toggle (#1798)', () => {
         );
 
         render(<SettingsPage />);
-        const toggle = await waitFor(getDynamicToolsToggle);
+        const toggle = await findLoadedDynamicToolsToggle();
 
         // First click starts the save; the toggle disables (savingDynamicTools).
         await userEvent.click(toggle);
@@ -128,7 +179,7 @@ describe('SettingsPage — Dynamic Tools toggle (#1798)', () => {
     it('reverts and surfaces an error when the save fails (no silent fallback)', async () => {
         mockedApi.updateSettings.mockRejectedValue(new Error('network down'));
         render(<SettingsPage />);
-        const toggle = await waitFor(getDynamicToolsToggle);
+        const toggle = await findLoadedDynamicToolsToggle();
 
         await userEvent.click(toggle);
 
