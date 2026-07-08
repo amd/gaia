@@ -88,6 +88,30 @@ def behavior_server(require_real_model, tmp_path_factory):
     env["HOME"] = str(home_dir)
     env["USERPROFILE"] = str(home_dir)  # Windows compat
 
+    # Redirect the child's stdout/stderr to a FILE, never a PIPE. The server
+    # logs heavily during startup (registry discovery, agent loop, scheduler,
+    # monitor, connector tripwire, DispatchQueue progress) — several KB before
+    # ``/api/health`` comes up. An unread ``subprocess.PIPE`` fills the OS pipe
+    # buffer (~4-8 KB on Windows) and the server BLOCKS on write, so the ASGI
+    # lifespan never finishes and health never responds — a deadlock that
+    # timed out at 30 s only on the (Windows) strix-halo runner, not locally
+    # where the pipe buffer is larger. File writes never block, and the log is
+    # uploaded as a CI artifact for diagnosis.
+    # Write under an ``artifacts`` subdir so the workflow's
+    # ``pytest-behavior/**/artifacts/**`` upload step captures the server log
+    # for post-mortem diagnosis (e.g. a slow model load or a wedged tool loop).
+    log_dir = home_dir / "artifacts"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "server.log"
+    log_fh = open(log_path, "w", encoding="utf-8", errors="replace")
+
+    def _server_log_tail(limit: int = 4000) -> str:
+        log_fh.flush()
+        try:
+            return log_path.read_text(encoding="utf-8", errors="replace")[-limit:]
+        except OSError as e:  # pragma: no cover — diagnostic best-effort
+            return f"<could not read {log_path}: {e}>"
+
     process = subprocess.Popen(
         [
             sys.executable,
@@ -99,31 +123,47 @@ def behavior_server(require_real_model, tmp_path_factory):
             "127.0.0.1",
         ],
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
         text=True,
     )
 
     base_url = f"http://127.0.0.1:{port}"
-    deadline = time.time() + 30
-    while time.time() < deadline:
-        try:
-            resp = requests.get(f"{base_url}/api/health", timeout=2)
-            if resp.status_code == 200:
-                break
-        except requests.RequestException:
-            pass
-        if process.poll() is not None:
-            stdout, stderr = process.communicate()
+    # Cold first-run boot on a busy self-hosted runner (heavy imports + DB init
+    # + registry/agent-loop/scheduler/monitor startup) legitimately needs more
+    # than 30 s. The pipe-deadlock fix above is the real cause of the historical
+    # hang; the larger budget is headroom for a genuinely slow cold boot.
+    deadline = time.time() + 90
+    try:
+        while time.time() < deadline:
+            try:
+                resp = requests.get(f"{base_url}/api/health", timeout=2)
+                if resp.status_code == 200:
+                    break
+            except requests.RequestException:
+                pass
+            if process.poll() is not None:
+                pytest.fail(
+                    f"gaia.ui.server exited unexpectedly (code {process.returncode}).\n"
+                    f"server log tail:\n{_server_log_tail()}"
+                )
+            time.sleep(0.5)
+        else:
+            process.terminate()
+            process.wait(timeout=10)
             pytest.fail(
-                f"gaia.ui.server exited unexpectedly.\n"
-                f"stdout: {stdout[-2000:]}\nstderr: {stderr[-2000:]}"
+                f"gaia.ui.server did not become healthy on port {port} within 90 s.\n"
+                f"server log tail:\n{_server_log_tail()}"
             )
-        time.sleep(0.5)
-    else:
+    except BaseException:
         process.terminate()
-        process.wait(timeout=10)
-        pytest.fail(f"gaia.ui.server did not become healthy on port {port} within 30 s")
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        log_fh.close()
+        raise
 
     yield base_url, home_dir
 
@@ -133,6 +173,7 @@ def behavior_server(require_real_model, tmp_path_factory):
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
+    log_fh.close()
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +191,14 @@ def test_builder_creates_agent_file(behavior_server, tmp_path):
     base_url, home_dir = behavior_server
     artifact_dir = tmp_path / "artifacts"
 
-    harness = BehaviorHarness(base_url=base_url, timeout=180)
+    # Match the server's own 600 s inference ceiling (``_get_chat_response``
+    # wraps ``process_query`` in ``asyncio.wait_for(timeout=600)``) plus a
+    # small margin. A slower budget avoids the client cutting a still-running
+    # builder request at 180 s — which left the request in flight server-side
+    # and wedged the single worker so subsequent runs also timed out. Letting
+    # the server-side bound fire first yields a clean response instead of a
+    # client-side ReadTimeout.
+    harness = BehaviorHarness(base_url=base_url, timeout=620)
     scenario = BUILDER_SCENARIOS[0]
 
     result = harness.run_scenario(
