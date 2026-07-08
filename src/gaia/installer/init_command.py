@@ -31,6 +31,7 @@ except ImportError:
 
 from gaia.agents.base.console import AgentConsole
 from gaia.installer.lemonade_installer import LemonadeInfo, LemonadeInstaller
+from gaia.llm.lemonade_launcher import build_start_command, resolve_lemonade
 from gaia.version import LEMONADE_VERSION
 
 log = logging.getLogger(__name__)
@@ -62,9 +63,12 @@ INIT_PROFILES = {
     "chat": {
         "description": "Interactive chat with RAG and vision support",
         "agent": "chat",
-        "models": ["Gemma-4-E4B-it-GGUF", "nomic-embed-text-v2-moe-GGUF"],
+        "models": ["Gemma-4-E4B-it-GGUF", "user.embeddinggemma-300m-GGUF"],
         "approx_size": "~4 GB",
-        "min_lemonade_version": "10.2.0",
+        # EmbeddingGemma is validated on Lemonade v10.9.0; older bundled
+        # llama.cpp builds fail to load it. Floor the version so init fails
+        # loudly instead of the embedder failing at first RAG index.
+        "min_lemonade_version": "10.9.0",
         "min_context_size": 32768,
         "pip_extras": ["rag"],
     },
@@ -80,9 +84,10 @@ INIT_PROFILES = {
     "rag": {
         "description": "Document Q&A with retrieval",
         "agent": "rag",
-        "models": ["Gemma-4-E4B-it-GGUF", "nomic-embed-text-v2-moe-GGUF"],
+        "models": ["Gemma-4-E4B-it-GGUF", "user.embeddinggemma-300m-GGUF"],
         "approx_size": "~4 GB",
-        "min_lemonade_version": "10.2.0",
+        # EmbeddingGemma loads only on Lemonade v10.9.0+ (see chat profile).
+        "min_lemonade_version": "10.9.0",
         "min_context_size": 32768,
         "pip_extras": ["rag"],
     },
@@ -95,10 +100,26 @@ INIT_PROFILES = {
         "min_context_size": 32768,
         "pip_extras": [],
     },
+    "email": {
+        "description": "Email triage for Gmail/Outlook (local inference)",
+        "agent": "email",
+        "models": ["Gemma-4-E4B-it-GGUF"],
+        "approx_size": "~3 GB",
+        # Keep in lock-step with gaia_agent_email.version.MIN_LEMONADE_VERSION
+        # and the email gaia-agent.yaml manifest (the GET /v1/email/init readiness
+        # check reads the same minimum). A test asserts the three agree.
+        "min_lemonade_version": "10.2.0",
+        "min_context_size": 32768,
+        "pip_extras": [],
+    },
     "npu": {
         "description": "Ryzen AI NPU acceleration via FLM backend (requires XDNA2 NPU)",
         "agent": "chat",
-        "models": ["gemma4-it-e2b-FLM"],
+        # FLM chat model + FLM-native embedder so chat and embeddings stay
+        # co-resident on the NPU backend. A GGUF embedder would run on Vulkan
+        # and evict the FLM chat model every turn (#1744). Both are built-in
+        # Lemonade *-FLM models, pulled by name only (no recipe — #1655).
+        "models": ["gemma4-it-e2b-FLM", "embed-gemma-300m-FLM"],
         "approx_size": "~3 GB",
         "min_lemonade_version": "10.2.0",
         # NPU context window. Matches GPU/CPU (32768) so the init report and
@@ -117,7 +138,8 @@ INIT_PROFILES = {
         "agent": "all",
         "models": None,
         "approx_size": "~26 GB",
-        "min_lemonade_version": "9.2.0",  # Includes SD, so needs v9.2.0+
+        # Includes EmbeddingGemma, which loads only on Lemonade v10.9.0+.
+        "min_lemonade_version": "10.9.0",
         "min_context_size": 32768,  # Max requirement across all agents
         "pip_extras": ["rag"],
     },
@@ -1041,65 +1063,109 @@ class InitCommand:
 
     def _find_lemonade_server(self) -> Optional[str]:
         """
-        Find the lemonade-server executable.
+        Find the Lemonade server launcher executable (modern or legacy).
 
-        Uses the installer's PATH refresh to pick up recent MSI changes.
-        Falls back to common installation paths if not found in PATH.
+        Retained as a compatibility surface only — no in-tree callers remain;
+        new code should call :func:`gaia.llm.lemonade_launcher.resolve_lemonade`.
+
+        Uses the installer's PATH refresh to pick up recent MSI changes,
+        then delegates detection to
+        :func:`gaia.llm.lemonade_launcher.resolve_lemonade` (which honors
+        the LEMONADE_SERVER_PATH override and finds modern installs at
+        their canonical path before falling back to the legacy CLI).
 
         Returns:
-            Path to lemonade-server executable, or None if not found
+            Path to the server launcher, or None if not found
         """
-        import shutil
-
         # Use installer's PATH refresh (reads from Windows registry)
         self.installer.refresh_path_from_registry()
 
-        # Try to find in updated PATH
-        lemonade_path = shutil.which("lemonade-server")
-        if lemonade_path:
-            return lemonade_path
-
-        # Fallback: check common installation paths (Windows)
-        if sys.platform == "win32":
-            common_paths = [
-                # Per-user install (most common for MSI)
-                os.path.expandvars(
-                    r"%LOCALAPPDATA%\Programs\Lemonade Server\lemonade-server.exe"
-                ),
-                os.path.expandvars(
-                    r"%LOCALAPPDATA%\Lemonade Server\lemonade-server.exe"
-                ),
-                # System-wide install
-                r"C:\Program Files\Lemonade Server\lemonade-server.exe",
-                r"C:\Program Files (x86)\Lemonade Server\lemonade-server.exe",
-                # Potential alternative paths
-                os.path.expandvars(
-                    r"%USERPROFILE%\lemonade-server\lemonade-server.exe"
-                ),
-            ]
-
-            for path in common_paths:
-                if os.path.isfile(path):
-                    if self.verbose:
-                        log.debug(f"Found lemonade-server at fallback path: {path}")
-                    return path
-
-        # Fallback: check common installation paths (Linux)
-        elif sys.platform.startswith("linux"):
-            common_paths = [
-                "/snap/bin/lemonade-server",
-                "/usr/local/bin/lemonade-server",
-                "/usr/bin/lemonade-server",
-                os.path.expanduser("~/.local/bin/lemonade-server"),
-            ]
-
-            for path in common_paths:
-                if os.path.isfile(path):
-                    if self.verbose:
-                        log.debug(f"Found lemonade-server at fallback path: {path}")
-                    return path
-
+        tooling = resolve_lemonade()
+        if tooling.found:
+            return tooling.server_launcher
         return None
+
+    def _auto_start_server(self, client) -> bool:
+        """
+        Attempt to auto-start the Lemonade server and wait for it to be healthy.
+
+        Resolves the installed tooling via resolve_lemonade() — which honors
+        the LEMONADE_SERVER_PATH override set by CI — and launches it through
+        build_start_command(), so modern installs get
+        ``LemonadeServer.exe --silent`` + ``LEMONADE_CTX_SIZE`` env and legacy
+        installs keep the ``serve --ctx-size`` argv.
+
+        Args:
+            client: A LemonadeClient used for health polling.
+
+        Returns:
+            True if the server came up healthy within 30s, False otherwise.
+        """
+        try:
+            tooling = resolve_lemonade()
+            if not tooling.found:
+                raise FileNotFoundError(
+                    "Lemonade Server not found (no modern install at its "
+                    "canonical path, no lemonade-server in PATH)"
+                )
+
+            # Pass the profile's context size so the auto-started server
+            # comes up with GAIA's required context window (issue #839).
+            min_ctx = INIT_PROFILES[self.profile].get("min_context_size")
+            if not min_ctx:
+                raise RuntimeError(
+                    f"Profile {self.profile!r} is missing 'min_context_size' "
+                    f"in INIT_PROFILES; cannot determine the context size for "
+                    f"the Lemonade server. Add the key to INIT_PROFILES "
+                    f"in src/gaia/installer/init_command.py."
+                )
+
+            spec = build_start_command(tooling, min_ctx)
+            log.info("Starting Lemonade Server: %s", " ".join(spec.argv))
+
+            popen_kwargs = {
+                "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL,
+                # Merge — never replace — the parent environment; the child
+                # loses PATH/LOCALAPPDATA otherwise and LemonadeServer.exe breaks.
+                "env": {**os.environ, **spec.env},
+            }
+            if sys.platform == "win32":
+                popen_kwargs["creationflags"] = (
+                    subprocess.CREATE_NO_WINDOW
+                    if hasattr(subprocess, "CREATE_NO_WINDOW")
+                    else 0
+                )
+            subprocess.Popen(spec.argv, **popen_kwargs)
+
+            # Wait for server to become healthy
+            import time
+
+            max_wait = 30
+            waited = 0
+            while waited < max_wait:
+                time.sleep(2)
+                waited += 2
+                try:
+                    health = client.health_check()
+                    if (
+                        health
+                        and isinstance(health, dict)
+                        and health.get("status") == "ok"
+                    ):
+                        self._print_success(
+                            f"Server started and ready (waited {waited}s)"
+                        )
+                        return True
+                except Exception as e:
+                    log.debug("Health poll not ready yet: %s", e)
+
+            self._print_error(f"Server failed to start after {max_wait}s")
+            return False
+
+        except Exception as e:
+            self._print_error(f"Failed to start server: {e}")
+            return False
 
     def _ensure_server_running(self) -> bool:
         """
@@ -1107,6 +1173,10 @@ class InitCommand:
 
         In remote mode, only checks if server is reachable - does not prompt
         user to start it (assumes it's managed externally).
+
+        In local mode, auto-start is attempted FIRST in both CI (yes=True)
+        and interactive modes; the manual "Please start Lemonade Server"
+        prompt is reachable only when an interactive auto-start fails.
 
         Returns:
             True if server is running and healthy, False on failure
@@ -1147,97 +1217,26 @@ class InitCommand:
                 )
                 return False
 
-            # Server not running - start it automatically in CI mode, or prompt user
+            # Server not running — auto-start FIRST in both CI and
+            # interactive modes (issue #316).
             if self.yes:
-                # In CI mode, just inform and auto-start (not an error)
+                # CI mode: auto-start is the only path; never prompts.
                 self._print("   Lemonade Server is not running")
                 self.console.print()
                 self.console.print(
                     "   [dim]Auto-starting Lemonade Server (CI mode)...[/dim]"
                 )
+                return self._auto_start_server(client)
 
-                try:
-                    # Find lemonade-server executable
-                    # Check env var first (set by install-lemonade action in CI)
-                    lemonade_path = os.environ.get("LEMONADE_SERVER_PATH")
-                    if not lemonade_path:
-                        # Use our enhanced finder (checks PATH + fallback locations)
-                        lemonade_path = self._find_lemonade_server()
+            # Interactive mode: try auto-start before ever prompting.
+            self._print("   Lemonade Server is not running — starting it...")
+            if self._auto_start_server(client):
+                return True
 
-                    if not lemonade_path:
-                        raise FileNotFoundError("lemonade-server not found in PATH")
-
-                    # Pass --ctx-size so the auto-started server comes up with
-                    # GAIA's required context window (issue #839).  Without this
-                    # the server starts with its default (small) ctx and the
-                    # user is told to stop and restart it manually — bad UX.
-                    min_ctx = INIT_PROFILES[self.profile].get("min_context_size")
-                    if not min_ctx:
-                        raise RuntimeError(
-                            f"Profile {self.profile!r} is missing 'min_context_size' "
-                            f"in INIT_PROFILES; cannot determine --ctx-size for "
-                            f"lemonade-server. Add the key to INIT_PROFILES "
-                            f"in src/gaia/installer/init_command.py."
-                        )
-                    ctx_args = ["--ctx-size", str(min_ctx)]
-                    log.info(
-                        "Starting lemonade-server with %s",
-                        " ".join(ctx_args),
-                    )
-
-                    # Start server in background
-                    if sys.platform == "win32":
-                        # Windows: use subprocess.Popen with no window
-                        subprocess.Popen(
-                            [lemonade_path, "serve", "--no-tray", *ctx_args],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                            creationflags=(
-                                subprocess.CREATE_NO_WINDOW
-                                if hasattr(subprocess, "CREATE_NO_WINDOW")
-                                else 0
-                            ),
-                        )
-                    else:
-                        # Linux/Mac: background process
-                        subprocess.Popen(
-                            [lemonade_path, "serve", *ctx_args],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                        )
-
-                    # Wait for server to start
-                    import time
-
-                    max_wait = 30
-                    waited = 0
-                    while waited < max_wait:
-                        time.sleep(2)
-                        waited += 2
-                        try:
-                            health = client.health_check()
-                            if (
-                                health
-                                and isinstance(health, dict)
-                                and health.get("status") == "ok"
-                            ):
-                                self._print_success(
-                                    f"Server started and ready (waited {waited}s)"
-                                )
-                                return True
-                        except Exception:
-                            pass
-
-                    self._print_error(f"Server failed to start after {max_wait}s")
-                    return False
-
-                except Exception as e:
-                    self._print_error(f"Failed to start server: {e}")
-                    return False
-            else:
-                # Interactive mode - prompt user to start manually
-                self._print_error("Lemonade Server is not running")
-                self.console.print()
+            # Auto-start failed — the manual prompt below is the only
+            # remaining fall-through path (interactive mode only).
+            self._print_error("Could not start Lemonade Server automatically")
+            self.console.print()
             self.console.print("   [bold]Please start Lemonade Server:[/bold]")
             if sys.platform == "win32":
                 self.console.print(
@@ -1247,12 +1246,18 @@ class InitCommand:
                     "   [dim]• Search for 'Lemonade' in Start Menu and launch it[/dim]"
                 )
             else:
-                # Find the actual binary path to give the user a working command
-                lemonade_path = self._find_lemonade_server()
-                if lemonade_path:
-                    self.console.print(
-                        f"   [dim]• Run:[/dim] [cyan]{lemonade_path} serve &[/cyan]"
-                    )
+                # Give the user the exact start command for their tooling
+                tooling = resolve_lemonade()
+                if tooling.found:
+                    min_ctx = INIT_PROFILES[self.profile].get("min_context_size")
+                    spec = build_start_command(tooling, min_ctx)
+                    cmd_str = " ".join(spec.argv)
+                    if spec.env:
+                        env_prefix = " ".join(f"{k}={v}" for k, v in spec.env.items())
+                        cmd_str = f"{env_prefix} {cmd_str}"
+                    if tooling.kind == "legacy":
+                        cmd_str += " &"
+                    self.console.print(f"   [dim]• Run:[/dim] [cyan]{cmd_str}[/cyan]")
                 else:
                     self.console.print(
                         "   [dim]• Run:[/dim] [cyan]lemonade-server serve &[/cyan]"
@@ -1500,15 +1505,41 @@ class InitCommand:
             # treat the call as a *new* model registration, which requires the
             # ``user.`` prefix and 400s on built-in names (#1655). The recipe is
             # baked into the built-in model and applied at load time.
+            #
+            # Custom (``user.``-namespaced) models — e.g. the EmbeddingGemma
+            # embedder — are NOT built-ins: they must be registered on first pull
+            # with checkpoint + recipe + the embedding label. Look those up from
+            # the model registry so the pull request is valid (#1745 auto-label bug
+            # is avoided by passing ``embedding=True`` explicitly).
+            from gaia.llm.lemonade_client import MODELS
+
+            registry_by_id = {mr.model_id: mr for mr in MODELS.values()}
+
             recipe = profile_config.get("recipe")
             success = True
             for model_id in model_ids:
                 self._print("")
+                mr = registry_by_id.get(model_id)
+                is_custom = model_id.startswith("user.")
                 label = f"{model_id} (recipe={recipe})" if recipe else model_id
                 self.agent_console.print(
                     f"   [bold cyan]Downloading:[/bold cyan] {label}"
                 )
-                if client.ensure_model_downloaded(model_id):
+                # Built-in models are pulled by name only. Passing recipe (even
+                # =None) can make Lemonade treat the call as a custom-model
+                # registration, which 400s on built-in names (#1655). Only
+                # user.-namespaced models carry checkpoint + recipe + the
+                # embedding label.
+                pull_kwargs = (
+                    {
+                        "checkpoint": mr.checkpoint,
+                        "recipe": mr.recipe,
+                        "embedding": mr.embedding,
+                    }
+                    if (mr and is_custom)
+                    else {}
+                )
+                if client.ensure_model_downloaded(model_id, **pull_kwargs):
                     self._print_success(f"Downloaded {model_id}")
                 else:
                     self._print_error(f"Failed to download {model_id}")

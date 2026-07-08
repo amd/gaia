@@ -177,7 +177,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0  # full history for any version calculations
           ref: ${{ inputs.tag || github.ref }}
@@ -194,7 +194,7 @@ jobs:
       # platform. Cross-runner cache paths are listed together — actions/cache
       # silently skips paths that don't exist on the current runner.
       - name: Cache electron + electron-builder
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cache/electron
@@ -299,9 +299,14 @@ jobs:
           cp "${tmpdir}/uv-aarch64-apple-darwin/uv" "${DEST_DIR}/uv"
           chmod 0755 "${DEST_DIR}/uv"
           "${DEST_DIR}/uv" --version
-          # Echo the extracted-binary SHA (pre-codesign). To bump the
-          # runtime's POST-codesign digest (BUNDLED_UV_SHA256[mac-arm64]),
-          # run CI and copy the value from the dmg-structural-smoke output.
+          # Echo the extracted-binary SHA (pre-codesign) for build logs only —
+          # there is no runtime pin to update for mac-arm64. Unlike
+          # linux-x64/win-x64, mac-arm64's BUNDLED_UV_SHA256 entry was removed:
+          # electron-builder re-signs this binary during packaging (ad-hoc
+          # identity=- on every CI build today), and ad-hoc codesign output is
+          # not deterministic across GitHub-hosted macos-latest runner image
+          # rollovers. ensureUv() and dmg-structural-smoke both verify this
+          # binary via `codesign --verify --strict` instead of a fixed digest.
           shasum -a 256 "${DEST_DIR}/uv"
 
       - name: Build frontend (Vite)
@@ -735,7 +740,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download Linux installer artifact
         uses: actions/download-artifact@v8
@@ -762,8 +767,12 @@ jobs:
   # Mirrors appimage-structural-smoke for the macOS DMG. Catches the
   # failure mode that bit v0.17.5: a darwin-arm64 install that hard-fails
   # in ensure-uv on first launch because the bundled uv either was never
-  # shipped or has the wrong SHA256 against BUNDLED_UV_SHA256[mac-arm64]
-  # in backend-installer.cjs.
+  # shipped or fails `codesign --verify --strict` in backend-installer.cjs.
+  # (Prior to the mac-arm64 pin removal, this compared against a fixed
+  # BUNDLED_UV_SHA256[mac-arm64] digest — retired because ad-hoc codesign
+  # output is not deterministic across GitHub-hosted macos-latest runner
+  # image rollovers; see the BUNDLED_UV_SHA256 comment in
+  # backend-installer.cjs.)
   #
   # MUST be present in build-complete `needs:` below — without that
   # wiring, a failing DMG smoke does not block release-readiness.
@@ -776,7 +785,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download macOS installer artifact
         uses: actions/download-artifact@v8
@@ -793,7 +802,7 @@ jobs:
           echo "Found DMG: ${DMG}"
           echo "dmg=${DMG}" >> "$GITHUB_OUTPUT"
 
-      - name: Structural smoke (uv binary, mode, sha256, --version)
+      - name: Structural smoke (uv binary, mode, codesign, --version)
         env:
           GAIA_DMG: ${{ steps.locate.outputs.dmg }}
         run: node --test tests/electron/dmg-smoke.test.mjs
@@ -805,7 +814,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download Linux installer artifact
         uses: actions/download-artifact@v8
@@ -1064,7 +1073,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download Linux installer artifact
         uses: actions/download-artifact@v8
@@ -1171,7 +1180,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -1212,7 +1221,7 @@ jobs:
   #     needs: build
   #     runs-on: ubuntu-24.04
   #     steps:
-  #       - uses: actions/checkout@v6
+  #       - uses: actions/checkout@v7
   #       - run: sudo apt-get install --yes cage grim imagemagick libfuse2
   #       - run: cage -s -- xvfb-run "${APPIMAGE}" &
   #       - run: sleep 20 && grim -t png /tmp/shot.png

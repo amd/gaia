@@ -434,7 +434,7 @@ class ProceduralMemoryMixin:
         The Step-8 driver of the procedural-memory loop, run once per process
         inside ``_run_memory_post_init`` (off the request hot path).  It wires the
         pure ``skill_synthesis`` pipeline to the live seams: DETECT via
-        ``MemoryStore.iter_sessions``, CLUSTER via the nomic-768 embedder
+        ``MemoryStore.iter_sessions``, CLUSTER via the 768-dim embedder
         (``_embed_text``), DISTILL via ``self.chat.send_messages``, and
         RECONCILE/STORE into the ``procedures`` table, adding each new row's
         ``when_to_use`` vector to the separate procedures FAISS index.

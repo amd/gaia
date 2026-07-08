@@ -31,6 +31,7 @@ class TestConfirmationGatingAtBaseLevel:
         [
             "send_draft",
             "send_now",
+            "schedule_send",
             "forward_message",
             "permanent_delete",
             "accept_invite",

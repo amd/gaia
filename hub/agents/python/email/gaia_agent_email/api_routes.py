@@ -13,7 +13,7 @@ endpoints, mounted on the existing OpenAI-compatible FastAPI app
                              draft proposal).
     POST /v1/email/draft   — propose a reply and obtain a single-use
                              confirmation token bound to the exact
-                             ``(to, subject, body)`` payload.
+                             ``(to, subject, body, attachments)`` payload.
     POST /v1/email/send    — send a reply. REJECTED with a 4xx unless a
                              valid confirmation token for *this* payload is
                              supplied. This is the send-confirmation gate
@@ -49,12 +49,13 @@ import json
 import re
 import secrets
 import threading
-from typing import Any, Dict, List, Literal, NoReturn, Optional
+from typing import Any, Dict, Iterator, List, Literal, NoReturn, Optional, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi.responses import HTMLResponse, StreamingResponse
 from gaia_agent_email.contract import (
     ActionItem,
+    AttachmentMeta,
     BatchItemError,
     BatchItemResult,
     BatchTriageRequest,
@@ -90,12 +91,14 @@ from gaia_agent_email.contract import (
     EmailUnarchiveResponse,
     EmailUnquarantineRequest,
     EmailUnquarantineResponse,
+    OutgoingAttachment,
     SingleEmailInput,
     ThreadInput,
     TriageUsage,
     UnarchivedMessage,
     UnarchiveFailure,
 )
+from gaia_agent_email.outlook_backend import AttachmentTooLargeError
 from gaia_agent_email.tools.llm_triage import LLMTriageError
 from gaia_agent_email.tools.summarize_tools import EmailSummarizeError
 from gaia_agent_email.tools.triage_heuristics import (
@@ -104,6 +107,7 @@ from gaia_agent_email.tools.triage_heuristics import (
 )
 from gaia_agent_email.version import AGENT_VERSION, API_VERSION
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.concurrency import iterate_in_threadpool
 
 from gaia.connectors.api import connected_mailbox_providers
 from gaia.connectors.errors import (
@@ -166,6 +170,184 @@ _MAX_SUMMARY_CHARS = 300
 # down" into a prompt 502 instead of a 30s hang.
 _LEMONADE_PROBE_CONNECT_TIMEOUT = 2.0
 _LEMONADE_PROBE_READ_TIMEOUT = 3.0
+
+# A model pull is a first-download of multi-GB weights — minutes, not seconds.
+# Generous ceiling so a slow link doesn't abort a real download; the connect
+# leg stays short so an unreachable server still fails fast.
+_LEMONADE_PULL_TIMEOUT = (5.0, 1800.0)
+
+
+def _resolve_probe_base(base_url: Optional[str]) -> str:
+    """Resolve the Lemonade ``/api/v1`` base URL for a health/model probe.
+
+    An explicit ``base_url`` is normalised to end in ``/api/v1`` (callers often
+    omit it); ``None`` falls back to the env-derived default via
+    ``_get_lemonade_config``. Shared by the reachability probe and the
+    model-presence probe so both target the exact same server.
+    """
+    from gaia.llm.lemonade_client import _get_lemonade_config
+
+    if base_url:
+        probe_base = base_url.rstrip("/")
+        if not probe_base.endswith("/api/v1"):
+            probe_base = f"{probe_base}/api/v1"
+        return probe_base
+    _, _, probe_base = _get_lemonade_config()
+    return probe_base
+
+
+def _probe_lemonade_health(
+    base_url: Optional[str] = None,
+) -> Tuple[bool, str, Optional[str]]:
+    """Probe Lemonade's ``/health`` with a short connect timeout (#1677).
+
+    Returns ``(reachable, probe_base, version)``. Any HTTP response — even an
+    error status — means the server is up; only a connection/timeout failure
+    counts as unreachable (auth/model errors surface later on the real chat
+    call, where their messages are specific). ``version`` is Lemonade's
+    self-reported server version from the ``/health`` body (``None`` when the
+    server doesn't advertise one or the body isn't JSON). Never raises: the
+    readiness endpoint reports the values rather than failing.
+    """
+    import requests
+
+    probe_base = _resolve_probe_base(base_url)
+    try:
+        resp = requests.get(
+            f"{probe_base}/health",
+            timeout=(_LEMONADE_PROBE_CONNECT_TIMEOUT, _LEMONADE_PROBE_READ_TIMEOUT),
+        )
+    except requests.exceptions.RequestException:
+        return False, probe_base, None
+
+    version: Optional[str] = None
+    try:
+        body = resp.json()
+        if isinstance(body, dict):
+            version = body.get("version")
+    except ValueError:
+        version = None
+    return True, probe_base, version
+
+
+def _probe_lemonade_reachable(base_url: Optional[str] = None) -> Tuple[bool, str]:
+    """Reachability-only view of :func:`_probe_lemonade_health`.
+
+    Kept for callers (the POST provisioning verb) that need only "is it up?",
+    not the version — so they share the single ``/health`` probe logic.
+    """
+    reachable, probe_base, _version = _probe_lemonade_health(base_url)
+    return reachable, probe_base
+
+
+def _probe_model_present(probe_base: str, model_id: str) -> bool:
+    """Cheaply check whether ``model_id`` is downloaded on the Lemonade server.
+
+    Queries the model list (downloaded models only) with the same short
+    timeout as the reachability probe and matches on the ``id`` field. Sends
+    the resolved Lemonade auth header so an authenticated server answers
+    instead of 401-ing. Raises ``requests.RequestException`` on a transport
+    failure — the caller turns that into an actionable readiness hint rather
+    than silently reporting "absent".
+
+    "Present" is intentionally cheap (a list lookup, no model load). Whether
+    the model actually *loads* (``loadable``) is not probed in v1 — forcing a
+    load is heavy, so the readiness response reports ``loadable=null``.
+    """
+    import requests
+
+    from gaia.llm.lemonade_client import (
+        lemonade_auth_headers,
+        resolve_lemonade_api_key,
+    )
+
+    resp = requests.get(
+        f"{probe_base}/models",
+        headers=lemonade_auth_headers(resolve_lemonade_api_key()),
+        timeout=(_LEMONADE_PROBE_CONNECT_TIMEOUT, _LEMONADE_PROBE_READ_TIMEOUT),
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+    data = payload.get("data", []) if isinstance(payload, dict) else []
+    return any(isinstance(m, dict) and m.get("id") == model_id for m in data)
+
+
+def _pull_model(probe_base: str, model_id: str) -> None:
+    """Tell a RUNNING Lemonade Server to download ``model_id``.
+
+    Posts to Lemonade's ``/pull`` with ONLY ``model_name`` — the email triage
+    model is a *built-in* Lemonade model, and sending ``recipe`` for a built-in
+    makes Lemonade 400 (the #1655 trap). Sends the resolved auth header so an
+    authenticated server accepts the request. Raises ``requests.RequestException``
+    (incl. ``HTTPError`` on a non-2xx) on failure — the caller surfaces it as a
+    loud provisioning-failed line rather than swallowing it.
+
+    This is the ONLY provisioning the frozen sidecar can do: it cannot run the
+    full ``gaia init`` (no bundled CLI/installer) and cannot install Lemonade
+    itself if Lemonade is what's missing (chicken-and-egg).
+    """
+    import requests
+
+    from gaia.llm.lemonade_client import (
+        lemonade_auth_headers,
+        resolve_lemonade_api_key,
+    )
+
+    resp = requests.post(
+        f"{probe_base}/pull",
+        json={"model_name": model_id},
+        headers=lemonade_auth_headers(resolve_lemonade_api_key()),
+        timeout=_LEMONADE_PULL_TIMEOUT,
+    )
+    resp.raise_for_status()
+
+
+def _resolve_email_model_id() -> str:
+    """Resolve the Lemonade model id the email agent triages with.
+
+    Mirrors the agent's own resolution (``config.model_id or
+    DEFAULT_MODEL_NAME``) so the readiness probe reports the exact model the
+    triage path will load.
+    """
+    from gaia_agent_email.config import EmailAgentConfig
+
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+    return EmailAgentConfig().model_id or DEFAULT_MODEL_NAME
+
+
+def _parse_version(version: Optional[str]) -> Optional[Tuple[int, ...]]:
+    """Parse a dotted version string into a comparable int tuple.
+
+    Mirrors ``gaia.installer.init_command.InitCommand._parse_version`` (same
+    semantics: strip a leading ``v``, take the first three dotted parts as
+    ints). Kept LOCAL rather than imported because the frozen sidecar does not
+    bundle ``gaia.installer`` — importing it at runtime would ``ModuleNotFound``
+    in the binary this endpoint exists to serve. Returns ``None`` when the
+    string is missing or unparseable.
+    """
+    if not version:
+        return None
+    try:
+        return tuple(int(p) for p in version.lstrip("v").split(".")[:3])
+    except (ValueError, IndexError, AttributeError):
+        return None
+
+
+def _version_meets_min(found: Optional[str], minimum: str) -> Optional[bool]:
+    """Return whether ``found`` >= ``minimum`` (both dotted versions).
+
+    ``None`` means "can't tell" — the server didn't advertise a version or it
+    was unparseable. Readiness treats unknown as non-blocking (it does not
+    fabricate a pass/fail), mirroring ``gaia init``'s "don't block on an
+    unparseable version" policy, but surfaces ``compatible=null`` so a consumer
+    can see the check was indeterminate.
+    """
+    found_t = _parse_version(found)
+    min_t = _parse_version(minimum)
+    if found_t is None or min_t is None:
+        return None
+    return found_t >= min_t
 
 
 def _split_sentences(text: str) -> List[str]:
@@ -337,14 +519,7 @@ class EmailTriageService:
         """
         import requests
 
-        from gaia.llm.lemonade_client import _get_lemonade_config
-
-        if base_url:
-            probe_base = base_url.rstrip("/")
-            if not probe_base.endswith("/api/v1"):
-                probe_base = f"{probe_base}/api/v1"
-        else:
-            _, _, probe_base = _get_lemonade_config()
+        probe_base = _resolve_probe_base(base_url)
         health_url = f"{probe_base}/health"
 
         try:
@@ -377,7 +552,19 @@ class EmailTriageService:
             (h.get("name") or "").lower(): h.get("value", "")
             for h in payload.get("headers", [])
         }
-        body, _attachments = decode_message_body(payload)
+        body, raw_attachments = decode_message_body(payload)
+        # The decoder also emits charset-fallback diagnostics for inline text
+        # parts; those are not attachments — only real file parts surface.
+        attachments = [
+            AttachmentMeta(
+                filename=a["filename"],
+                mime_type=a["mime_type"],
+                size_bytes=a["size_bytes"],
+                attachment_id=a.get("attachment_id"),
+            )
+            for a in raw_attachments
+            if not a.get("charset_fallback")
+        ]
         subject = headers.get("subject", "")
         sender = headers.get("from", "")
         label_ids = list(msg.get("labelIds", []))
@@ -389,6 +576,7 @@ class EmailTriageService:
             label_ids=label_ids,
             principal=principal,
             reply_to=_parse_address(sender),
+            attachments=attachments,
         )
 
     def _triage_single_llm(
@@ -405,6 +593,7 @@ class EmailTriageService:
             chat=chat,
             message_id=msg.message_id,
             context=context,
+            attachments=list(msg.attachments),
         )
 
     def _triage_thread_llm(
@@ -427,6 +616,8 @@ class EmailTriageService:
             chat=chat,
             message_id=payload.thread_id,
             context=context,
+            # Oldest-first, matching the request's message order.
+            attachments=[a for m in messages for a in m.attachments],
         )
 
     def _build_result_llm(
@@ -442,6 +633,7 @@ class EmailTriageService:
         chat: Any,
         message_id: Optional[str] = None,
         context: Any = None,
+        attachments: Optional[List[AttachmentMeta]] = None,
     ) -> EmailTriageResult:
         """Build a result using LLM escalation when heuristic confidence is low."""
         from gaia_agent_email.tools.llm_triage import classify_email_llm
@@ -501,6 +693,7 @@ class EmailTriageService:
             message_id=message_id,
             suggested_action=suggested_action,
             usage=_aggregate_usage(call_stats),
+            attachments=attachments or [],
         )
 
     def _build_result(
@@ -514,6 +707,7 @@ class EmailTriageService:
         reply_to: Optional[EmailAddress],
         summary_prefix: str = "",
         message_id: Optional[str] = None,
+        attachments: Optional[List[AttachmentMeta]] = None,
     ) -> EmailTriageResult:
         heuristic = classify_category_heuristic(
             subject=subject, sender=sender_raw, label_ids=label_ids
@@ -538,6 +732,7 @@ class EmailTriageService:
             draft=draft,
             message_id=message_id,
             suggested_action=suggested_action,
+            attachments=attachments or [],
         )
 
     def _summarize(self, subject: str, body: str) -> str:
@@ -654,14 +849,28 @@ def _parse_address(raw: str) -> Optional[EmailAddress]:
 # ---------------------------------------------------------------------------
 
 
-def _payload_fingerprint(to: List[EmailAddress], subject: str, body: str) -> str:
+def _payload_fingerprint(
+    to: List[EmailAddress],
+    subject: str,
+    body: str,
+    attachments: Optional[List[OutgoingAttachment]] = None,
+) -> str:
     """A stable fingerprint of the exact message a token authorizes.
 
     Binding the token to the payload means a token issued for one message
-    cannot be replayed to send different content.
+    cannot be replayed to send different content. Attachments are part of the
+    fingerprint (filename, MIME type, AND content digest) — a token minted for
+    an attachment-free draft cannot authorize a send that smuggles one in, nor
+    can the file bytes be swapped after confirmation (#1542).
     """
     recipients = ",".join(sorted(a.email.lower() for a in to))
-    material = "\x1f".join([recipients, subject, body])
+    material_parts = [recipients, subject, body]
+    for att in attachments or []:
+        content_digest = hashlib.sha256(att.decode_content()).hexdigest()
+        material_parts.append(
+            "\x1e".join([att.filename, att.mime_type, content_digest])
+        )
+    material = "\x1f".join(material_parts)
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
@@ -1056,7 +1265,7 @@ def get_action_db():
         if _action_db is None:
             from pathlib import Path
 
-            from gaia_agent_email import action_store
+            from gaia_agent_email import action_store, task_store
             from gaia_agent_email.config import EmailAgentConfig
 
             from gaia.database.mixin import DatabaseMixin
@@ -1069,6 +1278,7 @@ def get_action_db():
             Path(path).parent.mkdir(parents=True, exist_ok=True)
             db.init_db(path)
             action_store.init_schema(db)
+            task_store.init_schema(db)
             _action_db = db
         return _action_db
 
@@ -1349,6 +1559,78 @@ class VersionResponse(_Strict):
     agentVersion: str = Field(..., description="Package build version.")
 
 
+class InitLemonadeStatus(_Strict):
+    """Reachability AND version-compatibility of the local Lemonade Server."""
+
+    reachable: bool = Field(
+        ..., description="True when Lemonade answered the /health probe."
+    )
+    base_url: str = Field(..., description="The /api/v1 base URL that was probed.")
+    version: Optional[str] = Field(
+        default=None,
+        description=(
+            "Lemonade's self-reported server version (from /health). Null when "
+            "the server doesn't advertise one."
+        ),
+    )
+    min_version: str = Field(
+        ...,
+        description=(
+            "Minimum Lemonade version the triage stack requires "
+            "(gaia_agent_email.version.MIN_LEMONADE_VERSION)."
+        ),
+    )
+    compatible: Optional[bool] = Field(
+        default=None,
+        description=(
+            "True when version >= min_version. Null when the version could not "
+            "be determined (the check was indeterminate, not a pass)."
+        ),
+    )
+
+
+class InitModelStatus(_Strict):
+    """Presence (and, when cheap, loadability) of the triage model."""
+
+    id: str = Field(..., description="Resolved Lemonade model id for triage.")
+    present: bool = Field(
+        ..., description="True when the model is downloaded on the server."
+    )
+    loadable: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Whether the model actually loads. Not probed in v1 (forcing a "
+            "load is heavy), so this is null — `present` is the readiness "
+            "signal. Reserved for an opt-in deeper check."
+        ),
+    )
+
+
+class InitResponse(_Strict):
+    """Readiness preflight for the whole triage stack (#1795).
+
+    ``ready`` is True only when Lemonade is reachable AND the triage model is
+    present. The route returns HTTP 200 when ready and 503 when not, with an
+    actionable ``hint`` naming what to fix — so an integrator can verify "ready
+    to triage," not just "process up." Read-only: probes only, no model pull.
+    """
+
+    ready: bool = Field(
+        ..., description="True when the triage stack is ready to serve."
+    )
+    lemonade: InitLemonadeStatus = Field(
+        ..., description="Lemonade Server reachability."
+    )
+    model: InitModelStatus = Field(..., description="Triage model status.")
+    hint: Optional[str] = Field(
+        default=None,
+        description=(
+            "Actionable next step when not ready (what failed / what to do). "
+            "Null when ready."
+        ),
+    )
+
+
 class EmailDraftRequest(_Strict):
     """Propose a reply and obtain a confirmation token for it."""
 
@@ -1357,6 +1639,14 @@ class EmailDraftRequest(_Strict):
     )
     subject: str = Field(..., description="Proposed subject line.")
     body: str = Field(..., description="Proposed reply body.")
+    attachments: List[OutgoingAttachment] = Field(
+        default_factory=list,
+        description=(
+            "Attachments to include on the send (schema 2.2, #1542). The "
+            "minted confirmation token binds to their content digests, so the "
+            "send must carry these exact files."
+        ),
+    )
     provider: Optional[str] = Field(
         default=None,
         description=(
@@ -1377,7 +1667,8 @@ class EmailDraftResponse(_Strict):
         ...,
         description=(
             "Echo this back to POST /v1/email/send to authorize sending "
-            "exactly this payload. Single-use; bound to (to, subject, body)."
+            "exactly this payload. Single-use; bound to (to, subject, body, "
+            "attachments)."
         ),
     )
 
@@ -1390,6 +1681,14 @@ class EmailSendRequest(_Strict):
     )
     subject: str = Field(..., description="Subject line.")
     body: str = Field(..., description="Reply body.")
+    attachments: List[OutgoingAttachment] = Field(
+        default_factory=list,
+        description=(
+            "Attachments to send (schema 2.2, #1542). Must match the set the "
+            "confirmation token was minted for — filename, MIME type, and "
+            "content digest all bind."
+        ),
+    )
     confirmation_token: Optional[str] = Field(
         default=None,
         description=(
@@ -1415,6 +1714,10 @@ class EmailSendResponse(_Strict):
         ..., description="Recipients the message was sent to."
     )
     subject: str = Field(..., description="Subject of the sent message.")
+    attachments: List[AttachmentMeta] = Field(
+        default_factory=list,
+        description="Metadata of the attachments that went out (schema 2.2).",
+    )
     sent: bool = Field(default=True, description="Always true on success.")
 
 
@@ -1423,6 +1726,69 @@ class EmailSendResponse(_Strict):
 # ---------------------------------------------------------------------------
 
 _service = EmailTriageService()
+
+
+def _persist_triage_tasks(result: EmailTriageResult) -> None:
+    """Write a triage result's action items to the persistent task store (#1605).
+
+    Side-effect only — the inline ``action_items`` response shape is
+    untouched. Skipped when the result carries no ``message_id`` (no source
+    message to link back to) or no action items. ``record_action_items``
+    de-duplicates per message (including the concurrent-insert race, handled
+    inside ``task_store`` as a dedup-skip), so re-triaging never duplicates
+    tasks and never raises for that race specifically.
+
+    Any other persistence failure (e.g. the sqlite file is locked or
+    unwritable) is a real error, but it must never turn an already-computed,
+    successful triage result into a failed response — callers catch and log
+    it instead of letting it propagate. See ``_triage_and_persist`` /
+    ``_triage_batch_and_persist``.
+    """
+    from gaia_agent_email import task_store
+
+    if not result.message_id or not result.action_items:
+        return
+    task_store.record_action_items(
+        resolve_action_db(),
+        message_id=result.message_id,
+        items=result.action_items,
+    )
+
+
+def _triage_and_persist(request: EmailTriageRequest) -> EmailTriageResponse:
+    response = _service.triage_request(request)
+    try:
+        _persist_triage_tasks(response.result)
+    except Exception:
+        # Task persistence is a side effect of a triage that already
+        # succeeded — never turn that success into a 500 for the caller.
+        logger.exception(
+            "email triage: task persistence failed for message_id=%s; "
+            "triage result is still returned",
+            response.result.message_id,
+        )
+    return response
+
+
+def _triage_batch_and_persist(request: BatchTriageRequest) -> BatchTriageResponse:
+    response = _service.triage_batch(request)
+    for item in response.results:
+        if item.result is None:
+            continue
+        try:
+            _persist_triage_tasks(item.result)
+        except Exception:
+            # Isolate per item (#1887's documented contract): one item's
+            # persistence failure must not collapse the whole batch into a
+            # 500 and must not flip this item's already-successful `result`
+            # into an `error` (triage itself did not fail).
+            logger.exception(
+                "email triage batch: task persistence failed for index=%d "
+                "message_id=%s; item result is still returned",
+                item.index,
+                item.result.message_id,
+            )
+    return response
 
 
 @router.post("/triage", response_model=EmailTriageResponse)
@@ -1434,9 +1800,12 @@ async def triage_email(request: EmailTriageRequest) -> EmailTriageResponse:
     ``EmailTriageResponse`` — category, spam/phishing signals, a plain-text
     summary, extracted action items, and an optional draft-reply proposal.
     No mail is read or sent; this analyzes only the payload in the request.
+    Extracted action items are also persisted to the local task store,
+    linked to the source ``message_id`` and de-duplicated per message
+    (#1605) — additive, the response shape is unchanged.
     """
     try:
-        return await asyncio.to_thread(_service.triage_request, request)
+        return await asyncio.to_thread(_triage_and_persist, request)
     except (LLMTriageError, EmailSummarizeError) as e:
         raise HTTPException(
             status_code=502, detail=f"local LLM triage failed: {e}"
@@ -1452,10 +1821,13 @@ async def triage_email_batch(request: BatchTriageRequest) -> BatchTriageResponse
     order-preserved. Per-item failures surface as ``BatchItemResult.error``
     (HTTP 200 with all items errored is valid — inspect each result). A 502
     means Lemonade was unreachable before any item was processed. No mail is
-    read or sent; this analyzes only the items in the request.
+    read or sent; this analyzes only the items in the request. Each
+    successful item's action items are persisted to the local task store,
+    linked to its source ``message_id`` and de-duplicated per message
+    (#1605) — additive, the response shape is unchanged.
     """
     try:
-        return await asyncio.to_thread(_service.triage_batch, request)
+        return await asyncio.to_thread(_triage_batch_and_persist, request)
     except LLMTriageError as e:
         # Only LLMTriageError can escape triage_batch — it is raised by the
         # pre-loop Lemonade probe when the server is unreachable. Per-item
@@ -1534,18 +1906,83 @@ async def prescan_inbox(
     return EmailPreScanResponse(result=EmailPreScanResult.model_validate(out))
 
 
+class EmailBriefingResponse(_Strict):
+    """Latest scheduled inbox briefing (#1608). LOCAL model — the briefing
+    payload itself is the frozen contract's ``EmailPreScanResult``."""
+
+    schema_version: str = Field(
+        default=API_VERSION, description="Echoes the contract version."
+    )
+    generated_at: str = Field(
+        ..., description="UTC ISO-8601 timestamp of the scheduled run."
+    )
+    briefing: EmailPreScanResult = Field(
+        ..., description="The email_pre_scan envelope the scheduled run produced."
+    )
+
+
+@router.get("/briefing", response_model=EmailBriefingResponse)
+async def get_briefing() -> EmailBriefingResponse:
+    """Return the latest scheduled inbox briefing (#1608).
+
+    The briefing is generated without a user prompt by the sidecar's daily
+    scheduler (off by default — ``GAIA_EMAIL_BRIEFING_ENABLED``) and
+    persisted by ``gaia_agent_email.briefing``; this endpoint is the pull
+    surface any host reads it from. 404 until a scheduled run has happened.
+    """
+    from gaia_agent_email.briefing import (
+        BriefingUnavailableError,
+        load_latest_briefing,
+    )
+
+    try:
+        record = load_latest_briefing()
+    except BriefingUnavailableError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No inbox briefing has been generated yet. Enable the daily "
+                "schedule (GAIA_EMAIL_BRIEFING_ENABLED=true on the email "
+                "sidecar) or POST /v1/email/prescan for an on-demand scan."
+            ),
+        )
+    try:
+        return EmailBriefingResponse(
+            generated_at=record["generated_at"],
+            briefing=EmailPreScanResult.model_validate(record["briefing"]),
+        )
+    except (KeyError, ValueError) as e:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Persisted briefing does not match the email_pre_scan "
+                f"envelope: {e}. Delete ~/.gaia/email/briefing_latest.json "
+                "and let the next scheduled run regenerate it."
+            ),
+        ) from e
+
+
 @router.post("/draft", response_model=EmailDraftResponse)
 async def draft_reply(request: EmailDraftRequest) -> EmailDraftResponse:
     """Propose a reply and mint a confirmation token bound to its payload.
 
     The returned token must be echoed to :func:`send_email` to authorize
-    sending exactly this ``(to, subject, body)``. This is the explicit
+    sending exactly this ``(to, subject, body, attachments)``. This is the explicit
     user-confirmation step — the consuming app surfaces the draft to the
     user, and only a user-approved send echoes the token back.
     """
-    fingerprint = _payload_fingerprint(request.to, request.subject, request.body)
+    fingerprint = _payload_fingerprint(
+        request.to, request.subject, request.body, request.attachments
+    )
     token = confirmation_store.issue(fingerprint, provider=request.provider)
-    draft = DraftReply(to=request.to, subject=request.subject, body=request.body)
+    draft = DraftReply(
+        to=request.to,
+        subject=request.subject,
+        body=request.body,
+        attachments=[a.to_meta() for a in request.attachments],
+    )
     return EmailDraftResponse(draft=draft, confirmation_token=token)
 
 
@@ -1560,7 +1997,9 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
     and guarantees the gate fires regardless of backend health. Never
     auto-confirms.
     """
-    fingerprint = _payload_fingerprint(request.to, request.subject, request.body)
+    fingerprint = _payload_fingerprint(
+        request.to, request.subject, request.body, request.attachments
+    )
     gate_ok, bound_provider = confirmation_store.consume_with_provider(
         request.confirmation_token or "", fingerprint
     )
@@ -1570,7 +2009,8 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
             detail=(
                 "Send rejected: missing or invalid confirmation token for this "
                 "message. Call POST /v1/email/draft to obtain a confirmation "
-                "token bound to this exact (to, subject, body), then echo it in "
+                "token bound to this exact (to, subject, body, attachments), "
+                "then echo it in "
                 "'confirmation_token'. Emails are never sent without explicit "
                 "confirmation."
             ),
@@ -1586,12 +2026,28 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
     try:
         backend = _resolve_backend_for_provider(bound_provider or request.provider)
         to_header = ", ".join(_format_address(a) for a in request.to)
+        backend_attachments = [
+            {
+                "filename": a.filename,
+                "mime_type": a.mime_type,
+                "content": a.decode_content(),
+            }
+            for a in request.attachments
+        ]
+        # Attachment-free sends keep the pre-2.2 call shape so existing
+        # backend fakes/implementations without the new kwarg keep working.
+        send_kwargs: Dict[str, Any] = (
+            {"attachments": backend_attachments} if backend_attachments else {}
+        )
         result = await asyncio.to_thread(
             backend.send_message,
             to=to_header,
             subject=request.subject,
             body=request.body,
+            **send_kwargs,
         )
+    except AttachmentTooLargeError as e:
+        raise HTTPException(status_code=413, detail=str(e)) from e
     except (AuthRequiredError, ScopeMismatchError, ConnectionRevokedError) as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ConfigurationError as e:
@@ -1607,8 +2063,18 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
             status_code=502,
             detail="Email backend did not return a message id for the send.",
         )
-    logger.info("email send: id=%s to=%s", sent_id, to_header)
-    return EmailSendResponse(sent_id=sent_id, to=request.to, subject=request.subject)
+    logger.info(
+        "email send: id=%s to=%s attachments=%d",
+        sent_id,
+        to_header,
+        len(request.attachments),
+    )
+    return EmailSendResponse(
+        sent_id=sent_id,
+        to=request.to,
+        subject=request.subject,
+        attachments=[a.to_meta() for a in request.attachments],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1866,6 +2332,242 @@ async def email_version() -> VersionResponse:
     return VersionResponse(apiVersion=API_VERSION, agentVersion=AGENT_VERSION)
 
 
+def _compute_init_status(base_url: Optional[str] = None) -> InitResponse:
+    """Probe the triage stack and return its structured readiness status.
+
+    Read-only: checks (1) Lemonade reachable AND at a compatible version
+    (>= ``MIN_LEMONADE_VERSION``), then (2) the triage model is downloaded.
+    Never pulls a model. Returns a not-ready ``InitResponse`` with an actionable
+    ``hint`` for each failure mode rather than raising, so the route can
+    serialize the same body under both 200 and 503.
+
+    ``ready`` requires reachable + model present + version not-too-old. An
+    indeterminate version (server didn't advertise one) is reported as
+    ``compatible=null`` and does NOT block — mirroring ``gaia init``'s policy of
+    not failing on an unparseable version.
+    """
+    import requests
+    from gaia_agent_email.version import MIN_LEMONADE_VERSION
+
+    model_id = _resolve_email_model_id()
+    reachable, probe_base, version = _probe_lemonade_health(base_url)
+    compatible = (
+        _version_meets_min(version, MIN_LEMONADE_VERSION) if reachable else None
+    )
+    lemonade = InitLemonadeStatus(
+        reachable=reachable,
+        base_url=probe_base,
+        version=version,
+        min_version=MIN_LEMONADE_VERSION,
+        compatible=compatible,
+    )
+
+    if not reachable:
+        return InitResponse(
+            ready=False,
+            lemonade=lemonade,
+            model=InitModelStatus(id=model_id, present=False, loadable=None),
+            hint=(
+                f"Local Lemonade Server is not reachable at {probe_base} — start "
+                "it with `lemonade-server serve` (or run `gaia init`), then retry."
+            ),
+        )
+
+    try:
+        present = _probe_model_present(probe_base, model_id)
+    except requests.exceptions.RequestException as exc:
+        # Lemonade answered /health but its model list could not be read.
+        # Surface loudly (still 503) rather than silently reporting "absent".
+        return InitResponse(
+            ready=False,
+            lemonade=lemonade,
+            model=InitModelStatus(id=model_id, present=False, loadable=None),
+            hint=(
+                f"Lemonade is reachable but its model list at {probe_base}/models "
+                f"could not be read ({type(exc).__name__}: {exc}). Make sure the "
+                "server is healthy, then retry."
+            ),
+        )
+
+    model = InitModelStatus(id=model_id, present=present, loadable=None)
+
+    # Version too old is the most fundamental blocker — surface it before the
+    # model hint (upgrading Lemonade comes first even if the model is missing).
+    if compatible is False:
+        return InitResponse(
+            ready=False,
+            lemonade=lemonade,
+            model=model,
+            hint=(
+                f"Lemonade {version} is older than the required "
+                f"{MIN_LEMONADE_VERSION} — upgrade it (see "
+                "https://lemonade-server.ai or run `gaia init`), then retry."
+            ),
+        )
+
+    if not present:
+        return InitResponse(
+            ready=False,
+            lemonade=lemonade,
+            model=model,
+            hint=(
+                f"Model `{model_id}` not downloaded — run `gaia init` (or pull it "
+                "via Lemonade), then retry."
+            ),
+        )
+
+    return InitResponse(
+        ready=True,
+        lemonade=lemonade,
+        model=model,
+        hint=None,
+    )
+
+
+@router.get(
+    "/init",
+    response_model=InitResponse,
+    responses={503: {"model": InitResponse}},
+)
+async def email_init(response: Response) -> InitResponse:
+    """Readiness preflight: validate the whole triage stack (#1795).
+
+    Returns HTTP 200 when ready, 503 when not (with an actionable ``hint``).
+    Unlike ``/health`` (liveness-only — never touches the LLM), this probes the
+    local Lemonade Server, checks it is at a compatible VERSION (>= the agent's
+    ``MIN_LEMONADE_VERSION``), and confirms the triage model is downloaded — so a
+    host can verify "ready to triage," not just "process up." Read-only — no
+    model pull or provisioning is triggered.
+    """
+    status = await asyncio.to_thread(_compute_init_status)
+    if not status.ready:
+        response.status_code = 503
+    return status
+
+
+def _provision_progress(probe_base: str, model_id: str) -> Iterator[str]:
+    """Yield newline-terminated progress lines while provisioning the model.
+
+    The only realistic sidecar provisioning action: ask the already-running
+    local Lemonade to download the configured email model, narrating each step
+    so a consumer can render it terminal-style. The leading reachability check
+    is handled by the route (so it can return a real 503); this generator runs
+    only once Lemonade is confirmed up.
+
+    HTTP note: once a streamed 200 is committed the status can no longer change,
+    so the FINAL line is the authoritative success/failure signal — a line
+    starting ``✓`` for success, ``✗`` for failure.
+    """
+    import requests
+
+    def line(text: str) -> str:
+        return text + "\n"
+
+    yield line(f"→ Email triage model: {model_id}")
+    yield line(f"→ Lemonade reachable at {probe_base}")
+    yield line(f"→ Checking whether {model_id} is already downloaded…")
+
+    try:
+        present = _probe_model_present(probe_base, model_id)
+    except requests.exceptions.RequestException as exc:
+        yield line(
+            f"✗ Could not read Lemonade's model list ({type(exc).__name__}: {exc})."
+        )
+        yield line(
+            "✗ Provisioning aborted — make sure the Lemonade Server is healthy, then retry."
+        )
+        return
+
+    if present:
+        yield line(f"✓ {model_id} is already downloaded — nothing to pull.")
+        yield line(
+            "✓ Provisioning complete. Re-run GET /v1/email/init to confirm readiness."
+        )
+        return
+
+    yield line(
+        f"→ Pulling {model_id} via Lemonade — first download can take several "
+        "minutes…"
+    )
+    try:
+        _pull_model(probe_base, model_id)
+    except requests.exceptions.RequestException as exc:
+        yield line(f"✗ Provisioning failed: {type(exc).__name__}: {exc}")
+        yield line(
+            "✗ The model was not downloaded. Check the Lemonade Server logs, then retry."
+        )
+        return
+
+    yield line(f"✓ {model_id} downloaded.")
+
+    # Verify the pull actually registered the model. A verify hiccup is surfaced
+    # (not swallowed) but does not by itself fail a pull Lemonade reported OK.
+    try:
+        if _probe_model_present(probe_base, model_id):
+            yield line(f"✓ Verified {model_id} is registered with Lemonade.")
+        else:
+            yield line(
+                f"✗ {model_id} is still not listed after the pull — provisioning "
+                "incomplete. Check the Lemonade Server logs, then retry."
+            )
+            return
+    except requests.exceptions.RequestException as exc:
+        yield line(
+            f"⚠ Pull reported success but the model list could not be re-read "
+            f"({type(exc).__name__}). Re-run GET /v1/email/init to confirm."
+        )
+
+    yield line(
+        "✓ Provisioning complete. Re-run GET /v1/email/init to confirm readiness."
+    )
+
+
+@router.post("/init", include_in_schema=False)
+async def email_provision() -> StreamingResponse:
+    """Provision the triage stack and STREAM terminal-style progress (#1795).
+
+    The companion verb to ``GET /v1/email/init`` (readiness probe). It tells a
+    RUNNING local Lemonade to download the configured email model and streams
+    newline-delimited progress (``text/plain``) so a consumer can show what is
+    happening line by line.
+
+    Scope (frozen-binary reality): the sidecar cannot run the full ``gaia init``
+    or install Lemonade itself — if Lemonade is unreachable this returns a real
+    **503** with an actionable line and pulls nothing. Once a pull starts the
+    response is a committed **200**; the final ``✓``/``✗`` line is then the
+    authoritative outcome (the HTTP status can't change mid-stream).
+
+    Not in the OpenAPI JSON contract — it's a streaming operational verb, like
+    ``GET /spec`` — so it's documented in the HTML spec instead.
+    """
+    media_type = "text/plain; charset=utf-8"
+    model_id = _resolve_email_model_id()
+    reachable, probe_base = await asyncio.to_thread(_probe_lemonade_reachable)
+
+    if not reachable:
+        # Fail loudly BEFORE streaming so the status code is a truthful 503.
+        def _unreachable() -> Iterator[str]:
+            yield f"✗ Local Lemonade Server is not reachable at {probe_base}.\n"
+            yield (
+                "✗ Start it with `lemonade-server serve` (or run `gaia init`), "
+                "then POST /v1/email/init again.\n"
+            )
+            yield (
+                "✗ The sidecar can't install Lemonade itself — that's a host "
+                "prerequisite.\n"
+            )
+
+        return StreamingResponse(_unreachable(), media_type=media_type, status_code=503)
+
+    # The generator does blocking requests.* I/O (incl. a long model pull) —
+    # iterate it in a worker thread so it never runs on the event loop.
+    return StreamingResponse(
+        iterate_in_threadpool(_provision_progress(probe_base, model_id)),
+        media_type=media_type,
+        status_code=200,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Calendar endpoints (#1780) — view (read-only), create (confirmation-gated),
 # respond (RSVP). Reach either the Google or Microsoft calendar backend through
@@ -2074,12 +2776,16 @@ __all__ = [
     "resolve_action_db",
     "_resolve_mutate_backend",
     "_action_fingerprint",
+    "EmailBriefingResponse",
     "EmailDraftRequest",
     "EmailDraftResponse",
     "EmailSendRequest",
     "EmailSendResponse",
     "HealthResponse",
     "VersionResponse",
+    "InitResponse",
+    "InitLemonadeStatus",
+    "InitModelStatus",
     # Shared formatting helpers reused by the MCP surface.
     "_format_address",
     "_payload_fingerprint",

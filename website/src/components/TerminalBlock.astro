@@ -13,7 +13,7 @@ const { lines, typing = false, class: className = '' } = Astro.props;
     <span class="w-2.5 h-2.5 rounded-full bg-[#2a2a2e]"></span>
     <span class="w-2.5 h-2.5 rounded-full bg-[#2a2a2e]"></span>
   </div>
-  <div class="g-terminal-body min-h-[5.5rem]">
+  <div class="g-terminal-body min-h-[5.5rem] overflow-x-auto">
     {!typing && lines.map((l) => (
       <div class={l.muted ? 'text-[#71717a]' : 'text-[#e8e8e6]'}>
         {l.prompt && <span class="text-g-gold select-none">$ </span>}{l.text}

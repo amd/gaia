@@ -28,6 +28,18 @@ class _FakeProxy:
             raise self._error
         return {"sent": True}
 
+    def pre_scan_inbox(self, body):
+        return {"result": {"kind": "email_pre_scan", "urgent": [], "echo": body}}
+
+    def search_inbox(self, body):
+        return {"query": body.get("query"), "messages": []}
+
+    def archive(self, body):
+        return {"message_id": body.get("message_id"), "batch_id": "b1"}
+
+    def calendar_events(self, params):
+        return {"events": [], "params": params}
+
     def health(self):
         return {"status": "ok", "service": "gaia-agent-email"}
 
@@ -85,6 +97,32 @@ def test_health_and_version_proxied():
     client = _client(_FakeManager())
     assert client.get("/v1/email/health").json()["service"] == "gaia-agent-email"
     assert client.get("/v1/email/version").json()["apiVersion"] == "2.0"
+
+
+def test_prescan_route_forwards_and_preserves_card_envelope():
+    # The card pipeline depends on /prescan returning the email_pre_scan envelope
+    # shape unchanged through the sidecar router.
+    client = _client(_FakeManager())
+    r = client.post("/v1/email/prescan", json={"max_messages": 10})
+    assert r.status_code == 200
+    assert r.json()["result"]["kind"] == "email_pre_scan"
+
+
+def test_search_and_archive_routes_mounted():
+    client = _client(_FakeManager())
+    assert (
+        client.post("/v1/email/search", json={"query": "is:unread"}).status_code == 200
+    )
+    assert (
+        client.post("/v1/email/archive", json={"message_id": "m1"}).status_code == 200
+    )
+
+
+def test_calendar_events_get_forwards_query_params():
+    client = _client(_FakeManager())
+    r = client.get("/v1/email/calendar/events?time_min=2026-06-30T00:00:00Z")
+    assert r.status_code == 200
+    assert r.json()["params"] == {"time_min": "2026-06-30T00:00:00Z"}
 
 
 def test_sidecar_http_error_status_and_detail_passthrough():

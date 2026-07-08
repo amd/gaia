@@ -10,6 +10,8 @@ on:
   push:
     branches: [ main ]
     paths:
+      - 'src/gaia/version.py'
+      - '.github/actions/install-lemonade/**'
       - 'src/gaia/agents/base/mcp_agent.py'
       - 'src/gaia/mcp/**'
       - 'tests/mcp/**'
@@ -19,6 +21,8 @@ on:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
+      - 'src/gaia/version.py'
+      - '.github/actions/install-lemonade/**'
       - 'src/gaia/agents/base/mcp_agent.py'
       - 'src/gaia/mcp/**'
       - 'tests/mcp/**'
@@ -49,7 +53,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Free disk space
         if: matrix.os == 'ubuntu-latest'

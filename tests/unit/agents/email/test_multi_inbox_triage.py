@@ -139,6 +139,14 @@ def _agent_two_backends(tmp_path, monkeypatch, *, google_ids, microsoft_ids):
     )
     with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:
         mock_sdk.return_value = MagicMock()
+        # is_spam is now content-judged (#1906): a CATEGORY_PROMOTIONS-tagged
+        # message is category-confident but not spam-confident, so the
+        # classifier IS invoked even though these tests are about routing,
+        # not classification -- give it a valid no-op response so it doesn't
+        # crash on the mock's unconfigured .text attribute.
+        mock_sdk.return_value.send_messages.return_value.text = (
+            '{"category": "PROMOTIONAL", "is_spam": false, "confidence": 1.0}'
+        )
         agent = EmailTriageAgent(config=cfg)
     return agent, spy_g, spy_m
 
@@ -257,6 +265,12 @@ class TestMultiInboxTriageMergeAndTag:
         )
         with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:
             mock_sdk.return_value = MagicMock()
+            # is_spam is content-judged (#1906): give the mocked chat a valid
+            # no-op response so a spam-only classifier escalation (see the
+            # other mock_sdk setups in this file) doesn't crash.
+            mock_sdk.return_value.send_messages.return_value.text = (
+                '{"category": "PROMOTIONAL", "is_spam": false, "confidence": 1.0}'
+            )
             agent = EmailTriageAgent(config=cfg)
 
         try:
@@ -430,6 +444,12 @@ class TestSingleBackendRoutingUnchanged:
         )
         with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:
             mock_sdk.return_value = MagicMock()
+            # is_spam is content-judged (#1906): give the mocked chat a valid
+            # no-op response so a spam-only classifier escalation (see the
+            # other mock_sdk setups in this file) doesn't crash.
+            mock_sdk.return_value.send_messages.return_value.text = (
+                '{"category": "PROMOTIONAL", "is_spam": false, "confidence": 1.0}'
+            )
             agent = EmailTriageAgent(config=cfg)
         try:
             assert set(agent._backends) == {"google"}

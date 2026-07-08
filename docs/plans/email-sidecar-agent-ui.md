@@ -1,5 +1,13 @@
 # Design: Email Agent in the Agent UI — frozen sidecar + dual user/dev modes
 
+> **⚠️ Partially superseded by Agent UI v2** ([`agent-ui.mdx`](agent-ui.mdx) +
+> [`agent-ui-agent-capabilities-plan.md`](agent-ui-agent-capabilities-plan.md) §0).
+> This doc's frozen-sidecar + dual-mode foundation still holds, but v2 changes two
+> things it specifies: (1) the UI drives the sidecar's **`/query` (SSE) agent loop**,
+> not fixed-call forwarding (the in-UI `EmailProxyAgent` of PR #1910 is superseded);
+> (2) the sidecar no longer **reads `grants.json` directly** — the host **forwards a
+> short-lived access token** to it (§0.6). Read v2 §0 for the current model.
+
 **Date:** 2026-06-26
 **Status:** Draft (v3.1 — sidecar direction, bulletproofed) — pending user review
 **Decision (2026-06-26):** The Agent UI's email backend is the **out-of-process

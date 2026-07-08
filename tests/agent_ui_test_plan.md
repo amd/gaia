@@ -6,7 +6,7 @@
 >
 > **Prerequisites:**
 > - Lemonade Server running with a loaded model (e.g., Qwen3-Coder-30B)
-> - Embedding model loaded (e.g., nomic-embed-text-v2-moe-GGUF)
+> - Embedding model loaded (e.g., user.embeddinggemma-300m-GGUF)
 > - Agent UI started (`gaia chat --ui`)
 > - Test fixture files placed in `tests/fixtures/agent_ui/` (see Appendix A)
 

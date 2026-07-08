@@ -820,6 +820,41 @@ class TestRebuildEmbeddingsEndpoint:
             resp = client.post("/api/memory/rebuild-embeddings")
         assert resp.status_code == 500
 
+    def test_rebuild_uses_stamped_embedder_not_nomic(self, client, test_store):
+        """Re-embed with the stamped embedder, not the nomic default (#1744).
+
+        On the NPU profile the agent stamps the FLM embedder. The dashboard
+        rebuild button must reuse it — embedding with nomic would mix vector
+        spaces in one table and reload a Vulkan embedder that evicts the FLM
+        chat model.
+        """
+        test_store.set_embedder_id("embed-gemma-300m-FLM")
+        mock_provider = MagicMock()
+        mock_provider.embed.return_value = [[0.1] * 768]
+        with patch(
+            "gaia.llm.providers.lemonade.LemonadeProvider", return_value=mock_provider
+        ) as ctor:
+            resp = client.post("/api/memory/rebuild-embeddings")
+        assert resp.status_code == 200
+        ctor.assert_called_once_with(model="embed-gemma-300m-FLM")
+
+    def test_rebuild_falls_back_to_default_embedder_when_unstamped(
+        self, client, test_store
+    ):
+        """A never-stamped DB (no agent run yet) defaults to the module default
+        embedder — EmbeddingGemma 300M GGUF (replaced nomic)."""
+        from gaia.agents.base.memory import EMBEDDING_MODEL
+
+        mock_provider = MagicMock()
+        mock_provider.embed.return_value = [[0.1] * 768]
+        with patch(
+            "gaia.llm.providers.lemonade.LemonadeProvider", return_value=mock_provider
+        ) as ctor:
+            resp = client.post("/api/memory/rebuild-embeddings")
+        assert resp.status_code == 200
+        ctor.assert_called_once_with(model=EMBEDDING_MODEL)
+        assert EMBEDDING_MODEL == "user.embeddinggemma-300m-GGUF"
+
 
 # ===========================================================================
 # v2 Router Tests — Reconcile Endpoint
@@ -841,6 +876,31 @@ class TestReconcileEndpoint:
         resp = client.post("/api/memory/reconcile")
         assert resp.status_code == 503
         assert "faiss" in resp.json()["detail"].lower()
+
+    def test_reconcile_standalone_derives_dim_from_vectors(self, client, test_store):
+        """Standalone reconcile builds the FAISS index at the stored vectors'
+        dim, not a hardcoded 768 — so a non-768 embedder (e.g. a truncated FLM
+        embedder) is not silently skipped (#1744).
+        """
+        pytest.importorskip("faiss")  # standalone reconcile path needs faiss
+        import numpy as np
+
+        # Two identical 512-dim vectors → cosine 1.0 → above the pair threshold.
+        vec = np.ones(512, dtype=np.float32).tobytes()
+        for content in ("alpha fact one", "alpha fact two"):
+            kid = _create_knowledge(client, content)["knowledge_id"]
+            test_store.store_embedding(kid, vec)
+        test_store.set_embedder_id("embed-gemma-300m-FLM")
+
+        fake_llm = MagicMock()
+        fake_llm.chat.return_value = '{"relationship": "neutral", "action": "noop"}'
+        with patch("gaia.llm.create_client", return_value=fake_llm):
+            resp = client.post("/api/memory/reconcile")
+
+        assert resp.status_code == 200
+        # A pair was found and classified — proves the 512-dim index built and
+        # nothing was skipped by a dim mismatch.
+        assert resp.json()["pairs_checked"] >= 1
 
     def test_reconcile_returns_200_when_agent_registered(self, client):
         """POST /api/memory/reconcile returns 200 when _reconcile_fn is set."""
