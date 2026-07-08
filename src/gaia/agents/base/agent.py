@@ -154,6 +154,10 @@ TOOLS_REQUIRING_CONFIRMATION = {
     # (Phase I2 / S2.M1).
     "send_draft",
     "send_now",
+    # Scheduled send (#1609) — confirmation at CREATION: the user approves the
+    # literal recipient/subject/body and fire time, then the send fires
+    # unattended at/after that time.
+    "schedule_send",
     "forward_message",
     "permanent_delete",
     "accept_invite",
@@ -510,8 +514,9 @@ Do NOT wrap conversational replies in JSON.
         # Initialize AgentSDK with proper configuration
         # Note: We don't set system_prompt in config, we pass it per request
         # Note: Context size is configured when starting Lemonade server, not here
-        # Use the configured default model (Gemma) when no explicit model_id
-        # is provided. The 0.5B model is too small for complex agent tasks.
+        # Default an agent with no explicit model_id to Qwen3.5-35B-A3B — small
+        # models are too weak for complex agent tasks. (This is the *agent* default;
+        # `gaia llm` defaults to DEFAULT_MODEL_NAME / Gemma-4-E4B via a separate path.)
         chat_config = AgentConfig(
             model=model_id or "Qwen3.5-35B-A3B-GGUF",
             use_claude=use_claude,
@@ -818,8 +823,19 @@ Do NOT wrap conversational replies in JSON.
         # pylint: disable-next=assignment-from-none
         new_filter = self._select_tools_for_turn(user_input)
         if new_filter != self._active_tool_filter:
-            self._active_tool_filter = new_filter
-            self._system_prompt_cache = self._compose_system_prompt()
+            self._apply_tool_filter(new_filter)
+
+    def _apply_tool_filter(self, new_filter: Optional[List[str]]) -> None:
+        """Swap the active tool filter and recompute the cached system prompt.
+
+        The single place the "filter and prompt move together" invariant lives.
+        Called from :meth:`_refresh_active_tool_filter` (per user turn) and from
+        the ``load_tools`` escape-hatch handler (mid-loop), so a mid-query
+        expansion is visible to the very next model step — both render paths
+        (``system_prompt`` and ``_openai_tools``) read these live.
+        """
+        self._active_tool_filter = new_filter
+        self._system_prompt_cache = self._compose_system_prompt()
 
     def rebuild_system_prompt(self) -> None:
         """Rebuild system prompt with current tools from _TOOL_REGISTRY.

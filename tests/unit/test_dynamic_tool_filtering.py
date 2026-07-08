@@ -18,7 +18,13 @@ from __future__ import annotations
 
 import json
 
-from gaia.eval.tool_cost import build_doc_agent_skeleton
+import pytest
+
+# build_doc_agent_skeleton builds a doc-profile ChatAgent, which ships in the
+# standalone gaia-agent-chat wheel (#1102); skip when a framework-only env lacks it.
+pytest.importorskip("gaia_agent_chat")
+
+from gaia.eval.tool_cost import build_doc_agent_skeleton  # noqa: E402
 
 
 def _agent():
@@ -128,10 +134,13 @@ class _SpyAgent:
         self.compose_calls += 1
         return f"PROMPT::{self._active_tool_filter}"
 
-    # Bind the real method under test.
+    # Bind the real methods under test. ``_refresh_active_tool_filter`` now
+    # delegates the filter+prompt swap to ``_apply_tool_filter`` (#1450), so the
+    # spy must borrow both to exercise the real recompute-on-change path.
     from gaia.agents.base.agent import Agent
 
     _refresh_active_tool_filter = Agent._refresh_active_tool_filter
+    _apply_tool_filter = Agent._apply_tool_filter
 
 
 def test_recompute_only_on_change():

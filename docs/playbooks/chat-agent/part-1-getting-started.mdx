@@ -141,7 +141,7 @@ Get a working agent running to understand the basic flow.
 
     ```python title="my_chat_agent.py"
     import json
-    from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
     # Create agent with a document
     config = ChatAgentConfig(
@@ -163,7 +163,7 @@ Get a working agent running to understand the basic flow.
     **What happens:**
     1. PDF text extraction (PyMuPDF)
     2. Chunking into 500-token segments
-    3. Embedding generation (nomic-embed running on NPU/iGPU)
+    3. Embedding generation (EmbeddingGemma 300M running on NPU/iGPU)
     4. FAISS index creation
     5. Query processing via vector search
     6. LLM generates answer using retrieved chunks (Ryzen AI acceleration)
@@ -291,7 +291,7 @@ flowchart TD
         chunk_size=500,        # Tokens per chunk
         chunk_overlap=100,     # Context preservation
         max_chunks=5,          # Top-k retrieval
-        embedding_model="nomic-embed-text-v2-moe-GGUF"  # Runs on NPU/iGPU
+        embedding_model="user.embeddinggemma-300m-GGUF"  # Runs on NPU/iGPU
     )
     ```
 
@@ -383,7 +383,7 @@ flowchart TD
 <CodeGroup>
 ```python Example: Multiple Mixins
 from gaia.agents.base.agent import Agent
-from gaia.agents.chat.tools import RAGToolsMixin, FileToolsMixin
+from gaia.agents.tools import RAGToolsMixin, FileToolsMixin
 
 class MyAgent(Agent, RAGToolsMixin, FileToolsMixin):
     def _register_tools(self):
@@ -595,7 +595,7 @@ DocQAAgent(documents=["manual.pdf"])
   → For each PDF:
       → PyMuPDF extracts text
       → Text split into 500-token chunks (100 overlap)
-      → nomic-embed generates embeddings (384 dimensions, runs on NPU/iGPU)
+      → EmbeddingGemma 300M generates embeddings (768 dimensions, runs on NPU/iGPU)
       → Embeddings stored in FAISS index (in-memory)
   → Ready for queries
 ```
@@ -609,7 +609,7 @@ On AI PCs with Ryzen AI, the embedding model runs on the NPU for efficient proce
 process_query("What are the system requirements?")
   → Agent decides to use query_documents tool
   → Tool execution:
-      → Generate query embedding (nomic-embed on NPU)
+      → Generate query embedding (EmbeddingGemma 300M on NPU)
       → Compute cosine similarity vs all chunk embeddings
       → Sort by similarity score
       → Return top 5 chunks

@@ -4,9 +4,9 @@
 HTML spec generator for the Email Triage Agent REST endpoints (issue #1263).
 
 ``render_endpoint_spec_html()`` returns a single self-contained HTML page
-documenting the three email REST endpoints and the frozen #1262 contract
-request/response shapes. It derives field rows directly from the contract
-pydantic models so the spec stays in sync with the contract automatically.
+documenting the email REST endpoints (triage, search, draft, send) and the
+frozen #1262 contract request/response shapes. It derives field rows directly
+from the contract pydantic models so the spec stays in sync automatically.
 
 No external assets — inline CSS only. No LLM, no network calls.
 """
@@ -16,23 +16,63 @@ from __future__ import annotations
 import html as _html_lib
 import webbrowser
 from pathlib import Path
-from typing import Any, List, Optional, Tuple, Type, Union, get_args, get_origin
-
-from pydantic import BaseModel
+from typing import (
+    Annotated,
+    Any,
+    List,
+    Optional,
+    Tuple,
+    Type,
+    Union,
+    get_args,
+    get_origin,
+)
 
 from gaia_agent_email.contract import (
     SCHEMA_VERSION,
     ActionItem,
+    AttachmentMeta,
+    BatchItemError,
+    BatchItemResult,
+    BatchTriageRequest,
+    BatchTriageResponse,
+    CalendarCreateEventRequest,
+    CalendarEvent,
+    CalendarEventDateTime,
+    CalendarEventPreviewResponse,
+    CalendarEventResponse,
+    CalendarEventsResponse,
+    CalendarRespondRequest,
+    CalendarRespondResponse,
     DraftReply,
+    EmailActionConfirmRequest,
+    EmailActionConfirmResponse,
     EmailAddress,
+    EmailArchiveRequest,
+    EmailArchiveResponse,
     EmailCategory,
     EmailMessage,
+    EmailPreScanRequest,
+    EmailPreScanResponse,
+    EmailPreScanResult,
+    EmailQuarantineRequest,
+    EmailQuarantineResponse,
+    EmailSearchRequest,
+    EmailSearchResponse,
+    EmailSearchResultItem,
     EmailTriageRequest,
     EmailTriageResponse,
     EmailTriageResult,
+    EmailUnarchiveRequest,
+    EmailUnarchiveResponse,
+    EmailUnquarantineRequest,
+    EmailUnquarantineResponse,
+    OutgoingAttachment,
+    PreScanItem,
     SingleEmailInput,
     ThreadInput,
 )
+from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -45,63 +85,64 @@ _NONE_TYPE = type(None)
 
 _INLINE_CSS = """
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
                Helvetica, Arial, sans-serif;
-  background: #0f1117;
-  color: #e0e0e0;
+  background: #0a0a0b;
+  color: #f0f0ee;
   margin: 0;
   padding: 2rem;
   line-height: 1.6;
 }
 h1 {
-  color: #ed6b36;
+  color: #e2a33e;
   font-size: 2rem;
   margin-bottom: 0.25rem;
+  letter-spacing: -0.01em;
 }
 .subtitle {
-  color: #888;
+  color: #8e8e92;
   font-size: 0.95rem;
   margin-bottom: 2.5rem;
 }
 h2 {
-  color: #d97742;
+  color: #f0f0ee;
   margin-top: 2.5rem;
   margin-bottom: 0.5rem;
   font-size: 1.4rem;
 }
 h3 {
-  color: #c0bfe0;
+  color: #f0f0ee;
   margin-top: 1.5rem;
   margin-bottom: 0.4rem;
   font-size: 1.1rem;
 }
 .endpoint-block {
-  background: #1a1d27;
-  border: 1px solid #2d2f3e;
-  border-radius: 8px;
+  background: #111113;
+  border: 1px solid #1f1f22;
+  border-radius: 12px;
   padding: 1.5rem;
-  margin-bottom: 2rem;
+  margin-bottom: 1.5rem;
 }
 .method-badge {
   display: inline-block;
-  background: #4e6aff;
-  color: #fff;
+  background: #e2a33e;
+  color: #0a0a0b;
   font-size: 0.78rem;
   font-weight: 700;
   padding: 0.2rem 0.6rem;
-  border-radius: 4px;
+  border-radius: 5px;
   letter-spacing: 0.05em;
   margin-right: 0.75rem;
   vertical-align: middle;
 }
 .path {
-  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+  font-family: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
   font-size: 1.05rem;
-  color: #a8d8a8;
+  color: #e2a33e;
   vertical-align: middle;
 }
 .desc {
-  color: #aaa;
+  color: #8e8e92;
   font-size: 0.93rem;
   margin-top: 0.5rem;
 }
@@ -113,32 +154,32 @@ table {
 }
 th {
   text-align: left;
-  color: #888;
+  color: #8e8e92;
   font-weight: 600;
-  border-bottom: 1px solid #2d2f3e;
+  border-bottom: 1px solid #1f1f22;
   padding: 0.4rem 0.6rem;
 }
 td {
   padding: 0.4rem 0.6rem;
-  border-bottom: 1px solid #1e2030;
+  border-bottom: 1px solid #1f1f22;
   vertical-align: top;
 }
 td:first-child {
-  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
-  color: #8fd8ff;
+  font-family: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
+  color: #e2a33e;
   white-space: nowrap;
 }
 td:nth-child(2) {
-  color: #d8a870;
+  color: #c9c9c6;
 }
 td:nth-child(3) {
-  color: #aaa;
+  color: #8e8e92;
 }
 .required-badge {
   display: inline-block;
   font-size: 0.72rem;
-  background: #6a3030;
-  color: #ff9a9a;
+  background: rgba(232, 122, 122, 0.14);
+  color: #e87a7a;
   padding: 0.05rem 0.4rem;
   border-radius: 3px;
   margin-left: 0.4rem;
@@ -147,8 +188,8 @@ td:nth-child(3) {
 .optional-badge {
   display: inline-block;
   font-size: 0.72rem;
-  background: #2a3040;
-  color: #8899bb;
+  background: #1f1f22;
+  color: #8e8e92;
   padding: 0.05rem 0.4rem;
   border-radius: 3px;
   margin-left: 0.4rem;
@@ -156,11 +197,12 @@ td:nth-child(3) {
 }
 .version-badge {
   display: inline-block;
-  background: #2a3040;
-  color: #8899bb;
+  background: rgba(226, 163, 62, 0.12);
+  color: #e2a33e;
+  border: 1px solid rgba(226, 163, 62, 0.35);
   font-size: 0.8rem;
   padding: 0.2rem 0.75rem;
-  border-radius: 4px;
+  border-radius: 999px;
   margin-left: 1rem;
   vertical-align: middle;
 }
@@ -171,26 +213,26 @@ td:nth-child(3) {
   margin-top: 0.5rem;
 }
 .category-tag {
-  background: #2a3040;
-  color: #a8d8a8;
-  border: 1px solid #3a4555;
-  border-radius: 4px;
+  background: rgba(226, 163, 62, 0.12);
+  color: #e2a33e;
+  border: 1px solid rgba(226, 163, 62, 0.35);
+  border-radius: 999px;
   padding: 0.2rem 0.75rem;
-  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+  font-family: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
   font-size: 0.85rem;
 }
 .model-section {
-  background: #151821;
-  border: 1px solid #252838;
-  border-radius: 6px;
+  background: #0d0d0f;
+  border: 1px solid #1f1f22;
+  border-radius: 10px;
   padding: 1rem 1.25rem;
   margin-top: 1rem;
 }
 .footer {
   margin-top: 3rem;
-  color: #555;
+  color: #8e8e92;
   font-size: 0.8rem;
-  border-top: 1px solid #2d2f3e;
+  border-top: 1px solid #1f1f22;
   padding-top: 1rem;
 }
 """
@@ -207,8 +249,14 @@ def _annotation_label(annotation: Any) -> str:
     ``Optional[List[EmailAddress]]`` render as ``list[EmailAddress]``
     rather than the bare outer name. NoneType arms (from Optional) are
     dropped so the label names the value type, not ``| None``.
+    ``Annotated[X, …]`` (e.g. a discriminated-union list element) is unwrapped
+    to ``X`` so the label names the value type, not the ``Annotated`` wrapper.
     """
     origin = get_origin(annotation)
+    # Unwrap Annotated[X, metadata…] → X before any other handling, so a
+    # discriminated-union element renders as the union, not 'Annotated[...'.
+    if origin is Annotated:
+        return _annotation_label(get_args(annotation)[0])
     if origin is None:
         # A concrete class (str, bool, EmailAddress, …) or a bare name.
         return getattr(annotation, "__name__", None) or str(annotation)
@@ -287,16 +335,21 @@ def _endpoint_block(
     request_sections: List[Tuple[str, Type[BaseModel]]],
     response_sections: List[Tuple[str, Type[BaseModel]]],
     extra_html: str = "",
+    method: str = "POST",
 ) -> str:
     req_html = "".join(_model_table(m, t) for t, m in request_sections)
     resp_html = "".join(_model_table(m, t) for t, m in response_sections)
+    # A GET (read-only) endpoint has no request body — show query params (if any)
+    # via the request_sections heading text instead of a "Request body" header.
+    req_heading = "Query parameters" if method.upper() == "GET" else "Request body"
+    req_block = f"<h3>{req_heading}</h3>{req_html}" if req_html else ""
     return (
         f'<div class="endpoint-block">'
-        f'<span class="method-badge">POST</span>'
+        f'<span class="method-badge">{_esc(method.upper())}</span>'
         f'<span class="path">{_esc(path)}</span>'
         f'<p class="desc">{_esc(description)}</p>'
         f"{extra_html}"
-        f"<h3>Request body</h3>{req_html}"
+        f"{req_block}"
         f"<h3>Response body</h3>{resp_html}"
         f"</div>"
     )
@@ -326,6 +379,7 @@ def render_endpoint_spec_html() -> str:
         + _model_table(ThreadInput, "ThreadInput (kind: thread)")
         + _model_table(EmailMessage, "EmailMessage")
         + _model_table(EmailAddress, "EmailAddress")
+        + _model_table(AttachmentMeta, "AttachmentMeta (schema 2.2, #1542)")
     )
 
     triage_block = (
@@ -336,7 +390,10 @@ def render_endpoint_spec_html() -> str:
         f"Accepts the frozen #1262 EmailTriageRequest and returns "
         f"a structured EmailTriageResponse — category, spam/phishing signals, "
         f"a plain-text summary, extracted action items, and an optional draft reply. "
-        f"No mail is read or sent; this analyses only the payload in the request.</p>"
+        f"No mail is read or sent; this analyses only the payload in the request. "
+        f"Extracted action items also persist to the local task store, linked to "
+        f"the source <code>message_id</code> and de-duplicated per message (#1605) "
+        f"— the response shape is unchanged.</p>"
         f"<h3>Request envelope</h3>"
         f"{_model_table(EmailTriageRequest, 'EmailTriageRequest')}"
         f"<h3>Payload shapes</h3>"
@@ -349,6 +406,48 @@ def render_endpoint_spec_html() -> str:
         f"</div>"
     )
 
+    batch_block = (
+        f'<div class="endpoint-block">'
+        f'<span class="method-badge">POST</span>'
+        f'<span class="path">/v1/email/triage/batch</span>'
+        f'<p class="desc">Triage a batch of emails or threads in one request (#1887). '
+        f"Accepts a BatchTriageRequest (an <code>items</code> array of 1–100 "
+        f"single-email / thread inputs) and returns a BatchTriageResponse — one "
+        f"BatchItemResult per item, order-preserved. This is additive: the single "
+        f"<code>/v1/email/triage</code> endpoint above is unchanged.</p>"
+        f"<p class='desc'><strong>Per-item isolation:</strong> a failure on one "
+        f"item sets that entry's <code>error</code> and the rest still run. "
+        f"<strong>HTTP 200 with every item errored is valid</strong> — inspect each "
+        f"<code>results[].error</code>, not just the status. A 502 means the local "
+        f"LLM was unreachable before any item was processed (the whole batch fails).</p>"
+        f"<h3>Request envelope</h3>"
+        f"{_model_table(BatchTriageRequest, 'BatchTriageRequest')}"
+        f"<h3>Response envelope</h3>"
+        f"{_model_table(BatchTriageResponse, 'BatchTriageResponse')}"
+        f"{_model_table(BatchItemResult, 'BatchItemResult (exactly one of result / error)')}"
+        f"{_model_table(BatchItemError, 'BatchItemError')}"
+        f"</div>"
+    )
+
+    prescan_block = _endpoint_block(
+        path="/v1/email/prescan",
+        description=(
+            "Inbox pre-scan (#1778). Lists the most-recent inbox messages from "
+            "the connected mailbox and returns the aggregate triage-card "
+            "envelope the Agent UI renders — top urgent / actionable rows, an "
+            "informational count, and suggested archives, each with a heuristic "
+            "reason. Read-only: nothing is archived, marked, or sent. "
+            "Classification reuses the agent's pre_scan_inbox path. Fails loudly "
+            "when no mailbox is connected (503) or 2+ are (400)."
+        ),
+        request_sections=[("EmailPreScanRequest", EmailPreScanRequest)],
+        response_sections=[
+            ("EmailPreScanResponse", EmailPreScanResponse),
+            ("EmailPreScanResult", EmailPreScanResult),
+            ("PreScanItem", PreScanItem),
+        ],
+    )
+
     # /draft and /send are derived from the REST route models (the same
     # pydantic classes the endpoints actually use) via _endpoint_block, so the
     # tables cannot drift from the live request/response shapes. Imported
@@ -356,20 +455,66 @@ def render_endpoint_spec_html() -> str:
     # avoid any import-order coupling with email_routes (which imports this
     # module lazily for its GET /spec page).
     from gaia_agent_email.api_routes import (
+        EmailBriefingResponse,
         EmailDraftRequest,
         EmailDraftResponse,
         EmailSendRequest,
         EmailSendResponse,
+        InitLemonadeStatus,
+        InitModelStatus,
+        InitResponse,
+    )
+
+    briefing_block = _endpoint_block(
+        path="/v1/email/briefing",
+        method="GET",
+        description=(
+            "Latest scheduled daily inbox briefing (#1608). The email sidecar "
+            "generates the pre-scan envelope on a configurable daily schedule "
+            "— off by default; enable with GAIA_EMAIL_BRIEFING_ENABLED=true "
+            "(fire time via GAIA_EMAIL_BRIEFING_TIME, 24h local HH:MM, "
+            "default 08:00) — and this endpoint returns the most recent run. "
+            "The briefing payload is the same email_pre_scan envelope as "
+            "POST /v1/email/prescan, produced by the agent's own "
+            "pre_scan_inbox path. 404 until a scheduled run has happened."
+        ),
+        request_sections=[],
+        response_sections=[
+            ("EmailBriefingResponse", EmailBriefingResponse),
+            ("EmailPreScanResult", EmailPreScanResult),
+            ("PreScanItem", PreScanItem),
+        ],
+    )
+
+    search_block = _endpoint_block(
+        path="/v1/email/search",
+        description=(
+            "Search the connected mailbox (read-only, #1781) by Gmail-style "
+            "query / labels. Returns inbox-list metadata (id, thread, subject, "
+            "from, snippet, labels) for each match — not the message body, and "
+            "nothing is sent or modified. The mailbox is the one connected in "
+            "GAIA; an ambiguous count fails loud (0 -> 503, 2+ -> 400)."
+        ),
+        request_sections=[("EmailSearchRequest", EmailSearchRequest)],
+        response_sections=[
+            ("EmailSearchResponse", EmailSearchResponse),
+            ("EmailSearchResultItem", EmailSearchResultItem),
+        ],
     )
 
     draft_block = _endpoint_block(
         path="/v1/email/draft",
         description=(
             "Propose a reply and obtain a single-use confirmation token bound "
-            "to the exact (to, subject, body) payload. Echo the token to "
-            "POST /v1/email/send to authorize sending."
+            "to the exact (to, subject, body, attachments) payload — "
+            "attachment binding covers filename, MIME type, and content digest "
+            "(schema 2.2, #1542). Echo the token to POST /v1/email/send to "
+            "authorize sending."
         ),
-        request_sections=[("EmailDraftRequest", EmailDraftRequest)],
+        request_sections=[
+            ("EmailDraftRequest", EmailDraftRequest),
+            ("OutgoingAttachment", OutgoingAttachment),
+        ],
         response_sections=[("EmailDraftResponse", EmailDraftResponse)],
     )
 
@@ -379,11 +524,179 @@ def render_endpoint_spec_html() -> str:
             "Send a reply — gated on explicit confirmation (#1264). The "
             "confirmation gate fires FIRST: a request without a valid, "
             "payload-bound confirmation token is rejected with HTTP 403 before "
-            "any backend call. Emails are never sent without explicit "
-            "confirmation."
+            "any backend call. Attachments (schema 2.2) must exactly match the "
+            "confirmed draft's — a swapped or smuggled file is rejected. "
+            "Emails are never sent without explicit confirmation."
         ),
         request_sections=[("EmailSendRequest", EmailSendRequest)],
         response_sections=[("EmailSendResponse", EmailSendResponse)],
+    )
+
+    # Readiness preflight (#1795). GET, response-only — documents the
+    # structured status a host polls before triaging. Derived from the live
+    # route models so the table cannot drift from what the endpoint returns.
+    init_block = (
+        f'<div class="endpoint-block">'
+        f'<span class="method-badge">GET</span>'
+        f'<span class="path">/v1/email/init</span>'
+        f'<p class="desc">Readiness preflight for the whole triage stack. '
+        f"Returns HTTP 200 when ready and 503 when not, with an actionable "
+        f"<code>hint</code>. Unlike <code>/health</code> (liveness-only), this "
+        f"probes the local Lemonade Server, checks it is at a compatible "
+        f"<strong>version</strong> (&ge; <code>min_version</code>), and confirms "
+        f"the triage model is downloaded — so a host can verify &ldquo;ready to "
+        f"triage,&rdquo; not just &ldquo;process up.&rdquo; Read-only: probes "
+        f"only, no model pull.</p>"
+        f"<h3>Response body</h3>"
+        f"{_model_table(InitResponse, 'InitResponse')}"
+        f"{_model_table(InitLemonadeStatus, 'InitLemonadeStatus')}"
+        f"{_model_table(InitModelStatus, 'InitModelStatus')}"
+        f"</div>"
+    )
+
+    # Provisioning verb (#1795 follow-up). POST on the same path, but it STREAMS
+    # terminal-style progress instead of returning JSON — so it is documented
+    # here rather than in the JSON OpenAPI contract.
+    provision_block = (
+        f'<div class="endpoint-block">'
+        f'<span class="method-badge">POST</span>'
+        f'<span class="path">/v1/email/init</span>'
+        f'<p class="desc">Provision the triage stack and <strong>stream '
+        f"terminal-style progress</strong>. Tells the running local Lemonade "
+        f"Server to download the configured email model, emitting "
+        f"newline-delimited progress lines (<code>text/plain</code>) a consumer "
+        f"can render line by line. A line beginning <code>✓</code> marks "
+        f"success, <code>✗</code> a failure; the final line is authoritative.</p>"
+        f'<p class="desc"><strong>Scope:</strong> the sidecar cannot run the full '
+        f"<code>gaia init</code> or install Lemonade itself. If Lemonade is "
+        f"unreachable this returns <strong>503</strong> with an actionable line "
+        f"and pulls nothing. Once a pull starts the response is a committed "
+        f"<strong>200</strong> (HTTP status cannot change mid-stream), so the "
+        f"trailing <code>✓</code>/<code>✗</code> line carries the real outcome. "
+        f"On success, re-run <code>GET /v1/email/init</code> to confirm "
+        f"readiness.</p>"
+        f"</div>"
+    )
+
+    # Mailbox actions — archive / quarantine + reversal (schema 2.1, #1779).
+    # Built from the contract models so the tables track the live shapes.
+    confirm_block = _endpoint_block(
+        path="/v1/email/confirm",
+        description=(
+            "Mint a single-use confirmation token for a destructive mailbox "
+            "action (archive / quarantine), bound to that exact (action, "
+            "message_id). The action analogue of /v1/email/draft — nothing "
+            "mutates here. Echo the token to /archive or /quarantine."
+        ),
+        request_sections=[("EmailActionConfirmRequest", EmailActionConfirmRequest)],
+        response_sections=[("EmailActionConfirmResponse", EmailActionConfirmResponse)],
+    )
+
+    archive_block = _endpoint_block(
+        path="/v1/email/archive",
+        description=(
+            "Archive a message — gated on confirmation, reversible for 30s. The "
+            "gate fires FIRST: no valid token for this (action='archive', "
+            "message_id) is rejected with HTTP 403 before any backend call. "
+            "Returns a batch_id undo handle and the post_archive_id (the id a "
+            "folder-based backend like Outlook mints on the move, #1738)."
+        ),
+        request_sections=[("EmailArchiveRequest", EmailArchiveRequest)],
+        response_sections=[("EmailArchiveResponse", EmailArchiveResponse)],
+    )
+
+    unarchive_block = _endpoint_block(
+        path="/v1/email/unarchive",
+        description=(
+            "Reverse an archive within the undo window. NOT gated — it restores. "
+            "Routes by the mailbox recorded at archive time and uses the "
+            "post_archive_id so Outlook can find the moved message. Fails loudly "
+            "with HTTP 409 when the window has expired or the batch_id is unknown."
+        ),
+        request_sections=[("EmailUnarchiveRequest", EmailUnarchiveRequest)],
+        response_sections=[("EmailUnarchiveResponse", EmailUnarchiveResponse)],
+    )
+
+    quarantine_block = _endpoint_block(
+        path="/v1/email/quarantine",
+        description=(
+            "Quarantine a phishing message — gated on confirmation, reversible "
+            "for 30s. Applies the GAIA_PHISHING_QUARANTINE label and removes the "
+            "message from the inbox. The gate fires FIRST (HTTP 403 without a "
+            "valid token). Refuses is_phishing=false with HTTP 400."
+        ),
+        request_sections=[("EmailQuarantineRequest", EmailQuarantineRequest)],
+        response_sections=[("EmailQuarantineResponse", EmailQuarantineResponse)],
+    )
+
+    unquarantine_block = _endpoint_block(
+        path="/v1/email/unquarantine",
+        description=(
+            "Reverse a quarantine within the undo window. NOT gated — it restores "
+            "the exact prior label set and removes the quarantine label. Fails "
+            "loudly with HTTP 409 when the window has expired or the action_id is "
+            "unknown/already undone."
+        ),
+        request_sections=[("EmailUnquarantineRequest", EmailUnquarantineRequest)],
+        response_sections=[("EmailUnquarantineResponse", EmailUnquarantineResponse)],
+    )
+
+    # Calendar surface (schema 2.1, #1780) — view / preview / create / respond.
+    # Reaches either the Google or Microsoft calendar backend through one contract.
+    calendar_view_block = _endpoint_block(
+        path="/v1/email/calendar/events",
+        method="GET",
+        description=(
+            "View events on the primary calendar (read-only). Optional RFC 3339 "
+            "query params time_min / time_max bound the window; provider "
+            "(google|microsoft) is required only when more than one account is "
+            "connected. Fails loudly (403 + reconnect CTA) if the calendar scope "
+            "is missing."
+        ),
+        request_sections=[],
+        response_sections=[
+            ("CalendarEventsResponse", CalendarEventsResponse),
+            ("CalendarEvent", CalendarEvent),
+        ],
+    )
+
+    calendar_preview_block = _endpoint_block(
+        path="/v1/email/calendar/events/preview",
+        description=(
+            "Mint a single-use confirmation token bound to a proposed event — the "
+            "calendar analogue of /v1/email/draft. Creates nothing; echo the "
+            "returned confirmation_token to POST /v1/email/calendar/events."
+        ),
+        request_sections=[("CalendarCreateEventRequest", CalendarCreateEventRequest)],
+        response_sections=[
+            ("CalendarEventPreviewResponse", CalendarEventPreviewResponse),
+            ("CalendarEventDateTime", CalendarEventDateTime),
+        ],
+    )
+
+    calendar_create_block = _endpoint_block(
+        path="/v1/email/calendar/events",
+        description=(
+            "Create a calendar event — gated on explicit confirmation (#1780). "
+            "Like /send, the gate fires FIRST: a request without a valid, "
+            "payload-bound confirmation token (from .../preview) is rejected with "
+            "HTTP 403 before any backend call. Events are externally visible to "
+            "attendees, so they are never created without confirmation."
+        ),
+        request_sections=[("CalendarCreateEventRequest", CalendarCreateEventRequest)],
+        response_sections=[("CalendarEventResponse", CalendarEventResponse)],
+    )
+
+    calendar_respond_block = _endpoint_block(
+        path="/v1/email/calendar/events/respond",
+        description=(
+            "RSVP accept / decline / tentative to an existing invite. An explicit, "
+            "user-initiated action (the UI's accept/decline controls), so it is not "
+            "separately token-gated. attendee_email is the principal's own address "
+            "(used by Google; ignored by Outlook, which RSVPs on /me)."
+        ),
+        request_sections=[("CalendarRespondRequest", CalendarRespondRequest)],
+        response_sections=[("CalendarRespondResponse", CalendarRespondResponse)],
     )
 
     body = f"""<!DOCTYPE html>
@@ -411,9 +724,74 @@ def render_endpoint_spec_html() -> str:
 
 {triage_block}
 
+{batch_block}
+
+{prescan_block}
+
+{briefing_block}
+
+{search_block}
+
 {draft_block}
 
 {send_block}
+
+{init_block}
+
+{provision_block}
+
+<h2>Mailbox actions — archive &amp; quarantine (schema 2.1)</h2>
+<p class="subtitle">
+  Reversible mailbox mutations exposed on the contract (#1779). Each acts on the
+  mailbox connected in GAIA on the host and is gated on a single-use confirmation
+  token from <code>/v1/email/confirm</code> — the same explicit-confirmation rule as
+  <code>/v1/email/send</code>. Both are reversible within a 30-second undo window via
+  the ungated <code>/unarchive</code> · <code>/unquarantine</code>.
+</p>
+
+{confirm_block}
+
+{archive_block}
+
+{unarchive_block}
+
+{quarantine_block}
+
+{unquarantine_block}
+
+<h2>Calendar</h2>
+<p class="subtitle">
+  View, create, and RSVP to calendar events through the same contract — reaching
+  whichever calendar (Google or Microsoft) the user connected. Added in
+  schema_version 2.1 (#1780).
+</p>
+
+{calendar_view_block}
+
+{calendar_preview_block}
+
+{calendar_create_block}
+
+{calendar_respond_block}
+
+<h2>Convenience pages</h2>
+
+<div class="endpoint-block">
+  <span class="method-badge">GET</span>
+  <span class="path">/v1/email/spec</span>
+  <p class="desc">This page — a human-readable rendering of the contract above.
+    Not part of the OpenAPI schema.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">GET</span>
+  <span class="path">/v1/email/playground</span>
+  <p class="desc">A self-contained, localhost-only playground: a stack-health
+    check plus live triage/draft against this sidecar. Served same-origin with a
+    <code>Content-Security-Policy: connect-src 'self'</code> header, so the page
+    can only reach this sidecar and email content never leaves the machine. Not
+    part of the OpenAPI schema.</p>
+</div>
 
 <div class="footer">
   GAIA Email Triage Agent &mdash; schema_version {_esc(SCHEMA_VERSION)} &mdash; amd-gaia.ai

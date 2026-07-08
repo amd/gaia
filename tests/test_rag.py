@@ -102,7 +102,7 @@ class TestRAGConfig:
         assert config.chunk_size == 500
         assert config.chunk_overlap == 100
         assert config.max_chunks == 5
-        assert config.embedding_model == "nomic-embed-text-v2-moe-GGUF"
+        assert config.embedding_model == "user.embeddinggemma-300m-GGUF"
         assert config.cache_dir == ".gaia"
         assert config.show_stats is False
         assert config.use_local_llm is True

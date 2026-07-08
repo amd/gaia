@@ -12,7 +12,7 @@ Provides 5 LLM-facing tools: remember, recall, update_memory, forget, search_pas
 Valid categories: fact, preference, error, skill, note, reminder, system.
 
 v2 additions:
-- Embedding pipeline (Lemonade nomic-embed-text-v2-moe-GGUF, 768-dim)
+- Embedding pipeline (Lemonade EmbeddingGemma 300M, 768-dim)
 - FAISS IndexFlatIP for cosine similarity search
 - Hybrid search: vector + BM25 + RRF fusion + cross-encoder reranking
 - Complexity-aware recall depth (3/5/10 top_k)
@@ -47,9 +47,12 @@ from uuid import uuid4
 import numpy as np
 
 from gaia.agents.base.memory_store import (
+    EXTRACTABLE_CATEGORIES,
     MAX_CONTENT_LENGTH,
     VALID_CATEGORIES,
 )
+from gaia.agents.base.procedural_memory import ProceduralMemoryMixin
+from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -144,10 +147,16 @@ def _changed_software_versions(existing: List[Dict]) -> List[str]:
 # Constants
 # ============================================================================
 
-#: Embedding model served by Lemonade — 768-dim, MOE architecture.
-EMBEDDING_MODEL = "nomic-embed-text-v2-moe-GGUF"
+#: Default embedder served by Lemonade — EmbeddingGemma 300M, 768-dim GGUF
+#: (GPU/CPU profiles). Replaced nomic-embed-text-v2-moe, which the current
+#: llama.cpp server cannot load. The active embedder is per-instance
+#: (``self._embedding_model``) and may be the NPU-native FLM embedder instead;
+#: see ``init_memory`` (#1744). These module constants remain the fallback default.
+EMBEDDING_MODEL = DEFAULT_EMBEDDING_MODEL
 
-#: Embedding dimensionality for nomic-embed-text-v2-moe.
+#: Default embedding dimensionality (EmbeddingGemma 300M / nomic are both 768).
+#: The active dim is derived from the live embedder at startup
+#: (``self._embedding_dim``); this is only the pre-probe fallback.
 EMBEDDING_DIM = 768
 
 #: Cross-encoder model for reranking (~22 MB, runs on CPU).
@@ -291,7 +300,7 @@ def _blob_to_embedding(blob: bytes) -> np.ndarray:
     return np.frombuffer(blob, dtype=np.float32).copy()
 
 
-class MemoryMixin:
+class MemoryMixin(ProceduralMemoryMixin):
     """
     Mixin that gives any Agent persistent memory across sessions (v2).
 
@@ -306,7 +315,10 @@ class MemoryMixin:
     """
 
     def init_memory(
-        self, db_path: Optional[Path] = None, context: str = "global"
+        self,
+        db_path: Optional[Path] = None,
+        context: str = "global",
+        embedding_model: Optional[str] = None,
     ) -> None:
         """Initialize the memory subsystem (v2 startup sequence).
 
@@ -319,6 +331,11 @@ class MemoryMixin:
         Args:
             db_path: Optional path for the DB file. Default: ~/.gaia/memory.db
             context: Active context scope (e.g., 'work', 'personal', 'global').
+            embedding_model: Embedder model id. Defaults to ``EMBEDDING_MODEL``
+                (GGUF nomic). The NPU profile passes the FLM-native embedder so
+                chat and embeddings stay co-resident on the NPU backend (#1744).
+                The embedding dimension is derived from the live embedder, not
+                this id, so a model with a different dim works without changes.
 
         Raises:
             RuntimeError: If Lemonade embedding service is unreachable
@@ -329,6 +346,10 @@ class MemoryMixin:
         # Explicit opt-out for environments that don't need memory (security
         # tests, lint-time imports, etc.).  This is NOT a silent fallback —
         # the user/test author has explicitly set the env var.
+        self._embedding_model = embedding_model or EMBEDDING_MODEL
+        # Pre-probe default; refined from the live embedder below.
+        self._embedding_dim = EMBEDDING_DIM
+
         if os.environ.get("GAIA_MEMORY_DISABLED") == "1":
             logger.info(
                 "[MemoryMixin] memory disabled via GAIA_MEMORY_DISABLED=1; "
@@ -342,6 +363,10 @@ class MemoryMixin:
             self._embedder = None
             self._faiss_index = None
             self._faiss_id_map = []
+            self._proc_faiss_index = None
+            self._proc_faiss_id_map = []
+            self._recalled_skill_prompt = ""
+            self._recalled_skills = []
             self._memory_post_init_pending = False
             self._memory_session_id = str(uuid4())
             return
@@ -365,6 +390,24 @@ class MemoryMixin:
         self._faiss_index = None
         self._faiss_id_map: List[str] = []  # faiss_position -> knowledge_id
 
+        # Procedures FAISS index state — a SEPARATE index over
+        # procedures.embedding (the when_to_use trigger vector), distinct from
+        # the knowledge index above so goal→procedure recall never pollutes, or
+        # is polluted by, knowledge search (#887 procedural memory).
+        self._proc_faiss_index = None
+        self._proc_faiss_id_map: List[str] = []  # faiss_position -> procedure_id
+
+        # Per-turn recalled-skill injection (#887 RECALL).  Holds the rendered
+        # procedure body(ies) recall_skill matched for the current goal; the
+        # auto-discovered get_recalled_skills_system_prompt() contributes it to
+        # the composed system prompt.  Empty string = no recall = the system
+        # prompt stays byte-identical to a build without procedural memory.
+        self._recalled_skill_prompt = ""
+        # The matched Skill objects from the same per-turn recall (#1451): the
+        # tool loader reads their tools_required via _recalled_skill_tools as the
+        # SKILL signal.  Empty list = no recall = no SKILL signal this turn.
+        self._recalled_skills = []
+
         # Step 2: Validate Lemonade embedding service connectivity.
         #
         # Memory v2 needs an embedding service to function (FAISS index, hybrid
@@ -381,17 +424,39 @@ class MemoryMixin:
         # via ``_memory_store is None`` checks at every memory operation.
         try:
             self._get_embedder()
-            # Validate connectivity with a small test embedding
+            # Validate connectivity AND derive the embedding dimension from the
+            # live embedder — different embedders (e.g. the NPU FLM embedder)
+            # have different dims, so the FAISS index must match the active
+            # model rather than a hardcoded constant (#1744).
             test_vec = self._embed_text("connectivity test")
-            if test_vec.shape[0] != EMBEDDING_DIM:
+            dim = int(test_vec.shape[0])
+            if dim <= 0:
                 raise RuntimeError(
-                    f"Embedding dimension mismatch: expected {EMBEDDING_DIM}, "
-                    f"got {test_vec.shape[0]}"
+                    f"Embedder '{self._embedding_model}' returned a 0-length "
+                    "vector. Check that the model is loaded in Lemonade."
                 )
+            self._embedding_dim = dim
             logger.info(
-                "[MemoryMixin] Lemonade embedding service validated (%d-dim)",
-                EMBEDDING_DIM,
+                "[MemoryMixin] Lemonade embedding service validated "
+                "(model=%s, %d-dim)",
+                self._embedding_model,
+                self._embedding_dim,
             )
+            # Invalidate stored vectors when the embedder changed. Vectors from
+            # a different model live in a different vector space (even at the
+            # same dim), so reusing them silently corrupts similarity search.
+            # Clearing forces backfill to re-embed with the active model.
+            prior = self._memory_store.get_embedder_id()
+            if prior is not None and prior != self._embedding_model:
+                cleared = self._memory_store.clear_all_embeddings()
+                logger.warning(
+                    "[MemoryMixin] embedder changed (%s -> %s); cleared %d stored "
+                    "embedding(s) for re-embedding",
+                    prior,
+                    self._embedding_model,
+                    cleared,
+                )
+            self._memory_store.set_embedder_id(self._embedding_model)
         except Exception as e:
             logger.warning(
                 "[MemoryMixin] Lemonade embedding service unreachable — "
@@ -408,6 +473,9 @@ class MemoryMixin:
             self._memory_session_id = str(uuid4())
             return
 
+        # (Embedder-change migration is handled above via the store's
+        # get_embedder_id / set_embedder_id + clear_all_embeddings, #1744.)
+
         # Step 3: Backfill embeddings for items missing them
         backfilled = self._backfill_embeddings(limit=100)
         if backfilled > 0:
@@ -415,6 +483,11 @@ class MemoryMixin:
 
         # Step 4: Rebuild FAISS index from stored embeddings
         self._rebuild_faiss_index()
+
+        # Step 4b: Rebuild the SEPARATE procedures FAISS index (#887). Empty
+        # until skill synthesis stores procedures, so this is a no-op cost for
+        # users without procedural memory yet.
+        self._rebuild_proc_faiss_index()
 
         # Step 5: apply_confidence_decay()
         self._memory_store.apply_confidence_decay()
@@ -590,6 +663,20 @@ class MemoryMixin:
     # Embedding Pipeline
     # ==================================================================
 
+    def _active_embedding_model(self) -> str:
+        """Resolve the active embedder id, falling back to the module default.
+
+        ``self._embedding_model`` is set in ``init_memory`` (and may be the
+        NPU-native FLM embedder, #1744). Callers that touch embedding before a
+        full init (or unit tests using a bare mixin) fall back to the module
+        default so embedding never crashes with a missing-attribute error.
+        """
+        return getattr(self, "_embedding_model", None) or EMBEDDING_MODEL
+
+    def _active_embedding_dim(self) -> int:
+        """Resolve the active embedding dim, falling back to the module default."""
+        return getattr(self, "_embedding_dim", None) or EMBEDDING_DIM
+
     def _get_embedder(self) -> Any:
         """Lazy-init cached LemonadeProvider for embeddings.
 
@@ -604,7 +691,7 @@ class MemoryMixin:
         try:
             from gaia.llm.providers.lemonade import LemonadeProvider
 
-            self._embedder = LemonadeProvider(model=EMBEDDING_MODEL)
+            self._embedder = LemonadeProvider(model=self._active_embedding_model())
             logger.debug("[MemoryMixin] LemonadeProvider initialized for embeddings")
             return self._embedder
         except Exception as e:
@@ -612,21 +699,44 @@ class MemoryMixin:
                 f"Failed to initialize Lemonade embedding provider: {e}"
             ) from e
 
+    def _get_embedding_cache(self):
+        """Lazy-init the content-keyed embedding cache (per-instance)."""
+        cache = getattr(self, "_embedding_cache", None)
+        if cache is None:
+            from gaia.llm.embedding_cache import EmbeddingCache
+
+            cache = EmbeddingCache()
+            self._embedding_cache = cache
+        return cache
+
     def _embed_text(self, text: str) -> np.ndarray:
-        """Embed text via Lemonade (nomic-embed-text-v2-moe-GGUF, 768-dim).
+        """Embed text via Lemonade using the active embedder.
 
         Required, not optional. Raises RuntimeError if embedding fails.
+
+        Identical text is served from a content-keyed cache, so repeated
+        query embeds (same recall query across turns) skip the Lemonade call.
 
         Args:
             text: Text to embed.
 
         Returns:
-            L2-normalized float32 numpy array of shape (768,).
+            L2-normalized float32 numpy array of shape ``(self._embedding_dim,)``.
         """
+        # Key the cache by the ACTIVE embedder (not the module default) so a
+        # non-default embedder (e.g. the NPU FLM one) never serves vectors from
+        # a different model's space.
+        model = self._active_embedding_model()
+        dim = self._active_embedding_dim()
+        cache = self._get_embedding_cache()
+        cached = cache.get(model, dim, text)
+        if cached is not None:
+            return cached
+
         embedder = self._get_embedder()
         try:
             # LemonadeProvider.embed() returns list[list[float]]
-            results = embedder.embed([text], model=EMBEDDING_MODEL)
+            results = embedder.embed([text], model=model)
             vec = np.array(results[0], dtype=np.float32)
 
             # L2-normalize for cosine similarity via IndexFlatIP
@@ -634,6 +744,7 @@ class MemoryMixin:
             if norm > 0:
                 vec = vec / norm
 
+            cache.put(model, dim, text, vec)
             return vec
         except Exception as e:
             raise RuntimeError(f"Embedding failed: {e}") from e
@@ -684,13 +795,13 @@ class MemoryMixin:
         # Get all active knowledge items that have embeddings
         items = store.get_items_with_embeddings(include_sensitive=True)
 
-        index = faiss.IndexFlatIP(EMBEDDING_DIM)
+        index = faiss.IndexFlatIP(self._embedding_dim)
         id_map = []
 
         for item in items:
             try:
                 vec = _blob_to_embedding(item["embedding"])
-                if vec.shape[0] != EMBEDDING_DIM:
+                if vec.shape[0] != self._embedding_dim:
                     logger.debug(
                         "[MemoryMixin] skipping embedding for %s: wrong dim %d",
                         item["id"],
@@ -750,11 +861,11 @@ class MemoryMixin:
             # Reconstruct all vectors except the removed one
             n = self._faiss_index.ntotal
             if n <= 1:
-                self._faiss_index = faiss.IndexFlatIP(EMBEDDING_DIM)
+                self._faiss_index = faiss.IndexFlatIP(self._embedding_dim)
                 self._faiss_id_map = []
                 return
 
-            all_vecs = np.zeros((n, EMBEDDING_DIM), dtype=np.float32)
+            all_vecs = np.zeros((n, self._embedding_dim), dtype=np.float32)
             for i in range(n):
                 all_vecs[i] = self._faiss_index.reconstruct(i)
 
@@ -762,7 +873,7 @@ class MemoryMixin:
             keep_vecs = np.delete(all_vecs, idx, axis=0)
             keep_ids = self._faiss_id_map[:idx] + self._faiss_id_map[idx + 1 :]
 
-            new_index = faiss.IndexFlatIP(EMBEDDING_DIM)
+            new_index = faiss.IndexFlatIP(self._embedding_dim)
             new_index.add(keep_vecs)
             self._faiss_index = new_index
             self._faiss_id_map = keep_ids
@@ -1102,8 +1213,16 @@ class MemoryMixin:
                     continue
                 op_type = op["op"]
                 if op_type == "add" and "content" in op and "category" in op:
-                    if op["category"] in VALID_CATEGORIES:
+                    if op["category"] in EXTRACTABLE_CATEGORIES:
                         valid_ops.append(op)
+                    elif op["category"] in VALID_CATEGORIES:
+                        # Privileged category (system/profile/permission): only
+                        # explicit tools may write these — never the extractor.
+                        logger.debug(
+                            "[MemoryMixin] dropped extracted op with privileged "
+                            "category %r (extractor cannot write it)",
+                            op["category"],
+                        )
                 elif op_type == "update" and "knowledge_id" in op and "content" in op:
                     valid_ops.append(op)
                 elif op_type == "delete" and "knowledge_id" in op:
@@ -1208,7 +1327,8 @@ class MemoryMixin:
 
         Called automatically on the first process_query() invocation, by which
         time Agent.__init__() has completed and self.chat is available.
-        Steps: reconcile_memory (max 20 pairs) + consolidate_old_sessions (max 5).
+        Steps: reconcile_memory (max 20 pairs), consolidate_old_sessions (max 5),
+        then _synthesize_skills (procedural memory, #887).
         """
         # Step 6: reconcile_memory() (max 20 pairs)
         try:
@@ -1225,6 +1345,18 @@ class MemoryMixin:
                 logger.info("[MemoryMixin] post-init consolidation: %s", consol)
         except Exception as e:
             logger.warning("[MemoryMixin] post-init consolidation failed: %s", e)
+
+        # Step 8: _synthesize_skills() — procedural memory (#887).  Boundary
+        # translation only: _synthesize_skills is fail-loud internally (embedder
+        # failure re-raises, no smaller-model fallback); this wrapper keeps a
+        # background synthesis error from crashing the user's first query, the
+        # same posture as the reconcile / consolidate steps above.
+        try:
+            synth = self._synthesize_skills()
+            if synth.get("stored", 0) > 0:
+                logger.info("[MemoryMixin] post-init skill synthesis: %s", synth)
+        except Exception as e:
+            logger.warning("[MemoryMixin] post-init skill synthesis failed: %s", e)
 
     # ==================================================================
     # Conversation Consolidation
@@ -1318,14 +1450,23 @@ class MemoryMixin:
                         vec = self._embed_text(summary)
                         store.store_embedding(summary_id, _embedding_to_blob(vec))
                         self._faiss_add(summary_id, vec)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        # Non-fatal: the row is stored; the vector is backfilled
+                        # on the next init. Logged so the gap is never silent.
+                        logger.debug(
+                            "[MemoryMixin] consolidation summary embed failed "
+                            "(id=%s, backfilled on restart): %s",
+                            summary_id,
+                            e,
+                        )
 
                 # Store extracted knowledge items
                 knowledge_items = data.get("knowledge", [])
                 for ki in knowledge_items:
                     if isinstance(ki, dict) and "content" in ki and "category" in ki:
-                        if ki["category"] in VALID_CATEGORIES:
+                        # EXTRACTABLE_CATEGORIES, not VALID_CATEGORIES: a session
+                        # summary must not mint a system/profile/permission row.
+                        if ki["category"] in EXTRACTABLE_CATEGORIES:
                             try:
                                 kid = store.store(
                                     category=ki["category"],
@@ -1340,8 +1481,16 @@ class MemoryMixin:
                                     vec = self._embed_text(ki["content"])
                                     store.store_embedding(kid, _embedding_to_blob(vec))
                                     self._faiss_add(kid, vec)
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    # Non-fatal: row stored; vector backfilled on
+                                    # next init. Logged so the gap is not silent.
+                                    logger.debug(
+                                        "[MemoryMixin] consolidation item embed "
+                                        "failed (id=%s, backfilled on restart): "
+                                        "%s",
+                                        kid,
+                                        e,
+                                    )
                                 result["extracted_items"] += 1
                             except Exception as e:
                                 logger.debug(
@@ -1411,7 +1560,7 @@ class MemoryMixin:
         for item in items:
             try:
                 vec = _blob_to_embedding(item["embedding"])
-                if vec.shape[0] != EMBEDDING_DIM:
+                if vec.shape[0] != self._embedding_dim:
                     continue
                 norm = np.linalg.norm(vec)
                 if norm > 0:
@@ -1431,7 +1580,7 @@ class MemoryMixin:
         try:
             import faiss
 
-            temp_index = faiss.IndexFlatIP(EMBEDDING_DIM)
+            temp_index = faiss.IndexFlatIP(self._embedding_dim)
             temp_index.add(mat)
 
             # Search each item for its top-5 neighbors
@@ -1561,8 +1710,16 @@ class MemoryMixin:
                     reconciled_b.append(id_a)
                     merged_b["reconciled_with"] = reconciled_b
                     store.update(id_b, metadata=merged_b)
-                except Exception:
-                    pass
+                except Exception as e:
+                    # Loud: a failed mark means this pair is re-examined (and
+                    # re-sent to the LLM) on every startup until it succeeds.
+                    logger.warning(
+                        "[MemoryMixin] failed to mark pair %s/%s reconciled — "
+                        "it will be re-checked next startup: %s",
+                        id_a[:8],
+                        id_b[:8],
+                        e,
+                    )
 
             except json.JSONDecodeError:
                 logger.debug(
@@ -1778,6 +1935,11 @@ class MemoryMixin:
 
         # Save original so _after_process_query stores the clean user text
         self._original_user_input = user_input
+
+        # Refresh the recalled-procedure injection for this goal (#887 RECALL).
+        # Uses the clean goal (not the dynamic-context-augmented message) and
+        # recomposes the system prompt only when the recalled set changes.
+        self._refresh_recalled_skills(user_input)
 
         # Prepend dynamic context to the user message
         dynamic = self.get_memory_dynamic_context()
@@ -2349,6 +2511,25 @@ class MemoryMixin:
             time_to: str = "",
         ) -> dict:
             """Search past conversations. Use query for keywords, days for time range, time_from/time_to for ISO 8601 boundaries, or combinations."""
+            # Smaller models often emit numeric args as JSON strings ("7", "10");
+            # coerce before any comparison so clamping below doesn't raise TypeError.
+            for _name, _value in (("days", days), ("limit", limit)):
+                if isinstance(_value, str):
+                    _stripped = _value.strip()
+                    if not _stripped:
+                        continue  # empty string -> keep the int default
+                    try:
+                        _coerced = int(_stripped)
+                    except ValueError:
+                        return {
+                            "status": "error",
+                            "message": f"Invalid '{_name}': expected an integer, got {_value!r}.",
+                        }
+                    if _name == "days":
+                        days = _coerced
+                    else:
+                        limit = _coerced
+
             if not query and not days and not time_from and not time_to:
                 return {
                     "status": "error",

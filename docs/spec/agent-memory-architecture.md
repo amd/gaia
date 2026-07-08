@@ -138,7 +138,7 @@ CREATE TABLE knowledge (
     due_at      TEXT,                -- ISO 8601 (when this becomes actionable/relevant)
     reminded_at TEXT,                -- ISO 8601 (when agent last surfaced this to user)
     -- Vector embedding
-    embedding   BLOB,                -- float32 vector (nomic-embed-text-v2-moe-GGUF, 768-dim). NULL = not yet embedded.
+    embedding   BLOB,                -- float32 vector (user.embeddinggemma-300m-GGUF, 768-dim). NULL = not yet embedded.
     -- Fact lineage (Zep-inspired)
     superseded_by TEXT               -- ID of newer knowledge item that replaced this one. NULL = current/active.
 );
@@ -308,7 +308,9 @@ Source is visible in the dashboard and helps users understand why the agent "kno
 
 ### Embed
 
-After storage, the item is immediately embedded via Lemonade (`nomic-embed-text-v2-moe-GGUF`, 768-dim) and the embedding BLOB is written back. Embedding is a hard requirement — `init_memory()` validates Lemonade connectivity at startup and raises `RuntimeError` if the embedding endpoint is unreachable. All knowledge items must have embeddings; items without embeddings (e.g., from a schema migration) are backfilled on startup before the system becomes operational.
+After storage, the item is immediately embedded via Lemonade (`user.embeddinggemma-300m-GGUF`, 768-dim) and the embedding BLOB is written back. Embedding is a hard requirement — `init_memory()` validates Lemonade connectivity at startup and raises `RuntimeError` if the embedding endpoint is unreachable. All knowledge items must have embeddings; items without embeddings (e.g., from a schema migration) are backfilled on startup before the system becomes operational.
+
+The embedder switched from `nomic-embed-text-v2-moe-GGUF` to `user.embeddinggemma-300m-GGUF` because the current llama.cpp server cannot load the nomic MOE embedder. Both are 768-dim, so the embedding schema is unchanged — but old nomic vectors are not comparable to EmbeddingGemma vectors, so the changed model name invalidates the stored embeddings and existing stores are re-embedded automatically on the next run.
 
 ### Dedup
 
@@ -359,7 +361,7 @@ RRF score = 0.6 / (60 + rank_vector) + 0.4 / (60 + rank_bm25)
 
 ### Search Steps
 
-1. Embed query via Lemonade (`nomic-embed-text-v2-moe-GGUF`, 768-dim)
+1. Embed query via Lemonade (`user.embeddinggemma-300m-GGUF`, 768-dim)
 2. FAISS cosine search on normalized embeddings (IndexFlatIP): top-K x 4 candidates (oversample)
 3. FTS5 BM25 search: top-K x 4 candidates (oversample)
 4. Deduplicate by ID, apply RRF weights, take top-K x 2 candidates
@@ -377,7 +379,7 @@ RRF score = 0.6 / (60 + rank_vector) + 0.4 / (60 + rank_bm25)
 
 After RRF fusion, a lightweight cross-encoder rescores each candidate by jointly encoding (query, document) pairs. This catches semantic matches that both vector and BM25 underrank individually.
 
-Model: `cross-encoder/ms-marco-MiniLM-L-6-v2` (~22MB, runs on CPU in <50ms for 10 candidates)
+Model: `cross-encoder/ms-marco-MiniLM-L-6-v2` (~22MB, runs on CPU in &lt;50ms for 10 candidates)
 
 Why this matters: RRF fusion combines two independent rankings. The cross-encoder sees query and document together, enabling it to catch fine-grained relevance signals (negation, qualification, context-dependent meaning) that independent encoders miss. Hindsight (91.4% LongMemEval) attributes a significant portion of its retrieval precision to this step.
 

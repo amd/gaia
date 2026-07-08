@@ -823,6 +823,27 @@ async def _check_model_status(model_name: str) -> ModelStatus:
     return status
 
 
+def _resolve_dynamic_tools_setting(db: ChatDatabase) -> tuple[bool, bool]:
+    """Return ``(effective, locked)`` for the Beta dynamic tool loader (#1798).
+
+    ``GAIA_DYNAMIC_TOOLS`` wins when set (``locked=True`` ⇒ the frontend
+    reflects the effective value and disables the toggle, never a silent
+    no-op); otherwise the persisted ``dynamic_tools`` setting is authoritative.
+    Delegates the env parse to ``dynamic_tools_env_override`` so the UI and
+    ``ChatAgent._resolve_dynamic_tools_enabled`` share one truthy set.
+    """
+    # Function-local import keeps the agents layer off the router's import path
+    # (no cycle, no module-load cost). The helper lives in the core tool_loader
+    # (not the chat wheel) so this core UI setting works without gaia-agent-chat.
+    from gaia.agents.base.tool_loader import dynamic_tools_env_override
+
+    persisted = db.get_setting("dynamic_tools", "false") == "true"
+    override = dynamic_tools_env_override()
+    if override is not None:
+        return override, True
+    return persisted, False
+
+
 @router.get("/api/settings", response_model=SettingsResponse)
 async def get_settings(db: ChatDatabase = Depends(get_db)):
     """Get current user settings with model status."""
@@ -830,11 +851,15 @@ async def get_settings(db: ChatDatabase = Depends(get_db)):
     context_size_str = db.get_setting("context_size")
     context_size = int(context_size_str) if context_size_str else None
     agent_mode = db.get_setting("agent_mode") or "autonomous"
+    dynamic_tools, dynamic_tools_locked = _resolve_dynamic_tools_setting(db)
     logger.debug(
-        "Settings loaded: custom_model=%s, context_size=%s, agent_mode=%s",
+        "Settings loaded: custom_model=%s, context_size=%s, agent_mode=%s, "
+        "dynamic_tools=%s (locked=%s)",
         custom_model,
         context_size,
         agent_mode,
+        dynamic_tools,
+        dynamic_tools_locked,
     )
     model_status = await _check_model_status(custom_model) if custom_model else None
     return SettingsResponse(
@@ -842,6 +867,8 @@ async def get_settings(db: ChatDatabase = Depends(get_db)):
         model_status=model_status,
         context_size=context_size,
         agent_mode=agent_mode,
+        dynamic_tools=dynamic_tools,
+        dynamic_tools_locked=dynamic_tools_locked,
     )
 
 
@@ -899,16 +926,28 @@ async def update_settings(
         db.set_setting("agent_mode", mode)
         logger.info("Agent mode set: %s", mode)
 
+    if (
+        "dynamic_tools" in request.model_fields_set
+        and request.dynamic_tools is not None
+    ):
+        # Persist the user's intent even while GAIA_DYNAMIC_TOOLS locks the
+        # effective value — so their choice applies once the env var is unset.
+        db.set_setting("dynamic_tools", "true" if request.dynamic_tools else "false")
+        logger.info("Dynamic tools setting persisted: %s", request.dynamic_tools)
+
     custom_model = db.get_setting("custom_model")
     context_size_str = db.get_setting("context_size")
     context_size = int(context_size_str) if context_size_str else None
     agent_mode = db.get_setting("agent_mode") or "autonomous"
+    dynamic_tools, dynamic_tools_locked = _resolve_dynamic_tools_setting(db)
     model_status = await _check_model_status(custom_model) if custom_model else None
     return SettingsResponse(
         custom_model=custom_model or None,
         model_status=model_status,
         context_size=context_size,
         agent_mode=agent_mode,
+        dynamic_tools=dynamic_tools,
+        dynamic_tools_locked=dynamic_tools_locked,
     )
 
 

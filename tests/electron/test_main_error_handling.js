@@ -289,6 +289,50 @@ describe("installSafetyNet", () => {
     exitSpy.mockRestore();
   });
 
+  // ── Test 9b: GPU child-process crash is non-fatal ──────────────────────────
+  // A GPU-process crash is recoverable (Chromium relaunches it and falls back
+  // to software rendering). It fires routinely in GPU-less environments
+  // (Windows Sandbox, VMs, RDP), so it must NOT kill the app or show a dialog.
+
+  test("child-process-gone of type GPU does not trigger fatal", () => {
+    const { installSafetyNet } = require(SAFETY_NET_PATH);
+    const dialog = mockDialog();
+    const app = mockApp(true);
+    const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {});
+
+    installSafetyNet({ logPath, dialogModule: dialog, appModule: app });
+    app.emit("child-process-gone", {}, { type: "GPU", reason: "crashed" });
+
+    // No crash dialog, no process exit — the app keeps running.
+    expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
+    expect(dialog.showErrorBox).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
+
+    // The crash is still recorded forensically.
+    const logContent = fs.readFileSync(logPath, "utf8");
+    expect(logContent).toMatch(/GPU_PROCESS_GONE/);
+
+    exitSpy.mockRestore();
+  });
+
+  // ── Test 9c: non-GPU child-process crash is still fatal ────────────────────
+  // Only GPU crashes are recoverable; a crashed utility/other child process
+  // still routes through fatal() as before.
+
+  test("child-process-gone of a non-GPU type still triggers fatal", () => {
+    const { installSafetyNet } = require(SAFETY_NET_PATH);
+    const dialog = mockDialog();
+    const app = mockApp(true);
+    const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {});
+
+    installSafetyNet({ logPath, dialogModule: dialog, appModule: app });
+    app.emit("child-process-gone", {}, { type: "Utility", reason: "crashed" });
+
+    expect(dialog.showMessageBoxSync).toHaveBeenCalledTimes(1);
+
+    exitSpy.mockRestore();
+  });
+
   // ── Test 10: fatal handler writes to log before showing dialog ─────────────
   // If dialog.showErrorBox itself crashes, the log must already have the entry.
 

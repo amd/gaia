@@ -102,7 +102,7 @@ gaia chat --query "Hello" --show-stats
 ## Document Q&A (RAG)
 
 <Note>
-RAG (Retrieval-Augmented Generation) enables chatting with PDF and PowerPoint (.pptx) documents using semantic search and context retrieval.
+RAG (Retrieval-Augmented Generation) enables chatting with documents — including PDF, Word (.docx), PowerPoint (.pptx), and Excel (.xlsx) — using semantic search and context retrieval.
 </Note>
 
 ### CLI with RAG
@@ -110,16 +110,18 @@ RAG (Retrieval-Augmented Generation) enables chatting with PDF and PowerPoint (.
 <Tabs>
   <Tab title="Single Document">
     ```bash
-    # Chat with a PDF or PowerPoint document
+    # Chat with a PDF, Word, PowerPoint, or Excel document
     gaia chat --index manual.pdf
+    gaia chat --index handbook.docx
     gaia chat --index slides.pptx
+    gaia chat --index budget.xlsx
     ```
   </Tab>
 
   <Tab title="Multiple Documents">
     ```bash
-    # Chat with multiple documents (PDF and PPTX supported)
-    gaia chat --index doc1.pdf doc2.pdf slides.pptx
+    # Chat with multiple documents (PDF, DOCX, PPTX, XLSX supported)
+    gaia chat --index doc1.pdf report.docx slides.pptx
     ```
   </Tab>
 
@@ -132,7 +134,7 @@ RAG (Retrieval-Augmented Generation) enables chatting with PDF and PowerPoint (.
 
   <Tab title="Watch Folder">
     ```bash
-    # Auto-index every PDF/PPTX in a folder, and any new ones dropped in later
+    # Auto-index every supported document in a folder, and any new ones dropped in later
     gaia chat --watch ./docs
     ```
   </Tab>
@@ -208,7 +210,7 @@ gaia chat --index document.pdf --debug
 
 ```python Python Debug
 # Python SDK with debug — ChatAgent takes a single ChatAgentConfig
-from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
 config = ChatAgentConfig(
     rag_documents=['document.pdf'],
@@ -316,11 +318,13 @@ first-turn prompt and speeds up the first reply.
 
 It activates only on the `doc` profile (the registered `doc` agent, the SDK with
 `ChatAgentConfig(prompt_profile="doc")`, or `gaia eval agent --agent-type doc`).
-Turn it on with the config field or an environment variable — the env var wins,
-which is handy for the eval harness:
+Turn it on with the config field, an environment variable, or the Agent UI
+**Settings → Dynamic Tools (Beta)** toggle. The env var wins over both — when it
+is set, the UI toggle reflects the effective value and disables itself — which is
+handy for the eval harness:
 
 ```python
-from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
 agent = ChatAgent(ChatAgentConfig(prompt_profile="doc", dynamic_tools=True))
 ```

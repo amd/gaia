@@ -61,19 +61,13 @@ _MANIFEST_FINGERPRINT_KEYS = frozenset(
 # "-lite" / ``gaia-lite`` aliases — those no longer register their own card
 # (#1162) but remain reserved so a custom agent can't claim the old ID and
 # shadow the alias resolution in ``_LEGACY_ID_ALIASES``.
-# Only ids that resolve to a framework *builtin* belong here. data/web (and
-# their -lite aliases) and email migrated to standalone hub wheels (#1102), so
-# they are no longer reserved builtins — they register via the gaia.agent entry
-# point.
+# Only ids that resolve to a framework *builtin* belong here. The chat/doc/file
+# profiles, data, web, email (and all their -lite / gaia-lite aliases) migrated
+# to standalone hub wheels (#1102), so they register via the gaia.agent entry
+# point and are no longer reserved builtins. ``builder`` is the only remaining
+# framework agent.
 _RESERVED_BUILTIN_IDS: frozenset[str] = frozenset(
     {
-        "chat",
-        "doc",
-        "file",
-        "chat-lite",
-        "doc-lite",
-        "file-lite",
-        "gaia-lite",
         "builder",
     }
 )
@@ -223,6 +217,11 @@ def _compute_custom_origin_hash(py_file: Path) -> str:
     return hashlib.sha256(py_file.read_bytes()).hexdigest()[:16]
 
 
+# Default embedder (GPU/CPU). The NPU device overrides this with the FLM-native
+# embedder so chat + embeddings stay co-resident on the NPU backend (#1744).
+DEFAULT_EMBEDDING_MODEL = "nomic-embed-text-v2-moe-GGUF"
+
+
 @dataclass
 class DeviceConfig:
     """A verified (device, model, recipe, backend) configuration for an agent.
@@ -241,6 +240,10 @@ class DeviceConfig:
         verified: Whether this combination has been tested end-to-end via
             agent eval.  Unverified configs show a warning badge in the UI.
         ctx_size: Default context window size for this configuration.
+        embedding_model: Embedder model id for RAG/memory on this device. NPU
+            uses the FLM-native embedder so the chat model and embedder stay
+            co-resident on the NPU backend; a GGUF embedder runs on Vulkan and
+            evicts the FLM chat model every turn on a shared-memory APU (#1744).
     """
 
     device: Literal["cpu", "gpu", "npu"]
@@ -249,6 +252,7 @@ class DeviceConfig:
     backend: str
     verified: bool = False
     ctx_size: int = 32768
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL
 
 
 # Default device configurations for built-in agents using Gemma 4 E4B.
@@ -276,9 +280,27 @@ DEFAULT_DEVICE_CONFIGS: List[DeviceConfig] = [
         recipe="flm",
         backend="flm:npu",
         verified=True,
-        ctx_size=4096,
+        ctx_size=32768,
+        # FLM-native embedder so chat + embeddings stay co-resident on the NPU
+        # backend and don't thrash NPU<->Vulkan every turn (#1744).
+        embedding_model="embed-gemma-300m-FLM",
     ),
 ]
+
+
+def get_embedding_model_for_device(device: Optional[str]) -> str:
+    """Return the embedder model id for a device target.
+
+    Single source of truth: reads ``DEFAULT_DEVICE_CONFIGS`` so the embedder
+    choice lives next to the chat model/recipe/backend for each device. The NPU
+    profile uses the FLM-native embedder (see ``DeviceConfig.embedding_model``);
+    GPU/CPU and an unspecified device default to the GGUF nomic embedder, which
+    matches the GPU-default policy elsewhere in the CLI.
+    """
+    for dc in DEFAULT_DEVICE_CONFIGS:
+        if dc.device == device:
+            return dc.embedding_model
+    return DEFAULT_EMBEDDING_MODEL
 
 
 @dataclass
@@ -553,137 +575,13 @@ class AgentRegistry:
     def _register_builtin_agents(self) -> None:
         """Register built-in agents (ChatAgent, BuilderAgent, etc.)."""
 
-        # --- Model-size tiers (issue #1162) ---
-        # Each conversation/analysis agent exposes a "full" (its own default
-        # model) and a "lite" (~4B) tier. The Agent UI renders a SINGLE card
-        # per agent with a model-size selector instead of duplicate "… Lite"
-        # cards. The lite model list is platform-conditional:
-        #   macOS: Qwen3.5-4B-GGUF (tool-calling label, OpenAI format)
-        #   Linux/Windows: Gemma-4-E4B-it-GGUF (tool-calling label)
-        # Shared full+lite tier builder, promoted to module level so hub agent
-        # packages reuse the identical preset (#1102).
-        _model_tiers = build_model_tiers
-
-        def _make_chat_factory(profile, extra=None, tiers=None):
-            """ChatAgent factory that honours a ``model_tier`` kwarg (#1162)."""
-            _extra = dict(extra or {})
-            _tiers = list(tiers or [])
-
-            def factory(**kwargs):
-                tier = kwargs.pop("model_tier", None)
-                if tier:
-                    preset = _select_tier_model(_tiers, tier)
-                    if preset:
-                        kwargs.setdefault("model_id", preset)
-                from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
-
-                valid_fields = {f.name for f in dataclasses.fields(ChatAgentConfig)}
-                filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
-                filtered.setdefault("prompt_profile", profile)
-                for k, v in _extra.items():
-                    filtered.setdefault(k, v)
-                config = ChatAgentConfig(**filtered)
-                return ChatAgent(config=config)
-
-            return factory
-
-        # --- Chat Agent (conversation-only, lean prompt) ---
-        _chat_tiers = _model_tiers("Full")
-        self._register(
-            AgentRegistration(
-                id="chat",
-                name="Chat",
-                description="General conversation — fast, personality-first, no document tools",
-                source="builtin",
-                conversation_starters=[
-                    "What can you help me with?",
-                    "Tell me about yourself",
-                    "What's new today?",
-                ],
-                factory=_wrap_factory_with_namespaced_id(
-                    _make_chat_factory("chat", tiers=_chat_tiers), "builtin:chat"
-                ),
-                agent_dir=None,
-                models=[],
-                required_connections=[],
-                # Hardcoded to mirror ``ChatAgent.CONSUMES_MCP_SERVERS`` — the
-                # lazy factory must not import the chat module at discovery
-                # time. A guard test keeps the two in sync.
-                consumes_mcp_servers=True,
-                namespaced_agent_id="builtin:chat",
-                category="conversation",
-                tags=["chat", "general", "personality"],
-                icon="message-circle",
-                tools_count=0,
-                model_tiers=_chat_tiers,
-            )
-        )
-        logger.info(
-            "registry: Registered built-in agent: chat (ChatAgent, profile=chat)"
-        )
-
-        # --- Doc Agent (document Q&A with RAG) ---
-        _doc_tiers = _model_tiers("Full")
-        self._register(
-            AgentRegistration(
-                id="doc",
-                name="Doc Agent",
-                description="Document Q&A with RAG — ask questions about PDFs, reports, and manuals",
-                source="builtin",
-                conversation_starters=[
-                    "Search my documents for...",
-                    "Summarize this document",
-                    "What does the report say about...",
-                ],
-                factory=_wrap_factory_with_namespaced_id(
-                    _make_chat_factory("doc", tiers=_doc_tiers), "builtin:doc"
-                ),
-                agent_dir=None,
-                models=[],
-                required_connections=[],
-                namespaced_agent_id="builtin:doc",
-                category="documents",
-                tags=["rag", "files", "search", "mcp"],
-                icon="file-text",
-                tools_count=15,
-                model_tiers=_doc_tiers,
-            )
-        )
-        logger.info("registry: Registered built-in agent: doc (ChatAgent, profile=doc)")
-
-        # --- File Agent (file system operations) ---
-        _file_tiers = _model_tiers("Full")
-        self._register(
-            AgentRegistration(
-                id="file",
-                name="File Agent",
-                description="File system navigation, search, and analysis",
-                source="builtin",
-                conversation_starters=[
-                    "Find files related to...",
-                    "What's in my Documents folder?",
-                    "Show me the project structure",
-                ],
-                factory=_wrap_factory_with_namespaced_id(
-                    _make_chat_factory(
-                        "file", extra={"enable_filesystem": True}, tiers=_file_tiers
-                    ),
-                    "builtin:file",
-                ),
-                agent_dir=None,
-                models=[],
-                required_connections=[],
-                namespaced_agent_id="builtin:file",
-                category="productivity",
-                tags=["files", "search", "filesystem", "shell"],
-                icon="folder-search",
-                tools_count=10,
-                model_tiers=_file_tiers,
-            )
-        )
-        logger.info(
-            "registry: Registered built-in agent: file (ChatAgent, profile=file)"
-        )
+        # ChatAgent ships as the standalone ``gaia-agent-chat`` wheel (#1102)
+        # exposing three prompt-profile ids — ``chat``/``doc``/``file`` — each
+        # via its own ``gaia.agent`` entry point, discovered in
+        # ``_discover_installed_agents``. The full+lite model tiers live in the
+        # package's ``build_chat``/``build_doc``/``build_file`` using the
+        # module-level ``build_model_tiers`` helper. No built-in registration
+        # here.
 
         # AnalystAgent (id="data") and BrowserAgent (id="web") ship as the
         # standalone ``gaia-agent-analyst`` / ``gaia-agent-browser`` wheels

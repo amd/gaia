@@ -257,14 +257,21 @@ def _publish_r2(wheel: Path, manifest: Path, hub_url: Optional[str]) -> TargetRe
     files = {
         "manifest": ("gaia-agent.yaml", manifest_text, "text/yaml"),
     }
-    # Workers that predate the readme field ignore unknown multipart parts.
-    readme = manifest.parent / "README.md"
-    if readme.exists():
-        files["readme"] = (
-            "README.md",
-            readme.read_text(encoding="utf-8"),
-            "text/markdown",
-        )
+    # Workers that predate these fields ignore unknown multipart parts. README
+    # and CHANGELOG are read from beside the manifest and become the catalog
+    # entry's `readme` / `changelog` (rendered on the hub agent page).
+    for doc, field in (("README.md", "readme"), ("CHANGELOG.md", "changelog")):
+        path = manifest.parent / doc
+        if path.exists():
+            files[field] = (doc, path.read_text(encoding="utf-8"), "text/markdown")
+        else:
+            # Not fatal (the field defaults to "" in the catalog), but the hub
+            # page renders it — log so the omission isn't silent.
+            log.info(
+                "publisher: no %s next to the manifest; hub page %s will be empty",
+                doc,
+                field,
+            )
     log.debug("publisher: POST %s (%s)", url, wheel.name)
     try:
         with wheel.open("rb") as fh:

@@ -7,8 +7,33 @@ icon: "brain"
 GAIA Agent Memory is a persistent knowledge system that gives your agent a **second brain**. It remembers facts, preferences, errors, and workflows across sessions -- so every conversation picks up where the last one left off. All data stays local on your machine in a single SQLite file.
 
 <Info>
-  **First time here?** Complete the [Setup](/setup) guide first, then come back to enable memory.
+  **First time here?** Complete the [Quickstart (For Developers)](/quickstart#for-developers)
+  or [Manual Install](/quickstart#manual-install) guide first, then come back to enable memory.
 </Info>
+
+## Prerequisites
+
+Before using Agent Memory, make sure you have the following in place:
+
+- **Install path:** Developer install — clone the repo and install from source:
+
+  ```bash
+  git clone https://github.com/amd/gaia.git
+  cd gaia
+  uv venv .venv --python 3.12
+  source .venv/bin/activate        # Windows: .venv\Scripts\activate
+  uv pip install -e ".[dev,rag]"
+  ```
+
+- **Extras required:** `[dev,rag]` — `[rag]` provides the FAISS index used for memory recall; `[dev]` adds the developer toolchain
+
+- **Lemonade server** must be running before you start:
+
+  ```bash
+  lemonade-server serve
+  ```
+
+- **Example files** referenced in this guide are inside the cloned repo under `examples/`
 
 <Note>
   Memory is currently integrated into the Chat Agent. Any agent built on the GAIA Agent base class can add memory via the `MemoryMixin` -- see the [Memory SDK Reference](/sdk/sdks/memory) for developer details.
@@ -56,68 +81,24 @@ Until you enable memory, none of the behaviors on this page (cross-session recal
 
 ## Try It Right Now
 
-Five minutes after you enable memory (above). Here's what a second brain feels like:
+With memory enabled (above), here's what a second brain feels like. Teach it something in one session, then start a fresh one and watch it recall:
 
-<Steps>
-  <Step title="Start a conversation">
-    ```bash
-    gaia chat
-    ```
-  </Step>
+```
+# Session 1
+gaia chat
+You: "Remember that I'm working on the GAIA memory system, and that
+      standup is tomorrow at 10am -- Sarah is presenting the API migration."
+Agent: "Got it -- I've noted your project and linked Sarah to the standup."
 
-  <Step title="Teach it about you">
-    ```
-    You: "Remember that I'm working on the GAIA memory system
-          and I prefer detailed code examples"
-    Agent: "Got it! I've noted that you're working on the GAIA memory
-            system and that you prefer detailed code examples."
-    ```
-  </Step>
+# Session 2 (close the chat, start fresh)
+gaia chat
+You: "What's coming up?"
+Agent: "You have a standup at 10am -- Sarah is presenting the API migration."
+You: "What do you know about Sarah?"
+Agent: "Sarah is presenting the API migration results at tomorrow's standup."
+```
 
-  <Step title="Ask what it knows">
-    ```
-    You: "What do you know about me?"
-    Agent: "You're working on the GAIA memory system, and you prefer
-            detailed code examples."
-    ```
-  </Step>
-
-  <Step title="Add a time-sensitive item">
-    ```
-    You: "Remember: standup tomorrow at 10am, Sarah is presenting
-          the API migration results"
-    Agent: "Done -- I'll remind you about the standup tomorrow and
-            I've linked Sarah to this note."
-    ```
-  </Step>
-
-  <Step title="Start a new session">
-    Close the chat and start fresh:
-    ```bash
-    gaia chat
-    ```
-  </Step>
-
-  <Step title="Watch it remember">
-    ```
-    You: "What's coming up?"
-    Agent: "You have a standup at 10am -- Sarah is presenting
-            the API migration results."
-
-    You: "What do you know about Sarah?"
-    Agent: "Sarah is presenting the API migration results at
-            tomorrow's standup."
-    ```
-    The agent remembered across sessions -- no copy-paste, no notes app.
-  </Step>
-
-  <Step title="Open the dashboard">
-    ```bash
-    gaia chat --ui
-    ```
-    Click the **Brain** icon in the toolbar. You'll see every memory the agent has, filterable and editable.
-  </Step>
-</Steps>
+The agent remembered across sessions -- no copy-paste, no notes app. Run `gaia chat --ui` and click the **Brain** icon to see every memory, filterable and editable.
 
 ---
 
@@ -214,21 +195,13 @@ You: "What do you know about Sarah?"
 Agent: [recalls all entries linked to entity person:sarah_chen]
 ```
 
-Recall also supports **temporal filtering** with `time_from` and `time_to`. The agent converts natural language dates to concrete time ranges using the current date it always knows:
+Recall also supports **temporal filtering** with `time_from` and `time_to`. The agent converts natural language dates ("last week", "in March") to concrete time ranges using the current date it always knows:
 
 ```
 You: "What did we discuss about deployment last week?"
 Agent: "Last week you pushed the staging deploy and hit a kubectl
         permissions error. You resolved it by adding the service
         account role."
-
-You: "What errors have I seen this week?"
-Agent: "Two errors this week: a missing pytest conftest.py on Monday,
-        and a Docker build failure yesterday due to a stale cache."
-
-You: "What meetings did I have in March?"
-Agent: "Four standups in March: API migration (Sarah), two design
-        reviews, and the Q2 planning kickoff on the 28th."
 ```
 
 ### update_memory
@@ -257,97 +230,29 @@ Agent: [recalls the entry, deletes it]
 
 ### search_past_conversations
 
-Searches across all past conversation sessions by keyword, time range, or both.
+Searches across all past conversation sessions by keyword (`query`), time range (`days` or `time_from`/`time_to`), or both.
 
 ```
 You: "What did we discuss about database migration?"
 Agent: "Found 3 conversations mentioning database migration:
         two sessions last month about the Postgres schema, and
         one this week where you decided to add a new index."
-
-You: "What did we talk about in the last 7 days?"
-Agent: "This week's conversations covered: code review for the
-        auth module, debugging the CI pipeline, and planning
-        the Q2 dashboard."
-
-You: "What were we working on in March?"
-Agent: [searches conversation turns from March 1-31 and summarizes]
 ```
 
 ---
 
 ## Your Second Brain
 
-Memory turns GAIA into a personal knowledge system that grows smarter with every conversation. Here are real things you can try right now.
+Memory turns GAIA into a personal knowledge system that grows smarter with every conversation. Common uses:
 
-### Daily Journal
+- **Daily journal** -- log your work; recall it weeks later by date ("what did I work on the first week of April?").
+- **Meeting notes** -- paste standup notes; the agent extracts per-person facts and deadlines automatically.
+- **Research notes** -- save article summaries and find them later by concept, not just keywords.
+- **Personal reminders** -- set due dates (including recurring ones); the agent surfaces them proactively.
+- **Contact profiles** -- knowledge about people accumulates across conversations, linked to entities.
+- **Error learning** -- when a tool fails, the agent remembers the pattern and avoids it next time.
 
-Log your work at the end of the day. Recall it weeks later without digging through notes.
-
-```
-You: "Log today's work: finished the memory spec, reviewed analysis docs,
-      pushed the feature branch. Still blocked on the CI lint step."
-
-Agent: "Logged. I'll remember this when you ask about your work history."
-
-— Two weeks later —
-
-You: "What did I work on the first week of April?"
-Agent: "On April 1st, you finished the memory spec, reviewed analysis docs,
-        and pushed the feature branch. You were blocked on CI lint."
-
-You: "When did I push the memory branch?"
-Agent: "April 1st -- you pushed feature/agent-memory that day."
-```
-
-### Meeting Notes
-
-Capture standup notes, and the agent automatically extracts per-person facts and deadlines.
-
-```
-You: "In today's standup: Sarah said the API migration is done.
-      John is blocked waiting for design review.
-      Deadline for Q2 report moved to April 15."
-
-Agent: Stored 3 items:
-  - Note: standup summary (domain=meeting:standup)
-  - Reminder: Q2 report due April 15 (with due_at)
-  - Fact: John blocked on design review (linked to person:john)
-
-— Next week —
-
-You: "Is John still blocked?"
-Agent: "Last I heard (April 1st standup), John was blocked
-        waiting for design review."
-
-You: "What's the Q2 report deadline?"
-Agent: "April 15th -- the deadline was moved from the original date."
-```
-
-### Research & Reading Notes
-
-Save article summaries, then find them by concept -- not just keywords.
-
-```
-You: "Save this: the Hindsight paper shows that cross-encoder reranking
-      after RRF fusion gives 91.4% accuracy on LongMemEval. Key insight:
-      independent encoders miss fine-grained relevance signals."
-
-Agent: "Saved. I'll surface that when you ask about retrieval or search accuracy."
-
-— Later —
-
-You: "What do I know about improving retrieval accuracy?"
-Agent: "The Hindsight paper found that cross-encoder reranking after
-        RRF fusion reaches 91.4% on LongMemEval. The key insight is
-        that independent encoders miss fine-grained relevance signals."
-```
-
-The semantic search found the match even though you asked about "retrieval accuracy" and the memory says "cross-encoder reranking" -- because it searches by meaning.
-
-### Personal Reminders
-
-Set reminders with due dates. The agent surfaces them proactively -- even if you're talking about something else.
+A representative example -- proactive, time-aware reminders:
 
 ```
 You: "Remind me to submit the expense report by Friday"
@@ -360,52 +265,7 @@ Agent: "Sure, here's the refactored version. By the way,
         your expense report is due tomorrow -- don't forget to submit it."
 ```
 
-Recurring reminders work too -- the agent advances the date automatically each time it fires:
-
-```
-You: "Remind me to do a weekly review every Friday at 5pm"
-Agent: "Set. I'll remind you every Friday at 5pm and roll it
-        forward automatically after each reminder."
-```
-
-### Contact Profiles
-
-Build knowledge about people across conversations. The agent links everything to entities.
-
-```
-You: "Sarah Chen is the VP of Engineering, her email is sarah@company.com"
-Agent: "Got it -- I've saved Sarah's info. Her email is stored privately."
-
-— Another conversation —
-
-You: "Sarah prefers morning meetings and likes detailed agendas"
-Agent: "Added to Sarah's profile."
-
-— Later —
-
-You: "I need to set up a meeting with Sarah about the roadmap"
-Agent: "Sarah prefers morning meetings with detailed agendas.
-        Her email is sarah@company.com. Want me to draft an agenda?"
-```
-
-### Error Learning
-
-When a tool fails, the agent remembers the error pattern and avoids it next time -- automatically.
-
-```
-Session 1:
-Agent runs: import torch
-Error: ModuleNotFoundError: No module named 'torch'
-[agent silently stores this as an error pattern to avoid in future]
-
-Session 2:
-You: "Can you test this PyTorch model?"
-Agent: "I know from past experience that torch isn't installed
-        on this machine. Let me install it first with
-        pip install torch --index-url ..."
-```
-
-No manual intervention -- the agent learned from failure and adapted.
+Recurring reminders advance their date automatically each time they fire (e.g. *"remind me to do a weekly review every Friday at 5pm"*).
 
 ---
 
@@ -510,68 +370,23 @@ The agent always knows the current date and time. It can track commitments and d
 4. If the due date passes, the item appears as **overdue** until resolved
 
 ```
-Day 1:
-You: "I have a course starting next Tuesday"
-Agent: "Noted -- I'll remind you as it gets closer."
-
-Day 5 (3 days before):
-You: "What's the weather like?"
-Agent: "It's sunny. By the way, your online course starts in 3 days."
-
-Day 8 (the day):
-You: "Good morning"
-Agent: "Good morning! Your course starts today. How's it going?"
+Day 1:  You: "I have a course starting next Tuesday"
+        Agent: "Noted -- I'll remind you as it gets closer."
+Day 5:  You: "What's the weather like?"
+        Agent: "It's sunny. By the way, your online course starts in 3 days."
+Day 8:  You: "Good morning"
+        Agent: "Good morning! Your course starts today. How's it going?"
 ```
 
-### Accountability
-
-The agent can hold you accountable to your own commitments:
-
-```
-You: "I committed to exercising 3 times this week"
-Agent: "Holding you to it! I'll check in at the end of the week."
-
-Friday evening:
-You: "Let's plan the weekend"
-Agent: "Before we plan -- it's the end of the week. How did
-        the exercise commitment go? Did you hit 3 times?"
-```
+The same mechanism powers **accountability** -- commit to something ("I'll exercise 3 times this week") and the agent checks in proactively when the deadline nears.
 
 ---
 
 ## Intelligent Extraction
 
-After each conversation turn (with memory enabled), the agent automatically decides what's worth remembering -- without you saying "remember." This isn't pattern matching; the LLM sees your existing memory alongside the new conversation and makes intelligent decisions:
+After each conversation turn (with memory enabled), the agent automatically decides what's worth remembering -- without you saying "remember." This isn't pattern matching; the LLM sees your existing memory alongside the new conversation and decides whether to **ADD** new knowledge, **UPDATE** a changed fact (old version preserved with lineage), or **DELETE** something you've contradicted.
 
-- **ADD** -- new knowledge not already in memory
-- **UPDATE** -- a fact has changed (old version preserved with lineage)
-- **DELETE** -- information explicitly contradicted
-
-### How it works
-
-You say "we switched from React to Vue." The agent:
-
-1. Searches existing memory, finds `"Project uses React 19"` (stored last month)
-2. Recognizes this is a correction, not a new fact
-3. Creates a new entry: `"Project uses Vue 3 (switched from React)"`
-4. Marks the old React entry as `superseded_by` the new one -- preserving history
-
-No duplicate. No contradiction. The old fact is still visible in the dashboard's superseded view if you ever want to see how things evolved.
-
-### What gets extracted
-
-The agent extracts information that would be **useful in future conversations** -- facts, preferences, project details, people, deadlines. It skips greetings, task confirmations, and ephemeral details.
-
-```
-You: "I've been using the new AMD Ryzen 9 9950X for the project,
-      and it's much faster for local LLM inference. The team
-      decided to standardize on Python 3.12 going forward."
-
-Agent silently extracts:
-  - fact: "User has AMD Ryzen 9 9950X" (new)
-  - fact: "Team standardized on Python 3.12" (update if version changed)
-  - No action on "much faster" (subjective, ephemeral)
-```
+It extracts information useful in future conversations -- facts, preferences, project details, people, deadlines -- and skips greetings, confirmations, and ephemeral details. For example, "we standardized on Python 3.12 and I'm using a Ryzen 9 9950X" stores two facts but ignores subjective asides like "it's much faster."
 
 <Tip>
   Intelligent extraction kicks in for messages of 20+ words. Short messages like "yes" or "thanks" are skipped. The LLM's explicit memory tools (`remember`, `update_memory`, `forget`) still handle anything the auto-extraction misses.
@@ -621,61 +436,38 @@ The dashboard also provides maintenance tools for keeping your memory healthy:
 
 ## How Memory Improves Over Time
 
-### Confidence scoring
+These mechanisms run automatically -- you don't need to manage them.
 
-Every memory entry has a confidence score from 0.0 to 1.0:
+- **Confidence scoring** -- every entry has a 0.0--1.0 confidence. Newly created entries start lower for auto-captured items (LLM-extracted and discovery at **0.4**; tool-stored, error, and consolidation at **0.5**) and higher for user-created dashboard entries (**0.8**). Each recall adds +0.02, so frequently-used memories rank higher in the system prompt.
+- **Confidence decay** -- entries not accessed for 30+ days are multiplied by 0.9 once per session start, so stale knowledge fades in favor of what you actively use.
+- **Fact lineage** -- when a fact changes, the old version is kept with a `superseded_by` link and its original timestamp, so you can answer "what framework were we using in March?" The dashboard's superseded view shows the full chain.
+- **Automatic error learning** -- a failed tool call is stored as an error pattern; the next session's system prompt includes a "Known errors to avoid" list so the agent doesn't repeat it.
+- **Session consolidation** -- conversations older than 14 days are distilled into durable notes (extracted facts live indefinitely; raw conversations are pruned at 90 days), so old context is never lost.
+- **Background reconciliation** -- on startup the agent resolves contradictory facts across sessions, superseding the older item and boosting the newer (and reinforcing) one's confidence.
 
-| Source | Confidence | How created |
-|--------|-----------|-------------|
-| LLM-extracted | **0.4** | Automatically captured from conversation |
-| Discovery | **0.4** | Found during bootstrap system scan |
-| Tool-stored | **0.5** | Agent explicitly called `remember()` |
-| Error auto | **0.5** | Automatically stored from tool failure |
-| Consolidation | **0.5** | Distilled from old conversation sessions |
-| User-created | **0.8** | Manually added via the dashboard |
+### Procedural memory (skills)
 
-Each time a memory is recalled, its confidence increases by +0.02. Frequently-used memories become more prominent in the system prompt.
+Beyond remembering *facts*, the agent learns *procedures* -- the multi-step tool recipes it has already run successfully. When the same kind of goal succeeds several times with the same shape of work, GAIA distils that successful tool sequence into a reusable skill and stores it as a procedure. The next time a similar goal comes up, the agent recalls the proven recipe and reuses it instead of re-planning from scratch.
 
-### Confidence decay
+This is automatic: there is no command to run and no skill to install. Synthesis runs during the startup maintenance pass, and a matching skill is injected silently into the agent's planning context.
 
-Memories that are not accessed for 30+ days have their confidence multiplied by 0.9. This happens once per session start. Over time, stale knowledge naturally fades from the system prompt in favor of actively-used information.
+A procedure is only synthesized when **all** of these hold:
 
-### Fact lineage
+- the same goal succeeded at least **3 times** (clustered by goal similarity ≥ 0.82),
+- the success rate across those attempts is at least **80%**, and
+- each successful run was a real multi-step sequence of at least **3 tool calls**.
 
-When facts change, the old version is preserved with a `superseded_by` link. You can see the full history of how a fact evolved in the dashboard's superseded view.
+These thresholds live in `~/.gaia/memory_settings.json` under a `skill_synthesis` section, so you can tighten or relax them per machine.
 
-```
-March: "Project uses React 18"
-  -> superseded by: "Project uses React 19" (April)
-    -> superseded by: "Project uses Vue 3" (May)
-```
+Synthesized skills follow the same lineage rules as facts: a better recipe **supersedes** an older one rather than overwriting it, and nothing is deleted automatically.
 
-Each version keeps its original timestamp, so you can answer "what framework were we using in March?"
+**Off switches:**
 
-### Automatic error learning
+- `GAIA_MEMORY_DISABLED=1` turns off both synthesis and recall.
+- `"skill_synthesis": { "enabled": false }` in `memory_settings.json` skips synthesis while leaving the rest of memory active.
+- A procedure you disable (`enabled = 0`) or that has been superseded is never recalled.
 
-When a tool call fails, the agent automatically stores the error pattern as knowledge. Next time, the system prompt includes "Known errors to avoid" so the agent can handle or avoid the same failure.
-
-```
-Agent runs: import torch
-Error: ModuleNotFoundError: No module named 'torch'
-
-Next session system prompt:
-Known errors to avoid:
-  - execute_code: import torch fails -- torch not installed on this machine
-```
-
-### Session consolidation
-
-Conversations older than 14 days are automatically distilled into durable knowledge items. The LLM summarizes each old session and extracts facts worth preserving, then stores them as notes. The original conversations remain until the 90-day prune, but the extracted knowledge lives indefinitely.
-
-This means you never lose important context -- even from conversations months ago.
-
-### Background reconciliation
-
-On startup, the agent scans for contradictory facts across sessions and resolves them automatically. If it finds two items that say conflicting things (e.g., "uses PostgreSQL" and "migrated to DynamoDB"), it supersedes the older one and boosts the newer one's confidence. Reinforcing facts get a confidence boost too.
-
-You don't need to do anything -- the agent keeps its own knowledge consistent.
+Run `gaia memory status` to see how many procedures have been synthesized.
 
 ---
 
@@ -725,7 +517,7 @@ rm ~/.gaia/memory.db
 | `gaia memory bootstrap --reset` | Delete discovery items (with confirmation) |
 | `gaia memory bootstrap --system` | Re-scan and refresh system context (OS, hardware, apps, versions) |
 | `gaia memory bootstrap --reset-system` | Clear system context entries and optionally disable auto-collection |
-| `gaia memory status` | Show memory stats (counts, categories, contexts) |
+| `gaia memory status` | Show memory stats (counts, categories, contexts, synthesized procedures) |
 
 ### System context (versions, hardware, apps)
 

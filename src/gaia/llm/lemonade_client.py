@@ -11,7 +11,6 @@ OpenAI-compatible API and additional functionality.
 import json
 import logging
 import os
-import re
 import shutil
 import signal
 import socket
@@ -32,6 +31,11 @@ from dotenv import load_dotenv
 # Import OpenAI client for internal use
 from openai import OpenAI
 
+from gaia.llm.lemonade_launcher import (
+    build_start_command,
+    get_installed_version,
+    resolve_lemonade,
+)
 from gaia.logger import get_logger
 
 # Load environment variables from .env file
@@ -118,6 +122,33 @@ def lemonade_auth_headers(api_key: Optional[str]) -> Dict[str, str]:
 # in minimal setups. The UI default lives in ui/routers/system.py.
 DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 
+# Default embedding model. EmbeddingGemma 300M (768-dim) replaces
+# nomic-embed-text-v2-moe, which the current llama.cpp server cannot load.
+# Not a Lemonade built-in — registered as a ``user.`` custom model on first
+# pull via checkpoint + recipe + the ``embedding`` label (see MODELS entry).
+DEFAULT_EMBEDDING_MODEL = "user.embeddinggemma-300m-GGUF"
+DEFAULT_EMBEDDING_CHECKPOINT = "ggml-org/embeddinggemma-300M-GGUF:Q8_0"
+
+
+def _model_ids_match(a: Optional[str], b: Optional[str]) -> bool:
+    """Compare two Lemonade model names, tolerating the ``user.`` namespace.
+
+    A model registered as ``user.embeddinggemma-300m-GGUF`` is listed by
+    ``/v1/models`` under the *stripped* id ``embeddinggemma-300m-GGUF`` — but
+    ``/load`` and ``/embeddings`` accept either form. Comparing the raw strings
+    would make availability checks miss the registered model and re-pull forever.
+    Strip a leading ``user.`` from both sides and compare case-insensitively.
+    """
+
+    def norm(n: Optional[str]) -> str:
+        n = (n or "").strip()
+        if n.lower().startswith("user."):
+            n = n[len("user.") :]
+        return n.lower()
+
+    return norm(a) == norm(b)
+
+
 # Minimum context window (in tokens) that GAIA agents assume is loaded. The
 # bundled ChatAgent system prompt alone runs >7000 tokens before any user
 # message; running below this silently truncates prompts and yields empty
@@ -140,6 +171,17 @@ DEFAULT_REQUEST_TIMEOUT = 900
 # Default timeout in seconds for model loading operations
 # Increased for large model downloads and loading (10x increase for streaming stability)
 DEFAULT_MODEL_LOAD_TIMEOUT = 12000
+
+# Resilience to the transient AMD-Vulkan "llama-server failed to start" fault:
+# the same load succeeds on a retry once the GPU/driver state settles. The fault
+# is "windowed" (a bad period of consecutive failures that then clears), so the
+# retry uses an ESCALATING backoff to give a short window time to pass. Bounded
+# and explicit (callers can override via load_model(load_retries=)). With 3
+# retries the backoff is 8s, 16s, 24s (~48s total) before failing loudly -- a
+# one-time model load can afford that; a longer active window needs an upstream
+# fix, not unbounded waiting.
+DEFAULT_MODEL_LOAD_RETRIES = 3
+MODEL_LOAD_RETRY_BACKOFF = 8  # base seconds; escalates as backoff * attempt
 
 
 # =========================================================================
@@ -169,6 +211,15 @@ class ModelRequirement:
     tool_calling: bool = (
         True  # True for GGUF models via Lemonade --jinja (Tier 0 empirical)
     )
+    # For custom (``user.``-namespaced) models that must be registered on first
+    # pull: the HuggingFace checkpoint and recipe. Built-in models leave these
+    # None and are pulled by name only (passing recipe 400s on built-ins, #1655).
+    checkpoint: Optional[str] = None
+    recipe: Optional[str] = None
+    # Marks an embedding model — sets the ``embedding`` flag on /v1/pull so
+    # Lemonade applies the ``embeddings`` label explicitly (avoids the #1745
+    # auto-label-from-name bug).
+    embedding: bool = False
 
 
 @dataclass
@@ -218,9 +269,12 @@ MODELS = {
     # Issue #1282. This is the NPU-native FastFlowLM build (checkpoint
     # ``gemma4-it:e2b``), NOT the llama.cpp GGUF variant — only the FLM build
     # runs on the Strix Halo NPU. Validated on hardware: device=npu,
-    # recipe=flm, served at :13305, ctx_size=4096 (the NPU window). The triage
-    # classifier clips email bodies to 4000 chars, so a single email + the
-    # triage system prompt fit. The E2B *FLM* accuracy baseline is a follow-up:
+    # recipe=flm, served at :13305. ctx_size defaults to 32768 to match
+    # GPU/CPU (issue #1745) — the prior 4096 pin caused a config/runtime
+    # mismatch where ``gaia init --profile npu`` reported 4096 but the load
+    # path requested 32768. The triage classifier clips email bodies to 4000
+    # chars, so a single email + the triage system prompt fit either window.
+    # The E2B *FLM* accuracy baseline is a follow-up:
     # baseline_accuracy_e2b.json was recorded on the GGUF build, a different
     # variant.
     # tool_calling=False: unlike the GGUF builds (native tool calls via
@@ -233,7 +287,7 @@ MODELS = {
         model_type=ModelType.LLM,
         model_id="gemma4-it-e2b-FLM",
         display_name="Gemma 4 E2B (NPU/FLM)",
-        min_ctx_size=4096,
+        min_ctx_size=32768,
         tool_calling=False,
     ),
     # --- Legacy Qwen models: kept so existing pinned sessions/configs don't break ---
@@ -273,10 +327,31 @@ MODELS = {
         tool_calling=True,
     ),
     # Embedding Models
-    "nomic-embed": ModelRequirement(
+    # EmbeddingGemma 300M (768-dim). Custom user-model: registered on first pull
+    # from the HF checkpoint with the ``embedding`` label. Replaced nomic-embed,
+    # which the current llama.cpp server cannot load.
+    "embeddinggemma": ModelRequirement(
         model_type=ModelType.EMBEDDING,
-        model_id="nomic-embed-text-v2-moe-GGUF",
-        display_name="Nomic Embed Text v2",
+        model_id=DEFAULT_EMBEDDING_MODEL,
+        display_name="EmbeddingGemma 300M",
+        min_ctx_size=2048,
+        tool_calling=False,
+        checkpoint=DEFAULT_EMBEDDING_CHECKPOINT,
+        recipe="llamacpp",
+        embedding=True,
+    ),
+    # --- NPU-native FLM embedder for the NPU profile (#1744) ---
+    # EmbeddingGemma 300M built for the FastFlowLM/NPU backend. On a shared-
+    # memory Ryzen AI APU the GGUF nomic embedder runs on Vulkan/llama.cpp and
+    # reclaims the memory the FLM chat model holds, so loading it evicts the
+    # chat model — every chat turn then thrashes NPU<->Vulkan (#1676). Keeping
+    # the embedder on the same FLM/NPU backend as the chat model lets both stay
+    # co-resident. Built-in Lemonade *-FLM model: pull by name only (no recipe;
+    # passing recipe triggers user-model registration and 400s — #1655).
+    "embed-gemma-flm": ModelRequirement(
+        model_type=ModelType.EMBEDDING,
+        model_id="embed-gemma-300m-FLM",
+        display_name="EmbeddingGemma 300M (NPU/FLM)",
         min_ctx_size=2048,
         tool_calling=False,
     ),
@@ -287,7 +362,7 @@ AGENT_PROFILES = {
     "chat": AgentProfile(
         name="chat",
         display_name="Chat Agent",
-        models=["gemma-4-e4b", "nomic-embed"],
+        models=["gemma-4-e4b", "embeddinggemma"],
         # 64K so doc-Q&A (RAG retrieval + history) doesn't crush the
         # window. See ``gemma-4-e4b`` ModelRequirement note.
         min_ctx_size=65536,
@@ -317,7 +392,7 @@ AGENT_PROFILES = {
     "rag": AgentProfile(
         name="rag",
         display_name="RAG System",
-        models=["gemma-4-e4b", "nomic-embed"],
+        models=["gemma-4-e4b", "embeddinggemma"],
         # 64K — doc Q&A is the headline use case here; smaller windows
         # break summarize_document and large multi-chunk retrievals.
         min_ctx_size=65536,
@@ -361,7 +436,7 @@ AGENT_PROFILES = {
     "mcp": AgentProfile(
         name="mcp",
         display_name="MCP Bridge",
-        models=["gemma-4-e4b", "nomic-embed"],
+        models=["gemma-4-e4b", "embeddinggemma"],
         min_ctx_size=32768,
         description="Model Context Protocol bridge server with vision",
     ),
@@ -850,31 +925,66 @@ class LemonadeClient:
         """
         self.log.info("Starting Lemonade server...")
 
+        # Skip the port takeover when a healthy server is already listening —
+        # never kill a server the user didn't ask to restart.
+        try:
+            health = self.health_check()
+        except Exception as e:
+            self.log.debug(f"No healthy server detected before launch: {e}")
+            health = None
+        if isinstance(health, dict) and health.get("status") == "ok":
+            self.log.info(
+                f"Lemonade server already healthy on port {self.port} — "
+                "skipping launch"
+            )
+            return
+
         # Ensure we kill anything using the port
         kill_process_on_port(self.port)
 
-        # Build the base command
-        base_cmd = ["lemonade-server", "serve"]
-        if log_level != "info":
-            base_cmd.extend(["--log-level", log_level])
+        tooling = resolve_lemonade()
+        if not tooling.found:
+            raise LemonadeClientError(
+                "Lemonade Server not found (no modern install at its canonical "
+                "path, no lemonade-server in PATH). Run `gaia init` to install "
+                "it, or set LEMONADE_SERVER_PATH to the server executable."
+            )
+
+        spec = build_start_command(tooling, ctx_size)
         if ctx_size is not None:
-            base_cmd.extend(["--ctx-size", str(ctx_size)])
             self.log.info(f"Context size set to: {ctx_size}")
+        if log_level != "info":
+            if tooling.kind == "legacy":
+                spec.argv.extend(["--log-level", log_level])
+            else:
+                self.log.debug(
+                    f"log_level={log_level!r} is not supported by the modern "
+                    "Lemonade launcher; ignoring"
+                )
+
+        # Merge — never replace — the parent environment; the child loses
+        # PATH/LOCALAPPDATA otherwise and LemonadeServer.exe breaks.
+        popen_env = {**os.environ, **spec.env}
 
         if background == "terminal":
-            # Launch in a new terminal window
-            cmd = f'start cmd /k "{" ".join(base_cmd)}"'
-            self.server_process = subprocess.Popen(cmd, shell=True)
+            # New console window on Windows; argv-only — a resolved path must
+            # never pass through a shell=True string.
+            self.server_process = subprocess.Popen(
+                spec.argv,
+                creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
+                env=popen_env,
+            )
         elif background == "silent":
             # Run in background with subprocess
             self._log_file = open("lemonade.log", "w", encoding="utf-8")
             try:
                 self.server_process = subprocess.Popen(
-                    base_cmd,
+                    spec.argv,
                     stdout=self._log_file,
                     stderr=self._log_file,
                     text=True,
                     bufsize=1,
+                    env=popen_env,
                 )
             except Exception:
                 self._log_file.close()
@@ -883,11 +993,12 @@ class LemonadeClient:
         else:  # "none" or any other value
             # Run in foreground with real-time output
             self.server_process = subprocess.Popen(
-                base_cmd,
+                spec.argv,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,
+                env=popen_env,
             )
 
             # Print stdout and stderr in real-time only for foreground mode
@@ -1268,6 +1379,17 @@ class LemonadeClient:
         "corrupted download",
     )
 
+    # Phrases that signal a TRANSIENT backend-startup failure — the same load
+    # typically succeeds on a retry once the GPU/driver state settles. The
+    # canonical case is the AMD Vulkan iGPU intermittently aborting
+    # ``llama-server`` startup for some models (upstream llama.cpp #16301 /
+    # lemonade #612, not a GAIA defect). Deliberately narrow: a corrupt or
+    # missing-model failure is NOT transient and must not be retried here.
+    _TRANSIENT_LOAD_PHRASES = (
+        "llama-server failed to start",
+        "llama_server failed to start",
+    )
+
     def _is_corrupt_download_error(self, error: Union[str, Dict, Exception]) -> bool:
         """
         Check if an error indicates a corrupt or incomplete model download.
@@ -1287,6 +1409,67 @@ class LemonadeClient:
         error_message = (error_info.get("message") or "").lower()
 
         return any(phrase in error_message for phrase in self._CORRUPT_DOWNLOAD_PHRASES)
+
+    def _is_transient_load_error(self, error: Union[str, Dict, Exception]) -> bool:
+        """Check whether a load failure is a transient backend-startup fault.
+
+        See :attr:`_TRANSIENT_LOAD_PHRASES`. A corrupt-download failure is
+        explicitly excluded so the destructive repair path always wins over a
+        plain retry.
+        """
+        if self._is_corrupt_download_error(error):
+            return False
+        error_info = self._extract_error_info(error)
+        error_message = (error_info.get("message") or "").lower()
+        return any(phrase in error_message for phrase in self._TRANSIENT_LOAD_PHRASES)
+
+    def _post_load_with_transient_retry(
+        self,
+        url: str,
+        request_data: Dict[str, Any],
+        timeout: int,
+        model_name: str,
+        load_retries: int,
+    ) -> Dict[str, Any]:
+        """POST /load, retrying the transient backend-startup fault.
+
+        Retries only :meth:`_is_transient_load_error` failures (e.g. the AMD
+        Vulkan iGPU intermittently aborting llama-server), with an escalating
+        backoff, then re-raises the last error so the caller's existing
+        handling (corrupt repair, auto-download, fail-loud re-raise) takes
+        over. Non-transient failures raise immediately.
+        """
+        try:
+            return self._send_request("post", url, request_data, timeout=timeout)
+        except Exception as e:
+            if not (load_retries > 0 and self._is_transient_load_error(e)):
+                raise
+            last_error = e
+            for retry_num in range(1, load_retries + 1):
+                backoff = MODEL_LOAD_RETRY_BACKOFF * retry_num
+                self.log.warning(
+                    f"{_emoji('⚠️', '[RETRY]')} Transient load failure for "
+                    f"'{model_name}' (retry {retry_num}/{load_retries}): "
+                    f"{last_error}. Backing off "
+                    f"{backoff}s for the backend to recover..."
+                )
+                time.sleep(backoff)
+                try:
+                    response = self._send_request(
+                        "post", url, request_data, timeout=timeout
+                    )
+                    self.log.info(
+                        f"{_emoji('✅', '[OK]')} Loaded {model_name} after "
+                        f"{retry_num} retr{'y' if retry_num == 1 else 'ies'}"
+                    )
+                    return response
+                except Exception as retry_err:  # noqa: BLE001
+                    last_error = retry_err
+                    if not self._is_transient_load_error(retry_err):
+                        break
+            # Retries exhausted (or the error changed nature): surface the
+            # latest error to the caller's handling. Fail-loudly is preserved.
+            raise last_error
 
     def _execute_with_auto_download(
         self, api_call: Callable, model: str, auto_download: bool = True
@@ -1846,7 +2029,7 @@ class LemonadeClient:
 
         Args:
             input_texts: Single string or list of strings to embed
-            model: Embedding model to use (defaults to self.model or nomic-embed-text-v2)
+            model: Embedding model to use (defaults to self.model or DEFAULT_EMBEDDING_MODEL)
             timeout: Request timeout in seconds
 
         Returns:
@@ -1858,7 +2041,7 @@ class LemonadeClient:
                 input_texts = [input_texts]
 
             # Use specified model or default
-            embedding_model = model or self.model or "nomic-embed-text-v2"
+            embedding_model = model or self.model or DEFAULT_EMBEDDING_MODEL
 
             payload = {"model": embedding_model, "input": input_texts}
 
@@ -2074,6 +2257,7 @@ class LemonadeClient:
         recipe: Optional[str] = None,
         reasoning: Optional[bool] = None,
         mmproj: Optional[str] = None,
+        embedding: Optional[bool] = None,
         timeout: int = DEFAULT_MODEL_LOAD_TIMEOUT,
     ) -> Dict[str, Any]:
         """
@@ -2085,6 +2269,8 @@ class LemonadeClient:
             recipe: Lemonade API recipe to load the model with (for registering new models)
             reasoning: Whether the model is a reasoning model (for registering new models)
             mmproj: Multimodal Projector file for vision models (for registering new models)
+            embedding: Whether the model is an embedding model — sets the
+                'embeddings' label on registration (for registering new models)
             timeout: Request timeout in seconds (longer for model installation)
 
         Returns:
@@ -2105,6 +2291,8 @@ class LemonadeClient:
             request_data["reasoning"] = reasoning
         if mmproj:
             request_data["mmproj"] = mmproj
+        if embedding is not None:
+            request_data["embedding"] = embedding
 
         url = f"{self.base_url}/pull"
         try:
@@ -2375,6 +2563,9 @@ class LemonadeClient:
         model_name: str,
         show_progress: bool = True,
         timeout: int = 7200,
+        checkpoint: Optional[str] = None,
+        recipe: Optional[str] = None,
+        embedding: Optional[bool] = None,
     ) -> bool:
         """
         Ensure a model is downloaded, downloading if necessary.
@@ -2388,6 +2579,11 @@ class LemonadeClient:
             model_name: Model name to ensure is downloaded
             show_progress: Show progress messages during download
             timeout: Download timeout in seconds (default: 7200 = 2 hours)
+            checkpoint: HuggingFace checkpoint — required to register a custom
+                (``user.``-namespaced) model on first pull. Built-ins omit it.
+            recipe: Lemonade recipe for a custom-model registration (e.g. ``llamacpp``).
+            embedding: Set True for a custom embedding model so the ``embeddings``
+                label is applied on registration.
 
         Returns:
             True if model is available (was already downloaded or successfully downloaded),
@@ -2402,7 +2598,7 @@ class LemonadeClient:
             # Check if model is already downloaded
             models_response = self.list_models()
             for model in models_response.get("data", []):
-                if model.get("id") == model_name:
+                if _model_ids_match(model.get("id"), model_name):
                     if model.get("downloaded", False):
                         if show_progress:
                             self.log.info(
@@ -2419,8 +2615,15 @@ class LemonadeClient:
                     "   This may take minutes to hours depending on model size..."
                 )
 
-            # Download via pull_model
-            self.pull_model(model_name, timeout=timeout)
+            # Download via pull_model. checkpoint/recipe/embedding register a
+            # custom ``user.`` model on first pull; built-ins pull by name only.
+            self.pull_model(
+                model_name,
+                checkpoint=checkpoint,
+                recipe=recipe,
+                embedding=embedding,
+                timeout=timeout,
+            )
 
             # Use the centralized download waiter
             return self._wait_for_model_download(
@@ -2588,7 +2791,7 @@ class LemonadeClient:
                 # Check if model is now downloaded
                 models_response = self.list_models()
                 for model in models_response.get("data", []):
-                    if model.get("id") == model_name:
+                    if _model_ids_match(model.get("id"), model_name):
                         if model.get("downloaded", False):
                             if show_progress:
                                 minutes = elapsed // 60
@@ -2662,7 +2865,9 @@ class LemonadeClient:
             # with ``id`` + ``recipe_options`` so we can read ctx_size.
             loaded_entry: Optional[dict] = None
             for _m in status.loaded_models:
-                if _m.get("id") == model or _m.get("model_name") == model:
+                if _model_ids_match(_m.get("id"), model) or _model_ids_match(
+                    _m.get("model_name"), model
+                ):
                     loaded_entry = _m
                     break
 
@@ -2694,7 +2899,7 @@ class LemonadeClient:
             try:
                 models_data = self.list_models()
                 for _m in models_data.get("data", []):
-                    if _m.get("id") == model:
+                    if _model_ids_match(_m.get("id"), model):
                         is_downloaded = bool(_m.get("downloaded", False))
                         break
             except Exception as _e:  # pylint: disable=broad-except
@@ -2805,6 +3010,7 @@ class LemonadeClient:
         ctx_size: Optional[int] = None,
         save_options: bool = False,
         prompt: bool = True,
+        load_retries: int = DEFAULT_MODEL_LOAD_RETRIES,
     ) -> Dict[str, Any]:
         """
         Load a model on the server.
@@ -2829,6 +3035,15 @@ class LemonadeClient:
                          Model will use these settings on future loads.
             prompt: If True, prompt user before downloading (default: True).
                    Set to False to download automatically without user confirmation.
+            load_retries: Number of times to retry on a TRANSIENT backend-startup
+                         failure (``llama-server failed to start``) before giving
+                         up. The same load typically succeeds once the GPU/driver
+                         state settles, with an escalating backoff (8s, 16s,
+                         24s...). Default 3; pass 0 to disable. Only the
+                         transient fault is retried — corrupt/missing-model errors
+                         fail through to their normal handling immediately.
+                         Applies to every load attempt in this call, including
+                         the reload after an auto-download or corrupt repair.
 
         Returns:
             Dict containing the status of the load operation
@@ -2850,7 +3065,9 @@ class LemonadeClient:
         url = f"{self.base_url}/load"
 
         try:
-            response = self._send_request("post", url, request_data, timeout=timeout)
+            response = self._post_load_with_transient_retry(
+                url, request_data, timeout, model_name, load_retries
+            )
             self.log.debug(f"Loaded {model_name} successfully: response={response}")
             self.model = model_name
             return response
@@ -2888,8 +3105,8 @@ class LemonadeClient:
                     # First attempt: resume download
                     if self._consume_pull_stream(model_name, "resume"):
                         # Retry loading
-                        response = self._send_request(
-                            "post", url, request_data, timeout=timeout
+                        response = self._post_load_with_transient_retry(
+                            url, request_data, timeout, model_name, load_retries
                         )
                         self.log.info(
                             f"{_emoji('✅', '[OK]')} Loaded {model_name} after resume"
@@ -2923,8 +3140,8 @@ class LemonadeClient:
                         )
                         if self._consume_pull_stream(model_name, "fresh download"):
                             # Retry loading
-                            response = self._send_request(
-                                "post", url, request_data, timeout=timeout
+                            response = self._post_load_with_transient_retry(
+                                url, request_data, timeout, model_name, load_retries
                             )
                             self.log.info(
                                 f"{_emoji('✅', '[OK]')} Loaded {model_name} after fresh download"
@@ -3041,8 +3258,8 @@ class LemonadeClient:
                     self.log.info(
                         f"{_emoji('🔄', '[RETRY]')} Retrying model load: {model_name}"
                     )
-                    response = self._send_request(
-                        "post", url, request_data, timeout=timeout
+                    response = self._post_load_with_transient_retry(
+                        url, request_data, timeout, model_name, load_retries
                     )
                     self.log.info(
                         f"{_emoji('✅', '[OK]')} Loaded {model_name} successfully after download"
@@ -3275,7 +3492,7 @@ class LemonadeClient:
                 error_msg = (
                     f"Insufficient context size: server has {reported_ctx} tokens, "
                     f"but {required_tokens} tokens are required. "
-                    f"Restart with: lemonade-server serve --ctx-size {required_tokens}"
+                    f"Restart with: {self._start_command_hint(required_tokens)}"
                 )
                 if not quiet:
                     print(f"❌ {error_msg}")
@@ -3425,7 +3642,7 @@ class LemonadeClient:
             # Use list_models with show_all=True to get download status
             models = self.list_models(show_all=True)
             for model in models.get("data", []):
-                if model.get("id", "").lower() == model_id.lower():
+                if _model_ids_match(model.get("id"), model_id):
                     return model.get("downloaded", False)
         except Exception:
             pass
@@ -3520,7 +3737,7 @@ class LemonadeClient:
         try:
             models_response = self.list_models()
             for model in models_response.get("data", []):
-                if model.get("id", "").lower() == model_id.lower():
+                if _model_ids_match(model.get("id"), model_id):
                     return True
                 # Also check for partial match
                 if model_id.lower() in model.get("id", "").lower():
@@ -3553,40 +3770,34 @@ class LemonadeClient:
         is_localhost = self.host in ("localhost", "127.0.0.1", "::1")
 
         if is_localhost:
-            # Local server not running - check if binary is installed for auto-start
-            return shutil.which("lemonade-server") is not None
+            # Local server not running - check if tooling is installed for
+            # auto-start (modern LemonadeServer.exe/lemond or legacy CLI)
+            return resolve_lemonade().found
         else:
             # Remote server not responding and we can't auto-start it
             return False
 
     def get_lemonade_version(self) -> Optional[str]:
         """
-        Get the installed lemonade-server version.
+        Get the installed Lemonade version (modern or legacy tooling).
 
         Returns:
-            Version string (e.g., "8.2.2") or None if unable to determine
+            Version string (e.g., "10.7.0") or None if unable to determine
         """
-        try:
-            result = subprocess.run(
-                ["lemonade-server", "--version"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,  # We handle errors by checking the output
-            )
+        return get_installed_version(resolve_lemonade())
 
-            # Combine stdout and stderr to get complete output
-            full_output = result.stdout + result.stderr
+    def _start_command_hint(self, ctx_size: Optional[int]) -> str:
+        """Render the exact start command for the installed tooling.
 
-            # Extract version number using regex (e.g., "8.2.2")
-            version_match = re.search(r"(\d+\.\d+(?:\.\d+)?)", full_output)
-            if version_match:
-                return version_match.group(1)
-
-            return None
-
-        except Exception:
-            return None
+        Used in user-facing guidance so modern installs aren't told to run
+        the removed ``lemonade-server`` CLI.
+        """
+        tooling = resolve_lemonade()
+        if tooling.found:
+            spec = build_start_command(tooling, ctx_size)
+            env_prefix = " ".join(f"{k}={v}" for k, v in spec.env.items())
+            return f"{env_prefix} {' '.join(spec.argv)}".strip()
+        return f"lemonade-server serve --ctx-size {ctx_size}"
 
     def _check_version_compatibility(
         self,
@@ -3764,7 +3975,7 @@ class LemonadeClient:
                     )
                     print(
                         f"   For better performance, restart with: "
-                        f"lemonade-server serve --ctx-size {required_ctx}"
+                        f"{self._start_command_hint(required_ctx)}"
                     )
                     print("")
 
@@ -3774,7 +3985,7 @@ class LemonadeClient:
         if not auto_start:
             if not quiet:
                 print(f"{_emoji('❌', '[ERROR]')} Lemonade Server is not running")
-                print(f"   Start with: lemonade-server serve --ctx-size {required_ctx}")
+                print(f"   Start with: {self._start_command_hint(required_ctx)}")
             status.error = "Server not running"
             return status
 

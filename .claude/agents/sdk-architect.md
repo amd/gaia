@@ -28,7 +28,8 @@ You shape GAIA's SDK surface: base classes, mixins, config dataclasses, and cros
 src/gaia/
 ├── agents/base/       # Agent, MCPAgent, ApiAgent, @tool, AgentConsole, errors
 ├── agents/tools/      # Cross-agent tool mixins (file_tools, screenshot_tools)
-├── agents/<name>/     # Concrete agents + per-agent tools/
+├── agents/<name>/     # In-core agents (chat, docqa, builder, routing) + per-agent tools/
+│                       # Standalone concrete agents live in hub/agents/python/<id>/gaia_agent_<id>/
 ├── agents/registry.py # AgentRegistry + KNOWN_TOOLS map
 ├── chat/              # AgentSDK (class `AgentSDK`, formerly `ChatSDK`)
 ├── rag/               # RAGSDK / RAGConfig
@@ -45,7 +46,7 @@ src/gaia/
 
 ## Invariants
 
-1. **`Agent` is last in MRO** when composing mixins — so `super().__init__()` reaches it
+1. **`Agent` precedes the tool mixins** in MRO; a state mixin like `MemoryMixin` may precede `Agent` (see `ChatAgent`) — `Agent.__init__` doesn't call `super().__init__()`, so mixins lazy-init their state
 2. **Config dataclasses** own defaults; never hardcode in `__init__`
 3. **Copyright header** on every new file: `2025-2026`
 4. **Logger** via `from gaia.logger import get_logger`, never stdlib `logging`
@@ -77,7 +78,7 @@ Before merging a breaking API change:
 - [ ] Type hints on every public signature
 - [ ] Docstrings describe behavior, args, returns, and raised exceptions
 - [ ] New module has tests under `tests/`
-- [ ] `KNOWN_TOOLS` updated if a new mixin exists (`src/gaia/agents/registry.py:26`)
+- [ ] `KNOWN_TOOLS` updated if a new mixin exists (`src/gaia/agents/registry.py:38`)
 - [ ] `docs/docs.json` updated for any new MDX
 - [ ] No new silent fallback paths (see CLAUDE.md)
 - [ ] AMD copyright header present
@@ -112,8 +113,8 @@ The CLI factory then filters kwargs to valid dataclass fields (see the `_registe
 
 ## Common failures to block in review
 
-- **Hardcoded `http://localhost:8000`** — use env var
+- **Hardcoded `http://localhost:13305`** — use env var
 - **Fallback-to-Sonnet / fallback-model glue** — violates no-silent-fallbacks
-- **New mixin not in `KNOWN_TOOLS`** — YAML agents can't use it
+- **New mixin not in `KNOWN_TOOLS`** — Python agents can't compose it by name
 - **Config dataclass without defaults** — breaks factory instantiation
 - **Method returning `None` on error vs raising** — pick one and be consistent across the SDK

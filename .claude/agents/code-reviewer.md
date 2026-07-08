@@ -47,7 +47,7 @@ You review GAIA code for framework compliance, quality, and AMD standards. Start
 - No `print()` in library code — use `log.info/debug/error`
 - Type hints on public function signatures (Python 3.10+)
 - No `except Exception: pass` — handle or re-raise with context
-- No hardcoded `http://localhost:8000` — read `os.getenv("LEMONADE_BASE_URL", ...)`
+- No hardcoded `http://localhost:13305` — read `os.getenv("LEMONADE_BASE_URL", ...)`
 - Subprocess calls use a list, not a shell string, or `shlex.quote` if unavoidable
 - Async functions are actually awaited (no fire-and-forget without a reason)
 - Paths built with `pathlib.Path`, not string concatenation
@@ -68,7 +68,7 @@ For each finding: file, line number, the issue, and a concrete fix. Paste the fi
 
 - **Missing AMD header** — autofixable with the snippet above
 - **`import logging` then `logging.getLogger(__name__)`** — replace with `gaia.logger.get_logger`
-- **Re-implemented file search / RAG / shell tools** — point to existing mixin in `KNOWN_TOOLS` (`src/gaia/agents/registry.py:26`)
+- **Re-implemented file search / RAG / shell tools** — point to existing mixin in `KNOWN_TOOLS` (`src/gaia/agents/registry.py:38`)
 - **Tool registered outside `_register_tools`** — the `@tool` decorator needs `self` in closure scope
 - **New tool mixin not added to `KNOWN_TOOLS`** — other agents can't compose it by name
 - **Docstring-less `@tool`** — the docstring is what the LLM sees; it MUST describe args and return

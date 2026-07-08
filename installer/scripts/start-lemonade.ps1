@@ -27,8 +27,16 @@
 .PARAMETER ClearCache
     Clear model cache before pulling (default: false)
 
+.PARAMETER NoModel
+    Start the server only (skip pull/load). Use when the caller registers/loads
+    its own models afterwards (e.g. a custom user-model via LemonadeClient).
+
 .EXAMPLE
     .\installer\scripts\start-lemonade.ps1 -ModelName "Qwen3-0.6B-GGUF"
+
+.EXAMPLE
+    # Start the server robustly, then let the caller register a custom embedder:
+    .\installer\scripts\start-lemonade.ps1 -Port 13305 -NoModel
 
 .EXAMPLE
     .\installer\scripts\start-lemonade.ps1 -ModelName "nomic-embed-text-v2-moe-GGUF" -AdditionalModels "Qwen3-0.6B-GGUF,Qwen3-VL-4B-Instruct-GGUF" -InitWaitTime 30 -ClearCache
@@ -51,7 +59,10 @@ param(
     [int]$InitWaitTime = 10,
 
     [Parameter(Mandatory=$false)]
-    [switch]$ClearCache
+    [switch]$ClearCache,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$NoModel
 )
 
 $ErrorActionPreference = "Stop"
@@ -62,49 +73,42 @@ try {
     Write-Host "=========================================="
     Write-Host ""
 
-    # Check port availability
-    Write-Host "=== Checking Port $Port ==="
-    $portInUse = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
-    if ($portInUse) {
-        # Get unique PIDs (may have multiple connections on same port)
-        $processIds = $portInUse.OwningProcess | Select-Object -Unique
-        foreach ($processId in $processIds) {
-            Write-Host "[WARN] Port $Port in use by PID: $processId - killing orphaned process"
-            Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
-        }
-        Start-Sleep -Seconds 2
-    } else {
-        Write-Host "[OK] Port $Port is available"
-    }
+    # Free the port and reap stray Lemonade/llama-server processes from prior
+    # jobs on this shared runner (otherwise the server dies with a winerror
+    # 10048 bind collision). Shared with the inline-start CI workflows.
+    & "$PSScriptRoot\cleanup-lemonade.ps1" -Port $Port
     Write-Host ""
 
-    # Check installation. v10.x splits the old single binary into:
-    #   - ``LemonadeServer.exe`` (PascalCase) -- the actual server, but
-    #     it appears to be a tray/launcher with a different CLI shape
-    #     than the legacy ``lemonade-server serve --port ...`` we rely on.
-    #   - ``lemonade-server.exe`` -- a deprecation shim that still
-    #     translates ``serve --no-tray --port N`` correctly into the new
-    #     server invocation (proven working in test_gaia_cli_windows.yml).
-    #   - ``lemonade.exe`` -- the v10.x CLI for non-server commands (pull
-    #     etc.). ``lemonade-server pull`` is fully removed; calling it
-    #     prints a deprecation message and exits non-zero.
-    #
-    # So we deliberately use the shim for ``serve`` (it handles the
-    # arg translation) and ``lemonade`` for ``pull``. The shim refuses
-    # ``--ctx-size`` -- pin context per-model via the /load API instead.
+    # Check installation. v10.x ships:
+    #   - ``LemonadeServer.exe`` -- the actual server. Launch it directly with a
+    #     bare ``--port N`` (there is no ``serve`` subcommand). ``--ctx-size`` is
+    #     not a launch arg -- pin context per-model via the /load API below.
+    #   - ``lemonade.exe`` -- the v10.x CLI for non-server commands (``pull`` etc.).
+    # The old ``lemonade-server`` shim was deprecated in v10.5 and is no longer
+    # installed, so we use LemonadeServer.exe for serving and ``lemonade`` for pull.
     Write-Host "=== Checking Installation ==="
+    # Resolve LemonadeServer.exe from LEMONADE_SERVER_PATH or the install dirs.
     $lemonadeServerExe = $null
-    $lemonadeServerCmd = Get-Command "lemonade-server" -ErrorAction SilentlyContinue
-    if ($lemonadeServerCmd) {
-        $lemonadeServerExe = $lemonadeServerCmd.Source
-        Write-Host "[OK] Found 'lemonade-server' on PATH: $lemonadeServerExe"
-    } elseif (Test-Path ".\.venv\Scripts\lemonade-server.exe") {
-        $lemonadeServerExe = ".\.venv\Scripts\lemonade-server.exe"
-        Write-Host "[OK] Found 'lemonade-server' in .venv: $lemonadeServerExe"
-    } else {
-        Write-Host "[ERROR] lemonade-server not found on PATH or in .venv"
+    foreach ($cand in @(
+        $env:LEMONADE_SERVER_PATH,
+        "$env:LOCALAPPDATA\lemonade_server\bin\LemonadeServer.exe",
+        "$env:ProgramFiles\Lemonade Server\bin\LemonadeServer.exe",
+        "${env:ProgramFiles(x86)}\Lemonade Server\bin\LemonadeServer.exe"
+    )) {
+        if ($cand -and (Test-Path $cand)) { $lemonadeServerExe = (Resolve-Path $cand).Path; break }
+    }
+    if (-not $lemonadeServerExe) {
+        $found = Get-ChildItem `
+            "C:\Users\*\AppData\Local\lemonade_server\bin\LemonadeServer.exe", `
+            "C:\Program Files*\Lemonade Server\bin\LemonadeServer.exe" `
+            -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($found) { $lemonadeServerExe = $found.FullName }
+    }
+    if (-not $lemonadeServerExe) {
+        Write-Host "[ERROR] LemonadeServer.exe not found (set LEMONADE_SERVER_PATH or install Lemonade Server)"
         exit 1
     }
+    Write-Host "[OK] Found server: $lemonadeServerExe"
 
     $lemonadeCli = $null
     $lemonadeCliCmd = Get-Command "lemonade" -ErrorAction SilentlyContinue
@@ -128,26 +132,25 @@ try {
         Write-Host ""
     }
 
-    # Start server via the ``lemonade-server`` shim. We deliberately
-    # don't call ``LemonadeServer.exe`` directly -- on v10.2.0 it appears
-    # to be a tray/GUI launcher with a different CLI shape that emits no
-    # console output and never binds to the requested port when invoked
-    # with the legacy ``serve --port N --no-tray`` args. The shim still
-    # translates that arg shape correctly (proven by test_gaia_cli_windows
-    # which uses the same incantation against the same v10.2.0 runner).
-    # ``--ctx-size`` is omitted because the shim refuses it in v10.x; the
-    # ctx_size is set per-model on the /api/v1/load call below.
+    # Start the server. v10.5 removed the `lemonade-server` shim, so launch
+    # LemonadeServer.exe directly with a bare `--port` (there is no `serve`
+    # subcommand in v10.x). `--ctx-size` is set per-model on the /api/v1/load
+    # call below. (Verified on the stx runner: `LemonadeServer.exe --port N`
+    # binds N -- the legacy `serve --port` shape is what never bound.)
     Write-Host "=== Starting Server ==="
     $env:GGML_VK_DISABLE_COOPMAT = "1"
     $serverProcess = Start-Process -FilePath $lemonadeServerExe `
-        -ArgumentList "serve", "--port", "$Port", "--no-tray" `
+        -ArgumentList "--port", "$Port" `
         -PassThru -WindowStyle Hidden `
         -RedirectStandardOutput "lemonade-server-stdout.log" `
         -RedirectStandardError "lemonade-server-stderr.log"
     Write-Host "[OK] Started server PID: $($serverProcess.Id)"
     Write-Host "     Logs: lemonade-server-stdout.log, lemonade-server-stderr.log"
 
-    # Export process ID for cleanup (GitHub Actions)
+    # Export process ID for cleanup. Set it on the live process env too (not
+    # just GITHUB_ENV, which only reaches *later* steps) so a caller that starts
+    # the server and runs its tests in the SAME step can stop it in a finally.
+    $env:LEMONADE_PROCESS_ID = "$($serverProcess.Id)"
     if ($env:GITHUB_OUTPUT) {
         "lemonade-process-id=$($serverProcess.Id)" >> $env:GITHUB_OUTPUT
     }
@@ -175,9 +178,32 @@ try {
 
     if (-not $ready) {
         Write-Host "[ERROR] Server failed to start"
+        # Dump the server's own output so a startup failure is diagnosable
+        # (missing exe, bind collision, backend crash) instead of an opaque
+        # health-check timeout.
+        Write-Host "=== Server stdout (last 100 lines) ==="
+        if (Test-Path "lemonade-server-stdout.log") {
+            Get-Content "lemonade-server-stdout.log" -Tail 100
+        }
+        Write-Host "=== Server stderr (last 100 lines) ==="
+        if (Test-Path "lemonade-server-stderr.log") {
+            Get-Content "lemonade-server-stderr.log" -Tail 100
+        }
         throw "Server startup timeout"
     }
     Write-Host ""
+
+    # Start-only mode: the caller registers/loads its own models (e.g. a custom
+    # user-model via LemonadeClient), so skip the built-in pull/load path.
+    if ($NoModel) {
+        Write-Host "=========================================="
+        Write-Host "✅ LEMONADE SERVER READY (no model preloaded)"
+        Write-Host "=========================================="
+        Write-Host "Port: $Port"
+        Write-Host "Process ID: $($serverProcess.Id)"
+        Write-Host ""
+        exit 0
+    }
 
     # Pull primary model.
     #

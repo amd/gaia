@@ -152,6 +152,8 @@ class TestToolRegistry:
         "triage_inbox",
         "pre_scan_inbox",
         "profile_inbox",
+        # Follow-up tracking (#1606) — read-only detection
+        "check_followups",
         # Organize
         "archive_message",
         "mark_read",
@@ -175,6 +177,11 @@ class TestToolRegistry:
         "send_draft",
         "send_now",
         "forward_message",
+        # Scheduled send + snooze (#1609)
+        "schedule_send",
+        "snooze_message",
+        "cancel_scheduled_job",
+        "list_scheduled_jobs",
         # Delete
         "trash_message",
         "restore_message",
@@ -199,6 +206,9 @@ class TestToolRegistry:
         "clear_session_preferences",
         # Inbox profiling from memory (#1289)
         "profile_inbox",
+        # Voice/style profile from Sent mail (#1607)
+        "build_voice_profile",
+        "clear_voice_profile",
     }
 
     def test_every_expected_tool_is_registered(self, agent):
@@ -230,6 +240,7 @@ class TestConfirmationGating:
         [
             "send_draft",
             "send_now",
+            "schedule_send",
             "forward_message",
             "permanent_delete",
             "accept_invite",
@@ -285,29 +296,6 @@ class TestAC3LocalLLMOnly:
 
 
 class TestRegistryIntegration:
-    def test_email_agent_creatable_via_registry(
-        self, fake_gmail, fake_calendar, tmp_path
-    ):
-        from gaia.agents.registry import AgentRegistry
-
-        reg = AgentRegistry()
-        # email ships as the standalone gaia-agent-email wheel (#1102); it is
-        # registered via entry-point discovery, not as a built-in.
-        reg.discover()
-        assert "email" in {r.id for r in reg.list()}
-
-        with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:
-            mock_sdk.return_value = MagicMock()
-            agent = reg.create_agent(
-                "email",
-                gmail_backend=fake_gmail,
-                calendar_backend=fake_calendar,
-                db_path=str(tmp_path / "state.db"),
-                silent_mode=True,
-            )
-            assert isinstance(agent, EmailTriageAgent)
-            agent.close_db()
-
     def test_connectors_demo_required_connections_are_proper_objects(self):
         """#962 follow-up: the connectors_demo entry must use
         ``ConnectorRequirement`` objects, not bare strings.

@@ -17,7 +17,7 @@
 #      loud ::warning:: (the step outcome is unreliable — continue-on-error masks it
 #      and an install crash exits before outcome is set).
 #      CAVEAT: the retry gate (attempt 2) and this verification both depend on the
-#      `execution_file` output, which is specific to the pinned action SHA (v1.0.133).
+#      `execution_file` output, which is specific to the pinned action SHA (v1.0.140).
 #      A Dependabot bump of claude-code-action could rename or drop it and silently
 #      disable both — re-verify this output name when bumping the action.
 #
@@ -62,7 +62,7 @@ jobs:
       #     checkout the PR head and diff it against base. ---
       - name: Checkout PR head
         if: github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review_comment'
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
@@ -85,11 +85,36 @@ jobs:
           echo "Diff generated: $(wc -l < pr-diff.txt) lines"
           echo "Files changed: $(wc -l < pr-files.txt) files"
 
+      # --- Fetch the review rubric (REVIEW.md) from the BASE ref ---
+      # The pr-review / pr-rereview prompts read their tunable policy (correctness-first
+      # severity, nit cap, skip rules, length caps) from /tmp/review-rubric.md. It MUST come
+      # from the base branch, never the checked-out PR head: a fork controls its head tree,
+      # and letting it rewrite the reviewer's own rubric is instruction injection (worse than
+      # bad data) while the Anthropic credential + GITHUB_TOKEN are in scope. Gated to
+      # pull_request_target — the only events whose prompts use the rubric, and the only ones
+      # where `origin` is never redirected to a fork (see the fork-redirect step below), so
+      # origin/<base> is always the genuine base repo. Missing/unreadable REVIEW.md is
+      # non-fatal: the prompt falls back to its inline guidance and says so.
+      - name: Fetch review rubric from base ref
+        if: github.event_name == 'pull_request_target'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          rm -f /tmp/review-rubric.md
+          if git fetch origin "$BASE_REF" 2>/dev/null && \
+             git show "FETCH_HEAD:REVIEW.md" > /tmp/review-rubric.md 2>/dev/null && \
+             [ -s /tmp/review-rubric.md ]; then
+            echo "✅ Loaded review rubric from base ref '$BASE_REF' ($(wc -l < /tmp/review-rubric.md) lines)"
+          else
+            rm -f /tmp/review-rubric.md
+            echo "::warning title=Review rubric not loaded::REVIEW.md not found on base ref '$BASE_REF'; reviewer falls back to inline guidance."
+          fi
+
       # --- Issue / issue_comment events: plain checkout, plus a fork-aware diff when
       #     the comment is on a PR conversation. ---
       - name: Checkout repository
         if: github.event_name == 'issues' || github.event_name == 'issue_comment'
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -164,7 +189,7 @@ jobs:
       # not red-X a contributor's PR CI. Visibility comes from the verification step.
       - name: Run Claude (attempt 1)
         id: a1
-        uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1  # v1.0.140
+        uses: anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a  # v1.0.165
         continue-on-error: true
         with:
           # Prefer subscription OAuth, fall back to API key — see claude.yml "Authentication".
@@ -187,7 +212,7 @@ jobs:
       - name: Run Claude (attempt 2 — retry install-phase crash)
         id: a2
         if: "!cancelled() && steps.a1.outcome == 'failure' && steps.a1.outputs.execution_file == ''"
-        uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1  # v1.0.140
+        uses: anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a  # v1.0.165
         continue-on-error: true
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}

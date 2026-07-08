@@ -107,6 +107,17 @@ VALID_CATEGORIES: frozenset = frozenset(
     }
 )
 
+#: Privileged categories that only an explicit memory tool / the system may
+#: write — never the LLM conversation extractor. A chat turn must not be able to
+#: mint a permission grant, a system fact, or a profile entry by emitting that
+#: category, so the extraction/consolidation paths validate against
+#: EXTRACTABLE_CATEGORIES below, not VALID_CATEGORIES.
+_PRIVILEGED_CATEGORIES: frozenset = frozenset({"system", "profile", "permission"})
+
+#: Categories the LLM conversation extractor and consolidation pass may emit.
+#: Subset of VALID_CATEGORIES; mirrors the set advertised in _EXTRACTION_PROMPT.
+EXTRACTABLE_CATEGORIES: frozenset = VALID_CATEGORIES - _PRIVILEGED_CATEGORIES
+
 #: Maximum stored content length (chars).  Longer content is truncated by
 #: callers before reaching store() so the database stays compact.
 MAX_CONTENT_LENGTH: int = 2000
@@ -237,6 +248,15 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_sensitive ON knowledge(sensitive)
 -- Knowledge FTS5 (standalone, manually synced, porter stemmer for morphological matching)
 CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(content, domain, category, tokenize='porter unicode61');
 
+-- Key/value metadata (e.g. the embedder id that produced stored vectors).
+-- Lives in the DB (not a sidecar file) so it is atomic with the data it
+-- describes and visible to every connection — the agent and the UI memory
+-- router open the same DB from different code paths (#1744).
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
+
 -- Tool history
 CREATE TABLE IF NOT EXISTS tool_history (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -253,6 +273,35 @@ CREATE INDEX IF NOT EXISTS idx_tool_name ON tool_history(tool_name);
 CREATE INDEX IF NOT EXISTS idx_tool_session ON tool_history(session_id);
 CREATE INDEX IF NOT EXISTS idx_tool_success ON tool_history(success);
 CREATE INDEX IF NOT EXISTS idx_tool_ts ON tool_history(timestamp DESC);
+
+-- Procedures (v3 — procedural memory, #887)
+-- A distilled, reusable SKILL.md-shaped procedure synthesized from clusters of
+-- successful tool sequences.  Its own table (not knowledge): different origin,
+-- unit, quality signal, removal semantics, and embedding corpus.  A brand-new
+-- table, so it is created here via CREATE TABLE IF NOT EXISTS for both fresh
+-- and migrating databases; the v2->v3 step only advances the version marker.
+CREATE TABLE IF NOT EXISTS procedures (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,              -- kebab-case (-> SKILL.md name)
+    when_to_use     TEXT NOT NULL,              -- trigger; embedded for recall (-> description)
+    markdown_body   TEXT NOT NULL,              -- full procedure incl. edge cases inline
+    tools_required  TEXT,                       -- JSON array — the tool-loader recipe contract
+    tool_sequence   TEXT,                       -- JSON — the distilled step pattern
+    success_count   INTEGER NOT NULL DEFAULT 0,
+    attempt_count   INTEGER NOT NULL DEFAULT 0, -- success_count / attempt_count = success rate
+    provenance      TEXT,                       -- JSON {source:'synthesized', from_sessions:[...]}
+    version         TEXT NOT NULL DEFAULT '1.0.0',
+    enabled         INTEGER NOT NULL DEFAULT 1, -- disable without delete (blocks recall)
+    embedding       BLOB,                       -- over when_to_use; its OWN FAISS index
+    superseded_by   TEXT,                       -- set on supersede (higher success rate)
+    created_at      TEXT NOT NULL,
+    last_used_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_proc_name ON procedures(name);
+CREATE INDEX IF NOT EXISTS idx_proc_enabled ON procedures(enabled)
+    WHERE enabled = 1;
+CREATE INDEX IF NOT EXISTS idx_proc_superseded ON procedures(superseded_by)
+    WHERE superseded_by IS NOT NULL;
 """
 
 # Sync triggers for conversations_fts (external-content FTS5 table).
@@ -324,8 +373,9 @@ class MemoryStore:
     def _init_schema(self):
         """Create tables, indexes, triggers, and set WAL mode.
 
-        Fresh installs get the full v2 schema.  Existing v1 databases are
-        migrated automatically via ALTER TABLE ADD COLUMN.
+        Fresh installs get the full v3 schema.  Existing databases at v1 or v2
+        are migrated automatically (v1→v2 via ALTER TABLE ADD COLUMN; v2→v3 via
+        the procedures table's CREATE TABLE IF NOT EXISTS in ``_SCHEMA_SQL``).
         """
         with self._lock:
             self._conn.execute("PRAGMA journal_mode=WAL")
@@ -342,12 +392,12 @@ class MemoryStore:
                 except sqlite3.OperationalError:
                     pass  # Trigger already exists
 
-            # Initialize schema_version if empty (fresh install → v2)
+            # Initialize schema_version if empty (fresh install → v3)
             cursor = self._conn.execute("SELECT COUNT(*) FROM schema_version")
             if cursor.fetchone()[0] == 0:
                 self._conn.execute(
                     "INSERT INTO schema_version VALUES (?, ?)",
-                    (2, _now_iso()),
+                    (3, _now_iso()),
                 )
             else:
                 # Run migrations for existing databases
@@ -364,10 +414,10 @@ class MemoryStore:
     def _migrate_schema_locked(self):
         """Run schema migrations if needed. Must hold self._lock.
 
-        Migrations use ALTER TABLE ADD COLUMN which SQLite supports
-        without rewriting the table.  Each column is added individually
-        and errors are caught (column may already exist from a partial
-        prior migration).
+        Migrations are additive — ALTER TABLE ADD COLUMN (v1->v2) and a new
+        CREATE TABLE (v2->v3), both of which SQLite applies without rewriting
+        existing rows.  Each step is guarded so a partial prior migration
+        re-runs cleanly, and the steps chain (a v1 database is taken to v3).
         """
         cursor = self._conn.execute(
             "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
@@ -375,36 +425,49 @@ class MemoryStore:
         row = cursor.fetchone()
         current_version = row[0] if row else 1
 
-        if current_version >= 2:
-            return
+        if current_version < 2:
+            logger.info("[MemoryStore] migrating schema v%d -> v2", current_version)
 
-        logger.info("[MemoryStore] migrating schema v%d -> v2", current_version)
+            # v1 -> v2: add embedding, superseded_by to knowledge;
+            #           add consolidated_at to conversations.
+            #           Indexes are created by _init_schema() after this returns.
+            _v2_alter_statements = [
+                "ALTER TABLE knowledge ADD COLUMN embedding BLOB",
+                "ALTER TABLE knowledge ADD COLUMN superseded_by TEXT",
+                "ALTER TABLE conversations ADD COLUMN consolidated_at TEXT",
+            ]
+            for stmt in _v2_alter_statements:
+                try:
+                    self._conn.execute(stmt)
+                except sqlite3.OperationalError as e:
+                    # "duplicate column name" — column already exists from
+                    # a partial prior migration.  Safe to ignore.
+                    if "duplicate column" in str(e).lower():
+                        logger.debug("[MemoryStore] migration column exists: %s", e)
+                    else:
+                        raise
 
-        # v1 -> v2: add embedding, superseded_by to knowledge;
-        #           add consolidated_at to conversations.
-        #           Indexes are created by _init_schema() after this returns.
-        _v2_alter_statements = [
-            "ALTER TABLE knowledge ADD COLUMN embedding BLOB",
-            "ALTER TABLE knowledge ADD COLUMN superseded_by TEXT",
-            "ALTER TABLE conversations ADD COLUMN consolidated_at TEXT",
-        ]
-        for stmt in _v2_alter_statements:
-            try:
-                self._conn.execute(stmt)
-            except sqlite3.OperationalError as e:
-                # "duplicate column name" — column already exists from
-                # a partial prior migration.  Safe to ignore.
-                if "duplicate column" in str(e).lower():
-                    logger.debug("[MemoryStore] migration column exists: %s", e)
-                else:
-                    raise
+            self._conn.execute(
+                "UPDATE schema_version SET version = 2, migrated_at = ?",
+                (_now_iso(),),
+            )
+            logger.info("[MemoryStore] schema migration to v2 complete")
+            current_version = 2
 
-        # Update schema version
-        self._conn.execute(
-            "UPDATE schema_version SET version = 2, migrated_at = ?",
-            (_now_iso(),),
-        )
-        logger.info("[MemoryStore] schema migration to v2 complete")
+        if current_version < 3:
+            logger.info("[MemoryStore] migrating schema v%d -> v3", current_version)
+
+            # v2 -> v3: add the procedures table (procedural memory, #887).
+            # The table and its indexes are created by _SCHEMA_SQL's
+            # CREATE TABLE IF NOT EXISTS, which already ran in _init_schema(),
+            # so this step only advances the version marker.  Additive only —
+            # no knowledge / tool_history / conversations row is touched.
+            self._conn.execute(
+                "UPDATE schema_version SET version = 3, migrated_at = ?",
+                (_now_iso(),),
+            )
+            logger.info("[MemoryStore] schema migration to v3 complete")
+            current_version = 3
 
     # ------------------------------------------------------------------
     # Low-level helpers
@@ -457,6 +520,21 @@ class MemoryStore:
         "id, category, content, domain, source, confidence, metadata, "
         "use_count, context, sensitive, entity, created_at, updated_at, "
         "last_used, due_at, reminded_at, superseded_by, embedding"
+    )
+
+    #: Procedure column list (v3).  Excludes the ``embedding`` BLOB so routine
+    #: queries stay light; ``_PROCEDURE_COLS_WITH_EMBEDDING`` appends it for the
+    #: FAISS-index builder.  Order matches ``_row_to_procedure_dict``.
+    _PROCEDURE_COLS = (
+        "id, name, when_to_use, markdown_body, tools_required, tool_sequence, "
+        "success_count, attempt_count, provenance, version, enabled, "
+        "superseded_by, created_at, last_used_at"
+    )
+
+    _PROCEDURE_COLS_WITH_EMBEDDING = (
+        "id, name, when_to_use, markdown_body, tools_required, tool_sequence, "
+        "success_count, attempt_count, provenance, version, enabled, "
+        "superseded_by, created_at, last_used_at, embedding"
     )
 
     def _row_to_knowledge_dict_with_embedding(self, row) -> Dict:
@@ -738,6 +816,11 @@ class MemoryStore:
                 # Set embedding = NULL because the old embedding is now stale
                 # (it was computed for the previous content).  This forces the
                 # item into get_items_without_embeddings() for re-embedding.
+                #
+                # Never downgrade a user-edited item to a machine source: a
+                # discovery re-run that merges into a source='user' item must keep
+                # 'user', or a later delete_by_source('discovery') would wipe the
+                # user's edit (spec: user-edited memories are preserved).
                 try:
                     self._conn.execute(
                         """
@@ -746,7 +829,8 @@ class MemoryStore:
                             confidence = MAX(confidence, ?),
                             domain = COALESCE(?, domain),
                             metadata = COALESCE(?, metadata),
-                            source = COALESCE(?, source),
+                            source = CASE WHEN source = 'user' THEN 'user'
+                                          ELSE COALESCE(?, source) END,
                             entity = COALESCE(?, entity),
                             sensitive = MAX(sensitive, ?),
                             due_at = COALESCE(?, due_at),
@@ -1391,6 +1475,63 @@ class MemoryStore:
                 self._conn.rollback()
                 raise
 
+    def clear_all_embeddings(self) -> int:
+        """Null out every stored embedding so they get re-embedded on backfill.
+
+        Used when the active embedder changes: vectors from a different model
+        live in a different vector space (and possibly a different dimension),
+        so reusing them would silently corrupt similarity search. Clears both
+        knowledge and procedure embeddings. Returns the total rows cleared.
+        """
+        with self._lock:
+            try:
+                knowledge = self._conn.execute(
+                    "UPDATE knowledge SET embedding = NULL WHERE embedding IS NOT NULL"
+                ).rowcount
+                procedures = self._conn.execute(
+                    "UPDATE procedures SET embedding = NULL WHERE embedding IS NOT NULL"
+                ).rowcount
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        logger.info(
+            "[MemoryStore] cleared embeddings (embedder change): knowledge=%d procedures=%d",
+            knowledge,
+            procedures,
+        )
+        return knowledge + procedures
+
+    #: ``meta`` key recording which embedder produced the stored vectors.
+    _EMBEDDER_META_KEY = "embedder_id"
+
+    def get_embedder_id(self) -> Optional[str]:
+        """Return the embedder model id that produced the stored embeddings.
+
+        ``None`` when nothing has been stamped yet (fresh DB) — callers treat
+        that as "no change to detect". Read from the ``meta`` table so every
+        connection (agent + UI router) sees the same value.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value FROM meta WHERE key = ?", (self._EMBEDDER_META_KEY,)
+            ).fetchone()
+        return row[0] if row else None
+
+    def set_embedder_id(self, model_id: str) -> None:
+        """Record the embedder model id that produced the stored embeddings."""
+        with self._lock:
+            try:
+                self._conn.execute(
+                    "INSERT INTO meta (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (self._EMBEDDER_META_KEY, model_id),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
     def get_items_with_embeddings(
         self,
         category: str | None = None,
@@ -1854,6 +1995,19 @@ class MemoryStore:
                 (now_iso,),
             ).fetchone()[0]
 
+            # Procedures (procedural memory / skills, #887). COUNT(*) instead of
+            # fetching rows so a large procedure table never loads into memory.
+            p_total = self._conn.execute("SELECT COUNT(*) FROM procedures").fetchone()[
+                0
+            ]
+            p_active = self._conn.execute(
+                "SELECT COUNT(*) FROM procedures "
+                "WHERE enabled = 1 AND superseded_by IS NULL"
+            ).fetchone()[0]
+            p_last_recalled = self._conn.execute(
+                "SELECT MAX(last_used_at) FROM procedures"
+            ).fetchone()[0]
+
         # DB size
         try:
             db_size = os.path.getsize(str(self._db_path))
@@ -1889,6 +2043,11 @@ class MemoryStore:
             "temporal": {
                 "upcoming_count": upcoming_count,
                 "overdue_count": overdue_count,
+            },
+            "procedures": {
+                "total": p_total,
+                "active": p_active,
+                "last_recalled": p_last_recalled,
             },
             "db_size_bytes": db_size,
         }
@@ -2321,6 +2480,380 @@ class MemoryStore:
                 }
                 for row in cursor.fetchall()
             ]
+
+    # ==================================================================
+    # Procedures (v3 — procedural memory, #887)
+    # ==================================================================
+
+    def _row_to_procedure_dict(self, row) -> Dict:
+        """Convert a procedures row (``_PROCEDURE_COLS`` order) to a dict.
+
+        Does NOT include the ``embedding`` BLOB — only callers that pass
+        ``with_embedding=True`` to ``search_skills`` get it (via
+        ``_row_to_procedure_dict_with_embedding``).
+        """
+        return {
+            "id": row[0],
+            "name": row[1],
+            "when_to_use": row[2],
+            "markdown_body": row[3],
+            "tools_required": _safe_json_loads(row[4]),
+            "tool_sequence": _safe_json_loads(row[5]),
+            "success_count": row[6],
+            "attempt_count": row[7],
+            "provenance": _safe_json_loads(row[8]),
+            "version": row[9],
+            "enabled": bool(row[10]),
+            "superseded_by": row[11],
+            "created_at": row[12],
+            "last_used_at": row[13],
+        }
+
+    def _row_to_procedure_dict_with_embedding(self, row) -> Dict:
+        """Convert a 15-column procedures row (trailing embedding BLOB) to a dict."""
+        d = self._row_to_procedure_dict(row)
+        d["embedding"] = row[14]  # bytes or None
+        return d
+
+    def put_skill(
+        self,
+        name: str,
+        when_to_use: str,
+        markdown_body: str,
+        tools_required: list | None = None,
+        tool_sequence: list | None = None,
+        success_count: int = 0,
+        attempt_count: int = 0,
+        provenance: dict | None = None,
+        version: str = "1.0.0",
+        enabled: bool = True,
+        embedding: bytes | None = None,
+        skill_id: str | None = None,
+    ) -> str:
+        """Insert or update a procedure row (procedural memory).
+
+        With ``skill_id`` None a new ``proc_<uuid>`` id is generated and a row
+        is inserted (Mem0 ADD).  With ``skill_id`` referring to an existing row,
+        that row is updated in place (Mem0 UPDATE).  A ``skill_id`` that does not
+        match any row raises — callers update only ids they read back from
+        ``search_skills`` and insert with ``skill_id=None``.  No row is ever
+        deleted by this method; reconciliation only ADDs, UPDATEs, or supersedes.
+
+        Args:
+            name: kebab-case procedure name (→ SKILL.md frontmatter ``name``).
+            when_to_use: trigger text; embedded for recall (→ ``description``).
+            markdown_body: full procedure body, edge cases inline.
+            tools_required: tool names the procedure uses (stored as JSON).
+            tool_sequence: distilled ordered step pattern (stored as JSON).
+            success_count: successful runs behind this procedure.
+            attempt_count: total runs (success_count / attempt_count = rate).
+            provenance: audit dict, e.g.
+                ``{"source": "synthesized", "from_sessions": [...]}``.
+            version: SemVer string; freshly synthesized procedures are "1.0.0".
+            enabled: False disables recall without deleting the row.
+            embedding: 768-float32 BLOB over ``when_to_use`` (its own FAISS index).
+            skill_id: existing procedure id to update; None inserts a new row.
+
+        Returns:
+            The procedure id (existing on update, new ``proc_<uuid>`` on insert).
+
+        Raises:
+            ValueError: if ``name``, ``when_to_use``, or ``markdown_body`` is
+                empty, or if ``skill_id`` is given but matches no existing row.
+        """
+        if not name or not name.strip():
+            raise ValueError("MemoryStore.put_skill(): name must be non-empty")
+        if not when_to_use or not when_to_use.strip():
+            raise ValueError("MemoryStore.put_skill(): when_to_use must be non-empty")
+        if not markdown_body or not markdown_body.strip():
+            raise ValueError("MemoryStore.put_skill(): markdown_body must be non-empty")
+
+        tools_json = json.dumps(tools_required) if tools_required is not None else None
+        seq_json = json.dumps(tool_sequence) if tool_sequence is not None else None
+        prov_json = json.dumps(provenance) if provenance is not None else None
+        now = _now_iso()
+
+        with self._lock:
+            try:
+                # existing_id is the str id only when skill_id was provided AND
+                # matches a row — keeping it a narrowed str (not str | None) so
+                # the UPDATE branch and the return value are provably typed.
+                existing_id: str | None = None
+                if skill_id is not None:
+                    row = self._conn.execute(
+                        "SELECT id FROM procedures WHERE id = ?", (skill_id,)
+                    ).fetchone()
+                    if row is None:
+                        raise ValueError(
+                            f"MemoryStore.put_skill(): skill_id {skill_id!r} not "
+                            "found; pass skill_id=None to insert a new procedure"
+                        )
+                    existing_id = skill_id
+
+                if existing_id is not None:
+                    self._conn.execute(
+                        """
+                        UPDATE procedures SET
+                            name = ?, when_to_use = ?, markdown_body = ?,
+                            tools_required = ?, tool_sequence = ?,
+                            success_count = ?, attempt_count = ?, provenance = ?,
+                            version = ?, enabled = ?, embedding = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            name,
+                            when_to_use,
+                            markdown_body,
+                            tools_json,
+                            seq_json,
+                            int(success_count),
+                            int(attempt_count),
+                            prov_json,
+                            version,
+                            int(enabled),
+                            embedding,
+                            existing_id,
+                        ),
+                    )
+                    result_id = existing_id
+                    action = "updated"
+                else:
+                    # Reached only when skill_id is None (a provided-but-missing
+                    # id raised above), so the id is always freshly generated.
+                    result_id = f"proc_{uuid4().hex}"
+                    self._conn.execute(
+                        """
+                        INSERT INTO procedures
+                            (id, name, when_to_use, markdown_body, tools_required,
+                             tool_sequence, success_count, attempt_count, provenance,
+                             version, enabled, embedding, superseded_by, created_at,
+                             last_used_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            result_id,
+                            name,
+                            when_to_use,
+                            markdown_body,
+                            tools_json,
+                            seq_json,
+                            int(success_count),
+                            int(attempt_count),
+                            prov_json,
+                            version,
+                            int(enabled),
+                            embedding,
+                            None,  # superseded_by
+                            now,  # created_at
+                            None,  # last_used_at
+                        ),
+                    )
+                    action = "stored"
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
+        logger.info("[MemoryStore] procedure %s id=%s name=%s", action, result_id, name)
+        return result_id
+
+    def search_skills(
+        self,
+        skill_id: str | None = None,
+        name: str | None = None,
+        enabled_only: bool = True,
+        include_superseded: bool = False,
+        with_embedding: bool = False,
+        limit: int = 100,
+    ) -> List[Dict]:
+        """Query procedures by id / name / enabled flag.
+
+        Args:
+            skill_id: exact procedure id to fetch.  The ``enabled_only`` and
+                ``include_superseded`` filters still apply, so an exact-id lookup
+                of a disabled or superseded row returns nothing unless those
+                flags are relaxed (pass ``enabled_only=False,
+                include_superseded=True`` to fetch any row by id).
+            name: exact procedure name to fetch.
+            enabled_only: when True (default) exclude ``enabled = 0`` rows — the
+                recall path passes this so a disabled procedure is never returned.
+            include_superseded: when False (default) exclude superseded rows.
+            with_embedding: when True include the ``embedding`` BLOB in each dict
+                (used to build the procedures FAISS index); otherwise omit it.
+            limit: maximum rows to return.
+
+        Returns:
+            A list of procedure dicts, newest-first.
+        """
+        cols = (
+            self._PROCEDURE_COLS_WITH_EMBEDDING
+            if with_embedding
+            else self._PROCEDURE_COLS
+        )
+        conditions: list = []
+        params: list = []
+        if skill_id is not None:
+            conditions.append("id = ?")
+            params.append(skill_id)
+        if name is not None:
+            conditions.append("name = ?")
+            params.append(name)
+        if enabled_only:
+            conditions.append("enabled = 1")
+        if not include_superseded:
+            conditions.append("superseded_by IS NULL")
+
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        params.append(limit)
+        sql = f"""
+            SELECT {cols} FROM procedures
+            {where}
+            ORDER BY created_at DESC
+            LIMIT ?
+        """
+        with self._lock:
+            rows = self._conn.execute(sql, tuple(params)).fetchall()
+
+        if with_embedding:
+            return [self._row_to_procedure_dict_with_embedding(r) for r in rows]
+        return [self._row_to_procedure_dict(r) for r in rows]
+
+    def supersede_skill(self, skill_id: str, superseded_by: str) -> bool:
+        """Mark ``skill_id`` as superseded by ``superseded_by`` (Zep-style lineage).
+
+        The superseded row is kept, never deleted; recall excludes it via the
+        ``superseded_by IS NULL`` filter in ``search_skills``.
+
+        Returns:
+            True if a row was updated, False if ``skill_id`` was not found.
+        """
+        with self._lock:
+            try:
+                rowcount = self._conn.execute(
+                    "UPDATE procedures SET superseded_by = ? WHERE id = ?",
+                    (superseded_by, skill_id),
+                ).rowcount
+                self._conn.commit()
+                return rowcount > 0
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def touch_skills(self, skill_ids: List[str], when: str | None = None) -> int:
+        """Stamp ``last_used_at`` on the given procedures (recall telemetry).
+
+        Called when ``recall_skill`` surfaces procedures for a goal so
+        ``gaia memory status`` can report when a skill was last reused.
+
+        Args:
+            skill_ids: procedure ids that were just recalled.
+            when: ISO 8601 timestamp to record; defaults to now.
+
+        Returns:
+            Number of rows updated.
+        """
+        if not skill_ids:
+            return 0
+        stamp = when or _now_iso()
+        placeholders = ",".join("?" for _ in skill_ids)
+        with self._lock:
+            try:
+                rowcount = self._conn.execute(
+                    f"UPDATE procedures SET last_used_at = ? WHERE id IN ({placeholders})",
+                    (stamp, *skill_ids),
+                ).rowcount
+                self._conn.commit()
+                return rowcount
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def iter_sessions(self, since: str | None = None, min_steps: int = 3) -> List[Dict]:
+        """Return per-session successful tool spans + the session goal (DETECT).
+
+        Walks ``tool_history`` grouped by ``session_id`` and returns, for each
+        session whose successful tool calls number at least ``min_steps``, the
+        ordered successful tool sequence together with the goal — derived with
+        plain SQL as the first ``role='user'`` turn of that session
+        (``tool_history`` has no goal column).  This is the DETECT primitive for
+        skill synthesis: it runs no LLM and issues a single query (the heavy
+        per-session eligibility filter runs in SQL, not as N per-session reads).
+
+        Args:
+            since: ISO 8601 watermark; only tool calls strictly newer are
+                considered.  None scans all history.
+            min_steps: minimum successful tool calls for a session to qualify.
+
+        Returns:
+            A list of dicts, oldest session first, each shaped
+            ``{session_id, goal, tools, tool_sequence, success_count,
+            attempt_count, started_at, last_at}``.  ``goal`` is None when the
+            session has no user turn.
+        """
+        sql = """
+            WITH eligible AS (
+                SELECT session_id
+                FROM tool_history
+                WHERE (:since IS NULL OR timestamp > :since)
+                GROUP BY session_id
+                HAVING SUM(success) >= :min_steps
+            )
+            SELECT th.session_id, th.tool_name, th.args, th.success, th.timestamp,
+                   g.content AS goal
+            FROM tool_history th
+            JOIN eligible e ON e.session_id = th.session_id
+            LEFT JOIN (
+                SELECT session_id, content
+                FROM conversations
+                WHERE id IN (
+                    SELECT MIN(id) FROM conversations
+                    WHERE role = 'user'
+                    GROUP BY session_id
+                )
+            ) g ON g.session_id = th.session_id
+            WHERE (:since IS NULL OR th.timestamp > :since)
+            ORDER BY th.session_id, th.id
+        """
+        params = {"since": since, "min_steps": min_steps}
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+
+        # Group the ordered rows into per-session spans.  The eligible CTE has
+        # already pre-filtered to sessions with >= min_steps successes, so this
+        # pass is cheap (no further DB reads).
+        sessions: Dict[str, Dict] = {}
+        order: List[str] = []
+        for session_id, tool_name, args, success, timestamp, goal in rows:
+            sess = sessions.get(session_id)
+            if sess is None:
+                sess = {
+                    "session_id": session_id,
+                    "goal": goal,
+                    "tools": [],
+                    "tool_sequence": [],
+                    "success_count": 0,
+                    "attempt_count": 0,
+                    "started_at": timestamp,
+                    "last_at": timestamp,
+                }
+                sessions[session_id] = sess
+                order.append(session_id)
+            sess["attempt_count"] += 1
+            sess["last_at"] = timestamp
+            if success:
+                sess["success_count"] += 1
+                sess["tools"].append(tool_name)
+                sess["tool_sequence"].append(
+                    {"tool": tool_name, "args": _safe_json_loads(args)}
+                )
+
+        # The CTE guarantees the floor, but keep it explicit so callers can rely
+        # on every returned session having >= min_steps successful steps.
+        return [
+            sessions[sid]
+            for sid in order
+            if sessions[sid]["success_count"] >= min_steps
+        ]
 
     def apply_confidence_decay(
         self, days_threshold: int = 30, decay_factor: float = 0.9

@@ -174,6 +174,20 @@ class TestJsonExtraction:
         text = "This is just plain text with no JSON"
         assert extract_json_from_text(text) is None
 
+    def test_extract_json_with_brace_in_string_value(self):
+        """A brace inside a string value must not terminate the object early."""
+        text = (
+            'Here is the data: {"note": "use the } symbol to close", "ok": true} Done!'
+        )
+        result = extract_json_from_text(text)
+        assert result == {"note": "use the } symbol to close", "ok": True}
+
+    def test_extract_json_with_escaped_quote_and_brace_in_string(self):
+        """Escaped quotes inside a string must not flip string state mid-value."""
+        text = r'{"q": "say \"hi\" }", "n": 2}'
+        result = extract_json_from_text(text)
+        assert result == {"q": 'say "hi" }', "n": 2}
+
 
 class TestFieldChangeDetection:
     """Tests for field change detection."""

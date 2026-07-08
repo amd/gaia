@@ -1,775 +1,500 @@
 {
   "model": "Gemma-4-E2B-it-GGUF",
   "fixture": "synthetic_inbox.mbox",
-  "category_accuracy": 0.4273,
+  "category_accuracy": 0.7358,
   "category_breakdown": {
-    "urgent": 0.2553,
-    "actionable": 0.5893,
-    "informational": 0.5875,
-    "low priority": 0.0541
+    "URGENT": 0.8704,
+    "NEEDS_RESPONSE": 0.963,
+    "FYI": 0.7778,
+    "PROMOTIONAL": 0.6923,
+    "PERSONAL": 0.2121
   },
-  "is_spam_accuracy": 0.9091,
-  "is_phishing_accuracy": 0.9545,
-  "scored": 220,
-  "correct": 94,
+  "is_spam_accuracy": 0.8763,
+  "is_spam_precision": 0.6562,
+  "is_spam_recall": 0.7368,
+  "is_spam_f1": 0.6942,
+  "is_spam_tp": 42,
+  "is_spam_fp": 22,
+  "is_spam_fn": 15,
+  "is_phishing_accuracy": 0.6789,
+  "scored": 299,
+  "correct": 220,
   "tolerance_pp": 5,
-  "_recorded_on": "2026-06-01",
-  "_recorded_by": "real measurement on Gemma-4-E2B-it-GGUF via production heuristic + LLM-assist triage path (#1107)",
+  "_recorded_on": "2026-06-30",
+  "_recorded_by": "real measurement on Gemma-4-E2B-it-GGUF via production heuristic + LLM-assist triage path (#1107); is_spam now content-based detection with precision/recall/F1 (#1906)",
   "_misses": [
     {
-      "id": "01584c7b8ee54ff6",
-      "predicted": "informational",
-      "expected": "actionable",
+      "id": "02e78d1a85996110",
+      "predicted": "URGENT",
+      "expected": "PROMOTIONAL",
       "source": "llm"
     },
     {
-      "id": "02af2bc580efca9c",
-      "predicted": "urgent",
-      "expected": "low priority",
+      "id": "0871db72aaaaceb7",
+      "predicted": "URGENT",
+      "expected": "PROMOTIONAL",
       "source": "llm"
     },
     {
-      "id": "0331e586db6beecc",
-      "predicted": "urgent",
-      "expected": "low priority",
+      "id": "0c580d773f22e5a3",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "FYI",
       "source": "llm"
     },
     {
-      "id": "0d73235e52fe22e5",
-      "predicted": "urgent",
-      "expected": "low priority",
+      "id": "0dbe2c6c3f5fe8c7",
+      "predicted": "URGENT",
+      "expected": "PERSONAL",
       "source": "llm"
     },
     {
-      "id": "0d9d22ee99a31414",
-      "predicted": "informational",
-      "expected": "actionable",
+      "id": "108d46dcbd80c6c9",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PERSONAL",
       "source": "llm"
     },
     {
-      "id": "0dac53455383ce87",
-      "predicted": "low priority",
-      "expected": "urgent",
+      "id": "11445c2bb53e8463",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "FYI",
+      "source": "llm"
+    },
+    {
+      "id": "12c970fe91af0741",
+      "predicted": "FYI",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
+      "id": "13a1223674ebfe8a",
+      "predicted": "FYI",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
+      "id": "166e34f9d48b5b26",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PERSONAL",
+      "source": "llm"
+    },
+    {
+      "id": "1687d3e1ce3aa021",
+      "predicted": "URGENT",
+      "expected": "PERSONAL",
+      "source": "llm"
+    },
+    {
+      "id": "16d65f76e126ecd2",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "FYI",
+      "source": "llm"
+    },
+    {
+      "id": "19f95d2ba80b4982",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "FYI",
+      "source": "llm"
+    },
+    {
+      "id": "20c8fa0a20def4b7",
+      "predicted": "FYI",
+      "expected": "PERSONAL",
+      "source": "llm"
+    },
+    {
+      "id": "21f22f402abbe49a",
+      "predicted": "PROMOTIONAL",
+      "expected": "URGENT",
+      "source": "llm"
+    },
+    {
+      "id": "232b40433d4955b6",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PERSONAL",
+      "source": "llm"
+    },
+    {
+      "id": "2540baf5595e2353",
+      "predicted": "FYI",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
+      "id": "2c981711df4e986d",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "FYI",
+      "source": "llm"
+    },
+    {
+      "id": "2e55ca8930bfb5ce",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PERSONAL",
+      "source": "llm"
+    },
+    {
+      "id": "3a204034f35fc278",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "URGENT",
+      "source": "llm"
+    },
+    {
+      "id": "3a52c3779a233534",
+      "predicted": "FYI",
+      "expected": "PROMOTIONAL",
       "source": "heuristic"
     },
     {
-      "id": "0dd088cb18014d56",
-      "predicted": "low priority",
-      "expected": "informational",
+      "id": "3b584b2af8fe1715",
+      "predicted": "URGENT",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
+      "id": "3c0d1b8dbeef2442",
+      "predicted": "URGENT",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
+      "id": "3c0eb92f0aca6d5b",
+      "predicted": "URGENT",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
+      "id": "3e73acfabee5b65f",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
+      "id": "4157882a94b83dab",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PERSONAL",
+      "source": "llm"
+    },
+    {
+      "id": "4523f82f0661d739",
+      "predicted": "URGENT",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
+      "id": "55c7ba7ffdd7f214",
+      "predicted": "URGENT",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
+      "id": "58a29b2c0ae55006",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "FYI",
+      "source": "llm"
+    },
+    {
+      "id": "5f38d18ebe236ccb",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PERSONAL",
+      "source": "llm"
+    },
+    {
+      "id": "6099b47db3fa0c63",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
+      "id": "62e5caf507072e3e",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PERSONAL",
+      "source": "llm"
+    },
+    {
+      "id": "6e86a575d2d8695d",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PERSONAL",
+      "source": "llm"
+    },
+    {
+      "id": "701dc44f760c540f",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "URGENT",
+      "source": "llm"
+    },
+    {
+      "id": "75bb378c453a833f",
+      "predicted": "URGENT",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
+      "id": "7d88749f2fb65d1d",
+      "predicted": "FYI",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
+      "id": "7e98cd7264da1497",
+      "predicted": "URGENT",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
+      "id": "7f7866189bdaa8ad",
+      "predicted": "FYI",
+      "expected": "PROMOTIONAL",
       "source": "heuristic"
     },
     {
-      "id": "0df4cc4af65c0c39",
-      "predicted": "informational",
-      "expected": "urgent",
+      "id": "87a7096d45e10893",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PERSONAL",
+      "source": "llm"
+    },
+    {
+      "id": "87bd4cec7644ca6f",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "FYI",
+      "source": "llm"
+    },
+    {
+      "id": "8ee1b2f1fbb89c29",
+      "predicted": "URGENT",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
+      "id": "91e2a38b75ed4ea0",
+      "predicted": "FYI",
+      "expected": "NEEDS_RESPONSE",
+      "source": "llm"
+    },
+    {
+      "id": "95f06a2fbdb2e33a",
+      "predicted": "URGENT",
+      "expected": "PERSONAL",
+      "source": "llm"
+    },
+    {
+      "id": "98e077cf3d85289f",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PERSONAL",
+      "source": "llm"
+    },
+    {
+      "id": "a1511668f14aa9a4",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
+      "id": "a47d17aac2d19dc0",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "FYI",
+      "source": "llm"
+    },
+    {
+      "id": "a577dbb07ae8e521",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PERSONAL",
+      "source": "llm"
+    },
+    {
+      "id": "a6f269a64d12a080",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
+      "id": "ad1581c4965c0a44",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PERSONAL",
+      "source": "llm"
+    },
+    {
+      "id": "adb73d507db0569a",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
+      "id": "afcf0d7e59e03c7b",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "URGENT",
+      "source": "llm"
+    },
+    {
+      "id": "b155905a1c9b9f38",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "FYI",
+      "source": "llm"
+    },
+    {
+      "id": "b1de250d853b9df7",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PERSONAL",
+      "source": "llm"
+    },
+    {
+      "id": "b37c4de726918adc",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "FYI",
+      "source": "llm"
+    },
+    {
+      "id": "b4e45f8b62599836",
+      "predicted": "FYI",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
+      "id": "b6ce53cff5093099",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "URGENT",
+      "source": "llm"
+    },
+    {
+      "id": "ba0f911e9fd56d36",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PERSONAL",
+      "source": "llm"
+    },
+    {
+      "id": "bb62e71a243fe62e",
+      "predicted": "PERSONAL",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
+      "id": "c14ae7faa8eca3e7",
+      "predicted": "URGENT",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
+      "id": "c2a336f8dc791e63",
+      "predicted": "FYI",
+      "expected": "NEEDS_RESPONSE",
+      "source": "llm"
+    },
+    {
+      "id": "c44231570ae76a19",
+      "predicted": "URGENT",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
+      "id": "c6c8d92acb552bf9",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PERSONAL",
+      "source": "llm"
+    },
+    {
+      "id": "c80b9311eec23a4b",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "URGENT",
+      "source": "llm"
+    },
+    {
+      "id": "d194476caa592968",
+      "predicted": "URGENT",
+      "expected": "PERSONAL",
+      "source": "llm"
+    },
+    {
+      "id": "d975b7be169b2636",
+      "predicted": "URGENT",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
+      "id": "db5997e092a925e1",
+      "predicted": "URGENT",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
+      "id": "dbe7cff7277ae87b",
+      "predicted": "URGENT",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
+      "id": "dc27ba17720e604f",
+      "predicted": "FYI",
+      "expected": "PROMOTIONAL",
+      "source": "llm"
+    },
+    {
+      "id": "dcf2f1603a5a9172",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "URGENT",
+      "source": "llm"
+    },
+    {
+      "id": "dd48ae96e3405413",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PERSONAL",
+      "source": "llm"
+    },
+    {
+      "id": "e02075614a89a575",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PERSONAL",
+      "source": "llm"
+    },
+    {
+      "id": "e17e00d7b5318c3c",
+      "predicted": "FYI",
+      "expected": "PROMOTIONAL",
       "source": "heuristic"
     },
     {
-      "id": "0e38d3e3de658414",
-      "predicted": "informational",
-      "expected": "actionable",
+      "id": "e826247d5584f6c0",
+      "predicted": "FYI",
+      "expected": "PROMOTIONAL",
       "source": "llm"
     },
     {
-      "id": "0f631870938ec9f3",
-      "predicted": "actionable",
-      "expected": "urgent",
+      "id": "e99af3dcd6970171",
+      "predicted": "URGENT",
+      "expected": "PERSONAL",
       "source": "llm"
     },
     {
-      "id": "107157659aa52a53",
-      "predicted": "actionable",
-      "expected": "low priority",
+      "id": "ec11e301804528fb",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PERSONAL",
       "source": "llm"
     },
     {
-      "id": "10ec7574161d746d",
-      "predicted": "informational",
-      "expected": "low priority",
+      "id": "ec275c9fa2326b62",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "FYI",
       "source": "llm"
     },
     {
-      "id": "13b9073e65646964",
-      "predicted": "low priority",
-      "expected": "informational",
-      "source": "heuristic"
-    },
-    {
-      "id": "13f3a09ea74b8a0f",
-      "predicted": "informational",
-      "expected": "urgent",
-      "source": "heuristic"
-    },
-    {
-      "id": "172661e0f889e4bf",
-      "predicted": "informational",
-      "expected": "actionable",
-      "source": "llm"
-    },
-    {
-      "id": "17278778f3ec1f9c",
-      "predicted": "informational",
-      "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "1a33a8137f27430e",
-      "predicted": "actionable",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "1ba3a0bfb3be0294",
-      "predicted": "urgent",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "1c93950535ac01d5",
-      "predicted": "informational",
-      "expected": "actionable",
-      "source": "heuristic"
-    },
-    {
-      "id": "1d0d36513b432301",
-      "predicted": "low priority",
-      "expected": "informational",
-      "source": "heuristic"
-    },
-    {
-      "id": "204df847518b333c",
-      "predicted": "actionable",
-      "expected": "urgent",
-      "source": "llm"
-    },
-    {
-      "id": "220288ef14d8e00d",
-      "predicted": "actionable",
-      "expected": "urgent",
-      "source": "llm"
-    },
-    {
-      "id": "240d7730081b9ba3",
-      "predicted": "actionable",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "24b322f986eac012",
-      "predicted": "informational",
-      "expected": "actionable",
-      "source": "heuristic"
-    },
-    {
-      "id": "26a9bacc9f5b81b2",
-      "predicted": "urgent",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "2acd572540cadc93",
-      "predicted": "actionable",
-      "expected": "urgent",
-      "source": "llm"
-    },
-    {
-      "id": "2b09b709adead8ba",
-      "predicted": "informational",
-      "expected": "low priority",
-      "source": "heuristic"
-    },
-    {
-      "id": "2cb64a0ba21b9268",
-      "predicted": "informational",
-      "expected": "actionable",
-      "source": "llm"
-    },
-    {
-      "id": "2cf804e142471278",
-      "predicted": "urgent",
-      "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "310099835078216e",
-      "predicted": "actionable",
-      "expected": "urgent",
-      "source": "llm"
-    },
-    {
-      "id": "3114084d55859295",
-      "predicted": "urgent",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "33b92c14929db56a",
-      "predicted": "actionable",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "340f55dba2aeb6f3",
-      "predicted": "urgent",
-      "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "3519d0d858262214",
-      "predicted": "urgent",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "37eb07fad9beaa71",
-      "predicted": "informational",
-      "expected": "actionable",
-      "source": "llm"
-    },
-    {
-      "id": "3b72e5900ed16229",
-      "predicted": "actionable",
-      "expected": "urgent",
-      "source": "llm"
-    },
-    {
-      "id": "3ba00df3df7cc3fa",
-      "predicted": "actionable",
-      "expected": "urgent",
-      "source": "llm"
-    },
-    {
-      "id": "3c9ae2b4907a327e",
-      "predicted": "informational",
-      "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "3e060a7638864950",
-      "predicted": "actionable",
-      "expected": "urgent",
-      "source": "llm"
-    },
-    {
-      "id": "3ebd9b5933bb073c",
-      "predicted": "informational",
-      "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "41b12b9bba4d9236",
-      "predicted": "informational",
-      "expected": "urgent",
-      "source": "heuristic"
-    },
-    {
-      "id": "43643ed7433631b9",
-      "predicted": "informational",
-      "expected": "actionable",
-      "source": "heuristic"
-    },
-    {
-      "id": "43ea2aba2b2d4e79",
-      "predicted": "informational",
-      "expected": "actionable",
-      "source": "heuristic"
-    },
-    {
-      "id": "4434b4ac7d1d21ed",
-      "predicted": "actionable",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "44a7717cc7180dec",
-      "predicted": "low priority",
-      "expected": "informational",
-      "source": "heuristic"
-    },
-    {
-      "id": "483f7a3ed6ea0821",
-      "predicted": "actionable",
-      "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "488fcd0fa766465c",
-      "predicted": "low priority",
-      "expected": "informational",
-      "source": "heuristic"
-    },
-    {
-      "id": "4bc416276e06a1f1",
-      "predicted": "actionable",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "4ed514432cf621b5",
-      "predicted": "urgent",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "4ee1819f7acd0626",
-      "predicted": "informational",
-      "expected": "actionable",
-      "source": "llm"
-    },
-    {
-      "id": "4f732ef810d87f00",
-      "predicted": "low priority",
-      "expected": "urgent",
-      "source": "heuristic"
-    },
-    {
-      "id": "50eb7532cae3a6d1",
-      "predicted": "informational",
-      "expected": "actionable",
-      "source": "llm"
-    },
-    {
-      "id": "519aa9d181744a15",
-      "predicted": "informational",
-      "expected": "urgent",
-      "source": "heuristic"
-    },
-    {
-      "id": "51deb90fa5c4099d",
-      "predicted": "low priority",
-      "expected": "informational",
-      "source": "heuristic"
-    },
-    {
-      "id": "521f395dba78e883",
-      "predicted": "urgent",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "5349014688701524",
-      "predicted": "informational",
-      "expected": "urgent",
-      "source": "heuristic"
-    },
-    {
-      "id": "56368a42e147b40b",
-      "predicted": "actionable",
-      "expected": "urgent",
-      "source": "llm"
-    },
-    {
-      "id": "598c495c54ed791a",
-      "predicted": "informational",
-      "expected": "low priority",
-      "source": "heuristic"
-    },
-    {
-      "id": "5b6b1b42c916b141",
-      "predicted": "informational",
-      "expected": "urgent",
-      "source": "heuristic"
-    },
-    {
-      "id": "5bdc8a450f9a5be9",
-      "predicted": "actionable",
-      "expected": "urgent",
-      "source": "llm"
-    },
-    {
-      "id": "5cd4c7247e81502c",
-      "predicted": "informational",
-      "expected": "actionable",
-      "source": "heuristic"
-    },
-    {
-      "id": "5e9f54b13e2662a3",
-      "predicted": "informational",
-      "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "603edde356f65207",
-      "predicted": "informational",
-      "expected": "urgent",
-      "source": "heuristic"
-    },
-    {
-      "id": "60483079196852d9",
-      "predicted": "actionable",
-      "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "61466449dfab4466",
-      "predicted": "urgent",
-      "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "617376457500ffa5",
-      "predicted": "actionable",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "640c46e59d1dca89",
-      "predicted": "actionable",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "640d9d69eb1d77c5",
-      "predicted": "urgent",
-      "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "65c13168c5294b34",
-      "predicted": "actionable",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "664403d88eec7ac6",
-      "predicted": "informational",
-      "expected": "urgent",
-      "source": "heuristic"
-    },
-    {
-      "id": "693b0ff3a7e09c7b",
-      "predicted": "low priority",
-      "expected": "actionable",
-      "source": "heuristic"
-    },
-    {
-      "id": "69956070b60793f4",
-      "predicted": "actionable",
-      "expected": "urgent",
-      "source": "llm"
-    },
-    {
-      "id": "6e4df8202944d6db",
-      "predicted": "actionable",
-      "expected": "urgent",
-      "source": "llm"
-    },
-    {
-      "id": "6e89802d1f345848",
-      "predicted": "actionable",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "6f2c37358df34725",
-      "predicted": "low priority",
-      "expected": "informational",
-      "source": "heuristic"
-    },
-    {
-      "id": "7272f5f086246041",
-      "predicted": "actionable",
-      "expected": "urgent",
-      "source": "llm"
-    },
-    {
-      "id": "74cd4919d3d621e6",
-      "predicted": "urgent",
-      "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "758cdb051c3b37ca",
-      "predicted": "informational",
-      "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "797289caa75f4a11",
-      "predicted": "actionable",
-      "expected": "urgent",
-      "source": "llm"
-    },
-    {
-      "id": "7e0ec9a333dad98d",
-      "predicted": "low priority",
-      "expected": "urgent",
-      "source": "heuristic"
-    },
-    {
-      "id": "7e3d7462c8003a0d",
-      "predicted": "urgent",
-      "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "81d52b778c6f30ff",
-      "predicted": "informational",
-      "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "86fe03cff1d35a76",
-      "predicted": "actionable",
-      "expected": "urgent",
-      "source": "llm"
-    },
-    {
-      "id": "8812968826f09632",
-      "predicted": "actionable",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "8873445e960e86c6",
-      "predicted": "informational",
-      "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "89178213970a8117",
-      "predicted": "informational",
-      "expected": "urgent",
-      "source": "heuristic"
-    },
-    {
-      "id": "89c3447dda4a8a20",
-      "predicted": "informational",
-      "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "8b6c816705e5c7c8",
-      "predicted": "urgent",
-      "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "8bd3a251ac5c4df2",
-      "predicted": "informational",
-      "expected": "actionable",
-      "source": "llm"
-    },
-    {
-      "id": "8db072a4781b5148",
-      "predicted": "informational",
-      "expected": "urgent",
-      "source": "heuristic"
-    },
-    {
-      "id": "930abefe0a4560c5",
-      "predicted": "urgent",
-      "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "98b5862a1a250847",
-      "predicted": "actionable",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "9a73e95a0c84ab79",
-      "predicted": "informational",
-      "expected": "actionable",
-      "source": "llm"
-    },
-    {
-      "id": "9c5d566212dc8bb7",
-      "predicted": "informational",
-      "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "9c7e08663d181714",
-      "predicted": "actionable",
-      "expected": "urgent",
-      "source": "llm"
-    },
-    {
-      "id": "9d12f9b0fe8f988a",
-      "predicted": "informational",
-      "expected": "actionable",
-      "source": "llm"
-    },
-    {
-      "id": "a51f16a07ebb422f",
-      "predicted": "informational",
-      "expected": "actionable",
-      "source": "llm"
-    },
-    {
-      "id": "adbfea2474fd792c",
-      "predicted": "informational",
-      "expected": "actionable",
-      "source": "llm"
-    },
-    {
-      "id": "af3ade86f9ac0556",
-      "predicted": "actionable",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "af70540f06d2feb7",
-      "predicted": "informational",
-      "expected": "actionable",
-      "source": "llm"
-    },
-    {
-      "id": "b41c8e8c1a56f869",
-      "predicted": "actionable",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "b42414b3843f7dda",
-      "predicted": "actionable",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "b4f5006c33ef70df",
-      "predicted": "urgent",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "b53e4adb6ab9a226",
-      "predicted": "informational",
-      "expected": "urgent",
-      "source": "heuristic"
-    },
-    {
-      "id": "bb7193d32a828e09",
-      "predicted": "urgent",
-      "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "be372d3c1eba1dd1",
-      "predicted": "actionable",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "c18f46b7b6ed5a61",
-      "predicted": "urgent",
-      "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "c6df0508d2e1949a",
-      "predicted": "actionable",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "cd28b28167a294a7",
-      "predicted": "actionable",
-      "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "cf8e88781a1e264e",
-      "predicted": "low priority",
-      "expected": "actionable",
-      "source": "heuristic"
-    },
-    {
-      "id": "d2f7b9b507ee6da3",
-      "predicted": "actionable",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "d49fc14887c09355",
-      "predicted": "informational",
-      "expected": "actionable",
-      "source": "heuristic"
-    },
-    {
-      "id": "d9c437157ad659bb",
-      "predicted": "actionable",
-      "expected": "urgent",
-      "source": "llm"
-    },
-    {
-      "id": "db0866a8d152d0c8",
-      "predicted": "actionable",
-      "expected": "urgent",
-      "source": "llm"
-    },
-    {
-      "id": "dca06c852486fce4",
-      "predicted": "actionable",
-      "expected": "informational",
-      "source": "llm"
-    },
-    {
-      "id": "e0ffc6304c6d4ae1",
-      "predicted": "informational",
-      "expected": "actionable",
-      "source": "heuristic"
-    },
-    {
-      "id": "e1a9d906a7bd450f",
-      "predicted": "urgent",
-      "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "e29dbca60e95cbc2",
-      "predicted": "actionable",
-      "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "e4864064468878f1",
-      "predicted": "informational",
-      "expected": "urgent",
-      "source": "heuristic"
-    },
-    {
-      "id": "ea20ddf4bf4c3f24",
-      "predicted": "informational",
-      "expected": "urgent",
-      "source": "llm"
-    },
-    {
-      "id": "ecbc8c846ee404bb",
-      "predicted": "informational",
-      "expected": "urgent",
-      "source": "heuristic"
-    },
-    {
-      "id": "f58906b71d8da4a3",
-      "predicted": "urgent",
-      "expected": "low priority",
-      "source": "llm"
-    },
-    {
-      "id": "f705177b99e02779",
-      "predicted": "urgent",
-      "expected": "informational",
+      "id": "ef9eb466c12cb3ed",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "FYI",
       "source": "llm"
     },
     {
-      "id": "f88c7f9bbcf3695e",
-      "predicted": "urgent",
-      "expected": "low priority",
+      "id": "efa366b8fa0e5e78",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PERSONAL",
       "source": "llm"
     },
     {
-      "id": "fe78fe68219f6cba",
-      "predicted": "informational",
-      "expected": "low priority",
+      "id": "f3476be995b53209",
+      "predicted": "NEEDS_RESPONSE",
+      "expected": "PERSONAL",
       "source": "llm"
     },
     {
-      "id": "fec33466af8df3a0",
-      "predicted": "informational",
-      "expected": "low priority",
+      "id": "f902ec619a32d890",
+      "predicted": "URGENT",
+      "expected": "PROMOTIONAL",
       "source": "llm"
     }
   ]

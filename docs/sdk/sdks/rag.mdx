@@ -49,6 +49,13 @@ RAG searches your documents and answers using real information.
 - **Augmented** → Add that information to the LLM's context
 - **Generation** → LLM generates an answer using your documents
 
+<Note>
+**Supported document formats:** PDF, Word (`.docx`), PowerPoint (`.pptx`),
+Excel (`.xlsx`), plus plain text, Markdown, CSV, JSON, HTML, and common source
+code files. Legacy binary Office formats (`.doc`, `.ppt`, `.xls`) are not
+supported — re-save them as the modern `.docx` / `.pptx` / `.xlsx` formats.
+</Note>
+
 ---
 
 ## How RAG Works: A Mental Model
@@ -62,7 +69,7 @@ This happens once when you index documents:
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
-    A(["PDF / PPTX Document"]) --> B(["EXTRACT TEXT"])
+    A(["PDF / DOCX / PPTX / XLSX Document"]) --> B(["EXTRACT TEXT"])
     B --> C(["SPLIT INTO CHUNKS"])
     C --> D(["GENERATE EMBEDDINGS"])
     D --> E[("STORE IN FAISS")]
@@ -272,7 +279,7 @@ config = RAGConfig(
 
     # === Models ===
     model="Qwen3.5-35B-A3B-GGUF",  # LLM for generation
-    embedding_model="nomic-embed-text-v2-moe-GGUF",  # Embedding model
+    embedding_model="user.embeddinggemma-300m-GGUF",  # Embedding model
 
     # === Storage ===
     cache_dir=".gaia",         # Where to store the index
@@ -284,6 +291,10 @@ config = RAGConfig(
 
 rag = RAGSDK(config)
 ```
+
+<Note>
+The default embedder is now `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M), replacing `nomic-embed-text-v2-moe-GGUF` because the current llama.cpp server cannot load the nomic MOE embedder. Both are 768-dim, so retrieval behavior is unchanged. No manual cache clearing is needed after the switch: the on-disk cache under `cache_dir` stores only extracted document text and chunks (content-hashed, independent of the embedder), and vectors are regenerated via Lemonade on every index — so the next run embeds with EmbeddingGemma automatically.
+</Note>
 
 ### Tuning `max_chunks`
 
@@ -467,7 +478,7 @@ Think of the difference like this:
 GAIA's agents use RAG as a **tool**, not just a pipeline. This is the key architectural difference:
 
 ```python
-from gaia.agents.chat.agent import ChatAgent, ChatAgentConfig
+from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
 # Create an agent with RAG capability
 config = ChatAgentConfig(

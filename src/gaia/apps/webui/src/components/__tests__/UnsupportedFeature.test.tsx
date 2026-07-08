@@ -32,8 +32,8 @@ describe('getUnsupportedCategory', () => {
         expect(getUnsupportedCategory('.pdf')).toBeNull();
     });
 
-    it('returns "Microsoft Office" for .docx', () => {
-        expect(getUnsupportedCategory('.docx')?.label).toBe('Microsoft Office');
+    it('returns null for .docx — Word indexing is supported', () => {
+        expect(getUnsupportedCategory('.docx')).toBeNull();
     });
 
     it('returns null for .pptx — PowerPoint indexing is supported', () => {
@@ -58,6 +58,10 @@ describe('isExtensionSupported', () => {
 
     it('returns true for .pptx — modern PowerPoint is indexable', () => {
         expect(isExtensionSupported('.pptx')).toBe(true);
+    });
+
+    it('returns true for .docx — modern Word is indexable', () => {
+        expect(isExtensionSupported('.docx')).toBe(true);
     });
 
     it('returns false for .exe', () => {

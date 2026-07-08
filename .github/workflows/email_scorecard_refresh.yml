@@ -1,0 +1,176 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Email agent eval-scorecard refresh + regression gate (#1862).
+#
+# Answers "how does a PR that changes the agent keep the scorecard honest?":
+# when the email agent's LLM-affecting code (or the eval corpus) changes, this
+# re-runs the REAL eval, regenerates the scorecard, and then:
+#   - score IMPROVED or held  -> commits the refreshed SCORECARD.md to the branch
+#   - score REGRESSED          -> fails the job (the worse card is NOT committed)
+#
+# `gaia eval benchmark` needs Lemonade on AMD hardware, so this runs ONLY on the
+# self-hosted [self-hosted, lemonade-eval] pool — GitHub-hosted runners cannot run
+# it. The release-time `scorecard-gate` job in release_agent_email.yml is the
+# hosted-CI backstop (it parses committed files only, no eval).
+#
+# Two regression checks run here:
+#   1. SAME-VERSION: fresh aggregate vs the currently-committed SCORECARD.md —
+#      stops a noisy/worse re-run from silently overwriting a good score.
+#   2. CROSS-VERSION (best-effort): fresh SCORECARD.md vs the prior version tag
+#      via --baseline-ref.
+#
+# Auto-commit needs `contents: write` and only works on the repo's own branches;
+# a fork PR's GITHUB_TOKEN is read-only — for forks, run the eval locally / on AMD
+# hardware and commit the scorecard by hand (the release gate still enforces it).
+
+name: Email Agent Eval — scorecard refresh
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'Messages to triage (must match the committed scorecard for comparability)'
+        required: false
+        default: '220'
+      model:
+        description: 'Lemonade model id'
+        required: false
+        default: 'Gemma-4-E4B-it-GGUF'
+  push:
+    branches-ignore:
+      - main
+    paths:
+      - 'hub/agents/python/email/**'
+      - 'tests/fixtures/email/**'
+      - 'src/gaia/eval/release_scorecard.py'
+      - 'src/gaia/eval/scorecard_gate.py'
+
+concurrency:
+  # Share the single Lemonade backend slot with the other self-hosted evals so two
+  # runs never race-evict each other's model (CLAUDE.md: evals run serially).
+  group: lemonade-eval
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # auto-commit the refreshed scorecard to the branch
+
+env:
+  SCORECARD: hub/agents/npm/agent-email/SCORECARD.md
+  MANIFEST: hub/agents/python/email/gaia-agent.yaml
+  LIMIT: ${{ github.event.inputs.limit || '220' }}
+  MODEL: ${{ github.event.inputs.model || 'Gemma-4-E4B-it-GGUF' }}
+
+jobs:
+  refresh:
+    name: Re-run eval, refresh-or-reject scorecard
+    runs-on: [self-hosted, lemonade-eval]
+    timeout-minutes: 90
+    steps:
+      - name: Checkout (the pushed branch)
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+          fetch-depth: 0   # full history for git describe (cross-version baseline)
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+
+      - name: Install in isolated venv
+        run: |
+          python -m venv .venv-scorecard
+          source .venv-scorecard/bin/activate
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,eval,api]"
+          echo "$PWD/.venv-scorecard/bin" >> "$GITHUB_PATH"
+
+      - name: Resolve version + capture currently-committed aggregate
+        id: pre
+        run: |
+          set -euo pipefail
+          VERSION=$(python -c "import yaml; print(yaml.safe_load(open('${MANIFEST}'))['version'])")
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          # Aggregate of the SCORECARD.md as committed on this branch (empty if new).
+          if git cat-file -e "HEAD:${SCORECARD}" 2>/dev/null; then
+            git show "HEAD:${SCORECARD}" > /tmp/committed_scorecard.md
+            COMMITTED=$(python -c "from gaia.eval.release_scorecard import parse_scorecard; print(parse_scorecard(__import__('pathlib').Path('/tmp/committed_scorecard.md'))['aggregate']['value'])")
+          else
+            COMMITTED=""
+          fi
+          echo "committed=${COMMITTED}" >> "$GITHUB_OUTPUT"
+          # Resolve the previous release tag for the cross-version check.
+          PREV="$(git describe --tags --abbrev=0 \
+            --match 'agent-pkg-email-*' \
+            "HEAD^" 2>/dev/null || true)"
+          echo "prev_tag=${PREV}" >> "$GITHUB_OUTPUT"
+          echo "Version ${VERSION}; committed aggregate: ${COMMITTED:-<none>}; prev tag: ${PREV:-<none>}"
+
+      - name: Run the email-triage benchmark (real eval)
+        env:
+          # The agent's calendar-connector resolution blocks on the OS keyring in
+          # a headless context — disable it so construction doesn't hang.
+          PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
+          # Triage of the full corpus is one tool call (~17 min for 220 emails on a
+          # 4B local model); a lower timeout abandons it mid-run and yields a
+          # degenerate 0-email run, so pin a margin above the observed time.
+          GAIA_AGENT_TOOL_TIMEOUT: '1800'
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          rm -rf eval-out && mkdir -p eval-out
+          # mbox + ground_truth are generated artifacts (not committed) — build
+          # them from the committed seed before the eval reads them.
+          python tests/fixtures/email/generate_mbox.py
+          gaia eval benchmark \
+            --model "${MODEL}" \
+            --mbox-path tests/fixtures/email/synthetic_inbox.mbox \
+            --ground-truth tests/fixtures/email/ground_truth.json \
+            --limit "${LIMIT}" \
+            --output-dir eval-out
+
+      - name: Regenerate SCORECARD.md from the real run
+        run: |
+          set -euo pipefail
+          python hub/agents/python/email/packaging/gen_scorecard.py \
+            --benchmark-dir eval-out --limit "${LIMIT}"
+
+      - name: Same-version regression check (reject a worse re-run)
+        run: |
+          set -euo pipefail
+          COMMITTED="${{ steps.pre.outputs.committed }}"
+          FRESH=$(python -c "from gaia.eval.release_scorecard import parse_scorecard; print(parse_scorecard(__import__('pathlib').Path('${SCORECARD}'))['aggregate']['value'])")
+          echo "fresh aggregate: ${FRESH} | committed: ${COMMITTED:-<none>}"
+          if [ -n "${COMMITTED}" ] && python -c "import sys; sys.exit(0 if float('${FRESH}') < float('${COMMITTED}') else 1)"; then
+            echo "::error::Scorecard regression: re-run scored ${FRESH} < committed ${COMMITTED}. Not committing the worse card. Investigate, or override intentionally via --allow-regression in a manual commit."
+            git checkout -- "${SCORECARD}" || true
+            exit 1
+          fi
+          echo "No same-version regression — fresh score is >= committed."
+
+      - name: Cross-version gate (fresh SCORECARD.md vs prior version tag, best-effort)
+        run: |
+          set -euo pipefail
+          PREV="${{ steps.pre.outputs.prev_tag }}"
+          if [ -n "${PREV}" ]; then
+            python -m gaia.eval.scorecard_gate \
+              --scorecard "${SCORECARD}" \
+              --baseline-ref "${PREV}"
+          else
+            python -m gaia.eval.scorecard_gate \
+              --scorecard "${SCORECARD}"
+          fi
+
+      - name: Commit the refreshed SCORECARD.md (only if it changed for the better/equal)
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- "${SCORECARD}"; then
+            echo "SCORECARD.md unchanged — nothing to commit."
+            exit 0
+          fi
+          git config user.name  "${{ github.actor }}"
+          git config user.email "${{ github.actor }}@users.noreply.github.com"
+          git add "${SCORECARD}"
+          git commit -m "eval(email): refresh v${{ steps.pre.outputs.version }} scorecard from benchmark run"
+          git push origin "HEAD:${{ github.head_ref || github.ref_name }}"

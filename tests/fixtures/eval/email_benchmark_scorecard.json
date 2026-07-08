@@ -1,0 +1,5 @@
+{"run_id":"bench-fixture","scenarios":[
+  {"category":"Gemma-4-E4B-it-GGUF","status":"PASS","total_emails":12,"quality":{"category_accuracy":0.4167,"within_one_bucket_accuracy":0.8333,"urgent_vs_not_accuracy":0.75,"urgent_recall":0.70}},
+  {"category":"Gemma-4-E4B-it-GGUF","status":"PASS","total_emails":12,"quality":{"category_accuracy":0.5000,"within_one_bucket_accuracy":0.9167,"urgent_vs_not_accuracy":0.80,"urgent_recall":0.75}},
+  {"category":"Gemma-4-E4B-it-GGUF","status":"PASS","total_emails":0}
+]}

@@ -51,10 +51,613 @@
         "title": "ActionItem",
         "type": "object"
       },
+      "AttachmentMeta": {
+        "additionalProperties": false,
+        "description": "Metadata for one attachment on a message (schema 2.2, #1542).\n\nMetadata only — no content. On the read path ``attachment_id`` is the\nprovider handle a caller uses to fetch the bytes (Gmail\n``body.attachmentId``); it is null for providers/parts that carry none.",
+        "properties": {
+          "attachment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Provider handle for fetching the content (Gmail body.attachmentId). Null when the provider/part carries none.",
+            "title": "Attachment Id"
+          },
+          "filename": {
+            "description": "Attachment filename, e.g. 'report.pdf'.",
+            "title": "Filename",
+            "type": "string"
+          },
+          "mime_type": {
+            "description": "MIME type as reported by the provider.",
+            "title": "Mime Type",
+            "type": "string"
+          },
+          "size_bytes": {
+            "description": "Attachment size in bytes (decoded).",
+            "minimum": 0.0,
+            "title": "Size Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "filename",
+          "mime_type",
+          "size_bytes"
+        ],
+        "title": "AttachmentMeta",
+        "type": "object"
+      },
+      "BatchItemError": {
+        "additionalProperties": false,
+        "description": "Why one batch item could not be triaged (surfaced loudly, never swallowed).\n\nKept as an object (not a bare string) so a future ``code``/``type`` field is\nadditive rather than another breaking change.",
+        "properties": {
+          "message": {
+            "description": "Actionable failure reason for this item.",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "BatchItemError",
+        "type": "object"
+      },
+      "BatchItemResult": {
+        "additionalProperties": false,
+        "description": "One item's outcome in a batch triage, correlated by 0-based index.\n\nExactly one of ``result`` or ``error`` is set. ``index`` matches the item's\nposition in the request ``items`` array so out-of-order processing is safe\n(the current implementation is sequential and order-preserving).",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BatchItemError"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when the item failed."
+          },
+          "index": {
+            "description": "0-based position in the request ``items`` array.",
+            "minimum": 0.0,
+            "title": "Index",
+            "type": "integer"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EmailTriageResult"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when the item succeeded."
+          }
+        },
+        "required": [
+          "index"
+        ],
+        "title": "BatchItemResult",
+        "type": "object"
+      },
+      "BatchTriageRequest": {
+        "additionalProperties": false,
+        "description": "Top-level batch triage request envelope (#1887).\n\nAccepts 1..MAX_BATCH_SIZE ``EmailInput`` items (same discriminated union as\nthe single-email endpoint's ``payload``). ``context`` applies to ALL items;\nper-item context override is out of scope.",
+        "properties": {
+          "context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TriageContext"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional context (people/projects/tone/self-email) applied to ALL items. Absent → behavior unchanged for every item."
+          },
+          "items": {
+            "description": "The emails / threads to triage, 1..MAX_BATCH_SIZE items. Each is a SingleEmailInput or ThreadInput discriminated by ``kind``.",
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "single": "#/components/schemas/SingleEmailInput",
+                  "thread": "#/components/schemas/ThreadInput"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/SingleEmailInput"
+                },
+                {
+                  "$ref": "#/components/schemas/ThreadInput"
+                }
+              ]
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Items",
+            "type": "array"
+          },
+          "schema_version": {
+            "default": "2.2",
+            "description": "Contract version. Mismatch lets a consumer fail loudly.",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "BatchTriageRequest",
+        "type": "object"
+      },
+      "BatchTriageResponse": {
+        "additionalProperties": false,
+        "description": "Top-level batch triage response envelope (#1887).\n\nOne ``BatchItemResult`` per request item, order-preserved, 1:1 with\n``items``. HTTP 200 with all items errored is valid — consumers MUST inspect\neach ``results[].error``, not just the HTTP status.",
+        "properties": {
+          "results": {
+            "description": "One entry per request item, order-preserved, 1:1 with ``items``.",
+            "items": {
+              "$ref": "#/components/schemas/BatchItemResult"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "schema_version": {
+            "default": "2.2",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "title": "BatchTriageResponse",
+        "type": "object"
+      },
+      "CalendarCreateEventRequest": {
+        "additionalProperties": false,
+        "description": "Create a calendar event. Shared by the preview (token-mint) and create\n(token-consume) endpoints.\n\nCreating an event is a Tier-2 (externally visible) mutation, so it is gated\nby the same single-use confirmation-token handshake as ``/v1/email/send``:\nPOST this to ``/calendar/events/preview`` to mint a token bound to the exact\nevent, then echo the token in ``confirmation_token`` to ``/calendar/events``.",
+        "properties": {
+          "attendees": {
+            "description": "Attendee email addresses to invite (may be empty).",
+            "items": {
+              "type": "string"
+            },
+            "title": "Attendees",
+            "type": "array"
+          },
+          "confirmation_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Confirmation token from POST /v1/email/calendar/events/preview. Ignored by preview; required by create — a create without a valid token bound to this exact event is rejected (403).",
+            "title": "Confirmation Token"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional event description / body.",
+            "title": "Description"
+          },
+          "end": {
+            "$ref": "#/components/schemas/CalendarEventDateTime",
+            "description": "Event end (after start)."
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional free-text location.",
+            "title": "Location"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional provider binding ('google' or 'microsoft'). When set on preview, the confirmation token binds to this provider so the create routes to the right calendar even with multiple accounts connected.",
+            "title": "Provider"
+          },
+          "schema_version": {
+            "default": "2.2",
+            "description": "Contract version. Mismatch lets a consumer fail loudly.",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "start": {
+            "$ref": "#/components/schemas/CalendarEventDateTime",
+            "description": "Event start."
+          },
+          "summary": {
+            "description": "Event title / summary (non-empty).",
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "summary",
+          "start",
+          "end"
+        ],
+        "title": "CalendarCreateEventRequest",
+        "type": "object"
+      },
+      "CalendarEvent": {
+        "additionalProperties": false,
+        "description": "A calendar event as returned by the view endpoint (display-flattened).\n\n``start`` / ``end`` are the raw provider strings (an RFC 3339 ``dateTime``\nfor timed events or a ``YYYY-MM-DD`` ``date`` for all-day events) — flattened\nfor display rather than re-modeled, matching what the agent's calendar tools\nsurface.",
+        "properties": {
+          "end": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "End instant ('dateTime') or all-day 'date'.",
+            "title": "End"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Provider event id (opaque).",
+            "title": "Id"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Free-text location, or null when none.",
+            "title": "Location"
+          },
+          "organizer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Organizer email, or null when not reported.",
+            "title": "Organizer"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Start instant ('dateTime') or all-day 'date'.",
+            "title": "Start"
+          },
+          "summary": {
+            "default": "",
+            "description": "Event title / summary.",
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "title": "CalendarEvent",
+        "type": "object"
+      },
+      "CalendarEventDateTime": {
+        "additionalProperties": false,
+        "description": "One endpoint (start or end) of a calendar event.\n\nProvide EXACTLY ONE of:\n  - ``date_time`` — a timed event, RFC 3339 (e.g. ``2026-07-01T14:00:00Z``\n    or ``2026-07-01T14:00:00-07:00``); or\n  - ``date`` — an all-day event, ``YYYY-MM-DD``.\n\n``time_zone`` is an optional IANA name (e.g. ``America/Los_Angeles``).\nNote: when ``time_zone`` is omitted on a timed event, the Microsoft Graph\n(Outlook) calendar backend attaches a default of ``UTC`` (Graph rejects a\nbare ``dateTime`` without a paired time zone). For Google, supply either a\nUTC offset inside ``date_time`` or an explicit ``time_zone``.",
+        "properties": {
+          "date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "All-day date, 'YYYY-MM-DD'. Mutually exclusive with 'date_time'.",
+            "title": "Date"
+          },
+          "date_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Timed-event instant, RFC 3339. Mutually exclusive with 'date'.",
+            "title": "Date Time"
+          },
+          "time_zone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "IANA time zone (e.g. 'America/Los_Angeles'). Optional; the Outlook backend defaults a missing time zone to 'UTC' for timed events.",
+            "title": "Time Zone"
+          }
+        },
+        "title": "CalendarEventDateTime",
+        "type": "object"
+      },
+      "CalendarEventPreviewResponse": {
+        "additionalProperties": false,
+        "description": "The normalized event echo plus a single-use confirmation token bound to\nit. Returned by POST /v1/email/calendar/events/preview.",
+        "properties": {
+          "attendees": {
+            "description": "Attendees to invite.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Attendees",
+            "type": "array"
+          },
+          "confirmation_token": {
+            "description": "Echo this back to POST /v1/email/calendar/events to authorize creating exactly this event. Single-use; bound to the event payload.",
+            "title": "Confirmation Token",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional description.",
+            "title": "Description"
+          },
+          "end": {
+            "$ref": "#/components/schemas/CalendarEventDateTime",
+            "description": "Event end."
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional location.",
+            "title": "Location"
+          },
+          "schema_version": {
+            "default": "2.2",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "start": {
+            "$ref": "#/components/schemas/CalendarEventDateTime",
+            "description": "Event start."
+          },
+          "summary": {
+            "description": "The event title to be created.",
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "summary",
+          "start",
+          "end",
+          "confirmation_token"
+        ],
+        "title": "CalendarEventPreviewResponse",
+        "type": "object"
+      },
+      "CalendarEventResponse": {
+        "additionalProperties": false,
+        "description": "Result of POST /v1/email/calendar/events (create — confirmation-gated).",
+        "properties": {
+          "created": {
+            "default": true,
+            "description": "Always true on success.",
+            "title": "Created",
+            "type": "boolean"
+          },
+          "event_id": {
+            "description": "Provider id of the created event.",
+            "title": "Event Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "default": "2.2",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "summary": {
+            "description": "Title of the created event.",
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "event_id",
+          "summary"
+        ],
+        "title": "CalendarEventResponse",
+        "type": "object"
+      },
+      "CalendarEventsResponse": {
+        "additionalProperties": false,
+        "description": "Result of GET /v1/email/calendar/events (read-only view).",
+        "properties": {
+          "events": {
+            "description": "Matching events, ordered by start time.",
+            "items": {
+              "$ref": "#/components/schemas/CalendarEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "schema_version": {
+            "default": "2.2",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "title": "CalendarEventsResponse",
+        "type": "object"
+      },
+      "CalendarRespondRequest": {
+        "additionalProperties": false,
+        "description": "RSVP to an existing calendar invite (POST /v1/email/calendar/events/respond).\n\nResponding to an invite is an explicit, user-initiated action surfaced by the\nUI's accept/decline controls, so it is not separately token-gated. ``status``\nis the RSVP verb; ``attendee_email`` is the principal's own address (used by\nthe Google backend to locate the attendee row; ignored by the Outlook backend,\nwhich RSVPs on the authenticated ``/me`` calendar).",
+        "properties": {
+          "attendee_email": {
+            "description": "The principal's own email (the attendee responding). Used by the Google backend; ignored by Outlook (RSVPs on /me).",
+            "title": "Attendee Email",
+            "type": "string"
+          },
+          "event_id": {
+            "description": "Provider event id to RSVP to.",
+            "title": "Event Id",
+            "type": "string"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional provider binding ('google' or 'microsoft').",
+            "title": "Provider"
+          },
+          "schema_version": {
+            "default": "2.2",
+            "description": "Contract version. Mismatch lets a consumer fail loudly.",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "status": {
+            "description": "RSVP response: accept, decline, or tentatively accept.",
+            "enum": [
+              "accepted",
+              "declined",
+              "tentative"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "event_id",
+          "status",
+          "attendee_email"
+        ],
+        "title": "CalendarRespondRequest",
+        "type": "object"
+      },
+      "CalendarRespondResponse": {
+        "additionalProperties": false,
+        "description": "Result of POST /v1/email/calendar/events/respond (RSVP).",
+        "properties": {
+          "event_id": {
+            "description": "The event that was responded to.",
+            "title": "Event Id",
+            "type": "string"
+          },
+          "responded": {
+            "default": true,
+            "description": "Always true on success.",
+            "title": "Responded",
+            "type": "boolean"
+          },
+          "schema_version": {
+            "default": "2.2",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "status": {
+            "description": "The RSVP response that was recorded.",
+            "enum": [
+              "accepted",
+              "declined",
+              "tentative"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "event_id",
+          "status"
+        ],
+        "title": "CalendarRespondResponse",
+        "type": "object"
+      },
       "DraftReply": {
         "additionalProperties": false,
         "description": "A drafted reply the agent proposes. Never sent without confirmation\n(#1264) — this is a proposal, not an action.",
         "properties": {
+          "attachments": {
+            "description": "Metadata of the attachments the draft proposes to send (schema 2.2, #1542). Content stays in the caller's OutgoingAttachment payload; only the echo travels here.",
+            "items": {
+              "$ref": "#/components/schemas/AttachmentMeta"
+            },
+            "title": "Attachments",
+            "type": "array"
+          },
           "body": {
             "description": "Proposed reply body.",
             "title": "Body",
@@ -81,6 +684,82 @@
           "body"
         ],
         "title": "DraftReply",
+        "type": "object"
+      },
+      "EmailActionConfirmRequest": {
+        "additionalProperties": false,
+        "description": "Request a single-use confirmation token for a destructive mailbox action.\n\nMirrors the draft→send handshake (#1264): nothing mutates here — this only\nmints a token bound to *this* ``(action, message_id)`` that the matching\n``/archive`` or ``/quarantine`` call must echo back. A token minted for one\naction/message cannot authorize a different one.",
+        "properties": {
+          "action": {
+            "description": "The action to authorize: 'archive' or 'quarantine'.",
+            "enum": [
+              "archive",
+              "quarantine"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "message_id": {
+            "description": "Provider message id the action will mutate.",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional provider binding ('google' / 'microsoft'). When set, the minted token is bound to this mailbox so the action routes correctly even when more than one mailbox is connected.",
+            "title": "Provider"
+          }
+        },
+        "required": [
+          "action",
+          "message_id"
+        ],
+        "title": "EmailActionConfirmRequest",
+        "type": "object"
+      },
+      "EmailActionConfirmResponse": {
+        "additionalProperties": false,
+        "description": "A single-use confirmation token bound to the requested action+message.",
+        "properties": {
+          "action": {
+            "description": "The authorized action.",
+            "enum": [
+              "archive",
+              "quarantine"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "confirmation_token": {
+            "description": "Echo to POST /v1/email/archive or /v1/email/quarantine to authorize exactly this (action, message_id). Single-use; bound to the action.",
+            "title": "Confirmation Token",
+            "type": "string"
+          },
+          "message_id": {
+            "description": "The message the token authorizes.",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "default": "2.2",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "confirmation_token",
+          "action",
+          "message_id"
+        ],
+        "title": "EmailActionConfirmResponse",
         "type": "object"
       },
       "EmailAddress": {
@@ -111,6 +790,125 @@
         "title": "EmailAddress",
         "type": "object"
       },
+      "EmailArchiveRequest": {
+        "additionalProperties": false,
+        "description": "Archive a message (remove it from the inbox). Requires a confirmation\ntoken minted by POST /v1/email/confirm for ``action='archive'``.",
+        "properties": {
+          "confirmation_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Token from POST /v1/email/confirm. An archive without a valid token for this exact (action='archive', message_id) is rejected (403).",
+            "title": "Confirmation Token"
+          },
+          "message_id": {
+            "description": "Provider message id to archive.",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional provider ('google' / 'microsoft'), used only when the token carries no binding. A token's bound provider always wins; with two mailboxes connected and neither set, the call is rejected (400).",
+            "title": "Provider"
+          }
+        },
+        "required": [
+          "message_id"
+        ],
+        "title": "EmailArchiveRequest",
+        "type": "object"
+      },
+      "EmailArchiveResponse": {
+        "additionalProperties": false,
+        "description": "Result of an archive — carries the undo handle for the 30s window.",
+        "properties": {
+          "action_id": {
+            "description": "Action-log id for this archive.",
+            "title": "Action Id",
+            "type": "string"
+          },
+          "archived": {
+            "default": true,
+            "description": "Always true on success.",
+            "title": "Archived",
+            "type": "boolean"
+          },
+          "batch_id": {
+            "description": "Undo handle: pass to POST /v1/email/unarchive within the undo window to restore the message to the inbox.",
+            "title": "Batch Id",
+            "type": "string"
+          },
+          "message_id": {
+            "description": "The message that was archived.",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "post_archive_id": {
+            "description": "The message id valid AFTER the archive. For folder-based backends (Outlook) the archive move mints a new id; for Gmail it equals the request id. Surfaced so a caller can track the message post-archive.",
+            "title": "Post Archive Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "default": "2.2",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "undo_window_seconds": {
+            "description": "Seconds the unarchive handle stays valid.",
+            "title": "Undo Window Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "message_id",
+          "action_id",
+          "batch_id",
+          "post_archive_id",
+          "undo_window_seconds"
+        ],
+        "title": "EmailArchiveResponse",
+        "type": "object"
+      },
+      "EmailBriefingResponse": {
+        "additionalProperties": false,
+        "description": "Latest scheduled inbox briefing (#1608). LOCAL model — the briefing\npayload itself is the frozen contract's ``EmailPreScanResult``.",
+        "properties": {
+          "briefing": {
+            "$ref": "#/components/schemas/EmailPreScanResult",
+            "description": "The email_pre_scan envelope the scheduled run produced."
+          },
+          "generated_at": {
+            "description": "UTC ISO-8601 timestamp of the scheduled run.",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "schema_version": {
+            "default": "2.2",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "generated_at",
+          "briefing"
+        ],
+        "title": "EmailBriefingResponse",
+        "type": "object"
+      },
       "EmailCategory": {
         "description": "The five-bucket triage taxonomy (schema 2.0, #1615). Values MUST match\n``triage_heuristics.ALL_CATEGORIES`` — the contract tests assert this.",
         "enum": [
@@ -127,6 +925,14 @@
         "additionalProperties": false,
         "description": "Propose a reply and obtain a confirmation token for it.",
         "properties": {
+          "attachments": {
+            "description": "Attachments to include on the send (schema 2.2, #1542). The minted confirmation token binds to their content digests, so the send must carry these exact files.",
+            "items": {
+              "$ref": "#/components/schemas/OutgoingAttachment"
+            },
+            "title": "Attachments",
+            "type": "array"
+          },
           "body": {
             "description": "Proposed reply body.",
             "title": "Body",
@@ -172,7 +978,7 @@
         "description": "The proposed reply plus a single-use confirmation token bound to it.",
         "properties": {
           "confirmation_token": {
-            "description": "Echo this back to POST /v1/email/send to authorize sending exactly this payload. Single-use; bound to (to, subject, body).",
+            "description": "Echo this back to POST /v1/email/send to authorize sending exactly this payload. Single-use; bound to (to, subject, body, attachments).",
             "title": "Confirmation Token",
             "type": "string"
           },
@@ -192,6 +998,14 @@
         "additionalProperties": false,
         "description": "One email message. Shared by the single-email and thread inputs.",
         "properties": {
+          "attachments": {
+            "description": "Attachment metadata on this message (schema 2.2, #1542). Metadata only — triage weighs names/types/sizes; content never travels here.",
+            "items": {
+              "$ref": "#/components/schemas/AttachmentMeta"
+            },
+            "title": "Attachments",
+            "type": "array"
+          },
           "bcc": {
             "description": "Blind-carbon-copy recipients.",
             "items": {
@@ -269,10 +1083,415 @@
         "title": "EmailMessage",
         "type": "object"
       },
+      "EmailPreScanRequest": {
+        "additionalProperties": false,
+        "description": "Request envelope for an inbox pre-scan (#1778). Read-only.",
+        "properties": {
+          "max_messages": {
+            "default": 25,
+            "description": "How many recent inbox messages to scan. Bounded so a caller can't request an unbounded mailbox sweep.",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Max Messages",
+            "type": "integer"
+          },
+          "schema_version": {
+            "default": "2.2",
+            "description": "Contract version. Mismatch lets a consumer fail loudly.",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "title": "EmailPreScanRequest",
+        "type": "object"
+      },
+      "EmailPreScanResponse": {
+        "additionalProperties": false,
+        "description": "Top-level pre-scan response envelope (#1778).",
+        "properties": {
+          "result": {
+            "$ref": "#/components/schemas/EmailPreScanResult",
+            "description": "The pre-scan envelope."
+          },
+          "schema_version": {
+            "default": "2.2",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "EmailPreScanResponse",
+        "type": "object"
+      },
+      "EmailPreScanResult": {
+        "additionalProperties": false,
+        "description": "The aggregate pre-scan envelope the ``EmailPreScanCard`` renders.\n\nThis is the exact payload the chat surface detects via\n``kind == \"email_pre_scan\"`` — produced by the agent's\n``pre_scan_inbox_impl`` (same classification path), not re-implemented here.",
+        "properties": {
+          "actionable": {
+            "description": "Top messages needing a response (capped).",
+            "items": {
+              "$ref": "#/components/schemas/PreScanItem"
+            },
+            "title": "Actionable",
+            "type": "array"
+          },
+          "informational_count": {
+            "default": 0,
+            "description": "Count of informational (FYI/PERSONAL) messages — not listed.",
+            "title": "Informational Count",
+            "type": "integer"
+          },
+          "kind": {
+            "const": "email_pre_scan",
+            "default": "email_pre_scan",
+            "description": "Discriminator the chat surface detects to render the card.",
+            "title": "Kind",
+            "type": "string"
+          },
+          "preferences_applied": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreScanPreferencesApplied"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Session preferences that shaped this pre-scan."
+          },
+          "suggested_archives": {
+            "description": "Promotional / low-priority messages suggested for archive (capped).",
+            "items": {
+              "$ref": "#/components/schemas/PreScanItem"
+            },
+            "title": "Suggested Archives",
+            "type": "array"
+          },
+          "suggested_drafts": {
+            "description": "Reserved for future LLM-driven draft generation; empty today.",
+            "items": {},
+            "title": "Suggested Drafts",
+            "type": "array"
+          },
+          "totals": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreScanTotals"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pre-cap totals per bucket."
+          },
+          "urgent": {
+            "description": "Top urgent messages (capped).",
+            "items": {
+              "$ref": "#/components/schemas/PreScanItem"
+            },
+            "title": "Urgent",
+            "type": "array"
+          }
+        },
+        "title": "EmailPreScanResult",
+        "type": "object"
+      },
+      "EmailQuarantineRequest": {
+        "additionalProperties": false,
+        "description": "Quarantine a phishing message (apply GAIA_PHISHING_QUARANTINE + archive).\nRequires a confirmation token for ``action='quarantine'``.\n\nGmail-only: the label-based quarantine and its reversible undo don't map onto\nOutlook's folder moves, so a request that resolves to an Outlook mailbox is\nrejected with 400 rather than performing a move undo can't reverse (#1738).",
+        "properties": {
+          "confirmation_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Token from POST /v1/email/confirm. A quarantine without a valid token for this exact (action='quarantine', message_id) is rejected (403).",
+            "title": "Confirmation Token"
+          },
+          "is_phishing": {
+            "description": "Must be true. The action refuses to quarantine a message not flagged as phishing — a safety gate, never silently bypassed.",
+            "title": "Is Phishing",
+            "type": "boolean"
+          },
+          "message_id": {
+            "description": "Provider message id to quarantine.",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional provider ('google' / 'microsoft'), used only when the token carries no binding (see EmailArchiveRequest.provider).",
+            "title": "Provider"
+          }
+        },
+        "required": [
+          "message_id",
+          "is_phishing"
+        ],
+        "title": "EmailQuarantineRequest",
+        "type": "object"
+      },
+      "EmailQuarantineResponse": {
+        "additionalProperties": false,
+        "description": "Result of a quarantine — carries the action id for the 30s undo.",
+        "properties": {
+          "action_id": {
+            "description": "Undo handle: pass to POST /v1/email/unquarantine within the undo window to restore the message's prior labels.",
+            "title": "Action Id",
+            "type": "string"
+          },
+          "message_id": {
+            "description": "The message that was quarantined.",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "prior_labels": {
+            "description": "The label set restored on undo (recorded pre-quarantine).",
+            "items": {
+              "type": "string"
+            },
+            "title": "Prior Labels",
+            "type": "array"
+          },
+          "quarantine_label_id": {
+            "description": "Id of the GAIA_PHISHING_QUARANTINE label that was applied.",
+            "title": "Quarantine Label Id",
+            "type": "string"
+          },
+          "quarantined": {
+            "default": true,
+            "description": "Always true on success.",
+            "title": "Quarantined",
+            "type": "boolean"
+          },
+          "schema_version": {
+            "default": "2.2",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "undo_window_seconds": {
+            "description": "Seconds the unquarantine handle stays valid.",
+            "title": "Undo Window Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "message_id",
+          "action_id",
+          "quarantine_label_id",
+          "undo_window_seconds"
+        ],
+        "title": "EmailQuarantineResponse",
+        "type": "object"
+      },
+      "EmailSearchRequest": {
+        "additionalProperties": false,
+        "description": "Search the connected mailbox for messages by Gmail-style query / labels.\n\nRead-only: this lists messages already in the mailbox; it never sends,\nmodifies, or triages. It restores the agent's in-loop inbox-search tool\n(``search_messages``) on the REST contract so the Agent UI can drive it\nthrough the package (#1781).\n\nBoth ``query`` and ``labels`` are optional. A ``query`` searches **all\nmail** (Gmail search semantics); ``labels`` filter to those labels; with\n**neither**, the search lists the INBOX (bounded by ``max_results``).",
+        "properties": {
+          "labels": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Label ids to filter by (e.g. ['INBOX', 'UNREAD']). Omit to apply no label filter; when query is also omitted, the search defaults to the INBOX.",
+            "title": "Labels"
+          },
+          "max_results": {
+            "default": 25,
+            "description": "Max messages to return (1-100). Each match is hydrated with a per-message fetch, so the count is capped to bound that fan-out.",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Max Results",
+            "type": "integer"
+          },
+          "page_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Opaque pagination cursor from a previous response's ``next_page_token``. None fetches the first page.",
+            "title": "Page Token"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Gmail-style search query (e.g. 'from:alice is:unread'). A query searches all mail; omit it to list by label (or the INBOX when labels are also omitted).",
+            "title": "Query"
+          },
+          "schema_version": {
+            "default": "2.2",
+            "description": "Contract version. Mismatch lets a consumer fail loudly.",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "title": "EmailSearchRequest",
+        "type": "object"
+      },
+      "EmailSearchResponse": {
+        "additionalProperties": false,
+        "description": "Top-level inbox-search response envelope (#1781).",
+        "properties": {
+          "count": {
+            "description": "Number of messages returned.",
+            "title": "Count",
+            "type": "integer"
+          },
+          "messages": {
+            "description": "Matching messages (newest-first).",
+            "items": {
+              "$ref": "#/components/schemas/EmailSearchResultItem"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "next_page_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Opaque token to fetch the next page, or null when no more.",
+            "title": "Next Page Token"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Echoes the request query (None when unset).",
+            "title": "Query"
+          },
+          "schema_version": {
+            "default": "2.2",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "count"
+        ],
+        "title": "EmailSearchResponse",
+        "type": "object"
+      },
+      "EmailSearchResultItem": {
+        "additionalProperties": false,
+        "description": "One message in a search result — inbox-list metadata, not the full body.\n\nHeader values (``from_``/``to``/``date``) are the raw, provider-decoded\nheader strings exactly as the agent's read tools surface them — not parsed\ninto ``EmailAddress`` objects, because list headers can carry multiple or\nmalformed addresses a strict parse would reject. Fetch the full message via\nthe triage path when you need the body.",
+        "properties": {
+          "date": {
+            "default": "",
+            "description": "Raw 'Date' header string.",
+            "title": "Date",
+            "type": "string"
+          },
+          "from": {
+            "default": "",
+            "description": "Raw 'From' header string. Aliased to 'from' on the wire.",
+            "title": "From",
+            "type": "string"
+          },
+          "id": {
+            "description": "Provider message id (opaque).",
+            "title": "Id",
+            "type": "string"
+          },
+          "label_ids": {
+            "description": "Label ids on the message.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Label Ids",
+            "type": "array"
+          },
+          "snippet": {
+            "default": "",
+            "description": "Provider-supplied short preview of the body.",
+            "title": "Snippet",
+            "type": "string"
+          },
+          "subject": {
+            "default": "",
+            "description": "Subject line.",
+            "title": "Subject",
+            "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Provider thread id this message belongs to.",
+            "title": "Thread Id"
+          },
+          "to": {
+            "default": "",
+            "description": "Raw 'To' header string.",
+            "title": "To",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "EmailSearchResultItem",
+        "type": "object"
+      },
       "EmailSendRequest": {
         "additionalProperties": false,
         "description": "Send a reply. Requires a valid confirmation token for this payload.",
         "properties": {
+          "attachments": {
+            "description": "Attachments to send (schema 2.2, #1542). Must match the set the confirmation token was minted for — filename, MIME type, and content digest all bind.",
+            "items": {
+              "$ref": "#/components/schemas/OutgoingAttachment"
+            },
+            "title": "Attachments",
+            "type": "array"
+          },
           "body": {
             "description": "Reply body.",
             "title": "Body",
@@ -328,6 +1547,14 @@
       "EmailSendResponse": {
         "additionalProperties": false,
         "properties": {
+          "attachments": {
+            "description": "Metadata of the attachments that went out (schema 2.2).",
+            "items": {
+              "$ref": "#/components/schemas/AttachmentMeta"
+            },
+            "title": "Attachments",
+            "type": "array"
+          },
           "sent": {
             "default": true,
             "description": "Always true on success.",
@@ -396,7 +1623,7 @@
             "title": "Payload"
           },
           "schema_version": {
-            "default": "2.0",
+            "default": "2.2",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -426,7 +1653,7 @@
             "description": "The structured analysis."
           },
           "schema_version": {
-            "default": "2.0",
+            "default": "2.2",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -449,6 +1676,14 @@
               "$ref": "#/components/schemas/ActionItem"
             },
             "title": "Action Items",
+            "type": "array"
+          },
+          "attachments": {
+            "description": "Attachment metadata of the analyzed message (or every message in the thread, oldest-first), echoed for downstream processing (schema 2.2, #1542).",
+            "items": {
+              "$ref": "#/components/schemas/AttachmentMeta"
+            },
+            "title": "Attachments",
             "type": "array"
           },
           "category": {
@@ -525,6 +1760,146 @@
         "title": "EmailTriageResult",
         "type": "object"
       },
+      "EmailUnarchiveRequest": {
+        "additionalProperties": false,
+        "description": "Reverse an archive within the undo window. NOT gated — it restores.",
+        "properties": {
+          "batch_id": {
+            "description": "The undo handle returned by POST /v1/email/archive.",
+            "title": "Batch Id",
+            "type": "string"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional provider ('google' / 'microsoft'). Omit to route by the mailbox recorded at archive time (the default and correct choice).",
+            "title": "Provider"
+          }
+        },
+        "required": [
+          "batch_id"
+        ],
+        "title": "EmailUnarchiveRequest",
+        "type": "object"
+      },
+      "EmailUnarchiveResponse": {
+        "additionalProperties": false,
+        "description": "Result of an unarchive — partial success is reported, never silent.",
+        "properties": {
+          "batch_id": {
+            "description": "The undo handle that was processed.",
+            "title": "Batch Id",
+            "type": "string"
+          },
+          "failed": {
+            "description": "Messages that could not be restored (with reasons).",
+            "items": {
+              "$ref": "#/components/schemas/UnarchiveFailure"
+            },
+            "title": "Failed",
+            "type": "array"
+          },
+          "messages": {
+            "description": "Each restored message.",
+            "items": {
+              "$ref": "#/components/schemas/UnarchivedMessage"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "restored": {
+            "description": "Count of messages restored to inbox.",
+            "title": "Restored",
+            "type": "integer"
+          },
+          "schema_version": {
+            "default": "2.2",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "undone": {
+            "default": true,
+            "description": "True when at least one restored.",
+            "title": "Undone",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "batch_id",
+          "restored"
+        ],
+        "title": "EmailUnarchiveResponse",
+        "type": "object"
+      },
+      "EmailUnquarantineRequest": {
+        "additionalProperties": false,
+        "description": "Reverse a quarantine within the undo window. NOT gated — it restores.",
+        "properties": {
+          "action_id": {
+            "description": "The action id returned by POST /v1/email/quarantine.",
+            "title": "Action Id",
+            "type": "string"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional provider ('google' / 'microsoft'); omit to route by the mailbox recorded at quarantine time.",
+            "title": "Provider"
+          }
+        },
+        "required": [
+          "action_id"
+        ],
+        "title": "EmailUnquarantineRequest",
+        "type": "object"
+      },
+      "EmailUnquarantineResponse": {
+        "additionalProperties": false,
+        "description": "Result of an unquarantine.",
+        "properties": {
+          "action_id": {
+            "description": "The action id that was undone.",
+            "title": "Action Id",
+            "type": "string"
+          },
+          "message_id": {
+            "description": "The restored message id.",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "restored": {
+            "default": true,
+            "description": "Always true on success.",
+            "title": "Restored",
+            "type": "boolean"
+          },
+          "schema_version": {
+            "default": "2.2",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action_id",
+          "message_id"
+        ],
+        "title": "EmailUnquarantineResponse",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -558,6 +1933,286 @@
           }
         },
         "title": "HealthResponse",
+        "type": "object"
+      },
+      "InitLemonadeStatus": {
+        "additionalProperties": false,
+        "description": "Reachability AND version-compatibility of the local Lemonade Server.",
+        "properties": {
+          "base_url": {
+            "description": "The /api/v1 base URL that was probed.",
+            "title": "Base Url",
+            "type": "string"
+          },
+          "compatible": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "True when version >= min_version. Null when the version could not be determined (the check was indeterminate, not a pass).",
+            "title": "Compatible"
+          },
+          "min_version": {
+            "description": "Minimum Lemonade version the triage stack requires (gaia_agent_email.version.MIN_LEMONADE_VERSION).",
+            "title": "Min Version",
+            "type": "string"
+          },
+          "reachable": {
+            "description": "True when Lemonade answered the /health probe.",
+            "title": "Reachable",
+            "type": "boolean"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Lemonade's self-reported server version (from /health). Null when the server doesn't advertise one.",
+            "title": "Version"
+          }
+        },
+        "required": [
+          "reachable",
+          "base_url",
+          "min_version"
+        ],
+        "title": "InitLemonadeStatus",
+        "type": "object"
+      },
+      "InitModelStatus": {
+        "additionalProperties": false,
+        "description": "Presence (and, when cheap, loadability) of the triage model.",
+        "properties": {
+          "id": {
+            "description": "Resolved Lemonade model id for triage.",
+            "title": "Id",
+            "type": "string"
+          },
+          "loadable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether the model actually loads. Not probed in v1 (forcing a load is heavy), so this is null — `present` is the readiness signal. Reserved for an opt-in deeper check.",
+            "title": "Loadable"
+          },
+          "present": {
+            "description": "True when the model is downloaded on the server.",
+            "title": "Present",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "present"
+        ],
+        "title": "InitModelStatus",
+        "type": "object"
+      },
+      "InitResponse": {
+        "additionalProperties": false,
+        "description": "Readiness preflight for the whole triage stack (#1795).\n\n``ready`` is True only when Lemonade is reachable AND the triage model is\npresent. The route returns HTTP 200 when ready and 503 when not, with an\nactionable ``hint`` naming what to fix — so an integrator can verify \"ready\nto triage,\" not just \"process up.\" Read-only: probes only, no model pull.",
+        "properties": {
+          "hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Actionable next step when not ready (what failed / what to do). Null when ready.",
+            "title": "Hint"
+          },
+          "lemonade": {
+            "$ref": "#/components/schemas/InitLemonadeStatus",
+            "description": "Lemonade Server reachability."
+          },
+          "model": {
+            "$ref": "#/components/schemas/InitModelStatus",
+            "description": "Triage model status."
+          },
+          "ready": {
+            "description": "True when the triage stack is ready to serve.",
+            "title": "Ready",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ready",
+          "lemonade",
+          "model"
+        ],
+        "title": "InitResponse",
+        "type": "object"
+      },
+      "OutgoingAttachment": {
+        "additionalProperties": false,
+        "description": "One attachment to include on a draft/send (schema 2.2, #1542).\n\nContent travels inline as standard (RFC 4648) base64. Validation is\nfail-loud: a non-decodable payload, a malformed MIME type, or a decoded\nsize over ``MAX_ATTACHMENT_BYTES`` is a ``ValidationError`` — never\nsilently truncated or dropped.",
+        "properties": {
+          "content_base64": {
+            "description": "File content, standard base64 (RFC 4648).",
+            "title": "Content Base64",
+            "type": "string"
+          },
+          "filename": {
+            "description": "Filename shown to the recipient.",
+            "title": "Filename",
+            "type": "string"
+          },
+          "mime_type": {
+            "description": "MIME type of the content, e.g. 'application/pdf'.",
+            "title": "Mime Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "filename",
+          "mime_type",
+          "content_base64"
+        ],
+        "title": "OutgoingAttachment",
+        "type": "object"
+      },
+      "PreScanItem": {
+        "additionalProperties": false,
+        "description": "One surfaced inbox message in a pre-scan section.\n\n``why`` carries the rationale for urgent/actionable rows; ``reason`` carries\nit for suggested-archive rows. The frontend card reads ``reason ?? why``, so\nexactly one is populated per row depending on the section.",
+        "properties": {
+          "message_id": {
+            "description": "Provider message id (opaque).",
+            "title": "Message Id",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Rationale for a suggested-archive row (the heuristic reason).",
+            "title": "Reason"
+          },
+          "sender": {
+            "default": "",
+            "description": "Raw 'From' header of the message (display + address).",
+            "title": "Sender",
+            "type": "string"
+          },
+          "subject": {
+            "default": "",
+            "description": "Subject line.",
+            "title": "Subject",
+            "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Provider thread id this message belongs to.",
+            "title": "Thread Id"
+          },
+          "why": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Rationale for an urgent/actionable row (the heuristic reason).",
+            "title": "Why"
+          }
+        },
+        "required": [
+          "message_id"
+        ],
+        "title": "PreScanItem",
+        "type": "object"
+      },
+      "PreScanPreferencesApplied": {
+        "additionalProperties": false,
+        "description": "The session sender/category preferences that shaped this pre-scan.\n\nAlways present (with empty defaults) so the frontend schema can lock in now;\nthe stateless REST surface leaves these empty today, but the field carries a\nstable shape for a future preference-aware caller.",
+        "properties": {
+          "category_defaults": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Per-category default action (e.g. {'FYI': 'archive'}).",
+            "title": "Category Defaults",
+            "type": "object"
+          },
+          "low_priority_senders": {
+            "description": "Senders always treated as low-priority.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Low Priority Senders",
+            "type": "array"
+          },
+          "priority_senders": {
+            "description": "Senders always treated as urgent.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Priority Senders",
+            "type": "array"
+          }
+        },
+        "title": "PreScanPreferencesApplied",
+        "type": "object"
+      },
+      "PreScanTotals": {
+        "additionalProperties": false,
+        "description": "Pre-cap counts per bucket — the true totals before the per-section caps\nare applied to the surfaced lists. Lets the card show \"N surfaced\" honestly.",
+        "properties": {
+          "actionable": {
+            "default": 0,
+            "description": "Total actionable messages found.",
+            "title": "Actionable",
+            "type": "integer"
+          },
+          "informational": {
+            "default": 0,
+            "description": "Total informational (FYI/PERSONAL) messages found.",
+            "title": "Informational",
+            "type": "integer"
+          },
+          "suggested_archives": {
+            "default": 0,
+            "description": "Total suggested-archive messages found.",
+            "title": "Suggested Archives",
+            "type": "integer"
+          },
+          "urgent": {
+            "default": 0,
+            "description": "Total urgent messages found.",
+            "title": "Urgent",
+            "type": "integer"
+          }
+        },
+        "title": "PreScanTotals",
         "type": "object"
       },
       "SingleEmailInput": {
@@ -703,6 +2358,50 @@
         "title": "TriageUsage",
         "type": "object"
       },
+      "UnarchiveFailure": {
+        "additionalProperties": false,
+        "description": "One message in the batch that failed to restore.",
+        "properties": {
+          "error": {
+            "description": "Actionable failure reason.",
+            "title": "Error",
+            "type": "string"
+          },
+          "message_id": {
+            "description": "The message that failed to restore.",
+            "title": "Message Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message_id",
+          "error"
+        ],
+        "title": "UnarchiveFailure",
+        "type": "object"
+      },
+      "UnarchivedMessage": {
+        "additionalProperties": false,
+        "description": "One message restored to the inbox by an unarchive.",
+        "properties": {
+          "action_id": {
+            "description": "Action-log id that was undone.",
+            "title": "Action Id",
+            "type": "string"
+          },
+          "message_id": {
+            "description": "The restored message id.",
+            "title": "Message Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message_id",
+          "action_id"
+        ],
+        "title": "UnarchivedMessage",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -770,13 +2469,325 @@
   "info": {
     "description": "REST surface for the GAIA Email Triage agent (/v1/email/*). Cross-implementation contract for the npm client and native builds.",
     "title": "GAIA Email Agent API",
-    "version": "2.0"
+    "version": "2.2"
   },
   "openapi": "3.1.0",
   "paths": {
+    "/v1/email/archive": {
+      "post": {
+        "description": "Archive a message — gated on confirmation, reversible for 30s.\n\nThe gate fires FIRST: a request without a valid token for this exact\n``(action='archive', message_id)`` is rejected with 403 before any backend\ncall. On success a ``batch_id`` undo handle is returned; pass it to\nPOST /v1/email/unarchive within the window to restore the message. The\nresponse also surfaces ``post_archive_id`` (the id a folder backend mints on\nthe move) so a caller can track the message after Outlook changes its id.",
+        "operationId": "archive_email_v1_email_archive_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailArchiveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailArchiveResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Archive Email",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/briefing": {
+      "get": {
+        "description": "Return the latest scheduled inbox briefing (#1608).\n\nThe briefing is generated without a user prompt by the sidecar's daily\nscheduler (off by default — ``GAIA_EMAIL_BRIEFING_ENABLED``) and\npersisted by ``gaia_agent_email.briefing``; this endpoint is the pull\nsurface any host reads it from. 404 until a scheduled run has happened.",
+        "operationId": "get_briefing_v1_email_briefing_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailBriefingResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Briefing",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/calendar/events": {
+      "get": {
+        "description": "View calendar events on the primary calendar (read-only).\n\n``time_min`` / ``time_max`` are optional RFC 3339 bounds. ``provider``\n(google|microsoft) is required only when more than one account is connected;\nwith exactly one, it is inferred. Reaches whichever calendar the user\nconnected. Fails loudly (403 + reconnect CTA) if the calendar scope is missing.",
+        "operationId": "list_calendar_events_v1_email_calendar_events_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "time_min",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Time Min"
+            }
+          },
+          {
+            "in": "query",
+            "name": "time_max",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Time Max"
+            }
+          },
+          {
+            "in": "query",
+            "name": "provider",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Provider"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarEventsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Calendar Events",
+        "tags": [
+          "email"
+        ]
+      },
+      "post": {
+        "description": "Create a calendar event — gated on explicit confirmation (#1780).\n\nMirrors the send gate: a request without a valid, payload-bound confirmation\ntoken (from POST /calendar/events/preview) is rejected with HTTP 403 before\nany backend call. Creating an event is externally visible to attendees, so it\nis never performed without explicit confirmation.",
+        "operationId": "create_calendar_event_v1_email_calendar_events_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalendarCreateEventRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarEventResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Calendar Event",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/calendar/events/preview": {
+      "post": {
+        "description": "Mint a single-use confirmation token bound to the proposed event.\n\nThe calendar analogue of POST /v1/email/draft: it creates nothing and reads\nno calendar — it only returns the normalized event plus a ``confirmation_token``\nthe caller echoes to POST /v1/email/calendar/events to authorize the create.",
+        "operationId": "preview_calendar_event_v1_email_calendar_events_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalendarCreateEventRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarEventPreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Calendar Event",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/calendar/events/respond": {
+      "post": {
+        "description": "RSVP accept / decline / tentative to an existing calendar invite.\n\nAn explicit, user-initiated action (the UI's accept/decline controls), so it\nis not separately token-gated. ``attendee_email`` is the principal's own\naddress (used by the Google backend; ignored by Outlook, which RSVPs on /me).",
+        "operationId": "respond_calendar_event_v1_email_calendar_events_respond_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalendarRespondRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarRespondResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Respond Calendar Event",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/confirm": {
+      "post": {
+        "description": "Mint a single-use confirmation token for a destructive mailbox action.\n\nThe token authorizes exactly one ``(action, message_id)`` — the archive or\nquarantine call must echo it back. Nothing mutates here; this is the\nexplicit user-confirmation step (the action analogue of POST /v1/email/draft\nfor sends). When ``provider`` is set the token carries that binding so the\naction routes to the right mailbox.",
+        "operationId": "confirm_action_v1_email_confirm_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailActionConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailActionConfirmResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Confirm Action",
+        "tags": [
+          "email"
+        ]
+      }
+    },
     "/v1/email/draft": {
       "post": {
-        "description": "Propose a reply and mint a confirmation token bound to its payload.\n\nThe returned token must be echoed to :func:`send_email` to authorize\nsending exactly this ``(to, subject, body)``. This is the explicit\nuser-confirmation step — the consuming app surfaces the draft to the\nuser, and only a user-approved send echoes the token back.",
+        "description": "Propose a reply and mint a confirmation token bound to its payload.\n\nThe returned token must be echoed to :func:`send_email` to authorize\nsending exactly this ``(to, subject, body, attachments)``. This is the explicit\nuser-confirmation step — the consuming app surfaces the draft to the\nuser, and only a user-approved send echoes the token back.",
         "operationId": "draft_reply_v1_email_draft_post",
         "requestBody": {
           "content": {
@@ -838,6 +2849,164 @@
         ]
       }
     },
+    "/v1/email/init": {
+      "get": {
+        "description": "Readiness preflight: validate the whole triage stack (#1795).\n\nReturns HTTP 200 when ready, 503 when not (with an actionable ``hint``).\nUnlike ``/health`` (liveness-only — never touches the LLM), this probes the\nlocal Lemonade Server, checks it is at a compatible VERSION (>= the agent's\n``MIN_LEMONADE_VERSION``), and confirms the triage model is downloaded — so a\nhost can verify \"ready to triage,\" not just \"process up.\" Read-only — no\nmodel pull or provisioning is triggered.",
+        "operationId": "email_init_v1_email_init_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InitResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InitResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Email Init",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/prescan": {
+      "post": {
+        "description": "Pre-scan the connected inbox into the scannable triage card envelope.\n\nLists the ``max_messages`` most-recent inbox messages via the connected\nmailbox backend and returns the aggregate pre-scan summary the Agent UI's\n``EmailPreScanCard`` renders — top urgent / actionable rows, an\ninformational count, and suggested archives, each with a heuristic reason.\nRead-only: nothing is archived, marked, or sent.\n\nClassification reuses the agent's ``pre_scan_inbox_impl`` (the same\nheuristic path the agent loop runs) — categories are not re-implemented\nhere. The backend is resolved by :func:`get_prescan_backend`, which fails\nloudly on zero or ambiguous mailboxes.",
+        "operationId": "prescan_inbox_v1_email_prescan_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailPreScanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailPreScanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Prescan Inbox",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/quarantine": {
+      "post": {
+        "description": "Quarantine a phishing message — gated on confirmation, reversible for 30s.\n\nApplies the ``GAIA_PHISHING_QUARANTINE`` label and removes the message from\nthe inbox (capability #9). The gate fires FIRST (403 without a valid token\nfor this ``(action='quarantine', message_id)``). The action refuses\n``is_phishing=False`` (400) — only phishing-flagged mail may be quarantined.\nReverse with POST /v1/email/unquarantine using the returned ``action_id``.",
+        "operationId": "quarantine_email_v1_email_quarantine_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailQuarantineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailQuarantineResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Quarantine Email",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/search": {
+      "post": {
+        "description": "Search the connected mailbox (read-only) — #1781.\n\nLists messages matching ``query``/``labels`` from the connected Gmail or\nOutlook mailbox and returns inbox-list metadata (id, thread, subject, from,\nto, date, snippet, labels) — not the message body. No mail is sent or\nmodified. This restores the agent's in-loop inbox-search capability on the\nREST contract so the Agent UI can drive it through the package.\n\nThe mailbox is resolved by :func:`get_search_backend` (fail-loud on 0 or\nambiguous mailbox counts). Backend auth / config / transport errors surface\nas actionable 4xx/5xx, never a silent empty result.",
+        "operationId": "search_inbox_v1_email_search_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSearchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search Inbox",
+        "tags": [
+          "email"
+        ]
+      }
+    },
     "/v1/email/send": {
       "post": {
         "description": "Send a reply — gated on explicit confirmation (#1264).\n\nThe confirmation gate is enforced FIRST: a request without a valid,\npayload-bound confirmation token is rejected with HTTP 403 before any\nbackend call (or even backend resolution). This mirrors the agent's\n``TOOLS_REQUIRING_CONFIRMATION`` guard, translated to the API boundary,\nand guarantees the gate fires regardless of backend health. Never\nauto-confirms.",
@@ -882,7 +3051,7 @@
     },
     "/v1/email/triage": {
       "post": {
-        "description": "Triage a single email or a full thread.\n\nAccepts the FROZEN #1262 ``EmailTriageRequest`` (a single-email or\nthread payload, discriminated on ``kind``) and returns the structured\n``EmailTriageResponse`` — category, spam/phishing signals, a plain-text\nsummary, extracted action items, and an optional draft-reply proposal.\nNo mail is read or sent; this analyzes only the payload in the request.",
+        "description": "Triage a single email or a full thread.\n\nAccepts the FROZEN #1262 ``EmailTriageRequest`` (a single-email or\nthread payload, discriminated on ``kind``) and returns the structured\n``EmailTriageResponse`` — category, spam/phishing signals, a plain-text\nsummary, extracted action items, and an optional draft-reply proposal.\nNo mail is read or sent; this analyzes only the payload in the request.\nExtracted action items are also persisted to the local task store,\nlinked to the source ``message_id`` and de-duplicated per message\n(#1605) — additive, the response shape is unchanged.",
         "operationId": "triage_email_v1_email_triage_post",
         "requestBody": {
           "content": {
@@ -917,6 +3086,132 @@
           }
         },
         "summary": "Triage Email",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/triage/batch": {
+      "post": {
+        "description": "Triage an array of emails or threads in a single request (#1887).\n\nAccepts a ``BatchTriageRequest`` (1..MAX_BATCH_SIZE ``EmailInput`` items)\nand returns a ``BatchTriageResponse`` — one ``BatchItemResult`` per item,\norder-preserved. Per-item failures surface as ``BatchItemResult.error``\n(HTTP 200 with all items errored is valid — inspect each result). A 502\nmeans Lemonade was unreachable before any item was processed. No mail is\nread or sent; this analyzes only the items in the request. Each\nsuccessful item's action items are persisted to the local task store,\nlinked to its source ``message_id`` and de-duplicated per message\n(#1605) — additive, the response shape is unchanged.",
+        "operationId": "triage_email_batch_v1_email_triage_batch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchTriageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchTriageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Triage Email Batch",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/unarchive": {
+      "post": {
+        "description": "Reverse an archive within the undo window (NOT gated — it restores).\n\nRoutes each row to the mailbox it was archived from and uses the recorded\n``post_archive_id`` so a folder-based backend (Outlook) can find the message\nafter its id changed (#1738). Fails loudly (409) when the window has expired\nor the ``batch_id`` has no undoable rows — never a silent no-op.",
+        "operationId": "unarchive_email_v1_email_unarchive_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailUnarchiveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailUnarchiveResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unarchive Email",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/unquarantine": {
+      "post": {
+        "description": "Reverse a quarantine within the undo window (NOT gated — it restores).\n\nRestores the exact label set recorded at quarantine time and removes the\nquarantine label. Fails loudly (409) when the window has expired or the\n``action_id`` is unknown/already undone — never a silent no-op.",
+        "operationId": "unquarantine_email_v1_email_unquarantine_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailUnquarantineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailUnquarantineResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unquarantine Email",
         "tags": [
           "email"
         ]

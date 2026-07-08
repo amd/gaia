@@ -13,7 +13,7 @@ serves a catalog file, `index.json`.
 
 Publishing your agent to the Hub does two things:
 
-1. Anyone can install it with `pip install gaia-agent-<id>` (or from the Agent UI's Hub panel).
+1. Anyone can install it with `uv pip install gaia-agent-<id>` (or from the Agent UI's Hub panel).
 2. It **auto-creates the agent's page** on the Hub website
    (`amd-gaia.ai/hub`). The website is generated entirely
    from the Hub's catalog, so **publishing _is_ the website update** — there's no
@@ -21,6 +21,14 @@ Publishing your agent to the Hub does two things:
 
 This guide takes you from an empty folder to a published agent, and then shows how
 to ship updates. No prior packaging experience assumed.
+
+<Tip>
+  **New to building agents?** Start with [Custom Agents](/guides/custom-agent) to
+  write the agent itself, then come back here to publish it. **Using Claude Code in
+  the GAIA repo?** The **`gaia-build-agent`** skill builds and the
+  **`agent-hub-release`** skill cuts a frozen-binary + npm sidecar release (like the
+  email agent) — invoke them with the Skill tool.
+</Tip>
 
 ## Two ways to publish
 
@@ -288,7 +296,7 @@ be tampered with, stores it so it can **never be overwritten**, attaches your
 curl -s https://hub.amd-gaia.ai/index.json | grep my-agent
 
 # Install it the way a user would (PyPI path):
-pip install gaia-agent-my-agent
+uv pip install gaia-agent-my-agent
 # …or browse and install it from the Agent UI's Hub panel.
 ```
 

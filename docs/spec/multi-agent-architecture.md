@@ -6,7 +6,7 @@
 
 ## 1. Problem
 
-ChatAgent is a monolith: 35+ tools, 1,477-line system prompt, 35B model. Too slow for chat (<1s should be instant), too error-prone for tool calls (35-way classification), impossible to scale (every new tool degrades existing ones).
+ChatAgent is a monolith: 35+ tools, 1,477-line system prompt, 35B model. Too slow for chat (&lt;1s should be instant), too error-prone for tool calls (35-way classification), impossible to scale (every new tool degrades existing ones).
 
 ## 2. Solution
 
@@ -14,7 +14,7 @@ Split into **GaiaAgent** (personality + orchestration, 4B model) and **specialis
 
 | | Monolithic (today) | Multi-Agent |
 |---|---|---|
-| Chat speed | 2-5s (35B) | <1s (4B) |
+| Chat speed | 2-5s (35B) | &lt;1s (4B) |
 | Tool accuracy | ~60% (35 tools) | ~90%+ (3-10 per specialist) |
 | Memory | 20GB+ | ~8GB (shared 4B + LoRA) |
 | Adding features | Bloats everything | New specialist, zero impact |

@@ -3,13 +3,13 @@ title: "Dynamic Tool Loader"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/agents/base/tool_loader.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py) · bundles [`src/gaia/agents/chat/tool_bundles.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/tool_bundles.py)
+  **Source Code:** [`src/gaia/agents/base/tool_loader.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py) · bundles [`hub/agents/python/chat/gaia_agent_chat/tool_bundles.py`](https://github.com/amd/gaia/blob/main/hub/agents/python/chat/gaia_agent_chat/tool_bundles.py)
 </Info>
 
 <Note>
 **Component:** Per-turn tool visibility for agents (issue [#688](https://github.com/amd/gaia/issues/688))
 **Module:** `gaia.agents.base.tool_loader`
-**Status:** **Part 0 (#1448) + Part 1 (#1449) landed.** Part 1 ships the selection mechanism behind a default-off toggle on the ChatAgent `doc` profile. Parts 2–3 (explicit escape hatch, skill signal) are still proposed.
+**Status:** **Part 0 (#1448) + Part 1 (#1449) + Part 2 (#1450) + Part 3 (#1451) landed.** Part 1 ships the selection mechanism behind a default-off toggle on the ChatAgent `doc` profile; Part 2 adds the explicit `load_tools` escape hatch (so native tool-calling models can recover a semantic miss) plus the escape-hatch activation-rate tuning signal; Part 3 adds the skill-driven signal — the `tools_required` of a recalled learned procedure (#887) load ahead of the semantic results.
 **Target agent (v1):** `ChatAgent` (`doc` profile), behind a default-off toggle.
 </Note>
 
@@ -45,8 +45,8 @@ against the 12K number — measure first, then justify on TTFT and slope.
 ## Decided design
 
 A semantic selector over a CORE floor, with a model-driven safety net — plus a
-skill-driven signal added later once #887 lands (see
-[Part 3](#part-3-skill-driven-signal-gated-on-887)). Keyword matching is
+skill-driven signal layered on once #887 landed (see
+[Part 3](#part-3-skill-driven-signal-landed-1451)). Keyword matching is
 **explicitly out** — it is too brittle to maintain and was the source of repeated
 review failures on the prior attempts (#811 / #922 / #957 / #958).
 
@@ -266,8 +266,13 @@ A malformed `*_TAU` / `*_MAX` value raises at construction (no silent default).
 The loader is built **only** for `prompt_profile == "doc"` with the toggle on;
 otherwise `self.tool_loader is None` and the agent stays on the legacy path.
 
+As of #1798 the `dynamic_tools` enable knob is also reachable as a **Beta** toggle
+in the Agent UI **Settings** panel (default off). `GAIA_DYNAMIC_TOOLS` still wins
+when set — the toggle then reflects the effective value and disables — so τ and
+the cap stay env-only tuning.
+
 **CORE (10, always-on, cap- & eviction-exempt)** — defined in
-[`tool_bundles.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/tool_bundles.py):
+[`tool_bundles.py`](https://github.com/amd/gaia/blob/main/hub/agents/python/chat/gaia_agent_chat/tool_bundles.py):
 `remember`, `recall`, `update_memory`, `forget`, `search_past_conversations`,
 `read_file`, `query_documents`, `query_specific_file`, `set_loop_state`,
 `request_user_input`.
@@ -297,11 +302,14 @@ backend KV prefix stays warm. When a filter is active the tools block moves
 **after** the response-format template (volatile content last); with no filter
 the legacy order and bytes are preserved exactly.
 
-**Native known gap (Amendment 2).** `_execute_tool` is never tightened, so a
-non-tool-calling model that names an unlisted tool still runs it (free recovery)
-and the loader logs `TOOL_LOADER_ESCAPE_HATCH`. Native tool-calling models have
-no such hatch until Part 2's `load_tools`; on first activation the agent logs the
-miss as a *known gap* rather than padding the loaded set.
+**Native known gap (Amendment 2) — closed by Part 2.** `_execute_tool` is never
+tightened, so a non-tool-calling model that names an unlisted tool still runs it
+(free recovery) and the loader logs `TOOL_LOADER_ESCAPE_HATCH`. In Part 1 native
+tool-calling models had no such hatch — a semantic miss could not self-recover.
+[Part 2](#part-2-explicit-escape-hatch--tuning-1450) closes the recovery gap with
+the always-on `load_tools` meta-tool (the model loads the bundle it needs and
+calls the tool on its next step), and the recall gate's native exemption is
+removed accordingly.
 
 **Approved deviations from this sketch** (flagged in the #1449 PR):
 
@@ -323,7 +331,7 @@ baseline — meaning **CORE-only is the ~60%-reduction best case** and a full
 `test_tool_loader_token_budget.py` pins these filtered costs as a static guard.
 </Warning>
 
-### Part 2 — Explicit escape hatch + tuning
+### Part 2 — Explicit escape hatch + tuning ✅ landed (#1450)
 
 - Add bundle re-surfacing + a discoverability menu of bundle names, and the
   `load_tools` meta-tool that native tool-calling models need (the free recovery
@@ -340,12 +348,56 @@ baseline — meaning **CORE-only is the ~60%-reduction best case** and a full
 - **Escape-hatch activation rate** is logged per session and usable as the
   threshold-tuning signal (rising rate ⇒ τ too strict).
 
-### Part 3 — Skill-driven signal (gated on #887)
+#### How Part 2 shipped (implementation reference)
 
-A third selection signal, added **only after** [#887](https://github.com/amd/gaia/issues/887)
-(skill auto-synthesis) lands. A *skill* is a procedure the agent distilled from
-its own successful multi-step runs; each `SKILL.md` declares the exact
-`tools_required` for that recipe in its YAML frontmatter.
+**`load_tools` is always-on via CORE.** `load_tools` is added to
+[`DOC_CORE_TOOLS`](https://github.com/amd/gaia/blob/main/hub/agents/python/chat/gaia_agent_chat/tool_bundles.py)
+(CORE = 11), so once registered it renders in **both** the text prompt and the
+native `tools=` schema every active turn and is cap-/eviction-exempt. It is
+registered **only when the loader is active** (`self.tool_loader is not None`),
+so the default-off `doc` path stays byte-identical — the unfiltered 37-tool
+baseline is unchanged.
+
+**Recovery lands on the next model *step*, not the next user turn.** The
+`load_tools(bundle)` handler calls `ToolLoader.load_bundle`, then
+`Agent._apply_tool_filter` — the one place the active filter and the cached
+system prompt move together. Because `system_prompt` and `_openai_tools` are
+read live at every LLM call, the expanded set is visible to the very next step
+in the same query, which is what lets `smart_discovery` recover on turn 1.
+
+**`load_bundle` is cap-aware.** It resolves a bundle name (or a bare tool name,
+via the reverse index) and admits members with the same LRU-evict path `select()`
+uses — protecting CORE and the members being loaded now — so `max_tools` holds at
+all times. It emits a same-turn `TOOL_LOADER {…, "event": "load_tools", …}`
+superset line.
+
+**Menu is stable and native-only.** A compact bundle menu (name + one-line
+description, from `ToolBundle.description`) is injected into the **stable** prefix
+of the doc system prompt (before the volatile tools tail → no KV thrash), and
+**only for native tool-calling models** — non-native models already have free
+recovery and are the TTFT-sensitive path.
+
+**Tuning signal is log-derived.** The loader counts escape-hatch (free) and
+`load_tools` (explicit) activations per session and emits a `TOOL_LOADER_SESSION`
+summary on `reset_session()` (`escape_hatch_rate = (escape_hatch + load_tools) /
+turns`). `gaia.eval.tool_recall` aggregates these from the server log and reports
+the per-turn rate alongside recall — no UI-DB migration.
+
+**Recall gate flipped correctly.** `tool_recall.py` unions same-turn
+`load_tools` superset lines into that turn's loaded set and treats `load_tools`
+as always-satisfied; **only then** is the native "known gap" exemption removed,
+so a successful recovery passes the gate and a genuinely unrecovered miss fails
+it on every model.
+
+**Cap unchanged at 14** (→ 3 dynamic slots now that CORE = 11). The eval gates
+recall; bump the default only if recall or the escape-hatch rate regresses.
+
+### Part 3 — Skill-driven signal ✅ landed (#1451)
+
+A third selection signal, unblocked once [#887](https://github.com/amd/gaia/issues/887)
+(skill auto-synthesis) landed (PR #1794, refined by #1818/#1828). A *skill* is a
+procedure the agent distilled from its own successful multi-step runs; each
+stored procedure declares the exact `tools_required` for that recipe.
 
 - When `recall_skill(goal)` matches the user's goal, union in the matched skills'
   `tools_required` **ahead of** semantic results.
@@ -361,9 +413,12 @@ its own successful multi-step runs; each `SKILL.md` declares the exact
 - **Additive, not a reshape.** It slots in as one more input to the same
   selector: `loaded = CORE ∪ SKILL ∪ SEMANTIC ∪ escape-hatch`. Precedence is
   CORE > SKILL > SEMANTIC. Nothing in Parts 0–2 changes.
-- **Soft dependency.** Until #887 ships, this signal returns `[]` cleanly and the
-  loader runs on CORE + semantic exactly as in Parts 1–2 — so Parts 1–2 must not
-  assume it exists.
+- **Graceful absence is feature-detected, not import-guarded.** When no procedure
+  has been synthesized yet — the state every new user is in — the `procedures`
+  corpus is empty, so `recall_skill` returns `[]` at its `index.ntotal == 0`
+  guard and the loader runs on CORE + semantic exactly as in Parts 1–2. The
+  signal checks the *populated corpus at runtime*, never catches a missing
+  module, so the regression test exercises the real fall-through path.
 
 **Success criteria:**
 - When a skill matches the goal, its `tools_required` are loaded **ahead of**
@@ -374,12 +429,59 @@ its own successful multi-step runs; each `SKILL.md` declares the exact
   Parts 0–2 behavior is byte-for-byte unchanged (regression test).
 - **No regression** when no skill matches the goal (falls through to semantic).
 
+#### How Part 3 shipped (implementation reference)
+
+**The loader stays memory-agnostic.** `recall_skill` and `Skill` are *not*
+imported into `tool_loader.py` (that would be an upward dependency). Instead
+`ChatAgent` — the composition layer — flattens the recalled procedures'
+`tools_required` into a `List[str]` and passes it to `select()` via a new
+keyword-only `skill_tools` param. The loader admits **plain tool names**; it
+never learns what a skill is.
+
+**Recall runs once per turn; the loader reuses the cache (zero extra TTFT
+cost).** `recall_skill` already runs once per turn in
+`MemoryMixin._refresh_recalled_skills` (before tool selection, via the
+`process_query` → `super()` ordering). Part 3 refactors that method to cache the
+matched `Skill` objects in `self._recalled_skills` alongside the rendered
+prompt; `_recalled_skill_tools()` reads that cache. So the SKILL signal adds
+**no** second embed/FAISS call — TTFT is the whole point of the loader.
+
+**Precedence is realized by admission order, not set union.** `select()` admits
+CORE first (cap-exempt), then the SKILL tools (cap-**bound**, in recall order,
+deduped, no bundle pull-in — the exact recipe), then the semantic candidates.
+Because `new_candidates` is computed after, it naturally excludes skill-admitted
+tools. A fat recipe is cap-bound like any non-CORE tool, so it can never exceed
+`max_tools`; an idle skill tool LRU-evicts next turn, and recall re-runs each
+turn so the set self-heals.
+
+**Graceful absence is feature-detected.** `_recalled_skill_tools()` returns `[]`
+whenever `self._recalled_skills` is empty — the state of every new user (empty
+`procedures` corpus → `recall_skill` `[]`). With `skill_tools` `None`/empty the
+loaded set **and** the `TOOL_LOADER` log line are byte-identical to a
+CORE+SEMANTIC build (the `skill` key is emitted only when the signal fires).
+
+**The query asymmetry is intentional.** The semantic query is *previous +
+current* user message (Part 1), but the SKILL signal derives from the **clean
+current goal** that `recall_skill` matched — skill recall matches a goal-shaped
+trigger, not a conversation window, so the prior turn would blur the match.
+
+**Where the criteria are proven.** The *mechanism* (ahead-of-semantic,
+escape-hatch avoided, graceful absence, no double recall) is proven
+deterministically in
+[`test_tool_loader_selection.py`](https://github.com/amd/gaia/blob/main/tests/unit/test_tool_loader_selection.py)
+and `test_memory_mixin.py` (pure-numpy embedder, no model/Lemonade/GPU). The
+*metric* (precision lift / no-regression) is the
+`gaia eval agent --category tool_selection` run vs the committed
+`scorecard_tool_selection.json` baseline — a cold eval runs from an empty corpus,
+so it proves Part 3 = Parts 0–2 (the no-regression criterion); the precision lift
+needs a seeded procedure matching a scenario goal.
+
 ## Open questions — resolved in Part 1
 
 These were open in the design sketch; Part 1 (#1449) decided them as follows:
 
 1. **Bundle definitions and CORE membership** — *decided.* CORE = 10 names and 12
-   bundles, in [`tool_bundles.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/chat/tool_bundles.py)
+   bundles, in [`tool_bundles.py`](https://github.com/amd/gaia/blob/main/hub/agents/python/chat/gaia_agent_chat/tool_bundles.py)
    (see [How Part 1 shipped](#part-1-selection-dual-path-filtering-landed-1449)),
    pinned to cover the 37-tool `doc` registry exactly.
 2. **Similarity threshold τ / cap** — *decided.* τ = `0.20` inclusive, cap = `14`
@@ -407,7 +509,36 @@ via the base `_select_tools_for_turn` hook, and both render paths filter from th
 same selection. The old keyword/bundle-policy skeleton was removed; the class name
 `ToolLoader` and `reset_session()` were kept so the existing (guarded) call sites
 in `cli.py` / `chat/app.py` needed no change. Recall recovery for native
-tool-calling models (the `load_tools` meta-tool) is still **Part 2**.
+tool-calling models has shipped (Part 2, #1450): the loader exposes
+`bundle_names` / `format_bundle_menu` / `load_bundle` and per-session escape-hatch
+counters; `ChatAgent` registers the `load_tools` meta-tool and injects the
+native-only bundle menu; and `gaia.eval.tool_recall` unions mid-loop `load_tools`
+lines, drops the native exemption, and reports the escape-hatch activation rate.
+The skill-driven tier has shipped (Part 3, #1451): `select()` takes a keyword-only
+`skill_tools` list and admits it after CORE and ahead of the semantic candidates;
+`ChatAgent._select_tools_for_turn` feeds it `MemoryMixin._recalled_skill_tools()`,
+which flattens the `tools_required` of the procedures `recall_skill` matched this
+turn — reusing the per-turn recall cache, so the tier adds no extra embed/FAISS
+cost and stays byte-identical to Parts 1–2 whenever no procedure matches.
+
+## How #800 (scratchpad/memory collision) is resolved
+
+#800 tracked a feared collision between `scratchpad.query_data` and
+`memory.recall`. The loader resolves it by **design asymmetry**, and the literal
+pair never actually arises: scratchpad tools are registered only for the
+`data`/`full` profiles (`chat/agent.py`), never `doc` — the only profile the
+loader is wired to. The doc-profile analog the loader does arbitrate is
+`analyze_data_file` (the structured-data tool) vs `recall`:
+
+- `recall` ∈ **CORE** (`tool_bundles.py` `DOC_CORE_TOOLS`) — always loaded, cap-
+  and eviction-exempt: persistent recall is always relevant.
+- `analyze_data_file` ∈ the conditional **`data` bundle** — loaded only when the
+  turn's query semantically clears τ.
+
+So the two co-occur only when the turn justifies the data tool; recall is never
+the gated side. Pinned by `tests/unit/test_tool_loader_disambiguation.py`
+(deterministic, real CORE/bundle config) and the live
+`eval/scenarios/tool_selection/data_vs_recall_disambiguation.yaml` scenario.
 
 ## Dependencies
 
@@ -417,7 +548,9 @@ tool-calling models (the `load_tools` meta-tool) is still **Part 2**.
   **user-controllable** — when the user turns it off, the loader reverts to the
   legacy all-tools path (see
   [When memory is off](#when-memory-is-off-all-tools-load-the-legacy-path)).
-- **#887 (procedural memory / skills)** — *not landed.* Provides `recall_skill`
-  and `SKILL.md` `tools_required` frontmatter. The skill tier is **deferred to
-  [Part 3](#part-3-skill-driven-signal-gated-on-887)**, not in v1 (Parts 0–2);
-  it slots in additively once #887 lands and returns `[]` cleanly until then.
+- **#887 (procedural memory / skills)** — *landed* (PR #1794, refined by
+  #1818/#1828). Provides `recall_skill` and the per-procedure `tools_required`.
+  The skill tier shipped on top of it as
+  [Part 3](#part-3-skill-driven-signal-landed-1451); when the `procedures` corpus
+  is empty (every new user) `recall_skill` returns `[]`, so the loader runs on
+  CORE + semantic exactly as in Parts 0–2.

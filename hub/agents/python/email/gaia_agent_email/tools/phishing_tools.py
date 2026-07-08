@@ -28,7 +28,7 @@ path can call ``unquarantine_impl``.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from gaia_agent_email import action_store
 from gaia_agent_email.verbose import log_tool_call
@@ -75,6 +75,7 @@ def quarantine_phishing_impl(
     *,
     message_id: str,
     is_phishing: bool,
+    mailbox: Optional[str] = None,
     debug: bool = False,
 ) -> Dict[str, Any]:
     """Core quarantine logic.
@@ -84,6 +85,8 @@ def quarantine_phishing_impl(
         db:          DatabaseMixin instance for the action log.
         message_id:  The message to quarantine.
         is_phishing: Must be ``True`` — the tool refuses if this is False.
+        mailbox:     Which mailbox the action hit ('google' / 'microsoft'); recorded
+                     so undo routes to the right account when several are connected.
         debug:       Pass-through to ``log_tool_call``.
 
     Returns:
@@ -128,6 +131,7 @@ def quarantine_phishing_impl(
                 "prior_labels": prior_labels,
                 "quarantine_label_id": quarantine_label_id,
             },
+            mailbox=mailbox,
         )
         st["result_summary"] = {"action_id": action_id}
         return {

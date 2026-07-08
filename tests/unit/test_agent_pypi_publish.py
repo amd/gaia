@@ -28,6 +28,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 UTIL_DIR = REPO_ROOT / "util"
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "publish_agents.yml"
 
+# Infrastructure agents publish as wheels but are loaded by class-path from the
+# API server, not discovered via the gaia.agent registry entry point (#1102).
+INFRA_ONLY_AGENT_IDS = {"routing"}
+
 if str(UTIL_DIR) not in sys.path:
     sys.path.insert(0, str(UTIL_DIR))
 
@@ -82,8 +86,14 @@ def test_pyproject_name_matches_dist(packages):
 
 
 def test_pyproject_declares_gaia_agent_entry_point(packages):
-    """Both install paths (R2 and pip) discover the agent via gaia.agent."""
+    """Both install paths (R2 and pip) discover the agent via gaia.agent.
+
+    Infrastructure agents (e.g. routing) are exempt — they are resolved by
+    class-path from the API server, not via the registry entry point (#1102).
+    """
     for p in packages:
+        if p.agent_id in INFRA_ONLY_AGENT_IDS:
+            continue
         pyproject = (p.path / "pyproject.toml").read_text(encoding="utf-8")
         assert (
             'entry-points."gaia.agent"' in pyproject

@@ -80,6 +80,23 @@ def test_send_endpoint_present():
     assert "/v1/email/send" in _html()
 
 
+def test_init_endpoint_present():
+    # Readiness preflight (#1795) must be documented on the spec page.
+    html = _html()
+    assert "/v1/email/init" in html
+    assert "InitResponse" in html
+    # The GET method badge must render (init is the only GET endpoint shown).
+    assert ">GET<" in html
+
+
+def test_provision_verb_documented():
+    # The POST provisioning verb (#1795 follow-up) streams progress and is not in
+    # the JSON OpenAPI, so the HTML spec is where it must be documented.
+    html = _html()
+    assert "stream terminal-style progress" in html.lower()
+    assert "text/plain" in html
+
+
 # ---------------------------------------------------------------------------
 # Contract field names — sourced from the models so a contract change that
 # drops a field will break this test, not slip through silently.
@@ -285,10 +302,12 @@ def test_type_label_unwraps_optional():
 def test_no_truncated_list_label_in_html():
     # The whole page must never contain a truncated 'list[Something' without a
     # closing bracket (the _type_label bracket-ordering bug). Every 'list['
-    # generic that opens must close with ']'.
+    # generic that opens must close with ']'. The inner may be a single type
+    # (list[EmailAddress]) or a union (list[SingleEmailInput | ThreadInput]),
+    # so we require a ']' before the next '<' (HTML tag) — never an unclosed run.
     html = _html()
-    for m in re.finditer(r"list\[[A-Za-z_]+(.?)", html):
-        assert m.group(1) == "]", f"Unclosed list[ label near: {m.group(0)!r}"
+    for m in re.finditer(r"list\[([^\]<]*)(.?)", html):
+        assert m.group(2) == "]", f"Unclosed list[ label near: {m.group(0)!r}"
 
 
 # ---------------------------------------------------------------------------

@@ -639,7 +639,7 @@ Power Automate per-user limits on M365 E3/E5:
 |-------|-------|--------|
 | API calls per 24h | 6,000 | ~250/hour — enough for hourly triage of typical inbox |
 | Concurrent runs | 300 | Not a concern for single-user agent |
-| Flow run duration | 30 days (cloud) | Not a concern (our flows return in <5 s) |
+| Flow run duration | 30 days (cloud) | Not a concern (our flows return in &lt;5 s) |
 | HTTP request size | 100 MB | Not a concern (email metadata is small) |
 | HTTP response size | 100 MB | Sufficient for all but absurd attachment downloads |
 
@@ -684,7 +684,7 @@ limits.
 | Flow sends email without user approval | High — bypasses GAIA's send confirmation | GAIA's send policy enforced in agent; `send_email()` not callable without confirmation gate |
 | IT blocks outbound HTTP to Power Automate | Medium — corporate proxy/TLS inspection | Handler respects `HTTPS_PROXY`/`NO_PROXY` env vars; SSL errors produce actionable message pointing to proxy/CA configuration |
 | Email content transits Microsoft cloud | Expected — Power Automate runs in M365 | Same as normal Outlook usage; no additional exposure vs. reading email in browser |
-| Stale trigger URL (SAS expired) | Medium — silent failure | SAS `se` parameter parsed at configure time; `test()` warns if <14 days remain; 401 on call surfaces actionable error |
+| Stale trigger URL (SAS expired) | Medium — silent failure | SAS `se` parameter parsed at configure time; `test()` warns if &lt;14 days remain; 401 on call surfaces actionable error |
 | Prompt injection via email content | Medium — malicious email subjects in flow response | Not unique to this path (Gmail MCP has same risk); send-confirmation guardrail is the defense layer |
 | Flow sharing exposes trigger URLs | Medium — co-owners see URLs | Setup guide warns: "Do not share flows. Run history retains request/response for 28 days." |
 

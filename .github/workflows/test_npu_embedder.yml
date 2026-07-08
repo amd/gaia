@@ -1,0 +1,88 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Validates the NPU-native FLM embedder (embed-gemma-300m-FLM, #1744) on real
+# Ryzen AI hardware. The test (tests/test_npu_flm_embedder_hw.py) SKIPS unless
+# the live Lemonade Server advertises the FLM model, so on a runner without the
+# FLM/NPU backend this job is a clean no-op rather than a false failure.
+name: Test NPU FLM Embedder
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'src/gaia/agents/registry.py'
+      - 'src/gaia/agents/base/memory.py'
+      - 'src/gaia/agents/base/memory_store.py'
+      - 'src/gaia/llm/lemonade_client.py'
+      - 'tests/test_npu_flm_embedder_hw.py'
+      - '.github/workflows/test_npu_embedder.yml'
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'src/gaia/agents/registry.py'
+      - 'src/gaia/agents/base/memory.py'
+      - 'src/gaia/agents/base/memory_store.py'
+      - 'src/gaia/llm/lemonade_client.py'
+      - 'tests/test_npu_flm_embedder_hw.py'
+      - '.github/workflows/test_npu_embedder.yml'
+  workflow_call:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test-npu-embedder:
+    name: Test NPU FLM Embedder
+    runs-on: [self-hosted, strix-halo]
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Python environment
+        uses: ./.github/actions/setup-venv
+        with:
+          python-version: '3.12'
+          install-package: '.[dev,rag]'
+          extra-index-url: 'https://download.pytorch.org/whl/cpu'
+
+      - name: Install Lemonade Server
+        uses: ./.github/actions/install-lemonade
+
+      - name: Start Lemonade + validate FLM embedder on NPU
+        shell: powershell
+        env:
+          NO_PROXY: "localhost,127.0.0.1"
+        run: |
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $env:PYTHONIOENCODING = "utf-8"
+          $env:PYTHONUTF8 = "1"
+          chcp 65001 | Out-Null
+
+          # Free the port, then start Lemonade in a single session so the FLM
+          # backend child survives for the test run.
+          .\installer\scripts\start-lemonade.ps1 `
+              -ModelName "gemma4-it-e2b-FLM" `
+              -Port 13305 `
+              -CtxSize 32768 `
+              -InitWaitTime 15
+
+          try {
+              # The test loads embed-gemma-300m-FLM itself and skips cleanly if
+              # the runner's Lemonade has no FLM/NPU backend. -rs prints skip
+              # reasons so a silent skip is visible in the log.
+              python -m pytest tests/test_npu_flm_embedder_hw.py -v -rs --tb=short
+              if ($LASTEXITCODE -ne 0) { throw "NPU FLM embedder tests failed" }
+          }
+          finally {
+              if ($env:LEMONADE_PROCESS_ID) {
+                  Stop-Process -Id $env:LEMONADE_PROCESS_ID -Force -ErrorAction SilentlyContinue
+              }
+          }
