@@ -15,7 +15,8 @@
 #   - tests/fixtures/email/quality_gate_thresholds.json  (FP<5% / FN<2%)
 #   - tests/fixtures/email/perf_gate_thresholds.json      (TTFT / tps / latency / mem)
 #   - tests/fixtures/email/drafting_gate_thresholds.json  (draft-approval >=70%, #1269)
-# CI keys off each gate's `should_fail` (= enforce and not passed). All three
+#   - tests/fixtures/email/action_items_gate_thresholds.json (extraction P/R/F1, #1949)
+# CI keys off each gate's `should_fail` (= enforce and not passed). All four
 # manifests ship `enforce: false`, so `should_fail` is always false today: the gate
 # machinery runs, logs, and uploads, but the build stays green. This is the
 # honest posture — categorization accuracy is still ~0.40, so the FP/FN bars are
@@ -398,6 +399,89 @@ jobs:
       # =================================================================
       # END voice-drafting quality eval
       # =================================================================
+
+      # ─────────────────────────────────────────────────────────────────────
+      # BEGIN action-item extraction eval (#1605 / PR #1917 — eval #1949).
+      # REPORT MODE, deterministic and offline: drives the production
+      # extractor (EmailTriageService._extract_action_items) directly over
+      # the committed hand-labeled corpus — no Lemonade, no LLM, no judge.
+      # Bars + the single enforce switch live in the committed manifest
+      # tests/fixtures/email/action_items_gate_thresholds.json
+      # (enforce:false), read only through the harness loader. Keyed off
+      # gate['should_fail'] exactly like the quality/perf gates above.
+      # Self-contained step: writes eval-out/action_items_report.json, which
+      # the upload step below already sweeps up.
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Action-item extraction eval (report mode — offline, no LLM)
+        if: always()
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          set -e
+          python - <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          from gaia.eval.action_item_metrics import (
+              default_action_item_ground_truth_path,
+              default_action_item_thresholds_path,
+              evaluate_action_item_gate,
+              load_action_item_ground_truth,
+              load_default_action_item_thresholds,
+              run_action_item_extraction,
+              score_action_item_extraction,
+          )
+
+          gt_path = default_action_item_ground_truth_path()
+          thresholds = load_default_action_item_thresholds()
+          print(f"[GATE] action-item corpus:   {gt_path}")
+          print(f"[GATE] action-item manifest: {default_action_item_thresholds_path()}")
+          print(
+              f"[GATE] action-items enforce={thresholds.enforce} "
+              f"precision_min={thresholds.precision_min} "
+              f"recall_min={thresholds.recall_min} f1_min={thresholds.f1_min}"
+          )
+
+          ground_truth = load_action_item_ground_truth(gt_path)
+          # Deterministic + offline: the cue-based extractor needs no model.
+          extractions = run_action_item_extraction(ground_truth)
+          quality = score_action_item_extraction(ground_truth, extractions)
+          gate = evaluate_action_item_gate(quality, thresholds)
+
+          block = quality["action_items"]
+          print("\n========= ACTION-ITEM EXTRACTION REPORT (report mode) =========")
+          print(f"  Cases scored        : {quality['cases_scored']}")
+          print(f"  Precision           : {block['precision']}   (reported target >={thresholds.precision_min})")
+          print(f"  Recall              : {block['recall']}   (reported target >={thresholds.recall_min})")
+          print(f"  F1                  : {block['f1']}   (reported target >={thresholds.f1_min})")
+          print(f"  Due-hint accuracy   : {quality['due_hint_accuracy']} over {quality['due_hint_pairs']} pairs")
+          print(f"  Link accuracy       : {quality['link_accuracy']} over {quality['link_pairs']} pairs")
+          print(f"  Hard negatives clean: {quality['negatives_clean']}/{quality['negatives_total']}")
+          print(f"  Gate                : passed={gate['passed']} "
+                f"breaches={len(gate['breaches'])} enforce={gate['enforce']} "
+                f"should_fail={gate['should_fail']}")
+          print("================================================================\n")
+
+          report = {
+              "corpus": str(gt_path),
+              "quality": quality,
+              "gate": gate,
+          }
+          out = Path("eval-out")
+          out.mkdir(parents=True, exist_ok=True)
+          (out / "action_items_report.json").write_text(
+              json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8"
+          )
+          print("[OUT] wrote eval-out/action_items_report.json")
+
+          if gate["should_fail"]:
+              print("[GATE] enforced action-item gate breach — failing the build.")
+              sys.exit(1)
+          print("[GATE] report mode (or no breach) — gate does not block the build.")
+          PY
+      # END action-item extraction eval (#1949).
+      # ─────────────────────────────────────────────────────────────────────
 
       - name: Upload eval scorecard + gate report
         if: always()

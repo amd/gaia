@@ -1,0 +1,327 @@
+{
+  "_meta": {
+    "fixture": "action_items_ground_truth.json",
+    "fixture_kind": "hand-labeled",
+    "schema_version": 1,
+    "feature": "action-item extraction into the persistent task list (#1605, PR #1917)",
+    "eval": "#1949 — scored by gaia.eval.action_item_metrics (precision/recall/F1, report mode)",
+    "labeling_policy": "One expected item per sentence that asks the principal to do something concrete. 'description' is the sentence verbatim as written in the body (the extraction contract is sentence-granular); 'due_hint' is the 'by <when>' phrase verbatim when present, else null; 'type'/'url' follow the ActionItem contract ('link' when the ask is to follow a URL in the same sentence). Pleasantries, conditional if-you-need-it guidance, and boilerplate ('Please note...', 'No action required') are NOT action items — several such cue-trap cases are labeled expected:[] on purpose to measure false positives. Cases ai-014..ai-016 phrase real asks without the extractor's cue words on purpose, to keep recall honest.",
+    "counts": {
+      "cases": 26,
+      "expected_items": 19,
+      "hard_negatives": 10
+    }
+  },
+  "ai-001": {
+    "subject": "Q3 budget spreadsheet",
+    "body": "Hi Sam, hope the offsite went well. Please send me the Q3 budget spreadsheet by Friday. Thanks, Priya",
+    "expected": [
+      {
+        "description": "Please send me the Q3 budget spreadsheet by Friday.",
+        "due_hint": "by Friday",
+        "type": "text",
+        "url": null
+      }
+    ],
+    "has_action_items": true,
+    "rationale": "Single explicit ask with a due phrase."
+  },
+  "ai-002": {
+    "subject": "Two things before sprint kickoff",
+    "body": "Hey team, two things before the sprint kicks off. Can you review the onboarding doc before Thursday's sync? Also, please confirm your attendance for the offsite by EOD. Cheers, Dana",
+    "expected": [
+      {
+        "description": "Can you review the onboarding doc before Thursday's sync?",
+        "due_hint": null,
+        "type": "text",
+        "url": null
+      },
+      {
+        "description": "Also, please confirm your attendance for the offsite by EOD.",
+        "due_hint": "by EOD",
+        "type": "text",
+        "url": null
+      }
+    ],
+    "has_action_items": true,
+    "rationale": "Two independent asks in one email; only the second has a 'by' due phrase."
+  },
+  "ai-003": {
+    "subject": "v2 design ready for review",
+    "body": "Morning! The v2 design is ready. Please review the design doc at https://docs.example.com/design/rev2 and leave comments inline. We want to lock scope this week.",
+    "expected": [
+      {
+        "description": "Please review the design doc at https://docs.example.com/design/rev2 and leave comments inline.",
+        "due_hint": null,
+        "type": "link",
+        "url": "https://docs.example.com/design/rev2"
+      }
+    ],
+    "has_action_items": true,
+    "rationale": "Link action: the ask is to follow the URL and review."
+  },
+  "ai-004": {
+    "subject": "Team dinner next week",
+    "body": "We're hosting a team dinner at Luigi's next week. RSVP by Monday so we can get a headcount. Partners welcome.",
+    "expected": [
+      {
+        "description": "RSVP by Monday so we can get a headcount.",
+        "due_hint": "by Monday",
+        "type": "text",
+        "url": null
+      }
+    ],
+    "has_action_items": true,
+    "rationale": "RSVP request with a due phrase."
+  },
+  "ai-005": {
+    "subject": "Expense report reminder",
+    "body": "This is a reminder from Finance. Kindly submit your expense report by 5pm on Thursday. Late submissions roll to the next cycle.",
+    "expected": [
+      {
+        "description": "Kindly submit your expense report by 5pm on Thursday.",
+        "due_hint": "by 5pm",
+        "type": "text",
+        "url": null
+      }
+    ],
+    "has_action_items": true,
+    "rationale": "Deadline ask; the due phrase is the clock time, as the contract's free-text hint."
+  },
+  "ai-006": {
+    "subject": "Vendor follow-up from standup",
+    "body": "Quick note from today's standup. Please follow up with the vendor about the delayed GPU shipment. It's blocking the lab bring-up.",
+    "expected": [
+      {
+        "description": "Please follow up with the vendor about the delayed GPU shipment.",
+        "due_hint": null,
+        "type": "text",
+        "url": null
+      }
+    ],
+    "has_action_items": true,
+    "rationale": "Follow-up task, no due date."
+  },
+  "ai-007": {
+    "subject": "1:1 moved",
+    "body": "I moved our 1:1 to Wednesday at 10am. Let me know if the new time works for you. Calendar invite updated.",
+    "expected": [
+      {
+        "description": "Let me know if the new time works for you.",
+        "due_hint": null,
+        "type": "text",
+        "url": null
+      }
+    ],
+    "has_action_items": true,
+    "rationale": "A reply is requested — a real ask even though phrased conditionally."
+  },
+  "ai-008": {
+    "subject": "Action required: VPN credential rotation",
+    "body": "Action required: rotate your VPN credentials before the security deadline on March 3. Accounts that miss the deadline will be locked.",
+    "expected": [
+      {
+        "description": "Action required: rotate your VPN credentials before the security deadline on March 3.",
+        "due_hint": null,
+        "type": "text",
+        "url": null
+      }
+    ],
+    "has_action_items": true,
+    "rationale": "Mandatory task; 'before March 3' is not a 'by' phrase so due_hint stays null under the contract's free-text 'by' convention."
+  },
+  "ai-009": {
+    "subject": "Contract redline",
+    "body": "Thanks for drafting the contract so quickly. Could you send the updated redline to legal for review? They need it before signature.",
+    "expected": [
+      {
+        "description": "Could you send the updated redline to legal for review?",
+        "due_hint": null,
+        "type": "text",
+        "url": null
+      }
+    ],
+    "has_action_items": true,
+    "rationale": "Single ask; surrounding sentences are context, not tasks."
+  },
+  "ai-010": {
+    "subject": "Q3 workshop headcount",
+    "body": "Planning for the Q3 workshop is underway. Reply by Thursday with your headcount estimate and dietary needs. Agenda to follow.",
+    "expected": [
+      {
+        "description": "Reply by Thursday with your headcount estimate and dietary needs.",
+        "due_hint": "by Thursday",
+        "type": "text",
+        "url": null
+      }
+    ],
+    "has_action_items": true,
+    "rationale": "Reply-by ask with a due phrase."
+  },
+  "ai-011": {
+    "subject": "Release checklist — three items",
+    "body": "Hi all, wrapping up the release checklist. Please update the CHANGELOG for your components. Can you confirm the installer smoke test passed on your machine? Finally, send me the signed-off test matrix by tomorrow. Thank you!",
+    "expected": [
+      {
+        "description": "Please update the CHANGELOG for your components.",
+        "due_hint": null,
+        "type": "text",
+        "url": null
+      },
+      {
+        "description": "Can you confirm the installer smoke test passed on your machine?",
+        "due_hint": null,
+        "type": "text",
+        "url": null
+      },
+      {
+        "description": "Finally, send me the signed-off test matrix by tomorrow.",
+        "due_hint": "by tomorrow",
+        "type": "text",
+        "url": null
+      }
+    ],
+    "has_action_items": true,
+    "rationale": "Three distinct asks in one email — set matching must credit each independently."
+  },
+  "ai-012": {
+    "subject": "Q3 review survey",
+    "body": "One last thing for the quarter. Can you fill out the survey at https://forms.example.com/q3-review?team=eng before you leave today? It takes about three minutes.",
+    "expected": [
+      {
+        "description": "Can you fill out the survey at https://forms.example.com/q3-review?team=eng before you leave today?",
+        "due_hint": null,
+        "type": "link",
+        "url": "https://forms.example.com/q3-review?team=eng"
+      }
+    ],
+    "has_action_items": true,
+    "rationale": "Link action whose URL carries a query string; 'before you leave today' is not a 'by' phrase."
+  },
+  "ai-013": {
+    "subject": "Garage repaint this weekend",
+    "body": "The parking garage will be repainted this weekend. Respond by Friday with your parking preference. Assignments go out Monday.",
+    "expected": [
+      {
+        "description": "Respond by Friday with your parking preference.",
+        "due_hint": "by Friday",
+        "type": "text",
+        "url": null
+      }
+    ],
+    "has_action_items": true,
+    "rationale": "Respond-by ask with a due phrase."
+  },
+  "ai-014": {
+    "subject": "Missing NDA",
+    "body": "Hi Ravi, the auditors flagged the missing NDA. I need the signed NDA back before Thursday. The rest of the packet looked fine.",
+    "expected": [
+      {
+        "description": "I need the signed NDA back before Thursday.",
+        "due_hint": null,
+        "type": "text",
+        "url": null
+      }
+    ],
+    "has_action_items": true,
+    "rationale": "Real ask phrased as 'I need X' — deliberately outside the extractor's cue list, to measure recall on non-imperative phrasing."
+  },
+  "ai-015": {
+    "subject": "Slides for the sales team",
+    "body": "Great progress this sprint. It would help a lot if you shared the final slide deck with the sales team tonight. They present tomorrow at 9am.",
+    "expected": [
+      {
+        "description": "It would help a lot if you shared the final slide deck with the sales team tonight.",
+        "due_hint": null,
+        "type": "text",
+        "url": null
+      }
+    ],
+    "has_action_items": true,
+    "rationale": "Polite indirect request — a real, time-sensitive ask without imperative cue words."
+  },
+  "ai-016": {
+    "subject": "Staging goes down at noon",
+    "body": "Heads up — the staging environment goes down at noon. Make sure your feature branches are pushed before then. Ping infra if anything looks stuck.",
+    "expected": [
+      {
+        "description": "Make sure your feature branches are pushed before then.",
+        "due_hint": null,
+        "type": "text",
+        "url": null
+      }
+    ],
+    "has_action_items": true,
+    "rationale": "'Make sure ...' is a required task without cue words. 'Ping infra if anything looks stuck' is conditional guidance, not a task — deliberately unlabeled."
+  },
+  "ai-017": {
+    "subject": "Maintenance window tonight",
+    "body": "Maintenance window tonight from 1-3am UTC. No action required — sessions will reconnect automatically. Status page will track progress.",
+    "expected": [],
+    "has_action_items": false,
+    "rationale": "Cue trap: contains the literal phrase 'action required' while explicitly requiring nothing — measures false positives on boilerplate."
+  },
+  "ai-018": {
+    "subject": "Ticket #8123 resolved",
+    "body": "Your ticket #8123 has been resolved. Please note that this mailbox is not monitored. Open a new ticket if the issue returns.",
+    "expected": [],
+    "has_action_items": false,
+    "rationale": "Cue trap: 'Please note ...' is boilerplate, not a task; reopening is conditional guidance."
+  },
+  "ai-019": {
+    "subject": "March engineering newsletter",
+    "body": "Welcome to the March engineering newsletter. This month we shipped the new NPU scheduler and cut inference latency by 18%. Read on for team highlights and upcoming talks.",
+    "expected": [],
+    "has_action_items": false,
+    "rationale": "Hard negative: newsletter, nothing asked of the reader."
+  },
+  "ai-020": {
+    "subject": "Your order has shipped",
+    "body": "Your order #4821 has shipped. Estimated delivery is Tuesday, March 12. Track your package in the app.",
+    "expected": [],
+    "has_action_items": false,
+    "rationale": "Hard negative: transactional receipt; tracking is optional, not a task."
+  },
+  "ai-021": {
+    "subject": "Out of office",
+    "body": "I am out of the office until Monday, June 9, with limited email access. For urgent build issues, contact Maya Chen. I will respond when I return.",
+    "expected": [],
+    "has_action_items": false,
+    "rationale": "Hard negative: auto-reply; the contact line is conditional routing, not an assigned task."
+  },
+  "ai-022": {
+    "subject": "All-hands room change",
+    "body": "FYI — the all-hands moved to the main auditorium. No agenda changes. Recording will be posted afterwards.",
+    "expected": [],
+    "has_action_items": false,
+    "rationale": "Hard negative: pure FYI."
+  },
+  "ai-023": {
+    "subject": "Good seeing you!",
+    "body": "It was great catching up at the conference last week! The keynote on chiplet packaging was fantastic. Say hi to the team for me.",
+    "expected": [],
+    "has_action_items": false,
+    "rationale": "Hard negative: personal pleasantries; 'say hi' is not a task worth tracking."
+  },
+  "ai-024": {
+    "subject": "Nightly backup report",
+    "body": "Nightly backup completed successfully at 02:14 UTC. 412 GB archived to cold storage. No errors reported.",
+    "expected": [],
+    "has_action_items": false,
+    "rationale": "Hard negative: automated success notification."
+  },
+  "ai-025": {
+    "subject": "Security review signed off",
+    "body": "Thanks for turning the security review around so quickly. Everything is signed off on our side. Great work this quarter.",
+    "expected": [],
+    "has_action_items": false,
+    "rationale": "Hard negative: thank-you that mentions a past review — must not become a task."
+  },
+  "ai-026": {
+    "subject": "Flash sale this weekend",
+    "body": "Flash sale: 30% off all monitors this weekend only. Use code SAVE30 at checkout. Offer ends Sunday at midnight.",
+    "expected": [],
+    "has_action_items": false,
+    "rationale": "Hard negative: promotional mail; marketing imperatives are not the principal's tasks."
+  }
+}
