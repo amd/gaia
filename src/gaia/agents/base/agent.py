@@ -39,6 +39,7 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.chat.sdk import AgentConfig, AgentSDK
 
 if TYPE_CHECKING:
+    from gaia.agents.base.goal_store import Goal, Proposal
     from gaia.connectors.providers.base import ConnectorRequirement
 
 # Set up logging
@@ -2573,25 +2574,18 @@ Do NOT wrap conversational replies in JSON.
     def propose(
         self,
         proposal: "Proposal",
-    ) -> Optional[Goal]:
+    ) -> Optional["Goal"]:
         """Submit a proactive proposal for user approval.
 
         Delegates to ``GoalStore.propose()``. Low-risk actions are
         auto-approved; medium/high/critical actions go into
         ``pending_approval`` and must be explicitly accepted before
-        execution.
+        execution. DB errors propagate from ``GoalStore.propose()``.
         """
         from gaia.agents.base.goal_store import GoalStore
 
         store = GoalStore()
-        try:
-            return store.propose(proposal)
-        except Exception:
-            logger.exception(
-                "[Agent] failed to submit proposal: %s",
-                proposal.action,
-            )
-            return None
+        return store.propose(proposal)
 
     def _agent_identity_context(self, ns_id: Optional[str]):
         """Context manager that binds _agent_context for grant resolution.
@@ -2599,6 +2593,9 @@ Do NOT wrap conversational replies in JSON.
         Shared identity binding so that both process_query and
         on_heartbeat can resolve per-agent grants via contextvars.
         """
+        # `_agent_context` is intentionally PRIVATE (issue #915): imported via
+        # the private path so a malicious tool body can't forge an agent
+        # identity through the public gaia.connectors API.
         from gaia.connectors.context import _agent_context
 
         return _agent_context(ns_id) if ns_id else None

@@ -540,10 +540,8 @@ class GoalStore:
 
         Low-risk actions (risk=\"low\") are auto-approved and queued.
         Medium/high/critical actions start as ``pending_approval``.
-        Returns the created Goal, or None on DB error.
+        Returns the created Goal; DB errors propagate as ``sqlite3.Error``.
         """
-        from gaia.agents.base.goal_store import _now_iso
-
         now = _now_iso()
         goal_id = str(uuid4())
 
@@ -556,12 +554,7 @@ class GoalStore:
             approved = False
 
         description = f"[{source}] {proposal.rationale}"
-        if source == "agent_inferred":
-            source_label = "agent_inferred"
-        elif source == "agent_scheduled":
-            source_label = "agent_scheduled"
-        else:
-            source_label = "user"
+        source_label = source
 
         with self._lock:
             conn = self._get_conn()
