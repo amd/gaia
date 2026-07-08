@@ -84,8 +84,6 @@ def run_daemon(store_path: Path = DEFAULT_STORE_PATH) -> None:
 
 def next_fire_time(cron: str) -> Optional[str]:
     """Human-readable next fire time for a cron expression (for `list`)."""
-    from datetime import datetime
-
     trigger = CronTrigger.from_crontab(cron)
     nxt = trigger.get_next_fire_time(None, datetime.now(trigger.timezone))
     return nxt.isoformat() if nxt else None

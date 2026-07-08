@@ -663,6 +663,20 @@ class MemoryMixin(ProceduralMemoryMixin):
     # Embedding Pipeline
     # ==================================================================
 
+    def _active_embedding_model(self) -> str:
+        """Resolve the active embedder id, falling back to the module default.
+
+        ``self._embedding_model`` is set in ``init_memory`` (and may be the
+        NPU-native FLM embedder, #1744). Callers that touch embedding before a
+        full init (or unit tests using a bare mixin) fall back to the module
+        default so embedding never crashes with a missing-attribute error.
+        """
+        return getattr(self, "_embedding_model", None) or EMBEDDING_MODEL
+
+    def _active_embedding_dim(self) -> int:
+        """Resolve the active embedding dim, falling back to the module default."""
+        return getattr(self, "_embedding_dim", None) or EMBEDDING_DIM
+
     def _get_embedder(self) -> Any:
         """Lazy-init cached LemonadeProvider for embeddings.
 
@@ -677,7 +691,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         try:
             from gaia.llm.providers.lemonade import LemonadeProvider
 
-            self._embedder = LemonadeProvider(model=self._embedding_model)
+            self._embedder = LemonadeProvider(model=self._active_embedding_model())
             logger.debug("[MemoryMixin] LemonadeProvider initialized for embeddings")
             return self._embedder
         except Exception as e:
@@ -709,15 +723,20 @@ class MemoryMixin(ProceduralMemoryMixin):
         Returns:
             L2-normalized float32 numpy array of shape ``(self._embedding_dim,)``.
         """
+        # Key the cache by the ACTIVE embedder (not the module default) so a
+        # non-default embedder (e.g. the NPU FLM one) never serves vectors from
+        # a different model's space.
+        model = self._active_embedding_model()
+        dim = self._active_embedding_dim()
         cache = self._get_embedding_cache()
-        cached = cache.get(EMBEDDING_MODEL, EMBEDDING_DIM, text)
+        cached = cache.get(model, dim, text)
         if cached is not None:
             return cached
 
         embedder = self._get_embedder()
         try:
             # LemonadeProvider.embed() returns list[list[float]]
-            results = embedder.embed([text], model=self._embedding_model)
+            results = embedder.embed([text], model=model)
             vec = np.array(results[0], dtype=np.float32)
 
             # L2-normalize for cosine similarity via IndexFlatIP
@@ -725,7 +744,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             if norm > 0:
                 vec = vec / norm
 
-            cache.put(EMBEDDING_MODEL, EMBEDDING_DIM, text, vec)
+            cache.put(model, dim, text, vec)
             return vec
         except Exception as e:
             raise RuntimeError(f"Embedding failed: {e}") from e
