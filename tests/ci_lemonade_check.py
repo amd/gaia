@@ -61,6 +61,21 @@ def main() -> int:
     # Register + download a custom model (checkpoint given) through the same
     # client path production uses, so the registration contract is validated.
     if args.checkpoint:
+        # A shared CI runner may already have this model registered from a prior
+        # job WITHOUT the embeddings label (e.g. a raw-REST pull, or the #1745
+        # auto-label bug). ensure_model_downloaded would then short-circuit on
+        # "already downloaded" and never re-apply the label, so llama-server
+        # loads without --embeddings and /v1/embeddings 501s. Force a clean
+        # re-registration for embedding models so the label is guaranteed.
+        if args.register_embedding:
+            try:
+                print(
+                    "[ci] deleting any stale registration of %s..." % args.model,
+                    flush=True,
+                )
+                client.delete_model(args.model)
+            except Exception as e:  # noqa: BLE001 - best-effort; model may not exist
+                print("[ci]   (delete skipped: %s)" % e, flush=True)
         print(
             "[ci] register+download %s (checkpoint=%s) via LemonadeClient..."
             % (args.model, args.checkpoint),
