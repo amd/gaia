@@ -62,7 +62,7 @@ class TestLoadModelRequestConstruction:
         client = LemonadeClient(host="localhost", port=13305)
 
         client.load_model(
-            "nomic-embed-text-v2-moe-GGUF",
+            "user.embeddinggemma-300m-GGUF",
             llamacpp_args="--ubatch-size 2048 --split-mode none",
         )
 
@@ -117,7 +117,7 @@ class TestLoadModelRequestConstruction:
         client = LemonadeClient(host="localhost", port=13305)
 
         client.load_model(
-            "nomic-embed-text-v2-moe-GGUF",
+            "user.embeddinggemma-300m-GGUF",
             llamacpp_args="--ubatch-size 2048",
             ctx_size=2048,
             save_options=True,
@@ -125,7 +125,7 @@ class TestLoadModelRequestConstruction:
 
         payload = mock_send.call_args[0][2]
         assert payload == {
-            "model_name": "nomic-embed-text-v2-moe-GGUF",
+            "model_name": "user.embeddinggemma-300m-GGUF",
             "llamacpp_args": "--ubatch-size 2048",
             "ctx_size": 2048,
             "save_options": True,

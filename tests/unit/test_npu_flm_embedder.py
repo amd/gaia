@@ -127,9 +127,13 @@ class TestDynamicDim:
 
     def test_default_embedder_when_unspecified(self, tmp_path, monkeypatch):
         monkeypatch.delenv("GAIA_MEMORY_DISABLED", raising=False)
+        from gaia.agents.base.memory import EMBEDDING_MODEL
+
         host = _make_host()
         _init_with_embedder(host, tmp_path / "memory.db", model=None, dim=768)
-        assert host._embedding_model == "nomic-embed-text-v2-moe-GGUF"
+        # Default GGUF embedder is EmbeddingGemma 300M (replaced nomic).
+        assert host._embedding_model == EMBEDDING_MODEL
+        assert host._embedding_model == "user.embeddinggemma-300m-GGUF"
         assert host._embedding_dim == 768
 
     def test_zero_length_vector_degrades_memory(self, tmp_path, monkeypatch):

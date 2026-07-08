@@ -279,7 +279,7 @@ config = RAGConfig(
 
     # === Models ===
     model="Qwen3.5-35B-A3B-GGUF",  # LLM for generation
-    embedding_model="nomic-embed-text-v2-moe-GGUF",  # Embedding model
+    embedding_model="user.embeddinggemma-300m-GGUF",  # Embedding model
 
     # === Storage ===
     cache_dir=".gaia",         # Where to store the index
@@ -291,6 +291,10 @@ config = RAGConfig(
 
 rag = RAGSDK(config)
 ```
+
+<Note>
+The default embedder is now `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M), replacing `nomic-embed-text-v2-moe-GGUF` because the current llama.cpp server cannot load the nomic MOE embedder. Both are 768-dim, so retrieval behavior is unchanged. No manual cache clearing is needed after the switch: the on-disk cache under `cache_dir` stores only extracted document text and chunks (content-hashed, independent of the embedder), and vectors are regenerated via Lemonade on every index — so the next run embeds with EmbeddingGemma automatically.
+</Note>
 
 ### Tuning `max_chunks`
 

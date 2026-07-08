@@ -838,8 +838,13 @@ class TestRebuildEmbeddingsEndpoint:
         assert resp.status_code == 200
         ctor.assert_called_once_with(model="embed-gemma-300m-FLM")
 
-    def test_rebuild_falls_back_to_nomic_when_unstamped(self, client, test_store):
-        """A never-stamped DB (no agent run yet) defaults to the nomic embedder."""
+    def test_rebuild_falls_back_to_default_embedder_when_unstamped(
+        self, client, test_store
+    ):
+        """A never-stamped DB (no agent run yet) defaults to the module default
+        embedder — EmbeddingGemma 300M GGUF (replaced nomic)."""
+        from gaia.agents.base.memory import EMBEDDING_MODEL
+
         mock_provider = MagicMock()
         mock_provider.embed.return_value = [[0.1] * 768]
         with patch(
@@ -847,7 +852,8 @@ class TestRebuildEmbeddingsEndpoint:
         ) as ctor:
             resp = client.post("/api/memory/rebuild-embeddings")
         assert resp.status_code == 200
-        ctor.assert_called_once_with(model="nomic-embed-text-v2-moe-GGUF")
+        ctor.assert_called_once_with(model=EMBEDDING_MODEL)
+        assert EMBEDDING_MODEL == "user.embeddinggemma-300m-GGUF"
 
 
 # ===========================================================================

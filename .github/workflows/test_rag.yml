@@ -101,11 +101,7 @@ jobs:
     - name: Install Lemonade Server
       uses: ./.github/actions/install-lemonade
 
-    - name: Free Lemonade port (reap stray processes from prior jobs)
-      shell: powershell
-      run: .\installer\scripts\cleanup-lemonade.ps1 -Port 13305
-
-    - name: Start Lemonade Server and Run Tests
+    - name: Start Lemonade Server and run RAG integration tests
       shell: powershell
       run: |
         # Set console to UTF-8 for Unicode support
@@ -117,100 +113,49 @@ jobs:
         chcp 65001 | Out-Null
 
         try {
-            Write-Host "Starting Lemonade server..."
-            $serverJob = Start-Job -ScriptBlock {
-                # Workaround for Issue #612: Disable Vulkan cooperative matrix optimization
-                $env:GGML_VK_DISABLE_COOPMAT = "1"
-                # v10.x ``lemonade-server serve`` (deprecation shim) and
-                # ``LemonadeServer.exe serve`` no longer accept
-                # ``--ctx-size`` and abort with "error: failed to start
-                # lemonade-server" when it's passed. RAG loads its model via
-                # the runtime API which already pins the right ctx_size on
-                # the load call.
-                & lemonade-server serve --host localhost --port 13305 --no-tray 2>&1
-            }
-            Write-Host "Started Lemonade server job with ID: $($serverJob.Id)"
-            $env:LEMONADE_JOB_ID = $serverJob.Id
-
-            # Wait for server to be ready
-            Write-Host "Waiting for Lemonade server to start..."
-            $maxWaitTime = 60
-            $waitTime = 0
-            $serverReady = $false
-
-            while ($waitTime -lt $maxWaitTime -and -not $serverReady) {
-                Start-Sleep -Seconds 2
-                $waitTime += 2
-
-                try {
-                    $response = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/health" -Method GET -TimeoutSec 5
-                    Write-Host "[OK] Lemonade server is ready"
-                    Write-Host "Health response: $($response | ConvertTo-Json -Compress)"
-                    $serverReady = $true
-                } catch {
-                    Write-Host "Waiting... ($waitTime/$maxWaitTime seconds)"
-                }
-            }
-
-            if (-not $serverReady) {
-                Write-Host "[ERROR] Server health check failed after $maxWaitTime seconds"
-                throw "Server failed to start"
-            }
-
-            # Clear any cached/corrupted model files to force fresh download
-            # See: https://github.com/ggml-org/llama.cpp/issues/13534
-            Write-Host "`n=== Clearing Model Cache ==="
-            $lemonadeCache = "$env:LOCALAPPDATA\lemonade-server"
-            if (Test-Path "$lemonadeCache\models") {
-                Write-Host "Removing cached models from: $lemonadeCache\models"
-                Get-ChildItem "$lemonadeCache\models" -Directory | ForEach-Object {
-                    Write-Host "   Removing: $($_.Name)"
-                    Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
-                }
-            }
+            # Start the server via the shared launcher (server + tests run in ONE
+            # step so the detached server survives for the test run). It reaps
+            # stray procs, frees the port, launches LemonadeServer.exe --port
+            # directly (the `lemonade-server serve` shim was removed in Lemonade
+            # v10.5 and no longer exists on the runner), captures stdout/stderr
+            # to logs, waits for health (dumping the logs on failure), and sets
+            # LEMONADE_PROCESS_ID for cleanup. RAG loads its models via the
+            # runtime API below, which pins ctx_size per-model on the load call.
+            .\installer\scripts\start-lemonade.ps1 -Port 13305 -NoModel
+            if ($LASTEXITCODE -ne 0) { throw "Lemonade server failed to start" }
 
             # Pre-pull the LLM + VLM via GAIA's LemonadeClient (the embedder is
-            # pulled+loaded below). Pulls are a non-fatal pre-warm -- tolerate a
-            # transient failure and continue (the model auto-downloads on load),
-            # matching the original behavior. CI drives Lemonade through our
-            # client, not raw REST.
+            # registered+loaded below). Pulls are a non-fatal pre-warm -- tolerate
+            # a transient failure and continue (auto-downloads on load).
             Write-Host "`n=== Pre-pulling LLM + VLM via LemonadeClient ==="
             uv run python tests/ci_lemonade_check.py --model Qwen3-4B-Instruct-2507-GGUF --pull-only
             if ($LASTEXITCODE -ne 0) { Write-Host "   [WARN] LLM pre-pull failed; continuing (auto-downloads on load)" }
             uv run python tests/ci_lemonade_check.py --model Qwen3-VL-4B-Instruct-GGUF --pull-only
             if ($LASTEXITCODE -ne 0) { Write-Host "   [WARN] VLM pre-pull failed; continuing (auto-downloads on load)" }
 
-            # Load + verify the embedding model THROUGH GAIA's LemonadeClient so
-            # CI exercises the production load path -- including the bounded
-            # retry that absorbs the transient AMD-Vulkan "llama-server failed
-            # to start" fault. Raw REST here would bypass that resilience.
-            Write-Host "`n=== Load + verify embedding model via LemonadeClient ==="
-            uv run python tests/ci_lemonade_check.py --model nomic-embed-text-v2-moe-GGUF --embeddings
+            # Register + load + verify the embedding model THROUGH GAIA's
+            # LemonadeClient so CI exercises the production load path -- including
+            # the bounded retry that absorbs the transient AMD-Vulkan
+            # "llama-server failed to start" fault. Raw REST would bypass it.
+            # EmbeddingGemma is a custom user-model, so pass the checkpoint +
+            # recipe + embedding label to register it on first pull.
+            Write-Host "`n=== Register + load + verify embedding model via LemonadeClient ==="
+            uv run python tests/ci_lemonade_check.py --model user.embeddinggemma-300m-GGUF --checkpoint ggml-org/embeddinggemma-300M-GGUF:Q8_0 --recipe llamacpp --register-embedding --embeddings
             if ($LASTEXITCODE -ne 0) {
-                if ($env:LEMONADE_JOB_ID) {
-                    Write-Host "Server output:"
-                    Receive-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
-                }
+                Write-Host "=== Server stdout (last 100 lines) ==="
+                Get-Content lemonade-server-stdout.log -Tail 100 -ErrorAction SilentlyContinue
+                Write-Host "=== Server stderr (last 100 lines) ==="
+                Get-Content lemonade-server-stderr.log -Tail 100 -ErrorAction SilentlyContinue
                 throw "Embedding model setup/verify via LemonadeClient failed"
             }
 
-            # Run tests in same session while server is running
             Write-Host "`n=== Running RAG Integration Tests ==="
             python tests/test_rag_integration.py
-            $testExitCode = $LASTEXITCODE
-
-            Write-Host "`nTests completed with exit code: $testExitCode"
-
-            if ($testExitCode -ne 0) {
-                throw "Tests failed with exit code $testExitCode"
-            }
+            if ($LASTEXITCODE -ne 0) { throw "Tests failed with exit code $LASTEXITCODE" }
         } finally {
-            # Always cleanup server
-            if ($env:LEMONADE_JOB_ID) {
-                Write-Host "`n=== Stopping Lemonade Server ==="
-                Stop-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
-                Remove-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
-                Write-Host "[OK] Server stopped"
+            if ($env:LEMONADE_PROCESS_ID) {
+                Write-Host "`n=== Stopping Lemonade Server (PID $env:LEMONADE_PROCESS_ID) ==="
+                Stop-Process -Id $env:LEMONADE_PROCESS_ID -Force -ErrorAction SilentlyContinue
             }
         }
 

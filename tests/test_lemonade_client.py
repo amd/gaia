@@ -867,7 +867,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         responses.add(
             responses.POST, f"{API_BASE}/unload", json=unload_response, status=200
         )
-        embed_model = "nomic-embed-text-v2-moe-GGUF"
+        embed_model = "user.embeddinggemma-300m-GGUF"
         result = self.client.unload_model(embed_model)
         self.assertEqual(result, unload_response)
         self.assertEqual(
@@ -891,7 +891,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         into a no-op; every other failure — and the default strict mode — still
         raises, so a global unload or a real outage is never swallowed.
         """
-        embed_model = "nomic-embed-text-v2-moe-GGUF"
+        embed_model = "user.embeddinggemma-300m-GGUF"
         not_loaded = {"error": f"Model not loaded: {embed_model}"}
 
         # 404 "not loaded" + flag ON → no-op, no raise.
@@ -990,6 +990,86 @@ class TestLemonadeClientMock(unittest.TestCase):
             reasoning=False,
         )
         self.assertEqual(result, pull_response)
+
+    @responses.activate
+    def test_pull_embedding_model_request_shape(self):
+        """The embedder registration must send a VALID /pull body, not just any
+        pull. EmbeddingGemma is a custom user-model: the request must carry the
+        ``user.`` prefix, the checkpoint, ``recipe=llamacpp`` AND ``embedding=true``
+        together. The ``embedding`` flag is what sets the 'embeddings' label —
+        omitting it reproduces the #1745 501 "server does not support embeddings".
+        Asserts shape (per CLAUDE.md: mocks prove validity, not just invocation).
+        """
+        from gaia.llm.lemonade_client import (
+            DEFAULT_EMBEDDING_CHECKPOINT,
+            DEFAULT_EMBEDDING_MODEL,
+            MODELS,
+        )
+
+        # The registry entry that drives init/RAG/code-index registration.
+        mr = MODELS["embeddinggemma"]
+        self.assertEqual(mr.model_id, DEFAULT_EMBEDDING_MODEL)
+        self.assertTrue(mr.model_id.startswith("user."))
+        self.assertEqual(mr.checkpoint, DEFAULT_EMBEDDING_CHECKPOINT)
+        self.assertEqual(mr.recipe, "llamacpp")
+        self.assertTrue(mr.embedding)
+        self.assertFalse(mr.tool_calling)
+
+        responses.add(
+            responses.POST,
+            f"{API_BASE}/pull",
+            json={"status": "success", "message": "ok"},
+            status=200,
+        )
+
+        self.client.pull_model(
+            model_name=mr.model_id,
+            checkpoint=mr.checkpoint,
+            recipe=mr.recipe,
+            embedding=mr.embedding,
+        )
+
+        body = json.loads(responses.calls[-1].request.body)
+        self.assertEqual(body["model_name"], DEFAULT_EMBEDDING_MODEL)
+        self.assertTrue(body["model_name"].startswith("user."))
+        self.assertEqual(body["checkpoint"], DEFAULT_EMBEDDING_CHECKPOINT)
+        self.assertEqual(body["recipe"], "llamacpp")
+        self.assertIs(body["embedding"], True)
+
+    @responses.activate
+    def test_ensure_model_downloaded_matches_user_namespace_display_id(self):
+        """A ``user.``-registered model is listed by /v1/models under its STRIPPED
+        id (e.g. ``embeddinggemma-300m-GGUF``), but referenced elsewhere as
+        ``user.embeddinggemma-300m-GGUF``. ensure_model_downloaded must treat the
+        two as the same model — otherwise the availability check never matches and
+        it re-pulls forever (observed hang against a live Lemonade server).
+        """
+        from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL, _model_ids_match
+
+        # The matcher is namespace-tolerant and case-insensitive, but not a
+        # substring match (must not confuse distinct models).
+        self.assertTrue(
+            _model_ids_match(DEFAULT_EMBEDDING_MODEL, "embeddinggemma-300m-GGUF")
+        )
+        self.assertTrue(_model_ids_match("user.Foo-GGUF", "foo-gguf"))
+        self.assertFalse(
+            _model_ids_match(DEFAULT_EMBEDDING_MODEL, "nomic-embed-text-v2-moe-GGUF")
+        )
+
+        # Server lists the stripped id; requesting the user.-prefixed name must
+        # resolve to "already downloaded" without issuing a pull.
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/models",
+            json={"data": [{"id": "embeddinggemma-300m-GGUF", "downloaded": True}]},
+            status=200,
+        )
+        result = self.client.ensure_model_downloaded(
+            DEFAULT_EMBEDDING_MODEL, show_progress=False
+        )
+        self.assertTrue(result)
+        # No /pull call was made — only the /models availability probe.
+        self.assertTrue(all("/pull" not in c.request.url for c in responses.calls))
 
     @responses.activate
     def test_delete_model(self):
@@ -1211,7 +1291,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         model_ids = self.client.get_required_models("chat")
 
         self.assertIn("Gemma-4-E4B-it-GGUF", model_ids)
-        self.assertIn("nomic-embed-text-v2-moe-GGUF", model_ids)
+        self.assertIn("user.embeddinggemma-300m-GGUF", model_ids)
 
     def test_get_required_models_for_code(self):
         """Test get_required_models returns correct models for code agent."""
@@ -1231,9 +1311,9 @@ class TestLemonadeClientMock(unittest.TestCase):
         """Test get_required_models returns all unique models."""
         model_ids = self.client.get_required_models("all")
 
-        # All profiles use gemma-4-e4b; some also use nomic-embed
+        # All profiles use gemma-4-e4b; some also use embeddinggemma
         self.assertIn("Gemma-4-E4B-it-GGUF", model_ids)
-        self.assertIn("nomic-embed-text-v2-moe-GGUF", model_ids)
+        self.assertIn("user.embeddinggemma-300m-GGUF", model_ids)
         self.assertEqual(len(model_ids), 2)
 
     def test_get_required_models_unknown_agent(self):

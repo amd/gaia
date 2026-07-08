@@ -1480,19 +1480,27 @@ class MemoryStore:
 
         Used when the active embedder changes: vectors from a different model
         live in a different vector space (and possibly a different dimension),
-        so reusing them would silently corrupt similarity search. Returns the
-        number of rows cleared.
+        so reusing them would silently corrupt similarity search. Clears both
+        knowledge and procedure embeddings. Returns the total rows cleared.
         """
         with self._lock:
             try:
-                rowcount = self._conn.execute(
+                knowledge = self._conn.execute(
                     "UPDATE knowledge SET embedding = NULL WHERE embedding IS NOT NULL"
                 ).rowcount
+                procedures = self._conn.execute(
+                    "UPDATE procedures SET embedding = NULL WHERE embedding IS NOT NULL"
+                ).rowcount
                 self._conn.commit()
-                return rowcount
             except Exception:
                 self._conn.rollback()
                 raise
+        logger.info(
+            "[MemoryStore] cleared embeddings (embedder change): knowledge=%d procedures=%d",
+            knowledge,
+            procedures,
+        )
+        return knowledge + procedures
 
     #: ``meta`` key recording which embedder produced the stored vectors.
     _EMBEDDER_META_KEY = "embedder_id"

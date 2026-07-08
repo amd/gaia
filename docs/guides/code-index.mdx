@@ -27,7 +27,7 @@ The index is exposed three ways:
 | Aspect | Details |
 |--------|---------|
 | **Languages parsed** | Python (AST), JavaScript, TypeScript, Go, Rust, Java, C, C++ |
-| **Embeddings** | Local AMD NPU/GPU via Lemonade Server (`nomic-embed-text-v2-moe-GGUF` by default) |
+| **Embeddings** | Local AMD NPU/GPU via Lemonade Server (`user.embeddinggemma-300m-GGUF` — EmbeddingGemma 300M, 768-dim — by default) |
 | **Vector store** | FAISS `IndexFlatL2` |
 | **Cache** | `~/.gaia/code_index/<repo-hash>/` (atomic writes; incremental on file-hash) |
 | **Privacy** | All processing local; sensitive files (`.env`, `.pem`, `.key`, …) auto-excluded |
@@ -45,6 +45,10 @@ Start Lemonade Server so embeddings can be generated:
 ```bash
 lemonade-server serve
 ```
+
+<Note>
+The default embedder is now `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M), replacing `nomic-embed-text-v2-moe-GGUF` because the current llama.cpp server cannot load the nomic MOE embedder. Both are 768-dim, so retrieval behavior is unchanged. A cached index (under `~/.gaia/code_index/`) records the model it was built with: re-running `gaia-code index` rebuilds every embedding with the new model, and searching a stale index fails loudly with a model-mismatch error until you rebuild.
+</Note>
 
 If FAISS or numpy are missing at runtime you'll see exactly:
 
@@ -64,7 +68,7 @@ gaia-code index
 gaia-code index --repo /path/to/repo
 
 # Cap the file count (default 5000) and pick a different embedding model
-gaia-code index --repo /path/to/repo --max-files 2000 --model nomic-embed-text-v2-moe-GGUF
+gaia-code index --repo /path/to/repo --max-files 2000 --model user.embeddinggemma-300m-GGUF
 ```
 
 Common index-level flags (apply to every subcommand):
@@ -175,18 +179,18 @@ Retrieval-quality benchmarks (precision/recall against curated queries) are trac
 
 ## Real-world benchmark
 
-Indexing the gaia repo itself against Lemonade Server's `nomic-embed-text-v2-moe-GGUF` embedding model:
+Indexing the gaia repo itself against Lemonade Server's `user.embeddinggemma-300m-GGUF` embedding model:
 
 | Metric | Value |
 |--------|-------|
 | Source files discovered | 973 |
 | Semantic chunks indexed | 23,974 |
 | Languages parsed | Python, JavaScript, TypeScript, Go, Rust, Java, C/C++ |
-| Embedding model | `nomic-embed-text-v2-moe-GGUF` (via Lemonade Server) |
+| Embedding model | `user.embeddinggemma-300m-GGUF` (via Lemonade Server) |
 | Wall-clock (remote, ngrok) | ~51 min |
 
 ```bash
-gaia-code index --repo . --model nomic-embed-text-v2-moe-GGUF
+gaia-code index --repo . --model user.embeddinggemma-300m-GGUF
 ```
 
 The 51-minute figure is **network-bound** (embeddings sent to a remote Lemonade Server over an ngrok tunnel). On a local Ryzen AI setup the embedding step runs on the NPU and is substantially faster. For retrieval-quality metrics see [#868](https://github.com/amd/gaia/issues/868).

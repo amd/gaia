@@ -11,6 +11,10 @@ embeddings or chat round-trip, then exits non-zero on failure.
 Usage:
     python tests/ci_lemonade_check.py --model nomic-embed-text-v2-moe-GGUF --embeddings
     python tests/ci_lemonade_check.py --model Gemma-4-E4B-it-GGUF --chat --ctx-size 4096
+    # Custom (``user.``-namespaced) model — register on first pull:
+    python tests/ci_lemonade_check.py --model user.embeddinggemma-300m-GGUF \
+        --checkpoint ggml-org/embeddinggemma-300M-GGUF:Q8_0 --recipe llamacpp \
+        --register-embedding --embeddings
 """
 
 import argparse
@@ -35,13 +39,63 @@ def main() -> int:
         dest="pull_only",
         help="download the model via the client without loading it",
     )
+    # Custom-model registration (``user.``-namespaced models that aren't Lemonade
+    # built-ins). When --checkpoint is given, the model is registered+downloaded
+    # via ensure_model_downloaded before load, exactly as init/RAG do.
+    parser.add_argument(
+        "--checkpoint", default=None, help="HF checkpoint for custom-model registration"
+    )
+    parser.add_argument(
+        "--recipe", default=None, help="recipe for custom-model registration"
+    )
+    parser.add_argument(
+        "--register-embedding",
+        action="store_true",
+        dest="register_embedding",
+        help="set the 'embeddings' label when registering a custom model",
+    )
     args = parser.parse_args()
 
     client = LemonadeClient()
 
+    # Register + download a custom model (checkpoint given) through the same
+    # client path production uses, so the registration contract is validated.
+    if args.checkpoint:
+        # A shared CI runner may already have this model registered from a prior
+        # job WITHOUT the embeddings label (e.g. a raw-REST pull, or the #1745
+        # auto-label bug). ensure_model_downloaded would then short-circuit on
+        # "already downloaded" and never re-apply the label, so llama-server
+        # loads without --embeddings and /v1/embeddings 501s. Force a clean
+        # re-registration for embedding models so the label is guaranteed.
+        if args.register_embedding:
+            try:
+                print(
+                    "[ci] deleting any stale registration of %s..." % args.model,
+                    flush=True,
+                )
+                client.delete_model(args.model)
+            except Exception as e:  # noqa: BLE001 - best-effort; model may not exist
+                print("[ci]   (delete skipped: %s)" % e, flush=True)
+        print(
+            "[ci] register+download %s (checkpoint=%s) via LemonadeClient..."
+            % (args.model, args.checkpoint),
+            flush=True,
+        )
+        ok = client.ensure_model_downloaded(
+            args.model,
+            checkpoint=args.checkpoint,
+            recipe=args.recipe,
+            embedding=args.register_embedding or None,
+        )
+        if not ok:
+            print("[ci] ERROR: failed to register/download %s" % args.model, flush=True)
+            return 1
+        print("[ci] registered+downloaded %s" % args.model, flush=True)
+
     if args.pull_only:
-        print("[ci] pull %s via LemonadeClient..." % args.model, flush=True)
-        client.pull_model(args.model)
+        if not args.checkpoint:
+            print("[ci] pull %s via LemonadeClient..." % args.model, flush=True)
+            client.pull_model(args.model)
         print("[ci] pulled %s" % args.model, flush=True)
         return 0
 
@@ -57,10 +111,32 @@ def main() -> int:
     print("[ci] models via client: %s" % ", ".join(str(i) for i in ids), flush=True)
 
     if args.embeddings:
-        resp = client.embeddings(["ci validation text"], model=args.model)
-        dim = len(resp["data"][0]["embedding"])
+        # A freshly loaded embedder can briefly return a non-standard body
+        # (e.g. while the backend finishes warming), so retry a few times and,
+        # on persistent failure, print the actual response instead of a raw
+        # KeyError so the fault is diagnosable.
+        import time
+
+        dim = 0
+        last = None
+        for attempt in range(1, 6):
+            resp = client.embeddings(["ci validation text"], model=args.model)
+            data = resp.get("data") if isinstance(resp, dict) else None
+            if data and data[0].get("embedding"):
+                dim = len(data[0]["embedding"])
+                break
+            last = resp
+            print(
+                "[ci] embeddings attempt %d returned no data; retrying..." % attempt,
+                flush=True,
+            )
+            time.sleep(3)
         if dim <= 0:
-            print("[ci] ERROR: empty embedding vector", flush=True)
+            print(
+                "[ci] ERROR: embeddings returned no vector; last response: %r"
+                % (last,),
+                flush=True,
+            )
             return 1
         print("[ci] embeddings OK (dim=%d)" % dim, flush=True)
 
