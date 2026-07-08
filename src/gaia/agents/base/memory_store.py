@@ -816,6 +816,11 @@ class MemoryStore:
                 # Set embedding = NULL because the old embedding is now stale
                 # (it was computed for the previous content).  This forces the
                 # item into get_items_without_embeddings() for re-embedding.
+                #
+                # Never downgrade a user-edited item to a machine source: a
+                # discovery re-run that merges into a source='user' item must keep
+                # 'user', or a later delete_by_source('discovery') would wipe the
+                # user's edit (spec: user-edited memories are preserved).
                 try:
                     self._conn.execute(
                         """
@@ -824,7 +829,8 @@ class MemoryStore:
                             confidence = MAX(confidence, ?),
                             domain = COALESCE(?, domain),
                             metadata = COALESCE(?, metadata),
-                            source = COALESCE(?, source),
+                            source = CASE WHEN source = 'user' THEN 'user'
+                                          ELSE COALESCE(?, source) END,
                             entity = COALESCE(?, entity),
                             sensitive = MAX(sensitive, ?),
                             due_at = COALESCE(?, due_at),

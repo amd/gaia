@@ -1504,7 +1504,12 @@ class TestLemonadeClientMock(unittest.TestCase):
         self.assertIsNotNone(error)
         self.assertIn("4096", error)
         self.assertIn("32768", error)
-        self.assertIn("--ctx-size", error)
+        # The restart hint renders the resolved tooling's command: legacy
+        # uses `--ctx-size`, modern passes ctx via LEMONADE_CTX_SIZE env.
+        self.assertTrue(
+            "--ctx-size" in error or "LEMONADE_CTX_SIZE" in error,
+            f"restart hint missing ctx-size guidance: {error}",
+        )
 
     @responses.activate
     def test_validate_context_size_health_failure(self):
@@ -1933,6 +1938,127 @@ class TestLemonadeClientMock(unittest.TestCase):
                 )
         finally:
             logging.disable(logging.NOTSET)
+
+
+class TestLaunchServerModernLegacyDispatch(unittest.TestCase):
+    """AC7 (issue #316): launch_server() must build its Popen argv/env from
+    resolve_lemonade()/build_start_command() rather than the hardcoded
+    ["lemonade-server", "serve"] literal, so it works against both modern
+    (LemonadeServer.exe / lemond) and legacy (lemonade-server) tooling.
+    """
+
+    @patch("gaia.llm.lemonade_client.kill_process_on_port")
+    @patch("subprocess.Popen")
+    @patch("gaia.llm.lemonade_client.build_start_command")
+    @patch("gaia.llm.lemonade_client.resolve_lemonade")
+    def test_launch_server_uses_resolved_modern_command(
+        self, mock_resolve, mock_build_cmd, mock_popen, mock_kill_port
+    ):
+        """When resolve_lemonade() resolves to modern tooling, launch_server()'s
+        Popen call must match exactly what build_start_command() produced —
+        not the old hardcoded legacy argv literal."""
+        from gaia.llm.lemonade_launcher import LemonadeTooling, StartSpec
+
+        mock_resolve.return_value = LemonadeTooling(
+            found=True,
+            kind="modern",
+            client_path=r"C:\lemonade_server\bin\lemonade.exe",
+            server_launcher=r"C:\lemonade_server\bin\LemonadeServer.exe",
+        )
+        mock_build_cmd.return_value = StartSpec(
+            argv=[r"C:\lemonade_server\bin\LemonadeServer.exe", "--silent"],
+            env={"LEMONADE_CTX_SIZE": "32768"},
+        )
+        mock_popen.return_value = MagicMock()
+
+        client = LemonadeClient(host=HOST, port=PORT, verbose=False)
+        # health_check would normally gate this via kill_process_on_port —
+        # patch it out directly since launch_server() calls it unconditionally
+        # today; the "skip when already healthy" behavior is asserted
+        # separately below.
+        with patch.dict(os.environ, {"GAIA_TEST_SENTINEL": "1"}):
+            with patch.object(client, "health_check", return_value=None):
+                with patch("socket.create_connection"):
+                    client.launch_server(background="silent", ctx_size=32768)
+
+        mock_popen.assert_called_once()
+        call_args, call_kwargs = mock_popen.call_args
+        argv = call_args[0] if call_args else call_kwargs.get("args")
+        self.assertEqual(
+            argv, [r"C:\lemonade_server\bin\LemonadeServer.exe", "--silent"]
+        )
+        env = call_kwargs.get("env", {})
+        self.assertEqual(env.get("LEMONADE_CTX_SIZE"), "32768")
+        # spec.env must be MERGED into the parent environment — a bare
+        # Popen(argv, env=spec.env) drops PATH/LOCALAPPDATA and breaks
+        # LemonadeServer.exe.
+        self.assertEqual(env.get("GAIA_TEST_SENTINEL"), "1")
+        self.assertIn("PATH", env)
+
+    @patch("gaia.llm.lemonade_client.kill_process_on_port")
+    @patch("subprocess.Popen")
+    @patch("gaia.llm.lemonade_client.build_start_command")
+    @patch("gaia.llm.lemonade_client.resolve_lemonade")
+    def test_launch_server_legacy_fallback_unchanged(
+        self, mock_resolve, mock_build_cmd, mock_popen, mock_kill_port
+    ):
+        """When resolve_lemonade() resolves to legacy tooling, the Popen argv
+        shape must remain byte-identical to today's:
+        ["lemonade-server", "serve", "--ctx-size", "N"] — regression guard."""
+        from gaia.llm.lemonade_launcher import LemonadeTooling, StartSpec
+
+        mock_resolve.return_value = LemonadeTooling(
+            found=True,
+            kind="legacy",
+            client_path="lemonade-server",
+            server_launcher="lemonade-server",
+        )
+        mock_build_cmd.return_value = StartSpec(
+            argv=["lemonade-server", "serve", "--ctx-size", "32768"],
+            env={},
+        )
+        mock_popen.return_value = MagicMock()
+
+        client = LemonadeClient(host=HOST, port=PORT, verbose=False)
+        with patch.object(client, "health_check", return_value=None):
+            with patch("socket.create_connection"):
+                client.launch_server(background="silent", ctx_size=32768)
+
+        mock_popen.assert_called_once()
+        call_args, call_kwargs = mock_popen.call_args
+        argv = call_args[0] if call_args else call_kwargs.get("args")
+        self.assertEqual(argv, ["lemonade-server", "serve", "--ctx-size", "32768"])
+
+    @patch("gaia.llm.lemonade_client.kill_process_on_port")
+    @patch("subprocess.Popen")
+    @patch("gaia.llm.lemonade_client.build_start_command")
+    @patch("gaia.llm.lemonade_client.resolve_lemonade")
+    def test_launch_server_skips_kill_when_already_healthy(
+        self, mock_resolve, mock_build_cmd, mock_popen, mock_kill_port
+    ):
+        """kill_process_on_port(self.port) must NOT be called when
+        health_check() already reports OK at entry to launch_server() —
+        a healthy server already listening should not be killed."""
+        from gaia.llm.lemonade_launcher import LemonadeTooling, StartSpec
+
+        mock_resolve.return_value = LemonadeTooling(
+            found=True,
+            kind="legacy",
+            client_path="lemonade-server",
+            server_launcher="lemonade-server",
+        )
+        mock_build_cmd.return_value = StartSpec(
+            argv=["lemonade-server", "serve", "--ctx-size", "32768"],
+            env={},
+        )
+        mock_popen.return_value = MagicMock()
+
+        client = LemonadeClient(host=HOST, port=PORT, verbose=False)
+        with patch.object(client, "health_check", return_value={"status": "ok"}):
+            with patch("socket.create_connection"):
+                client.launch_server(background="silent", ctx_size=32768)
+
+        mock_kill_port.assert_not_called()
 
 
 def is_server_running(host=HOST, port=PORT):

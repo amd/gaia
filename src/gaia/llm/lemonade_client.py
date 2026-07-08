@@ -11,7 +11,6 @@ OpenAI-compatible API and additional functionality.
 import json
 import logging
 import os
-import re
 import shutil
 import signal
 import socket
@@ -32,6 +31,11 @@ from dotenv import load_dotenv
 # Import OpenAI client for internal use
 from openai import OpenAI
 
+from gaia.llm.lemonade_launcher import (
+    build_start_command,
+    get_installed_version,
+    resolve_lemonade,
+)
 from gaia.logger import get_logger
 
 # Load environment variables from .env file
@@ -921,31 +925,66 @@ class LemonadeClient:
         """
         self.log.info("Starting Lemonade server...")
 
+        # Skip the port takeover when a healthy server is already listening —
+        # never kill a server the user didn't ask to restart.
+        try:
+            health = self.health_check()
+        except Exception as e:
+            self.log.debug(f"No healthy server detected before launch: {e}")
+            health = None
+        if isinstance(health, dict) and health.get("status") == "ok":
+            self.log.info(
+                f"Lemonade server already healthy on port {self.port} — "
+                "skipping launch"
+            )
+            return
+
         # Ensure we kill anything using the port
         kill_process_on_port(self.port)
 
-        # Build the base command
-        base_cmd = ["lemonade-server", "serve"]
-        if log_level != "info":
-            base_cmd.extend(["--log-level", log_level])
+        tooling = resolve_lemonade()
+        if not tooling.found:
+            raise LemonadeClientError(
+                "Lemonade Server not found (no modern install at its canonical "
+                "path, no lemonade-server in PATH). Run `gaia init` to install "
+                "it, or set LEMONADE_SERVER_PATH to the server executable."
+            )
+
+        spec = build_start_command(tooling, ctx_size)
         if ctx_size is not None:
-            base_cmd.extend(["--ctx-size", str(ctx_size)])
             self.log.info(f"Context size set to: {ctx_size}")
+        if log_level != "info":
+            if tooling.kind == "legacy":
+                spec.argv.extend(["--log-level", log_level])
+            else:
+                self.log.debug(
+                    f"log_level={log_level!r} is not supported by the modern "
+                    "Lemonade launcher; ignoring"
+                )
+
+        # Merge — never replace — the parent environment; the child loses
+        # PATH/LOCALAPPDATA otherwise and LemonadeServer.exe breaks.
+        popen_env = {**os.environ, **spec.env}
 
         if background == "terminal":
-            # Launch in a new terminal window
-            cmd = f'start cmd /k "{" ".join(base_cmd)}"'
-            self.server_process = subprocess.Popen(cmd, shell=True)
+            # New console window on Windows; argv-only — a resolved path must
+            # never pass through a shell=True string.
+            self.server_process = subprocess.Popen(
+                spec.argv,
+                creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
+                env=popen_env,
+            )
         elif background == "silent":
             # Run in background with subprocess
             self._log_file = open("lemonade.log", "w", encoding="utf-8")
             try:
                 self.server_process = subprocess.Popen(
-                    base_cmd,
+                    spec.argv,
                     stdout=self._log_file,
                     stderr=self._log_file,
                     text=True,
                     bufsize=1,
+                    env=popen_env,
                 )
             except Exception:
                 self._log_file.close()
@@ -954,11 +993,12 @@ class LemonadeClient:
         else:  # "none" or any other value
             # Run in foreground with real-time output
             self.server_process = subprocess.Popen(
-                base_cmd,
+                spec.argv,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,
+                env=popen_env,
             )
 
             # Print stdout and stderr in real-time only for foreground mode
@@ -3452,7 +3492,7 @@ class LemonadeClient:
                 error_msg = (
                     f"Insufficient context size: server has {reported_ctx} tokens, "
                     f"but {required_tokens} tokens are required. "
-                    f"Restart with: lemonade-server serve --ctx-size {required_tokens}"
+                    f"Restart with: {self._start_command_hint(required_tokens)}"
                 )
                 if not quiet:
                     print(f"❌ {error_msg}")
@@ -3730,40 +3770,34 @@ class LemonadeClient:
         is_localhost = self.host in ("localhost", "127.0.0.1", "::1")
 
         if is_localhost:
-            # Local server not running - check if binary is installed for auto-start
-            return shutil.which("lemonade-server") is not None
+            # Local server not running - check if tooling is installed for
+            # auto-start (modern LemonadeServer.exe/lemond or legacy CLI)
+            return resolve_lemonade().found
         else:
             # Remote server not responding and we can't auto-start it
             return False
 
     def get_lemonade_version(self) -> Optional[str]:
         """
-        Get the installed lemonade-server version.
+        Get the installed Lemonade version (modern or legacy tooling).
 
         Returns:
-            Version string (e.g., "8.2.2") or None if unable to determine
+            Version string (e.g., "10.7.0") or None if unable to determine
         """
-        try:
-            result = subprocess.run(
-                ["lemonade-server", "--version"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,  # We handle errors by checking the output
-            )
+        return get_installed_version(resolve_lemonade())
 
-            # Combine stdout and stderr to get complete output
-            full_output = result.stdout + result.stderr
+    def _start_command_hint(self, ctx_size: Optional[int]) -> str:
+        """Render the exact start command for the installed tooling.
 
-            # Extract version number using regex (e.g., "8.2.2")
-            version_match = re.search(r"(\d+\.\d+(?:\.\d+)?)", full_output)
-            if version_match:
-                return version_match.group(1)
-
-            return None
-
-        except Exception:
-            return None
+        Used in user-facing guidance so modern installs aren't told to run
+        the removed ``lemonade-server`` CLI.
+        """
+        tooling = resolve_lemonade()
+        if tooling.found:
+            spec = build_start_command(tooling, ctx_size)
+            env_prefix = " ".join(f"{k}={v}" for k, v in spec.env.items())
+            return f"{env_prefix} {' '.join(spec.argv)}".strip()
+        return f"lemonade-server serve --ctx-size {ctx_size}"
 
     def _check_version_compatibility(
         self,
@@ -3941,7 +3975,7 @@ class LemonadeClient:
                     )
                     print(
                         f"   For better performance, restart with: "
-                        f"lemonade-server serve --ctx-size {required_ctx}"
+                        f"{self._start_command_hint(required_ctx)}"
                     )
                     print("")
 
@@ -3951,7 +3985,7 @@ class LemonadeClient:
         if not auto_start:
             if not quiet:
                 print(f"{_emoji('❌', '[ERROR]')} Lemonade Server is not running")
-                print(f"   Start with: lemonade-server serve --ctx-size {required_ctx}")
+                print(f"   Start with: {self._start_command_hint(required_ctx)}")
             status.error = "Server not running"
             return status
 

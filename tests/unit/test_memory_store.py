@@ -508,6 +508,50 @@ class TestDeduplication:
         )
         assert id1 != id2
 
+    def test_dedup_never_downgrades_user_source(self, store):
+        """A discovery re-run that merges into a user item keeps source='user'."""
+        uid = store.store(
+            category="fact",
+            content="User prefers dark mode in the editor at all times",
+            source="user",
+        )
+        # A discovery pass finds near-identical content and dedups into it.
+        merged = store.store(
+            category="fact",
+            content="User prefers dark mode in the editor",
+            source="discovery",
+        )
+        assert merged == uid  # same row (deduped)
+
+        source = store._conn.execute(
+            "SELECT source FROM knowledge WHERE id = ?", (uid,)
+        ).fetchone()[0]
+        assert source == "user", "Merge must not downgrade source='user' to 'discovery'"
+
+    def test_user_item_survives_reset_after_discovery_rerun(self, store):
+        """re-run → delete_by_source('discovery') leaves the user item intact."""
+        uid = store.store(
+            category="fact",
+            content="User prefers dark mode in the editor at all times",
+            source="user",
+        )
+        # Discovery re-run merges into the user item.
+        store.store(
+            category="fact",
+            content="User prefers dark mode in the editor",
+            source="discovery",
+        )
+        # `gaia memory --reset` deletes discovery-sourced items.
+        store.delete_by_source("discovery")
+
+        row = store._conn.execute(
+            "SELECT source FROM knowledge WHERE id = ?", (uid,)
+        ).fetchone()
+        assert (
+            row is not None
+        ), "User item must survive --reset after a discovery re-run"
+        assert row[0] == "user"
+
 
 # ===========================================================================
 # 4. Confidence
