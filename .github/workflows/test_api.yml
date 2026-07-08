@@ -81,11 +81,17 @@ jobs:
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
 
-      - name: Free Lemonade port (reap stray processes from prior jobs)
+      # Start the server via the shared launcher (its own step): it reaps stray
+      # procs, frees the port, launches LemonadeServer.exe --port directly (the
+      # `lemonade-server serve` shim was removed in Lemonade v10.5 and no longer
+      # exists on the runner), captures stdout/stderr to logs, waits for health
+      # (dumping the logs on failure), and exports LEMONADE_PROCESS_ID (via
+      # GITHUB_ENV) for the test + cleanup steps.
+      - name: Start Lemonade Server
         shell: powershell
-        run: .\installer\scripts\cleanup-lemonade.ps1 -Port 13305
+        run: .\installer\scripts\start-lemonade.ps1 -Port 13305 -NoModel
 
-      - name: Start Lemonade Server and Run Tests
+      - name: Start API server and run API tests
         shell: powershell
         run: |
           # Set console to UTF-8 for Unicode support
@@ -97,57 +103,16 @@ jobs:
           chcp 65001 | Out-Null
 
           try {
-              Write-Host "Starting Lemonade server..."
-              $serverJob = Start-Job -ScriptBlock {
-                  # Workaround for Issue #612: Disable Vulkan cooperative matrix optimization
-                  $env:GGML_VK_DISABLE_COOPMAT = "1"
-                  # v10.x ``lemonade-server serve`` (deprecation shim) and
-                  # ``LemonadeServer.exe serve`` no longer accept
-                  # ``--ctx-size`` and abort with "error: failed to start
-                  # lemonade-server" if it's passed. Drop the flag here; the
-                  # API tests don't pin a specific window, and any future
-                  # need for a larger ctx can be set per-model via the
-                  # ``/api/v1/load`` body.
-                  & lemonade-server serve --host localhost --port 13305 --no-tray 2>&1
-              }
-              Write-Host "Started Lemonade server job with ID: $($serverJob.Id)"
-              $env:LEMONADE_JOB_ID = $serverJob.Id
-
-              # Wait for server to be ready
-              Write-Host "Waiting for Lemonade server to start..."
-              $maxWaitTime = 60
-              $waitTime = 0
-              $serverReady = $false
-
-              while ($waitTime -lt $maxWaitTime -and -not $serverReady) {
-                  Start-Sleep -Seconds 2
-                  $waitTime += 2
-
-                  try {
-                      $response = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/health" -Method GET -TimeoutSec 5
-                      Write-Host "[OK] Lemonade server is ready"
-                      Write-Host "Health response: $($response | ConvertTo-Json -Compress)"
-                      $serverReady = $true
-                  } catch {
-                      Write-Host "Waiting... ($waitTime/$maxWaitTime seconds)"
-                  }
-              }
-
-              if (-not $serverReady) {
-                  Write-Host "[ERROR] Server health check failed after $maxWaitTime seconds"
-                  throw "Server failed to start"
-              }
-
               # Pull + load + verify the LLM via GAIA's LemonadeClient so CI
               # validates our interface to Lemonade (incl. the model-load retry),
               # not raw REST.
-              Write-Host "`n=== Pull + load + verify LLM via LemonadeClient ==="
+              Write-Host "=== Pull + load + verify LLM via LemonadeClient ==="
               uv run python tests/ci_lemonade_check.py --model Qwen3-0.6B-GGUF --chat
               if ($LASTEXITCODE -ne 0) {
-                  if ($env:LEMONADE_JOB_ID) {
-                      Write-Host "Server output:"
-                      Receive-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
-                  }
+                  Write-Host "=== Server stdout (last 100 lines) ==="
+                  Get-Content lemonade-server-stdout.log -Tail 100 -ErrorAction SilentlyContinue
+                  Write-Host "=== Server stderr (last 100 lines) ==="
+                  Get-Content lemonade-server-stderr.log -Tail 100 -ErrorAction SilentlyContinue
                   throw "LLM setup/verify via LemonadeClient failed"
               }
 
@@ -183,6 +148,10 @@ jobs:
 
               if (-not $apiReady) {
                   Write-Host "[ERROR] API server failed to start after $maxWaitTime seconds"
+                  if ($env:API_JOB_ID) {
+                      Write-Host "=== API server job output ==="
+                      Receive-Job -Id $env:API_JOB_ID -ErrorAction SilentlyContinue
+                  }
                   throw "API server failed to start"
               }
 
@@ -190,29 +159,27 @@ jobs:
               Write-Host "`n=== Running API Integration Tests ==="
               $env:CI = "true"
               uv run pytest tests/test_api.py -v --tb=short --capture=no
-              $testExitCode = $LASTEXITCODE
-
-              Write-Host "`nTests completed with exit code: $testExitCode"
-
-              if ($testExitCode -ne 0) {
-                  throw "Tests failed with exit code $testExitCode"
-              }
+              if ($LASTEXITCODE -ne 0) { throw "Tests failed with exit code $LASTEXITCODE" }
           } finally {
-              # Always cleanup servers
-              Write-Host "`n=== Stopping Servers ==="
+              # Stop the API server job (same-session var); Lemonade is stopped
+              # in the always() cleanup step.
               if ($env:API_JOB_ID) {
-                  Write-Host "Stopping API server..."
+                  Write-Host "`n=== Stopping API server ==="
                   Stop-Job -Id $env:API_JOB_ID -ErrorAction SilentlyContinue
                   Remove-Job -Id $env:API_JOB_ID -ErrorAction SilentlyContinue
                   Write-Host "[OK] API server stopped"
               }
-              if ($env:LEMONADE_JOB_ID) {
-                  Write-Host "Stopping Lemonade server..."
-                  Stop-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
-                  Remove-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
-                  Write-Host "[OK] Lemonade server stopped"
-              }
           }
+
+      - name: Stop Lemonade Server
+        if: always()
+        shell: powershell
+        run: |
+          if ($env:LEMONADE_PROCESS_ID) {
+              Write-Host "Stopping Lemonade Server (PID $env:LEMONADE_PROCESS_ID)..."
+              Stop-Process -Id $env:LEMONADE_PROCESS_ID -Force -ErrorAction SilentlyContinue
+          }
+          .\installer\scripts\cleanup-lemonade.ps1 -Port 13305
 
       - name: Upload API Server Logs
         if: failure()
