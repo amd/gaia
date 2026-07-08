@@ -106,7 +106,7 @@ const sidecar = await startSidecar({ binaryPath, port: 8131 });`;
         <h2 class="text-2xl sm:text-3xl font-bold tracking-tight">Build → Run → Distribute.</h2>
         <p class="mt-3 text-g-muted max-w-xl mx-auto">From an idea to an installable agent — entirely on local hardware.</p>
       </div>
-      <div class="grid md:grid-cols-3 gap-5">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
         {pipeline.map((p) => (
           <div class="rounded-xl border border-g-border bg-g-surface p-6">
             <span class="flex w-10 h-10 rounded-lg border border-g-border items-center justify-center text-g-gold-text">
@@ -131,7 +131,7 @@ const sidecar = await startSidecar({ binaryPath, port: 8131 });`;
         <Eyebrow>Run agents now</Eyebrow>
         <a href="/hub" class="text-sm text-g-gold-text hover:underline">Browse the hub →</a>
       </div>
-      <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-5">
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
         {outcomes.map((o) => (
           <a href="/hub" class="group rounded-xl border border-g-border bg-g-surface p-5 hover:border-g-gold/40 transition-colors">
             <span class="flex w-9 h-9 rounded-lg border border-g-border items-center justify-center text-g-muted group-hover:text-g-gold-text transition-colors">
@@ -146,7 +146,7 @@ const sidecar = await startSidecar({ binaryPath, port: 8131 });`;
 
     <!-- 4. Embed in your app (integrators / app companies) -->
     <section class="border-y border-g-border bg-g-surface/40">
-      <div class="max-w-6xl mx-auto px-6 py-20 grid lg:grid-cols-2 gap-12 items-center">
+      <div class="max-w-6xl mx-auto px-6 py-20 grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
         <div>
           <Eyebrow class="mb-3">Integrate</Eyebrow>
           <h2 class="text-2xl sm:text-3xl font-bold tracking-tight">Drop GAIA into your own app.</h2>
@@ -183,7 +183,7 @@ const sidecar = await startSidecar({ binaryPath, port: 8131 });`;
         <a href="/hub" class="whitespace-nowrap text-sm text-g-gold-text hover:underline">All agents →</a>
       </div>
       {featured.length > 0 && (
-        <div class="grid sm:grid-cols-3 gap-5">
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-5">
           {featured.map((agent) => <FeaturedCard agent={agent} eyebrow={agent.category} />)}
         </div>
       )}
@@ -195,7 +195,7 @@ const sidecar = await startSidecar({ binaryPath, port: 8131 });`;
         <Eyebrow class="mb-3">For developers</Eyebrow>
         <h2 class="text-2xl sm:text-3xl font-bold tracking-tight">Prefer the terminal? Start here.</h2>
         <p class="mt-3 text-g-muted max-w-xl">Install the framework and CLI, then build and publish your own agent.</p>
-        <div class="mt-8 grid sm:grid-cols-3 gap-4">
+        <div class="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-4">
           {devInstalls.map((d) => (
             <div class="rounded-xl border border-g-border bg-g-surface p-5">
               <div class="text-[11px] font-bold uppercase tracking-wide text-g-gold-text">{d.label}</div>
