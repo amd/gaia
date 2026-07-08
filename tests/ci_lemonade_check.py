@@ -96,10 +96,32 @@ def main() -> int:
     print("[ci] models via client: %s" % ", ".join(str(i) for i in ids), flush=True)
 
     if args.embeddings:
-        resp = client.embeddings(["ci validation text"], model=args.model)
-        dim = len(resp["data"][0]["embedding"])
+        # A freshly loaded embedder can briefly return a non-standard body
+        # (e.g. while the backend finishes warming), so retry a few times and,
+        # on persistent failure, print the actual response instead of a raw
+        # KeyError so the fault is diagnosable.
+        import time
+
+        dim = 0
+        last = None
+        for attempt in range(1, 6):
+            resp = client.embeddings(["ci validation text"], model=args.model)
+            data = resp.get("data") if isinstance(resp, dict) else None
+            if data and data[0].get("embedding"):
+                dim = len(data[0]["embedding"])
+                break
+            last = resp
+            print(
+                "[ci] embeddings attempt %d returned no data; retrying..." % attempt,
+                flush=True,
+            )
+            time.sleep(3)
         if dim <= 0:
-            print("[ci] ERROR: empty embedding vector", flush=True)
+            print(
+                "[ci] ERROR: embeddings returned no vector; last response: %r"
+                % (last,),
+                flush=True,
+            )
             return 1
         print("[ci] embeddings OK (dim=%d)" % dim, flush=True)
 
