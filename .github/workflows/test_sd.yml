@@ -7,6 +7,8 @@
 
 name: SD Integration Tests (Windows)
 
+# CI validation: exercise STX integration jobs on the stx-test-labelled runner (xsj-aimlab-stxp-07); revert before merge.
+
 on:
   push:
     branches: ["main"]
@@ -17,6 +19,7 @@ on:
       - "src/gaia/cli.py"
       - "tests/integration/test_sd_integration.py"
       - "tests/unit/test_sd_mixin.py"
+      - ".github/workflows/test_sd.yml"  # self-trigger so CI-validation edits run this workflow
   pull_request:
     branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -27,6 +30,7 @@ on:
       - "src/gaia/cli.py"
       - "tests/integration/test_sd_integration.py"
       - "tests/unit/test_sd_mixin.py"
+      - ".github/workflows/test_sd.yml"  # self-trigger so CI-validation edits run this workflow
   workflow_dispatch:
 
 permissions:

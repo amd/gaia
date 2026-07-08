@@ -8,6 +8,8 @@
 
 name: C++ Build & Test
 
+# CI validation: exercise STX integration jobs on the stx-test-labelled runner (xsj-aimlab-stxp-07); revert before merge.
+
 on:
   workflow_call:
   push:
