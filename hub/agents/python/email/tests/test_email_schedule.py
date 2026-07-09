@@ -540,7 +540,8 @@ def _build_agent(tmp_path: Path, backend: FakeGmailBackend):
 
 class TestAgentWiring:
     def test_tools_registered_and_send_gated(self, tmp_path):
-        from gaia.agents.base.agent import TOOLS_REQUIRING_CONFIRMATION
+        from gaia_agent_email.agent import EmailTriageAgent
+
         from gaia.agents.base.tools import _TOOL_REGISTRY
 
         backend = FakeGmailBackend(user_email="me@example.com")
@@ -554,8 +555,12 @@ class TestAgentWiring:
         ):
             assert name in _TOOL_REGISTRY, f"{name} not registered"
         # Tier-2: confirmation at creation (#1264), unattended fire after.
-        assert "schedule_send" in TOOLS_REQUIRING_CONFIRMATION
-        assert "snooze_message" not in TOOLS_REQUIRING_CONFIRMATION
+        # schedule_send is declared on the email agent's own
+        # CONFIRMATION_REQUIRED_TOOLS and merged with the generic base set
+        # via confirmation_required_tools() (#1440).
+        gated = EmailTriageAgent.confirmation_required_tools()
+        assert "schedule_send" in gated
+        assert "snooze_message" not in gated
 
     def test_end_to_end_through_agent_tools_and_scheduler(self, tmp_path):
         from gaia.agents.base.tools import _TOOL_REGISTRY

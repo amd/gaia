@@ -6,8 +6,9 @@
 within the undo window calls ``untrash_message`` and marks the row as
 undone. After the window, restore raises with an actionable message.
 
-``permanent_delete`` is registered in TOOLS_REQUIRING_CONFIRMATION at
-the agent level — it never auto-executes.
+``permanent_delete`` is declared in the agent's
+``CONFIRMATION_REQUIRED_TOOLS`` (merged with the generic base set via
+``confirmation_required_tools()``, #1440) — it never auto-executes.
 """
 
 from __future__ import annotations
