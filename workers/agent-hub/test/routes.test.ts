@@ -119,6 +119,12 @@ describe("eval scorecard in catalog", () => {
     const entry = body.agents[0];
     expect(entry.eval_score).toBe(87.5);
     expect(entry.eval_scorecard_url).toMatch(/\/agents\/chat\/0\.1\.0\/SCORECARD\.md$/);
+    // The render-ready `scorecard` field carries the body with the YAML front
+    // matter stripped, so the hub tab shows prose, not raw `schema_version:` etc.
+    expect(entry.scorecard).toContain("# Test Agent — Eval Scorecard v0.1.0");
+    expect(entry.scorecard).toContain("**Aggregate score: 87.5**");
+    expect(entry.scorecard).not.toContain("schema_version:");
+    expect(entry.scorecard.startsWith("---")).toBe(false);
   });
 
   it("omits eval_score and eval_scorecard_url when no scorecard is published", async () => {
@@ -140,5 +146,7 @@ describe("eval scorecard in catalog", () => {
     const entry = body.agents[0];
     expect(entry.eval_score).toBeUndefined();
     expect(entry.eval_scorecard_url).toBeUndefined();
+    // No scorecard published → the render-ready field defaults to "".
+    expect(entry.scorecard).toBe("");
   });
 });

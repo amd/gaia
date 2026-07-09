@@ -121,6 +121,17 @@ function parseScorecardScore(markdown: string | null): number | undefined {
 }
 
 /**
+ * Strip a leading YAML front-matter block (`---\n…\n---`) from markdown so the
+ * rendered scorecard tab shows the prose body, not the raw front matter. The
+ * machine-readable fields (aggregate, recipe) are parsed separately for
+ * `eval_score`; the tab only needs the human-facing body.
+ */
+function stripFrontMatter(markdown: string): string {
+  const match = /^---\n[\s\S]*?\n---\n?/.exec(markdown);
+  return (match ? markdown.slice(match[0].length) : markdown).replace(/^\n+/, "");
+}
+
+/**
  * Build the catalog entry for one agent manifest. `readme`/`changelog` are the
  * latest version's markdown ("" if none was published); `packageFiles` is the
  * whole-package zip's file listing (null if no package zip was published);
@@ -178,6 +189,8 @@ export function toIndexEntry(
     changelog,
     spec,
     skill,
+    // Render-ready scorecard body (front matter stripped); "" when none published.
+    scorecard: evalScorecard !== null ? stripFrontMatter(evalScorecard) : "",
     // undefined serializes to "key absent" — only present when the manifest set it.
     npm_package: agent.npm_package,
     playground_url: agent.playground_url,
