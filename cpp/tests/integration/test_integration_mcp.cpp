@@ -128,7 +128,7 @@ TEST(IntegrationMCP, ConnectsToWindowsMcp) {
     McpTestAgent agent;
     bool connected = agent.connectMcpServer("windows", {
         {"command", "uvx"},
-        {"args", {"windows-mcp"}}
+        {"args", {"windows-mcp@0.8.2", "serve"}}
     });
     ASSERT_TRUE(connected) << "Failed to connect to Windows MCP server (uvx windows-mcp)";
 }
@@ -137,7 +137,7 @@ TEST(IntegrationMCP, DiscoversShellTool) {
     McpTestAgent agent;
     bool connected = agent.connectMcpServer("windows", {
         {"command", "uvx"},
-        {"args", {"windows-mcp"}}
+        {"args", {"windows-mcp@0.8.2", "serve"}}
     });
     ASSERT_TRUE(connected);
 
@@ -153,7 +153,7 @@ TEST(IntegrationMCP, DiscoversMultipleTools) {
     McpTestAgent agent;
     bool connected = agent.connectMcpServer("windows", {
         {"command", "uvx"},
-        {"args", {"windows-mcp"}}
+        {"args", {"windows-mcp@0.8.2", "serve"}}
     });
     ASSERT_TRUE(connected);
 
@@ -167,7 +167,7 @@ TEST(IntegrationMCP, DisconnectAndReconnect) {
     McpTestAgent agent;
     bool connected = agent.connectMcpServer("windows", {
         {"command", "uvx"},
-        {"args", {"windows-mcp"}}
+        {"args", {"windows-mcp@0.8.2", "serve"}}
     });
     ASSERT_TRUE(connected);
 
@@ -183,7 +183,7 @@ TEST(IntegrationMCP, DisconnectAndReconnect) {
     // Reconnect
     bool reconnected = agent.connectMcpServer("windows", {
         {"command", "uvx"},
-        {"args", {"windows-mcp"}}
+        {"args", {"windows-mcp@0.8.2", "serve"}}
     });
     ASSERT_TRUE(reconnected) << "Failed to reconnect to Windows MCP server";
     EXPECT_TRUE(agent.tools().hasTool(testTool))
@@ -194,7 +194,7 @@ TEST(IntegrationMCP, SystemPromptIncludesMcpTools) {
     McpTestAgent agent;
     bool connected = agent.connectMcpServer("windows", {
         {"command", "uvx"},
-        {"args", {"windows-mcp"}}
+        {"args", {"windows-mcp@0.8.2", "serve"}}
     });
     ASSERT_TRUE(connected);
 
