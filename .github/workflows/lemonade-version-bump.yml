@@ -6,7 +6,9 @@
 # lemonade-sdk/lemonade GitHub API on a schedule. When a newer stable release exists
 # than the LEMONADE_VERSION pinned in src/gaia/version.py — and the Windows installer
 # assets are actually published for it — it hands off to Claude to open a bump PR with
-# a changelog-aware description. The cheap shell gate runs weekly; the (paid) Claude
+# a changelog-aware description (bumping version.py plus the hardcoded Lemonade version
+# strings in docs that util/check_doc_versions.py enforces). The cheap shell gate runs
+# weekly; the (paid) Claude
 # step only fires when there is genuinely something to bump, and never twice for the
 # same version (it skips when a bump PR for that version is already open).
 name: Lemonade Version Bump
@@ -174,26 +176,43 @@ jobs:
 
             ## Scope (do exactly this — nothing more)
             1. Create the branch: `git checkout -b ${{ steps.detect.outputs.branch }}`
-            2. Edit src/gaia/version.py ONLY: change the line
+            2. Edit src/gaia/version.py: change the line
                  `LEMONADE_VERSION = "${{ steps.detect.outputs.current_version }}"`
                to
                  `LEMONADE_VERSION = "${{ steps.detect.outputs.target_version }}"`
                This constant is the single source of truth — CI and the installer derive the
-               download URLs from it. Do NOT touch anything else: not the per-profile
-               `min_lemonade_version` floors in src/gaia/installer/init_command.py (those are
-               deliberately conservative minimums, not "latest"), not docs, not other files.
-            3. Validate the target release's Windows installers actually exist (a sanity
+               download URLs from it. Do NOT touch the per-profile `min_lemonade_version`
+               floors in src/gaia/installer/init_command.py (those are deliberately
+               conservative minimums, not "latest").
+            3. Sync the hardcoded Lemonade version strings in the docs. CI runs
+               `python util/check_doc_versions.py`, which FAILS the build when any doc or
+               README under docs/ or cpp/ still references the OLD Lemonade version (release
+               download URLs, release-page links, .deb filenames, "vX.Y.Z" text callouts,
+               version table cells). A bump PR that skips this step is guaranteed to fail CI.
+               Run the checker to list every stale reference:
+                 `python util/check_doc_versions.py`
+               For each file it flags, replace the old version
+               `${{ steps.detect.outputs.current_version }}` with
+               `${{ steps.detect.outputs.target_version }}` on ONLY the flagged lines, then
+               re-run the checker until it prints `[OK] All documentation version references
+               are consistent!`. Change nothing but the version numbers — no surrounding
+               prose, and never edit files the checker excludes (docs/releases/, docs/plans/).
+            4. Validate the target release's Windows installers actually exist (a sanity
                re-check; the workflow already gated on this):
                  `gh api repos/lemonade-sdk/lemonade/releases/tags/v${{ steps.detect.outputs.target_version }} --jq '.assets[].name'`
                Confirm `lemonade.msi` and `lemonade-server-minimal.msi` are present. If either
                is missing, do NOT open a PR — delete the branch and stop.
-            4. Run lint on the changed file so formatting stays clean:
+            5. Run lint on the changed files so formatting stays clean:
                  `python util/lint.py --black --isort`
-               (Tooling is pre-installed. A one-line constant edit should produce no changes.)
+               (Tooling is pre-installed. The version.py edit and doc edits should produce
+               no formatting changes.)
 
             ## Commit
+            Stage version.py plus every doc file you updated in step 3 (`git add -u` picks up
+            all modified tracked files — you have only edited version.py and flagged docs, so
+            this stays in scope):
             ```
-            git add src/gaia/version.py
+            git add -u
             git commit -m "chore(deps): bump Lemonade Server to v${{ steps.detect.outputs.target_version }}"
             ```
             Conventional-commits title. NO Co-Authored-By trailer. NO Claude attribution anywhere.
@@ -296,8 +315,10 @@ jobs:
                If you filed no issues, leave the PR body as-is.
 
             ## Hard constraints
-            - The only repo FILE you may change is src/gaia/version.py. No drive-by edits.
-              (Feature scouting creates GitHub issues only — it never edits files.)
+            - The only repo FILES you may change are src/gaia/version.py and the docs/README
+              files under docs/ or cpp/ that `util/check_doc_versions.py` flags for a Lemonade
+              version update — and in those docs, only the version numbers. No other files, no
+              drive-by edits. (Feature scouting creates GitHub issues only — it never edits files.)
             - No Claude attribution anywhere (commit, PR body, issues) — including Co-Authored-By.
             - Never run the Lemonade server or any installer in this job.
             - Filing zero feature issues is the expected default — only file when the high bar

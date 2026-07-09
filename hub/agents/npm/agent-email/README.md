@@ -283,6 +283,20 @@ exposes metadata, draft/send accept files). The remaining mailbox **actions**
 through this package — see
 [`SPEC.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md) for the complete surface.
 
+### Stateful agent surface (`/v1/email/agent/*`, 0.4.0)
+
+The typed client above is **stateless** — each call analyzes the payload you pass,
+with no memory and no conversation. As of 0.4.0 the sidecar *also* hosts a
+**session-scoped, conversational agent** (`/v1/email/agent/*`) that runs the full
+`EmailTriageAgent` — memory, personalization, and every agent tool — over HTTP,
+streaming each turn back as Server-Sent Events. Create a session, `POST
+/v1/email/agent/query` to run a turn, approve gated tools via `/confirm-tool`, and
+toggle memory at runtime via `/memory`. This is the surface the Agent UI uses; it is
+**not wrapped by the typed client yet** — drive it with `fetch`. See
+[`SPEC.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md)
+and [`SKILL.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SKILL.md)
+for the endpoint table and a streaming example.
+
 ## Running in production
 
 This is a long-lived local resource, not a per-request one. Wire it like this:
