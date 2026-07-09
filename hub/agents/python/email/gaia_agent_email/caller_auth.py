@@ -46,9 +46,8 @@ from dataclasses import dataclass
 from typing import FrozenSet, Optional
 from urllib.parse import urlsplit
 
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.datastructures import Headers
+from starlette.responses import JSONResponse
 
 from gaia.logger import get_logger
 
@@ -171,51 +170,66 @@ def token_ok(config: CallerAuthConfig, authorization_header: str) -> bool:
     return hmac.compare_digest(presented.strip(), config.token)
 
 
-class HostOriginMiddleware(BaseHTTPMiddleware):
+class HostOriginMiddleware:
     """Reject non-loopback ``Host`` (400) and non-loopback ``Origin`` (403).
 
     The token check lives in the ``require_caller_token`` route dependency (so it
-    can be scoped to the email router and skip the exempt probe/HTML paths); this
+    can be scoped to the routers and skip the exempt probe/HTML paths); this
     middleware enforces the transport-level controls that must cover *every*
     request, including the exempt paths. No-ops when auth was never configured.
+
+    Implemented as **pure ASGI** (not ``BaseHTTPMiddleware``) so it only inspects
+    two request headers and then hands the untouched ``(scope, receive, send)``
+    to the app — ``BaseHTTPMiddleware`` wraps the response body and can buffer /
+    reorder streaming responses, which would break the line-by-line
+    ``StreamingResponse`` from ``POST /v1/email/init``.
     """
 
-    async def dispatch(self, request: Request, call_next) -> Response:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
         config = get_config()
-        if config is None:
-            return await call_next(request)
+        if config is not None:
+            headers = Headers(scope=scope)
 
-        host = _host_only(request.headers.get("host", ""))
-        if host and host not in config.allowed_hosts:
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "detail": (
-                        f"Rejected: Host header '{host}' is not an allowed "
-                        "loopback host. The email sidecar serves only "
-                        "127.0.0.1/localhost; a non-loopback Host is a "
-                        "DNS-rebinding attempt."
-                    )
-                },
-            )
-
-        origin = request.headers.get("origin")
-        if origin is not None:
-            origin_host = (urlsplit(origin).hostname or "").lower()
-            if origin_host not in config.allowed_origin_hosts:
-                return JSONResponse(
-                    status_code=403,
-                    content={
-                        "detail": (
-                            f"Rejected: cross-origin request from Origin "
-                            f"'{origin}'. The email sidecar refuses browser "
-                            "origins other than loopback (drive-by / "
-                            "DNS-rebinding protection)."
-                        )
-                    },
+            host = _host_only(headers.get("host", ""))
+            if host and host not in config.allowed_hosts:
+                await self._reject(
+                    scope,
+                    receive,
+                    send,
+                    400,
+                    f"Rejected: Host header '{host}' is not an allowed loopback "
+                    "host. The email sidecar serves only 127.0.0.1/localhost; a "
+                    "non-loopback Host is a DNS-rebinding attempt.",
                 )
+                return
 
-        return await call_next(request)
+            origin = headers.get("origin")
+            if origin is not None:
+                origin_host = (urlsplit(origin).hostname or "").lower()
+                if origin_host not in config.allowed_origin_hosts:
+                    await self._reject(
+                        scope,
+                        receive,
+                        send,
+                        403,
+                        f"Rejected: cross-origin request from Origin '{origin}'. "
+                        "The email sidecar refuses browser origins other than "
+                        "loopback (drive-by / DNS-rebinding protection).",
+                    )
+                    return
+
+        await self.app(scope, receive, send)
+
+    @staticmethod
+    async def _reject(scope, receive, send, status: int, detail: str) -> None:
+        await JSONResponse({"detail": detail}, status_code=status)(scope, receive, send)
 
 
 __all__ = [

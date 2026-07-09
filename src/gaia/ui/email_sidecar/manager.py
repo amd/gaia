@@ -262,7 +262,7 @@ class EmailSidecarManager:
         # Hand the sidecar its per-session caller-auth token over the private env
         # channel (#1706). Merge over the inherited env / any cwd already in
         # popen_kwargs — never clobber them.
-        spawn_env = {**os.environ, **popen_kwargs.pop("env", {})}
+        spawn_env = {**os.environ, **(popen_kwargs.pop("env", None) or {})}
         spawn_env[_TOKEN_ENV_VAR] = self.auth_token
         try:
             self._proc = subprocess.Popen(

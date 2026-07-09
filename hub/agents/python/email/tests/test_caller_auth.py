@@ -228,3 +228,41 @@ def test_shipped_sidecar_app_enforces_token(monkeypatch):
     assert ok.status_code == 200
     # Root liveness probe stays open (readiness handshake needs it pre-token).
     assert client.get("/health").status_code == 200
+
+
+def test_shipped_app_gates_connector_and_agent_routers(monkeypatch):
+    # Every mailbox-touching router is gated, not just the email router: the
+    # connector lifecycle (configure/complete/disconnect) and the stateful agent
+    # surface can act on the mailbox, so an unauthenticated local caller is 401.
+    monkeypatch.setenv(caller_auth.TOKEN_ENV_VAR, _TOKEN)
+    server = _load_sidecar_server()
+    client = TestClient(server.build_app(), base_url=_BASE_URL)
+    auth = {"Authorization": f"Bearer {_TOKEN}"}
+
+    # Connector routes: 401 without the token, gate cleared with it.
+    assert client.get("/v1/email/connectors").status_code == 401
+    assert client.get("/v1/email/connectors", headers=auth).status_code != 401
+    # Stateful agent surface: 401 without the token (gate runs before the
+    # heavy session build, so no agent/memory import is triggered here).
+    assert client.post("/v1/email/agent/session", json={}).status_code == 401
+
+
+def test_shipped_app_streams_provision_through_middleware(monkeypatch):
+    # The pure-ASGI HostOriginMiddleware must NOT buffer/break the
+    # StreamingResponse from POST /v1/email/init. With Lemonade unreachable the
+    # verb returns a 503 stream of actionable lines; assert it arrives intact
+    # through the middleware + token gate.
+    import gaia_agent_email.api_routes as ar
+
+    monkeypatch.setenv(caller_auth.TOKEN_ENV_VAR, _TOKEN)
+    monkeypatch.setattr(
+        ar, "_probe_lemonade_reachable", lambda *a, **k: (False, "http://x/api/v1")
+    )
+    server = _load_sidecar_server()
+    client = TestClient(server.build_app(), base_url=_BASE_URL)
+
+    resp = client.post("/v1/email/init", headers={"Authorization": f"Bearer {_TOKEN}"})
+    assert resp.status_code == 503
+    assert "not reachable" in resp.text.lower()
+    # Same request without the token is refused before streaming starts.
+    assert client.post("/v1/email/init").status_code == 401
