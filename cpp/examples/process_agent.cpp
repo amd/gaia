@@ -15,7 +15,7 @@
 //
 // Requirements:
 //   - Windows (Win32 APIs and PowerShell for system diagnostics)
-//   - LLM server running at http://localhost:8000/api/v1
+//   - LLM server running at http://localhost:13305/api/v1
 
 #define NOMINMAX
 #include <windows.h>

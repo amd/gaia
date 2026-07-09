@@ -12,7 +12,7 @@
 //
 // Requirements:
 //   - Windows MCP server: uvx windows-mcp
-//   - LLM server running at http://localhost:8000/api/v1
+//   - LLM server running at http://localhost:13305/api/v1
 
 #include <algorithm>
 #include <cctype>

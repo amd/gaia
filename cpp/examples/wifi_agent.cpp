@@ -11,7 +11,7 @@
 //
 // Requirements:
 //   - Windows (PowerShell commands for network diagnostics)
-//   - LLM server running at http://localhost:8000/api/v1
+//   - LLM server running at http://localhost:13305/api/v1
 
 #ifdef _WIN32
 #include <windows.h>
