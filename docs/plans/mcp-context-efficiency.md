@@ -26,7 +26,7 @@ This plan closes the remaining gaps that live **on the GAIA side of that line**:
 > differently. Native tool-calling models get **full JSON schemas** per tool
 > (`_build_openai_tool_schemas`) — close to the article's "~150 tokens per
 > definition." Non-native models get **one compact line** per tool
-> (`- name(params): desc`, `agent.py:771`) — far cheaper. WS1's token win is
+> (`- name(params): desc`, `agent.py:770`) — far cheaper. WS1's token win is
 > therefore largest for native tool-calling models; justify on TTFT + slope, not
 > a single headline number.
 - **WS2 — Tool results enter context verbatim.** Large MCP payloads (a Drive
@@ -51,11 +51,13 @@ selection and tool-wrapper layers — not the mechanism.
   Scores **every** registry entry by cosine similarity of the query against
   `"{name}: {description}"` (`tool_loader.py:271-278`), so MCP tools are *already
   scoreable* once the loader runs.
-- Wiring lives only in ChatAgent: `_maybe_build_tool_loader` (`agent.py:447`) gates
-  it to the **`doc` profile** with the toggle on, and `_dynamic_tools_active`
-  (`agent.py:512`) additionally requires an active memory store.
+- Wiring lives only in ChatAgent (chat wheel,
+  `hub/agents/python/chat/gaia_agent_chat/agent.py`): `_maybe_build_tool_loader`
+  (`gaia_agent_chat/agent.py:455`) gates it to the **`doc` profile** with the
+  toggle on, and `_dynamic_tools_active` (`gaia_agent_chat/agent.py:520`)
+  additionally requires an active memory store.
 - Rendering is gated in the base agent: `_format_tools_for_prompt(filter_to=)`
-  (`agent.py:738`) and `_openai_tools`/`_build_openai_tool_schemas` read
+  (`agent.py:737`) and `_openai_tools`/`_build_openai_tool_schemas` read
   `_active_tool_filter`. Execution always uses the full registry.
 - **KV-cache invariant** (`agent.py:621-647`): loaded set is monotonic + sorted,
   tool block rendered last, so non-expansion turns serialize byte-identically.
@@ -240,9 +242,9 @@ re-sent when piped into the next tool.
   scratchpad backend**: `src/gaia/scratchpad/` is oriented to SQL *tables* for
   data analysis, not opaque blobs, so "reuse" is a stretch (kept as an open
   question below, but leaning dedicated).
-- **Argument handle-resolution pass in `Agent._execute_tool`** (`agent.py:1897`)
+- **Argument handle-resolution pass in `Agent._execute_tool`** (`agent.py:1909`)
   — confirmed single dispatch site: it resolves the tool name, then calls
-  `self._tools_registry[tool_name]["function"]` at `agent.py:1983`. Scan/rehydrate
+  `self._tools_registry[tool_name]["function"]` at `agent.py:1995`. Scan/rehydrate
   handles in `tool_args` immediately before that call so it applies to **all**
   tools (a small tool can consume a large tool's artifact), MCP or not.
   - **Verify before building:** confirm the native tool-calling path also routes
