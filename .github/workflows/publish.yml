@@ -316,18 +316,39 @@ jobs:
       tag: ${{ needs.validate.outputs.tag_name }}
       publish_to_release: false
 
+  # ── Email eval suite (release gate, self-hosted) ────────────────────
+  # Runs the SAME triage + drafting + action-item eval suite as the nightly
+  # (test_email_agent_eval.yml) on the [self-hosted, lemonade-eval] AMD runner,
+  # so the core release exercises the email agent on its committed corpus before
+  # publish. Report mode: it runs + uploads its scorecard/gate reports and only
+  # HARD-BLOCKS the release when a tests/fixtures/email/ threshold manifest sets
+  # enforce:true (data, not code). The approval gate below waits on it; the
+  # shared `lemonade-eval` concurrency group keeps it serial with the
+  # nightly/refresh runs on the single Lemonade slot.
+  #
+  # NOTE: the general `gaia eval agent` gate is intentionally NOT wired here yet
+  # — that CI (test_eval_rag.yml) is disabled pending #1315 (nonexistent runner
+  # label + a 90-min perf ceiling), so wiring it as a blocking gate now would
+  # fail every release. Add it as a fast-follow once #1315 lands.
+  email-eval:
+    name: Email eval suite (release gate)
+    needs: validate
+    uses: ./.github/workflows/test_email_agent_eval.yml
+    secrets: inherit
+
   # ── Stage 3: Approve (single manual gate) ───────────────────────────
   # All builds must pass before the approval prompt appears.
   # Configure the "publish" GitHub environment with required reviewers.
 
   approve-publish:
     name: Approve Publishing
-    needs: [build-pypi, build-npm, build-desktop-installers]
+    needs: [build-pypi, build-npm, build-desktop-installers, email-eval]
     if: >-
       !cancelled() &&
       needs.build-pypi.result == 'success' &&
       needs.build-npm.result == 'success' &&
-      needs.build-desktop-installers.result == 'success'
+      needs.build-desktop-installers.result == 'success' &&
+      needs.email-eval.result == 'success'
     runs-on: ubuntu-latest
     environment: publish
     steps:

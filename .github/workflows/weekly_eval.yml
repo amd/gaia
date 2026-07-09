@@ -1,0 +1,87 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Weekly eval sweep (#1964). Runs the email eval suite (triage + drafting +
+# action-item) once a week on the self-hosted Lemonade runner and OPENS A GITHUB
+# ISSUE if any eval fails, so a regression that the nightly report-mode run only
+# logs is escalated into the tracker once a week instead of scrolling past.
+#
+# This calls the SAME reusable workflow the nightly and the release gates use
+# (test_email_agent_eval.yml), so there is one eval definition, not a fork. The
+# shared `lemonade-eval` concurrency group keeps it strictly serial with the
+# nightly/refresh/release runs on the single Lemonade slot.
+#
+# "Failure" here is a real signal, never a silent skip: the action-item eval
+# REQUIRES the Claude judge (no fuzzy fallback), so a missing/broken judge, a
+# Lemonade/infra error, or an enforced (enforce:true) gate breach all fail the
+# job — which is exactly what files the issue.
+
+name: Weekly Eval
+
+on:
+  # Sundays 08:17 UTC — off the nightly's 07:00 slot; the concurrency group
+  # serializes them if they ever overlap.
+  schedule:
+    - cron: '17 8 * * 0'
+  workflow_dispatch:
+
+concurrency:
+  group: lemonade-eval
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Reuse the one eval definition. secrets: inherit passes ANTHROPIC_API_KEY
+  # (REQUIRED by the action-item judge — the suite fails loudly without it).
+  email-eval:
+    name: Weekly email eval suite
+    uses: ./.github/workflows/test_email_agent_eval.yml
+    secrets: inherit
+
+  open-issue-on-failure:
+    name: Open an issue if the weekly eval failed
+    needs: email-eval
+    # always() so this runs even though the needed job failed; then gate on the
+    # failure result so it only fires on a real failure.
+    if: ${{ always() && needs.email-eval.result == 'failure' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: File (or update) the eval-failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          TITLE="Weekly eval failure: email eval suite"
+          # Idempotent label so --label never errors (create-or-update).
+          gh label create eval-failure --color B60205 \
+            --description "Automated weekly eval failure" --force
+          BODY="$(cat <<EOF
+          The weekly email eval suite (\`test_email_agent_eval.yml\`, called by \`weekly_eval.yml\`) failed.
+
+          - Run: ${RUN_URL}
+          - Trigger: ${EVENT_NAME}
+
+          The email eval REQUIRES the Claude equivalence judge (there is no fuzzy fallback), so a failure here is one of:
+          a Lemonade / infra error, the Claude judge being unavailable or broken, or an enforced (\`enforce: true\`) gate breach.
+          Open the run log above to see which stage failed (triage / drafting / action-item) and why.
+          EOF
+          )"
+          # One rolling issue: comment on the open one if it exists, else open it.
+          EXISTING="$(gh issue list --state open --label eval-failure \
+            --search "${TITLE} in:title" --json number --jq '.[0].number // empty')"
+          if [ -n "${EXISTING}" ]; then
+            gh issue comment "${EXISTING}" --body "${BODY}"
+            echo "commented on existing issue #${EXISTING}"
+          else
+            gh issue create --title "${TITLE}" --body "${BODY}" --label eval-failure
+          fi
