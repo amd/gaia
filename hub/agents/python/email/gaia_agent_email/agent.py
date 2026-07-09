@@ -404,8 +404,10 @@ class EmailTriageAgent(
         enable it when it was never initialized (``GAIA_MEMORY_DISABLED=1`` or
         Lemonade unreachable) cannot succeed at runtime and is reported loudly
         (``ok=False`` with remediation) rather than silently ignored. Disabling is
-        always honored. Enabling mid-session takes full effect on the next turn;
-        the stable working-context prompt refreshes when it is next composed.
+        always honored. When the flag actually changes, the cached system prompt is
+        recomposed so the read-path gate on the stable working-context takes effect
+        immediately — not just the next time the prompt happens to be rebuilt (the
+        email agent has no dynamic tool filter, so it never recomposes on its own).
         """
         available = getattr(self, "_memory_store", None) is not None
         if not available:
@@ -420,7 +422,13 @@ class EmailTriageAgent(
                 )
             return status
 
-        self._incognito = not enabled
+        incognito = not enabled
+        if incognito != getattr(self, "_incognito", False):
+            self._incognito = incognito
+            # The stable memory working-context is baked into the cached system
+            # prompt; flush it so a mid-session toggle can't keep leaking stored
+            # preferences/facts to the model until some unrelated rebuild.
+            self.rebuild_system_prompt()
         status = self.memory_status()
         status["ok"] = True
         return status
@@ -440,7 +448,8 @@ class EmailTriageAgent(
         """Per-turn dynamic memory context, gated on the runtime toggle (#1666).
 
         Empty when memory is off so no stored context is prepended to the user
-        turn; effective immediately on toggle (unlike the cached system prompt).
+        turn. Built per-turn, so a toggle takes effect on the next turn; the
+        stable system-prompt fragment is flushed by ``set_memory_enabled``.
         """
         if getattr(self, "_incognito", False):
             return ""

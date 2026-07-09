@@ -201,6 +201,35 @@ class TestQueryStream:
         finally:
             session.run_lock.release()
 
+    def test_setup_failure_releases_lock(self, client, monkeypatch):
+        """If run setup fails (here: handler construction) before the worker
+        thread owns the lock, run_lock must be released so the session isn't
+        permanently wedged at 409 (PR #1966 review). Patching the handler (not
+        threading) keeps TestClient's own threads working."""
+        import gaia.ui.sse_handler as sse_mod
+
+        real_handler = sse_mod.SSEOutputHandler
+
+        def _boom(*a, **k):
+            raise RuntimeError("cannot build handler")
+
+        monkeypatch.setattr(sse_mod, "SSEOutputHandler", _boom)
+        r = client.post(
+            "/v1/email/agent/query", json={"session_id": "s1", "message": "hi"}
+        )
+        assert r.status_code == 500
+        # Lock must be free — the session can run again once setup works.
+        session = agent_routes.registry.get("s1")
+        assert session is not None and not session.is_running()
+        # Restore ONLY the handler (monkeypatch.undo would also revert the
+        # fixture's build_session_agent/registry patches).
+        monkeypatch.setattr(sse_mod, "SSEOutputHandler", real_handler)
+        with client.stream(
+            "POST", "/v1/email/agent/query", json={"session_id": "s1", "message": "hi"}
+        ) as resp:
+            assert resp.status_code == 200
+            assert any(e["type"] == "run_complete" for e in _sse_events(resp))
+
 
 # ---------------------------------------------------------------------------
 # Tool confirmation over HTTP

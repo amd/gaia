@@ -409,43 +409,57 @@ async def query(request: AgentQueryRequest) -> StreamingResponse:
             detail="A turn is already in progress for this session.",
         )
 
-    # Apply the optional per-turn memory override before the run. A failed
-    # enable (memory unavailable) is surfaced as a stream event, not a hard
-    # error — the turn can still run without memory.
-    memory_note: Optional[str] = None
-    if request.memory_enabled is not None:
-        setter = getattr(session.agent, "set_memory_enabled", None)
-        if callable(setter):
-            res = setter(request.memory_enabled)
-            if not res.get("ok", False):
-                memory_note = str(res.get("message", ""))
+    # Between acquiring run_lock and the worker thread taking ownership of it,
+    # ANY failure must release the lock — otherwise the session deadlocks (every
+    # future /query returns 409 with no recovery but /session reset). The
+    # thread's own finally releases it on the happy path; this guard covers the
+    # setup (memory override, handler build, thread start) that runs before it.
+    try:
+        # Apply the optional per-turn memory override before the run. A failed
+        # enable (memory unavailable) is surfaced as a stream event, not a hard
+        # error — the turn can still run without memory.
+        memory_note: Optional[str] = None
+        if request.memory_enabled is not None:
+            setter = getattr(session.agent, "set_memory_enabled", None)
+            if callable(setter):
+                res = setter(request.memory_enabled)
+                if not res.get("ok", False):
+                    memory_note = str(res.get("message", ""))
 
-    handler = SSEOutputHandler()
-    session.handler = handler
-    session.agent.console = handler
+        handler = SSEOutputHandler()
+        session.handler = handler
+        session.agent.console = handler
 
-    def _run_agent() -> None:
-        try:
-            if memory_note:
-                handler._emit(
-                    {"type": "status", "status": "warning", "message": memory_note}
+        def _run_agent() -> None:
+            try:
+                if memory_note:
+                    handler._emit(
+                        {"type": "status", "status": "warning", "message": memory_note}
+                    )
+                result = session.agent.process_query(request.message)
+                answer = _extract_answer(result)
+                session.history.append((request.message, answer))
+                handler._emit({"type": "run_complete", "answer": answer})
+            except Exception as exc:  # surface loudly into the stream
+                logger.exception(
+                    "email agent run failed for session %s", session.session_id
                 )
-            result = session.agent.process_query(request.message)
-            answer = _extract_answer(result)
-            session.history.append((request.message, answer))
-            handler._emit({"type": "run_complete", "answer": answer})
-        except Exception as exc:  # surface loudly into the stream
-            logger.exception(
-                "email agent run failed for session %s", session.session_id
-            )
-            handler._emit({"type": "error", "message": str(exc)})
-            handler._emit({"type": "run_complete", "answer": ""})
-        finally:
-            session.handler = None
-            session.run_lock.release()
+                handler._emit({"type": "error", "message": str(exc)})
+                handler._emit({"type": "run_complete", "answer": ""})
+            finally:
+                session.handler = None
+                session.run_lock.release()
 
-    thread = threading.Thread(target=_run_agent, daemon=True)
-    thread.start()
+        thread = threading.Thread(target=_run_agent, daemon=True)
+        thread.start()
+    except Exception as exc:
+        # Setup failed before the worker thread could take over the lock — release
+        # it so the session isn't permanently wedged, then fail loudly.
+        session.handler = None
+        session.run_lock.release()
+        raise HTTPException(
+            status_code=500, detail=f"Failed to start agent turn: {exc}"
+        ) from exc
 
     async def _sse():
         try:

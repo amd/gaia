@@ -471,6 +471,34 @@ class TestRuntimeMemoryToggle:
         finally:
             agent.close_db()
 
+    def test_runtime_disable_flushes_composed_system_prompt(self, tmp_path):
+        """A mid-session set_memory_enabled(False) must scrub stored
+        preferences/facts from the CACHED, composed system prompt — not just the
+        get_memory_system_prompt() helper. The email agent has no dynamic tool
+        filter, so without an explicit rebuild the cached prompt would keep
+        leaking memory to the model after a runtime toggle (PR #1966 review)."""
+        marker = "PINEAPPLE_PREF_MARKER_42"
+        agent = _build_agent(tmp_path)
+        try:
+            # Store a preference, then rebuild so the composed prompt includes it.
+            agent._memory_store.store(
+                category="preference", content=marker, context="email"
+            )
+            agent.rebuild_system_prompt()
+            assert marker in agent.system_prompt, "sanity: pref injected while on"
+
+            # Runtime disable must flush the cached prompt immediately.
+            agent.set_memory_enabled(False)
+            assert (
+                marker not in agent.system_prompt
+            ), "cached system prompt still leaks memory after runtime disable"
+
+            # Re-enabling restores it.
+            agent.set_memory_enabled(True)
+            assert marker in agent.system_prompt
+        finally:
+            agent.close_db()
+
     def test_set_memory_enabled_returns_feedback(self, tmp_path):
         """The setter reports the applied state with actionable feedback."""
         agent = _build_agent(tmp_path)
