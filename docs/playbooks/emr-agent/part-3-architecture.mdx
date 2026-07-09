@@ -27,7 +27,7 @@ icon: "sitemap"
 ## System Architecture
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#A87B2D', 'edgeLabelBackground':'#ffffff', 'fontFamily':'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
     A[/"Intake Form"/] --> B(["FileWatcher"])
     B --> C(["VLM Extraction"])
@@ -50,7 +50,7 @@ flowchart TD
 | Component | Technology | Purpose |
 |-----------|------------|---------|
 | **FileWatcher** | watchdog library | Monitors directory for new intake forms |
-| **VLM Extraction** | Qwen3-VL on iGPU (Vulkan) | Extracts patient data from images/PDFs |
+| **VLM Extraction** | Gemma-4-E4B-it on iGPU (Vulkan) | Extracts patient data from images/PDFs |
 | **SQLite DB** | sqlite3 | Local storage for patients, alerts, sessions |
 | **FastAPI Server** | FastAPI + uvicorn | REST API + SSE events for real-time updates |
 | **React Dashboard** | React + Vite | Four views: Dashboard, Patients, Chat, Settings |
@@ -182,7 +182,7 @@ The agent follows a 7-step pipeline from file detection to database storage.
   </Step>
 
   <Step title="VLM Extraction">
-    **Model:** Qwen3-VL-4B-Instruct (GGUF) running on the iGPU via llama.cpp/Vulkan
+    **Model:** Gemma-4-E4B-it-GGUF running on the iGPU via llama.cpp/Vulkan
 
     ```python
     EXTRACTION_PROMPT = """Extract patient data from this medical intake form.
@@ -197,7 +197,7 @@ The agent follows a 7-step pipeline from file detection to database storage.
     Use empty string "" for fields not found on the form."""
     ```
 
-    **Why Qwen3-VL?** Best performance for document understanding on AMD hardware.
+    **Why Gemma-4-E4B-it?** A compact multimodal model that runs efficiently on AMD hardware and is the default VLM for GAIA's document-understanding agents.
   </Step>
 
   <Step title="JSON Parsing">
@@ -429,7 +429,7 @@ A form with 15 fields and ~300 characters:
 The Medical Intake Agent combines three GAIA mixins.
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#A87B2D', 'edgeLabelBackground':'#ffffff', 'fontFamily':'system-ui, -apple-system, sans-serif'}}}%%
 classDiagram
     class Agent {
         +process_query()
