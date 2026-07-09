@@ -30,16 +30,13 @@ except ImportError:
     except ImportError:
         PdfReader = None
 
-# Not just ImportError: a broken native dependency (e.g. torchcodec/FFmpeg
-# pulled in by sentence-transformers, or an arch-mismatched faiss build) raises
-# RuntimeError/OSError at import. Treat that the same as "not installed" so a
-# bad install can't crash every module that transitively imports RAG; the loud,
-# actionable error is deferred to RAGSDK._check_dependencies() at point of use.
-try:
-    from sentence_transformers import SentenceTransformer
-except Exception:  # pylint: disable=broad-except
-    SentenceTransformer = None
-
+# Not just ImportError: an arch-mismatched faiss build raises RuntimeError/OSError
+# at import. Treat that the same as "not installed" so a bad install can't crash
+# every module that transitively imports RAG; the loud, actionable error is
+# deferred to RAGSDK._check_dependencies() at point of use.
+# NOTE: RAG embeds via Lemonade (self.embedder.embeddings), NOT sentence-transformers.
+# sentence-transformers is intentionally NOT imported or required here — it is only
+# an optional dep of the memory cross-encoder reranker (gaia.agents.base.memory).
 try:
     import faiss
 except Exception:  # pylint: disable=broad-except
@@ -217,8 +214,6 @@ class RAGSDK:
         missing = []
         if PdfReader is None:
             missing.append("pypdf (or PyPDF2)")
-        if SentenceTransformer is None:
-            missing.append("sentence-transformers")
         if faiss is None:
             missing.append("faiss-cpu")
 
@@ -236,13 +231,8 @@ class RAGSDK:
             # skipping genuinely-missing packages (ImportError) which the
             # install instructions above already cover.
             broken = []
-            for pkg, label in (
-                ("sentence_transformers", "sentence-transformers"),
-                ("faiss", "faiss"),
-            ):
-                if (pkg == "sentence_transformers" and SentenceTransformer is None) or (
-                    pkg == "faiss" and faiss is None
-                ):
+            for pkg, label in (("faiss", "faiss"),):
+                if pkg == "faiss" and faiss is None:
                     try:
                         # Use the import statement (__import__), not
                         # importlib.import_module — the latter bypasses
