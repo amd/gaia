@@ -69,6 +69,7 @@ from gaia_agent_email.contract import (
     CalendarRespondRequest,
     CalendarRespondResponse,
     DraftReply,
+    DraftScaffold,
     EmailActionConfirmRequest,
     EmailActionConfirmResponse,
     EmailAddress,
@@ -797,7 +798,7 @@ class EmailTriageService:
         principal: EmailAddress,
         is_spam: bool,
         is_phishing: bool,
-    ) -> Optional[DraftReply]:
+    ) -> Optional[DraftScaffold]:
         # Never propose a reply to spam/phishing — surfacing a draft would
         # nudge the user toward engaging with a hostile sender.
         if is_spam or is_phishing or reply_to is None:
@@ -811,11 +812,9 @@ class EmailTriageService:
             reply_subject = f"Re: {reply_subject}"
         elif not reply_subject:
             reply_subject = "Re:"
-        return DraftReply(
-            to=[reply_to],
-            subject=reply_subject,
-            body="",  # proposal scaffold; the user/agent fills the body in
-        )
+        # Triage returns a scaffold (recipient + subject) — it never composes a
+        # body. Callers compose the body and POST it to /v1/email/draft.
+        return DraftScaffold(to=[reply_to], subject=reply_subject)
 
 
 def _format_address(addr: EmailAddress) -> str:

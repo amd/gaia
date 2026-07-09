@@ -115,7 +115,7 @@ the principal is not necessarily a recipient of every message.
 | `is_phishing` | bool | Phishing signal, independent of `is_spam`. |
 | `summary` | string | Plain-text summary of the email / thread. Required. |
 | `action_items` | `ActionItem[]` | Extracted actions. May be empty. |
-| `draft` | `DraftReply` \| null | Proposed reply, or `null` when none is suggested. Never sent without explicit confirmation (#1264). |
+| `draft` | `DraftScaffold` \| null | Proposed reply **scaffold** (recipient + subject only, no body), or `null` when none is suggested (schema 2.3). Triage never composes reply prose — compose the body yourself and `POST /v1/email/draft` to get a full `DraftReply` + confirmation token. |
 
 `ActionItem`:
 
@@ -124,13 +124,16 @@ the principal is not necessarily a recipient of every message.
 | `description` | string | Imperative action. Required, non-empty. |
 | `due_hint` | string \| null | Free-text due hint as written (`"Friday"`); not parsed into a date. |
 
-`DraftReply`:
+`DraftScaffold` (the triage-response draft, schema 2.3):
 
 | Field | Type | Notes |
 |---|---|---|
 | `to` | `EmailAddress[]` | **Non-empty** proposed recipients. |
-| `subject` | string | Proposed subject. |
-| `body` | string | Proposed body. |
+| `subject` | string | Proposed subject (`Re:`-prefixed). |
+
+There is deliberately **no `body`** here — triage does not write replies. The full
+`DraftReply` (with `body`) is returned only by `POST /v1/email/draft`, where you
+supply the composed body and receive a single-use send-confirmation token.
 
 ---
 
@@ -269,8 +272,7 @@ The MCP surface mirrors this with a `triage_email_batch` tool (the single
     ],
     "draft": {
       "to": [{ "name": "Bob Sender", "email": "bob@vendor.com" }],
-      "subject": "Re: Q2 invoice attached",
-      "body": "Thanks Bob, I'll review and confirm by Friday."
+      "subject": "Re: Q2 invoice attached"
     }
   }
 }
