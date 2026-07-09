@@ -1,0 +1,291 @@
+{
+  "_meta": {
+    "fixture": "followups_ground_truth.json",
+    "fixture_kind": "hand-authored-seed",
+    "schema_version": 1,
+    "description": "Labeled seed corpus for the email follow-up detection quality eval (#1606 feature, #1950 tracking). Each case is ONE sent thread (a conversation the user started) hand-labeled with whether it genuinely 'awaits_reply' -- i.e. the user asked for something / expects a response that has not arrived. Scored by gaia.eval.followup_quality: the corpus thread is replayed into a FakeGmailBackend and the REAL detector (gaia_agent_email.tools.followup_tools.check_followups_impl) is run over it; whether the thread is flagged 'awaiting_reply' is the prediction, matched against 'awaits_reply'. Detection is deterministic (latest-message-outbound + age + external-recipient) -- this eval measures where that heuristic diverges from human judgment: FALSE POSITIVES (thanks/FYI/acknowledgment notes the user sent that need no reply but get flagged) and FALSE NEGATIVES (a genuine question whose latest inbound message is only an out-of-office auto-reply, which the detector mistakes for a real answer). To isolate the CONTENT/reply-state judgment from the detector's timing grace-window, every outbound-latest case is authored past the 3-day window (age_days >= window); the only thing that varies is the content and the inbound-reply state. HARD NEGATIVES (awaits_reply == false) are deliberate and first-class: a sent note that needs no reply must NOT be flagged, and any flag there is a false positive in the precision denominator. The aggregate precision / recall / F1 over the awaits_reply flag are compared to followups_gate_thresholds.json in report mode (enforce:false).",
+    "detection_params": {
+      "window_days": 3,
+      "note": "The scorer runs check_followups_impl with window_days=3 and a fixed injected now, so ages are deterministic. A thread is flagged only when its LATEST message is the user's own outbound mail, at least window_days old, to at least one external recipient."
+    },
+    "case_schema": {
+      "scenario": "str -- short label for what this sent thread is",
+      "awaits_reply": "bool -- the human label: does this thread genuinely await an inbound reply the user is waiting on?",
+      "is_hard_negative": "bool -- true when the thread does NOT await a reply (awaits_reply == false); must agree with awaits_reply",
+      "thread": "list[{direction: 'outbound'|'inbound', from?: str, to?: str, subject: str, body: str, age_days: number}] -- the conversation in chronological order (oldest first). Outbound = the user's mail (from defaults to the user, to is the recipient); inbound = a counterparty's reply (from is the counterparty, to defaults to the user). age_days is how many days ago the message was sent, relative to the fixed eval 'now'."
+    }
+  },
+  "fu-001": {
+    "scenario": "genuine question -- confirm a meeting time, no reply",
+    "awaits_reply": true,
+    "is_hard_negative": false,
+    "thread": [
+      {
+        "direction": "outbound",
+        "to": "Dana Kim <dana@acme.io>",
+        "subject": "Design review time",
+        "body": "Hi Dana,\n\nCan we move Thursday's design review from 1pm to 3pm? Let me know if that works and I'll update the invite.\n\nSam",
+        "age_days": 5
+      }
+    ]
+  },
+  "fu-002": {
+    "scenario": "document review request to external counsel, no reply",
+    "awaits_reply": true,
+    "is_hard_negative": false,
+    "thread": [
+      {
+        "direction": "outbound",
+        "to": "Robert Alvarez <ralvarez@dunmorelaw.com>",
+        "subject": "Licensing agreement -- redline",
+        "body": "Dear Robert,\n\nI've attached our redline of the licensing agreement. Could you review sections 4 and 7 and let me know if the revised indemnity language is acceptable?\n\nThanks,\nSam",
+        "age_days": 6
+      }
+    ]
+  },
+  "fu-003": {
+    "scenario": "quote request to a vendor, no reply",
+    "awaits_reply": true,
+    "is_hard_negative": false,
+    "thread": [
+      {
+        "direction": "outbound",
+        "to": "Sales <sales@cloudhost.com>",
+        "subject": "Pricing for the enterprise tier",
+        "body": "Hello,\n\nWe're evaluating your enterprise plan for ~200 seats. Could you send a formal quote including volume discount and annual billing options?\n\nBest,\nSam",
+        "age_days": 4
+      }
+    ]
+  },
+  "fu-004": {
+    "scenario": "approval request to a teammate, no reply",
+    "awaits_reply": true,
+    "is_hard_negative": false,
+    "thread": [
+      {
+        "direction": "outbound",
+        "to": "Priya Rao <priya@acme.io>",
+        "subject": "PR #812 ready for your approval",
+        "body": "Hi Priya,\n\nThe migration PR is green and ready. Could you review and approve when you get a chance? I'd like to merge before the Friday freeze.\n\nSam",
+        "age_days": 7
+      }
+    ]
+  },
+  "fu-005": {
+    "scenario": "open question needing an answer, no reply",
+    "awaits_reply": true,
+    "is_hard_negative": false,
+    "thread": [
+      {
+        "direction": "outbound",
+        "to": "Marcus Lee <marcus@acme.io>",
+        "subject": "Which commit shipped in the staging deploy?",
+        "body": "Hey Marcus,\n\nQA is chasing a regression on staging. Do you know which commit went out in this morning's deploy? I need it to bisect.\n\nSam",
+        "age_days": 5
+      }
+    ]
+  },
+  "fu-006": {
+    "scenario": "false-negative trap -- genuine ask, latest inbound is only an out-of-office auto-reply",
+    "awaits_reply": true,
+    "is_hard_negative": false,
+    "thread": [
+      {
+        "direction": "outbound",
+        "to": "Grace Osei <grace@partnerco.com>",
+        "subject": "Intro call times",
+        "body": "Hi Grace,\n\nGreat to connect. Are you free Tuesday 2pm or Thursday 11am for a 30-minute intro call? I'll send an invite once you confirm.\n\nSam",
+        "age_days": 6
+      },
+      {
+        "direction": "inbound",
+        "from": "Grace Osei <grace@partnerco.com>",
+        "subject": "Automatic reply: Intro call times",
+        "body": "I am out of the office until Monday with limited access to email. For urgent matters contact my assistant at ops@partnerco.com. I will respond when I return.\n\nGrace",
+        "age_days": 4
+      }
+    ]
+  },
+  "fu-neg-001": {
+    "scenario": "hard negative -- thank-you note the user sent, no reply needed",
+    "awaits_reply": false,
+    "is_hard_negative": true,
+    "thread": [
+      {
+        "direction": "outbound",
+        "to": "Grace Osei <grace@partnerco.com>",
+        "subject": "Thanks!",
+        "body": "Hi Grace,\n\nThanks so much for the demo yesterday -- the team was really impressed. No need to reply, just wanted to pass along the kind words.\n\nSam",
+        "age_days": 5
+      }
+    ]
+  },
+  "fu-neg-002": {
+    "scenario": "hard negative -- FYI status broadcast, explicitly no action needed",
+    "awaits_reply": false,
+    "is_hard_negative": true,
+    "thread": [
+      {
+        "direction": "outbound",
+        "to": "team@acme.io",
+        "subject": "2.4 deployed cleanly",
+        "body": "Hi all,\n\nJust letting you know the 2.4 release deployed to production this afternoon with no issues. Metrics look normal. No action needed -- sharing for visibility.\n\nSam",
+        "age_days": 5
+      }
+    ]
+  },
+  "fu-neg-003": {
+    "scenario": "hard negative -- closing acknowledgment, conversation already settled",
+    "awaits_reply": false,
+    "is_hard_negative": true,
+    "thread": [
+      {
+        "direction": "inbound",
+        "from": "Dana Kim <dana@acme.io>",
+        "subject": "Design review time",
+        "body": "3pm Thursday works great on my end -- see you then.\n\nDana",
+        "age_days": 6
+      },
+      {
+        "direction": "outbound",
+        "to": "Dana Kim <dana@acme.io>",
+        "subject": "Re: Design review time",
+        "body": "Sounds good, see you Thursday at 3pm. Thanks Dana!\n\nSam",
+        "age_days": 5
+      }
+    ]
+  },
+  "fu-neg-004": {
+    "scenario": "hard negative -- shared an article for visibility, no ask",
+    "awaits_reply": false,
+    "is_hard_negative": true,
+    "thread": [
+      {
+        "direction": "outbound",
+        "to": "Marcus Lee <marcus@acme.io>",
+        "subject": "Interesting read on NPU scheduling",
+        "body": "Hey Marcus,\n\nSaw this and thought of our roadmap discussion -- sharing for visibility, no need to respond.\n\nhttps://example.com/npu-scheduling\n\nSam",
+        "age_days": 6
+      }
+    ]
+  },
+  "fu-neg-005": {
+    "scenario": "hard negative -- polite decline that closes the loop, no reply needed",
+    "awaits_reply": false,
+    "is_hard_negative": true,
+    "thread": [
+      {
+        "direction": "inbound",
+        "from": "Events <events@acme.io>",
+        "subject": "Team offsite -- headcount",
+        "body": "Hi all, please RSVP yes/no for the offsite by Friday.\n\nEvents",
+        "age_days": 7
+      },
+      {
+        "direction": "outbound",
+        "to": "Events <events@acme.io>",
+        "subject": "Re: Team offsite -- headcount",
+        "body": "Thanks for organizing -- I won't be able to make it this time, no worries. Have fun!\n\nSam",
+        "age_days": 5
+      }
+    ]
+  },
+  "fu-neg-006": {
+    "scenario": "hard negative -- thread answered by a substantive inbound reply",
+    "awaits_reply": false,
+    "is_hard_negative": true,
+    "thread": [
+      {
+        "direction": "outbound",
+        "to": "Priya Rao <priya@acme.io>",
+        "subject": "Which commit shipped in the staging deploy?",
+        "body": "Hey Priya, do you know which commit went out in this morning's staging deploy?\n\nSam",
+        "age_days": 6
+      },
+      {
+        "direction": "inbound",
+        "from": "Priya Rao <priya@acme.io>",
+        "subject": "Re: Which commit shipped in the staging deploy?",
+        "body": "It was a1b2c3d -- the checkout refactor. That's almost certainly the regression; I'll revert it now.\n\nPriya",
+        "age_days": 4
+      }
+    ]
+  },
+  "fu-neg-007": {
+    "scenario": "hard negative -- approval granted, thread resolved by the reply",
+    "awaits_reply": false,
+    "is_hard_negative": true,
+    "thread": [
+      {
+        "direction": "outbound",
+        "to": "Tom Becker <tom@acme.io>",
+        "subject": "PTO approval",
+        "body": "Hi Tom, could you approve my PTO request for August 4-8 in the HR system?\n\nSam",
+        "age_days": 6
+      },
+      {
+        "direction": "inbound",
+        "from": "Tom Becker <tom@acme.io>",
+        "subject": "Re: PTO approval",
+        "body": "Approved -- enjoy the break!\n\nTom",
+        "age_days": 4
+      }
+    ]
+  },
+  "fu-neg-008": {
+    "scenario": "hard negative -- note-to-self, no external recipient can ever reply",
+    "awaits_reply": false,
+    "is_hard_negative": true,
+    "thread": [
+      {
+        "direction": "outbound",
+        "to": "user@example.com",
+        "subject": "Reminder: renew the domain",
+        "body": "Renew acme.io before it expires on the 22nd. Card ending 4471.",
+        "age_days": 5
+      }
+    ]
+  },
+  "fu-neg-009": {
+    "scenario": "hard negative -- FYI broadcast that got a courtesy reply, no ask outstanding",
+    "awaits_reply": false,
+    "is_hard_negative": true,
+    "thread": [
+      {
+        "direction": "outbound",
+        "to": "team@acme.io",
+        "subject": "Q2 metrics recap",
+        "body": "Hi all, attaching the Q2 metrics recap for your awareness. No action needed.\n\nSam",
+        "age_days": 6
+      },
+      {
+        "direction": "inbound",
+        "from": "Elena Vasquez <elena@acme.io>",
+        "subject": "Re: Q2 metrics recap",
+        "body": "Thanks for putting this together, Sam -- really useful.\n\nElena",
+        "age_days": 4
+      }
+    ]
+  },
+  "fu-neg-010": {
+    "scenario": "hard negative -- confirmation the user sent that ends the exchange",
+    "awaits_reply": false,
+    "is_hard_negative": true,
+    "thread": [
+      {
+        "direction": "inbound",
+        "from": "Grace Osei <grace@partnerco.com>",
+        "subject": "Invite: intro call Thursday 11am",
+        "body": "Sending an invite for Thursday 11am -- let me know if that still works.\n\nGrace",
+        "age_days": 7
+      },
+      {
+        "direction": "outbound",
+        "to": "Grace Osei <grace@partnerco.com>",
+        "subject": "Re: Invite: intro call Thursday 11am",
+        "body": "Confirmed, Thursday 11am works -- accepted the invite. Talk then!\n\nSam",
+        "age_days": 5
+      }
+    ]
+  }
+}
