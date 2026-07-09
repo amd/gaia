@@ -116,6 +116,13 @@ class EmailAgentConfig:
     undo_window_seconds: int = 30
     db_path: Optional[str] = None
     memory_db_path: Optional[str] = None
+    # Runtime memory toggle (#1666). When False the agent constructs with memory
+    # in incognito mode: personalization/persistence (inbox profiling #1289,
+    # behavioral learning #1290, preference persistence #1288) is suppressed and
+    # the stored working context is NOT injected into the prompt. Unlike
+    # GAIA_MEMORY_DISABLED (startup-only), this is per-instance and can be flipped
+    # at runtime via ``EmailTriageAgent.set_memory_enabled``.
+    memory_enabled: bool = True
     mail_provider: Optional[str] = None
     calendar_provider: Optional[str] = None
     gmail_backend: Optional[Any] = None

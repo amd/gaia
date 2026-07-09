@@ -300,6 +300,13 @@ class EmailTriageAgent(
         memory_db.parent.mkdir(parents=True, exist_ok=True)
         self.init_memory(db_path=memory_db, context="email")
 
+        # Runtime memory toggle (#1666). init_memory() sets _incognito=False when
+        # the store is live; honor an explicit memory_enabled=False by starting in
+        # incognito so personalization/persistence and working-context injection
+        # are suppressed from the first turn. Toggle later via set_memory_enabled.
+        if not config.memory_enabled:
+            self._incognito = True
+
         # Restore preferences from the previous session. Must come after
         # init_memory() (so _memory_store is set) and after
         # _session_preferences is set (done above).
@@ -333,6 +340,51 @@ class EmailTriageAgent(
 
     def _get_system_prompt(self) -> str:
         return _SYSTEM_PROMPT
+
+    # -- Runtime memory control (#1666) ------------------------------------
+
+    def set_memory_enabled(self, enabled: bool) -> None:
+        """Enable or disable the agent's memory at runtime.
+
+        The runtime, per-instance counterpart to ``EmailAgentConfig.memory_enabled``
+        and the ``GAIA_MEMORY_DISABLED`` env var — a consuming app can flip
+        personalization/persistence on or off without an env var + restart. It sets
+        the ``MemoryMixin._incognito`` flag, which gates BOTH:
+
+        - the write path — inbox profiling (#1289), behavioral learning (#1290),
+          preference persistence (#1288), conversation storage, and tool logging;
+        - the read path — the stored working context (preferences/facts) is not
+          injected into the system prompt or per-turn dynamic context.
+
+        No-op when memory was never initialized (``_memory_store is None``, e.g.
+        ``GAIA_MEMORY_DISABLED=1`` or Lemonade unreachable at startup): there is
+        nothing to re-enable. Enabling mid-session takes full effect on the next
+        turn; the stable working-context prompt refreshes when it is next composed.
+        """
+        if getattr(self, "_memory_store", None) is None:
+            return
+        self._incognito = not enabled
+
+    def get_memory_system_prompt(self) -> str:
+        """Stable memory working-context fragment, gated on the runtime toggle.
+
+        Returns an empty fragment when memory is off (``_incognito``) so stored
+        preferences/facts are not injected into the prompt — the read-path half of
+        the #1666 toggle. Otherwise defers to ``MemoryMixin``.
+        """
+        if getattr(self, "_incognito", False):
+            return ""
+        return super().get_memory_system_prompt()
+
+    def get_memory_dynamic_context(self) -> str:
+        """Per-turn dynamic memory context, gated on the runtime toggle (#1666).
+
+        Empty when memory is off so no stored context is prepended to the user
+        turn; effective immediately on toggle (unlike the cached system prompt).
+        """
+        if getattr(self, "_incognito", False):
+            return ""
+        return super().get_memory_dynamic_context()
 
     def process_query(self, *args, **kwargs):
         # Zero the batch-organize counter per turn so a long-lived instance

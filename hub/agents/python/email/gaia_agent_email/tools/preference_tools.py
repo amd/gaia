@@ -169,11 +169,14 @@ class PreferenceToolsMixin:
         that preferences set in a previous session are immediately available.
 
         When no record exists (first run or after ``clear_session_preferences``
-        wiped everything) or when memory is disabled, the empty default set by
-        ``init_session_preferences()`` is left untouched.
+        wiped everything) or when memory is off, the empty default set by
+        ``init_session_preferences()`` is left untouched. "Off" means either
+        ``_memory_store is None`` (never initialized) or ``_incognito`` (the
+        runtime toggle, #1666) — an incognito agent must not read stored
+        personalization back into the session.
         """
         store = getattr(self, "_memory_store", None)
-        if store is None:
+        if store is None or getattr(self, "_incognito", False):
             return
 
         existing = store.get_by_entity(_PREF_ENTITY)

@@ -80,7 +80,12 @@ def _fake_embed(text: str) -> np.ndarray:
     return vec
 
 
-def _build_agent(tmp_path: Path, *, memory_disabled: bool = False) -> EmailTriageAgent:
+def _build_agent(
+    tmp_path: Path,
+    *,
+    memory_disabled: bool = False,
+    memory_enabled: bool = True,
+) -> EmailTriageAgent:
     """Build an EmailTriageAgent with injected fake backends and tmp db paths.
 
     When *memory_disabled* is True the function sets GAIA_MEMORY_DISABLED=1
@@ -89,6 +94,9 @@ def _build_agent(tmp_path: Path, *, memory_disabled: bool = False) -> EmailTriag
 
     When *memory_disabled* is False the Lemonade embedder is mocked so the
     agent constructs without a running Lemonade server.
+
+    *memory_enabled* maps to ``EmailAgentConfig.memory_enabled`` (#1666): with
+    a live store and ``memory_enabled=False`` the agent starts in incognito.
     """
     cfg = EmailAgentConfig(
         gmail_backend=_MinimalMailBackend(),
@@ -97,6 +105,7 @@ def _build_agent(tmp_path: Path, *, memory_disabled: bool = False) -> EmailTriag
         memory_db_path=str(tmp_path / "memory.db"),
         silent_mode=True,
         debug=False,
+        memory_enabled=memory_enabled,
     )
 
     def _do_build():
@@ -116,19 +125,25 @@ def _build_agent(tmp_path: Path, *, memory_disabled: bool = False) -> EmailTriag
                 os.environ["GAIA_MEMORY_DISABLED"] = old
     else:
         # Mock the Lemonade embedding endpoint so init_memory succeeds hermetically.
-        with patch(
-            "gaia.agents.base.memory.MemoryMixin._get_embedder",
-            return_value=MagicMock(),
-        ), patch(
-            "gaia.agents.base.memory.MemoryMixin._embed_text",
-            side_effect=_fake_embed,
-        ), patch(
-            "gaia.agents.base.memory.MemoryMixin._backfill_embeddings",
-            return_value=0,
-        ), patch(
-            "gaia.agents.base.memory.MemoryMixin._rebuild_faiss_index",
-        ), patch(
-            "gaia.agents.base.memory.MemoryMixin.init_system_context",
+        with (
+            patch(
+                "gaia.agents.base.memory.MemoryMixin._get_embedder",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "gaia.agents.base.memory.MemoryMixin._embed_text",
+                side_effect=_fake_embed,
+            ),
+            patch(
+                "gaia.agents.base.memory.MemoryMixin._backfill_embeddings",
+                return_value=0,
+            ),
+            patch(
+                "gaia.agents.base.memory.MemoryMixin._rebuild_faiss_index",
+            ),
+            patch(
+                "gaia.agents.base.memory.MemoryMixin.init_system_context",
+            ),
         ):
             return _do_build()
 
@@ -274,9 +289,9 @@ class TestIndependentDatabases:
 
             # Get the row count in state.db (email_actions table)
             with sqlite3.connect(state_db) as conn:
-                before = conn.execute(
-                    "SELECT COUNT(*) FROM email_actions"
-                ).fetchone()[0]
+                before = conn.execute("SELECT COUNT(*) FROM email_actions").fetchone()[
+                    0
+                ]
 
             # Insert a dummy action row directly (using the real schema from action_store.py).
             with sqlite3.connect(state_db) as conn:
@@ -288,9 +303,7 @@ class TestIndependentDatabases:
                 )
 
             with sqlite3.connect(state_db) as conn:
-                after = conn.execute(
-                    "SELECT COUNT(*) FROM email_actions"
-                ).fetchone()[0]
+                after = conn.execute("SELECT COUNT(*) FROM email_actions").fetchone()[0]
 
             assert after == before + 1, "state.db row count should have increased by 1"
 
@@ -308,9 +321,9 @@ class TestIndependentDatabases:
                         mem_count = conn.execute(
                             "SELECT COUNT(*) FROM knowledge_items"
                         ).fetchone()[0]
-                        assert mem_count == 0, (
-                            "memory.db should not have gained rows from a state.db write"
-                        )
+                        assert (
+                            mem_count == 0
+                        ), "memory.db should not have gained rows from a state.db write"
         finally:
             agent.close_db()
 
@@ -318,9 +331,9 @@ class TestIndependentDatabases:
         """The memory context is set to 'email' (not 'global') for the email agent."""
         agent = _build_agent(tmp_path)
         try:
-            assert agent._memory_context == "email", (
-                f"Expected memory context 'email', got {agent._memory_context!r}"
-            )
+            assert (
+                agent._memory_context == "email"
+            ), f"Expected memory context 'email', got {agent._memory_context!r}"
         finally:
             agent.close_db()
 
@@ -333,9 +346,9 @@ class TestIndependentDatabases:
         path = Path(cfg.resolved_memory_db_path())
         # Default path should be ~/.gaia/email/memory.db
         assert path.name == "memory.db", f"Expected memory.db, got {path.name}"
-        assert "email" in str(path), (
-            f"Memory db path should be namespaced under email/, got {path}"
-        )
+        assert "email" in str(
+            path
+        ), f"Memory db path should be namespaced under email/, got {path}"
 
     def test_config_memory_db_path_injectable(self, tmp_path):
         """When memory_db_path is set in config, resolved_memory_db_path() returns it."""
@@ -346,3 +359,126 @@ class TestIndependentDatabases:
             memory_db_path=custom,
         )
         assert cfg.resolved_memory_db_path() == custom
+
+
+class TestRuntimeMemoryToggle:
+    """#1666: runtime enable/disable of the agent's memory.
+
+    Covers the write-gate (inbox profiling #1289, behavioral learning #1290,
+    preference persistence #1288) and the read path (working-context injection),
+    driven by both ``EmailAgentConfig.memory_enabled`` (construction) and
+    ``set_memory_enabled`` (runtime), without an env var + restart.
+    """
+
+    _INTERACTION_ENTITY = "email:interaction:alice@example.com"
+
+    def test_default_is_not_incognito(self, tmp_path):
+        """A live store with memory_enabled=True (default) leaves the agent
+        non-incognito — the runtime toggle changes nothing about existing
+        behavior by default."""
+        agent = _build_agent(tmp_path)
+        try:
+            assert agent._memory_store is not None
+            assert agent._incognito is False
+        finally:
+            agent.close_db()
+
+    def test_config_memory_enabled_false_starts_incognito(self, tmp_path):
+        """memory_enabled=False constructs a live-store agent that starts in
+        incognito — memory is off from the first turn, no restart required."""
+        agent = _build_agent(tmp_path, memory_enabled=False)
+        try:
+            # Store IS initialized (this is a runtime toggle, not the startup
+            # GAIA_MEMORY_DISABLED opt-out), but writes/reads are gated.
+            assert agent._memory_store is not None
+            assert agent._incognito is True
+        finally:
+            agent.close_db()
+
+    def test_incognito_suppresses_inbox_profiling_write(self, tmp_path):
+        """_record_interaction must not persist when memory is off (#1289 gate)."""
+        agent = _build_agent(tmp_path, memory_enabled=False)
+        try:
+            agent._record_interaction("alice@example.com", "URGENT")
+            rows = agent._memory_store.get_by_entity(self._INTERACTION_ENTITY)
+            assert rows == [], f"incognito must skip profiling write, got: {rows}"
+        finally:
+            agent.close_db()
+
+    def test_memory_on_records_inbox_profiling_write(self, tmp_path):
+        """Regression guard: with memory on, profiling still writes."""
+        agent = _build_agent(tmp_path)  # memory_enabled=True (default)
+        try:
+            agent._record_interaction("alice@example.com", "URGENT")
+            rows = agent._memory_store.get_by_entity(self._INTERACTION_ENTITY)
+            assert rows, "memory-on agent should record the interaction"
+        finally:
+            agent.close_db()
+
+    def test_incognito_gates_profile_read_of_prior_data(self, tmp_path):
+        """Data written while memory was on must not be surfaced by a read
+        (``_read_interactions``/``profile_inbox``) once memory is toggled off."""
+        agent = _build_agent(tmp_path)
+        try:
+            agent._record_interaction("alice@example.com", "URGENT")
+            assert agent._read_interactions(), "sanity: write happened while on"
+
+            agent.set_memory_enabled(False)
+            assert (
+                agent._read_interactions() == []
+            ), "incognito must not surface stored interaction history on read"
+        finally:
+            agent.close_db()
+
+    def test_set_memory_enabled_toggles_write_gate_at_runtime(self, tmp_path):
+        """set_memory_enabled(False) then (True) flips the write gate on a live
+        instance — no reconstruction."""
+        agent = _build_agent(tmp_path)
+        try:
+            # Turn OFF at runtime — the write is skipped.
+            agent.set_memory_enabled(False)
+            assert agent._incognito is True
+            agent._record_interaction("alice@example.com", "URGENT")
+            assert agent._memory_store.get_by_entity(self._INTERACTION_ENTITY) == []
+
+            # Turn back ON — the next write persists.
+            agent.set_memory_enabled(True)
+            assert agent._incognito is False
+            agent._record_interaction("alice@example.com", "URGENT")
+            assert agent._memory_store.get_by_entity(self._INTERACTION_ENTITY)
+        finally:
+            agent.close_db()
+
+    def test_incognito_suppresses_behavioral_promotions(self, tmp_path):
+        """_evaluate_promotions returns [] when memory is off (#1290 read gate)."""
+        agent = _build_agent(tmp_path, memory_enabled=False)
+        try:
+            assert agent._evaluate_promotions() == []
+        finally:
+            agent.close_db()
+
+    def test_incognito_gates_working_context_read_path(self, tmp_path):
+        """The memory working-context fragments are empty when memory is off, so
+        stored preferences/facts are not injected into the prompt."""
+        agent = _build_agent(tmp_path)
+        try:
+            # Memory on: the stable fragment carries the memory instructions.
+            assert agent.get_memory_system_prompt() != ""
+
+            agent.set_memory_enabled(False)
+            assert agent.get_memory_system_prompt() == ""
+            assert agent.get_memory_dynamic_context() == ""
+        finally:
+            agent.close_db()
+
+    def test_set_memory_enabled_noop_without_store(self, tmp_path):
+        """When memory was never initialized (GAIA_MEMORY_DISABLED=1), enabling at
+        runtime is a safe no-op — there is nothing to re-enable."""
+        agent = _build_agent(tmp_path, memory_disabled=True)
+        try:
+            assert agent._memory_store is None
+            # Must not raise, and must not falsely clear incognito.
+            agent.set_memory_enabled(True)
+            assert agent._incognito is True
+        finally:
+            agent.close_db()

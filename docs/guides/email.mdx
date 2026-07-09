@@ -143,6 +143,15 @@ Preferences are stored in process memory only — restarting the agent (or quitt
 
 Senders you reply to quickly are automatically promoted to priority on the next triage run — no explicit command needed. The agent measures how long it took you to reply to each sender (using the original message's receipt timestamp as the anchor) and promotes senders whose median reply latency falls below the threshold. Promotion is applied on-demand during triage, not on a background thread, and persists across agent restarts. Works across both connected mailboxes (Gmail and Outlook).
 
+### Turning memory on or off
+
+All of the personalization above — inbox profiling, behavioral auto-promotion, and preference persistence — depends on the agent's memory. You can disable it, so nothing is read from or written to memory:
+
+- **At startup**, set the config field: `EmailAgentConfig(memory_enabled=False)`. The agent still constructs normally; it just runs with memory off from the first turn.
+- **At runtime**, call `agent.set_memory_enabled(False)` (and `True` to re-enable) — no restart. The Agent UI drives this per session, so a private session runs with memory off automatically.
+
+When memory is off, both halves are covered: the **write** path (profiling, behavioral learning, preference persistence, conversation storage) is suppressed, and the **read** path (your stored preferences/facts) is not injected into the prompt. This supersedes the older `GAIA_MEMORY_DISABLED=1` env var, which only worked at startup and required a restart to change.
+
 ## Action surface
 
 ### Read
