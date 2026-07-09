@@ -482,13 +482,20 @@ def triage_inbox_impl(
     LLM follow-up (#1107): when ``classifier`` is provided, a heuristic
     ``confident=False`` message has its body read and classified by the
     LLM via ``classifier(subject=, sender=, body=, message_id=)`` →
-    ``{category, confidence, reasoning}``. The result is recorded with
-    ``confident=True`` and ``source="llm"``. If the classifier raises
+    ``{category, is_spam, confidence, reasoning}``. The result is recorded
+    with ``confident=True`` and ``source="llm"``. If the classifier raises
     (LLM unreachable, unparseable output, or an out-of-taxonomy category)
     the exception propagates — we never silently default to
     ``informational``. When ``classifier`` is None, the message is left
     flagged (``confident=False``) for a caller that sequences LLM calls
     itself — preserving the heuristic-only path.
+
+    ``is_spam`` follow-up (#1906) is independent of category confidence: the
+    heuristic only commits ``is_spam`` for a narrow, mechanical sender-pattern
+    signal (``spam_confident=True``); a ``spam_confident=False`` message gets
+    the same LLM call (no extra round-trip) and only its ``is_spam`` field is
+    applied from the response — an already-confident category is never
+    silently overridden by a spam-only escalation, and vice versa.
 
     When ``force_llm`` is True, every message is routed to the classifier
     (if provided) regardless of heuristic confidence — used for
@@ -543,10 +550,17 @@ def triage_inbox_impl(
                 "source": "heuristic",
             }
 
-            # LLM follow-up (#1107): re-classify when the heuristic is not
-            # confident (or force_llm), if a classifier is wired in. Raises on
-            # failure — never silently defaults the category.
-            if classifier is not None and (not heuristic.confident or force_llm):
+            # LLM follow-up (#1107; is_spam added #1906): re-classify when the
+            # heuristic is not confident about category OR not confident about
+            # is_spam (or force_llm), if a classifier is wired in. Raises on
+            # failure — never silently defaults the category. Category and
+            # is_spam are applied independently: a spam-only escalation must
+            # not let the LLM silently override an already-confident category,
+            # and vice versa.
+            needs_llm = (
+                not heuristic.confident or not heuristic.spam_confident or force_llm
+            )
+            if classifier is not None and needs_llm:
                 body_text, _ = decode_message_body(msg.get("payload") or {})
                 llm = classifier(
                     subject=decision["subject"],
@@ -554,13 +568,16 @@ def triage_inbox_impl(
                     body=body_text,
                     message_id=msg["id"],
                 )
-                decision["category"] = llm["category"]
-                decision["confident"] = True
-                decision["source"] = "llm"
-                if llm.get("reasoning"):
-                    decision["rationale"] = llm["reasoning"]
-                if llm.get("confidence") is not None:
-                    decision["llm_confidence"] = llm["confidence"]
+                if not heuristic.confident or force_llm:
+                    decision["category"] = llm["category"]
+                    decision["confident"] = True
+                    decision["source"] = "llm"
+                    if llm.get("reasoning"):
+                        decision["rationale"] = llm["reasoning"]
+                    if llm.get("confidence") is not None:
+                        decision["llm_confidence"] = llm["confidence"]
+                if not heuristic.spam_confident:
+                    decision["is_spam"] = bool(llm.get("is_spam", heuristic.is_spam))
 
             decision = _apply_session_preferences(decision, prefs)
             log_triage_decision(

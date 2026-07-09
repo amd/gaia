@@ -28,6 +28,7 @@ setup(
         "gaia.llm.providers",
         "gaia.audio",
         "gaia.chat",
+        "gaia.schedule",
         "gaia.ui",
         "gaia.ui.routers",
         "gaia.ui.email_sidecar",
@@ -105,6 +106,11 @@ setup(
         "beautifulsoup4",
         "watchdog>=2.1.0",
         "pillow>=9.0.0",
+        # Cron-based scheduler (issue #892): apscheduler drives the daemon;
+        # tomli/tomli-w read+write ~/.gaia/schedules.toml (tomllib is stdlib on 3.11+).
+        "apscheduler>=3.10.0",
+        "tomli-w>=1.0.0",
+        "tomli>=2.0.0; python_version < '3.11'",
         # Required by the `gaia-mcp` bridge (base console_script), which parses
         # multipart uploads via python_multipart at import time. Base — not an
         # extra — so a plain `pip install amd-gaia` ships a working gaia-mcp.
@@ -147,6 +153,7 @@ setup(
             "pymupdf>=1.24.0",
             "pypdf",
             "python-pptx>=0.6.21",
+            "python-docx>=1.1.0",
             "sentence-transformers",
             "safetensors",
             # torch is pinned lower-bound only. The "audio" extra caps
@@ -233,6 +240,7 @@ setup(
             "pymupdf>=1.24.0",
             "pypdf",
             "python-pptx>=0.6.21",
+            "python-docx>=1.1.0",
             "sentence-transformers",
         ],
         "lint": [
@@ -267,9 +275,9 @@ setup(
         "agent-connectors-demo": ["gaia-agent-connectors-demo"],
         "agent-analyst": ["gaia-agent-analyst"],
         "agent-browser": ["gaia-agent-browser"],
-        "agent-email": ["gaia-agent-email"],
         "agent-docqa": ["gaia-agent-docqa"],
         "agent-routing": ["gaia-agent-routing"],
+        "agent-email": ["gaia-agent-email"],
         "agent-chat": ["gaia-agent-chat"],
         "agents": [
             "gaia-agent-summarize",
@@ -283,9 +291,9 @@ setup(
             "gaia-agent-connectors-demo",
             "gaia-agent-analyst",
             "gaia-agent-browser",
-            "gaia-agent-email",
             "gaia-agent-docqa",
             "gaia-agent-routing",
+            "gaia-agent-email",
             "gaia-agent-chat",
         ],
     },

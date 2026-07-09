@@ -217,6 +217,11 @@ def _compute_custom_origin_hash(py_file: Path) -> str:
     return hashlib.sha256(py_file.read_bytes()).hexdigest()[:16]
 
 
+# Default embedder (GPU/CPU). The NPU device overrides this with the FLM-native
+# embedder so chat + embeddings stay co-resident on the NPU backend (#1744).
+DEFAULT_EMBEDDING_MODEL = "nomic-embed-text-v2-moe-GGUF"
+
+
 @dataclass
 class DeviceConfig:
     """A verified (device, model, recipe, backend) configuration for an agent.
@@ -235,6 +240,10 @@ class DeviceConfig:
         verified: Whether this combination has been tested end-to-end via
             agent eval.  Unverified configs show a warning badge in the UI.
         ctx_size: Default context window size for this configuration.
+        embedding_model: Embedder model id for RAG/memory on this device. NPU
+            uses the FLM-native embedder so the chat model and embedder stay
+            co-resident on the NPU backend; a GGUF embedder runs on Vulkan and
+            evicts the FLM chat model every turn on a shared-memory APU (#1744).
     """
 
     device: Literal["cpu", "gpu", "npu"]
@@ -243,6 +252,7 @@ class DeviceConfig:
     backend: str
     verified: bool = False
     ctx_size: int = 32768
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL
 
 
 # Default device configurations for built-in agents using Gemma 4 E4B.
@@ -271,8 +281,26 @@ DEFAULT_DEVICE_CONFIGS: List[DeviceConfig] = [
         backend="flm:npu",
         verified=True,
         ctx_size=32768,
+        # FLM-native embedder so chat + embeddings stay co-resident on the NPU
+        # backend and don't thrash NPU<->Vulkan every turn (#1744).
+        embedding_model="embed-gemma-300m-FLM",
     ),
 ]
+
+
+def get_embedding_model_for_device(device: Optional[str]) -> str:
+    """Return the embedder model id for a device target.
+
+    Single source of truth: reads ``DEFAULT_DEVICE_CONFIGS`` so the embedder
+    choice lives next to the chat model/recipe/backend for each device. The NPU
+    profile uses the FLM-native embedder (see ``DeviceConfig.embedding_model``);
+    GPU/CPU and an unspecified device default to the GGUF nomic embedder, which
+    matches the GPU-default policy elsewhere in the CLI.
+    """
+    for dc in DEFAULT_DEVICE_CONFIGS:
+        if dc.device == device:
+            return dc.embedding_model
+    return DEFAULT_EMBEDDING_MODEL
 
 
 @dataclass

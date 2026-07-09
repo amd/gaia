@@ -14,12 +14,16 @@ from __future__ import annotations
 
 import pytest
 
-from gaia.agents.base.agent import TOOLS_REQUIRING_CONFIRMATION
+# EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102).
+pytest.importorskip("gaia_agent_email")
+from gaia_agent_email.agent import EmailTriageAgent  # noqa: E402
 
 
 class TestConfirmationGatingAtBaseLevel:
-    """The base ``Agent`` class's TOOLS_REQUIRING_CONFIRMATION must list
-    every email tool that has external side effects.
+    """The EmailTriageAgent's confirmation set (its own
+    ``CONFIRMATION_REQUIRED_TOOLS`` merged with the generic base set via
+    ``confirmation_required_tools()`` — #1440) must list every email tool
+    that has external side effects.
     """
 
     @pytest.mark.parametrize(
@@ -27,6 +31,7 @@ class TestConfirmationGatingAtBaseLevel:
         [
             "send_draft",
             "send_now",
+            "schedule_send",
             "forward_message",
             "permanent_delete",
             "accept_invite",
@@ -35,7 +40,7 @@ class TestConfirmationGatingAtBaseLevel:
         ],
     )
     def test_destructive_tool_is_gated(self, tool_name):
-        assert tool_name in TOOLS_REQUIRING_CONFIRMATION
+        assert tool_name in EmailTriageAgent.confirmation_required_tools()
 
     @pytest.mark.parametrize(
         "tool_name",
@@ -65,4 +70,4 @@ class TestConfirmationGatingAtBaseLevel:
         ],
     )
     def test_safe_tool_is_NOT_gated(self, tool_name):
-        assert tool_name not in TOOLS_REQUIRING_CONFIRMATION
+        assert tool_name not in EmailTriageAgent.confirmation_required_tools()

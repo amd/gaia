@@ -11,6 +11,8 @@ on:
   push:
     branches: ["main"]
     paths:
+      - 'src/gaia/version.py'
+      - '.github/actions/install-lemonade/**'
       - "src/gaia/sd/**"  # SD mixin and tools
       - "hub/agents/python/sd/**"  # SD agent (standalone wheel #1102)
       - "src/gaia/llm/lemonade_client.py"
@@ -21,6 +23,8 @@ on:
     branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
+      - 'src/gaia/version.py'
+      - '.github/actions/install-lemonade/**'
       - "src/gaia/sd/**"  # SD mixin and tools
       - "hub/agents/python/sd/**"  # SD agent (standalone wheel #1102)
       - "src/gaia/llm/lemonade_client.py"
@@ -39,7 +43,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Kill Stuck Processes (MSI and Lemonade Server)
         if: always()

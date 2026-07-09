@@ -91,7 +91,7 @@ def _write_bundle(
 
 def test_export_import_round_trip(tmp_path, fake_home, agents_root):
     # Create a real agent dir with a couple of files.
-    agent_dir = _make_agent(agents_root, "zoo-agent")
+    agent_dir = _make_agent(agents_root, "test-fixture-agent")
     (agent_dir / "notes.txt").write_text("hello")
     (agent_dir / "sub").mkdir()
     (agent_dir / "sub" / "helper.py").write_text("x = 1\n")
@@ -99,21 +99,21 @@ def test_export_import_round_trip(tmp_path, fake_home, agents_root):
     out = tmp_path / "export.zip"
     result = export_custom_agents(out)
     assert isinstance(result, ExportResult)
-    assert result.agent_ids == ["zoo-agent"]
+    assert result.agent_ids == ["test-fixture-agent"]
     assert out.exists()
 
     # Remove the source then import and verify contents match.
     import shutil
 
     shutil.rmtree(agent_dir)
-    assert not (agents_root / "zoo-agent").exists()
+    assert not (agents_root / "test-fixture-agent").exists()
 
     imported = import_agent_bundle(out)
     assert isinstance(imported, ImportResult)
-    assert imported.imported == ["zoo-agent"]
+    assert imported.imported == ["test-fixture-agent"]
     assert imported.overwritten == []
 
-    restored = agents_root / "zoo-agent"
+    restored = agents_root / "test-fixture-agent"
     assert restored.is_dir()
     assert (restored / "agent.py").is_file()
     assert (restored / "notes.txt").read_text() == "hello"
@@ -352,14 +352,14 @@ def test_export_zero_agents_raises(tmp_path, fake_home, agents_root):
 
 def test_import_overwrites_existing(tmp_path, fake_home, agents_root):
     # Seed an existing agent with old content.
-    existing = _make_agent(agents_root, "zoo-agent", body="OLD\n")
+    existing = _make_agent(agents_root, "test-fixture-agent", body="OLD\n")
     (existing / "stale.txt").write_text("stale")
 
     # Build a bundle with the same id but new content.
     bundle = tmp_path / "new.zip"
     staging = tmp_path / "staging"
     staging.mkdir()
-    new_agent = staging / "zoo-agent"
+    new_agent = staging / "test-fixture-agent"
     new_agent.mkdir()
     (new_agent / "agent.py").write_text("NEW\n")
 
@@ -371,17 +371,17 @@ def test_import_overwrites_existing(tmp_path, fake_home, agents_root):
                     "format_version": BUNDLE_FORMAT_VERSION,
                     "exported_at": "now",
                     "gaia_version": "test",
-                    "agent_ids": ["zoo-agent"],
+                    "agent_ids": ["test-fixture-agent"],
                 }
             ),
         )
-        zf.write(new_agent / "agent.py", arcname="zoo-agent/agent.py")
+        zf.write(new_agent / "agent.py", arcname="test-fixture-agent/agent.py")
 
     result = import_agent_bundle(bundle)
-    assert result.imported == ["zoo-agent"]
-    assert result.overwritten == ["zoo-agent"]
+    assert result.imported == ["test-fixture-agent"]
+    assert result.overwritten == ["test-fixture-agent"]
 
-    final = agents_root / "zoo-agent"
+    final = agents_root / "test-fixture-agent"
     assert (final / "agent.py").read_text() == "NEW\n"
     # Stale file from the previous install must be gone.
     assert not (final / "stale.txt").exists()

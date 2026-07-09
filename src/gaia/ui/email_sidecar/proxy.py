@@ -2,19 +2,26 @@
 # SPDX-License-Identifier: MIT
 """EmailSidecarProxy — forward UI email calls to the running sidecar over HTTP.
 
-Forwards the routes that EXIST today (triage / draft / send / health / version)
-and returns the sidecar's envelopes unchanged so the existing SSE card pipeline
-keeps working. Routes that do not exist yet (inbox pre-scan, search #1781,
-archive/quarantine #1779, calendar #1780) are GATED: they raise loudly with the
-tracking issue rather than silently no-op — no fallback, no fake success.
+Forwards the full schema-2.1 ``/v1/email/*`` contract (triage, batch triage,
+search, inbox pre-scan, draft/send + confirm, archive/unarchive,
+quarantine/unquarantine, calendar view/preview/create/respond, health, version)
+and returns the sidecar's envelopes **unchanged** so the existing SSE card
+pipeline (``pre_scan_inbox`` → ``email_pre_scan``) keeps working byte-for-byte.
+
+A non-2xx is translated loudly into :class:`SidecarHTTPError`, which carries the
+sidecar's own actionable ``detail`` (e.g. ``502 local LLM triage failed: …``)
+instead of a generic ``HTTPError`` — no fallback, no swallowed error. The
+sidecar's connector OAuth *write* routes are deliberately NOT proxied here: all
+connector writes stay on the Python backend's single-writer path.
 """
 
 from __future__ import annotations
 
 import os
+from typing import Any, Dict, Optional
 
 from gaia.logger import get_logger
-from gaia.ui.email_sidecar.errors import RouteNotAvailableError, SidecarHTTPError
+from gaia.ui.email_sidecar.errors import SidecarHTTPError
 
 logger = get_logger(__name__)
 
@@ -63,46 +70,75 @@ class EmailSidecarProxy:
         self._raise_for_status(resp, path)
         return resp.json()
 
-    def _get(self, path: str) -> dict:
-        resp = self._session.get(f"{self.base_url}{path}", timeout=self.timeout)
+    def _get(self, path: str, params: Optional[Dict[str, Any]] = None) -> dict:
+        resp = self._session.get(
+            f"{self.base_url}{path}", params=params, timeout=self.timeout
+        )
         self._raise_for_status(resp, path)
         return resp.json()
 
-    # -- Routes that exist today --------------------------------------------
+    # -- Triage -------------------------------------------------------------
     def triage(self, payload: dict) -> dict:
         return self._post("/v1/email/triage", payload)
 
+    def triage_batch(self, payload: dict) -> dict:
+        return self._post("/v1/email/triage/batch", payload)
+
+    # -- Inbox read (search + pre-scan) -------------------------------------
+    def search_inbox(self, payload: dict) -> dict:
+        return self._post("/v1/email/search", payload)
+
+    def pre_scan_inbox(self, payload: dict) -> dict:
+        """Forward an inbox pre-scan to the sidecar's ``/prescan`` route.
+
+        Returns the sidecar's ``EmailPreScanResponse`` envelope unchanged
+        (``{"result": {"kind": "email_pre_scan", …}}``). The chat tool reshapes
+        ``result`` into the ``email_pre_scan`` card envelope the SSE handler
+        injects — the wire shape the renderer depends on is preserved here.
+        """
+        return self._post("/v1/email/prescan", payload)
+
+    # -- Reply (draft + send, confirmation-gated) ---------------------------
     def draft(self, payload: dict) -> dict:
         return self._post("/v1/email/draft", payload)
 
     def send(self, payload: dict) -> dict:
         return self._post("/v1/email/send", payload)
 
+    # -- Destructive mailbox actions (confirm-gated) + their undo -----------
+    def confirm(self, payload: dict) -> dict:
+        """Mint a single-use token for a destructive action (archive/quarantine)."""
+        return self._post("/v1/email/confirm", payload)
+
+    def archive(self, payload: dict) -> dict:
+        return self._post("/v1/email/archive", payload)
+
+    def unarchive(self, payload: dict) -> dict:
+        return self._post("/v1/email/unarchive", payload)
+
+    def quarantine(self, payload: dict) -> dict:
+        return self._post("/v1/email/quarantine", payload)
+
+    def unquarantine(self, payload: dict) -> dict:
+        return self._post("/v1/email/unquarantine", payload)
+
+    # -- Calendar -----------------------------------------------------------
+    def calendar_events(self, params: Optional[Dict[str, Any]] = None) -> dict:
+        """View calendar events (read-only). ``params`` → time_min/time_max/provider."""
+        return self._get("/v1/email/calendar/events", params=params)
+
+    def calendar_preview(self, payload: dict) -> dict:
+        return self._post("/v1/email/calendar/events/preview", payload)
+
+    def calendar_create(self, payload: dict) -> dict:
+        return self._post("/v1/email/calendar/events", payload)
+
+    def calendar_respond(self, payload: dict) -> dict:
+        return self._post("/v1/email/calendar/events/respond", payload)
+
+    # -- Health / version ---------------------------------------------------
     def health(self) -> dict:
         return self._get("/health")
 
     def version(self) -> dict:
         return self._get("/version")
-
-    # -- Routes not yet built (gated, not silently broken) ------------------
-    def _pending(self, capability: str, issue: str):
-        raise RouteNotAvailableError(
-            f"email {capability} has no REST route on the sidecar yet "
-            f"(pending {issue}). The sidecar can only serve inbox features once "
-            "that route lands. This is gated deliberately — no fallback."
-        )
-
-    def pre_scan_inbox(self, *_args, **_kwargs):
-        self._pending("inbox pre-scan", "the inbox pre-scan REST route")
-
-    def search_inbox(self, *_args, **_kwargs):
-        self._pending("inbox search", "#1781")
-
-    def archive(self, *_args, **_kwargs):
-        self._pending("archive", "#1779")
-
-    def quarantine(self, *_args, **_kwargs):
-        self._pending("quarantine", "#1779")
-
-    def calendar(self, *_args, **_kwargs):
-        self._pending("calendar", "#1780")

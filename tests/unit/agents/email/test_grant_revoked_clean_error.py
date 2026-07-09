@@ -126,6 +126,13 @@ def _build_agent(tmp_path, monkeypatch, *, granted_backend, ungranted_backend):
     )
     with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:
         mock_sdk.return_value = MagicMock()
+        # is_spam is now content-judged (#1906): a CATEGORY_PROMOTIONS-tagged
+        # message is category-confident but not spam-confident, so the
+        # classifier IS invoked -- give it a valid no-op response so it
+        # doesn't crash on the mock's unconfigured .text attribute.
+        mock_sdk.return_value.send_messages.return_value.text = (
+            '{"category": "PROMOTIONAL", "is_spam": false, "confidence": 1.0}'
+        )
         agent = EmailTriageAgent(config=cfg)
     return agent
 
@@ -280,6 +287,11 @@ class TestInjectedFakeScanUnaffected:
         )
         with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:
             mock_sdk.return_value = MagicMock()
+            # is_spam is content-judged (#1906): give the mocked chat a valid
+            # no-op response so a spam-only classifier escalation doesn't crash.
+            mock_sdk.return_value.send_messages.return_value.text = (
+                '{"category": "PROMOTIONAL", "is_spam": false, "confidence": 1.0}'
+            )
             agent = EmailTriageAgent(config=cfg)
         try:
             envelope = json.loads(_registered_tool("triage_inbox")(20))
@@ -339,6 +351,11 @@ class TestCalendarUngrantedCleanError:
         )
         with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:
             mock_sdk.return_value = MagicMock()
+            # is_spam is content-judged (#1906): give the mocked chat a valid
+            # no-op response so a spam-only classifier escalation doesn't crash.
+            mock_sdk.return_value.send_messages.return_value.text = (
+                '{"category": "PROMOTIONAL", "is_spam": false, "confidence": 1.0}'
+            )
             agent = EmailTriageAgent(config=cfg)
         try:
             # The list_calendar_events tool should return a clean error envelope,
