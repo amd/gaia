@@ -79,6 +79,30 @@ connected mailbox, but no token); the mutating calls (`send`, `archive`, `quaran
 `createCalendarEvent`) and the reversals/calendar views need a connected mailbox whose
 relevant scope was granted.
 
+### Stateful agent surface (`/v1/email/agent/*`, 0.4.0)
+
+Everything above is **stateless** — each call analyzes the payload you send, with no
+memory and no agent loop. The sidecar also hosts a **session-scoped, conversational
+agent** so a host can drive the full `EmailTriageAgent` (memory, personalization, and
+every agent tool) over HTTP instead of importing it in-process. This is the surface the
+Agent UI uses to back its email experience with the packaged sidecar. It is **not wrapped
+by the typed npm client yet** — call it directly (e.g. `fetch`) or via the Agent UI.
+
+| Endpoint | Notes |
+|---|---|
+| `POST /v1/email/agent/session` | Create/reset a session (`{ session_id, reset? }`) → `{ created, memory }`. Builds the agent (surfaces failures early). |
+| `POST /v1/email/agent/query` | Run one turn; **SSE** stream (`text/event-stream`) of the loop — `thinking`/`step`/tool/`permission_request`/`error`/terminal `run_complete`. Body `{ session_id, message, memory_enabled? }`. Every agent tool is reachable via natural language. Overlapping turn → **409**. |
+| `POST /v1/email/agent/confirm-tool` | Approve/deny a gated tool the run is blocking on (`{ session_id, approved }`). |
+| `POST /v1/email/agent/cancel` | Cooperatively cancel the in-flight run. |
+| `DELETE /v1/email/agent/session/{id}` | Evict a session + tear down its agent. |
+| `GET /v1/email/agent/session/{id}/history` | Conversation so far (`turns[]`, oldest first). |
+| `POST /v1/email/agent/memory` | Runtime memory toggle (#1666), `{ session_id, enabled }` → `{ enabled, available, message }`. Enabling memory that was never initialized (started with `GAIA_MEMORY_DISABLED` / Lemonade unreachable) → **409**, never a silent no-op. |
+| `GET /v1/email/agent/memory/{id}` | Memory status without changing it. |
+
+Sessions are in-process and single-tenant (the sidecar hosts one user's agent); one turn
+runs at a time per session. Memory uses FAISS locally; embeddings still go over Lemonade
+HTTP, so the frozen binary stays free of torch/transformers.
+
 ### Mailbox actions (archive / quarantine, schema 2.1)
 
 `archive` and `quarantine` mutate the live mailbox, so each is gated on a single-use
