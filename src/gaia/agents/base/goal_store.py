@@ -532,7 +532,7 @@ class GoalStore:
     def propose(
         self,
         proposal: "Proposal",
-        proposer: str = "agent",
+        proposer: str = "agent",  # pylint: disable=unused-argument
         source: GoalSource = "agent_inferred",
         priority: Priority = "medium",
     ) -> Optional[Goal]:

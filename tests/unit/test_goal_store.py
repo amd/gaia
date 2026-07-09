@@ -398,7 +398,9 @@ class TestPropose:
     def test_propose_low_risk_auto_approves(self, store):
         from gaia.agents.base.goal_store import Proposal
 
-        p = Proposal(action="list_files", rationale="list", action_class="file_read", risk="low")
+        p = Proposal(
+            action="list_files", rationale="list", action_class="file_read", risk="low"
+        )
         goal = store.propose(p)
         assert goal is not None
         assert goal.status == "queued"
@@ -424,7 +426,12 @@ class TestPropose:
     def test_propose_stores_metadata(self, store):
         from gaia.agents.base.goal_store import Proposal
 
-        p = Proposal(action="api_call", rationale="fetch users", action_class="api_call", risk="medium")
+        p = Proposal(
+            action="api_call",
+            rationale="fetch users",
+            action_class="api_call",
+            risk="medium",
+        )
         goal = store.propose(p)
         assert "api_call" in goal.title
         assert goal.description.startswith("[agent_inferred]")

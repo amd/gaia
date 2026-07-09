@@ -2571,7 +2571,9 @@ Do NOT wrap conversational replies in JSON.
     # Proactive lifecycle hooks (#1484)
     # ------------------------------------------------------------------
 
-    def on_first_run(self, context: Optional[Dict[str, Any]]) -> List["Proposal"]:
+    def on_first_run(  # pylint: disable=unused-argument
+        self, context: Optional[Dict[str, Any]]
+    ) -> List["Proposal"]:
         """First-run discovery: propose actions based on initial context.
 
         Default: no-op, returns empty list. Override to implement proactive
@@ -2579,7 +2581,9 @@ Do NOT wrap conversational replies in JSON.
         """
         return []
 
-    def on_heartbeat(self, context: Optional[Dict[str, Any]]) -> List["Proposal"]:
+    def on_heartbeat(  # pylint: disable=unused-argument
+        self, context: Optional[Dict[str, Any]]
+    ) -> List["Proposal"]:
         """Steady-state autonomous loop: propose actions based on current context.
 
         Default: no-op, returns empty list. Override to implement heartbeat
