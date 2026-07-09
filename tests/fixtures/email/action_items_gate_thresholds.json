@@ -1,0 +1,7 @@
+{
+  "_comment": "Extraction-quality bars for the email action-item extraction eval (#1605 feature, #1949 tracking). 'f1_min' is the primary reported target (micro-averaged F1 over the labeled corpus); 'recall_min' guards against dropping real tasks; 'precision_min' guards against spurious extractions (the hard-negative false-positive case). 'enforce' is the SINGLE switch CI keys off and it ships FALSE (report mode) on purpose: NO real judged baseline exists yet (live-baseline generation is a documented #1949 follow-up on the self-hosted Lemonade runner), so these bars are PROVISIONAL placeholders, NOT measured numbers — do not treat them as a confirmed floor. Flip 'enforce' to true HERE (data, not code) once the first nightly report on Strix Halo / Gemma-4-E4B establishes a stable baseline, RE-MEASURING f1_min/recall_min/precision_min to the observed numbers at that point. Loaded by gaia.eval.action_item_quality.load_extraction_thresholds (which ignores extra keys).",
+  "f1_min": 0.70,
+  "recall_min": 0.75,
+  "precision_min": 0.70,
+  "enforce": false
+}

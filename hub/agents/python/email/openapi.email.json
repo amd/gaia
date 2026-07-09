@@ -3009,7 +3009,7 @@
     },
     "/v1/email/send": {
       "post": {
-        "description": "Send a reply — gated on explicit confirmation (#1264).\n\nThe confirmation gate is enforced FIRST: a request without a valid,\npayload-bound confirmation token is rejected with HTTP 403 before any\nbackend call (or even backend resolution). This mirrors the agent's\n``TOOLS_REQUIRING_CONFIRMATION`` guard, translated to the API boundary,\nand guarantees the gate fires regardless of backend health. Never\nauto-confirms.",
+        "description": "Send a reply — gated on explicit confirmation (#1264).\n\nThe confirmation gate is enforced FIRST: a request without a valid,\npayload-bound confirmation token is rejected with HTTP 403 before any\nbackend call (or even backend resolution). This mirrors the agent's\n``CONFIRMATION_REQUIRED_TOOLS`` guard, translated to the API boundary,\nand guarantees the gate fires regardless of backend health. Never\nauto-confirms.",
         "operationId": "send_email_v1_email_send_post",
         "requestBody": {
           "content": {

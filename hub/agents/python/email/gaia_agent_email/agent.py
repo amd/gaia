@@ -12,7 +12,8 @@ Architectural commitments (mapped to plan's Acceptance Criteria):
         wired via the connectors framework's ``get_credential_sync``.
 - AC2 — Full action set in the UI: every tool registered here reaches
         the chat surface; destructive ones (send/forward/permanent_delete/
-        RSVP) gate via ``TOOLS_REQUIRING_CONFIRMATION``.
+        RSVP) gate via the agent's ``CONFIRMATION_REQUIRED_TOOLS`` (merged
+        with the generic base set by ``Agent.confirmation_required_tools()``).
 - AC3 — Local-LLM only: ``EmailAgentConfig`` has no field that can route
         to a cloud LLM; ``base_url`` is allowlisted at startup; this
         class never passes ``use_claude=True`` / ``use_chatgpt=True`` to
@@ -228,6 +229,35 @@ class EmailTriageAgent(
         "Draft a reply to my most recent message",
         "Show me today's calendar",
     ]
+
+    # Destructive / external email + calendar tools that must never auto-execute
+    # without explicit user confirmation (#1440). Merged with the generic
+    # ``TOOLS_REQUIRING_CONFIRMATION`` base set by ``Agent._execute_tool`` via
+    # ``confirmation_required_tools()``. The confirmation payload surfaces the
+    # literal recipient/subject/body so the user sees what will actually happen,
+    # not an LLM paraphrase (Phase I2 / S2.M1).
+    CONFIRMATION_REQUIRED_TOOLS: ClassVar[frozenset] = frozenset(
+        {
+            # Send / forward (#962) — external side effect.
+            "send_draft",
+            "send_now",
+            # Scheduled send (#1609) — confirmation at CREATION: the user
+            # approves the literal recipient/subject/body and fire time, then
+            # the send fires unattended at/after that time.
+            "schedule_send",
+            "forward_message",
+            # Irreversible delete (#962).
+            "permanent_delete",
+            # Calendar RSVP / event creation (#962).
+            "accept_invite",
+            "decline_invite",
+            "create_event_from_email",
+            # Phishing quarantine (#1271) — mutates message state (removes from
+            # INBOX and applies a quarantine label). Reversible via
+            # unquarantine_message but must not auto-execute.
+            "quarantine_phishing_message",
+        }
+    )
 
     # Declares BOTH mailbox providers so the user can connect either Google or
     # a personal Microsoft account and have the agent grant-checked correctly.

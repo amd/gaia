@@ -154,3 +154,62 @@ class TestBuilderFailLoudly:
 
         assert result["answer"] == tool_result
         assert agent.chat.send_messages.call_count == 1
+
+
+class TestBuilderOneShotNudge:
+    """A one-shot request that names the agent must not stall on a greeting.
+
+    Regression for the behavior-E2E ``honest_failure`` where the model parroted
+    the Builder greeting instead of calling create_agent when the very first
+    message already contained the name.
+    """
+
+    def test_greeting_when_name_present_nudges_then_creates(self, tmp_path):
+        """Greeting on turn 1 (name present) → corrective nudge → tool call turn 2."""
+        agent = _make_agent(tmp_path)
+        agent.console = MagicMock()
+
+        greeting = (
+            "Hi! I'm the Gaia Builder, an alpha feature. I'll scaffold a starter "
+            "agent *template* for you. What would you like to call your agent?"
+        )
+        real_call = '{"tool": "create_agent", "tool_args": {"name": "test-3f6aa1b2"}}'
+        responses = iter([greeting, real_call])
+
+        agent.chat = MagicMock()
+        agent.chat.send_messages.side_effect = lambda **kwargs: _mock_chat_response(
+            next(responses)
+        )
+
+        tool_result = f"Agent 'Test Agent' created at {tmp_path}/test-3f6aa1b2/agent.py"
+        with patch.object(
+            agent, "_execute_tool", return_value=tool_result
+        ) as mock_execute:
+            result = agent._process_query_impl(
+                "Create an agent named 'test-3f6aa1b2'. No tools, no MCP. Create it now."
+            )
+
+        # The tool must have run and its confirmation returned — not the greeting.
+        mock_execute.assert_called_once()
+        assert result["answer"] == tool_result
+        assert agent.chat.send_messages.call_count == 2
+
+    def test_greeting_when_no_name_returns_greeting_without_nudge(self, tmp_path):
+        """No name in the message → normal interactive flow; ask for the name once.
+
+        The nudge must NOT fire (that would break the UI's greeting flow), and the
+        tool must not be called on a vague opener.
+        """
+        agent = _make_agent(tmp_path)
+        agent.console = MagicMock()
+
+        greeting = "Hi! I'm the Gaia Builder. What would you like to call your agent?"
+        agent.chat = MagicMock()
+        agent.chat.send_messages.return_value = _mock_chat_response(greeting)
+
+        with patch.object(agent, "_execute_tool") as mock_execute:
+            result = agent._process_query_impl("I want to build a new agent")
+
+        mock_execute.assert_not_called()
+        assert result["answer"] == greeting
+        assert agent.chat.send_messages.call_count == 1

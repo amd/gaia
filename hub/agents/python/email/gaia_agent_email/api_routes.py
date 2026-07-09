@@ -18,8 +18,8 @@ endpoints, mounted on the existing OpenAI-compatible FastAPI app
                              valid confirmation token for *this* payload is
                              supplied. This is the send-confirmation gate
                              (#1264) translated to the API boundary — the
-                             same rule the agent enforces via
-                             ``TOOLS_REQUIRING_CONFIRMATION`` /
+                             same rule the agent enforces via its
+                             ``CONFIRMATION_REQUIRED_TOOLS`` /
                              ``console.confirm_tool_execution``.
 
 Design commitments
@@ -1993,7 +1993,7 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
     The confirmation gate is enforced FIRST: a request without a valid,
     payload-bound confirmation token is rejected with HTTP 403 before any
     backend call (or even backend resolution). This mirrors the agent's
-    ``TOOLS_REQUIRING_CONFIRMATION`` guard, translated to the API boundary,
+    ``CONFIRMATION_REQUIRED_TOOLS`` guard, translated to the API boundary,
     and guarantees the gate fires regardless of backend health. Never
     auto-confirms.
     """
