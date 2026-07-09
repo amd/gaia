@@ -538,6 +538,18 @@
         </ul>
       </div>
     </div>
+
+    <div class="cards2">
+      <div class="gcard t2" style="border-top-color:var(--brand)">
+        <div class="lab" style="color:var(--brand)">Cross-cutting · caller authentication</div>
+        <h3>401 without the session token</h3>
+        <ul>
+          <li>The sidecar binds <code class="inl">127.0.0.1</code> and can send mail as you, so it authenticates its <b>caller</b> (<a class="iss" href="https://github.com/amd/gaia/issues/1706" target="_blank" rel="noopener">#1706</a>) — separate from the payload-bound <code class="inl">confirmation_token</code>, which does <b>not</b> identify the caller</li>
+          <li>The spawning parent mints a random <b>per-session bearer token</b>, handed to the sidecar over the private <code class="inl">GAIA_EMAIL_SIDECAR_TOKEN</code> env channel; every <code class="inl">/v1/email/*</code> request must send <code class="inl">Authorization: Bearer &lt;token&gt;</code> or it is <b>401</b></li>
+          <li>Non-loopback <code class="inl">Host</code> &rarr; <b>400</b> (DNS-rebinding) and non-loopback browser <code class="inl">Origin</code> &rarr; <b>403</b> (drive-by web page); no permissive CORS</li>
+        </ul>
+      </div>
+    </div>
   </div>
 </section>
 

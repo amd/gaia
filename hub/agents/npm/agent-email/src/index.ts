@@ -36,6 +36,7 @@ export {
   shutdown,
   startSidecar,
   executableName,
+  generateSessionToken,
 } from "./lifecycle.js";
 export type {
   ResolveOptions,
