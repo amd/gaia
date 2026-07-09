@@ -59,6 +59,34 @@ on:
         description: 'Repeat count for variance analysis'
         required: false
         default: '1'
+  # Reusable: called as a release gate from the email-agent release
+  # (release_agent_email.yml) and the GAIA core release (publish.yml) so a
+  # release runs the same triage/drafting/action-item eval suite it runs
+  # nightly. The `lemonade-eval` concurrency group below keeps release-triggered
+  # runs strictly serial with the nightly/refresh runs on the single Lemonade
+  # slot. Report mode is preserved end-to-end (the manifests own the enforce
+  # switch), so a call only hard-blocks a release when enforce:true is set.
+  workflow_call:
+    inputs:
+      model:
+        description: 'Lemonade model id to benchmark'
+        required: false
+        type: string
+        default: 'Gemma-4-E4B-it-GGUF'
+      limit:
+        description: 'Max messages to triage from the synthetic corpus'
+        required: false
+        type: string
+        default: '50'
+      experiments:
+        description: 'Repeat count for variance analysis'
+        required: false
+        type: string
+        default: '1'
+    secrets:
+      ANTHROPIC_API_KEY:
+        description: 'Judge credential for the drafting + borderline action-item judge; absent → those paths log a loud skip / run judge-less.'
+        required: false
 
 concurrency:
   # Share the single Lemonade backend slot with the other self-hosted evals so
@@ -98,9 +126,9 @@ jobs:
       - name: Run email-triage benchmark over the synthetic corpus
         env:
           GAIA_MEMORY_DISABLED: "1"
-          EMAIL_EVAL_MODEL: ${{ github.event.inputs.model || 'Gemma-4-E4B-it-GGUF' }}
-          EMAIL_EVAL_LIMIT: ${{ github.event.inputs.limit || '50' }}
-          EMAIL_EVAL_EXPERIMENTS: ${{ github.event.inputs.experiments || '1' }}
+          EMAIL_EVAL_MODEL: ${{ inputs.model || 'Gemma-4-E4B-it-GGUF' }}
+          EMAIL_EVAL_LIMIT: ${{ inputs.limit || '50' }}
+          EMAIL_EVAL_EXPERIMENTS: ${{ inputs.experiments || '1' }}
         run: |
           set -e
           echo "================================================================"
@@ -131,9 +159,9 @@ jobs:
       - name: Evaluate committed gates (report mode — reads the threshold manifests)
         env:
           GAIA_MEMORY_DISABLED: "1"
-          EMAIL_EVAL_MODEL: ${{ github.event.inputs.model || 'Gemma-4-E4B-it-GGUF' }}
-          EMAIL_EVAL_LIMIT: ${{ github.event.inputs.limit || '50' }}
-          EMAIL_EVAL_EXPERIMENTS: ${{ github.event.inputs.experiments || '1' }}
+          EMAIL_EVAL_MODEL: ${{ inputs.model || 'Gemma-4-E4B-it-GGUF' }}
+          EMAIL_EVAL_LIMIT: ${{ inputs.limit || '50' }}
+          EMAIL_EVAL_EXPERIMENTS: ${{ inputs.experiments || '1' }}
         run: |
           set -e
           python - <<'PY'
@@ -282,7 +310,7 @@ jobs:
       - name: Voice-drafting quality eval (judge-scored, report mode)
         env:
           GAIA_MEMORY_DISABLED: "1"
-          EMAIL_EVAL_MODEL: ${{ github.event.inputs.model || 'Gemma-4-E4B-it-GGUF' }}
+          EMAIL_EVAL_MODEL: ${{ inputs.model || 'Gemma-4-E4B-it-GGUF' }}
           # Judge credential for gaia.eval.claude.ClaudeClient. When the
           # secret is unavailable the step logs a LOUD skip (never a pass).
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -424,7 +452,7 @@ jobs:
       - name: Action-item extraction eval (report mode)
         env:
           GAIA_MEMORY_DISABLED: "1"
-          EMAIL_EVAL_MODEL: ${{ github.event.inputs.model || 'Gemma-4-E4B-it-GGUF' }}
+          EMAIL_EVAL_MODEL: ${{ inputs.model || 'Gemma-4-E4B-it-GGUF' }}
           # Judge credential for the borderline equivalence judge. Absent -> the
           # step still runs pure-fuzzy (never a skip, never an invented pass).
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

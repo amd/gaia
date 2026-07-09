@@ -334,11 +334,26 @@ jobs:
               --scorecard hub/agents/npm/agent-email/SCORECARD.md ${BARS}
           fi
 
+  # ── Stage 1c: email eval suite (release gate, self-hosted) ─────────
+  # Runs the SAME triage + drafting + action-item eval suite as the nightly
+  # (test_email_agent_eval.yml) on the [self-hosted, lemonade-eval] AMD runner,
+  # so a release exercises the shipping agent on the committed corpus — not just
+  # the hosted-CI scorecard-presence check above. Report mode: the eval runs +
+  # uploads its scorecard/gate reports and only HARD-BLOCKS the release when a
+  # threshold manifest under tests/fixtures/email/ sets enforce:true (data, not
+  # code). `publish` gates on this job, so a release can't ship without a fresh
+  # eval; the shared `lemonade-eval` concurrency group keeps it serial with the
+  # nightly/refresh runs on the single Lemonade slot.
+  email-eval:
+    name: Email eval suite (release gate)
+    uses: ./.github/workflows/test_email_agent_eval.yml
+    secrets: inherit
+
   # ── Stage 2: publish to the hub + npm (single atomic step) ─────────
   publish:
     name: Publish to Hub + npm
     runs-on: ubuntu-latest
-    needs: [build, verify-darwin-x64-compat, scorecard-gate]
+    needs: [build, verify-darwin-x64-compat, scorecard-gate, email-eval]
     # Manual approval gate: the `agent-publish` environment is configured (repo
     # Settings → Environments) with required reviewers, so this job pauses until a
     # maintainer approves — the human backstop for an accidental/tampered release
