@@ -293,15 +293,21 @@ jobs:
           cmd /c "uv tool uninstall windows-mcp 2>NUL" 2>$null
           $global:LASTEXITCODE = 0
 
-          # Functional probe: launch `uvx windows-mcp` and confirm it starts.
-          # The server reads JSON-RPC on stdin; we send nothing and give it a
-          # few seconds to initialize, then check the process came up cleanly.
-          Write-Host "Probing 'uvx windows-mcp' launch capability..."
+          # Functional probe: launch `uvx windows-mcp@0.8.2 serve` (the exact
+          # invocation the tests use) and confirm it stays up. Pinning + the
+          # `serve` subcommand matters: current windows-mcp requires a subcommand
+          # and exits with "Missing command." when called bare, which the tests'
+          # MCP client sees as a failed connection. Warm the cache first so the
+          # probe times package launch, not the one-time uvx download.
+          Write-Host "Warming uvx cache for windows-mcp@0.8.2..."
+          cmd /c "uvx windows-mcp@0.8.2 --help >NUL 2>&1"
+          $global:LASTEXITCODE = 0
+          Write-Host "Probing 'uvx windows-mcp@0.8.2 serve' launch capability..."
           $probeOk = $false
           try {
               $psi = New-Object System.Diagnostics.ProcessStartInfo
               $psi.FileName = $uvx.Source
-              $psi.Arguments = "windows-mcp"
+              $psi.Arguments = "windows-mcp@0.8.2 serve"
               $psi.RedirectStandardInput = $true
               $psi.RedirectStandardError = $true
               $psi.UseShellExecute = $false
