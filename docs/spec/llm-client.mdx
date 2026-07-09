@@ -382,7 +382,7 @@ class LemonadeProvider(LLMClient):
         Initialize Lemonade provider.
 
         Args:
-            model: Model name (defaults to "Qwen3-0.6B-GGUF")
+            model: Model name (defaults to DEFAULT_MODEL_NAME, currently "Gemma-4-E4B-it-GGUF")
             base_url: Base URL for Lemonade server (overrides LEMONADE_BASE_URL env var)
             host: Server host (alternative to base_url)
             port: Server port (alternative to base_url)
@@ -398,7 +398,7 @@ class LemonadeProvider(LLMClient):
             LEMONADE_MODEL: Default model name if not specified
 
         Note:
-            Default model is "Qwen3-0.6B-GGUF" for CPU-only inference.
+            Default model is DEFAULT_MODEL_NAME (currently "Gemma-4-E4B-it-GGUF").
             All methods use temperature=0.1 by default for deterministic responses.
         """
 
@@ -809,7 +809,7 @@ from .exceptions import NotSupportedError
 from typing import Iterator, Optional, Union
 from ..base_client import LLMClient
 from ..lemonade_client import LemonadeClient, DEFAULT_MODEL_NAME
-# DEFAULT_MODEL_NAME = "Qwen3-0.6B-GGUF"
+# DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 ```
 
 **OpenAIProvider (`providers/openai_provider.py`):**
