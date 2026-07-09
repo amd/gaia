@@ -54,6 +54,7 @@ def build_app():
     """
     from fastapi import FastAPI
     from gaia_agent_email import __version__ as agent_version
+    from gaia_agent_email.agent_routes import router as agent_router
     from gaia_agent_email.api_routes import router as email_router
     from gaia_agent_email.connector_routes import router as connector_router
     from gaia_agent_email.contract import SCHEMA_VERSION
@@ -76,6 +77,12 @@ def build_app():
 
     app.include_router(email_router)
     app.include_router(connector_router)
+    # Stateful agent surface (/v1/email/agent/*): hosts a session-scoped
+    # EmailTriageAgent with memory + tool-confirmation so the Agent UI can drive
+    # the full conversational agent over HTTP instead of importing it in-process.
+    # Router import is light; the heavy agent/memory imports are deferred to the
+    # first session build.
+    app.include_router(agent_router)
     return app
 
 

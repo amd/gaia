@@ -199,6 +199,19 @@ are exposed alongside triage/draft/send:
 Each reaches whichever calendar (Google or Microsoft) the user connected; a missing
 `calendar.events` scope fails loud with **HTTP 403** and the reconnect CTA.
 
+## Driving the full agent over HTTP (sidecar)
+
+The stateless REST endpoints above (`/v1/email/triage`, `/draft`, `/send`, …) analyze a payload you pass in — they don't run the conversational agent and have no memory. For the full experience the Agent UI shows (natural-language requests, multi-step tool use, personalization, memory), the sidecar also hosts a **stateful, session-scoped agent** under `/v1/email/agent/*`:
+
+- `POST /v1/email/agent/session` — create (or `reset`) a session; builds the agent and reports memory status.
+- `POST /v1/email/agent/query` — run one turn; streams the agent loop back as Server-Sent Events (`thinking`, `step`, `tool` usage, `permission_request`, and a terminal `run_complete` with the answer). Because this runs the real agent loop, **every** agent tool is reachable through natural language — no per-tool endpoint.
+- `POST /v1/email/agent/confirm-tool` — approve or deny a gated tool (send/forward/delete/quarantine/calendar-create). The run blocks until you respond, mirroring the in-app confirmation prompt.
+- `POST /v1/email/agent/cancel` — cooperatively cancel an in-flight run.
+- `GET /v1/email/agent/session/{id}/history` — the conversation so far.
+- `POST /v1/email/agent/memory` + `GET /v1/email/agent/memory/{id}` — the runtime memory toggle over HTTP. Enabling memory that was never initialized this session (started with `GAIA_MEMORY_DISABLED` or Lemonade unreachable) returns **409** with an actionable message rather than silently doing nothing.
+
+Each session holds one agent; one turn runs at a time (an overlapping `/query` returns **409**). This is the surface the Agent UI uses to drive the packaged email agent over the network instead of importing it in-process.
+
 ## Sending email — safety
 
 **The agent never sends email on its own. A send always requires your explicit confirmation, and this holds no matter how you drive the agent.** Drafting a reply is harmless and unconfirmed; turning a draft into a sent message is the only step that asks for your approval, and it always asks.
