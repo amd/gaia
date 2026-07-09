@@ -117,7 +117,8 @@ class ProfileToolsMixin:
     - ``_record_reply_interaction`` stores reply latency data per sender.
     - ``_evaluate_promotions`` reads the reply data and returns senders whose
       median reply latency qualifies them for priority promotion.
-    Both methods are memory-guarded (skip when ``_memory_store is None``).
+    Both methods are memory-guarded: they skip when ``_memory_store is None``
+    (memory never initialized) or ``_incognito`` (runtime toggle off, #1666).
     Promotion is NEVER triggered on a background thread; it happens only when
     ``_evaluate_promotions`` is called explicitly — currently from
     ``_triage_all_backends`` in ``agent.py``.
@@ -127,8 +128,8 @@ class ProfileToolsMixin:
         """Append a reply latency data point for *sender*.
 
         Keeps a single rolling record per sender (upsert — never unbounded).
-        When ``_memory_store is None`` (memory disabled), silently skips.
-        Skips silently when *sender* is empty.
+        Silently skips when memory is off (``_memory_store is None`` or
+        ``_incognito``, #1666) or when *sender* is empty.
 
         The record's ``content`` JSON::
 
@@ -139,7 +140,9 @@ class ProfileToolsMixin:
             }
         """
         store = getattr(self, "_memory_store", None)
-        if store is None:
+        # Incognito (#1666): the runtime memory toggle suppresses behavioral
+        # learning writes, not just the base MemoryMixin writes.
+        if store is None or getattr(self, "_incognito", False):
             return
         if not sender:
             return
@@ -198,7 +201,9 @@ class ProfileToolsMixin:
         Called on-demand at triage time — never from a background thread.
         """
         store = getattr(self, "_memory_store", None)
-        if store is None:
+        # Incognito (#1666): no promotions are evaluated when memory is off, so
+        # the runtime toggle also stops the read side of behavioral learning.
+        if store is None or getattr(self, "_incognito", False):
             return []
 
         rows = store.get_by_category(
@@ -239,14 +244,17 @@ class ProfileToolsMixin:
     def _record_interaction(self, sender: str, category: str) -> None:
         """Update the rolling interaction record for *sender*.
 
-        - When ``_memory_store`` is None (memory disabled), silently skips.
+        - When memory is off (``_memory_store is None`` or ``_incognito``, #1666),
+          silently skips.
         - Does an upsert: retrieve the single per-sender record, update JSON
           in-place, then call ``store.update(id, content=...)``. When no record
           exists yet, ``store.store(...)`` creates the initial one.
         - One record per sender — no unbounded accumulation.
         """
         store = getattr(self, "_memory_store", None)
-        if store is None:
+        # Incognito (#1666): the runtime memory toggle suppresses inbox-profiling
+        # writes so personalization data stops accumulating while memory is off.
+        if store is None or getattr(self, "_incognito", False):
             return
         if not sender or not category:
             return
@@ -294,8 +302,9 @@ class ProfileToolsMixin:
         """Return all per-sender interaction records as parsed dicts.
 
         Each element has: ``sender``, ``count``, ``category_counts``,
-        ``last_ts``. Returns an empty list when memory is disabled or no
-        records exist. Designed for reuse by #1290 and other callers.
+        ``last_ts``. Returns an empty list when memory is off (``_memory_store
+        is None`` or ``_incognito``, #1666) or no records exist. Designed for
+        reuse by #1290 and other callers.
 
         Reads up to ``_MAX_INTERACTION_RECORDS`` distinct-sender records. That
         ceiling is far beyond any realistic mailbox; if it is ever reached we
@@ -303,7 +312,9 @@ class ProfileToolsMixin:
         deliberately.
         """
         store = getattr(self, "_memory_store", None)
-        if store is None:
+        # Incognito (#1666): the runtime toggle gates this read too, so a
+        # profile_inbox call surfaces no stored personalization while off.
+        if store is None or getattr(self, "_incognito", False):
             return []
         rows = store.get_by_category(
             _INTERACTION_CATEGORY,

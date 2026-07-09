@@ -56,12 +56,17 @@ PATHEX = [REPO_ROOT / "hub" / "agents" / "python" / "email", REPO_ROOT / "src"]
 # Heavy ML stack reached only via the lazily-imported triage import graph. Real
 # triage uses Lemonade over HTTP (no in-process torch), so these are excluded to
 # keep the binary lean (torch alone is ~2 GB).
+#
+# NOTE (#1666 follow-up): the stateful agent surface (/v1/email/agent/*) hosts the
+# full EmailTriageAgent, whose memory subsystem uses FAISS for the working-context
+# index (embeddings still go over Lemonade HTTP, so torch/transformers stay
+# excluded). ``faiss``/``faiss_cpu`` are therefore NOT excluded and are collected
+# in full below. numpy is a memory.py module-level import the analyzer already
+# follows.
 EXCLUDES = [
     "torch",
     "transformers",
     "sentence_transformers",
-    "faiss",
-    "faiss_cpu",
     "sympy",
     "tokenizers",
     "scipy",
@@ -117,6 +122,11 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
         # connector provider discovery is dynamic.
         "--collect-submodules",
         "gaia.connectors",
+        # FAISS backs the stateful agent's memory index (#1666). faiss-cpu ships
+        # compiled libs + swig submodules the static analyzer misses, so collect
+        # it wholesale. Lazily imported inside gaia.agents.base.memory.
+        "--collect-all",
+        "faiss",
         # core metadata (importlib.metadata version probes).
         "--copy-metadata",
         "amd-gaia",

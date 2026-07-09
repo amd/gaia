@@ -248,6 +248,36 @@ _HTML = r"""<!doctype html>
     </div>
   </details>
 
+  <!-- Agent (stateful) — /v1/email/agent/* -->
+  <details class="card">
+    <summary><span class="sum-title">Agent (stateful)</span>
+      <span class="sum-desc">session · query (SSE) · memory · /v1/email/agent/*</span><span class="chev">›</span></summary>
+    <div class="card-body">
+      <div class="grid">
+        <div><label>Session id</label><input id="ag-session" value="playground" /></div>
+        <div><label>Memory toggle</label>
+          <div class="actions" style="margin:0">
+            <button id="ag-mem-on" class="ghost">Enable</button>
+            <button id="ag-mem-off" class="ghost">Disable</button>
+          </div>
+        </div>
+      </div>
+      <div class="actions"><button id="ag-start">Start / reset session</button>
+        <span class="note" id="ag-sess-stat"></span></div>
+      <div class="actions" style="margin-top:0"><span class="note" id="ag-mem-stat"></span></div>
+      <label>Message</label>
+      <textarea id="ag-msg">Remember that I prefer concise email summaries.</textarea>
+      <div class="actions"><button id="ag-query" class="primary">Send · stream</button>
+        <button id="ag-cancel" class="ghost">Cancel</button>
+        <span id="ag-perm" style="display:none">
+          <button id="ag-allow" class="primary">Allow</button>
+          <button id="ag-deny" class="ghost">Deny</button>
+        </span>
+        <span class="note">runs the full agent loop over SSE — every tool reachable via natural language</span></div>
+      <div class="out" id="ag-out"></div>
+    </div>
+  </details>
+
   <!-- Contract -->
   <details class="card">
     <summary><span class="sum-title">Contract</span>
@@ -725,6 +755,72 @@ async function doSend(){
     out.textContent = "✓ sent · id=" + (s.sent_id || "(ok)");
   }catch(e){ out.textContent = "✗ HTTP " + e.status + ": " + (e.body || e.message); }
 }
+// ---- Stateful agent surface (/v1/email/agent/*) ----
+function agSession(){ return $("ag-session").value.trim() || "playground"; }
+let agAbort = null;
+async function agStart(){
+  const stat = $("ag-sess-stat"); stat.textContent = "starting…";
+  try{
+    const r = await postJSON("/v1/email/agent/session", { session_id: agSession(), reset: true });
+    stat.textContent = (r.created ? "session ready" : "session exists");
+    $("ag-mem-stat").textContent = "memory: " + r.memory.message;
+  }catch(e){ stat.textContent = "✗ HTTP " + e.status + ": " + (e.body || e.message); }
+}
+async function agMemory(enabled){
+  const stat = $("ag-mem-stat");
+  try{
+    const r = await postJSON("/v1/email/agent/memory", { session_id: agSession(), enabled });
+    stat.textContent = "memory: " + r.message;
+  }catch(e){ stat.textContent = "✗ HTTP " + e.status + ": " + (e.body || e.message); }
+}
+function agRender(ev, append){
+  const t = ev.type;
+  if(t === "thinking") append("💭 " + (ev.content||"") + "\n");
+  else if(t === "step") append("— step " + ev.step + "/" + (ev.total||"?") + "\n");
+  else if(t === "tool" || t === "tool_call") append("🔧 " + (ev.tool||ev.name||"tool") + "\n");
+  else if(t === "permission_request"){ append("⚠ permission requested: " + ev.tool + "\n"); $("ag-perm").style.display = "inline"; }
+  else if(t === "status") append("· " + (ev.message||ev.status||"") + "\n");
+  else if(t === "error") append("✗ " + (ev.message||"error") + "\n");
+  else if(t === "run_complete"){ append("\n✅ " + (ev.answer || "(done)") + "\n"); $("ag-perm").style.display = "none"; }
+}
+async function agQuery(){
+  const out = $("ag-out"); out.className = "out show"; out.textContent = "";
+  $("ag-perm").style.display = "none";
+  const append = (s) => { out.textContent += s; out.scrollTop = out.scrollHeight; };
+  agAbort = new AbortController();
+  try{
+    const r = await fetch("/v1/email/agent/query", {
+      method:"POST",
+      headers:{ "content-type":"application/json", accept:"text/event-stream" },
+      body: JSON.stringify({ session_id: agSession(), message: $("ag-msg").value }),
+      signal: agAbort.signal,
+    });
+    if(!r.ok){ append("✗ HTTP " + r.status + ": " + (await r.text())); return; }
+    const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = "";
+    for(;;){
+      const { value, done } = await reader.read(); if(done) break;
+      buf += dec.decode(value, { stream:true });
+      let idx;
+      while((idx = buf.indexOf("\n\n")) >= 0){
+        const frame = buf.slice(0, idx); buf = buf.slice(idx + 2);
+        const line = frame.split("\n").find(l => l.startsWith("data: "));
+        if(!line) continue;
+        let ev; try{ ev = JSON.parse(line.slice(6)); }catch(_){ continue; }
+        agRender(ev, append);
+        if(ev.type === "run_complete") return;
+      }
+    }
+  }catch(e){ if(e.name !== "AbortError") append("\n✗ " + (e.message || e)); }
+  finally{ agAbort = null; }
+}
+async function agConfirm(approved){
+  $("ag-perm").style.display = "none";
+  try{ await postJSON("/v1/email/agent/confirm-tool", { session_id: agSession(), approved }); }catch(_){}
+}
+async function agCancel(){
+  try{ await postJSON("/v1/email/agent/cancel", { session_id: agSession() }); }catch(_){}
+  if(agAbort) agAbort.abort();
+}
 $("recheck").onclick = healthCheck;
 $("do-init").onclick = doInit;
 $("do-provision").onclick = doProvision;
@@ -732,6 +828,13 @@ $("do-triage").onclick = doTriage;
 $("do-triage-batch").onclick = doTriageBatch;
 $("do-draft").onclick = doDraft;
 $("do-send").onclick = doSend;
+$("ag-start").onclick = agStart;
+$("ag-query").onclick = agQuery;
+$("ag-cancel").onclick = agCancel;
+$("ag-allow").onclick = () => agConfirm(true);
+$("ag-deny").onclick = () => agConfirm(false);
+$("ag-mem-on").onclick = () => agMemory(true);
+$("ag-mem-off").onclick = () => agMemory(false);
 healthCheck();
 loadConnectors();
 </script>
