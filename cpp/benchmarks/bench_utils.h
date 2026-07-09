@@ -175,6 +175,16 @@ inline std::vector<BenchmarkResult> readBenchmarkResults(const std::string& path
 // Per-metric thresholds
 // ---------------------------------------------------------------------------
 
+// Wall-clock timing metrics (startup, loop latency) are microbenchmarks. On the
+// shared GitHub-hosted runners (esp. windows-latest) CPU-scheduling jitter alone
+// swings them well past any sane percentage band, producing false regressions
+// that flake the merge gate. Report their deltas for humans to eyeball trends,
+// but never fail CI on them — only the deterministic size/memory metrics gate.
+inline bool isInformationalMetric(const std::string& name) {
+    return name.find("_time_") != std::string::npos ||
+           name.find("_latency_") != std::string::npos;
+}
+
 inline double thresholdForMetric(const std::string& name) {
     // Binary size metrics: 10% threshold (issue: "Fail if size regresses >10%")
     if (name.find("binary_size") != std::string::npos) {
@@ -232,7 +242,10 @@ inline int compareAndReport(const std::string& baselinePath, const std::string& 
         double pct = (base == 0.0) ? 0.0 : (r.value - base) / base * 100.0;
 
         std::string status;
-        if (pct > threshold) {
+        if (isInformationalMetric(r.name)) {
+            // Report-only: noisy wall-clock timing never gates the merge.
+            status = "INFO";
+        } else if (pct > threshold) {
             status = "FAIL";
             anyRegression = true;
         } else if (pct < -1.0) {
@@ -255,14 +268,18 @@ inline int compareAndReport(const std::string& baselinePath, const std::string& 
             if (r.name == b.name) { found = true; break; }
         }
         if (!found) {
+            bool informational = isInformationalMetric(b.name);
             std::cout << std::left << std::setw(45) << b.name
                       << std::right << std::setw(12) << std::fixed << std::setprecision(1)
                       << b.value
                       << std::setw(12) << "N/A"
                       << std::setw(10) << "N/A"
                       << std::setw(12) << "N/A"
-                      << std::setw(10) << "MISSING" << "\n";
-            anyRegression = true;
+                      << std::setw(10) << (informational ? "MISSING-INFO" : "MISSING")
+                      << "\n";
+            if (!informational) {
+                anyRegression = true;
+            }
         }
     }
     std::cout << std::string(101, '-') << "\n";

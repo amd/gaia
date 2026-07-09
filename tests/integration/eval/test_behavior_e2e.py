@@ -105,7 +105,11 @@ def behavior_server(require_real_model, tmp_path_factory):
     )
 
     base_url = f"http://127.0.0.1:{port}"
-    deadline = time.time() + 30
+    # gaia.ui.server imports fastapi/uvicorn + the RAG stack at boot; on a busy
+    # self-hosted runner that cold-import can take well over 30 s. Gate on a
+    # generous, override-able budget so a slow-but-healthy boot isn't a flake.
+    startup_timeout = int(os.environ.get("GAIA_UI_STARTUP_TIMEOUT", "120"))
+    deadline = time.time() + startup_timeout
     while time.time() < deadline:
         try:
             resp = requests.get(f"{base_url}/api/health", timeout=2)
@@ -122,8 +126,16 @@ def behavior_server(require_real_model, tmp_path_factory):
         time.sleep(0.5)
     else:
         process.terminate()
-        process.wait(timeout=10)
-        pytest.fail(f"gaia.ui.server did not become healthy on port {port} within 30 s")
+        try:
+            stdout, stderr = process.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
+        pytest.fail(
+            f"gaia.ui.server did not become healthy on port {port} within "
+            f"{startup_timeout} s.\n"
+            f"stdout: {(stdout or '')[-2000:]}\nstderr: {(stderr or '')[-2000:]}"
+        )
 
     yield base_url, home_dir
 
