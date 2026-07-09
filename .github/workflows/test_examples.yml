@@ -18,6 +18,8 @@ on:
   push:
     branches: [ main ]
     paths:
+      - 'src/gaia/version.py'
+      - '.github/actions/install-lemonade/**'
       - 'examples/**'
       - 'src/gaia/**'
       - 'tests/integration/test_example_agents.py'
@@ -27,6 +29,8 @@ on:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
+      - 'src/gaia/version.py'
+      - '.github/actions/install-lemonade/**'
       - 'examples/**'
       - 'src/gaia/**'
       - 'tests/integration/test_example_agents.py'
@@ -50,7 +54,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Free disk space
         uses: ./.github/actions/free-disk-space
@@ -89,12 +93,15 @@ jobs:
   test-examples-integration:
     name: Example Agents Integration Tests (stx)
     needs: test-examples-unit
-    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
+    runs-on:
+      - self-hosted
+      - Windows
+      - ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Python environment
         uses: ./.github/actions/setup-venv

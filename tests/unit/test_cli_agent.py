@@ -147,6 +147,16 @@ def test_lint_passes_on_fresh_python_scaffold(scaffolded_python):
     cli_agent.cmd_test(_test_args(scaffolded_python, lint=True))
 
 
+def test_scaffold_persona_has_no_zoo_references(scaffolded_python):
+    # The starter persona must be a neutral self-describing example, not the
+    # retired zookeeper demo (issue #1908).
+    content = (scaffolded_python / "gaia_agent_demo_agent" / "agent.py").read_text(
+        encoding="utf-8"
+    )
+    assert "zookeeper" not in content.lower()
+    assert "zoo" not in content.lower()
+
+
 def test_lint_passes_on_fresh_cpp_scaffold(tmp_path):
     cli_agent.cmd_init(_init_args("native-demo", tmp_path, language="cpp"))
     cli_agent.cmd_test(_test_args(tmp_path / "native-demo", lint=True))

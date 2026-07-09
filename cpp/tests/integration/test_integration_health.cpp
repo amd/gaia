@@ -92,7 +92,7 @@ public:
         // Connect to Windows MCP server — same as health_agent.cpp
         bool ok = connectMcpServer("windows", {
             {"command", "uvx"},
-            {"args", {"windows-mcp"}}
+            {"args", {"windows-mcp@0.8.2", "serve"}}
         });
         if (!ok) {
             throw std::runtime_error("Failed to connect to Windows MCP server (uvx windows-mcp)");

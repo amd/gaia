@@ -175,6 +175,58 @@ def test_version_has_no_undocumented_fields(client, committed_spec):
 
 
 # ---------------------------------------------------------------------------
+# 2b. /init — readiness conformance (#1795). Probes patched so no live LLM.
+# ---------------------------------------------------------------------------
+
+
+def test_init_conforms_to_spec_when_not_ready(client, committed_spec):
+    """GET /init returns 503 + an InitResponse-shaped body when Lemonade is down.
+
+    The running server returns the SAME structured model under 503 as under 200,
+    so the body must carry every required key from the documented schema.
+    """
+    with patch(
+        "gaia_agent_email.api_routes._probe_lemonade_health",
+        return_value=(False, "http://localhost:8000/api/v1", None),
+    ):
+        resp = client.get("/v1/email/init")
+
+    assert resp.status_code == 503
+    schema_name = _schema_name_from_response(committed_spec, "get", "/v1/email/init")
+    required = _required_keys(committed_spec, schema_name)
+    body = resp.json()
+    for key in required:
+        assert key in body, f"required key {key!r} missing from /init response"
+    assert body["ready"] is False
+    assert body["hint"]  # actionable, non-empty
+
+
+def test_init_conforms_to_spec_when_ready(client, committed_spec):
+    """GET /init returns 200 + ready=True when both probes pass."""
+    with (
+        patch(
+            "gaia_agent_email.api_routes._probe_lemonade_health",
+            return_value=(True, "http://localhost:8000/api/v1", "10.2.0"),
+        ),
+        patch(
+            "gaia_agent_email.api_routes._probe_model_present",
+            return_value=True,
+        ),
+    ):
+        resp = client.get("/v1/email/init")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ready"] is True
+    # No undocumented fields leak from the running server.
+    documented = set(
+        committed_spec["components"]["schemas"]["InitResponse"].get("properties", {})
+    )
+    for key in body:
+        assert key in documented, f"undocumented field {key!r} in /init response"
+
+
+# ---------------------------------------------------------------------------
 # 3. /triage — conformance (LLM mocked; real HTTP layer running)
 # ---------------------------------------------------------------------------
 
@@ -691,6 +743,59 @@ def test_prescan_without_mailbox_returns_503(client, in_memory_keyring):
 
 
 # ---------------------------------------------------------------------------
+# Scheduled daily briefing (#1608 additive)
+# ---------------------------------------------------------------------------
+
+
+def test_briefing_conforms_to_spec(client, committed_spec, tmp_path, monkeypatch):
+    """GET /briefing returns the documented EmailBriefingResponse shape once a
+    scheduled run has persisted a briefing, and a documented 404 before one."""
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    resp = client.get("/v1/email/briefing")
+    assert resp.status_code == 404  # no scheduled run has happened yet
+
+    from gaia_agent_email.briefing import run_briefing_job
+
+    class _FakeBackend:
+        def list_messages(self, **_):
+            return {
+                "messages": [{"id": "m1", "threadId": "t-m1"}],
+                "nextPageToken": None,
+            }
+
+        def get_message(self, message_id):
+            return {
+                "id": message_id,
+                "threadId": f"t-{message_id}",
+                "labelIds": ["INBOX", "CATEGORY_PROMOTIONS"],
+                "snippet": "",
+                "payload": {
+                    "headers": [
+                        {"name": "Subject", "value": "50% off this weekend!"},
+                        {"name": "From", "value": "deals@shop.example"},
+                    ],
+                    "mimeType": "text/plain",
+                    "body": {"data": ""},
+                },
+            }
+
+    run_briefing_job(_FakeBackend(), max_messages=5)
+
+    resp = client.get("/v1/email/briefing")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    schema_name = _schema_name_from_response(
+        committed_spec, "get", "/v1/email/briefing"
+    )
+    assert schema_name == "EmailBriefingResponse"
+    for key in _required_keys(committed_spec, schema_name):
+        assert key in body, f"required key {key!r} missing from /briefing response"
+    assert body["schema_version"] == API_VERSION
+    assert body["briefing"]["kind"] == "email_pre_scan"
+
+
+# ---------------------------------------------------------------------------
 # 7. All documented paths are covered
 # ---------------------------------------------------------------------------
 
@@ -711,10 +816,12 @@ def test_all_documented_paths_covered(committed_spec):
         ("post", "/v1/email/triage/batch"),  # #1887 additive
         ("post", "/v1/email/search"),
         ("post", "/v1/email/prescan"),
+        ("get", "/v1/email/briefing"),  # #1608 additive
         ("post", "/v1/email/draft"),
         ("post", "/v1/email/send"),
         ("get", "/v1/email/health"),
         ("get", "/v1/email/version"),
+        ("get", "/v1/email/init"),
         # Mailbox actions (schema 2.1, #1779).
         ("post", "/v1/email/confirm"),
         ("post", "/v1/email/archive"),

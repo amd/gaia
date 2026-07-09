@@ -36,7 +36,7 @@ class TestCodeIndexConfig:
         assert config.max_files == 5000
         assert config.max_file_size_mb == 1
         assert config.chunk_overlap == 50
-        assert config.embedding_model == "nomic-embed-text-v2-moe-GGUF"
+        assert config.embedding_model == "user.embeddinggemma-300m-GGUF"
         assert config.cache_dir == "~/.gaia/code_index"
 
     def test_custom_values(self):

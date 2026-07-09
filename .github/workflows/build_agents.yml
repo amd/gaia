@@ -66,7 +66,7 @@ jobs:
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.vcpkg-cache
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -81,7 +81,7 @@ jobs:
         run: mkdir -p "${VCPKG_DEFAULT_BINARY_CACHE}"
 
       - name: Restore vcpkg binary cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/.vcpkg-cache
           key: vcpkg-${{ matrix.triplet }}-${{ hashFiles('cpp/vcpkg.json') }}
@@ -89,7 +89,7 @@ jobs:
             vcpkg-${{ matrix.triplet }}-
 
       - name: Restore FetchContent cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: cpp/build/_deps
           key: fetchcontent-agents-${{ matrix.platform }}-${{ hashFiles('cpp/CMakeLists.txt') }}

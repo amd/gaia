@@ -60,7 +60,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 # Default semantic match threshold (cosine), inclusive. Calibrated against the
-# doc profile's live nomic embeddings (#1449): a user's question is only weakly
+# doc profile's live embeddings (#1449): a user's question is only weakly
 # similar to a tool's *description*, so real scores sit ~0.05-0.25 (not the
 # 0.5-0.7 a symmetric-similarity guess assumed). 0.20 surfaces document-action
 # tools (index/summarize/RAG) for doc-oriented turns while excluding lower-

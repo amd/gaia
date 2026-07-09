@@ -446,9 +446,15 @@ class FakeGmailBackend:
         subject: str,
         body: str,
         headers: Optional[Dict[str, str]] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         self._transport.record(
-            "create_draft", to=to, subject=subject, body=body, headers=headers
+            "create_draft",
+            to=to,
+            subject=subject,
+            body=body,
+            headers=headers,
+            attachments=attachments,
         )
         draft_id = f"draft_{self._next_draft_seq}"
         self._next_draft_seq += 1
@@ -457,6 +463,7 @@ class FakeGmailBackend:
             "subject": subject,
             "body": body,
             "headers": dict(headers or {}),
+            "attachments": list(attachments or []),
         }
         return {"id": draft_id}
 
@@ -474,9 +481,15 @@ class FakeGmailBackend:
         subject: str,
         body: str,
         headers: Optional[Dict[str, str]] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         self._transport.record(
-            "send_message", to=to, subject=subject, body=body, headers=headers
+            "send_message",
+            to=to,
+            subject=subject,
+            body=body,
+            headers=headers,
+            attachments=attachments,
         )
         return {"id": f"sent_{uuid.uuid4().hex[:8]}", "to": to, "subject": subject}
 

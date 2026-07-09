@@ -728,7 +728,7 @@ class LemonadeManager:
         # the catalog (which lacks ``type``). Embedding and image models
         # are excluded — reloading them with an LLM ctx_size makes no
         # sense and (pre-#1030 follow-up) used to load the wrong model
-        # entirely because ``nomic-embed-…`` sorts before ``Gemma-…``.
+        # entirely because the embedder can sort before ``Gemma-…``.
         llm_models = [
             m
             for m in status.loaded_models

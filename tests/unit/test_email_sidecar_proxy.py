@@ -1,12 +1,12 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""EmailSidecarProxy: forward live routes unchanged; gate not-yet-built routes."""
+"""EmailSidecarProxy: forward the full schema-2.1 contract unchanged."""
 
 import importlib.util
 
 import pytest
 
-from gaia.ui.email_sidecar.errors import RouteNotAvailableError, SidecarHTTPError
+from gaia.ui.email_sidecar.errors import SidecarHTTPError
 from gaia.ui.email_sidecar.proxy import EmailSidecarProxy
 
 
@@ -40,8 +40,8 @@ class _Session:
         self.posts.append((url, json))
         return self._make()
 
-    def get(self, url, timeout=None):
-        self.gets.append(url)
+    def get(self, url, params=None, timeout=None):
+        self.gets.append((url, params))
         return self._make()
 
 
@@ -98,8 +98,8 @@ def test_health_and_version_get_routes():
     assert proxy.health()["status"] == "ok"
     proxy.version()
     assert sess.gets == [
-        "http://127.0.0.1:9100/health",
-        "http://127.0.0.1:9100/version",
+        ("http://127.0.0.1:9100/health", None),
+        ("http://127.0.0.1:9100/version", None),
     ]
 
 
@@ -141,19 +141,54 @@ def test_403_send_gate_detail_preserved():
 
 
 @pytest.mark.parametrize(
-    "method,issue",
+    "method,path",
     [
-        ("pre_scan_inbox", "pre-scan"),
-        ("search_inbox", "1781"),
-        ("archive", "1779"),
-        ("quarantine", "1779"),
-        ("calendar", "1780"),
+        ("triage_batch", "/v1/email/triage/batch"),
+        ("search_inbox", "/v1/email/search"),
+        ("pre_scan_inbox", "/v1/email/prescan"),
+        ("confirm", "/v1/email/confirm"),
+        ("archive", "/v1/email/archive"),
+        ("unarchive", "/v1/email/unarchive"),
+        ("quarantine", "/v1/email/quarantine"),
+        ("unquarantine", "/v1/email/unquarantine"),
+        ("calendar_preview", "/v1/email/calendar/events/preview"),
+        ("calendar_create", "/v1/email/calendar/events"),
+        ("calendar_respond", "/v1/email/calendar/events/respond"),
     ],
 )
-def test_future_routes_gated(method, issue):
-    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=_Session({}))
-    with pytest.raises(RouteNotAvailableError, match=issue):
-        getattr(proxy, method)()
+def test_schema21_post_routes_forward_to_real_endpoints(method, path):
+    # Previously-gated routes now FORWARD to the live schema-2.1 endpoints and
+    # return the sidecar's envelope unchanged.
+    envelope = {"ok": True, "echo": "payload"}
+    sess = _Session(envelope)
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    out = getattr(proxy, method)({"x": 1})
+    assert out == envelope
+    assert sess.posts[0] == (f"http://127.0.0.1:9100{path}", {"x": 1})
+
+
+def test_pre_scan_inbox_forwards_prescan_envelope_unchanged():
+    # The card pipeline depends on this exact shape: /prescan returns
+    # {"result": {"kind": "email_pre_scan", ...}} and the proxy passes it through
+    # untouched so the chat tool can wrap result in the email_pre_scan envelope.
+    envelope = {"result": {"kind": "email_pre_scan", "urgent": [], "actionable": []}}
+    sess = _Session(envelope)
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    out = proxy.pre_scan_inbox({"max_messages": 25})
+    assert out == envelope
+    assert out["result"]["kind"] == "email_pre_scan"
+
+
+def test_calendar_events_get_forwards_query_params():
+    events = {"events": [{"id": "e1", "summary": "Standup"}]}
+    sess = _Session(events)
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    out = proxy.calendar_events({"time_min": "2026-06-30T00:00:00Z"})
+    assert out == events
+    assert sess.gets[0] == (
+        "http://127.0.0.1:9100/v1/email/calendar/events",
+        {"time_min": "2026-06-30T00:00:00Z"},
+    )
 
 
 @pytest.mark.skipif(

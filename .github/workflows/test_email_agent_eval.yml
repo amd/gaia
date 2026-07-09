@@ -14,8 +14,9 @@
 # only through the harness loaders (no thresholds are hardcoded in this YAML):
 #   - tests/fixtures/email/quality_gate_thresholds.json  (FP<5% / FN<2%)
 #   - tests/fixtures/email/perf_gate_thresholds.json      (TTFT / tps / latency / mem)
-# CI keys off each gate's `should_fail` (= enforce and not passed). Both manifests
-# ship `enforce: false`, so `should_fail` is always false today: the gate
+#   - tests/fixtures/email/drafting_gate_thresholds.json  (draft-approval >=70%, #1269)
+# CI keys off each gate's `should_fail` (= enforce and not passed). All three
+# manifests ship `enforce: false`, so `should_fail` is always false today: the gate
 # machinery runs, logs, and uploads, but the build stays green. This is the
 # honest posture — categorization accuracy is still ~0.40, so the FP/FN bars are
 # not yet meaningful and the Strix Halo perf bars are not yet confirmed on
@@ -23,13 +24,15 @@
 # what makes the build start failing on a breach, once #1266 (categorization),
 # #1271 (phishing) and the perf bars land. No edit to this file is needed then.
 #
-# NOTE on accuracy gates: categorization >=85% (#1266), phishing precision >=90%
-# (#1271) and draft-approval >=70% (#1269) do not yet have committed threshold
-# manifests (they are owned by those issues). This workflow REPORTS the
-# categorization accuracy and phishing precision the benchmark already emits, but
-# does not gate on them — there is no committed bar to read, and inventing one in
-# YAML would violate the single-source rule above. They become gating once their
-# manifests land and this gate-reader is pointed at them.
+# NOTE on accuracy gates: categorization >=85% (#1266) and phishing precision
+# >=90% (#1271) do not yet have committed threshold manifests (they are owned by
+# those issues). This workflow REPORTS the categorization accuracy and phishing
+# precision the benchmark already emits, but does not gate on them — there is no
+# committed bar to read, and inventing one in YAML would violate the single-source
+# rule above. They become gating once their manifests land and this gate-reader is
+# pointed at them. Draft-approval >=70% (#1269) DOES now have a committed manifest
+# (tests/fixtures/email/drafting_gate_thresholds.json, enforce:false) — it is
+# scored by the voice-drafting eval step below (#1607 / #1948), report mode.
 #
 # Self-hosted: this needs a running Lemonade Server with the email-triage model
 # loaded on AMD hardware (Ryzen AI / Strix Halo). That hardware is the gating
@@ -56,6 +59,34 @@ on:
         description: 'Repeat count for variance analysis'
         required: false
         default: '1'
+  # Reusable: called as a release gate from the email-agent release
+  # (release_agent_email.yml) and the GAIA core release (publish.yml) so a
+  # release runs the same triage/drafting/action-item eval suite it runs
+  # nightly. The `lemonade-eval` concurrency group below keeps release-triggered
+  # runs strictly serial with the nightly/refresh runs on the single Lemonade
+  # slot. Report mode is preserved end-to-end (the manifests own the enforce
+  # switch), so a call only hard-blocks a release when enforce:true is set.
+  workflow_call:
+    inputs:
+      model:
+        description: 'Lemonade model id to benchmark'
+        required: false
+        type: string
+        default: 'Gemma-4-E4B-it-GGUF'
+      limit:
+        description: 'Max messages to triage from the synthetic corpus'
+        required: false
+        type: string
+        default: '50'
+      experiments:
+        description: 'Repeat count for variance analysis'
+        required: false
+        type: string
+        default: '1'
+    secrets:
+      ANTHROPIC_API_KEY:
+        description: 'Judge credential for the drafting + borderline action-item judge; absent → those paths log a loud skip / run judge-less.'
+        required: false
 
 concurrency:
   # Share the single Lemonade backend slot with the other self-hosted evals so
@@ -73,7 +104,7 @@ jobs:
     timeout-minutes: 90
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -95,9 +126,9 @@ jobs:
       - name: Run email-triage benchmark over the synthetic corpus
         env:
           GAIA_MEMORY_DISABLED: "1"
-          EMAIL_EVAL_MODEL: ${{ github.event.inputs.model || 'Gemma-4-E4B-it-GGUF' }}
-          EMAIL_EVAL_LIMIT: ${{ github.event.inputs.limit || '50' }}
-          EMAIL_EVAL_EXPERIMENTS: ${{ github.event.inputs.experiments || '1' }}
+          EMAIL_EVAL_MODEL: ${{ inputs.model || 'Gemma-4-E4B-it-GGUF' }}
+          EMAIL_EVAL_LIMIT: ${{ inputs.limit || '50' }}
+          EMAIL_EVAL_EXPERIMENTS: ${{ inputs.experiments || '1' }}
         run: |
           set -e
           echo "================================================================"
@@ -128,9 +159,9 @@ jobs:
       - name: Evaluate committed gates (report mode — reads the threshold manifests)
         env:
           GAIA_MEMORY_DISABLED: "1"
-          EMAIL_EVAL_MODEL: ${{ github.event.inputs.model || 'Gemma-4-E4B-it-GGUF' }}
-          EMAIL_EVAL_LIMIT: ${{ github.event.inputs.limit || '50' }}
-          EMAIL_EVAL_EXPERIMENTS: ${{ github.event.inputs.experiments || '1' }}
+          EMAIL_EVAL_MODEL: ${{ inputs.model || 'Gemma-4-E4B-it-GGUF' }}
+          EMAIL_EVAL_LIMIT: ${{ inputs.limit || '50' }}
+          EMAIL_EVAL_EXPERIMENTS: ${{ inputs.experiments || '1' }}
         run: |
           set -e
           python - <<'PY'
@@ -200,8 +231,9 @@ jobs:
           quality = summary.get("quality", {})
           perf = summary.get("scorecard", {}).get("performance", {})
 
-          # Reported-only accuracy numbers (gates pending #1266 / #1271 / #1269 —
-          # no committed accuracy-threshold manifest yet, so we log, not gate).
+          # Reported-only accuracy numbers (gates pending #1266 / #1271 — no
+          # committed accuracy-threshold manifest yet, so we log, not gate).
+          # Draft-approval (#1269) is scored by the drafting eval step below.
           cat_acc = quality.get("category_accuracy")
           phishing = quality.get("phishing", {})
           phishing_precision = (
@@ -211,7 +243,7 @@ jobs:
           print("\n================ EMAIL EVAL GATE REPORT (report mode) ================")
           print(f"  Categorization accuracy : {cat_acc}   (target >=0.85 #1266, REPORTED)")
           print(f"  Phishing precision      : {phishing_precision}   (target >=0.90 #1271, REPORTED)")
-          print(f"  Draft-approval rate     : not emitted by the benchmark yet (#1269, REPORTED)")
+          print(f"  Draft-approval rate     : scored by the voice-drafting eval step below (#1269, REPORTED)")
           print("  ----------------------------------------------------------------")
           print(f"  Quality gate (FP/FN)    : passed={quality_gate.get('passed')} "
                 f"breaches={len(quality_gate.get('breaches', []))} "
@@ -256,6 +288,291 @@ jobs:
               sys.exit(1)
           print("[GATE] report mode (or no breach) — gates do not block the build.")
           PY
+
+      # =================================================================
+      # BEGIN voice-drafting quality eval (#1607 feature / #1269 metric /
+      # #1948 tracking) — ADDITIVE, self-contained block. Report mode.
+      #
+      # Judge-scored draft quality: the agent composes replies over the
+      # committed drafting seed corpus with the #1607 voice profile active
+      # (Lemonade, FakeGmailBackend — drafting only, nothing is ever sent),
+      # and a Claude judge scores each draft against the case rubric. The
+      # aggregate draft_approval_rate is compared to the committed manifest
+      #   tests/fixtures/email/drafting_gate_thresholds.json  (enforce:false)
+      # via gaia.eval.draft_quality — same single-source rule as the gates
+      # above: no thresholds inlined in this YAML; flip `enforce` in the
+      # manifest (data, not code) to make this gate block.
+      #
+      # Runs AFTER the triage benchmark in the same job, so Lemonade access
+      # stays strictly serial (CLAUDE.md: evals serial). Keep this block
+      # self-contained so concurrent edits to this workflow merge cleanly.
+      # =================================================================
+      - name: Voice-drafting quality eval (judge-scored, report mode)
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+          EMAIL_EVAL_MODEL: ${{ inputs.model || 'Gemma-4-E4B-it-GGUF' }}
+          # Judge credential for gaia.eval.claude.ClaudeClient. When the
+          # secret is unavailable the step logs a LOUD skip (never a pass).
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -e
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          from gaia.eval.draft_quality import (
+              default_drafting_thresholds_path,
+              generate_drafts,
+              judge_drafts,
+              load_default_drafting_thresholds,
+              load_drafting_corpus,
+              make_claude_judge,
+              summarize_drafting,
+          )
+
+          model = os.environ["EMAIL_EVAL_MODEL"]
+          corpus_path = "tests/fixtures/email/drafting_ground_truth.json"
+          out = Path("eval-out")
+          out.mkdir(parents=True, exist_ok=True)
+
+          thresholds = load_default_drafting_thresholds()
+          print(f"[DRAFT-EVAL] manifest: {default_drafting_thresholds_path()}")
+          print(
+              f"[DRAFT-EVAL] enforce={thresholds.enforce} "
+              f"approval_min={thresholds.approval_min} (#1269 target, REPORTED)"
+          )
+
+          if not os.environ.get("ANTHROPIC_API_KEY"):
+              # Loud, explicit skip — the judge credential is absent, so no
+              # draft can be scored. Never invents a pass; the report says so.
+              report = {
+                  "skipped": True,
+                  "reason": (
+                      "ANTHROPIC_API_KEY not available on this runner — the "
+                      "Claude judge cannot score drafts"
+                  ),
+                  "enforce": thresholds.enforce,
+                  "should_fail": False,
+              }
+              (out / "drafting_gate_report.json").write_text(
+                  json.dumps(report, indent=2), encoding="utf-8"
+              )
+              print(
+                  "[DRAFT-EVAL] SKIPPED: no judge credential — wrote "
+                  "eval-out/drafting_gate_report.json"
+              )
+              sys.exit(0)
+
+          # Generation: drives the #1607 voice-profile drafting path per case
+          # (Lemonade — this job holds the serial lemonade-eval slot).
+          generations = generate_drafts(model, corpus_path=corpus_path)
+          produced = sum(1 for g in generations if g["draft"])
+          print(f"[DRAFT-EVAL] generated {produced}/{len(generations)} drafts")
+
+          results = judge_drafts(
+              load_drafting_corpus(corpus_path),
+              generations,
+              make_claude_judge(),
+              model_id=model,
+          )
+          summary = summarize_drafting(
+              results,
+              run_id=f"email-draft-eval-{model.replace('/', '-').lower()}",
+              thresholds=thresholds,
+          )
+
+          gate = summary.get("drafting_gate", {})
+          agg = summary.get("drafting", {})
+          print("\n============ EMAIL DRAFTING EVAL REPORT (report mode) ============")
+          print(
+              f"  Draft-approval rate : {agg.get('draft_approval_rate')}   "
+              f"(target >={thresholds.approval_min} #1269, REPORTED)"
+          )
+          print(f"  Voice-match mean    : {agg.get('voice_match_mean')}")
+          print(f"  Grounded rate       : {agg.get('grounded_rate')}")
+          print(
+              f"  Cases judged/errored: {agg.get('cases_judged')}/"
+              f"{agg.get('cases_errored')}"
+          )
+          print(
+              f"  Drafting gate       : passed={gate.get('passed')} "
+              f"enforce={gate.get('enforce')} "
+              f"should_fail={gate.get('should_fail')} "
+              f"skipped={gate.get('skipped', False)}"
+          )
+          print("==================================================================\n")
+
+          (out / "drafting_gate_report.json").write_text(
+              json.dumps(
+                  {"model": model, "corpus": corpus_path, "summary": summary},
+                  indent=2,
+                  ensure_ascii=False,
+              ),
+              encoding="utf-8",
+          )
+          print("[OUT] wrote eval-out/drafting_gate_report.json")
+
+          # Same hook contract as the gates above: report mode never fails.
+          if gate.get("should_fail"):
+              print("[DRAFT-EVAL] enforced gate breach — failing the build.")
+              sys.exit(1)
+          print(
+              "[DRAFT-EVAL] report mode (or no breach) — gate does not block "
+              "the build."
+          )
+          PY
+      # =================================================================
+      # END voice-drafting quality eval
+      # =================================================================
+
+      # =================================================================
+      # BEGIN action-item extraction eval (#1605 feature / #1949 metric /
+      # #1964 wiring) — ADDITIVE, self-contained block. Report mode.
+      #
+      # Precision / recall / F1 of the agent's extracted action items vs a
+      # hand-labeled corpus (tests/fixtures/email/action_items_ground_truth.json,
+      # hard negatives included). Generation drives the REAL triage path over a
+      # FakeGmailBackend (Lemonade — nothing is ever sent). The Claude
+      # equivalence judge resolves borderline description pairs and is REQUIRED:
+      # ANTHROPIC_API_KEY MUST be present, and if the judge cannot run the step
+      # FAILS LOUDLY. There is NO fallback to fuzzy-only matching — a missing or
+      # broken judge is an error, never a silent degradation to a weaker scorer
+      # (CLAUDE.md: No Silent Fallbacks — Fail Loudly).
+      # The aggregate is scored against the committed manifest
+      #   tests/fixtures/email/action_items_gate_thresholds.json  (enforce:false)
+      # via gaia.eval.action_item_quality — same single-source rule as the gates
+      # above: no thresholds inlined in this YAML; flip `enforce` in the manifest
+      # (data, not code) to make this gate block once a baseline confirms the bars.
+      #
+      # Runs AFTER the triage + drafting evals in the same job, so Lemonade
+      # access stays strictly serial (CLAUDE.md: evals serial). Kept
+      # self-contained so concurrent edits to this workflow merge cleanly.
+      # =================================================================
+      - name: Action-item extraction eval (report mode)
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+          EMAIL_EVAL_MODEL: ${{ inputs.model || 'Gemma-4-E4B-it-GGUF' }}
+          # Judge credential for the borderline equivalence judge — REQUIRED.
+          # Absent -> the step fails loudly (NO fuzzy-only fallback).
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -e
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          from gaia.eval.action_item_quality import (
+              default_extraction_thresholds_path,
+              generate_extractions,
+              load_action_item_corpus,
+              load_default_extraction_thresholds,
+              make_claude_judge,
+              score_generations,
+              summarize_extraction,
+          )
+
+          model = os.environ["EMAIL_EVAL_MODEL"]
+          corpus_path = "tests/fixtures/email/action_items_ground_truth.json"
+          out = Path("eval-out")
+          out.mkdir(parents=True, exist_ok=True)
+
+          thresholds = load_default_extraction_thresholds()
+          print(f"[EXTRACT-EVAL] manifest: {default_extraction_thresholds_path()}")
+          print(
+              f"[EXTRACT-EVAL] enforce={thresholds.enforce} "
+              f"f1_min={thresholds.f1_min} recall_min={thresholds.recall_min} "
+              f"precision_min={thresholds.precision_min} (#1949 target, REPORTED)"
+          )
+
+          # The Claude equivalence judge is REQUIRED — no fuzzy-only fallback.
+          # If the credential is absent we FAIL LOUDLY here rather than silently
+          # scoring with a weaker matcher (CLAUDE.md: No Silent Fallbacks). A
+          # judge that errors mid-run also propagates and fails the step.
+          if not os.environ.get("ANTHROPIC_API_KEY"):
+              print(
+                  "[EXTRACT-EVAL] ERROR: ANTHROPIC_API_KEY is not set. The "
+                  "action-item extraction eval requires the Claude equivalence "
+                  "judge and does NOT fall back to fuzzy-only matching. Set the "
+                  "ANTHROPIC_API_KEY secret on this runner and re-run.",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+          judge_fn = make_claude_judge()
+          print("[EXTRACT-EVAL] match mode: fuzzy-primary + REQUIRED Claude judge")
+
+          # Generation: drives the REAL triage/extraction path per case (Lemonade
+          # — this job holds the serial lemonade-eval slot).
+          generations = generate_extractions(model, corpus_path=corpus_path)
+          produced = sum(1 for g in generations if g.get("predicted") is not None)
+          print(f"[EXTRACT-EVAL] extracted for {produced}/{len(generations)} cases")
+
+          corpus = load_action_item_corpus(corpus_path)
+          results = score_generations(
+              corpus, generations, model_id=model, judge_fn=judge_fn
+          )
+          summary = summarize_extraction(
+              results,
+              run_id=f"email-action-item-eval-{model.replace('/', '-').lower()}",
+              thresholds=thresholds,
+          )
+
+          gate = summary.get("extraction_gate", {})
+          agg = summary.get("extraction", {})
+          print("\n=========== EMAIL ACTION-ITEM EVAL REPORT (report mode) ===========")
+          print(
+              f"  Precision / Recall / F1 : {agg.get('precision')} / "
+              f"{agg.get('recall')} / {agg.get('f1')}   "
+              f"(F1 target >={thresholds.f1_min} #1949, REPORTED)"
+          )
+          print(
+              f"  Hard-negative correct   : {agg.get('hard_negatives_correct')}/"
+              f"{agg.get('hard_negatives_total')} "
+              f"(rate {agg.get('hard_negative_correct_rate')})"
+          )
+          print(
+              f"  Cases scored/errored    : {agg.get('cases_scored')}/"
+              f"{agg.get('cases_errored')}"
+          )
+          print("  Match mode              : fuzzy-primary + REQUIRED Claude judge")
+          print(
+              f"  Extraction gate         : passed={gate.get('passed')} "
+              f"enforce={gate.get('enforce')} "
+              f"should_fail={gate.get('should_fail')} "
+              f"skipped={gate.get('skipped', False)}"
+          )
+          print("==================================================================\n")
+
+          (out / "action_items_report.json").write_text(
+              json.dumps(
+                  {
+                      "model": model,
+                      "corpus": corpus_path,
+                      "match_mode": "fuzzy-primary+required-claude-judge",
+                      "summary": summary,
+                  },
+                  indent=2,
+                  ensure_ascii=False,
+              ),
+              encoding="utf-8",
+          )
+          print("[OUT] wrote eval-out/action_items_report.json")
+
+          # Same hook contract as the gates above: report mode never fails.
+          if gate.get("should_fail"):
+              print("[EXTRACT-EVAL] enforced gate breach — failing the build.")
+              sys.exit(1)
+          print(
+              "[EXTRACT-EVAL] report mode (or no breach) — gate does not block "
+              "the build."
+          )
+          PY
+      # =================================================================
+      # END action-item extraction eval
+      # =================================================================
 
       - name: Upload eval scorecard + gate report
         if: always()

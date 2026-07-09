@@ -898,9 +898,11 @@ Used to reach the UI from a phone.
 
 <AccordionGroup>
   <Accordion title="POST /api/chat/confirm-tool">
-    Tool-confirmation handshake. When `TOOLS_REQUIRING_CONFIRMATION`
-    triggers the agent to pause, the UI prompts the user and posts the
-    outcome (`approve` / `deny`) back on this endpoint.
+    Tool-confirmation handshake. When a tool in the agent's
+    `confirmation_required_tools()` set (the generic base set merged with the
+    agent's own `CONFIRMATION_REQUIRED_TOOLS`) triggers the agent to pause,
+    the UI prompts the user and posts the outcome (`approve` / `deny`) back on
+    this endpoint.
   </Accordion>
 </AccordionGroup>
 

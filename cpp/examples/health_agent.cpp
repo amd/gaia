@@ -43,7 +43,7 @@ public:
                   << color::RESET << std::endl;
         bool success = connectMcpServer("windows", {
             {"command", "uvx"},
-            {"args", {"windows-mcp"}}
+            {"args", {"windows-mcp@0.8.2", "serve"}}
         });
 
         if (success) {

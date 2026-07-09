@@ -462,3 +462,37 @@ class EmailSidecarManager:
         self._proc = None
         self._close_log()
         logger.info("email sidecar: shut down")
+
+
+# ---------------------------------------------------------------------------
+# Shared process-wide manager
+# ---------------------------------------------------------------------------
+# The Agent UI has exactly ONE email backend (design: "One backend for the UI").
+# Both consumers — the /v1/email REST router and the in-app email chat agent
+# (agent_type=email) — share this single manager so they drive the SAME sidecar
+# process (one ephemeral port, one lazy spawn, one tree-kill) instead of racing
+# to spawn two. The contract MAJOR is pinned here so a breaking sidecar upgrade
+# fails loudly (kept in lockstep with the contract SCHEMA_VERSION major).
+_EXPECTED_API_MAJOR = "2"
+_shared_manager: Optional["EmailSidecarManager"] = None
+_shared_manager_lock = threading.Lock()
+
+
+def get_shared_manager() -> "EmailSidecarManager":
+    """Return the process-wide email sidecar manager, creating it once."""
+    global _shared_manager
+    with _shared_manager_lock:
+        if _shared_manager is None:
+            _shared_manager = EmailSidecarManager(
+                expected_api_version=_EXPECTED_API_MAJOR
+            )
+        return _shared_manager
+
+
+def reset_shared_manager() -> None:
+    """Shut down and clear the shared manager (test isolation seam)."""
+    global _shared_manager
+    with _shared_manager_lock:
+        if _shared_manager is not None:
+            _shared_manager.shutdown()
+            _shared_manager = None

@@ -79,6 +79,9 @@ class EmailAgentConfig:
     - ``undo_window_seconds``: how long after a soft-delete the user has
       to ``restore_message``. After this window ``restore_message``
       raises with a "use Trash to recover" message.
+    - ``followup_window_days``: how many days a sent message may sit
+      without an inbound reply before ``check_followups`` flags it
+      (#1606). Must be a positive integer.
     - ``db_path``: where ``email_actions`` / ``email_drafts`` live.
       Defaults to ``~/.gaia/email/state.db``. Eval harness passes a
       ``tmp_path``-derived path so concurrent live + eval runs don't
@@ -103,6 +106,9 @@ class EmailAgentConfig:
       ``mail_provider="google"`` and ``outlook_backend`` for
       ``"microsoft"``; ``calendar_backend`` is honored for either calendar
       provider. An injected backend always wins over the live one.
+    - ``scheduler_poll_seconds`` / ``start_scheduler``: the one-shot scheduler
+      for scheduled send + snooze (#1609). ``start_scheduler=False`` skips the
+      polling thread — tests drive ``fire_due_jobs()`` deterministically.
     """
 
     base_url: Optional[str] = None
@@ -114,6 +120,7 @@ class EmailAgentConfig:
     show_stats: bool = False
     output_dir: Optional[str] = None
     undo_window_seconds: int = 30
+    followup_window_days: int = 3
     db_path: Optional[str] = None
     memory_db_path: Optional[str] = None
     # Runtime memory toggle (#1666). When False the agent constructs with memory
@@ -129,6 +136,11 @@ class EmailAgentConfig:
     outlook_backend: Optional[Any] = None
     calendar_backend: Optional[Any] = None
     force_llm: bool = False
+    # One-shot scheduler (#1609): scheduled send + snooze. ``start_scheduler``
+    # controls the built-in polling thread; tests set it False and drive
+    # ``EmailJobScheduler.fire_due_jobs()`` deterministically instead.
+    scheduler_poll_seconds: float = 30.0
+    start_scheduler: bool = True
 
     def validate(self) -> None:
         """Run startup-time invariants. Called from the agent's __init__.
@@ -136,6 +148,12 @@ class EmailAgentConfig:
         Raises ``ConfigurationError`` on any failure — never silently
         downgrades.
         """
+        if self.scheduler_poll_seconds <= 0:
+            raise ConfigurationError(
+                "EmailAgentConfig.scheduler_poll_seconds must be > 0, got "
+                f"{self.scheduler_poll_seconds!r}. Scheduled send / snooze "
+                "need a positive polling interval to fire."
+            )
         if self.base_url:
             host = urlparse(self.base_url).hostname
             allowed = _allowed_hosts()
@@ -147,6 +165,13 @@ class EmailAgentConfig:
                     "cloud LLM endpoints are permitted (AC3). To use a "
                     "non-default Lemonade port, set LEMONADE_BASE_URL."
                 )
+        if not isinstance(self.followup_window_days, int) or (
+            self.followup_window_days <= 0
+        ):
+            raise ConfigurationError(
+                f"EmailAgentConfig.followup_window_days must be a positive "
+                f"integer number of days, got {self.followup_window_days!r}."
+            )
 
     def resolved_db_path(self) -> str:
         """Return the SQLite path with ``$HOME`` expanded.
