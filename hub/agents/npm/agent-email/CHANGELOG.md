@@ -5,6 +5,26 @@ follows [SemVer](https://semver.org/): the **MAJOR** of the on-the-wire
 `SCHEMA_VERSION` is what `checkVersion` enforces at startup, so a contract MAJOR
 bump is always at least a package MINOR bump with a migration note.
 
+## 0.4.0
+
+Adds a **stateful agent surface** (`/v1/email/agent/*`) so a host can drive the
+full conversational `EmailTriageAgent` over HTTP — memory, personalization, and
+every agent tool — instead of importing it in-process. This is what lets the Agent
+UI back its email experience with the packaged sidecar. No triage-contract change:
+`SCHEMA_VERSION` stays **2.1**, so `checkVersion` (MAJOR-only) is unaffected.
+
+- **New endpoints** (additive): `POST /v1/email/agent/session`,
+  `DELETE /v1/email/agent/session/{id}`, `GET /v1/email/agent/session/{id}/history`,
+  `POST /v1/email/agent/query` (SSE stream of the agent loop),
+  `POST /v1/email/agent/confirm-tool` (approve/deny a gated tool),
+  `POST /v1/email/agent/cancel`, `POST /v1/email/agent/memory` +
+  `GET /v1/email/agent/memory/{id}` (runtime memory toggle, #1666).
+- **Runtime memory toggle reachable over HTTP** — enabling memory that was never
+  initialized (started with `GAIA_MEMORY_DISABLED` or Lemonade unreachable) returns
+  **409** with an actionable message rather than silently no-opping.
+- **Frozen binary** now bundles FAISS (the memory index) — embeddings still go over
+  Lemonade HTTP, so torch/transformers stay excluded.
+
 ## 0.3.0
 
 Contract bumped to `SCHEMA_VERSION` **2.1** — additive, no triage shape change, so
