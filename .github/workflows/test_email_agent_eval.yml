@@ -434,11 +434,12 @@ jobs:
       # Precision / recall / F1 of the agent's extracted action items vs a
       # hand-labeled corpus (tests/fixtures/email/action_items_ground_truth.json,
       # hard negatives included). Generation drives the REAL triage path over a
-      # FakeGmailBackend (Lemonade — nothing is ever sent). Matching is
-      # fuzzy-primary and fully offline; the Claude equivalence judge only
-      # resolves borderline pairs and is used ONLY when ANTHROPIC_API_KEY is
-      # present — otherwise the step still runs, matching pure-fuzzy
-      # (token-overlap-only), with the mode logged and recorded in the report.
+      # FakeGmailBackend (Lemonade — nothing is ever sent). The Claude
+      # equivalence judge resolves borderline description pairs and is REQUIRED:
+      # ANTHROPIC_API_KEY MUST be present, and if the judge cannot run the step
+      # FAILS LOUDLY. There is NO fallback to fuzzy-only matching — a missing or
+      # broken judge is an error, never a silent degradation to a weaker scorer
+      # (CLAUDE.md: No Silent Fallbacks — Fail Loudly).
       # The aggregate is scored against the committed manifest
       #   tests/fixtures/email/action_items_gate_thresholds.json  (enforce:false)
       # via gaia.eval.action_item_quality — same single-source rule as the gates
@@ -453,8 +454,8 @@ jobs:
         env:
           GAIA_MEMORY_DISABLED: "1"
           EMAIL_EVAL_MODEL: ${{ inputs.model || 'Gemma-4-E4B-it-GGUF' }}
-          # Judge credential for the borderline equivalence judge. Absent -> the
-          # step still runs pure-fuzzy (never a skip, never an invented pass).
+          # Judge credential for the borderline equivalence judge — REQUIRED.
+          # Absent -> the step fails loudly (NO fuzzy-only fallback).
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set -e
@@ -487,16 +488,21 @@ jobs:
               f"precision_min={thresholds.precision_min} (#1949 target, REPORTED)"
           )
 
-          # The judge only resolves borderline (gray-band) pairs. Present ->
-          # judge-assisted; absent -> pure-fuzzy token-overlap. Either way the
-          # step runs; the mode is logged and written to the report.
-          if os.environ.get("ANTHROPIC_API_KEY"):
-              judge_fn = make_claude_judge()
-              match_mode = "fuzzy+judge"
-          else:
-              judge_fn = None
-              match_mode = "fuzzy-only"
-          print(f"[EXTRACT-EVAL] match mode: {match_mode}")
+          # The Claude equivalence judge is REQUIRED — no fuzzy-only fallback.
+          # If the credential is absent we FAIL LOUDLY here rather than silently
+          # scoring with a weaker matcher (CLAUDE.md: No Silent Fallbacks). A
+          # judge that errors mid-run also propagates and fails the step.
+          if not os.environ.get("ANTHROPIC_API_KEY"):
+              print(
+                  "[EXTRACT-EVAL] ERROR: ANTHROPIC_API_KEY is not set. The "
+                  "action-item extraction eval requires the Claude equivalence "
+                  "judge and does NOT fall back to fuzzy-only matching. Set the "
+                  "ANTHROPIC_API_KEY secret on this runner and re-run.",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+          judge_fn = make_claude_judge()
+          print("[EXTRACT-EVAL] match mode: fuzzy-primary + REQUIRED Claude judge")
 
           # Generation: drives the REAL triage/extraction path per case (Lemonade
           # — this job holds the serial lemonade-eval slot).
@@ -531,7 +537,7 @@ jobs:
               f"  Cases scored/errored    : {agg.get('cases_scored')}/"
               f"{agg.get('cases_errored')}"
           )
-          print(f"  Match mode              : {match_mode}")
+          print("  Match mode              : fuzzy-primary + REQUIRED Claude judge")
           print(
               f"  Extraction gate         : passed={gate.get('passed')} "
               f"enforce={gate.get('enforce')} "
@@ -545,7 +551,7 @@ jobs:
                   {
                       "model": model,
                       "corpus": corpus_path,
-                      "match_mode": match_mode,
+                      "match_mode": "fuzzy-primary+required-claude-judge",
                       "summary": summary,
                   },
                   indent=2,
