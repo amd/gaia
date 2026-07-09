@@ -163,7 +163,10 @@ jobs:
   # Integration tests on STX hardware: LLM + MCP + WiFi + Health
   integration-test:
     name: C++ Integration Tests (STX)
-    runs-on: ${{ (contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test') || 'stx' }}
+    runs-on:
+      - self-hosted
+      - Windows
+      - ${{ (contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test') || 'stx' }}
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:

@@ -91,7 +91,10 @@ jobs:
   test-examples-integration:
     name: Example Agents Integration Tests (stx)
     needs: test-examples-unit
-    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
+    runs-on:
+      - self-hosted
+      - Windows
+      - ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     timeout-minutes: 30
 
