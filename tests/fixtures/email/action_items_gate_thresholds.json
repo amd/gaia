@@ -1,8 +1,7 @@
 {
-  "_comment": "Extraction-quality bars for the email action-item eval (#1605 / PR #1917, eval #1949). Scored by gaia.eval.action_item_metrics over the hand-labeled corpus action_items_ground_truth.json (set-based precision/recall/F1 with normalized+fuzzy description matching). 'enforce' is the SINGLE switch CI keys off, and it ships FALSE (report mode) on purpose: these are REPORTED targets, not enforced gates — the corpus is a ~26-case seed and the bars should only start blocking builds once the corpus grows past seed size and the numbers prove stable across a few nightly reports. Flip 'enforce' to true HERE (data, not code) to make a breach fail the build. Loaded by gaia.eval.action_item_metrics.load_action_item_thresholds.",
-  "_baseline": "Measured on the deterministic cue-based extractor (EmailTriageService._extract_action_items) over the committed 26-case corpus: precision 0.8889, recall 0.8421, f1 0.8649, due_hint_accuracy 1.0, negatives clean 8/10. The bars sit below the measured baseline with jitter-free margin (the extractor is deterministic, so any drop below a bar is a real code-behavior change, not noise).",
-  "precision_min": 0.80,
+  "_comment": "Extraction-quality bars for the email action-item extraction eval (#1605 feature, #1949 tracking). 'f1_min' is the primary reported target (micro-averaged F1 over the labeled corpus); 'recall_min' guards against dropping real tasks; 'precision_min' guards against spurious extractions (the hard-negative false-positive case). 'enforce' is the SINGLE switch CI keys off and it ships FALSE (report mode) on purpose: NO real judged baseline exists yet (live-baseline generation is a documented #1949 follow-up on the self-hosted Lemonade runner), so these bars are PROVISIONAL placeholders, NOT measured numbers — do not treat them as a confirmed floor. Flip 'enforce' to true HERE (data, not code) once the first nightly report on Strix Halo / Gemma-4-E4B establishes a stable baseline, RE-MEASURING f1_min/recall_min/precision_min to the observed numbers at that point. Loaded by gaia.eval.action_item_quality.load_extraction_thresholds (which ignores extra keys).",
+  "f1_min": 0.70,
   "recall_min": 0.75,
-  "f1_min": 0.80,
+  "precision_min": 0.70,
   "enforce": false
 }
