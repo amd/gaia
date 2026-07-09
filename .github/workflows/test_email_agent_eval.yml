@@ -399,6 +399,147 @@ jobs:
       # END voice-drafting quality eval
       # =================================================================
 
+      # =================================================================
+      # BEGIN action-item extraction eval (#1605 feature / #1949 metric /
+      # #1964 wiring) — ADDITIVE, self-contained block. Report mode.
+      #
+      # Precision / recall / F1 of the agent's extracted action items vs a
+      # hand-labeled corpus (tests/fixtures/email/action_items_ground_truth.json,
+      # hard negatives included). Generation drives the REAL triage path over a
+      # FakeGmailBackend (Lemonade — nothing is ever sent). Matching is
+      # fuzzy-primary and fully offline; the Claude equivalence judge only
+      # resolves borderline pairs and is used ONLY when ANTHROPIC_API_KEY is
+      # present — otherwise the step still runs, matching pure-fuzzy
+      # (token-overlap-only), with the mode logged and recorded in the report.
+      # The aggregate is scored against the committed manifest
+      #   tests/fixtures/email/action_items_gate_thresholds.json  (enforce:false)
+      # via gaia.eval.action_item_quality — same single-source rule as the gates
+      # above: no thresholds inlined in this YAML; flip `enforce` in the manifest
+      # (data, not code) to make this gate block once a baseline confirms the bars.
+      #
+      # Runs AFTER the triage + drafting evals in the same job, so Lemonade
+      # access stays strictly serial (CLAUDE.md: evals serial). Kept
+      # self-contained so concurrent edits to this workflow merge cleanly.
+      # =================================================================
+      - name: Action-item extraction eval (report mode)
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+          EMAIL_EVAL_MODEL: ${{ github.event.inputs.model || 'Gemma-4-E4B-it-GGUF' }}
+          # Judge credential for the borderline equivalence judge. Absent -> the
+          # step still runs pure-fuzzy (never a skip, never an invented pass).
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -e
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          from gaia.eval.action_item_quality import (
+              default_extraction_thresholds_path,
+              generate_extractions,
+              load_action_item_corpus,
+              load_default_extraction_thresholds,
+              make_claude_judge,
+              score_generations,
+              summarize_extraction,
+          )
+
+          model = os.environ["EMAIL_EVAL_MODEL"]
+          corpus_path = "tests/fixtures/email/action_items_ground_truth.json"
+          out = Path("eval-out")
+          out.mkdir(parents=True, exist_ok=True)
+
+          thresholds = load_default_extraction_thresholds()
+          print(f"[EXTRACT-EVAL] manifest: {default_extraction_thresholds_path()}")
+          print(
+              f"[EXTRACT-EVAL] enforce={thresholds.enforce} "
+              f"f1_min={thresholds.f1_min} recall_min={thresholds.recall_min} "
+              f"precision_min={thresholds.precision_min} (#1949 target, REPORTED)"
+          )
+
+          # The judge only resolves borderline (gray-band) pairs. Present ->
+          # judge-assisted; absent -> pure-fuzzy token-overlap. Either way the
+          # step runs; the mode is logged and written to the report.
+          if os.environ.get("ANTHROPIC_API_KEY"):
+              judge_fn = make_claude_judge()
+              match_mode = "fuzzy+judge"
+          else:
+              judge_fn = None
+              match_mode = "fuzzy-only"
+          print(f"[EXTRACT-EVAL] match mode: {match_mode}")
+
+          # Generation: drives the REAL triage/extraction path per case (Lemonade
+          # — this job holds the serial lemonade-eval slot).
+          generations = generate_extractions(model, corpus_path=corpus_path)
+          produced = sum(1 for g in generations if g.get("predicted") is not None)
+          print(f"[EXTRACT-EVAL] extracted for {produced}/{len(generations)} cases")
+
+          corpus = load_action_item_corpus(corpus_path)
+          results = score_generations(
+              corpus, generations, model_id=model, judge_fn=judge_fn
+          )
+          summary = summarize_extraction(
+              results,
+              run_id=f"email-action-item-eval-{model.replace('/', '-').lower()}",
+              thresholds=thresholds,
+          )
+
+          gate = summary.get("extraction_gate", {})
+          agg = summary.get("extraction", {})
+          print("\n=========== EMAIL ACTION-ITEM EVAL REPORT (report mode) ===========")
+          print(
+              f"  Precision / Recall / F1 : {agg.get('precision')} / "
+              f"{agg.get('recall')} / {agg.get('f1')}   "
+              f"(F1 target >={thresholds.f1_min} #1949, REPORTED)"
+          )
+          print(
+              f"  Hard-negative correct   : {agg.get('hard_negatives_correct')}/"
+              f"{agg.get('hard_negatives_total')} "
+              f"(rate {agg.get('hard_negative_correct_rate')})"
+          )
+          print(
+              f"  Cases scored/errored    : {agg.get('cases_scored')}/"
+              f"{agg.get('cases_errored')}"
+          )
+          print(f"  Match mode              : {match_mode}")
+          print(
+              f"  Extraction gate         : passed={gate.get('passed')} "
+              f"enforce={gate.get('enforce')} "
+              f"should_fail={gate.get('should_fail')} "
+              f"skipped={gate.get('skipped', False)}"
+          )
+          print("==================================================================\n")
+
+          (out / "action_items_report.json").write_text(
+              json.dumps(
+                  {
+                      "model": model,
+                      "corpus": corpus_path,
+                      "match_mode": match_mode,
+                      "summary": summary,
+                  },
+                  indent=2,
+                  ensure_ascii=False,
+              ),
+              encoding="utf-8",
+          )
+          print("[OUT] wrote eval-out/action_items_report.json")
+
+          # Same hook contract as the gates above: report mode never fails.
+          if gate.get("should_fail"):
+              print("[EXTRACT-EVAL] enforced gate breach — failing the build.")
+              sys.exit(1)
+          print(
+              "[EXTRACT-EVAL] report mode (or no breach) — gate does not block "
+              "the build."
+          )
+          PY
+      # =================================================================
+      # END action-item extraction eval
+      # =================================================================
+
       - name: Upload eval scorecard + gate report
         if: always()
         uses: actions/upload-artifact@v7
