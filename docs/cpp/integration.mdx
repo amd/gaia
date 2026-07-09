@@ -247,7 +247,7 @@ protected:
 private:
     static gaia::AgentConfig makeConfig() {
         gaia::AgentConfig cfg;
-        cfg.baseUrl = "http://localhost:13305/api/v1";
+        cfg.baseUrl = "http://localhost:8000/api/v1";
         cfg.modelId = "Qwen3-4B-GGUF";
         cfg.maxSteps = 10;
         return cfg;
@@ -359,7 +359,7 @@ That is the entire API surface. No embeddings endpoint, no streaming (unless `cf
 
     ```cpp
     gaia::AgentConfig cfg;
-    cfg.baseUrl = "http://localhost:13305/v1";
+    cfg.baseUrl = "http://localhost:8000/v1";
     cfg.modelId = "Qwen/Qwen3-4B";
     ```
   </Tab>
@@ -374,7 +374,7 @@ That is the entire API surface. No embeddings endpoint, no streaming (unless `cf
     ```cpp
     gaia::AgentConfig cfg;
     // defaults work out of the box
-    cfg.baseUrl = "http://localhost:13305/api/v1";
+    cfg.baseUrl = "http://localhost:8000/api/v1";
     cfg.modelId = "Qwen3-4B-GGUF";
     ```
   </Tab>

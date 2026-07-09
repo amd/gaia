@@ -106,7 +106,7 @@ The agent auto-runs a full system scan on startup, then waits for your input. Yo
     ```bash
     lemonade-server serve
     ```
-    The agent connects to `http://localhost:13305/api/v1` by default.
+    The agent connects to `http://localhost:8000/api/v1` by default.
   </Step>
 
   <Step title="Run the agent">
@@ -181,14 +181,14 @@ The agent runs in two phases. On startup it auto-scans the system — no menu sh
 Conversation history is preserved across all actions so the LLM can reference any labeled item without re-scanning. Only **Reanalyze** clears history, because the system state has genuinely changed.
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'fontSize':'14px', 'lineColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#A87B2D', 'edgeLabelBackground':'#ffffff', 'fontFamily':'system-ui, -apple-system, sans-serif'}, 'flowchart': {'curve': 'basis'}}}%%
 flowchart LR
-    START["Startup\nAuto-scan"] --> CLASS["LLM classifies\nA · B · C"]
+    START["Startup<br/>Auto-scan"] --> CLASS["LLM classifies<br/>A · B · C"]
     CLASS --> MENU["Action Menu"]
-    MENU --> ACT["Explain / Stop\nRestart / Quarantine"]
+    MENU --> ACT["Explain / Stop<br/>Restart / Quarantine"]
     ACT --> MENU
     MENU -->|"Reanalyze"| START
-    MENU -->|"Monitor"| MON["Background Thread\nSilentConsole + diff alerts"]
+    MENU -->|"Monitor"| MON["Background Thread<br/>SilentConsole + diff alerts"]
     MON -.->|"alerts before prompt"| MENU
 
     style START fill:#2d2d2d,stroke:#E2A33E,stroke-width:2px,color:#fff
@@ -510,7 +510,7 @@ These modify the system. The system prompt mandates user approval before the LLM
 ## Diagnostics Flow
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'fontSize':'14px', 'lineColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#A87B2D', 'edgeLabelBackground':'#ffffff', 'fontFamily':'system-ui, -apple-system, sans-serif'}, 'flowchart': {'curve': 'basis'}}}%%
 flowchart TD
     START["Phase 1: DETECT<br/>(auto-runs on startup)"] --> SS["system_snapshot<br/>CPU, memory, disk, services"]
     SS --> LP["list_processes<br/>Top 30 memory, top 10 CPU"]
@@ -523,7 +523,7 @@ flowchart TD
     MENU -->|"[3] Restart"| CONF_R["Confirm with user"]
     MENU -->|"[4] Quarantine"| EX_Q["explain_item first"]
     MENU -->|"[5] Reanalyze"| CLEAR["clearHistory()"]
-    MENU -->|"[6] Monitor"| MTOG{"Monitor\nrunning?"}
+    MENU -->|"[6] Monitor"| MTOG{"Monitor<br/>running?"}
     MTOG -->|No| MSTART["Start background thread<br/>SilentConsole + ProcessAgent"]
     MTOG -->|Yes| MSTOP["Stop monitor thread"]
     MSTART --> MSCAN["system_snapshot +<br/>list_processes (silent)"]

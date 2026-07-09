@@ -32,7 +32,24 @@ Conversations initiated via MCP appear in the browser UI in real time, so you ca
 | `search_files` | Search for files by name pattern and type |
 | `preview_file` | Preview file contents or metadata |
 | `take_screenshot` | Capture the Agent UI browser window (Windows) |
+| `memory_stats` | Memory counts and breakdown by category/context/entity |
+| `memory_list` | Filtered list of knowledge rows |
+| `memory_recall` | Hybrid-search recall over the memory store |
+| `memory_get` | Fetch one knowledge row by ID |
+| `memory_get_by_entity` | All rows tagged to an entity (e.g. `person:alice`) |
+| `memory_get_conversation_turns` | Raw turn history for a session |
+| `memory_seed` | Seed knowledge rows directly (for tests/setup) |
+| `memory_clear` | Clear memory rows |
 | `open_session_in_browser` | Open a session in the default browser |
+
+<Note>
+  The `memory_*` tools are **conditional**. The read tools (`memory_stats`, `memory_list`,
+  `memory_recall`, `memory_get`, `memory_get_by_entity`, `memory_get_conversation_turns`)
+  are registered only when memory MCP access is enabled — either via the Memory Dashboard
+  toggle (`mcp_memory_enabled`) or `GAIA_MEMORY_MCP_ALWAYS=1`. The admin tools
+  (`memory_seed`, `memory_clear`) additionally require `GAIA_MEMORY_ADMIN=1` on the backend
+  process.
+</Note>
 
 ---
 
@@ -190,7 +207,7 @@ claude mcp remove gaia-agent-ui
   </Accordion>
 
   <Accordion title="'Cannot connect to GAIA backend' errors">
-    The Agent UI backend must be running before the MCP server can work. Start it with `uv run python -m gaia.ui.server` or use the startup scripts in `scripts/`.
+    The Agent UI backend must be running before the MCP server can work. Start it with `uv run python -m gaia.ui.server` or use the startup scripts in `installer/scripts/`.
   </Accordion>
 
   <Accordion title="send_message times out">

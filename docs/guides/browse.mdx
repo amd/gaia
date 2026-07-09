@@ -32,31 +32,133 @@ Use interactive mode when you want to refine a web-research task over multiple t
 gaia browse
 ```
 
-## Tool Surface
+## Tools
 
-`gaia browse --list-tools` shows the exact tools available in your installed version. The focused Browser Agent exposes:
+`gaia browse --list-tools` prints the exact tools available in your installed version. The focused Browser Agent registers three:
 
-- `search_web` — run a web search for a query.
-- `fetch_page` — fetch a URL and return readable page text.
-- `download_file` — download a user-requested URL to a local file.
+| Tool | What it does | Key limits |
+|------|--------------|------------|
+| `search_web` | Runs a DuckDuckGo search and returns numbered results with titles, URLs, and snippets. | Returns up to 10 results (default 5). |
+| `fetch_page` | Fetches a URL and extracts readable content. Does **not** execute JavaScript — works best on static articles, docs, and reference pages. | Returns up to 20,000 chars (default 5,000). Can extract `text`, `html`, `links`, or `tables`. |
+| `download_file` | Saves a file from a URL to the local filesystem for later analysis. | Defaults to `~/Downloads`; capped at 100 MB per file; writes are path-validated (see below). |
 
-The Browser Agent does not register scratchpad or file-system analysis tools. Use [`gaia analyze`](/guides/analyze) for structured data work, or [`gaia chat`](/guides/chat) when you need the broader mixed tool set.
+A typical run chains them: `search_web` to find candidate sources, `fetch_page` to read the promising ones, and `download_file` only when the user needs a local copy. Binary URLs (PDFs, archives, images) that `fetch_page` hits are reported as binary with a suggestion to use `download_file` instead.
+
+### Download path validation
+
+`download_file` writes are guarded by GAIA's `PathValidator`:
+
+- **Allowlist** — by default the agent may write to `~/Downloads`. Pass `--allowed-paths` to permit additional directories. In an interactive terminal an out-of-allowlist path prompts you for confirmation; in the Agent UI / API server it is auto-denied.
+- **Blocklist** — sensitive directories (e.g. `/etc`, `~/.ssh`) and sensitive filenames (e.g. `.env`, `credentials.json`) are refused even if the allowlist would otherwise permit them; a file that resolves to a blocked name after download is deleted.
+
+```bash
+# Allow downloads into a project folder in addition to ~/Downloads
+gaia browse --allowed-paths ./research-data -q "Download the Q3 CSV from example.com and save it"
+```
+
+The Browser Agent does not register scratchpad or file-editing tools. Use [`gaia analyze`](/guides/analyze) for structured data work, or [`gaia chat`](/guides/chat) when you need the broader mixed tool set.
+
+## Flag Reference
+
+All flags are shown by `gaia browse -h`.
+
+| Flag | Description |
+|------|-------------|
+| `-q, --query QUERY` | Run a single task and exit. Omit for interactive mode. |
+| `--list-tools` | Print the agent's tools and exit. |
+| `--model MODEL` | Override the model ID (default: auto-selected). |
+| `--use-claude` | Use the Claude API instead of local Lemonade. |
+| `--use-chatgpt` | Use the ChatGPT/OpenAI API instead of local Lemonade. |
+| `--claude-model CLAUDE_MODEL` | Claude model when `--use-claude` is set (default: `claude-sonnet-4-20250514`). |
+| `--base-url BASE_URL` | Lemonade server base URL (default: `LEMONADE_BASE_URL` env or `http://localhost:13305/api/v1`). |
+| `--max-steps MAX_STEPS` | Cap the agent's tool-use steps (default: global limit 50, or `$GAIA_AGENT_MAX_STEPS`). |
+| `--allowed-paths PATH [PATH ...]` | Directories `download_file` may write to (in addition to the default `~/Downloads`). |
+| `--stats, --show-stats` | Print performance statistics after the run. |
+| `--trace` | Save a detailed JSON trace of agent execution. |
+| `--stream` | Stream raw LLM output as it is generated. |
+| `--show-prompts` | Print the prompts sent to the LLM. |
+| `--debug` | Enable debug output. |
+| `--logging-level LEVEL` | `DEBUG`, `INFO` (default), `WARNING`, `ERROR`, or `CRITICAL`. |
+| `--no-lemonade-check` | Skip the Lemonade server check (CI/testing). |
+
+## Example: a multi-step research run
+
+```bash
+gaia browse -q "What's new in the AMD Ryzen AI SDK? Find the docs and summarize the top links."
+```
+
+A representative run searches, reads a page, and reports back with citations:
+
+```
+🔍 search_web("AMD Ryzen AI SDK documentation")
+  1. Ryzen AI Software — AMD
+     https://ryzenai.docs.amd.com/
+     Documentation for the AMD Ryzen AI Software stack...
+  2. Ryzen AI SDK Release Notes
+     https://ryzenai.docs.amd.com/en/latest/relnotes.html
+     ...
+
+📄 fetch_page("https://ryzenai.docs.amd.com/en/latest/relnotes.html")
+  Page: Release Notes — Ryzen AI Software
+  Length: 12,430 chars
+
+Here are the most relevant links:
+- Ryzen AI Software docs (ryzenai.docs.amd.com) — install, quantization, and deployment guides.
+- Release Notes — the latest version adds updated NPU driver support and new example models.
+
+Sources: https://ryzenai.docs.amd.com/, https://ryzenai.docs.amd.com/en/latest/relnotes.html
+```
+
+Add `--stats` to see timing and token counts, or `--trace` to write a full JSON execution trace for debugging.
 
 ## Model and Backend Options
 
-By default, `gaia browse` uses the local Lemonade backend configured for GAIA. You can override the model or backend with the common agent flags:
+By default, `gaia browse` uses the local Lemonade backend with the agent's auto-selected default model. Override the model or switch backends with the common agent flags:
 
 ```bash
 # Use a smaller local model for lighter tasks
-gaia browse --model Qwen3-4B-Instruct-2507-GGUF -q "Fetch this page and list citations"
+gaia browse --model Qwen3-4B-Instruct-2507-GGUF -q "Fetch this page and list the citations"
 
 # Run against the Claude API instead of local inference
-gaia browse --use-claude -q "Compare these two URLs"
+gaia browse --use-claude -q "Compare the approaches described in these two URLs"
+
+# Point at a remote Lemonade server
+gaia browse --base-url https://my-host:13305/api/v1 -q "Search for recent NPU benchmarks"
 ```
 
-Other shared agent flags work here too — `--max-steps` to bound the run, `--trace` to save a JSON execution trace, `--stats` for performance metrics, and `--allowed-paths` to control where downloads may be written.
+**Choosing a model:** multi-step web research (search → read → synthesize) rewards stronger tool-calling, so the default larger model is a good starting point. Drop to a ~4B model with `--model` for simple single-fetch tasks on lighter hardware, or use `--use-claude` when you want the highest-quality synthesis and don't need everything to stay local.
 
 In the Agent UI the browser appears as a single `web` card with a model-size selector — pick **Lite (~4B)** for shorter browser tasks on lighter hardware, or **Full** for the default model. (The old `web-lite` registry ID still resolves to `web` on the lite tier for existing sessions.)
+
+## When to use browse vs. chat vs. analyze
+
+| Use | When |
+|-----|------|
+| [`gaia browse`](/guides/browse) | You want *only* web tools — search, read pages, download — with a minimal prompt and no other tooling. |
+| [`gaia chat`](/guides/chat) | You need the broader mixed tool set: RAG over local documents, file search, memory, and more, in one session. |
+| [`gaia analyze`](/guides/analyze) | You have structured rows and want reliable SQL calculations over an in-memory scratchpad table. |
+
+Keeping the tool surface small matters for smaller local models: fewer tools means a shorter system prompt and more accurate tool-calling, which is why the focused Browser Agent exists alongside the full chat agent.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="No search results / search errors">
+    `search_web` uses DuckDuckGo and can fail on rate limits or transient network issues. Retry, refine your query, or skip search entirely by giving the agent a direct URL to `fetch_page`.
+  </Accordion>
+
+  <Accordion title="A page comes back empty or truncated">
+    `fetch_page` does not run JavaScript, so JS-heavy or login-gated pages may return little content. Try a static/print version of the page, or raise the character cap via the tool's `max_length` (up to 20,000). Very long pages are truncated with a `... (truncated)` marker.
+  </Accordion>
+
+  <Accordion title="Download denied or blocked">
+    Downloads outside `~/Downloads` require `--allowed-paths`, and sensitive directories/filenames are always blocked. In the Agent UI / API server, out-of-allowlist paths are auto-denied (no interactive prompt). Pass an explicit `--allowed-paths` target and retry.
+  </Accordion>
+
+  <Accordion title="Lemonade server not reachable">
+    Ensure a model is set up (`gaia init`) and the server is running, or point at a remote one with `--base-url`. Use `--no-lemonade-check` only for CI/testing without a backend.
+  </Accordion>
+</AccordionGroup>
 
 ## Next Steps
 

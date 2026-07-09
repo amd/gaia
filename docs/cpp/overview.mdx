@@ -39,7 +39,7 @@ The C++ framework focuses on the core agent loop and tool execution. Specialized
 ## Agent Execution Flow
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'fontSize':'16px', 'lineColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis', 'nodeSpacing': 40, 'rankSpacing': 50}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#A87B2D', 'edgeLabelBackground':'#ffffff', 'fontFamily':'system-ui, -apple-system, sans-serif'}, 'flowchart': {'curve': 'basis', 'nodeSpacing': 40, 'rankSpacing': 50}}}%%
 flowchart TD
     A["&nbsp;&nbsp;User Query&nbsp;&nbsp;"] --> B["&nbsp;&nbsp;gaia::Agent&nbsp;&nbsp;<br/>processQuery()"]
     B -->|"chat/completions"| C["&nbsp;&nbsp;LLM Server&nbsp;&nbsp;<br/>(Lemonade)"]
@@ -69,7 +69,7 @@ flowchart TD
 The agent is **not a script**. After every tool execution, the LLM is called again with the full conversation so far — including the tool's output. This lets the model reason about results and change course.
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'fontSize':'16px', 'lineColor':'#E2A33E', 'primaryTextColor':'#1a1a1a'}, 'flowchart': {'curve': 'basis', 'nodeSpacing': 40}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#A87B2D', 'edgeLabelBackground':'#ffffff', 'fontFamily':'system-ui, -apple-system, sans-serif'}, 'flowchart': {'curve': 'basis', 'nodeSpacing': 40}}}%%
 graph LR
     S["&nbsp;&nbsp;Start&nbsp;&nbsp;"] --> A["&nbsp;&nbsp;Call LLM&nbsp;&nbsp;"]
     A --> B{"&nbsp;&nbsp;Parse JSON&nbsp;&nbsp;"}
@@ -96,11 +96,11 @@ Each loop iteration: **LLM reasons → agent executes → result fed back → LL
 The `health_agent` demo is a [Windows System Health Agent](/guides/mcp/windows-system-health). It subclasses `gaia::Agent`, connects to the Windows MCP server on startup, then enters the planning loop.
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'fontSize':'18px', 'lineColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#A87B2D', 'edgeLabelBackground':'#ffffff', 'fontFamily':'system-ui, -apple-system, sans-serif'}, 'flowchart': {'curve': 'basis'}}}%%
 graph TB
     User("User query")
     Agent("WindowsSystemHealthAgent<br/>gaia::Agent subclass")
-    LLM("LLM<br/>http://localhost:13305")
+    LLM("LLM<br/>http://localhost:8000")
     MCP("Windows MCP Server<br/>uvx windows-mcp")
 
     User --> Agent
@@ -240,14 +240,14 @@ All fields have sensible defaults. Override only what you need:
 
 ```cpp
 gaia::AgentConfig config;
-config.baseUrl = "http://localhost:13305/api/v1";
+config.baseUrl = "http://localhost:8000/api/v1";
 config.maxSteps = 30;
 config.debug = true;
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `baseUrl` | `std::string` | `"http://localhost:13305/api/v1"` | LLM server endpoint ([Lemonade Server](https://lemonade-server.ai) recommended; other OpenAI-compatible servers untested) |
+| `baseUrl` | `std::string` | `"http://localhost:8000/api/v1"` | LLM server endpoint ([Lemonade Server](https://lemonade-server.ai) recommended; other OpenAI-compatible servers untested) |
 | `modelId` | `std::string` | `"Qwen3-4B-GGUF"` | Model identifier sent to the server |
 | `maxSteps` | `int` | `20` | Maximum agent loop iterations per query |
 | `maxPlanIterations` | `int` | `3` | Maximum plan/replan cycles before forcing completion |
@@ -285,6 +285,9 @@ cpp/
   examples/
     health_agent.cpp        # Windows System Health Agent (MCP demo)
     wifi_agent.cpp          # Wi-Fi Troubleshooter Agent (registered tools)
+    process_agent.cpp       # Process Analyst Agent (Win32 + PowerShell tools)
+    security_demo.cpp       # Tool-policy / confirmation security demo
+    vlm_agent.cpp           # Vision-language (image) demo
   tests/
     test_agent.cpp
     test_tool_registry.cpp

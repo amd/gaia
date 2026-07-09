@@ -91,7 +91,7 @@ Full diagnostic run on a Ryzen AI PC: the agent calls 5 tools in sequence, reads
     ```bash
     lemonade-server serve
     ```
-    The agent connects to `http://localhost:13305/api/v1` by default.
+    The agent connects to `http://localhost:8000/api/v1` by default.
   </Step>
 
   <Step title="Run the agent (run as admin for fix tools)">
@@ -115,7 +115,6 @@ Full diagnostic run on a Ryzen AI PC: the agent calls 5 tools in sequence, reads
 The agent loop is a conversation between your C++ code and the LLM:
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'fontSize':'14px', 'lineColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
 sequenceDiagram
     participant U as User
     participant A as Agent (C++)
@@ -246,7 +245,7 @@ All string arguments from the LLM are validated with `isSafeShellArg()` to rejec
 The system prompt teaches the LLM this decision tree. Each fix loops back to re-verify before declaring success:
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'fontSize':'14px', 'lineColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'edgeLabelBackground':'#1a1a1a'}, 'flowchart': {'curve': 'basis'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#A87B2D', 'edgeLabelBackground':'#ffffff', 'fontFamily':'system-ui, -apple-system, sans-serif'}, 'flowchart': {'curve': 'basis'}}}%%
 flowchart TD
     A["1. check_adapter<br/>Wi-Fi adapter present?"] -->|Yes| B["2. check_ip_config<br/>IP address via DHCP?"]
     A -->|"Radio Off"| F4["FIX: toggle_wifi_radio"]
