@@ -237,13 +237,12 @@ def test_shipped_app_gates_connector_and_agent_routers(monkeypatch):
     monkeypatch.setenv(caller_auth.TOKEN_ENV_VAR, _TOKEN)
     server = _load_sidecar_server()
     client = TestClient(server.build_app(), base_url=_BASE_URL)
-    auth = {"Authorization": f"Bearer {_TOKEN}"}
 
-    # Connector routes: 401 without the token, gate cleared with it.
+    # The gate is applied to both routers: an unauthenticated caller is 401
+    # BEFORE the handler runs (so no live connector store / agent session is
+    # touched). The with-token pass-through is proven via /draft in the sibling
+    # test — the same require_caller_token dependency gates all three routers.
     assert client.get("/v1/email/connectors").status_code == 401
-    assert client.get("/v1/email/connectors", headers=auth).status_code != 401
-    # Stateful agent surface: 401 without the token (gate runs before the
-    # heavy session build, so no agent/memory import is triggered here).
     assert client.post("/v1/email/agent/session", json={}).status_code == 401
 
 
