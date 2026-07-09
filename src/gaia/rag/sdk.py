@@ -231,24 +231,23 @@ class RAGSDK:
             # skipping genuinely-missing packages (ImportError) which the
             # install instructions above already cover.
             broken = []
-            for pkg, label in (("faiss", "faiss"),):
-                if pkg == "faiss" and faiss is None:
-                    try:
-                        # Use the import statement (__import__), not
-                        # importlib.import_module — the latter bypasses
-                        # builtins.__import__, so this path can't be exercised
-                        # by tests that intercept imports, and re-running the
-                        # real import is what re-surfaces the native cause.
-                        __import__(pkg)
-                    except ImportError:
-                        pass  # genuinely missing → covered by install instructions
-                    except Exception as exc:  # pylint: disable=broad-except
-                        broken.append(f"  {label}: {exc}")
+            if faiss is None:
+                try:
+                    # Use the import statement (__import__), not
+                    # importlib.import_module — the latter bypasses
+                    # builtins.__import__, so this path can't be exercised
+                    # by tests that intercept imports, and re-running the
+                    # real import is what re-surfaces the native cause.
+                    __import__("faiss")
+                except ImportError:
+                    pass  # genuinely missing → covered by install instructions
+                except Exception as exc:  # pylint: disable=broad-except
+                    broken.append(f"  faiss: {exc}")
             if broken:
                 error_msg += (
                     "\nThe package(s) below are installed but failed to load — "
                     "reinstalling won't help until the underlying error is fixed "
-                    "(e.g. a missing FFmpeg for torchcodec):\n"
+                    "(e.g. an arch-mismatched faiss build):\n"
                     + "\n".join(broken)
                     + "\n"
                 )
