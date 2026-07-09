@@ -10,6 +10,7 @@ on:
     paths:
       - 'src/gaia/electron/**'
       - 'src/gaia/apps/*/webui/**'
+      - 'src/gaia/apps/webui/**'
       - 'hub/agents/python/emr/gaia_agent_emr/dashboard/electron/**'
       - 'tests/electron/**'
       - '.github/workflows/test_electron.yml'
@@ -19,6 +20,7 @@ on:
     paths:
       - 'src/gaia/electron/**'
       - 'src/gaia/apps/*/webui/**'
+      - 'src/gaia/apps/webui/**'
       - 'hub/agents/python/emr/gaia_agent_emr/dashboard/electron/**'
       - 'tests/electron/**'
       - '.github/workflows/test_electron.yml'
