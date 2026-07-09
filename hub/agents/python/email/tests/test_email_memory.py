@@ -471,14 +471,77 @@ class TestRuntimeMemoryToggle:
         finally:
             agent.close_db()
 
-    def test_set_memory_enabled_noop_without_store(self, tmp_path):
-        """When memory was never initialized (GAIA_MEMORY_DISABLED=1), enabling at
-        runtime is a safe no-op — there is nothing to re-enable."""
+    def test_set_memory_enabled_returns_feedback(self, tmp_path):
+        """The setter reports the applied state with actionable feedback."""
+        agent = _build_agent(tmp_path)
+        try:
+            off = agent.set_memory_enabled(False)
+            assert off["ok"] is True
+            assert off["enabled"] is False
+            assert off["available"] is True
+            assert "disabled" in off["message"].lower()
+
+            on = agent.set_memory_enabled(True)
+            assert on["ok"] is True
+            assert on["enabled"] is True
+            assert "enabled" in on["message"].lower()
+        finally:
+            agent.close_db()
+
+    def test_enable_when_unavailable_reports_failure(self, tmp_path):
+        """Trying to ENABLE memory that was never initialized (GAIA_MEMORY_DISABLED)
+        fails loudly with feedback — never a silent no-op."""
         agent = _build_agent(tmp_path, memory_disabled=True)
         try:
             assert agent._memory_store is None
-            # Must not raise, and must not falsely clear incognito.
-            agent.set_memory_enabled(True)
+            result = agent.set_memory_enabled(True)
+            # Cannot enable at runtime — reported, not silently ignored.
+            assert result["ok"] is False
+            assert result["enabled"] is False
+            assert result["available"] is False
+            assert "unavailable" in result["message"].lower()
+            # Incognito unchanged; nothing falsely turned on.
             assert agent._incognito is True
+        finally:
+            agent.close_db()
+
+    def test_disable_when_unavailable_is_satisfied(self, tmp_path):
+        """Disabling already-unavailable memory is a satisfied request (ok=True):
+        the caller asked for off, and off is what they get."""
+        agent = _build_agent(tmp_path, memory_disabled=True)
+        try:
+            result = agent.set_memory_enabled(False)
+            assert result["ok"] is True
+            assert result["enabled"] is False
+            assert result["available"] is False
+        finally:
+            agent.close_db()
+
+    def test_is_memory_enabled_and_status(self, tmp_path):
+        """is_memory_enabled()/memory_status() reflect the live state."""
+        agent = _build_agent(tmp_path)
+        try:
+            assert agent.is_memory_enabled() is True
+            assert agent.memory_status()["available"] is True
+
+            agent.set_memory_enabled(False)
+            assert agent.is_memory_enabled() is False
+            assert agent.memory_status()["enabled"] is False
+        finally:
+            agent.close_db()
+
+        disabled = _build_agent(tmp_path, memory_disabled=True)
+        try:
+            assert disabled.is_memory_enabled() is False
+            assert disabled.memory_status()["available"] is False
+        finally:
+            disabled.close_db()
+
+    def test_memory_enabled_by_default(self, tmp_path):
+        """Default construction leaves memory on — the toggle is opt-out."""
+        agent = _build_agent(tmp_path)
+        try:
+            assert agent.config.memory_enabled is True
+            assert agent.is_memory_enabled() is True
         finally:
             agent.close_db()

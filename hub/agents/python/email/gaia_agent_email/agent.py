@@ -343,11 +343,48 @@ class EmailTriageAgent(
 
     # -- Runtime memory control (#1666) ------------------------------------
 
-    def set_memory_enabled(self, enabled: bool) -> None:
-        """Enable or disable the agent's memory at runtime.
+    def is_memory_enabled(self) -> bool:
+        """True when memory is active this turn — initialized AND not incognito.
+
+        The single source of truth for "is personalization/persistence on right
+        now", covering both the startup state (``_memory_store``) and the runtime
+        toggle (``_incognito``).
+        """
+        return getattr(self, "_memory_store", None) is not None and not getattr(
+            self, "_incognito", False
+        )
+
+    def memory_status(self) -> dict:
+        """Report the current memory state without changing it.
+
+        Returns ``{"enabled", "available", "message"}`` where ``available`` is
+        whether a memory store exists this session (False when disabled at startup
+        via ``GAIA_MEMORY_DISABLED`` or when Lemonade was unreachable) and
+        ``enabled`` is the effective on/off state (``available`` and not incognito).
+        """
+        available = getattr(self, "_memory_store", None) is not None
+        enabled = self.is_memory_enabled()
+        if not available:
+            message = (
+                "Memory is unavailable this session: it was disabled at startup "
+                "(GAIA_MEMORY_DISABLED=1) or the Lemonade embedding service was "
+                "unreachable when the agent started. Start lemonade-server and "
+                "restart the agent to enable it."
+            )
+        elif enabled:
+            message = "Memory is enabled: personalization and persistence are active."
+        else:
+            message = (
+                "Memory is disabled (incognito): personalization and persistence "
+                "are paused. Call set_memory_enabled(True) to re-enable."
+            )
+        return {"enabled": enabled, "available": available, "message": message}
+
+    def set_memory_enabled(self, enabled: bool) -> dict:
+        """Enable or disable the agent's memory at runtime, with feedback.
 
         The runtime, per-instance counterpart to ``EmailAgentConfig.memory_enabled``
-        and the ``GAIA_MEMORY_DISABLED`` env var — a consuming app can flip
+        and the ``GAIA_MEMORY_DISABLED`` env var — a consuming app flips
         personalization/persistence on or off without an env var + restart. It sets
         the ``MemoryMixin._incognito`` flag, which gates BOTH:
 
@@ -356,14 +393,37 @@ class EmailTriageAgent(
         - the read path — the stored working context (preferences/facts) is not
           injected into the system prompt or per-turn dynamic context.
 
-        No-op when memory was never initialized (``_memory_store is None``, e.g.
-        ``GAIA_MEMORY_DISABLED=1`` or Lemonade unreachable at startup): there is
-        nothing to re-enable. Enabling mid-session takes full effect on the next
-        turn; the stable working-context prompt refreshes when it is next composed.
+        Returns a status dict ``{"ok", "enabled", "available", "message"}``:
+
+        - ``ok`` — whether the requested state was applied.
+        - ``enabled`` — the resulting effective state.
+        - ``available`` — whether a memory store exists this session.
+        - ``message`` — actionable human-readable feedback.
+
+        Enabling is only possible when memory was initialized at startup. Asking to
+        enable it when it was never initialized (``GAIA_MEMORY_DISABLED=1`` or
+        Lemonade unreachable) cannot succeed at runtime and is reported loudly
+        (``ok=False`` with remediation) rather than silently ignored. Disabling is
+        always honored. Enabling mid-session takes full effect on the next turn;
+        the stable working-context prompt refreshes when it is next composed.
         """
-        if getattr(self, "_memory_store", None) is None:
-            return
+        available = getattr(self, "_memory_store", None) is not None
+        if not available:
+            status = self.memory_status()
+            # Disabling already-unavailable memory is a satisfied request (it is
+            # off); asking to ENABLE it cannot be honored at runtime → ok=False.
+            status["ok"] = not enabled
+            if enabled:
+                logger.warning(
+                    "set_memory_enabled(True) ignored: memory was not initialized "
+                    "this session (GAIA_MEMORY_DISABLED or Lemonade unreachable)."
+                )
+            return status
+
         self._incognito = not enabled
+        status = self.memory_status()
+        status["ok"] = True
+        return status
 
     def get_memory_system_prompt(self) -> str:
         """Stable memory working-context fragment, gated on the runtime toggle.

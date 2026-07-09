@@ -145,12 +145,17 @@ Senders you reply to quickly are automatically promoted to priority on the next 
 
 ### Turning memory on or off
 
-All of the personalization above — inbox profiling, behavioral auto-promotion, and preference persistence — depends on the agent's memory. You can disable it, so nothing is read from or written to memory:
+All of the personalization above — inbox profiling, behavioral auto-promotion, and preference persistence — depends on the agent's memory. Memory is **on by default**; you can turn it off so nothing is read from or written to memory:
 
 - **At startup**, set the config field: `EmailAgentConfig(memory_enabled=False)`. The agent still constructs normally; it just runs with memory off from the first turn.
 - **At runtime**, call `agent.set_memory_enabled(False)` (and `True` to re-enable) — no restart. The Agent UI drives this per session, so a private session runs with memory off automatically.
 
 When memory is off, both halves are covered: the **write** path (profiling, behavioral learning, preference persistence, conversation storage) is suppressed, and the **read** path (your stored preferences/facts) is not injected into the prompt. This supersedes the older `GAIA_MEMORY_DISABLED=1` env var, which only worked at startup and required a restart to change.
+
+`set_memory_enabled()` returns a status dict — `{"ok", "enabled", "available", "message"}` — so a caller always gets feedback about what happened. Two cases worth knowing:
+
+- If memory was **never initialized this session** (started with `GAIA_MEMORY_DISABLED=1`, or Lemonade's embedding service was unreachable at startup), `available` is `false`. Trying to *enable* it at runtime returns `ok=false` with an actionable message — it can't be turned on without a restart, and the call says so rather than silently doing nothing.
+- Query the current state anytime with `agent.is_memory_enabled()` (bool) or `agent.memory_status()` (the same dict without changing anything).
 
 ## Action surface
 
