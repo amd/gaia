@@ -617,6 +617,14 @@ def run_benchmark(
                 )
             )
 
+            # Release the agent's SQLite state.db before the next experiment and
+            # the caller's temp-dir cleanup — an open connection locks the file on
+            # Windows. Best-effort: a stub agent_factory agent may lack close_db.
+            try:
+                agent.close_db()
+            except Exception:
+                pass
+
         return results
     finally:
         if _prev_ceiling is None:
