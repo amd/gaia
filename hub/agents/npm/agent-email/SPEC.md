@@ -35,9 +35,34 @@ your process exits, crashes, or is interrupted (default `autoCleanup`); call
 `shutdown` for a graceful, awaited stop, or pass `autoCleanup: false` to manage
 signals yourself.
 
+## Authentication
+
+The sidecar binds `127.0.0.1` and can send mail as the user, so it authenticates
+its **caller** (#1706) — distinct from the draft→send `confirmation_token`, which
+binds a send to one exact message but does not identify the caller.
+
+- **Per-session bearer token.** `spawnSidecar` / `startSidecar` mint a
+  cryptographically-random token, pass it to the sidecar over the private
+  `GAIA_EMAIL_SIDECAR_TOKEN` env channel, and bind it to `sidecar.client`. Every
+  `/v1/email/*` request must carry `Authorization: Bearer <token>` → otherwise
+  **401**. Construct-your-own clients pass `authToken` (from `sidecar.authToken`);
+  `generateSessionToken()` is exported for advanced flows. Exempt: `/health`,
+  `/version`, `/v1/email/health`, `/v1/email/version`, `/v1/email/spec`,
+  `/v1/email/playground`.
+- **Host allowlist** — non-loopback `Host` → **400** (DNS-rebinding).
+- **Origin rejection** — non-loopback browser `Origin` → **403** (drive-by page).
+  Non-browser clients send no `Origin` and are unaffected. No CORS is ever sent.
+
+Running the sidecar by hand without `GAIA_EMAIL_SIDECAR_TOKEN` disables the token
+check (local development only, logged loudly); the Host/Origin controls still
+apply. The shipped product always spawns with a token.
+
 ## REST API
 
-`EmailClient` is a typed wrapper over the sidecar's HTTP surface. Methods:
+Every `/v1/email/*` request also requires the per-session bearer token (see
+[Authentication](#authentication)); the "Auth" column below covers the additional
+per-endpoint connector/token requirements. `EmailClient` is a typed wrapper over
+the sidecar's HTTP surface. Methods:
 `triage`, `triageBatch`, `search`, `prescan`, `draft`, `send`, `confirmAction`,
 `archive`, `unarchive`, `quarantine`, `unquarantine`, `listCalendarEvents`,
 `previewCalendarEvent`, `createCalendarEvent`, `respondToCalendarEvent`, `health`,

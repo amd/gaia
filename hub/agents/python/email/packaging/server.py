@@ -54,9 +54,11 @@ def build_app():
     """
     from contextlib import asynccontextmanager
 
-    from fastapi import FastAPI
+    from fastapi import Depends, FastAPI
     from gaia_agent_email import __version__ as agent_version
+    from gaia_agent_email import caller_auth
     from gaia_agent_email.agent_routes import router as agent_router
+    from gaia_agent_email.api_routes import require_caller_token
     from gaia_agent_email.api_routes import router as email_router
     from gaia_agent_email.briefing import BriefingScheduleConfig, BriefingScheduler
     from gaia_agent_email.connector_routes import router as connector_router
@@ -83,6 +85,31 @@ def build_app():
         lifespan=lifespan,
     )
 
+    # Caller authentication (#1706). The sidecar binds 127.0.0.1 and exposes
+    # draft/send, so it MUST authenticate its caller — a no-auth localhost API is
+    # reachable by any other local process and (via DNS-rebinding) by the user's
+    # browser. The spawning parent passes a per-session bearer token over the
+    # private GAIA_EMAIL_SIDECAR_TOKEN env channel; the Host/Origin middleware
+    # closes rebinding / drive-by-webpage access regardless. This is wired ONLY
+    # here — the product server (gaia.api.openai_server) mounts the same router
+    # unchanged.
+    auth_config = caller_auth.config_from_env()
+    caller_auth.configure(auth_config)
+    app.add_middleware(caller_auth.HostOriginMiddleware)
+    if auth_config.token:
+        log.info(
+            "Email sidecar: caller authentication ENABLED "
+            "(per-session bearer token required on /v1/email/* requests)."
+        )
+    else:
+        log.warning(
+            "Email sidecar: caller authentication DISABLED — no %s in the "
+            "environment. This is intended for LOCAL DEVELOPMENT only; the "
+            "shipped product spawns the sidecar with a per-session token. "
+            "Host/Origin protection is still enforced.",
+            caller_auth.TOKEN_ENV_VAR,
+        )
+
     @app.get("/health", include_in_schema=True)
     async def health() -> dict:
         return {"status": "ok", "service": "gaia-agent-email"}
@@ -93,14 +120,20 @@ def build_app():
         # request/response schema); agentVersion is the package build.
         return {"apiVersion": SCHEMA_VERSION, "agentVersion": agent_version}
 
-    app.include_router(email_router)
-    app.include_router(connector_router)
+    # The token gate applies to EVERY mailbox-touching router (the exempt
+    # probe/HTML paths are skipped inside the dependency). Connector routes
+    # (configure / complete-OAuth / disconnect) and the stateful agent surface
+    # can both act on the mailbox connection, so they are gated too — a local
+    # process must present the session token to reach them (#1706).
+    token_gate = [Depends(require_caller_token)]
+    app.include_router(email_router, dependencies=token_gate)
+    app.include_router(connector_router, dependencies=token_gate)
     # Stateful agent surface (/v1/email/agent/*): hosts a session-scoped
     # EmailTriageAgent with memory + tool-confirmation so the Agent UI can drive
     # the full conversational agent over HTTP instead of importing it in-process.
     # Router import is light; the heavy agent/memory imports are deferred to the
     # first session build.
-    app.include_router(agent_router)
+    app.include_router(agent_router, dependencies=token_gate)
     return app
 
 

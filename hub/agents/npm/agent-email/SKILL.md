@@ -144,7 +144,9 @@ The sidecar serves **same-origin only — no CORS**. A renderer on a different o
 
 ```ts
 import { EmailClient } from "@amd-gaia/agent-email/client";
-const client = new EmailClient({ baseUrl: "http://127.0.0.1:8131" });
+// Pass the sidecar's session token (from sidecar.authToken in the main process,
+// forwarded over IPC) — without it every /v1/email/* call is 401.
+const client = new EmailClient({ baseUrl: "http://127.0.0.1:8131", authToken });
 ```
 
 ## Stateful agent surface (`/v1/email/agent/*`, 0.4.0)
@@ -218,6 +220,11 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
 
 ## Gotchas (read before debugging)
 
+- **Every `/v1/email/*` call needs the session token** (#1706). `sidecar.client`
+  carries it automatically; a client you construct yourself must pass `authToken`
+  (from `sidecar.authToken`) or every call is **401**. Non-loopback `Host` → 400,
+  non-loopback browser `Origin` → 403. `/health` · `/version` · `/v1/email/spec` ·
+  `/v1/email/playground` are exempt.
 - **`health()` is liveness-only.** A green `/health` means the REST surface is up,
   NOT that triage will work. The real readiness signal is a `triage` returning 200.
 - **HTTP 502 from `triage`** → Lemonade isn't running/reachable, or the model isn't

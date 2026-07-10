@@ -379,6 +379,14 @@ isolated, and dogfoods the exact binary shipped to integrators.
   third-party integrators consume, so the UI
   exercises the real product. The sidecar's connector OAuth **write** routes are
   never exposed (all grant writes stay on the backend's single-writer path).
+  Because the sidecar can send mail as you, it requires a **per-session bearer
+  token** on every `/v1/email/*` request (#1706, `401` without it) plus a loopback
+  Host/Origin allowlist (`400`/`403`) — closing local-process and DNS-rebinding
+  access. The UI backend mints the token, hands it to the sidecar over a private
+  env channel, and replays it on every proxied call, so this is transparent in the
+  UI; integrators embedding the frozen sidecar get the same token wired by
+  `startSidecar`. See
+  [Email Integration → Authentication](/guides/email-integration#authentication).
 - **The in-app email chat agent** (`agent_type=email`) — the local-LLM tool loop
   still runs in the UI backend, but every tool is a thin HTTP call to the
   sidecar. The chat **pre-scan card** runs through the sidecar's `/prescan` route
