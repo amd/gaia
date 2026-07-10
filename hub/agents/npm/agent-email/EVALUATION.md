@@ -141,38 +141,17 @@ are in [`SCORECARD.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/age
 
 ## Reproducing the scorecard
 
-Runs the real eval on a source checkout of [`amd/gaia`](https://github.com/amd/gaia).
-It needs a **Lemonade Server on AMD Ryzen AI hardware** (Strix Halo recommended);
-the npm package alone does not ship the corpus or harness.
+The **exact, version-stamped command** that produced the current numbers lives in
+[`SCORECARD.md` → *Reproduction*](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SCORECARD.md#reproduction).
+It is auto-generated with that run's model, corpus, and limit, so it always matches
+the published score — this guide deliberately does **not** duplicate it (a hand-copy
+would drift). Run that block from a source checkout of
+[`amd/gaia`](https://github.com/amd/gaia); it installs the eval extras, starts a
+Lemonade Server, and builds the corpus from the committed seed before running the
+benchmark. You need **AMD Ryzen AI hardware** (Strix Halo recommended) — the npm
+package alone ships neither the corpus nor the harness.
 
-```sh
-# 1. Install the eval extras and start the LLM backend (separate shell).
-uv pip install -e ".[dev,eval,api]"
-lemonade-server serve
-
-# 2. Build the corpus from the committed seed (generated artifacts, gitignored).
-python tests/fixtures/email/generate_mbox.py
-
-# 3. Run the benchmark over the synthetic corpus (no live mailbox, no LLM judge).
-PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \
-GAIA_AGENT_TOOL_TIMEOUT=1800 \
-PYTHONPATH="$(pwd)" \
-gaia eval benchmark \
-    --model Gemma-4-E4B-it-GGUF \
-    --mbox-path tests/fixtures/email/synthetic_inbox.mbox \
-    --ground-truth tests/fixtures/email/ground_truth.json \
-    --limit 250 \
-    --output-dir /tmp/email-eval
-
-# 4. Regenerate SCORECARD.md from the run.
-PYTHONPATH="$(pwd)" \
-python hub/agents/python/email/packaging/gen_scorecard.py \
-    --benchmark-dir /tmp/email-eval \
-    --ground-truth tests/fixtures/email/ground_truth.json \
-    --limit 250
-```
-
-Notes:
+A few things worth knowing before you run it:
 
 - **`GAIA_AGENT_TOOL_TIMEOUT=1800`** — full-corpus triage is one long tool call
   (~17 min on a 4B local model); a lower timeout abandons it mid-run and scores 0
