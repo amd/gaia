@@ -127,6 +127,12 @@ env:
   # Bare host (no /api/v1): the LemonadeClient normalizes the suffix itself.
   LEMONADE_BASE_URL: "http://127.0.0.1:13305"
   NO_PROXY: "localhost,127.0.0.1"
+  # `gaia eval benchmark` is the installed console script; it imports the
+  # synthetic-corpus backend via `from tests.fixtures.email.fake_gmail import
+  # FakeGmailBackend`. The repo root must be on sys.path or it dies with
+  # `ModuleNotFoundError: No module named 'tests'`. Set job-wide so every eval
+  # step is covered — mirrors email_scorecard_refresh.yml.
+  PYTHONPATH: ${{ github.workspace }}
 
 jobs:
   email-eval:
