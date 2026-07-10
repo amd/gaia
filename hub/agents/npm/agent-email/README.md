@@ -202,13 +202,13 @@ On a fresh machine the binary boots fine, but the first `triage` returns **HTTP
 502** until Lemonade and the model are in place. `health()` is **liveness-only** — a
 green `/health` means the REST surface is up, not that triage will work.
 
-To check *actual* readiness before your first `triage`, call **`GET
-/v1/email/init`** (#1795) — it probes Lemonade reachability + version + the triage
-model and returns `200` when ready, `503` with an actionable `hint` when not (no
-client wrapper yet; use `fetch` with the exported `InitResponse` type — and attach
-the per-session bearer token, `Authorization: Bearer ${sidecar.authToken}`, since a
-raw `fetch` doesn't inject it like the client methods do). `POST
-/v1/email/init` can then ask the running Lemonade to pull the model, streaming
+To check *actual* readiness before your first `triage`, call **`client.init()`**
+(`GET /v1/email/init`, #1795) — it probes Lemonade reachability + version + the
+triage model and returns the `InitResponse` on both the ready (`200`) and
+not-ready (`503`) paths, so branch on `.ready` / read `.hint` instead of catching an
+error. As a client method it attaches the per-session bearer token for you (a raw
+`fetch` would have to add `Authorization: Bearer ${sidecar.authToken}` itself).
+`POST /v1/email/init` can then ask the running Lemonade to pull the model, streaming
 progress. See [`SPEC.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md) → *Readiness vs liveness*.
 
 ## Interface

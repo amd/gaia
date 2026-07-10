@@ -226,10 +226,10 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
   non-loopback browser `Origin` → 403. `/health` · `/version` · `/v1/email/spec` ·
   `/v1/email/playground` are exempt.
 - **`health()` is liveness-only.** A green `/health` means the REST surface is up,
-  NOT that triage will work. For real readiness call **`GET /v1/email/init`**
-  (#1795) — it probes Lemonade + the triage model and returns `200` when ready,
-  `503` + an actionable `hint` when not (no client wrapper yet; `fetch` it, the
-  `InitResponse` type is exported). `POST /v1/email/init` streams a model-pull.
+  NOT that triage will work. For real readiness call **`init()`** (`GET
+  /v1/email/init`, #1795) — it probes Lemonade + the triage model and returns the
+  `InitResponse` on both the ready (`200`) and not-ready (`503`) paths, so branch on
+  `.ready` / read `.hint`. `POST /v1/email/init` streams a model-pull (no wrapper yet).
 - **HTTP 502 from `triage`** → Lemonade isn't running/reachable, or the model isn't
   pulled. It is not a bug in this package.
 - **Addresses are objects, not strings.** `to` (and `triage`'s `from` / `principal`)
