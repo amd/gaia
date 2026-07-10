@@ -1,17 +1,11 @@
----
-title: "Email Triage Contract Schema"
----
+# Email Triage Contract Schema
 
-<Info>
-  **Source Code:** [`hub/agents/python/email/gaia_agent_email/contract.py`](https://github.com/amd/gaia/blob/main/hub/agents/python/email/gaia_agent_email/contract.py)
-</Info>
-
-<Note>
-**Component:** Email request/response contract (issue #1262)
-**Module:** `gaia_agent_email.contract`
-**Validation:** pydantic v2
-**Schema version:** `2.2`
-</Note>
+> **Source code:** [`gaia_agent_email/contract.py`](gaia_agent_email/contract.py)
+>
+> **Component:** Email request/response contract (issue #1262)
+> **Module:** `gaia_agent_email.contract`
+> **Validation:** pydantic v2
+> **Schema version:** `2.2`
 
 ---
 
