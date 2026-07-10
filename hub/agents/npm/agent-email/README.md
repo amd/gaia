@@ -202,10 +202,11 @@ On a fresh machine the binary boots fine, but the first `triage` returns **HTTP
 502** until Lemonade and the model are in place. `health()` is **liveness-only** — a
 green `/health` means the REST surface is up, not that triage will work.
 
-To check *actual* readiness before your first `triage`, call **`GET
-/v1/email/init`** (#1795) — it probes Lemonade reachability + version + the triage
-model and returns `200` when ready, `503` with an actionable `hint` when not (no
-client wrapper yet; use `fetch` with the exported `InitResponse` type). `POST
+To check *actual* readiness before your first `triage`, call **`init()`** (`GET
+/v1/email/init`, #1795) — it probes Lemonade reachability + version + the triage
+model and returns `{ ready, hint }` (`ready: false` with an actionable `hint` when
+triage can't run yet). The wrapper returns the `InitResponse` on both the ready and
+not-ready paths, so branch on `.ready` rather than catching an error. `POST
 /v1/email/init` can then ask the running Lemonade to pull the model, streaming
 progress. See [`SPEC.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md) → *Readiness vs liveness*.
 
@@ -398,7 +399,7 @@ while a `send` transmits to your mail provider by definition. Press Ctrl+C to st
 | Symptom | Cause & fix |
 |---------|-------------|
 | `triage()` returns **HTTP 502** | Lemonade isn't running or the model isn't pulled. Start it (`lemonade-server serve`) and provision the model (`gaia init`). Not a bug in this package. |
-| `/health` is green but `triage` fails | `health()` is **liveness-only** — it doesn't check Lemonade or the model. Use `GET /v1/email/init` for real readiness (it probes Lemonade + the model; `503` + `hint` when not ready). |
+| `/health` is green but `triage` fails | `health()` is **liveness-only** — it doesn't check Lemonade or the model. Call `init()` for real readiness (it probes Lemonade + the model and returns `{ ready, hint }` — `ready: false` with a `hint` when triage can't run yet). |
 | `npm install` fails with `UNABLE_TO_GET_ISSUER_CERT` | Corporate TLS proxy. Reinstall with Node's system CA store: `NODE_OPTIONS=--use-system-ca npm install` (Node ≥ 22). |
 | `require(...)` throws `ERR_REQUIRE_ESM` | The package is ESM-only. Use `import`, or `await import("@amd-gaia/agent-email")` from CommonJS. |
 | Sidecar process lingers after exit | Auto-cleanup reaps it on exit/crash/signal by default; a lingering sidecar means `autoCleanup: false` (call `shutdown(sidecar)` yourself) or a hard `SIGKILL` of the host. |
