@@ -62,25 +62,31 @@ detected by a `release_agent_<id>.yml` workflow, a shipped `SCORECARD.md`, or a 
 
 ## Synthesis → one triage issue + child issues
 
-A synthesis job collects the five structured outputs, dedupes against already-open
-`weekly-audit` issues, ranks by severity (**🔴 high · 🟠 medium · 🟡 low** — no green;
-green reads as "pass"), and files:
+A synthesis job collects the five structured outputs, reduces them to the verified new set,
+ranks by severity (**🔴 high · 🟠 medium · 🟡 low** — no green; green reads as "pass"), and files:
 
-- **Parent triage issue** (`weekly-audit`): a section for **every** dimension with a
-  finding, in fixed order (Security, Correctness, Features, Docs, Tests), each finding
-  grouped under the dimension it *declares* (the synthesis never re-buckets). Broken
-  behavior always outranks a missing test.
+- **Parent triage issue** (`weekly-audit`): opens with a one-line tally (new/low/suppressed
+  counts) for trend, then a section for **every** dimension with a finding, in fixed order
+  (Security, Correctness, Features, Docs, Tests), each finding grouped under the dimension it
+  *declares* (never re-bucketed). Each run **supersedes and closes the previous parent** so
+  they don't pile up.
 - **Per-finding child issues** for **🔴/🟠 only** — 🟡 (low) findings are listed in the
-  parent, not filed as separate issues, to cap tracker churn. Children carry no auto-fix
-  label; a maintainer promotes one by applying **`bug`**, and the existing `auto-fix` job
-  (`claude.yml`) opens the PR. No new PR-creation code — humans gate every code change.
+  parent, not filed separately, to cap churn. Each child carries its `evidence` and an
+  **auto-fixable** flag; a maintainer promotes one with **`bug`** (→ existing `auto-fix`
+  job), or permanently silences it with **`audit-wontfix`**. No new PR-creation code.
+
+**Precision & lifecycle** (what makes it trustworthy over time):
+- **Verify before file**: dimensions must carry `evidence` (a read quote) and confirm the
+  problem isn't already handled; synthesis drops 🔴/🟠 findings whose evidence is thin.
+- **Cross-dimension dedup within a run**: one root cause = one issue, even if two lenses flag it.
+- **Permanent suppression**: a finding whose key sits on an `audit-wontfix` issue never re-files.
 
 ## Invariants (see the `weekly-audit-patterns` skill)
 
 - **Dedup key** = `<dimension>:<path>:<symbol-or-section>` — a function/class name or doc
   heading, **never a line number** (line numbers move and re-file the finding every week).
-  Embedded as `<!-- audit-key: KEY -->` in each child body; synthesis skips any key that
-  already has an open child.
+  Embedded as `<!-- audit-key: KEY -->` in each child body; synthesis skips any key already
+  on an *open* `weekly-audit` issue OR on any `audit-wontfix` issue (accepted debt).
 - **Security stays private**: full detail to the job run log only; a redacted stub in
   `findings-security.json`; the public issue shows a count + run-log pointer + `@kovtcharov-amd`.
 - **Skip-if-empty**: normal mode exits before any Claude call on a no-change week.

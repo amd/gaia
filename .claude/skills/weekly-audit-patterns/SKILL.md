@@ -53,22 +53,43 @@ missing tests on non-risk logic, cosmetic gaps. The synthesis emits a section pe
 dimension (fixed order: Security, Correctness, Features, Docs, Tests), grouping each
 finding under the dimension it **declares** — it never re-buckets.
 
-## Child issues are 🔴/🟠 only
+## Child issues are 🔴/🟠 only, and tagged auto-fixable
 
 Only high/medium findings get a child issue (and thus one-click `bug`→auto-fix promotion).
 🟡 (low) findings are listed in the parent triage issue and nowhere else — this caps
 tracker churn (the first deep run filed 19 children, ~13 of them low-value coverage nits).
+Each finding carries an `auto_fixable` boolean; the child body says whether applying `bug`
+will let auto-fix land it (locatable/small) or whether it needs a human (a test suite, a
+refactor) — so maintainers don't promote something auto-fix can't handle.
 
-## Dedup key — the single biggest usability risk
+## Precision gate — a false finding erodes the whole audit
+
+Recall is cheap; trust is not. Each finding must carry `evidence` (a concrete quote or
+`path:line` the dimension actually read), and the dimension prompt requires verifying the
+problem is present AND not already handled elsewhere before reporting. The synthesis
+**drops any 🔴/🟠 finding whose evidence doesn't substantiate its title**, and does an
+**intra-run cross-dimension dedup** (a stubbed command flagged by both `docs` and
+`correctness` is ONE issue, not two — keep the most severe, note the other lens).
+
+## Dedup + suppression — the single biggest usability risk
 
 Each finding carries `dedup_key = <dimension>:<repo-relative-path>:<symbol-or-section>`.
-**The symbol is a function/class name or doc heading — NEVER a line number.** Line
-numbers move every time the file changes, so a line-based key re-files the same finding
-every week and the triage issue is unusable by week 3. The key is embedded in each
-child issue body as `<!-- audit-key: KEY -->`; the synthesis job lists open
-`weekly-audit` issues, parses those markers, and **skips any finding whose key already
-has an open child**. Closing a child (fixed or wontfix) lets it resurface only if still
-present. Line numbers may appear in the human-readable title/why, never in the key.
+**The symbol is a function/class name or doc heading — NEVER a line number** (line numbers
+move, so a line-based key re-files the same finding every week and the issue is unusable by
+week 3). The key is embedded in each child body as `<!-- audit-key: KEY -->`. Synthesis
+skips a finding whose key is in EITHER set:
+- **already-filed** — keys on any *open* `weekly-audit` issue (avoid duplicates).
+- **suppressed-forever** — keys on any `weekly-audit` issue also labeled **`audit-wontfix`**
+  (open or closed). This is how you permanently silence accepted debt: close a child with
+  `audit-wontfix` and it never comes back. Without this, wontfix findings resurface every
+  deep run forever.
+
+## Parent triage issues roll over
+
+Each run files a NEW parent (`Weekly audit — <mode> — <run_id>`) and then **closes the
+previous open parent** with a "Superseded by #N" comment — otherwise ~52 stale parents pile
+up per year. Only the parent rolls over; child issues stay open (they're the actionable
+units). The parent opens with a one-line tally (new/low/suppressed counts) for trend.
 
 ## Security findings stay private
 

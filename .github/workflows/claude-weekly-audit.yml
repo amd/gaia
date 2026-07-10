@@ -45,7 +45,7 @@
 # (CLAUDE_CODE_OAUTH_TOKEN, covered by the monthly claude-auth-canary.yml). Runs on the
 # Claude Max subscription pool, so there is no per-run dollar cost — only shared quota.
 #
-# COST CEILING: 5 dimension jobs (--max-turns 30) + 1 synthesis job (--max-turns 25) =
+# COST CEILING: 5 dimension jobs (--max-turns 30) + 1 synthesis job (--max-turns 32) =
 # a known per-run ceiling. The dimension matrix runs `max-parallel: 1` (serialized) so
 # the run is a steady drip rather than a 5-job burst — this keeps it under the Max
 # subscription's rolling (5-hour) rate limit, at the cost of a longer wall-clock.
@@ -288,6 +288,8 @@ jobs:
                 "symbol": "function_name or ClassName or a doc heading — NOT a line number",
                 "title": "one-line statement of the problem",
                 "why": "one sentence: the concrete impact / what breaks",
+                "evidence": "a direct quote or `path:line` you READ that proves the claim — enough for a reviewer to verify without re-deriving. e.g. \"auditStore.ts:88 sets `rolledBack = true` with a `// TODO: call IPC` and no IPC call\"",
+                "auto_fixable": true | false,
                 "dedup_key": "${{ matrix.dimension }}:<repo-relative-path>:<symbol-or-section>"
               }
             ]}
@@ -297,9 +299,23 @@ jobs:
             function/class name or doc heading, NEVER a line number (line numbers move and
             would re-file the same finding every week). Line numbers may appear in `title`/`why`,
             never in the key. **`title`, `path`/`symbol`, and `dedup_key` must all point at the
-            SAME file and symbol** — don't let the title name one file and the key another. Report
-            only findings you are confident are real; skip anything CI's `python util/lint.py --all`
-            already enforces (black/isort/whitespace).
+            SAME file and symbol** — don't let the title name one file and the key another.
+            `auto_fixable` = true only if the fix is locatable and small (~1-3 files, targeted,
+            no design decision) so the `bug`→auto-fix path can land it; false if it needs a human
+            (writing a test suite, a refactor, a design call).
+
+            ## Verify before you report — precision beats recall
+            One false finding erodes trust in the whole audit. Before you write a finding:
+            1. **Open the cited file and confirm the problem is actually present** — don't report
+               from a filename or a grep hit alone.
+            2. **Rule out that it's already handled** — the error re-raised two lines down, a test
+               in a different directory, the "missing" doc living under another path. A finding
+               that's already covered is a false positive; drop it.
+            3. Fill `evidence` with what you actually read. If you cannot produce concrete
+               evidence, you have not verified it — **omit the finding.**
+            Skip anything CI's `python util/lint.py --all` already enforces (black/isort/whitespace),
+            and skip anything you are not confident is real. A shorter, fully-substantiated list is
+            the goal — never pad.
 
             ## Security lens — details stay PRIVATE (this overrides the output rule above)
             If YOUR LENS IS security: a GitHub Actions run has no private DM channel and this
@@ -348,14 +364,17 @@ jobs:
         with:
           path: audit-findings
 
-      - name: Ensure weekly-audit label exists
+      - name: Ensure labels exist
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh label create weekly-audit \
-            --color 5319e7 \
+          gh label create weekly-audit --color 5319e7 \
             --description "Proactive weekly Claude audit finding" \
             2>/dev/null && echo "created weekly-audit label" || echo "weekly-audit label already exists"
+          # audit-wontfix permanently suppresses a finding — synthesis skips its key forever.
+          gh label create audit-wontfix --color cccccc \
+            --description "Accepted debt — weekly audit will never re-file this finding" \
+            2>/dev/null && echo "created audit-wontfix label" || echo "audit-wontfix label already exists"
 
       - name: Synthesize and file the triage issue
         id: claude
@@ -379,19 +398,31 @@ jobs:
                subdir, e.g. `audit-findings/findings-docs/findings-docs.json`). Missing or empty
                files are fine — a dimension may have found nothing or crashed.
             2. Read `CLAUDE.md` → "Issue Response Guidelines" for the tone/format to write in.
-            3. List already-open audit findings so you don't re-file them:
+            3. Build the **already-filed** key set (findings not to re-file):
                `gh issue list --repo ${{ github.repository }} --label weekly-audit --state open --json number,title,body --limit 200`
-               Each open child issue body carries a hidden `<!-- audit-key: KEY -->` marker.
-               Collect those KEYs into the "already filed" set.
+               Each body carries a hidden `<!-- audit-key: KEY -->` marker — collect those KEYs.
+            4. Build the **suppressed-forever** key set (accepted debt):
+               `gh issue list --repo ${{ github.repository }} --label weekly-audit --label audit-wontfix --state all --json body --limit 200`
+               Collect their `audit-key` KEYs too. These are permanently dismissed.
+            5. Find the **previous parent** to supersede: the currently-open issue whose title
+               starts `Weekly audit —` (there should be at most one). Note its number.
 
-            ## Dedup (the single biggest correctness risk)
-            A finding is a duplicate iff its `dedup_key` already appears in an open
-            `weekly-audit` issue's `<!-- audit-key: ... -->` marker. Skip duplicates entirely.
-            Match on the exact key string — never on line numbers or prose similarity.
-            If, after dedup, there are ZERO new findings, post NOTHING and exit cleanly.
+            ## Dedup + verify (the single biggest quality risk)
+            Reduce the raw findings to the NEW, real set, in this order:
+            1. **Suppress + skip** any finding whose `dedup_key` is in the already-filed OR the
+               suppressed-forever set. Match the exact key string — never line numbers or prose.
+            2. **Cross-dimension dedup within THIS run:** if two findings from different dimensions
+               describe the same root cause (same file + symbol/area), keep the single most-severe
+               one, mention the other lens in its body, and file just ONE child. (A stubbed command
+               is often flagged by both `docs` and `correctness` — that's one issue, not two.)
+            3. **Evidence gate:** drop any 🔴/🟠 finding whose `evidence` is missing or does not
+               actually substantiate its `title`. If evidence looks thin, spot-check by reading the
+               cited `path`/`symbol` yourself before filing — a false issue erodes the whole audit.
+            If, after all of the above, there are ZERO new findings, post NOTHING, still run the
+            "supersede" step below to close the stale parent, and exit cleanly.
 
             ## File per-finding CHILD issues — 🔴 high / 🟠 medium ONLY (non-security)
-            Open a child issue only for NEW, confirmed, non-security findings whose severity is
+            Open a child issue only for NEW, verified, non-security findings whose severity is
             🔴 or 🟠. **🟡 (low) findings get NO child issue** — they are listed in the parent
             only (they are nits and don't warrant tracker churn or one-click promotion). Open the
             child WITHOUT any auto-fix trigger label (do NOT add `bug`). Write the body to a temp
@@ -402,14 +433,17 @@ jobs:
             <one-paragraph why-this-matters: what's wrong + the concrete impact>
 
             **Where:** `path` · `symbol`
+            **Evidence:** <the finding's `evidence` — the concrete proof a reviewer can check>
             **Dimension:** <the finding's own dimension>   **Severity:** 🔴 high / 🟠 medium
+            **Auto-fixable:** yes — apply `bug` to let auto-fix open the PR  |  no — needs a human
 
-            To turn this into a PR: a maintainer applies the `bug` label and the existing
-            auto-fix job opens the fix PR. This issue is intentionally not auto-triggered.
+            Not acting on this? Close it with the `audit-wontfix` label and the audit will never
+            re-file it. Applying `bug` instead hands it to the existing auto-fix job.
 
             <!-- audit-key: <the finding's dedup_key> -->
             ```
-            Capture each child issue number to reference from the parent.
+            Set the Auto-fixable line from the finding's `auto_fixable` field. Capture each child
+            issue number to reference from the parent.
 
             ## File ONE parent TRIAGE issue
             Title: `Weekly audit — ${{ needs.preflight.outputs.mode }} — ${{ github.run_id }}`.
@@ -431,6 +465,8 @@ jobs:
             ## Tests (1)
             - [ ] 🟡 `perf_analysis.py` has no coverage
             ```
+            Start the parent body with a one-line tally so trend is visible at a glance, e.g.
+            `New this run: 4 (🔴 1 · 🟠 3) · low (in-parent only): 2 · suppressed as dup/wontfix: 9`.
             **Security section — count + pointer ONLY.** If there were any security findings,
             render exactly one line at the top and NOTHING else about them (no file, no symbol,
             no detail):
@@ -438,12 +474,18 @@ jobs:
             with the run-log link: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}.
             NEVER put a security `file:line`, exploit, or payload in this issue.
 
+            ## Supersede the previous parent (tracker hygiene — always run this)
+            After filing the new parent (or, on a zero-new-findings run, instead of filing one),
+            close the previous parent you found in First-actions step 5 so triage issues don't
+            pile up: `gh issue close <prev-parent-#> --repo ${{ github.repository }} --comment "Superseded by #<new-parent-# or 'this week — no new findings'>."`
+            Child issues stay OPEN — they are the actionable units; only the parent rolls over.
+
             ## Rules
             - No Claude attribution anywhere (no "Generated with", no Co-Authored-By).
             - Do not open any PR and do not apply the `bug` label — humans gate every code change.
             - Lead with the finding; keep each line to one sentence (CLAUDE.md issue style).
           claude_args: |
-            --max-turns 25
+            --max-turns 32
             --model ${{ env.AUDIT_MODEL }}
             --allowedTools Read,Grep,Glob,Bash
 
