@@ -7,10 +7,10 @@ description: "Connect GAIA agents to your accounts and external services."
 ## What connectors do
 
 Connectors give GAIA agents permission to act on your behalf — read your
-Gmail, list your GitHub issues, post to Slack, query a Postgres
-database, and so on. You configure each connector **once**, then grant
-individual agents the specific scopes they need. An agent can never see
-or use a credential you haven't granted it.
+Gmail, list your GitHub issues, search the web with Tavily, and so on.
+You configure each connector **once**, then grant individual agents the
+specific scopes they need. An agent can never see or use a credential
+you haven't granted it.
 
 There are two flavors:
 
@@ -46,27 +46,36 @@ never writes a token to a plaintext file.
   <Card title="GitHub" icon="github" href="/connectors/github">
     Repos, PRs, issues, and Actions via the official GitHub MCP server.
   </Card>
+  <Card title="Tavily" icon="globe" href="/connectors/tavily">
+    Web search and content extraction for agents via the Tavily MCP server.
+  </Card>
 </CardGroup>
 
-## Coming soon
+## Also available today
 
-The connectors below ship in the catalog and work today, but their
-setup pages are still being written. Track progress and request
-priorities at [issue #937](https://github.com/amd/gaia/issues/937).
+Two more MCP servers ship in the catalog and work now. Neither needs an
+API key, so there's no dedicated setup page — enable them per agent from
+Settings → Connections or the CLI:
 
-In the meantime, the **Configure** form for each connector includes
-inline help with where to obtain the required token or API key.
+- **Git** — `mcp-git`: `log`, `diff`, `status`, and `blame` for a local
+  repository.
+- **Memory** — `mcp-memory`: a knowledge-graph scratchpad agents can
+  persist to across a conversation.
 
-- **Calendars** — `mcp-google-calendar`
-- **Email** — `mcp-gmail`, `mcp-sendgrid`
-- **Productivity** — `mcp-notion`, `mcp-linear`, `mcp-jira`,
-  `mcp-slack`
-- **Developer tools** — `mcp-git`, `mcp-postgres`,
-  `mcp-desktop-commander`
-- **Web** — `mcp-fetch`, `mcp-brave-search`, `mcp-context7`,
-  `mcp-playwright`, `mcp-microsoft-learn`
-- **Other** — `mcp-spotify`, `mcp-stripe`, `mcp-memory`,
-  `mcp-filesystem`, `mcp-windows-automation`
+Run `gaia connectors list` to see every connector the catalog currently
+ships — it is the source of truth for what you can configure today.
+
+## On the roadmap
+
+More connectors are planned but are **not yet in the catalog**, so
+`gaia connectors list` will not show them and they can't be configured
+yet. Track progress and request priorities at
+[issue #937](https://github.com/amd/gaia/issues/937):
+
+- **Email & calendar** — dedicated Gmail / Outlook / SendGrid servers
+- **Productivity** — Notion, Linear, Jira, Slack
+- **Developer tools** — Postgres, Playwright
+- **Web** — Brave Search, Context7
 
 ## Try it: the Connectors Demo agent
 
@@ -112,6 +121,12 @@ Agents that don't have a grant for a scope they request will fail with
 `AGENT_NOT_GRANTED` and tell you exactly what scope to add. The same
 flow protects you whether the agent is built-in, custom, or installed
 from the Agent Hub.
+
+For **MCP-server** connectors (GitHub, Tavily, …) a grant isn't enough
+on its own — the agent also needs an **activation** before those tools
+appear in its prompt (`gaia connectors activations activate <id>
+<agent>`). OAuth connectors like Google don't use activations. See the
+[connections security model](/security/connections) for the full model.
 
 ## See also
 

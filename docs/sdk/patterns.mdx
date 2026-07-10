@@ -241,14 +241,14 @@ from gaia.agents.hello.agent import HelloAgent, HelloAgentConfig
 
 def test_hello_agent_registers_now_tool(mock_lemonade_client):
     agent = HelloAgent(config=HelloAgentConfig())
-    assert "now" in agent.tools
+    assert "now" in agent._tools_registry
 
 
 def test_hello_agent_integration(require_lemonade):
     # Skips automatically when Lemonade isn't running.
     agent = HelloAgent(config=HelloAgentConfig())
     result = agent.process_query("What time is it?")
-    assert result["answer"]
+    assert result["result"]
 ```
 
 Fixtures live in `tests/conftest.py`. See [`docs/sdk/testing.mdx`](/sdk/testing) for more.

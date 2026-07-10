@@ -38,6 +38,18 @@ _RESERVED_IDS = {"agent", "chat", "gaia", "builder"}
 # Allowed characters for a generated agent ID.
 _SAFE_ID_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,50}[a-z0-9])?$")
 
+# A one-shot creation request names the agent inline ("named X", "call it Y").
+# When it does, a greeting/question first reply is a bug — the builder should
+# call create_agent immediately (see the system prompt's Fast path).
+_NAMED_REQUEST_RE = re.compile(
+    r"\b(?:named|called|call\s+it)\s+['\"]?[\w-]", re.IGNORECASE
+)
+
+
+def _query_names_agent(query: str) -> bool:
+    """Return True if *query* already supplies an agent name to create."""
+    return bool(query) and bool(_NAMED_REQUEST_RE.search(query))
+
 
 def _name_to_class_name(name: str) -> str:
     """Convert a human name to a valid Python class name.
@@ -246,6 +258,9 @@ class BuilderAgent(Agent):
 
         final_answer: Optional[str] = None
         steps_taken = 0
+        # One-shot guard: nudge at most once if the model stalls with a
+        # greeting/question when the request already named the agent.
+        nudged_missing_tool = False
 
         while steps_taken < steps_limit and final_answer is None:
             steps_taken += 1
@@ -358,6 +373,29 @@ class BuilderAgent(Agent):
                                 "You did not actually call create_agent. "
                                 "Output ONLY the bare JSON tool call, no prose, "
                                 "no code fences."
+                            ),
+                        }
+                    )
+                    # Do not set final_answer — the loop will continue
+                elif not nudged_missing_tool and _query_names_agent(
+                    self._current_query
+                ):
+                    # The request already named the agent, yet the model greeted
+                    # or asked a question instead of calling the tool (#1428-style
+                    # stall). Nudge once to force the bare tool call, then loop.
+                    nudged_missing_tool = True
+                    logger.warning(
+                        "BuilderAgent: name present but no create_agent call; "
+                        "injecting corrective user turn"
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "The request already includes the agent name and "
+                                "everything you need. Do NOT greet or ask "
+                                "questions. Output ONLY the bare create_agent JSON "
+                                "tool call now, no prose, no code fences."
                             ),
                         }
                     )

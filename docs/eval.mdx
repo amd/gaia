@@ -39,7 +39,7 @@ The benchmark runs as **two distinct processes** connected over MCP: a Python or
 ### System Overview
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#A87B2D', 'edgeLabelBackground':'#ffffff', 'fontFamily':'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
     YAML(["eval/scenarios/*.yaml"]) --> RUNNER(["AgentEvalRunner\n(Python orchestrator)"])
     MANIFEST(["eval/corpus/manifest.json"]) --> RUNNER
@@ -95,7 +95,7 @@ flowchart TD
 Each `claude -p` subprocess runs a 6-phase protocol. The eval agent has access to the Agent UI MCP server tools and uses them to drive a real session:
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#A87B2D', 'edgeLabelBackground':'#ffffff', 'fontFamily':'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
     P1(["Phase 1 · Setup\nsystem_status()\ncreate_session()\nindex_document() ×N"]) --> P2(["Phase 2 · Simulate + Judge\n(turn loop)"])
 
@@ -160,7 +160,7 @@ effective_timeout = max(base_timeout,
 After each subprocess returns its JSON result, the runner validates and deterministically overwrites the eval agent's arithmetic before writing the trace file:
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#A87B2D', 'edgeLabelBackground':'#ffffff', 'fontFamily':'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
     DIM(["7 Dimension Scores per Turn\ncorrectness · tool_selection · context_retention\ncompleteness · efficiency · personality · error_recovery"]) -->|"weighted sum\n(_SCORE_WEIGHTS)"| PT(["Per-Turn Score\n(0–10)"])
 
@@ -204,7 +204,7 @@ The recomputation applies in three passes:
 When `--fix` is passed, the runner repeats a diagnose-repair-retest cycle:
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#A87B2D', 'edgeLabelBackground':'#ffffff', 'fontFamily':'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
     A(["Phase A · Initial Eval\nall scenarios"]) --> CHK{"judged_pass_rate\n≥ target?\nno failures?"}
     CHK -->|"yes"| DONE(["Done"])

@@ -97,7 +97,7 @@ def __init__(
     claude_model: str = "claude-sonnet-4-20250514",
     base_url: Optional[str] = None,
     model_id: str = None,
-    max_steps: int = 20,
+    max_steps: Optional[int] = None,
     debug_prompts: bool = False,
     show_prompts: bool = False,
     output_dir: str = None,
@@ -110,6 +110,7 @@ def __init__(
     max_consecutive_repeats: int = 4,
     min_context_size: int = 32768,
     skip_lemonade: bool = False,
+    device: Optional[str] = None,
 ) -> None:
     """
     Initialize the Agent.
@@ -120,7 +121,8 @@ def __init__(
         claude_model: Model to use when use_claude=True
         base_url: Local LLM server URL (default: from LEMONADE_BASE_URL or http://localhost:13305/api/v1)
         model_id: Model ID for local LLM (default: None — resolves to DEFAULT_MODEL_NAME, currently Gemma-4-E4B-it-GGUF)
-        max_steps: Maximum reasoning iterations (default: 20)
+        max_steps: Maximum reasoning iterations (default: None — resolves to the
+            global default via default_max_steps(), i.e. GAIA_AGENT_MAX_STEPS or DEFAULT_MAX_STEPS)
         debug_prompts: Include prompts in conversation history (default: False)
         show_prompts: Display prompts sent to LLM (default: False)
         output_dir: Directory for JSON output files (default: current directory)
@@ -133,6 +135,8 @@ def __init__(
         max_consecutive_repeats: Max consecutive identical tool calls before stopping (default: 4)
         min_context_size: Minimum context size required for this agent (default: 32768)
         skip_lemonade: Skip Lemonade server initialization (default: False). Use when connecting to a different OpenAI-compatible backend.
+        device: Runtime device selector ('cpu', 'gpu', 'npu') validated against detected
+            hardware at startup; an unavailable device fails loudly (default: None = no check)
     """
 ```
 
@@ -193,11 +197,18 @@ def process_query(
 
     Returns:
         dict: {
-            "answer": str,           # Final answer from agent
-            "steps": int,            # Number of reasoning steps taken
-            "tools_used": List[str], # Tools called during execution
-            "success": bool,         # Whether query completed successfully
-            "error": str             # Error message if success=False
+            "status": str,           # "success" | "failed" | "incomplete"
+            "result": str,           # Final answer from the agent
+            "system_prompt": str,    # System prompt used for this query
+            "conversation": list,    # Full step-by-step conversation trace
+            "steps_taken": int,      # Number of reasoning steps taken
+            "duration": float,       # Total processing time in seconds
+            "input_tokens": int,     # Total input tokens across all steps
+            "output_tokens": int,    # Total output tokens across all steps
+            "total_tokens": int,     # Combined token count
+            "error_count": int,      # Number of errors encountered
+            "error_history": list,   # Full error history
+            # "output_file": str     # Present only when trace=True
         }
     """
     pass
@@ -600,10 +611,10 @@ def test_end_to_end_query():
     agent = TestAgent(silent_mode=True)
     result = agent.process_query("Test query")
 
-    assert "answer" in result
-    assert "steps" in result
-    assert "tools_used" in result
-    assert "success" in result
+    assert "result" in result
+    assert "status" in result
+    assert "steps_taken" in result
+    assert "total_tokens" in result
 
 def test_multiple_tools():
     """Test agent using multiple tools."""

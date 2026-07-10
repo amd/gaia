@@ -98,6 +98,27 @@ def test_provision_verb_documented():
 
 
 # ---------------------------------------------------------------------------
+# Authentication (#1706) — the caller-auth posture must be documented on the
+# spec page so integrators know the sidecar requires a per-session token.
+# ---------------------------------------------------------------------------
+
+
+def test_authentication_section_present():
+    html = _html()
+    assert "Authentication" in html
+    assert "GAIA_EMAIL_SIDECAR_TOKEN" in html
+    assert "Authorization: Bearer" in html
+
+
+def test_authentication_documents_status_codes():
+    html = _html()
+    # Token-missing 401, rebinding Host 400, drive-by Origin 403.
+    assert "401" in html
+    assert "400" in html
+    assert "403" in html
+
+
+# ---------------------------------------------------------------------------
 # Contract field names — sourced from the models so a contract change that
 # drops a field will break this test, not slip through silently.
 # ---------------------------------------------------------------------------

@@ -194,7 +194,7 @@ List available GAIA components with descriptions.
 ## Architecture
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontSize':'16px', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#A87B2D', 'edgeLabelBackground':'#ffffff', 'fontFamily':'system-ui, -apple-system, sans-serif'}}}%%
 graph TD
     A["AI Assistant<br/>(Claude, Cursor, etc.)"] -->|MCP Protocol| B["GAIA MCP Docs Server"]
     B --> C["Doc Index<br/>(Embedded)"]
@@ -302,7 +302,6 @@ gaia mcp docs clear-cache
 ### On First Run
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontSize':'16px', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 sequenceDiagram
     participant User
     participant CLI
@@ -322,7 +321,6 @@ sequenceDiagram
 ### On Query
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontSize':'16px', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 sequenceDiagram
     participant AI as AI Assistant
     participant MCP as MCP Server

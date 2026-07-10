@@ -33,7 +33,7 @@ Use this integration path when you want:
 - **Your own UX and mailbox connection** — your app runs OAuth, owns the tokens, and
   forwards a connection to GAIA so the agent can read/send on the user's behalf.
 - **A structured contract** — a frozen request/response schema (`SCHEMA_VERSION`
-  `2.1`) you can code against, over REST **or** MCP stdio.
+  `2.2`) you can code against, over REST **or** MCP stdio.
 
 ## Architecture
 
@@ -117,6 +117,15 @@ pick one of the entry points below.
     connection is stored in a **machine-global keyring shared by every GAIA surface**, so
     the sidecar's `send` reads it from that shared store. See the package
     [SPEC.md](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md).
+
+    <Note>
+      The frozen sidecar requires a **per-session bearer token** on every
+      `/v1/email/*` request (#1706) — `startSidecar` mints it, hands it to the
+      sidecar over the private `GAIA_EMAIL_SIDECAR_TOKEN` env channel, and binds it
+      to `sidecar.client`, so the snippet above just works. A client you construct
+      yourself must pass `authToken` (read `sidecar.authToken`); calls without it
+      get **HTTP 401**. See [Authentication](#authentication) below.
+    </Note>
   </Tab>
   <Tab title="MCP stdio">
     For MCP-native hosts, launch the agent's **stdio** MCP server (see
@@ -127,6 +136,45 @@ pick one of the entry points below.
     ```
   </Tab>
 </Tabs>
+
+## Authentication
+
+The frozen sidecar binds `127.0.0.1` and can **send mail as the user**, so it
+authenticates its **caller** (#1706). This is separate from the draft→send
+`confirmation_token` (below), which binds a send to one exact message but does not
+identify who is calling.
+
+- **Per-session bearer token.** Every `/v1/email/*` request to the sidecar must
+  carry `Authorization: Bearer <token>` or it is rejected with **HTTP 401**. The
+  token is a cryptographically-random per-session secret the spawning parent hands
+  to the sidecar over the private `GAIA_EMAIL_SIDECAR_TOKEN` env channel.
+- **Host / Origin allowlist.** A non-loopback `Host` header → **HTTP 400**
+  (DNS-rebinding); a non-loopback browser `Origin` → **HTTP 403** (drive-by web
+  page). No permissive CORS is ever sent.
+
+How this maps to the entry points above:
+
+- **Frozen sidecar / npm** — `startSidecar` mints the token, injects it, and binds
+  it to `sidecar.client`, so `sidecar.client.triage(...)` just works. A client you
+  construct yourself must pass `authToken` (from `sidecar.authToken`); forward it to
+  a browser/Electron renderer over your own IPC — never embed it in a page.
+- **GAIA backend (REST)** — the Agent UI backend proxies `/v1/email/*` to a sidecar
+  it spawns and authenticates for you, so your calls to `127.0.0.1:4200` need **no**
+  bearer token; the token is internal to the backend→sidecar hop.
+- **Direct-to-sidecar for local dev** — if you launch the frozen binary yourself,
+  set `GAIA_EMAIL_SIDECAR_TOKEN` and send the matching bearer header. Running it
+  **without** the env var disables the token check (local development only, logged
+  loudly) — the Host/Origin controls still apply.
+
+```ts
+// npm path — the bound client carries the token for you.
+const sidecar = await startSidecar({ binaryPath, port: 8131 });
+await sidecar.client.draft({ to: [{ email: "a@b.com" }], subject: "Re: x", body: "hi" });
+
+// Construct-your-own client (e.g. renderer over IPC) — pass the token explicitly.
+import { EmailClient } from "@amd-gaia/agent-email/client";
+const client = new EmailClient({ baseUrl: sidecar.baseUrl, authToken: sidecar.authToken });
+```
 
 ## Connection forwarding
 
@@ -205,7 +253,7 @@ token, the forwarded client credentials, and every per-agent grant.
 
 ## The triage contract
 
-*(#1262, frozen at `SCHEMA_VERSION` 2.1)* `POST /v1/email/triage` takes an email or a full
+*(#1262, frozen at `SCHEMA_VERSION` 2.2)* `POST /v1/email/triage` takes an email or a full
 thread and returns structured analysis. **No mail is read or sent** — it analyzes only the
 payload in the request, so you can build and verify triage with **zero connector setup**.
 See the full schema in the [Email Triage Contract](/spec/email-contract).
@@ -237,7 +285,7 @@ curl -s -X POST http://127.0.0.1:4200/v1/email/triage \
 
 ```json
 {
-  "schema_version": "2.1",
+  "schema_version": "2.2",
   "request_kind": "single",
   "result": {
     "category": "URGENT",
@@ -377,7 +425,7 @@ Tools exposed: `triage_email`, `triage_email_batch`, `draft_reply`, `send_email`
 ## Self-describing reference
 
 - **`GET /v1/email/spec`** — a human-readable HTML page describing every endpoint.
-- **`GET /v1/email/version`** — `{"apiVersion": "2.1", "agentVersion": "…"}`. `apiVersion`
+- **`GET /v1/email/version`** — `{"apiVersion": "2.2", "agentVersion": "…"}`. `apiVersion`
   is the frozen contract version; negotiate against its MAJOR so a breaking upgrade fails
   loudly.
 - **`GET /v1/email/health`** — liveness only (`{"status":"ok"}`). A green health check means

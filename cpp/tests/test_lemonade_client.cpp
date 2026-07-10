@@ -13,7 +13,7 @@ using namespace gaia;
 // ---------------------------------------------------------------------------
 
 TEST(LemonadeClientTest, ConstantsValues) {
-    EXPECT_STREQ(LEMONADE_DEFAULT_URL,   "http://localhost:8000/api/v1");
+    EXPECT_STREQ(LEMONADE_DEFAULT_URL,   "http://localhost:13305/api/v1");
     EXPECT_STREQ(LEMONADE_DEFAULT_MODEL, "Qwen3-0.6B-GGUF");
     EXPECT_EQ(LEMONADE_REQUEST_TIMEOUT,    900);
     EXPECT_EQ(LEMONADE_MODEL_LOAD_TIMEOUT, 12000);
@@ -26,7 +26,7 @@ TEST(LemonadeClientTest, ConstantsValues) {
 TEST(LemonadeClientTest, DefaultConstruction) {
     LemonadeClient client;
     // Default URL now includes /api/v1 (normalized)
-    EXPECT_EQ(client.baseUrl(), "http://localhost:8000/api/v1");
+    EXPECT_EQ(client.baseUrl(), "http://localhost:13305/api/v1");
     EXPECT_FALSE(client.debug());
     EXPECT_EQ(client.contextSize(), 0);
     EXPECT_TRUE(client.model().empty());

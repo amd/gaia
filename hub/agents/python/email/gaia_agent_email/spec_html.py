@@ -699,6 +699,82 @@ def render_endpoint_spec_html() -> str:
         response_sections=[("CalendarRespondResponse", CalendarRespondResponse)],
     )
 
+    # Stateful agent surface (/v1/email/agent/*). Hand-authored (not model
+    # tables) because the request/response shapes live in agent_routes.py — not
+    # the frozen contract — and /query returns an SSE stream, not a JSON body.
+    agent_block = """
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/agent/session</span>
+  <p class="desc">Create (or, with <code>reset:true</code>, recreate) a
+    session-scoped agent. Body: <code>{ "session_id": str, "reset"?: bool }</code>.
+    Returns <code>{ session_id, created, memory:{ enabled, available, message } }</code>.
+    Building the agent here surfaces construction failures early and warms memory.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/agent/query</span>
+  <p class="desc">Run one conversational turn and stream the agent loop back as
+    <b>Server-Sent Events</b> (<code>text/event-stream</code>). Body:
+    <code>{ "session_id": str, "message": str, "memory_enabled"?: bool }</code>.
+    Each SSE frame is <code>data: {json}</code> with a <code>type</code> of
+    <code>status</code>, <code>thinking</code>, <code>step</code>, tool usage,
+    <code>permission_request</code> (a gated tool is waiting), <code>error</code>,
+    or the terminal <code>run_complete</code> (carrying <code>answer</code>).
+    Because this runs the real agent loop, every agent tool is reachable via
+    natural language. One turn at a time per session — an overlapping call
+    returns <b>HTTP 409</b>.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/agent/confirm-tool</span>
+  <p class="desc">Approve or deny a tool the agent is blocking on (send / forward /
+    delete / quarantine / calendar-create). Body:
+    <code>{ "session_id": str, "approved": bool }</code>. The run resumes when this
+    returns. 404 when no run is awaiting confirmation.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/agent/cancel</span>
+  <p class="desc">Cooperatively cancel the session's in-flight run. Body:
+    <code>{ "session_id": str }</code>.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">DELETE</span>
+  <span class="path">/v1/email/agent/session/{session_id}</span>
+  <p class="desc">Evict the session and tear down its agent. 404 if unknown.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">GET</span>
+  <span class="path">/v1/email/agent/session/{session_id}/history</span>
+  <p class="desc">Return the conversation so far:
+    <code>{ session_id, turns:[{ user, assistant }] }</code> (oldest first).</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/agent/memory</span>
+  <p class="desc">Enable/disable the session agent's memory at runtime (#1666).
+    Body: <code>{ "session_id": str, "enabled": bool }</code>. Returns
+    <code>{ enabled, available, message }</code>. Enabling memory that was never
+    initialized this session (started with <code>GAIA_MEMORY_DISABLED</code> or
+    Lemonade unreachable) returns <b>HTTP 409</b> with an actionable message —
+    never a silent no-op.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">GET</span>
+  <span class="path">/v1/email/agent/memory/{session_id}</span>
+  <p class="desc">Report the session agent's memory state without changing it:
+    <code>{ enabled, available, message }</code>.</p>
+</div>
+"""
+
     body = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -719,6 +795,30 @@ def render_endpoint_spec_html() -> str:
   Field descriptions are sourced directly from the pydantic models and stay
   in sync with the contract automatically.
 </p>
+
+<h2>Authentication</h2>
+<p class="subtitle">
+  The sidecar binds <code>127.0.0.1</code> and can send mail as the user, so it
+  authenticates its <strong>caller</strong> (#1706). This is separate from the
+  draft&rarr;send <code>confirmation_token</code>, which binds a send to one exact
+  message but does not identify who is calling.
+</p>
+<ul class="desc">
+  <li><strong>Per-session bearer token.</strong> The parent process that spawns
+    the sidecar (the <code>@amd-gaia/agent-email</code> lifecycle or the GAIA UI
+    sidecar manager) generates a cryptographically-random token and hands it to
+    the sidecar over the private <code>GAIA_EMAIL_SIDECAR_TOKEN</code> env
+    channel. Every <code>/v1/email/*</code> request must carry
+    <code>Authorization: Bearer &lt;token&gt;</code> or it is rejected with
+    <strong>HTTP 401</strong>. Liveness/version probes
+    (<code>/health</code>, <code>/version</code>) and these HTML pages are exempt.</li>
+  <li><strong>Host allowlist.</strong> A non-loopback <code>Host</code> header is
+    rejected with <strong>HTTP 400</strong>, closing DNS-rebinding.</li>
+  <li><strong>Origin rejection.</strong> A request carrying a non-loopback browser
+    <code>Origin</code> is rejected with <strong>HTTP 403</strong>, closing
+    drive-by web-page access. Non-browser clients send no Origin and are
+    unaffected.</li>
+</ul>
 
 <h2>Endpoints</h2>
 
@@ -773,6 +873,18 @@ def render_endpoint_spec_html() -> str:
 {calendar_create_block}
 
 {calendar_respond_block}
+
+<h2>Stateful agent surface</h2>
+<p class="subtitle">
+  A session-scoped, conversational surface (<code>/v1/email/agent/*</code>) that
+  hosts the full <code>EmailTriageAgent</code> — memory, personalization, and
+  every agent tool — behind an HTTP query interface. Distinct from the stateless
+  triage contract above: this runs the real agent loop and streams it back as
+  Server-Sent Events. This is the surface the Agent UI uses to drive the packaged
+  agent over the network instead of importing it in-process.
+</p>
+
+{agent_block}
 
 <h2>Convenience pages</h2>
 

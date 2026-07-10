@@ -44,7 +44,7 @@ A hardware advisor agent that combines:
 ## The Architecture (What You're Building)
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#A87B2D', 'edgeLabelBackground':'#ffffff', 'fontFamily':'system-ui, -apple-system, sans-serif'}}}%%
 graph TD
     A(["HardwareAdvisorAgent"]) --> B(["Agent Base"])
     A --> C(["LemonadeClient"])
@@ -1065,7 +1065,7 @@ get_hardware_info()
       → Returns: {"name": "AMD Radeon...", "memory_mb": 24576}
 
   → Detect NPU
-      → Query devices.npu from Lemonade response
+      → Query devices.amd_npu from Lemonade response
       → Check availability flag
       → Returns: {"name": "Ryzen AI NPU", "available": True}
 ```

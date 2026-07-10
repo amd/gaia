@@ -5,13 +5,50 @@ follows [SemVer](https://semver.org/): the **MAJOR** of the on-the-wire
 `SCHEMA_VERSION` is what `checkVersion` enforces at startup, so a contract MAJOR
 bump is always at least a package MINOR bump with a migration note.
 
-## Unreleased
+## 0.4.0
 
 Contract bumped to `SCHEMA_VERSION` **2.2** — additive over 2.1, so `checkVersion`
 (MAJOR-only) keeps accepting existing clients.
 
+### Security
+
+- **Caller authentication for the local sidecar API (#1706).** The sidecar binds
+  `127.0.0.1` and can send mail as the user, but its REST API had **no caller
+  authentication** — any other local process, or a web page in the user's browser
+  (via DNS-rebinding), could reach draft/send. `spawnSidecar` / `startSidecar` now
+  mint a cryptographically-random **per-session bearer token**, hand it to the
+  sidecar over the private `GAIA_EMAIL_SIDECAR_TOKEN` env channel, and bind it to
+  `sidecar.client`; every `/v1/email/*` request must present `Authorization:
+  Bearer <token>` or it is **401**. A non-loopback `Host` is **400** and a
+  non-loopback browser `Origin` is **403**, closing DNS-rebinding / drive-by
+  access. The draft→send confirmation-token gate is unchanged (it is
+  payload-integrity, not caller-auth). `EmailClient` gains an `authToken` option;
+  `sidecar.authToken` and `generateSessionToken` are exported for the
+  construct-your-own-client / renderer-over-IPC paths. Wire-compatible: no
+  contract change, `SCHEMA_VERSION` stays `2.2`.
+
 ### Added
 
+- **Stateful agent surface (`/v1/email/agent/*`, #1666).** A session-scoped,
+  conversational surface so a host can drive the full `EmailTriageAgent` over HTTP —
+  memory, personalization, and every agent tool — instead of importing it in-process.
+  This is what lets the Agent UI back its email experience with the packaged sidecar.
+  Additive and **not part of the frozen triage contract** (it runs the agent loop, not
+  the stateless `EmailTriageService`), so it does not itself move `SCHEMA_VERSION`. New
+  endpoints: `POST /v1/email/agent/session`, `DELETE /v1/email/agent/session/{id}`,
+  `GET /v1/email/agent/session/{id}/history`, `POST /v1/email/agent/query` (SSE stream
+  of the agent loop), `POST /v1/email/agent/confirm-tool` (approve/deny a gated tool),
+  `POST /v1/email/agent/cancel`, and the runtime memory toggle `POST /v1/email/agent/memory`
+  + `GET /v1/email/agent/memory/{id}`. Not wrapped by the typed npm client yet.
+- **Runtime memory enable/disable (#1666).** `EmailAgentConfig.memory_enabled` (startup)
+  and `EmailTriageAgent.set_memory_enabled()` (runtime, no restart) turn the agent's
+  memory — inbox profiling, behavioral learning, preference persistence, and
+  working-context injection — on or off, superseding the startup-only
+  `GAIA_MEMORY_DISABLED` env var. Reachable over HTTP via the agent surface above;
+  enabling memory that was never initialized (started with `GAIA_MEMORY_DISABLED` or
+  Lemonade unreachable) returns **409** with an actionable message, never a silent
+  no-op. The frozen binary now bundles FAISS (the memory index); embeddings still go
+  over Lemonade HTTP, so torch/transformers stay excluded.
 - **Follow-up tracking (#1606).** The agent gains a read-only `check_followups`
   tool that scans the Sent folder of every connected mailbox and flags threads
   whose latest message is still the user's own outbound mail past a

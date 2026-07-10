@@ -45,6 +45,32 @@ class _Session:
         return self._make()
 
 
+class _HeaderSession(_Session):
+    """A fake session that also carries a mutable ``headers`` dict (like
+    requests.Session) so the caller-auth header wiring can be asserted."""
+
+    def __init__(self, payload=None, **kwargs):
+        super().__init__(payload if payload is not None else {}, **kwargs)
+        self.headers: dict = {}
+
+
+def test_proxy_sets_bearer_auth_header_when_token_given():
+    # #1706: the proxy replays the per-session token as a bearer header on every
+    # request so the token-gated sidecar accepts UI-originated calls.
+    sess = _HeaderSession()
+    proxy = EmailSidecarProxy(
+        "http://127.0.0.1:9100", session=sess, auth_token="tok-123"
+    )
+    assert proxy._auth_token == "tok-123"
+    assert sess.headers.get("Authorization") == "Bearer tok-123"
+
+
+def test_proxy_omits_auth_header_without_token():
+    sess = _HeaderSession()
+    EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    assert "Authorization" not in sess.headers
+
+
 def test_default_timeout_from_env(monkeypatch):
     # Fix F: no explicit timeout → reads GAIA_EMAIL_SIDECAR_TIMEOUT (default 300).
     monkeypatch.delenv("GAIA_EMAIL_SIDECAR_TIMEOUT", raising=False)

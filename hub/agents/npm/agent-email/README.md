@@ -147,10 +147,43 @@ app-proxied path to the sidecar:
 import { EmailClient } from "@amd-gaia/agent-email/client";
 
 // Only from a same-origin page, or behind a proxy you control — not a
-// cross-origin fetch straight at 127.0.0.1:8131.
-const client = new EmailClient({ baseUrl: "http://127.0.0.1:8131" });
+// cross-origin fetch straight at 127.0.0.1:8131. Pass the sidecar's session
+// token (see Authentication) — get it from your main process via IPC; the
+// renderer never spawns the sidecar itself.
+const client = new EmailClient({
+  baseUrl: "http://127.0.0.1:8131",
+  authToken, // from sidecar.authToken in the main process
+});
 const res = await client.triage({ payload: { /* … */ } });
 ```
+
+## Authentication
+
+The sidecar binds `127.0.0.1` and can **send mail as the user**, so it
+authenticates its **caller** (#1706). This is separate from the draft→send
+`confirmation_token`, which binds a send to one exact message but does not
+identify who is calling.
+
+- **Per-session bearer token.** `spawnSidecar` / `startSidecar` mint a
+  cryptographically-random token, hand it to the sidecar over the private
+  `GAIA_EMAIL_SIDECAR_TOKEN` env channel, and bind it to `sidecar.client`. Every
+  `/v1/email/*` request must carry `Authorization: Bearer <token>` or the sidecar
+  returns **HTTP 401**. Using `sidecar.client` you get this for free; a client you
+  construct yourself must pass `authToken` (read it from `sidecar.authToken`).
+- **Host / Origin allowlist.** A non-loopback `Host` header → **400**
+  (DNS-rebinding); a non-loopback browser `Origin` → **403** (drive-by web page).
+  No permissive CORS is ever sent.
+
+```ts
+const sidecar = await startSidecar({ binaryPath, port: 8131 });
+sidecar.authToken; // the per-session token, if you need to forward it (e.g. IPC)
+await sidecar.client.draft({ to: [{ email: "a@b.com" }], subject: "Re: x", body: "hi" });
+// A raw client without the token is refused:
+new EmailClient({ baseUrl: sidecar.baseUrl }).send(/* … */); // → HttpError 401
+```
+
+Liveness/version probes (`/health`, `/version`) and the HTML pages
+(`/v1/email/spec`, `/v1/email/playground`) are exempt from the token.
 
 ## Prerequisites
 
@@ -249,6 +282,20 @@ exposes metadata, draft/send accept files). The remaining mailbox **actions**
 (label, move, mark read/unread) are part of the full agent but not yet exposed
 through this package — see
 [`SPEC.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md) for the complete surface.
+
+### Stateful agent surface (`/v1/email/agent/*`, 0.4.0)
+
+The typed client above is **stateless** — each call analyzes the payload you pass,
+with no memory and no conversation. As of 0.4.0 the sidecar *also* hosts a
+**session-scoped, conversational agent** (`/v1/email/agent/*`) that runs the full
+`EmailTriageAgent` — memory, personalization, and every agent tool — over HTTP,
+streaming each turn back as Server-Sent Events. Create a session, `POST
+/v1/email/agent/query` to run a turn, approve gated tools via `/confirm-tool`, and
+toggle memory at runtime via `/memory`. This is the surface the Agent UI uses; it is
+**not wrapped by the typed client yet** — drive it with `fetch`. See
+[`SPEC.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md)
+and [`SKILL.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SKILL.md)
+for the endpoint table and a streaming example.
 
 ## Running in production
 

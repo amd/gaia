@@ -15,6 +15,13 @@
 #   - tests/fixtures/email/quality_gate_thresholds.json  (FP<5% / FN<2%)
 #   - tests/fixtures/email/perf_gate_thresholds.json      (TTFT / tps / latency / mem)
 #   - tests/fixtures/email/drafting_gate_thresholds.json  (draft-approval >=70%, #1269)
+#   - tests/fixtures/email/briefing_gate_thresholds.json  (briefing quality, #1951 — ENFORCING)
+#
+# NOTE: the briefing gate (#1951) ships enforce:TRUE — unlike the FP/FN, perf,
+# and drafting gates it is a hard gate with no report-mode fallback: a quality
+# breach, an errored/unjudged case, or a missing judge credential fails the
+# build. See its dedicated block near the end of this job.
+#
 # CI keys off each gate's `should_fail` (= enforce and not passed). All three
 # manifests ship `enforce: false`, so `should_fail` is always false today: the gate
 # machinery runs, logs, and uploads, but the build stays green. This is the
@@ -62,6 +69,34 @@ on:
         description: 'Repeat count for variance analysis'
         required: false
         default: '1'
+  # Reusable: called as a release gate from the email-agent release
+  # (release_agent_email.yml) and the GAIA core release (publish.yml) so a
+  # release runs the same triage/drafting/action-item eval suite it runs
+  # nightly. The `lemonade-eval` concurrency group below keeps release-triggered
+  # runs strictly serial with the nightly/refresh runs on the single Lemonade
+  # slot. Report mode is preserved end-to-end (the manifests own the enforce
+  # switch), so a call only hard-blocks a release when enforce:true is set.
+  workflow_call:
+    inputs:
+      model:
+        description: 'Lemonade model id to benchmark'
+        required: false
+        type: string
+        default: 'Gemma-4-E4B-it-GGUF'
+      limit:
+        description: 'Max messages to triage from the synthetic corpus'
+        required: false
+        type: string
+        default: '50'
+      experiments:
+        description: 'Repeat count for variance analysis'
+        required: false
+        type: string
+        default: '1'
+    secrets:
+      ANTHROPIC_API_KEY:
+        description: 'Judge credential for the drafting + borderline action-item judge; absent → those paths log a loud skip / run judge-less.'
+        required: false
 
 concurrency:
   # Share the single Lemonade backend slot with the other self-hosted evals so
@@ -73,9 +108,12 @@ permissions:
   contents: read
 
 env:
-  EMAIL_EVAL_MODEL: ${{ github.event.inputs.model || 'Gemma-4-E4B-it-GGUF' }}
-  EMAIL_EVAL_LIMIT: ${{ github.event.inputs.limit || '50' }}
-  EMAIL_EVAL_EXPERIMENTS: ${{ github.event.inputs.experiments || '1' }}
+  # `inputs.*` (not `github.event.inputs.*`) so the values propagate for BOTH
+  # workflow_dispatch AND workflow_call — on a reusable call github.event.inputs
+  # is empty. On schedule `inputs` is null and each falls back to its default.
+  EMAIL_EVAL_MODEL: ${{ inputs.model || 'Gemma-4-E4B-it-GGUF' }}
+  EMAIL_EVAL_LIMIT: ${{ inputs.limit || '50' }}
+  EMAIL_EVAL_EXPERIMENTS: ${{ inputs.experiments || '1' }}
   GAIA_MEMORY_DISABLED: "1"
   PYTHONIOENCODING: "utf-8"
   # Loopback Lemonade — bypass any runner proxy so Python requests reaches it.
@@ -177,6 +215,78 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "drafting eval failed" }
       # =================================================================
       # END voice-drafting quality eval
+      # =================================================================
+
+      # =================================================================
+      # BEGIN action-item extraction eval (#1605 feature / #1949 metric /
+      # #1964 wiring) — ADDITIVE, self-contained block. Report mode.
+      #
+      # Precision / recall / F1 of the agent's extracted action items vs a
+      # hand-labeled corpus (tests/fixtures/email/action_items_ground_truth.json,
+      # hard negatives included). Generation drives the REAL triage path over a
+      # FakeGmailBackend (Lemonade — nothing is ever sent). The Claude
+      # equivalence judge resolves borderline description pairs and is REQUIRED:
+      # ANTHROPIC_API_KEY MUST be present, and if the judge cannot run the step
+      # FAILS LOUDLY. There is NO fallback to fuzzy-only matching — a missing or
+      # broken judge is an error, never a silent degradation to a weaker scorer
+      # (CLAUDE.md: No Silent Fallbacks — Fail Loudly).
+      # The aggregate is scored against the committed manifest
+      #   tests/fixtures/email/action_items_gate_thresholds.json  (enforce:false)
+      # via gaia.eval.action_item_quality — same single-source rule as the gates
+      # above: no thresholds inlined in this YAML; flip `enforce` in the manifest
+      # (data, not code) to make this gate block once a baseline confirms the bars.
+      #
+      # Runs AFTER the triage + drafting evals in the same job, so Lemonade
+      # access stays strictly serial (CLAUDE.md: evals serial). Kept
+      # self-contained so concurrent edits to this workflow merge cleanly.
+      # =================================================================
+      - name: Action-item extraction eval (report mode)
+        env:
+          # Judge credential for the borderline equivalence judge — REQUIRED.
+          # Absent -> the script fails loudly (NO fuzzy-only fallback).
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python hub/agents/python/email/packaging/eval_action_item_report.py
+          if ($LASTEXITCODE -ne 0) { throw "action-item eval failed" }
+      # =================================================================
+      # END action-item extraction eval
+      # =================================================================
+
+      # =================================================================
+      # BEGIN daily-briefing summary-quality eval (#1608 feature / #1951
+      # tracking) — ADDITIVE, self-contained block. ENFORCING gate.
+      #
+      # Judge-scored briefing quality: the REAL scheduled-briefing path
+      # (gaia_agent_email.briefing.run_briefing_job -> pre_scan_inbox_impl)
+      # produces the email_pre_scan envelope over the committed briefing seed
+      # corpus (FakeGmailBackend — read-only, nothing sent/archived), and a
+      # Claude judge scores each briefing against the case inbox + rubric on
+      # faithfulness / must-include recall / hallucination-free / grouping. The
+      # aggregate is compared to the committed manifest
+      #   tests/fixtures/email/briefing_gate_thresholds.json  (enforce:true)
+      # via gaia.eval.briefing_quality — same single-source rule as the gates
+      # above: no thresholds inlined in this YAML; tune the bars in the manifest
+      # (data, not code).
+      #
+      # This gate BLOCKS: a quality breach, any errored/unjudged case, a missing
+      # judge credential, or a judge transport error all fail the build. There
+      # is deliberately NO report-mode fallback and NO silent skip — if the eval
+      # cannot prove the briefing is good, the pipeline goes red.
+      #
+      # Runs AFTER the drafting eval in the same job, so Lemonade access stays
+      # strictly serial (CLAUDE.md: evals serial). Keep this block
+      # self-contained so concurrent edits to this workflow merge cleanly.
+      # =================================================================
+      - name: Daily-briefing summary-quality eval (judge-scored, enforcing gate)
+        env:
+          # Judge credential for gaia.eval.claude.ClaudeClient — REQUIRED. This
+          # gate has no report-mode fallback: an absent key fails the build.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python hub/agents/python/email/packaging/eval_briefing_report.py
+          if ($LASTEXITCODE -ne 0) { throw "briefing eval failed" }
+      # =================================================================
+      # END daily-briefing summary-quality eval
       # =================================================================
 
       - name: Upload eval scorecard + gate report

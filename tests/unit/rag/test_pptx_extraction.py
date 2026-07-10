@@ -190,7 +190,13 @@ class TestPptxTextExtraction:
         assert "Remember to mention the deadline" in text
 
     def test_table_extraction(self, rag, tmp_path):
-        """Tables are extracted as markdown."""
+        """Tables are extracted as markdown by the pure-python (python-pptx) path.
+
+        The PPTX→PDF fast path (LibreOffice/PowerPoint COM) flattens tables to
+        plain text — markdown table structure is produced only by the pure-python
+        fallback. Force that fallback here so the assertion is deterministic
+        regardless of whether LibreOffice is installed on the runner.
+        """
         pptx_path = tmp_path / "table.pptx"
         _create_pptx(
             pptx_path,
@@ -206,7 +212,12 @@ class TestPptxTextExtraction:
             ],
         )
 
-        text, _, _ = rag._extract_text_from_pptx(str(pptx_path))
+        # Disable PPTX→PDF conversion so the pure-python markdown extractor runs.
+        with patch(
+            "gaia.rag.pptx_utils.convert_pptx_to_pdf",
+            side_effect=RuntimeError("PDF conversion disabled for this test"),
+        ):
+            text, _, _ = rag._extract_text_from_pptx(str(pptx_path))
 
         assert "Alice" in text
         assert "Bob" in text

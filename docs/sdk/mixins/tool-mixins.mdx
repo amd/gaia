@@ -10,7 +10,7 @@ icon: "puzzle-piece"
 </Note>
 
 <Info>
-  **Source Code:** [`src/gaia/agents/tools/`](https://github.com/amd/gaia/tree/main/src/gaia/agents/tools/), [`src/gaia/agents/code/tools/`](https://github.com/amd/gaia/tree/main/src/gaia/agents/code/tools/)
+  **Source Code:** [`src/gaia/agents/tools/`](https://github.com/amd/gaia/tree/main/src/gaia/agents/tools/), [`hub/agents/python/code/gaia_agent_code/tools/`](https://github.com/amd/gaia/tree/main/hub/agents/python/code/gaia_agent_code/tools/)
 </Info>
 
 <Note>
@@ -22,6 +22,31 @@ icon: "puzzle-piece"
 **Purpose:** Reusable tool sets that can be mixed into your agents.
 
 **Available Mixins:** For complete API specifications of all 17 mixins, see [Specifications → Tool Mixins](/spec/file-tools-mixin)
+
+## Composable mixins (registry)
+
+The agent registry exposes these mixins by name in `KNOWN_TOOLS`
+([`src/gaia/agents/registry.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py)).
+A [custom agent](/guides/custom-agent) can compose any of them by listing the
+tool name — BuilderAgent's template wires the import and base class for you.
+Each row is the exact `name → module.Class` mapping the registry resolves:
+
+| Tool name | Import | Purpose |
+|-----------|--------|---------|
+| `rag` | `from gaia.agents.tools.rag_tools import RAGToolsMixin` | Document retrieval |
+| `code_index` | `from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin` | Semantic code search (FAISS) |
+| `file_search` | `from gaia.agents.tools.file_tools import FileSearchToolsMixin` | Fuzzy/glob file search |
+| `file_io` | `from gaia.agents.tools.file_io_tools import FileIOToolsMixin` | Read/write/edit files |
+| `shell` | `from gaia.agents.tools.shell_tools import ShellToolsMixin` | Sandboxed shell commands |
+| `screenshot` | `from gaia.agents.tools.screenshot_tools import ScreenshotToolsMixin` | Screen capture |
+| `filesystem` | `from gaia.agents.tools.filesystem_tools import FileSystemToolsMixin` | File system navigation |
+| `scratchpad` | `from gaia.agents.tools.scratchpad_tools import ScratchpadToolsMixin` | SQL scratchpad tables for data analysis |
+| `browser` | `from gaia.agents.tools.browser_tools import BrowserToolsMixin` | Web search, page fetch, download |
+| `sd` | `from gaia.sd.mixin import SDToolsMixin` | Stable Diffusion image generation |
+| `vlm` | `from gaia.vlm.mixin import VLMToolsMixin` | Vision LLM / structured extraction |
+
+The sections below show usage patterns for the most common mixins; the
+`file_io` mixin is covered under [Code Development](./code-mixins).
 
 ## 9.1 File Watching Mixin
 
