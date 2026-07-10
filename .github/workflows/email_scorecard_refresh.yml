@@ -47,6 +47,10 @@ on:
       - main
     paths:
       - 'hub/agents/python/email/**'
+      # Publishing/upload plumbing is not LLM- or eval-affecting, so a change to
+      # it must NOT re-run the 90-min real eval. publish_to_r2.py only POSTs the
+      # already-built artifacts + docs to the Hub Worker.
+      - '!hub/agents/python/email/packaging/publish_to_r2.py'
       - 'tests/fixtures/email/**'
       - 'src/gaia/eval/release_scorecard.py'
       - 'src/gaia/eval/scorecard_gate.py'
