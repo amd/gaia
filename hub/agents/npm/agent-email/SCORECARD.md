@@ -204,7 +204,18 @@ matter alone — no eval-harness access needed.
 Run the following commands from the repository root:
 
 ```sh
-# Step 1: run the benchmark (requires a Lemonade Server with the model loaded; AMD Ryzen AI / Strix Halo recommended)
+# Prerequisites: install the eval extras and start a Lemonade Server
+# with the model on AMD Ryzen AI hardware (Strix Halo recommended).
+uv pip install -e ".[dev,eval,api]"
+lemonade-server serve   # in a separate shell; must stay running
+
+# Step 0: build the corpus from the committed seed. The mbox +
+# ground_truth are GENERATED artifacts (gitignored), so a fresh
+# checkout must materialise them before the benchmark can read them.
+python tests/fixtures/email/generate_mbox.py
+
+# Step 1: run the benchmark (requires the Lemonade Server above with the
+# model loaded; AMD Ryzen AI / Strix Halo recommended)
 PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \
 GAIA_AGENT_TOOL_TIMEOUT=1800 \
 PYTHONPATH="$(pwd)" \
@@ -253,3 +264,82 @@ _Each of the 249 test cases is scored once per run, so the totals below sum to t
   - fyi → needs_response: 37
   - personal → urgent: 15
   - urgent → needs_response: 12
+
+<!-- scorecard:notes:start -->
+## Dataset
+
+The corpus is **vendor-derived, not GAIA-synthesised**, and fully reproducible
+from a single committed source of truth:
+
+| File | Role |
+|------|------|
+| [`tests/fixtures/email/vendor_corpus_seed.jsonl`](../../../../tests/fixtures/email/vendor_corpus_seed.jsonl) | **Source of truth** (committed) — a deterministic, category-balanced subset of the vendor's labelled mailbox dataset, already in the schema-2.0 taxonomy |
+| `tests/fixtures/email/synthetic_inbox.mbox` | **Generated** (gitignored) — the mbox the eval loads via `FakeGmailBackend` |
+| `tests/fixtures/email/ground_truth.json` | **Generated** (gitignored) — per-email labels (249 entries), keyed by the Gmail-derived id `sha256(Message-ID)[:16]` so labels align 1:1 with `FakeGmailBackend` |
+| [`tests/fixtures/email/_schema.md`](../../../../tests/fixtures/email/_schema.md) | Full corpus schema, provenance chain, PII policy, and category split |
+
+Both generated files are rebuilt from the seed on demand — never a live mailbox:
+
+```sh
+python tests/fixtures/email/generate_mbox.py          # seed -> mbox + ground_truth
+python tests/fixtures/email/generate_mbox.py --verify  # check the two are in sync
+```
+
+Provenance: `vendor mailbox JSONL --select_vendor_subset.py--> vendor_corpus_seed.jsonl
+--generate_mbox.py--> synthetic_inbox.mbox + ground_truth.json`. The five
+schema-2.0 categories are `URGENT`, `NEEDS_RESPONSE`, `FYI`, `PROMOTIONAL`,
+`PERSONAL` (the agent's own output labels).
+
+### Worked example (one labeled email)
+
+A seed record (source of truth):
+
+```json
+{
+  "id": "004d89d1-cba8-4045-b94b-b6cab756529b",
+  "sender": "Hugo Petit <hugo.petit@lenovo.com>",
+  "subject": "Ryzen AI Adoption Trends Across ThinkPad Lineup - Data Request",
+  "category": "NEEDS_RESPONSE",
+  "suggestedAction": "reply",
+  "is_phishing": false,
+  "source_dataset": "spamassassin"
+}
+```
+
+`generate_mbox.py` writes it into the mbox and emits the matching ground-truth
+entry, keyed by the Gmail-derived id:
+
+```json
+"<gmail-id>": {
+  "category": "NEEDS_RESPONSE",
+  "priority": "normal",
+  "is_spam": false,
+  "is_phishing": false,
+  "suggested_action": "reply",
+  "source_dataset": "spamassassin"
+}
+```
+
+At eval time the agent triages the email and predicts a category. Scoring
+compares the prediction to `category` above. Because priority is ordinal
+(`URGENT > NEEDS_RESPONSE > FYI > PROMOTIONAL`), the headline metric credits an
+exact match **or** an adjacent bucket — so predicting `URGENT` or `FYI` here
+still counts toward the aggregate, while `PROMOTIONAL` (two buckets away) does
+not.
+
+## Understanding the metrics
+
+- **within_one_bucket_accuracy** *(headline, weight 1.0)* — share of emails whose
+  predicted priority is exact or one bucket off. This is what a user feels:
+  nothing urgent buried. It is the only metric in the aggregate.
+- **category_accuracy** *(reported)* — strict exact-match rate on the category
+  label. Always lower than the headline; it is the harder bar.
+- **urgent_recall** *(reported, anti-gaming floor)* — fraction of truly urgent
+  emails caught. A model can't inflate the headline by calling everything urgent
+  without this staying high.
+- **urgent_vs_not_accuracy** / **personal_recall** *(reported)* — binary
+  urgent-vs-not accuracy and recall on the scarce `PERSONAL` bucket.
+
+Only `within_one_bucket_accuracy` is weighted; the rest are shown with weight 0
+so the aggregate stays recomputable as `100 x within_one_bucket_accuracy`.
+<!-- scorecard:notes:end -->

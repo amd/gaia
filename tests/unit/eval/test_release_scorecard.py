@@ -689,6 +689,36 @@ class TestEmailAdapter:
         assert "gaia eval benchmark" in payload.reproduction_command
         assert "gen_scorecard.py" in payload.reproduction_command
         assert "PYTHON_KEYRING_BACKEND" in payload.reproduction_command
+        # The corpus is generated (not committed), so the recipe MUST build it
+        # from the seed first — a fresh checkout fails otherwise.
+        assert "generate_mbox.py" in payload.reproduction_command
+        assert 'uv pip install -e ".[dev,eval,api]"' in payload.reproduction_command
+
+    def test_build_payload_includes_dataset_notes(self, tmp_path):
+        # The scorecard must carry dataset pointers, a worked example, and a
+        # metric glossary so a reader can understand + reproduce the numbers.
+        mod = self._load_gen_scorecard()
+
+        benchmark_dir = tmp_path / "benchmark"
+        benchmark_dir.mkdir()
+        (benchmark_dir / "email_benchmark_scorecard.json").write_text(
+            EMAIL_BENCHMARK_FIXTURE.read_text()
+        )
+        gt_path = tmp_path / "ground_truth.json"
+        gt_path.write_text(json.dumps({"_meta": {}, "a": {"label": "x"}}))
+
+        payload = mod.build_payload(benchmark_dir, gt_path)
+        assert payload.notes is not None
+        notes = payload.notes
+        assert "## Dataset" in notes
+        assert "vendor_corpus_seed.jsonl" in notes  # pointer to source of truth
+        assert "generate_mbox.py" in notes  # how to rebuild the corpus
+        assert "Worked example" in notes  # a small concrete example
+        assert "within_one_bucket_accuracy" in notes  # metric glossary
+        # The notes reach the rendered scorecard body verbatim.
+        text = render_scorecard(payload)
+        assert "## Dataset" in text
+        assert "### Worked example" in text
 
 
 # ---------------------------------------------------------------------------
@@ -795,6 +825,78 @@ class TestBreakdownRoundTrip:
         assert (
             base_agg == bd_agg
         ), f"Aggregate changed when breakdown was added: {base_agg} → {bd_agg}"
+
+
+# ---------------------------------------------------------------------------
+# 11b. notes appendix round-trip (release_scorecard core)
+# ---------------------------------------------------------------------------
+
+
+class TestNotesRoundTrip:
+    """notes field: rendered verbatim, marker-wrapped, carry-forward-preserved."""
+
+    NOTES = "## Dataset\n\nSee `seed.jsonl`.\n\n### Worked example\n\n`predicted == expected`."
+
+    def test_notes_rendered_verbatim_when_present(self):
+        payload = _make_payload()
+        payload.notes = self.NOTES
+        text = render_scorecard(payload)
+        assert "## Dataset" in text
+        assert "### Worked example" in text
+        assert "See `seed.jsonl`." in text
+
+    def test_notes_wrapped_in_invisible_markers(self):
+        from gaia.eval.release_scorecard import _NOTES_END, _NOTES_START
+
+        payload = _make_payload()
+        payload.notes = self.NOTES
+        text = render_scorecard(payload)
+        assert _NOTES_START in text and _NOTES_END in text
+        # Markers are HTML comments (render to nothing on GitHub/npm).
+        assert _NOTES_START.startswith("<!--") and _NOTES_END.endswith("-->")
+
+    def test_notes_absent_leaves_no_markers(self):
+        from gaia.eval.release_scorecard import _NOTES_START
+
+        text = render_scorecard(_make_payload())
+        assert _NOTES_START not in text
+
+    def test_notes_not_in_required_fields(self):
+        assert "notes" not in REQUIRED_FIELDS
+
+    def test_notes_does_not_break_front_matter_or_validation(self):
+        payload = _make_payload()
+        payload.notes = self.NOTES
+        text = render_scorecard(payload)
+        parsed = parse_scorecard(text)
+        # notes is a body-only block — never leaks into the machine-readable YAML.
+        assert "notes" not in parsed
+        assert validate_scorecard(parsed) == []
+
+    def test_notes_does_not_affect_aggregate(self):
+        base = parse_scorecard(render_scorecard(_make_payload(accuracy=0.46)))
+        withn = _make_payload(accuracy=0.46)
+        withn.notes = self.NOTES
+        withn_parsed = parse_scorecard(render_scorecard(withn))
+        assert base["aggregate"]["value"] == withn_parsed["aggregate"]["value"]
+
+    def test_carry_forward_preserves_notes(self, tmp_path):
+        src = _make_payload(version="0.2.3", accuracy=0.75)
+        src.notes = self.NOTES
+        card_path = tmp_path / "SCORECARD.md"
+        card_path.write_text(render_scorecard(src))
+
+        result = carry_forward(card_path, "0.2.4")
+        assert result.notes is not None
+        assert "## Dataset" in result.notes
+        assert "### Worked example" in result.notes
+
+    def test_carry_forward_notes_none_when_absent(self, tmp_path):
+        src = _make_payload(version="0.2.3", accuracy=0.75)  # no notes
+        card_path = tmp_path / "SCORECARD.md"
+        card_path.write_text(render_scorecard(src))
+        result = carry_forward(card_path, "0.2.4")
+        assert result.notes is None
 
 
 # ---------------------------------------------------------------------------

@@ -230,6 +230,130 @@ def _compute_breakdown(judged: list) -> Optional[dict]:
     return {"per_category": per_category, "top_confusions": top_confusions}
 
 
+def _build_reproduction_command(model, ground_truth_rel: str, limit=None) -> str:
+    """Build the exact, portable shell recipe that reproduces this scorecard.
+
+    Repo-relative paths and a generic output dir only — never a local absolute
+    path (this ships in a published artifact).
+    """
+    limit_flag = f" \\\n    --limit {limit}" if limit is not None else ""
+    return (
+        "# Prerequisites: install the eval extras and start a Lemonade Server\n"
+        "# with the model on AMD Ryzen AI hardware (Strix Halo recommended).\n"
+        'uv pip install -e ".[dev,eval,api]"\n'
+        "lemonade-server serve   # in a separate shell; must stay running\n\n"
+        "# Step 0: build the corpus from the committed seed. The mbox +\n"
+        "# ground_truth are GENERATED artifacts (gitignored), so a fresh\n"
+        "# checkout must materialise them before the benchmark can read them.\n"
+        "python tests/fixtures/email/generate_mbox.py\n\n"
+        "# Step 1: run the benchmark (requires the Lemonade Server above with the\n"
+        "# model loaded; AMD Ryzen AI / Strix Halo recommended)\n"
+        "PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \\\n"
+        # Full-corpus triage is one tool call (~17 min on a 4B local model); a
+        # lower timeout abandons it mid-run and scores 0 emails.
+        "GAIA_AGENT_TOOL_TIMEOUT=1800 \\\n"
+        'PYTHONPATH="$(pwd)" \\\n'
+        "gaia eval benchmark \\\n"
+        f"    --model {model} \\\n"
+        "    --mbox-path tests/fixtures/email/synthetic_inbox.mbox \\\n"
+        f"    --ground-truth {ground_truth_rel}{limit_flag} \\\n"
+        "    --output-dir /tmp/email-eval\n\n"
+        "# Step 2: generate this scorecard from the benchmark output\n"
+        'PYTHONPATH="$(pwd)" \\\n'
+        "python hub/agents/python/email/packaging/gen_scorecard.py \\\n"
+        "    --benchmark-dir /tmp/email-eval \\\n"
+        f"    --ground-truth {ground_truth_rel}"
+        + (f"{limit_flag}" if limit is not None else "")
+    )
+
+
+def _build_notes(dataset_size: int) -> str:
+    """Build the free-form 'Dataset & metrics' appendix for the scorecard body.
+
+    Static, email-specific documentation (dataset pointers, a worked example, and
+    a plain-language metric glossary) so a reader can understand and reproduce the
+    numbers without reverse-engineering the harness. Rendered verbatim by the core
+    scorecard generator and preserved across patch releases.
+    """
+    return f"""## Dataset
+
+The corpus is **vendor-derived, not GAIA-synthesised**, and fully reproducible
+from a single committed source of truth:
+
+| File | Role |
+|------|------|
+| [`tests/fixtures/email/vendor_corpus_seed.jsonl`](../../../../tests/fixtures/email/vendor_corpus_seed.jsonl) | **Source of truth** (committed) — a deterministic, category-balanced subset of the vendor's labelled mailbox dataset, already in the schema-2.0 taxonomy |
+| `tests/fixtures/email/synthetic_inbox.mbox` | **Generated** (gitignored) — the mbox the eval loads via `FakeGmailBackend` |
+| `tests/fixtures/email/ground_truth.json` | **Generated** (gitignored) — per-email labels ({dataset_size} entries), keyed by the Gmail-derived id `sha256(Message-ID)[:16]` so labels align 1:1 with `FakeGmailBackend` |
+| [`tests/fixtures/email/_schema.md`](../../../../tests/fixtures/email/_schema.md) | Full corpus schema, provenance chain, PII policy, and category split |
+
+Both generated files are rebuilt from the seed on demand — never a live mailbox:
+
+```sh
+python tests/fixtures/email/generate_mbox.py          # seed -> mbox + ground_truth
+python tests/fixtures/email/generate_mbox.py --verify  # check the two are in sync
+```
+
+Provenance: `vendor mailbox JSONL --select_vendor_subset.py--> vendor_corpus_seed.jsonl
+--generate_mbox.py--> synthetic_inbox.mbox + ground_truth.json`. The five
+schema-2.0 categories are `URGENT`, `NEEDS_RESPONSE`, `FYI`, `PROMOTIONAL`,
+`PERSONAL` (the agent's own output labels).
+
+### Worked example (one labeled email)
+
+A seed record (source of truth):
+
+```json
+{{
+  "id": "004d89d1-cba8-4045-b94b-b6cab756529b",
+  "sender": "Hugo Petit <hugo.petit@lenovo.com>",
+  "subject": "Ryzen AI Adoption Trends Across ThinkPad Lineup - Data Request",
+  "category": "NEEDS_RESPONSE",
+  "suggestedAction": "reply",
+  "is_phishing": false,
+  "source_dataset": "spamassassin"
+}}
+```
+
+`generate_mbox.py` writes it into the mbox and emits the matching ground-truth
+entry, keyed by the Gmail-derived id:
+
+```json
+"<gmail-id>": {{
+  "category": "NEEDS_RESPONSE",
+  "priority": "normal",
+  "is_spam": false,
+  "is_phishing": false,
+  "suggested_action": "reply",
+  "source_dataset": "spamassassin"
+}}
+```
+
+At eval time the agent triages the email and predicts a category. Scoring
+compares the prediction to `category` above. Because priority is ordinal
+(`URGENT > NEEDS_RESPONSE > FYI > PROMOTIONAL`), the headline metric credits an
+exact match **or** an adjacent bucket — so predicting `URGENT` or `FYI` here
+still counts toward the aggregate, while `PROMOTIONAL` (two buckets away) does
+not.
+
+## Understanding the metrics
+
+- **within_one_bucket_accuracy** *(headline, weight 1.0)* — share of emails whose
+  predicted priority is exact or one bucket off. This is what a user feels:
+  nothing urgent buried. It is the only metric in the aggregate.
+- **category_accuracy** *(reported)* — strict exact-match rate on the category
+  label. Always lower than the headline; it is the harder bar.
+- **urgent_recall** *(reported, anti-gaming floor)* — fraction of truly urgent
+  emails caught. A model can't inflate the headline by calling everything urgent
+  without this staying high.
+- **urgent_vs_not_accuracy** / **personal_recall** *(reported)* — binary
+  urgent-vs-not accuracy and recall on the scarce `PERSONAL` bucket.
+
+Only `within_one_bucket_accuracy` is weighted; the rest are shown with weight 0
+so the aggregate stays recomputable as `100 x within_one_bucket_accuracy`.
+"""
+
+
 def build_payload(
     benchmark_dir: Path,
     ground_truth_path: Path,
@@ -386,36 +510,16 @@ def build_payload(
     import datetime
 
     # Construct a portable, exact reproduction command so any reader can reproduce
-    # this scorecard from scratch. Use repo-relative paths and a generic output dir
-    # only — never a local absolute path (this ships in a published artifact).
-    limit_flag = f" \\\n    --limit {limit}" if limit is not None else ""
+    # this scorecard from scratch.
     ground_truth_rel = (
         str(ground_truth_path.relative_to(_REPO_ROOT))
         if str(ground_truth_path).startswith(str(_REPO_ROOT))
         else ground_truth_path.name
     )
-    reproduction_command = (
-        "# Step 1: run the benchmark (requires a Lemonade Server with the model "
-        "loaded; AMD Ryzen AI / Strix Halo recommended)\n"
-        "PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \\\n"
-        # Full-corpus triage is one tool call (~17 min on a 4B local model); a
-        # lower timeout abandons it mid-run and scores 0 emails.
-        "GAIA_AGENT_TOOL_TIMEOUT=1800 \\\n"
-        'PYTHONPATH="$(pwd)" \\\n'
-        "gaia eval benchmark \\\n"
-        f"    --model {model} \\\n"
-        "    --mbox-path tests/fixtures/email/synthetic_inbox.mbox \\\n"
-        f"    --ground-truth {ground_truth_rel}{limit_flag} \\\n"
-        "    --output-dir /tmp/email-eval\n\n"
-        "# Step 2: generate this scorecard from the benchmark output\n"
-        'PYTHONPATH="$(pwd)" \\\n'
-        "python hub/agents/python/email/packaging/gen_scorecard.py \\\n"
-        "    --benchmark-dir /tmp/email-eval \\\n"
-        f"    --ground-truth {ground_truth_rel}"
-        + (f"{limit_flag}" if limit is not None else "")
-    )
+    reproduction_command = _build_reproduction_command(model, ground_truth_rel, limit)
 
     breakdown = _compute_breakdown(judged)
+    notes = _build_notes(dataset_size)
 
     return ResultPayload(
         agent_name="Email Triage",
@@ -464,6 +568,7 @@ def build_payload(
         reproduction_command=reproduction_command,
         breakdown=breakdown,
         environment=environment,
+        notes=notes,
     )
 
 
