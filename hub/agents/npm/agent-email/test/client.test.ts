@@ -255,6 +255,17 @@ describe("EmailClient", () => {
     await expect(client.init()).rejects.toBeInstanceOf(HttpError);
   });
 
+  it("init() throws HttpError (not SyntaxError) on a 503 with a non-JSON body", async () => {
+    // A proxy / load-balancer can return 503 with an HTML error page — the body
+    // isn't an InitResponse, so init() must surface the HttpError, not a bare
+    // JSON.parse SyntaxError.
+    const fetchImpl = vi.fn(async () =>
+      new Response("<html>Bad Gateway</html>", { status: 503 }),
+    ) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    await expect(client.init()).rejects.toBeInstanceOf(HttpError);
+  });
+
   it("draft + send round-trip types", async () => {
     const draftRes: EmailDraftResponse = {
       draft: { to: [{ email: "a@b.com" }], subject: "Re: x", body: "ok" },

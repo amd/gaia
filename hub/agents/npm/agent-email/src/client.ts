@@ -306,7 +306,14 @@ export class EmailClient {
       // 503 is the expected not-ready response — its body IS a valid
       // InitResponse (ready:false, with a hint), not an error to swallow.
       if (e instanceof HttpError && e.status === 503 && e.bodyText) {
-        return JSON.parse(e.bodyText) as InitResponse;
+        try {
+          return JSON.parse(e.bodyText) as InitResponse;
+        } catch {
+          // A 503 whose body isn't the InitResponse JSON (e.g. a proxy/LB
+          // HTML error page) is a real failure — re-throw the HttpError so
+          // callers still get the promised HttpError, not a bare SyntaxError.
+          throw e;
+        }
       }
       throw e;
     }
