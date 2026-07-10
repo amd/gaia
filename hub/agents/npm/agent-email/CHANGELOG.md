@@ -7,8 +7,23 @@ bump is always at least a package MINOR bump with a migration note.
 
 ## 0.4.0
 
-Contract bumped to `SCHEMA_VERSION` **2.2** — additive over 2.1, so `checkVersion`
-(MAJOR-only) keeps accepting existing clients.
+Contract bumped to `SCHEMA_VERSION` **2.3**. `checkVersion` is MAJOR-only, so the
+2.x MAJOR is unchanged and existing clients keep connecting.
+
+### Changed
+
+- **Triage returns a reply *scaffold*, not an empty draft (`SCHEMA_VERSION` 2.2 →
+  2.3).** `EmailTriageResult.draft` is now a `DraftScaffold` (`{ to, subject }`)
+  instead of a `DraftReply` — triage classifies and summarizes but never composes
+  reply prose, so the `draft.body` it used to return was *always* `""`
+  regardless of model or provider. That empty field read as a bug ("the model
+  failed to draft"), so it is dropped from the triage shape entirely. `DraftReply`
+  (with `body` + `attachments`) is **unchanged** and remains the `draft()` /
+  `send()` shape: to send a reply, compose the body yourself and call `draft()`
+  for a full `DraftReply` + confirmation token. MAJOR is unchanged (the removed
+  field carried no data), so `checkVersion` does not flag existing integrations;
+  TypeScript consumers that destructured `result.draft.body` will see it typed
+  away and should read the body from `draft()` instead.
 
 ### Security
 

@@ -41,7 +41,7 @@ const triageResponse: EmailTriageResponse = {
       { description: "Open the dashboard", type: "link", url: "https://example.com/dashboard" },
     ],
     suggested_action: "reply",
-    draft: { to: [{ email: "a@b.com" }], subject: "Re: x", body: "" },
+    draft: { to: [{ email: "a@b.com" }], subject: "Re: x" },
     message_id: "m1",
     usage: { prompt_tokens: 120, completion_tokens: 40, total_tokens: 160, tokens_per_second: 32.5 },
   },
