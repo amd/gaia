@@ -216,7 +216,7 @@ A fundamental mathematical operation in neural networks, crucial for AI computat
 A file format for quantized LLM models, optimized for efficient loading and inference.
 
 ### Ground Truth
-Known correct answers used to evaluate AI system performance. In GAIA, generate ground truth via `gaia groundtruth` command, then compare model outputs against it using `gaia eval`. Essential for measuring accuracy, detecting regressions, and benchmarking models. See also: Evaluation Framework, Batch Experiment.
+Known correct answers used to evaluate AI system performance. In GAIA's Agent Eval Benchmark, ground truth lives in each scenario's YAML file — per turn, the `ground_truth` block names the expected answer (a `null` answer means the agent must admit it doesn't know). The `gaia eval agent` runner judges responses against it to measure accuracy, detect regressions, and benchmark models. See also: Evaluation Framework.
 
 ### Grounding
 Anchoring LLM responses in factual data or retrieved documents to reduce hallucinations.

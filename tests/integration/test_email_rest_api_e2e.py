@@ -162,15 +162,15 @@ class TestEmailPipelineE2E:
     def test_send_gate_blocks_without_confirmation_then_allows(self, agent, fake_gmail):
         """Drive the agent's REAL confirmation guard end-to-end.
 
-        ``send_now`` is in ``TOOLS_REQUIRING_CONFIRMATION``, so
+        ``send_now`` is in the agent's ``confirmation_required_tools()``, so
         ``_execute_tool`` consults ``console.confirm_tool_execution`` before
         running. When the console denies, the tool returns ``status:
         denied`` and NOTHING is sent to Gmail. When it grants, the send
         reaches the backend. This is the agent-side analogue of the REST
         confirmation gate."""
-        from gaia.agents.base.agent import TOOLS_REQUIRING_CONFIRMATION
+        from gaia_agent_email.agent import EmailTriageAgent
 
-        assert "send_now" in TOOLS_REQUIRING_CONFIRMATION
+        assert "send_now" in EmailTriageAgent.confirmation_required_tools()
 
         args = {
             "to": "alice@example.com",

@@ -124,7 +124,8 @@ jobs:
             --shared-lib-size $shared `
             --exe-size $exe
 
-      # Compare current results against baseline (binary: 10%, others: 15%)
+      # Compare current results against baseline (binary size: 10%, timing _us
+      # metrics: 50%, memory_per_step_growth: 75%, all others: 15%)
       - name: Compare against baseline
         shell: bash
         run: |

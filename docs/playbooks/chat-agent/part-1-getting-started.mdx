@@ -5,7 +5,7 @@ icon: "book-open-reader"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/chat/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/chat/sdk.py) | [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py)
+  **Source Code:** [`hub/agents/python/chat/gaia_agent_chat/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/python/chat/gaia_agent_chat/agent.py) | [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py)
 </Info>
 
 <Badge text="development" color="orange" />
@@ -48,7 +48,7 @@ A chat agent that combines:
 ## The Architecture (What You're Building)
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#A87B2D', 'edgeLabelBackground':'#ffffff', 'fontFamily':'system-ui, -apple-system, sans-serif'}}}%%
 graph TD
     A(["ChatAgent"]) --> B(["Agent Base"])
     A --> C(["Tool Mixins"])
@@ -99,11 +99,11 @@ Get a working agent running to understand the basic flow.
         cd my-chat-agent
         uv venv .venv
         source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
-        uv pip install "amd-gaia[rag]"
+        uv pip install "amd-gaia[agent-chat,rag]"
         ```
 
         <Info>
-        This is the recommended path for most users. You'll create your agent scripts in this folder.
+        This is the recommended path for most users. You'll create your agent scripts in this folder. The `agent-chat` extra pulls in the standalone `gaia-agent-chat` wheel that provides `ChatAgent`; `rag` adds the document-processing dependencies (faiss, PyMuPDF).
         </Info>
       </Tab>
 
@@ -116,10 +116,11 @@ Get a working agent running to understand the basic flow.
         uv venv .venv
         source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
         uv pip install -e ".[rag]"
+        uv pip install -e hub/agents/python/chat   # ChatAgent ships as a separate hub wheel
         ```
 
         <Info>
-        Use this path if you want to modify GAIA source code or contribute to the project.
+        Use this path if you want to modify GAIA source code or contribute to the project. `ChatAgent` lives in the standalone `gaia-agent-chat` package under `hub/agents/python/chat/`, so install it as a second editable wheel.
         </Info>
       </Tab>
     </Tabs>
@@ -203,7 +204,7 @@ Before we build step-by-step, let's understand what each piece does **under the 
 **Processing flow when you call `process_query()`:**
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#A87B2D', 'edgeLabelBackground':'#ffffff', 'fontFamily':'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
     A(["User Query"]) --> B(["Agent receives query"])
     B --> C{"Select tool or answer"}
@@ -312,7 +313,7 @@ flowchart TD
 **RAG pipeline:**
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#A87B2D', 'edgeLabelBackground':'#ffffff', 'fontFamily':'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
     A(["PDF Document"]) --> B(["Extract Text"])
     B --> C(["Split into Chunks"])

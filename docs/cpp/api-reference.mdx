@@ -312,9 +312,10 @@ class ToolRegistry {
 public:
     void registerTool(const std::string& name, const std::string& description,
                       ToolCallback callback, std::vector<ToolParameter> params = {},
-                      bool atomic = false);
+                      bool atomic = false,
+                      std::optional<ToolPolicy> policy = std::nullopt);
 
-    json executeTool(const std::string& name, const json& args) const;
+    json executeTool(const std::string& name, const json& args);
 
     const ToolInfo* findTool(const std::string& name) const;
     bool hasTool(const std::string& name) const;
@@ -342,9 +343,10 @@ public:
     virtual void printError(const std::string& message) = 0;
     virtual void printWarning(const std::string& message) = 0;
     virtual void printInfo(const std::string& message) = 0;
-    virtual void printFinalAnswer(const std::string& answer) = 0;
+    virtual void printFinalAnswer(const std::string& answer,
+                                  const UsageStats& usage = {}) = 0;
     virtual void printCompletion(int stepsTaken, int stepsLimit) = 0;
-    // ... plus progress indicators, debug methods
+    // ... plus printStateInfo, printPlan, startProgress/stopProgress, and debug methods
 };
 ```
 

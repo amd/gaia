@@ -102,6 +102,7 @@
                     "group": "Connected Agents",
                     "pages": [
                       "guides/email",
+                      "guides/email-integration",
                       "guides/telegram-adapter",
                       "guides/jira"
                     ]

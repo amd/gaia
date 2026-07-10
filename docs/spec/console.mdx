@@ -438,7 +438,7 @@ def test_agent_execution():
     result = agent.process_query("test query")
 
     # Only structured result is returned
-    assert result.status == "success"
+    assert result["status"] == "success"
 ```
 
 ### Example 3: API Streaming with SSE

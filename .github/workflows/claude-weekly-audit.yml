@@ -1,0 +1,393 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Proactive weekly Claude audit. Every other Claude job in this repo is REACTIVE —
+# it fires on a PR, a comment, or an @claude mention (claude.yml). Nothing looks at
+# the repo proactively, so debt that ships inside a green PR (a feature with no doc
+# page, a code path with no test, a silent `except Exception: pass`, a cli.mdx that
+# drifted from the real flags) sits unnoticed until a user hits it. This workflow is
+# the missing proactive lens: a scheduled deep review that fans out one Claude job
+# per dimension, then files ONE ranked triage issue + per-finding child issues.
+#
+# HUMAN-GATED — NOT an auto-merge bot. The workflow produces *findings*, never
+# commits. To turn a child issue into a PR, a maintainer applies the `bug` label and
+# the existing auto-fix job (claude.yml) takes over. No new PR-creation code here.
+#
+# MODES:
+#   normal (weekly)  — reviews the last N days of merged work + the subsystems it touched.
+#   deep   (monthly) — whole-codebase latent-debt sweep. Auto-selected on the first
+#                      Monday of each month; also selectable via workflow_dispatch.
+#   The `auto` dispatch default resolves to deep on day-of-month <= 7, else normal.
+#
+# DIMENSIONS (one read-only Claude job each, run in parallel):
+#   security    — injection, unsafe subprocess/eval, secret handling. NEVER posts
+#                 details publicly (see "Security findings" below).
+#   correctness — logic bugs AND the CLAUDE.md "Fail Loudly" rule: `except Exception:
+#                 pass`, try/except that returns a placeholder, silent degradation.
+#                 (This dimension owns the silent-fallback check.)
+#   docs        — new feature with no docs/ page or docs.json entry; cli.mdx drift;
+#                 `amd-gaia.ai` links missing the `/docs/` prefix; hub-agent doc drift
+#                 (README/SPEC/SKILL/CHANGELOG out of sync).
+#   tests       — new/changed code paths with no coverage; assertions that only prove
+#                 invocation, not call validity (CLAUDE.md "#1655" boundary rule).
+#   features    — half-finished follow-ups, TODO-as-placeholder, gaps a recent feature implies.
+#
+# A synthesis job collects the five structured outputs, dedupes against already-open
+# `weekly-audit` issues via a stable per-finding key, ranks by severity, and files output.
+#
+# MODEL: claude-fable-5 (Claude Fable 5) — Anthropic's most capable model, chosen for
+# the deep-review quality this proactive lens needs. NOTE: Fable is premium-priced
+# ($10/$50 per MTok) and its safety classifiers auto-route ~<5% of sessions to Opus
+# 4.8; both are expected. If Fable is not selectable on the CLAUDE_CODE_OAUTH_TOKEN
+# subscription tier, the action errors and the per-job verify step surfaces it — change
+# AUDIT_MODEL below to claude-opus-4-8 in that case.
+#
+# AUTH: same OAuth-preferred / API-key-fallback wiring as every claude.yml job
+# (CLAUDE_CODE_OAUTH_TOKEN, covered by the monthly claude-auth-canary.yml). Runs on the
+# Claude Max subscription pool, so there is no per-run dollar cost — only shared quota.
+#
+# COST CEILING: 5 dimension jobs (--max-turns 30) + 1 synthesis job (--max-turns 25) =
+# a known per-run ceiling. skip-if-empty exits before any Claude call on a no-change
+# week. The concurrency group prevents two scheduled runs from overlapping.
+#
+# NO REPO-CODE EXECUTION: the jobs read and report only (--allowedTools Read,Grep,Glob,Bash
+# with no Edit/Write) — they never `pip install` / run GAIA / execute checked-out code,
+# same rule as the claude.yml review jobs.
+
+name: Claude Weekly Audit
+
+on:
+  schedule:
+    # 06:00 UTC every Monday. First Monday of the month → deep whole-codebase sweep.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Audit mode"
+        type: choice
+        options: [auto, normal, deep]
+        default: auto
+      window_days:
+        description: "Days of history to review in normal mode"
+        default: "7"
+
+# Least-privilege default. Only the synthesis job files issues, via its own
+# per-job `issues: write`. The dimension jobs are read-only.
+permissions:
+  contents: read
+
+# Never let two scheduled runs overlap — they would race-evict each other's model
+# slot and double-file issues. Not cancel-in-progress: let an in-flight run finish.
+concurrency:
+  group: claude-weekly-audit
+  cancel-in-progress: false
+
+env:
+  # Single source of truth for the model. Swap to claude-opus-4-8 if Fable is
+  # unavailable on the subscription tier (see the MODEL note in the file header).
+  AUDIT_MODEL: claude-fable-5
+
+jobs:
+  # Resolve mode (auto → deep/normal) and short-circuit a no-change week.
+  preflight:
+    if: github.repository == 'amd/gaia'
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.scope.outputs.skip }}
+      mode: ${{ steps.scope.outputs.mode }}
+      window_days: ${{ steps.scope.outputs.window_days }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve mode and skip-if-empty
+        id: scope
+        env:
+          DISPATCH_MODE: ${{ github.event.inputs.mode || 'auto' }}
+          WINDOW_DAYS: ${{ github.event.inputs.window_days || '7' }}
+        run: |
+          set -euo pipefail
+          mode="$DISPATCH_MODE"
+          if [ "$mode" = "auto" ]; then
+            # cron only fires on Mondays, so day-of-month <= 7 IS the first Monday.
+            # 10# forces base-10 so a leading-zero day (08/09) doesn't parse as octal.
+            dom=$(date -u +%d)
+            if [ "$((10#$dom))" -le 7 ]; then mode="deep"; else mode="normal"; fi
+          fi
+          skip=false
+          if [ "$mode" = "normal" ]; then
+            count=$(git log --since="$WINDOW_DAYS days ago" --oneline | wc -l | tr -d ' ')
+            echo "Commit activity in the last $WINDOW_DAYS days: $count"
+            [ "$count" = "0" ] && skip=true
+          fi
+          {
+            echo "mode=$mode"
+            echo "window_days=$WINDOW_DAYS"
+            echo "skip=$skip"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved: mode=$mode skip=$skip window_days=$WINDOW_DAYS"
+
+  # One read-only Claude job per dimension. Each writes findings-<dimension>.json and
+  # uploads it as an artifact for the synthesis job. continue-on-error so one dimension
+  # crashing (e.g. an install-phase flake) doesn't sink the whole audit.
+  audit:
+    needs: preflight
+    # A custom `if` drops the implicit needs-succeeded guard, so re-assert the repo
+    # gate — otherwise a fork (where preflight is skipped, leaving skip empty) would run.
+    if: github.repository == 'amd/gaia' && needs.preflight.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        dimension: [security, correctness, docs, tests, features]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Build audit scope
+        env:
+          MODE: ${{ needs.preflight.outputs.mode }}
+          WINDOW_DAYS: ${{ needs.preflight.outputs.window_days }}
+        run: |
+          set -euo pipefail
+          {
+            echo "# Audit scope"
+            echo "mode: $MODE"
+          } > audit-scope.txt
+          if [ "$MODE" = "normal" ]; then
+            echo "## Commits (last $WINDOW_DAYS days)" >> audit-scope.txt
+            git log --since="$WINDOW_DAYS days ago" --oneline >> audit-scope.txt || true
+            echo "" >> audit-scope.txt
+            echo "## Changed files (last $WINDOW_DAYS days)" >> audit-scope.txt
+            base_sha=$(git rev-list -1 --before="$WINDOW_DAYS days ago" HEAD || true)
+            if [ -n "$base_sha" ]; then
+              git diff --name-status "$base_sha"...HEAD >> audit-scope.txt || true
+            fi
+          else
+            echo "## Deep sweep — review the whole codebase, not just recent changes." >> audit-scope.txt
+          fi
+          echo "Scope file lines: $(wc -l < audit-scope.txt)"
+
+      - name: Run Claude (${{ matrix.dimension }} lens)
+        id: claude
+        continue-on-error: true
+        uses: anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a  # v1.0.165
+        with:
+          # Prefer subscription OAuth, fall back to API key — see claude.yml "Authentication".
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            You are one lens of GAIA's proactive weekly code audit. YOUR LENS IS: ${{ matrix.dimension }}
+            Do ONLY that lens — ignore issues that belong to the other four.
+
+            REPO: ${{ github.repository }}
+            RUN LOG: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            ## First actions
+            1. Read `CLAUDE.md` — project conventions and the rules the lenses enforce.
+            2. Read `audit-scope.txt` — it says whether this is a `normal` (recent-diff) or
+               `deep` (whole-codebase) run and, for normal runs, lists the commits and
+               changed files to focus on. In deep mode, review beyond the diff.
+            3. Investigate with Grep/Glob/Read/Bash (read-only — do NOT edit, install, or run repo code).
+
+            ## Your lens
+            - **security**: injection (SQL/command), unsafe subprocess/eval, `pickle`/`yaml.load`
+              without SafeLoader, secrets in code or logs, path traversal, fork-PR surface.
+            - **correctness**: real logic bugs, AND every CLAUDE.md "No Silent Fallbacks — Fail
+              Loudly" violation: `except Exception: pass`, `try/except` that returns
+              None/""/a placeholder and swallows the error, retry loops that hide the final
+              failure, config loaders that default a missing required value. This lens OWNS
+              the silent-fallback check.
+            - **docs**: a new/changed feature with no `docs/` page or no `docs.json` nav entry;
+              `docs/reference/cli.mdx` drift from the real `gaia` flags; any `amd-gaia.ai` URL in
+              `src/gaia/` missing the `/docs/` prefix (CI rule, issue #1058); a hub agent under
+              `hub/agents/python/<id>/` whose README/SPEC/SKILL/CHANGELOG contradict each other.
+            - **tests**: new or changed code paths under `src/gaia/` or `hub/` with no test in
+              `tests/`; assertions that only prove a mock was called, not that the outgoing call
+              is valid (the CLAUDE.md "#1655" boundary rule).
+            - **features**: obvious half-finished follow-ups, a `TODO` standing in for missing
+              logic, a capability a recent feature clearly implies but didn't ship.
+
+            ## Output — write findings to `findings-${{ matrix.dimension }}.json`
+            Write a JSON file at the repo root named exactly `findings-${{ matrix.dimension }}.json`
+            with this shape (write `{"findings": []}` if you find nothing):
+
+            ```json
+            {"findings": [
+              {
+                "severity": "🔴" | "🟡" | "🟢",
+                "path": "src/gaia/....py",
+                "symbol": "function_name or ClassName or a doc heading — NOT a line number",
+                "title": "one-line statement of the problem",
+                "why": "one sentence: the concrete impact / what breaks",
+                "dedup_key": "${{ matrix.dimension }}:<repo-relative-path>:<symbol-or-section>"
+              }
+            ]}
+            ```
+
+            The `dedup_key` MUST be `${{ matrix.dimension }}:<path>:<symbol>` — a stable
+            function/class name or doc heading, NEVER a line number (line numbers move and
+            would re-file the same finding every week). Line numbers may appear in `title`/`why`,
+            never in the key. Report only findings you are confident are real; skip anything
+            CI's `python util/lint.py --all` already enforces (black/isort/whitespace).
+
+            ## Security lens — details stay PRIVATE (this overrides the output rule above)
+            If YOUR LENS IS security: a GitHub Actions run has no private DM channel and this
+            job's findings feed a PUBLIC triage issue. So for security findings:
+            - Print the FULL detail (file, symbol, why, remediation) to STDOUT — the job log is
+              visible only to those with Actions read access. Start each with "SECURITY FINDING:".
+            - In `findings-security.json`, write ONLY a redacted stub per finding: a coarse
+              `path` (directory, e.g. `src/gaia/ui/`), NO exploit detail, `title` exactly
+              "Security finding (details in run log)", and a stable `dedup_key`. Never put a
+              `file:line`, exploit steps, or a payload in the JSON.
+            The synthesis job will surface security as a COUNT + a pointer to the run log,
+            tagging @kovtcharov-amd — it never appears with detail in the public issue.
+          claude_args: |
+            --max-turns 30
+            --model ${{ env.AUDIT_MODEL }}
+            --allowedTools Read,Grep,Glob,Bash
+
+      - name: Upload findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: findings-${{ matrix.dimension }}
+          path: findings-${{ matrix.dimension }}.json
+          if-no-files-found: warn
+
+  # Collect the five dimension outputs, dedupe against open weekly-audit issues, rank,
+  # and file ONE parent triage issue + per-finding child issues. This is the only job
+  # with issues: write.
+  synthesize:
+    needs: [preflight, audit]
+    # Re-assert the repo gate (custom `if` drops the needs-succeeded guard). !cancelled()
+    # so synthesis still files whatever the dimension jobs produced even if one crashed.
+    if: github.repository == 'amd/gaia' && !cancelled() && needs.preflight.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Download all findings
+        uses: actions/download-artifact@v4
+        with:
+          path: audit-findings
+
+      - name: Ensure weekly-audit label exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create weekly-audit \
+            --color 5319e7 \
+            --description "Proactive weekly Claude audit finding" \
+            2>/dev/null && echo "created weekly-audit label" || echo "weekly-audit label already exists"
+
+      - name: Synthesize and file the triage issue
+        id: claude
+        continue-on-error: true
+        uses: anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a  # v1.0.165
+        with:
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            You are the synthesis step of GAIA's weekly proactive audit. Five dimension jobs
+            (security, correctness, docs, tests, features) each wrote a findings JSON file.
+            Dedupe them against already-open findings, rank them, and file the output.
+
+            REPO: ${{ github.repository }}
+            AUDIT MODE: ${{ needs.preflight.outputs.mode }}
+            RUN LOG: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            ## First actions
+            1. Read every `findings-*.json` under `audit-findings/` (each artifact is in its own
+               subdir, e.g. `audit-findings/findings-docs/findings-docs.json`). Missing or empty
+               files are fine — a dimension may have found nothing or crashed.
+            2. Read `CLAUDE.md` → "Issue Response Guidelines" for the tone/format to write in.
+            3. List already-open audit findings so you don't re-file them:
+               `gh issue list --repo ${{ github.repository }} --label weekly-audit --state open --json number,title,body --limit 200`
+               Each open child issue body carries a hidden `<!-- audit-key: KEY -->` marker.
+               Collect those KEYs into the "already filed" set.
+
+            ## Dedup (the single biggest correctness risk)
+            A finding is a duplicate iff its `dedup_key` already appears in an open
+            `weekly-audit` issue's `<!-- audit-key: ... -->` marker. Skip duplicates entirely.
+            Match on the exact key string — never on line numbers or prose similarity.
+            If, after dedup, there are ZERO new findings, post NOTHING and exit cleanly.
+
+            ## File per-finding CHILD issues (non-security only)
+            For each NEW, confirmed, non-security finding, open a child issue — WITHOUT any
+            auto-fix trigger label (do NOT add `bug`). Write the body to a temp file first, then
+            `gh issue create --repo ${{ github.repository }} --label weekly-audit --title "<title>" --body-file <file>`.
+            Body format (the audit-key marker is REQUIRED and drives next week's dedup):
+            ```
+            <one-paragraph why-this-matters: what's wrong + the concrete impact>
+
+            **Where:** `path` · `symbol`
+            **Dimension:** <dimension>   **Severity:** 🔴/🟡/🟢
+
+            To turn this into a PR: a maintainer applies the `bug` label and the existing
+            auto-fix job opens the fix PR. This issue is intentionally not auto-triggered.
+
+            <!-- audit-key: <the finding's dedup_key> -->
+            ```
+            Capture each child issue number to reference from the parent.
+
+            ## File ONE parent TRIAGE issue
+            Title: `Weekly audit — ${{ needs.preflight.outputs.mode }} — ${{ github.run_id }}`.
+            Label it `weekly-audit`. A ranked checklist grouped by dimension, most-severe first,
+            each line linking its child issue (`· #<n>`). Example:
+            ```
+            Proactive weekly audit (${{ needs.preflight.outputs.mode }} mode). Promote a finding
+            to a PR by applying the `bug` label to its child issue.
+
+            ## 🔴 Correctness (1)
+            - [ ] `except Exception: pass` swallows the Lemonade timeout in `foo.py` · #<n>
+            ## 📄 Docs (2)
+            - [ ] `gaia email` flags missing from cli.mdx · #<n>
+            ```
+            **Security section — count + pointer ONLY.** If there were any security findings,
+            render exactly one line and NOTHING else about them (no file, no symbol, no detail):
+            `## 🔒 Security (<count>) — details in the run log, cc @kovtcharov-amd`
+            with the run-log link: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}.
+            NEVER put a security `file:line`, exploit, or payload in this issue.
+
+            ## Rules
+            - No Claude attribution anywhere (no "Generated with", no Co-Authored-By).
+            - Do not open any PR and do not apply the `bug` label — humans gate every code change.
+            - Lead with the finding; keep each line to one sentence (CLAUDE.md issue style).
+          claude_args: |
+            --max-turns 25
+            --model ${{ env.AUDIT_MODEL }}
+            --allowedTools Read,Grep,Glob,Bash
+
+      - name: Verify the audit filed output
+        if: always()
+        env:
+          EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # Don't trust step outcome (continue-on-error masks it; an install crash exits
+          # before it's set). Check the real artifact the action writes on completion.
+          ok=false
+          if [ -n "$EXEC_FILE" ] && [ -f "$EXEC_FILE" ]; then
+            is_err=$(jq -s -r '[.. | objects | select(has("is_error")) | .is_error] | .[-1]' "$EXEC_FILE" 2>/dev/null)
+            [ "$is_err" = "false" ] && ok=true
+          fi
+          if [ "$ok" = "true" ]; then
+            echo "✅ Weekly audit synthesis completed (log: $EXEC_FILE)"
+          else
+            echo "::warning title=Weekly audit did not complete::The synthesis step crashed or errored before finishing (often the upstream install-phase ENOENT flake). Re-run: $RUN_URL"
+          fi

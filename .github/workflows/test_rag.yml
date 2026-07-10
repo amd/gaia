@@ -14,6 +14,7 @@ on:
       - 'src/gaia/llm/**'
       - 'src/gaia/vlm/**'
       - 'tests/test_rag*.py'
+      - 'tests/unit/rag/**'
       - 'setup.py'
       - '.github/workflows/test_rag.yml'
   pull_request:
@@ -26,6 +27,7 @@ on:
       - 'src/gaia/llm/**'
       - 'src/gaia/vlm/**'
       - 'tests/test_rag*.py'
+      - 'tests/unit/rag/**'
       - 'setup.py'
       - '.github/workflows/test_rag.yml'
   merge_group:
@@ -65,7 +67,7 @@ jobs:
     - name: Run RAG unit tests
       run: |
         echo "Running RAG unit tests..."
-        pytest tests/test_rag.py -v -s --tb=short --cov=src/gaia/rag --cov-report=term-missing
+        pytest tests/test_rag.py tests/unit/rag/ -v -s --tb=short --cov=src/gaia/rag --cov-report=term-missing
 
     - name: Upload coverage report
       if: always()
@@ -76,7 +78,10 @@ jobs:
 
   test-rag-integration:
     name: RAG Integration Tests
-    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
+    runs-on:
+      - self-hosted
+      - Windows
+      - ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
     # Bound a wedged model pull/load — the LemonadeClient pull timeout alone
     # is 200 min; don't let one hold the self-hosted runner for the 6h default.
     timeout-minutes: 60

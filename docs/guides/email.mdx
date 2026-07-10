@@ -8,6 +8,14 @@ icon: "envelope"
 
 The Email Triage Agent connects to your Gmail account through GAIA's connectors framework and runs every email-body inference **locally on your machine** via Lemonade. No email content ever leaves your device.
 
+<Note>
+  **Embedding the agent in your own app?** If you're building an application that owns the
+  mailbox UX and OAuth and wants GAIA's email agent as a local processing component, see
+  [Email Integration (API)](/guides/email-integration) — it covers self-OAuth → connection
+  forwarding → triage/draft/send over REST or MCP. This page covers the flow where GAIA
+  owns the UX.
+</Note>
+
 ## What it does
 
 - **Triage your inbox** — classify every message into one of five buckets — `URGENT`, `NEEDS_RESPONSE`, `FYI`, `PROMOTIONAL`, or `PERSONAL` — with a `suggested_action` verb (`reply` / `archive` / `none`) and separate `is_spam` and `is_phishing` flags.
@@ -148,6 +156,20 @@ Preferences are snapshotted to the agent's on-device MemoryStore on every change
 
 Senders you reply to quickly are automatically promoted to priority on the next triage run — no explicit command needed. The agent measures how long it took you to reply to each sender (using the original message's receipt timestamp as the anchor) and promotes senders whose median reply latency falls below the threshold. Promotion is applied on-demand during triage, not on a background thread, and persists across agent restarts. Works across both connected mailboxes (Gmail and Outlook).
 
+### Turning memory on or off
+
+All of the personalization above — inbox profiling, behavioral auto-promotion, and preference persistence — depends on the agent's memory. Memory is **on by default**; you can turn it off so nothing is read from or written to memory:
+
+- **At startup**, set the config field: `EmailAgentConfig(memory_enabled=False)`. The agent still constructs normally; it just runs with memory off from the first turn.
+- **At runtime**, call `agent.set_memory_enabled(False)` (and `True` to re-enable) — no restart. The Agent UI drives this per session, so a private session runs with memory off automatically.
+
+When memory is off, both halves are covered: the **write** path (profiling, behavioral learning, preference persistence, conversation storage) is suppressed, and the **read** path (your stored preferences/facts) is not injected into the prompt. This supersedes the older `GAIA_MEMORY_DISABLED=1` env var, which only worked at startup and required a restart to change.
+
+`set_memory_enabled()` returns a status dict — `{"ok", "enabled", "available", "message"}` — so a caller always gets feedback about what happened. Two cases worth knowing:
+
+- If memory was **never initialized this session** (started with `GAIA_MEMORY_DISABLED=1`, or Lemonade's embedding service was unreachable at startup), `available` is `false`. Trying to *enable* it at runtime returns `ok=false` with an actionable message — it can't be turned on without a restart, and the call says so rather than silently doing nothing.
+- Query the current state anytime with `agent.is_memory_enabled()` (bool) or `agent.memory_status()` (the same dict without changing anything).
+
 ### Scheduled daily briefing (off by default)
 
 The email sidecar can run the pre-scan on a daily timer — no prompt needed — so the
@@ -234,6 +256,19 @@ are exposed alongside triage/draft/send:
 
 Each reaches whichever calendar (Google or Microsoft) the user connected; a missing
 `calendar.events` scope fails loud with **HTTP 403** and the reconnect CTA.
+
+## Driving the full agent over HTTP (sidecar)
+
+The stateless REST endpoints above (`/v1/email/triage`, `/draft`, `/send`, …) analyze a payload you pass in — they don't run the conversational agent and have no memory. For the full experience the Agent UI shows (natural-language requests, multi-step tool use, personalization, memory), the sidecar also hosts a **stateful, session-scoped agent** under `/v1/email/agent/*`:
+
+- `POST /v1/email/agent/session` — create (or `reset`) a session; builds the agent and reports memory status.
+- `POST /v1/email/agent/query` — run one turn; streams the agent loop back as Server-Sent Events (`thinking`, `step`, `tool` usage, `permission_request`, and a terminal `run_complete` with the answer). Because this runs the real agent loop, **every** agent tool is reachable through natural language — no per-tool endpoint.
+- `POST /v1/email/agent/confirm-tool` — approve or deny a gated tool (send/forward/delete/quarantine/calendar-create). The run blocks until you respond, mirroring the in-app confirmation prompt.
+- `POST /v1/email/agent/cancel` — cooperatively cancel an in-flight run.
+- `GET /v1/email/agent/session/{id}/history` — the conversation so far.
+- `POST /v1/email/agent/memory` + `GET /v1/email/agent/memory/{id}` — the runtime memory toggle over HTTP. Enabling memory that was never initialized this session (started with `GAIA_MEMORY_DISABLED` or Lemonade unreachable) returns **409** with an actionable message rather than silently doing nothing.
+
+Each session holds one agent; one turn runs at a time (an overlapping `/query` returns **409**). This is the surface the Agent UI uses to drive the packaged email agent over the network instead of importing it in-process.
 
 ## Sending email — safety
 
@@ -344,6 +379,14 @@ isolated, and dogfoods the exact binary shipped to integrators.
   third-party integrators consume, so the UI
   exercises the real product. The sidecar's connector OAuth **write** routes are
   never exposed (all grant writes stay on the backend's single-writer path).
+  Because the sidecar can send mail as you, it requires a **per-session bearer
+  token** on every `/v1/email/*` request (#1706, `401` without it) plus a loopback
+  Host/Origin allowlist (`400`/`403`) — closing local-process and DNS-rebinding
+  access. The UI backend mints the token, hands it to the sidecar over a private
+  env channel, and replays it on every proxied call, so this is transparent in the
+  UI; integrators embedding the frozen sidecar get the same token wired by
+  `startSidecar`. See
+  [Email Integration → Authentication](/guides/email-integration#authentication).
 - **The in-app email chat agent** (`agent_type=email`) — the local-LLM tool loop
   still runs in the UI backend, but every tool is a thin HTTP call to the
   sidecar. The chat **pre-scan card** runs through the sidecar's `/prescan` route

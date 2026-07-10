@@ -144,8 +144,57 @@ The sidecar serves **same-origin only — no CORS**. A renderer on a different o
 
 ```ts
 import { EmailClient } from "@amd-gaia/agent-email/client";
-const client = new EmailClient({ baseUrl: "http://127.0.0.1:8131" });
+// Pass the sidecar's session token (from sidecar.authToken in the main process,
+// forwarded over IPC) — without it every /v1/email/* call is 401.
+const client = new EmailClient({ baseUrl: "http://127.0.0.1:8131", authToken });
 ```
+
+## Stateful agent surface (`/v1/email/agent/*`, 0.4.0)
+
+Everything above is **stateless** — you send a payload, the sidecar analyzes it, no
+memory, no conversation. The sidecar also hosts a **session-scoped, conversational
+agent** that runs the full `EmailTriageAgent` (memory, personalization, every agent
+tool) over HTTP. This is the surface the Agent UI uses. It is **not wrapped by the
+typed `EmailClient` yet** — call it directly with `fetch` against the sidecar's
+`baseUrl`:
+
+```js
+const base = "http://127.0.0.1:8131";
+// 1. Start a session (builds the agent; reports memory availability).
+await fetch(`${base}/v1/email/agent/session`, {
+  method: "POST", headers: { "content-type": "application/json" },
+  body: JSON.stringify({ session_id: "s1" }),
+});
+
+// 2. Run a turn — the reply streams back as Server-Sent Events.
+const res = await fetch(`${base}/v1/email/agent/query`, {
+  method: "POST", headers: { "content-type": "application/json", accept: "text/event-stream" },
+  body: JSON.stringify({ session_id: "s1", message: "Triage my inbox" }),
+});
+const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
+for (;;) {
+  const { value, done } = await reader.read(); if (done) break;
+  buf += dec.decode(value, { stream: true });
+  let i; while ((i = buf.indexOf("\n\n")) >= 0) {
+    const line = buf.slice(0, i).split("\n").find(l => l.startsWith("data: "));
+    buf = buf.slice(i + 2);
+    if (!line) continue;
+    const ev = JSON.parse(line.slice(6));           // {type: "thinking"|"step"|"permission_request"|"run_complete"|...}
+    if (ev.type === "permission_request") {         // a gated tool (send/forward/delete/...) is waiting
+      await fetch(`${base}/v1/email/agent/confirm-tool`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ session_id: "s1", approved: true }),
+      });
+    }
+    if (ev.type === "run_complete") console.log("answer:", ev.answer);
+  }
+}
+```
+
+Other endpoints: `POST /cancel`, `DELETE /session/{id}`, `GET /session/{id}/history`,
+and the runtime memory toggle `POST /memory` + `GET /memory/{id}` (enabling memory that
+was never initialized returns **409**, never a silent no-op). One turn at a time per
+session — an overlapping `/query` returns **409**. See `SPEC.md` for the full table.
 
 ## Running in a server / long-lived app
 
@@ -171,6 +220,11 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
 
 ## Gotchas (read before debugging)
 
+- **Every `/v1/email/*` call needs the session token** (#1706). `sidecar.client`
+  carries it automatically; a client you construct yourself must pass `authToken`
+  (from `sidecar.authToken`) or every call is **401**. Non-loopback `Host` → 400,
+  non-loopback browser `Origin` → 403. `/health` · `/version` · `/v1/email/spec` ·
+  `/v1/email/playground` are exempt.
 - **`health()` is liveness-only.** A green `/health` means the REST surface is up,
   NOT that triage will work. For real readiness call **`GET /v1/email/init`**
   (#1795) — it probes Lemonade + the triage model and returns `200` when ready,

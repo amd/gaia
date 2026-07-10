@@ -5,7 +5,7 @@ icon: "docker"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/agents/docker/agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/docker/agent.py) · [`src/gaia/apps/docker/app.py`](https://github.com/amd/gaia/blob/main/src/gaia/apps/docker/app.py)
+  **Source Code:** [`hub/agents/python/docker/gaia_agent_docker/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/python/docker/gaia_agent_docker/agent.py) · [`src/gaia/apps/docker/app.py`](https://github.com/amd/gaia/blob/main/src/gaia/apps/docker/app.py)
 </Info>
 
 ## Overview
@@ -78,7 +78,7 @@ gaia docker "create a Dockerfile for my application and then build and run the c
 
 ### Key Components
 
-1. **DockerAgent** (`src/gaia/agents/docker/agent.py`)
+1. **DockerAgent** (`hub/agents/python/docker/gaia_agent_docker/agent.py`)
 
    - Core agent that processes natural language queries
    - Analyzes application structure and dependencies
@@ -198,7 +198,7 @@ For more details on the MCP bridge, see [MCP Documentation](/integrations/mcp).
 ### 1. Python API (Direct Integration)
 
 ```python
-from gaia.agents.docker.agent import DockerAgent
+from gaia_agent_docker.agent import DockerAgent
 
 # Initialize and execute
 agent = DockerAgent(model_id="Qwen3.5-35B-A3B-GGUF", silent_mode=True)
@@ -406,7 +406,7 @@ Current limitations of the Docker agent:
 
 **Quick Python Test:**
 ```python
-from gaia.agents.docker.agent import DockerAgent
+from gaia_agent_docker.agent import DockerAgent
 
 agent = DockerAgent(silent_mode=True)
 result = agent.process_query("create a Dockerfile for Flask app in: ./app")

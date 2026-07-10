@@ -12,6 +12,7 @@
  */
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -30,6 +31,19 @@ const log = createLogger("lifecycle");
 const DEFAULT_HOST = "127.0.0.1";
 // Matches server.py DEFAULT_PORT. NEVER 4001 (reserved).
 const DEFAULT_PORT = 8131;
+
+// Private env channel the sidecar reads its per-session caller-auth token from
+// (#1706). MUST equal `gaia_agent_email.caller_auth.TOKEN_ENV_VAR`.
+const TOKEN_ENV_VAR = "GAIA_EMAIL_SIDECAR_TOKEN";
+
+/**
+ * Mint a cryptographically-random, URL-safe per-session bearer token. Handed to
+ * the sidecar over the private env channel on spawn and replayed by the bound
+ * client on every request.
+ */
+export function generateSessionToken(): string {
+  return crypto.randomBytes(32).toString("base64url");
+}
 
 /** The executable basename the fetcher writes (platform-specific extension). */
 export function executableName(platform: NodeJS.Platform = process.platform): string {
@@ -75,6 +89,12 @@ export interface SpawnOptions {
   /** Extra env vars merged over process.env. */
   env?: NodeJS.ProcessEnv;
   /**
+   * Per-session caller-auth token (#1706) to hand the sidecar and bind to its
+   * client. Defaults to a freshly generated token — pass one only to reuse a
+   * specific value (e.g. tests). Never share it across sidecars.
+   */
+  authToken?: string;
+  /**
    * Auto-reap this sidecar if the parent process exits, crashes, or is
    * interrupted (exit / uncaughtException / SIGINT / SIGTERM / SIGHUP) without an
    * explicit `shutdown()`. Default `true` — the frozen binary's detached child
@@ -89,8 +109,10 @@ export interface Sidecar {
   host: string;
   port: number;
   baseUrl: string;
-  /** A client bound to this sidecar's baseUrl. */
+  /** A client bound to this sidecar's baseUrl (carries the auth token). */
   client: EmailClient;
+  /** The per-session caller-auth token this sidecar was spawned with (#1706). */
+  authToken: string;
 }
 
 // --- Auto-cleanup: reap orphaned sidecars when the parent process goes away ---
@@ -206,6 +228,10 @@ export function spawnSidecar(opts: SpawnOptions): Sidecar {
   const args = ["--host", host, "--port", String(port)];
   if (opts.extraArgs?.length) args.push(...opts.extraArgs);
 
+  // Per-session caller-auth token (#1706): generate one, hand it to the sidecar
+  // over the private env channel, and bind it to the client below. Never logged.
+  const authToken = opts.authToken ?? generateSessionToken();
+
   log.info(`spawning ${opts.binaryPath} ${args.join(" ")}`);
 
   const child = spawn(opts.binaryPath, args, {
@@ -214,7 +240,7 @@ export function spawnSidecar(opts: SpawnOptions): Sidecar {
     // semantics; we tree-kill via taskkill instead.
     detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, ...(opts.env ?? {}) },
+    env: { ...process.env, ...(opts.env ?? {}), [TOKEN_ENV_VAR]: authToken },
   });
 
   child.stdout?.on("data", (d) => log.debug(`[sidecar stdout] ${String(d).trimEnd()}`));
@@ -225,8 +251,8 @@ export function spawnSidecar(opts: SpawnOptions): Sidecar {
   child.on("error", (e) => log.error(`sidecar process error: ${e.message}`));
 
   const baseUrl = `http://${host}:${port}`;
-  const client = new EmailClient({ baseUrl });
-  const sidecar: Sidecar = { child, host, port, baseUrl, client };
+  const client = new EmailClient({ baseUrl, authToken });
+  const sidecar: Sidecar = { child, host, port, baseUrl, client, authToken };
   if (opts.autoCleanup !== false) registerForCleanup(sidecar);
   return sidecar;
 }
@@ -287,7 +313,7 @@ function majorOf(version: string): number {
 }
 
 export interface VersionCheckOptions {
-  /** The apiVersion the client was built against. Default SCHEMA_VERSION ("2.2"). */
+  /** The apiVersion the client was built against. Default SCHEMA_VERSION ("2.3"). */
   expectedApiVersion?: string;
 }
 

@@ -207,7 +207,7 @@ When a scenario exceeds its budget, it receives the `BUDGET_EXCEEDED` status and
 | Single scenario | $0.02 -- $0.10 | 30s -- 3min |
 | RAG quality category (7 scenarios) | $0.20 -- $0.70 | 5 -- 15min |
 | Context retention (4 scenarios) | $0.10 -- $0.40 | 3 -- 10min |
-| Full benchmark (54 scenarios) | $1.00 -- $5.00 | 20 -- 60min |
+| Full benchmark (all scenarios) | $1.00 -- $5.00 | 20 -- 60min |
 | Architecture audit | $0.00 | < 1min |
 
 <Note>
@@ -453,7 +453,7 @@ gaia eval agent --corpus-dir ~/my-project/eval-corpus
   </Card>
 
   <Card title="Don't" icon="xmark">
-    - Run the full 54-scenario benchmark on every commit
+    - Run the full benchmark (all scenarios) on every commit
     - Skip `--compare` -- regressions are the whole point
     - Use `--fix` in CI (patches should be reviewed by humans)
     - Ignore `BLOCKED_BY_ARCHITECTURE` -- track these as known issues

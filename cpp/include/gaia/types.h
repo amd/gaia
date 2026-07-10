@@ -292,7 +292,7 @@ inline bool defaultStreaming() {
 /// Return the default LLM base URL, honoring the LEMONADE_BASE_URL
 /// environment variable if set (matching the Python CLI behavior).
 inline std::string defaultBaseUrl() {
-    return getEnvVar("LEMONADE_BASE_URL", "http://localhost:8000/api/v1");
+    return getEnvVar("LEMONADE_BASE_URL", "http://localhost:13305/api/v1");
 }
 
 // ---- Decision Support ----

@@ -5,7 +5,7 @@ icon: "image"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/agents/sd/agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/sd/agent.py)
+  **Source Code:** [`hub/agents/python/sd/gaia_agent_sd/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/python/sd/gaia_agent_sd/agent.py)
 </Info>
 
 <Badge text="development" color="orange" />
@@ -40,6 +40,11 @@ By the end, you'll have a working multi-modal agent in ~60 lines of code and und
 
 Want to try it first before building?
 
+Install GAIA with the built-in SD agent (`gaia sd` ships in the standalone `gaia-agent-sd` package):
+```bash
+uv pip install "amd-gaia[agent-sd]"
+```
+
 Install models and start Lemonade Server:
 ```bash
 gaia init --profile sd
@@ -58,19 +63,18 @@ An `ImageStoryAgent` that generates images and creates stories about them. ~60 l
 
 When you run `agent.process_query("create a robot exploring ancient ruins")`, here's what happens:
 
-1. **LLM decides the plan**: Qwen3-8B analyzes your query and returns `{plan: [{tool: "generate_image", tool_args: {prompt: "..."}}, {tool: "create_story_from_image", tool_args: {...}}]}`
+1. **LLM decides the plan**: Gemma-4-E4B-it analyzes your query and returns `{plan: [{tool: "generate_image", tool_args: {prompt: "..."}}, {tool: "create_story_from_image", tool_args: {...}}]}`
 2. **Executes generate_image()**: Sends prompt to SDXL-Turbo (4-step diffusion model), receives PNG bytes, saves to disk (~17s)
-3. **Executes create_story_from_image()**: Calls your custom tool → sends image bytes to Qwen3-VL-4B vision model → receives 2-3 paragraph narrative (~15s)
+3. **Executes create_story_from_image()**: Calls your custom tool → sends image bytes to the Gemma-4-E4B-it vision model → receives 2-3 paragraph narrative (~15s)
 4. **Returns result**: `{"status": "success", "result": "Here's your image and story...", "conversation": [...], "steps_taken": 3}`
 
 You'll create the `create_story_from_image` tool yourself using VLM capabilities.
 
-**Three models, one agent:**
-- **Qwen3-8B-GGUF** (5GB): Reasoning engine - decides which tools to call and when
+**Two models, one agent:**
+- **Gemma-4-E4B-it-GGUF** (~3GB): Multimodal model — serves as both the reasoning engine (decides which tools to call and when) and the vision-language model (analyzes images and generates text)
 - **SDXL-Turbo** (6.5GB): Diffusion model - generates images from text prompts
-- **Qwen3-VL-4B** (3.2GB): Vision-language model - analyzes images and generates text
 
-All run locally via Lemonade Server. GGUF models use AMD Radeon iGPU (Vulkan), SDXL runs on CPU.
+All run locally via Lemonade Server. The GGUF model uses AMD Radeon iGPU (Vulkan); SDXL runs on CPU.
 
 ---
 
@@ -113,8 +117,10 @@ All run locally via Lemonade Server. GGUF models use AMD Radeon iGPU (Vulkan), S
 
   <Step title="Install GAIA">
     ```bash
-    uv pip install amd-gaia
+    uv pip install "amd-gaia[agent-sd]"
     ```
+
+    The custom agent you build below only needs the `gaia.sd` and `gaia.vlm` mixins from core `amd-gaia`. The `agent-sd` extra additionally installs the standalone `gaia-agent-sd` package so the built-in `gaia sd` command (used in the Quick Test and Troubleshooting) is available too.
   </Step>
 
   <Step title="Initialize SD profile">
@@ -126,10 +132,9 @@ All run locally via Lemonade Server. GGUF models use AMD Radeon iGPU (Vulkan), S
     1. Installs Lemonade Server (if not already installed)
     2. **Starts Lemonade Server automatically**
     3. **Configures Lemonade Server with 16K context** (required for SD agent multi-step planning)
-    4. Downloads three models (~15GB):
+    4. Downloads two models (~10GB):
        - **SDXL-Turbo** (6.5GB) - Diffusion model in safetensors format
-       - **Qwen3-8B-GGUF** (5GB) - Agent LLM in quantized GGUF format (loaded with 16K context)
-       - **Qwen3-VL-4B-Instruct-GGUF** (3.2GB) - Vision LLM in quantized GGUF format
+       - **Gemma-4-E4B-it-GGUF** (~3GB) - Multimodal GGUF model used for both agentic reasoning and vision (loaded with 16K context)
     5. Verifies models and context size
 
     **Hardware acceleration:**
@@ -162,14 +167,14 @@ class ImageStoryAgent(Agent, SDToolsMixin, VLMToolsMixin):
     """Agent that generates images and creates stories."""
 
     def __init__(self, output_dir="./generated_images"):
-        super().__init__(model_id="Qwen3-8B-GGUF")
+        super().__init__(model_id="Gemma-4-E4B-it-GGUF")
         self.init_sd(output_dir=output_dir, default_model="SDXL-Turbo")
-        self.init_vlm(model="Qwen3-VL-4B-Instruct-GGUF")
+        self.init_vlm(model="Gemma-4-E4B-it-GGUF")
 ```
 
 **What this does:**
 - `Agent, SDToolsMixin, VLMToolsMixin`: Inherits three capabilities - reasoning, image generation, vision analysis
-- `super().__init__(model_id="Qwen3-8B-GGUF")`: Sets up the reasoning LLM (downloaded by `gaia init --profile sd`)
+- `super().__init__(model_id="Gemma-4-E4B-it-GGUF")`: Sets up the multimodal reasoning LLM (downloaded by `gaia init --profile sd`)
 - `init_sd()`: Registers image generation tools (`generate_image`, `list_sd_models`, `get_generation_history`)
 - `init_vlm()`: Registers vision tools (`analyze_image`, `answer_question_about_image`)
 
@@ -208,7 +213,7 @@ The agent now has 5 tools from mixins. You'll add a 6th custom tool next.
     ```python
     analyze_image(image_path: str, focus: str = "all") -> dict
     ```
-    - Sends image bytes to Qwen3-VL-4B vision model
+    - Sends image bytes to the Gemma-4-E4B-it vision model
     - Returns: `{"status": "success", "description": "...", "focus_analysis": "..."}`
 
     ```python
@@ -279,7 +284,7 @@ Add `_register_tools()` to create `create_story_from_image`:
   - Non-atomic: multi-step tasks like "research a topic"
 - Reads image bytes from file path
 - Builds a storytelling prompt based on the style parameter
-- Calls `self.vlm_client.extract_from_image()` - sends image + prompt to Qwen3-VL-4B vision model
+- Calls `self.vlm_client.extract_from_image()` - sends image + prompt to the Gemma-4-E4B-it vision model
 - Returns structured dict with story text and metadata
 - Decorator auto-generates JSON schema from function signature and docstring
 
@@ -359,7 +364,7 @@ if __name__ == "__main__":
 <Accordion title="How the CLI works">
 
 **Quick summary:**
-- Creates output directory and initializes agent (loads Qwen3-8B, registers 6 tools)
+- Creates output directory and initializes agent (loads Gemma-4-E4B-it, registers 6 tools)
 - Loops: reads input → calls `process_query(input)` → prints result
 - `process_query()` handles LLM planning and tool execution automatically
 
@@ -368,7 +373,7 @@ if __name__ == "__main__":
 
 **Step 1 - LLM Planning:**
 ```python
-# Agent sends to Qwen3-8B
+# Agent sends to Gemma-4-E4B-it
 {
   "messages": [{"role": "user", "content": "create a robot exploring ruins"}],
   "tools": [
@@ -459,7 +464,7 @@ You: make a cyberpunk street scene and tell me a story
     **Solution:** Download missing models:
     ```bash
     lemonade-server pull SDXL-Turbo
-    lemonade-server pull Qwen3-VL-4B-Instruct-GGUF
+    lemonade-server pull Gemma-4-E4B-it-GGUF
     ```
 
     Or re-run init:

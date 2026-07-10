@@ -91,7 +91,6 @@ For full control — custom tools, built-in tool mixins, MCP servers, or complex
 
 ```python
 from gaia.agents.base.agent import Agent
-from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 
 
@@ -103,31 +102,28 @@ class MyPythonAgent(Agent):
     def _get_system_prompt(self) -> str:
         return "You are a helpful assistant with a custom greet tool."
 
-    def _create_console(self) -> AgentConsole:
-        return AgentConsole()
-
     def _register_tools(self) -> None:
         _TOOL_REGISTRY.clear()
-        self._register_custom_tools()
 
-    def _register_custom_tools(self) -> None:
         @tool
         def greet(name: str) -> str:
             """Greet a person by name."""
             return f"Hello, {name}! Welcome to GAIA."
 ```
 
-The three required methods are:
+This mirrors what the Builder Agent scaffolds. The only method a subclass **must**
+implement is `_register_tools()` (it's abstract on the base `Agent`); the other two
+have sensible defaults you can override:
 
-| Method | Purpose |
-|--------|---------|
-| `_get_system_prompt()` | Returns the system prompt string |
-| `_create_console()` | Returns an `AgentConsole` instance |
-| `_register_tools()` | Registers tools into `_TOOL_REGISTRY` |
+| Method | Required? | Purpose |
+|--------|-----------|---------|
+| `_register_tools()` | **Yes** | Registers tools into `_TOOL_REGISTRY` |
+| `_get_system_prompt()` | Optional | Returns the system prompt string (defaults to `""`, i.e. mixin prompts only) |
+| `_create_console()` | Optional | Returns the console handler (defaults to `AgentConsole`, or a silent console in silent mode) |
 
 ### Adding built-in tools
 
-GAIA ships with ready-to-use tool mixins. To enable them, inherit the mixin and call its `register_*_tools()` method from `_register_tools()`:
+GAIA ships with ready-to-use tool mixins. To enable most of them, inherit the mixin and call its `register_*_tools()` method from `_register_tools()`. The `sd` and `vlm` mixins are the exception — call `init_sd()` / `init_vlm()` (which set up the client **and** register the tools in one step):
 
 | Tool | Mixin | Register call |
 |------|-------|---------------|
@@ -136,8 +132,8 @@ GAIA ships with ready-to-use tool mixins. To enable them, inherit the mixin and 
 | `file_io` | `gaia.agents.tools.file_io_tools.FileIOToolsMixin` | `self.register_file_io_tools()` |
 | `shell` | `gaia.agents.tools.shell_tools.ShellToolsMixin` | `self.register_shell_tools()` |
 | `screenshot` | `gaia.agents.tools.screenshot_tools.ScreenshotToolsMixin` | `self.register_screenshot_tools()` |
-| `sd` | `gaia.sd.mixin.SDToolsMixin` | `self.register_sd_tools()` |
-| `vlm` | `gaia.vlm.mixin.VLMToolsMixin` | `self.register_vlm_tools()` |
+| `sd` | `gaia.sd.mixin.SDToolsMixin` | `self.init_sd()` |
+| `vlm` | `gaia.vlm.mixin.VLMToolsMixin` | `self.init_vlm()` |
 
 <Tip>
   To call out to external services (Gmail, GitHub, Slack, etc.) without baking API keys into your code, use [GAIA connectors](#using-gaia-connectors) instead of writing your own auth.
@@ -381,7 +377,7 @@ The UI endpoints (`POST /api/agents/export` and `POST /api/agents/import`) are l
   </Accordion>
 
   <Accordion title="Agent fails to load">
-    Check the server logs for load errors. Ensure `AGENT_ID`, `AGENT_NAME`, and `AGENT_DESCRIPTION` are set as class attributes, and that the three required methods (`_get_system_prompt`, `_create_console`, `_register_tools`) are implemented.
+    Check the server logs for load errors. Ensure `AGENT_ID`, `AGENT_NAME`, and `AGENT_DESCRIPTION` are set as class attributes, and that the required `_register_tools()` method is implemented (`_get_system_prompt()` and `_create_console()` are optional overrides).
   </Accordion>
 
   <Accordion title="Imported agent doesn't appear or shows errors">

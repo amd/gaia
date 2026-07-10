@@ -199,12 +199,13 @@ The MCP Server acts as an HTTP bridge between external applications and GAIA's n
     curl http://localhost:8765/health
     ```
 
-    Response:
+    Response (agent/tool counts vary by installation):
     ```json
     {
       "status": "healthy",
+      "service": "GAIA MCP Bridge (HTTP)",
       "agents": 4,
-      "tools": 8
+      "tools": 5
     }
     ```
   </Tab>
@@ -416,7 +417,7 @@ The MCP server exposes the following GAIA agents as tools:
 
     **Solutions**:
     - Start the Lemonade server: `lemonade-server serve`
-    - Check GAIA_BASE_URL is correct
+    - Check `LEMONADE_BASE_URL` is correct (default `http://localhost:13305/api/v1`)
     - Verify models are loaded
   </Accordion>
 

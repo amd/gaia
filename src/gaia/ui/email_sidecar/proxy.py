@@ -44,7 +44,14 @@ def _extract_detail(resp) -> str:
 
 
 class EmailSidecarProxy:
-    def __init__(self, base_url: str, *, session=None, timeout: float | None = None):
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        session=None,
+        timeout: float | None = None,
+        auth_token: str | None = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self.timeout = (
             timeout
@@ -56,6 +63,12 @@ class EmailSidecarProxy:
 
             session = requests.Session()
         self._session = session
+        # Per-session caller-auth token (#1706) replayed as a bearer header on
+        # every request so the sidecar accepts UI-originated calls; None only in
+        # tests / when talking to a sidecar started without auth.
+        self._auth_token = auth_token
+        if auth_token:
+            self._session.headers.update({"Authorization": f"Bearer {auth_token}"})
 
     def _raise_for_status(self, resp, path: str) -> None:
         # Translate the boundary loudly: keep the sidecar's own actionable detail
