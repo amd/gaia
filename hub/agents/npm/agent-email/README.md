@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/@amd-gaia/agent-email?label=version)](https://www.npmjs.com/package/@amd-gaia/agent-email) · contract `SCHEMA_VERSION` **2.3** · last updated **2026-07-10**
 
-**Eval scorecard (v0.3.0): aggregate 83.4 / 100** — within-one-bucket **acceptance** accuracy (3-run mean, 95% CI [82.1, 84.7]) over the full 249-email labeled corpus ([`SCORECARD.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SCORECARD.md)). Triage priority is ordinal, so the bar (#1437) credits exact-or-adjacent buckets — what users feel — not exact 4-way match (reported as a secondary, 0.77). The linked scorecard carries the full recipe, metrics + reported secondaries, run-to-run variance/CI, a per-category breakdown, the run environment, a worked recomputation, and reproduction steps.
+**Eval scorecard (v0.3.0): aggregate 83.4 / 100** — within-one-bucket **acceptance** accuracy (3-run mean, 95% CI [82.1, 84.7]) over the full 249-email labeled corpus ([`SCORECARD.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SCORECARD.md)). Triage priority is ordinal, so the bar (#1437) credits exact-or-adjacent buckets — what users feel — not exact 4-way match (reported as a secondary, 0.77). The linked scorecard carries the full recipe, metrics + reported secondaries, run-to-run variance/CI, a per-category breakdown, the run environment, and a worked recomputation; [`EVALUATION.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/EVALUATION.md) is the companion guide — what's measured, the dataset, a worked example, and step-by-step reproduction.
 
 Embed the **GAIA email agent** in your JS/TS app. It triages, organizes, replies
 to, and schedules from Gmail and Outlook — with every email body analyzed
@@ -202,11 +202,12 @@ On a fresh machine the binary boots fine, but the first `triage` returns **HTTP
 502** until Lemonade and the model are in place. `health()` is **liveness-only** — a
 green `/health` means the REST surface is up, not that triage will work.
 
-To check *actual* readiness before your first `triage`, call **`init()`** (`GET
-/v1/email/init`, #1795) — it probes Lemonade reachability + version + the triage
-model and returns `{ ready, hint }` (`ready: false` with an actionable `hint` when
-triage can't run yet). The wrapper returns the `InitResponse` on both the ready and
-not-ready paths, so branch on `.ready` rather than catching an error. `POST
+To check *actual* readiness before your first `triage`, call **`GET
+/v1/email/init`** (#1795) — it probes Lemonade reachability + version + the triage
+model and returns `200` when ready, `503` with an actionable `hint` when not (no
+client wrapper yet; use `fetch` with the exported `InitResponse` type — and attach
+the per-session bearer token, `Authorization: Bearer ${sidecar.authToken}`, since a
+raw `fetch` doesn't inject it like the client methods do). `POST
 /v1/email/init` can then ask the running Lemonade to pull the model, streaming
 progress. See [`SPEC.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md) → *Readiness vs liveness*.
 
@@ -219,7 +220,6 @@ example above). Every non-2xx response throws `HttpError` (with `status`, `url`,
 
 | Call | Needs | Does |
 |------|-------|------|
-| `init()` | Nothing external | **Readiness preflight** (#1795): probes Lemonade reachability + version and triage-model presence, read-only (never pulls a model). Returns `{ ready, lemonade, model, hint }` — `ready: true` when triage will actually work, else `ready: false` with an actionable `hint`. Branch on `.ready`; the not-ready case is a value, not a thrown error. This is the real readiness signal, unlike liveness-only `health()`. |
 | `triage(req)` | Local LLM only | Classifies the message you pass, summarizes it, and extracts action items + spam/phishing signals. No mailbox is read. Action items also persist to the sidecar's local task list, linked to the `message_id` and de-duplicated per message — the response shape is unchanged. |
 | `triageBatch(req)` | Local LLM only | Same as `triage`, but for an `items` array (1–100). Returns a parallel `results` array; per-item failures isolate (HTTP 200 can carry errored items — inspect `results[].error`). |
 | `search(req)` | A connected Gmail/Outlook mailbox | Searches the connected inbox (**read-only**) by Gmail-style `query`/`labels` and returns message metadata — id, subject, sender, snippet, labels. No message is read in full or modified; no confirmation token needed. |
@@ -264,7 +264,8 @@ const sidecar = await startSidecar({
 ```
 
 Each run persists the `email_pre_scan` envelope with a `generated_at` stamp; pull the
-latest one from `GET /v1/email/briefing` (plain `fetch` — no client wrapper yet). It
+latest one from `GET /v1/email/briefing` (plain `fetch` — no client wrapper yet, so
+attach the per-session bearer token yourself). It
 returns **404** until the first scheduled run has happened, and an invalid env value
 fails sidecar startup loudly rather than guessing a schedule.
 `archive`/`quarantine` are reversible within a 30-second window via
@@ -288,7 +289,7 @@ When you need finer control, the steps are exported individually:
 | `checkVersion(client)` | Throw if the sidecar's contract MAJOR differs from the client's. |
 | `shutdown(sidecar)` | Kill the whole process tree. |
 
-As of `SCHEMA_VERSION` 2.3 this package exposes inbox **search** (read-only),
+As of `SCHEMA_VERSION` 2.2 this package exposes inbox **search** (read-only),
 the **archive** / phishing-**quarantine** mailbox actions (+ their undo),
 calendar **view / create / respond**, and **attachments** (#1542: triage
 exposes metadata, draft/send accept files). The remaining mailbox **actions**
@@ -399,7 +400,7 @@ while a `send` transmits to your mail provider by definition. Press Ctrl+C to st
 | Symptom | Cause & fix |
 |---------|-------------|
 | `triage()` returns **HTTP 502** | Lemonade isn't running or the model isn't pulled. Start it (`lemonade-server serve`) and provision the model (`gaia init`). Not a bug in this package. |
-| `/health` is green but `triage` fails | `health()` is **liveness-only** — it doesn't check Lemonade or the model. Call `init()` for real readiness (it probes Lemonade + the model and returns `{ ready, hint }` — `ready: false` with a `hint` when triage can't run yet). |
+| `/health` is green but `triage` fails | `health()` is **liveness-only** — it doesn't check Lemonade or the model. Use `GET /v1/email/init` for real readiness (it probes Lemonade + the model; `503` + `hint` when not ready). |
 | `npm install` fails with `UNABLE_TO_GET_ISSUER_CERT` | Corporate TLS proxy. Reinstall with Node's system CA store: `NODE_OPTIONS=--use-system-ca npm install` (Node ≥ 22). |
 | `require(...)` throws `ERR_REQUIRE_ESM` | The package is ESM-only. Use `import`, or `await import("@amd-gaia/agent-email")` from CommonJS. |
 | Sidecar process lingers after exit | Auto-cleanup reaps it on exit/crash/signal by default; a lingering sidecar means `autoCleanup: false` (call `shutdown(sidecar)` yourself) or a hard `SIGKILL` of the host. |
@@ -411,6 +412,8 @@ Set `DEBUG=agent-email` for verbose spawn/fetch/health logs (on stderr).
 
 - [`SPEC.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md) — full API, lifecycle helpers, connectors, module format, and platforms.
 - [`SKILL.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SKILL.md) — load into Claude Code (or similar) for a step-by-step integration playbook.
+- [`SCORECARD.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SCORECARD.md) — latest eval results (score, metrics, per-category breakdown, run environment).
+- [`EVALUATION.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/EVALUATION.md) — evaluation guide: what's measured, the dataset, a worked example, and how to reproduce the scorecard.
 - [`CHANGELOG.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/CHANGELOG.md) — version history.
 
 ## License

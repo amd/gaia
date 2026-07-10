@@ -54,10 +54,8 @@ Contract bumped to `SCHEMA_VERSION` **2.3**. `checkVersion` is MAJOR-only, so th
   Lemonade to download the model and streams `text/plain` progress (it can't
   install Lemonade itself — a host prerequisite — so an unreachable server is a
   loud `503`, not a silent no-op). New exported types: `InitResponse`,
-  `InitLemonadeStatus`, `InitModelStatus`, and a typed `EmailClient.init()`
-  wrapper that returns the `InitResponse` on both the 200 (ready) and 503
-  (not-ready) paths — branch on `.ready` / read `.hint` instead of catching an
-  error. it does not move `SCHEMA_VERSION`.
+  `InitLemonadeStatus`, `InitModelStatus`; no client wrapper yet (call with
+  `fetch`). `SCHEMA_VERSION` stays `2.2`.
 - **Voice / style-matched drafting (#1607).** The agent can now draft replies in
   the user's **own voice** instead of a neutral scaffold. `build_voice_profile`
   samples the user's Sent mail into a local style profile — top greetings /
@@ -67,6 +65,17 @@ Contract bumped to `SCHEMA_VERSION` **2.3**. `checkVersion` is MAJOR-only, so th
   writes; `clear_voice_profile` forgets it. **Agent-loop only** (chat / Agent UI /
   `gaia email`) — no REST endpoint, no npm client method, `SCHEMA_VERSION` stays
   `2.2`.
+- **Content-based spam detection (#1911).** Spam detection previously keyed
+  entirely off Gmail's own `SPAM` label — so it did nothing for Outlook or any
+  non-Gmail mailbox and wasn't real detection. It's now provider-agnostic: a
+  narrow mechanical prefilter (auto-generated sender addresses, freemail-domain
+  impersonation) handles the clear-cut cases, and the local LLM makes the real
+  content-vs-legitimate-marketing call on the rest. The `is_spam` signal on
+  `triage()` keeps its shape — only its derivation changed — so `SCHEMA_VERSION`
+  stays `2.2`. The eval corpus was expanded to exercise it (spam examples 7 →
+  57, corpus → 299 messages) and the scorecard gains `is_spam` recall /
+  precision / F1 as the primary spam metrics (plain accuracy is misleading on a
+  minority class this size).
 - **Stateful agent surface (`/v1/email/agent/*`, #1666).** A session-scoped,
   conversational surface so a host can drive the full `EmailTriageAgent` over HTTP —
   memory, personalization, and every agent tool — instead of importing it in-process.
@@ -143,6 +152,16 @@ Contract bumped to `SCHEMA_VERSION` **2.3**. `checkVersion` is MAJOR-only, so th
   default 25), e.g. via `startSidecar({ env: {...} })`. An invalid value fails sidecar
   startup loudly; the endpoint returns `404` until the first scheduled run. REST-only
   for now — no npm client wrapper method yet.
+
+### Fixed
+
+- **MCP `serverInfo.version` now reports the real package version.** The stdio MCP
+  server's `get_mcp_server_info` had a hardcoded `"1.0.0"` placeholder; it now sources
+  `AGENT_VERSION` from `gaia_agent_email.version`, so all three version surfaces (wheel
+  metadata, `GET /v1/email/version` `agentVersion`, MCP server info) agree.
+- **Hub manifest `tools_count` corrected 6 → 52** (`gaia-agent.yaml` + the in-code agent
+  registration): the agent registers 52 `@tool` functions; the stale `6` under-reported
+  the surface on the hub page and the Agent UI card.
 
 ## 0.3.0
 

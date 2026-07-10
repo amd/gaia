@@ -33,7 +33,7 @@ Use this integration path when you want:
 - **Your own UX and mailbox connection** — your app runs OAuth, owns the tokens, and
   forwards a connection to GAIA so the agent can read/send on the user's behalf.
 - **A structured contract** — a frozen request/response schema (`SCHEMA_VERSION`
-  `2.2`) you can code against, over REST **or** MCP stdio.
+  `2.3`) you can code against, over REST **or** MCP stdio.
 
 ## Architecture
 
@@ -253,10 +253,10 @@ token, the forwarded client credentials, and every per-agent grant.
 
 ## The triage contract
 
-*(#1262, frozen at `SCHEMA_VERSION` 2.2)* `POST /v1/email/triage` takes an email or a full
+*(#1262, frozen at `SCHEMA_VERSION` 2.3)* `POST /v1/email/triage` takes an email or a full
 thread and returns structured analysis. **No mail is read or sent** — it analyzes only the
 payload in the request, so you can build and verify triage with **zero connector setup**.
-See the full schema in the [Email Triage Contract](/spec/email-contract).
+See the full schema in the [Email Triage Contract](https://github.com/amd/gaia/blob/main/hub/agents/python/email/CONTRACT.md).
 
 Triage always uses the **local Lemonade LLM** (there is no `engine` toggle; a
 high-confidence spam/promotional heuristic may skip the classify call internally, but the
@@ -285,7 +285,7 @@ curl -s -X POST http://127.0.0.1:4200/v1/email/triage \
 
 ```json
 {
-  "schema_version": "2.2",
+  "schema_version": "2.3",
   "request_kind": "single",
   "result": {
     "category": "URGENT",
@@ -298,8 +298,7 @@ curl -s -X POST http://127.0.0.1:4200/v1/email/triage \
     ],
     "draft": {
       "to": [{ "name": "Sarah Chen", "email": "sarah@example.com" }],
-      "subject": "Re: Prod incident follow-up",
-      "body": ""
+      "subject": "Re: Prod incident follow-up"
     },
     "suggested_action": "reply",
     "message_id": "m1",
@@ -313,8 +312,10 @@ Field notes:
 - **`category`** is one of the five buckets: `URGENT`, `NEEDS_RESPONSE`, `FYI`,
   `PROMOTIONAL`, `PERSONAL`. `is_spam` / `is_phishing` are independent boolean signals.
 - **`suggested_action`** is `reply`, `archive`, or `none`.
-- **`draft`** is a proposal scaffold (empty `body`) or `null` — the agent never drafts a
-  reply to spam/phishing or to yourself.
+- **`draft`** is a `DraftScaffold` (`to` + `subject` only, no `body` — schema 2.3) or
+  `null` — triage classifies and summarizes but never composes reply prose, and it never
+  proposes a reply to spam/phishing or to yourself. To get a sendable reply, compose the
+  body yourself and pass it to `POST /v1/email/draft`.
 - **`usage`** is `null` on the heuristic-only path (no LLM call made).
 
 ### Thread
@@ -425,7 +426,7 @@ Tools exposed: `triage_email`, `triage_email_batch`, `draft_reply`, `send_email`
 ## Self-describing reference
 
 - **`GET /v1/email/spec`** — a human-readable HTML page describing every endpoint.
-- **`GET /v1/email/version`** — `{"apiVersion": "2.2", "agentVersion": "…"}`. `apiVersion`
+- **`GET /v1/email/version`** — `{"apiVersion": "2.3", "agentVersion": "…"}`. `apiVersion`
   is the frozen contract version; negotiate against its MAJOR so a breaking upgrade fails
   loudly.
 - **`GET /v1/email/health`** — liveness only (`{"status":"ok"}`). A green health check means
@@ -443,5 +444,5 @@ Tools exposed: `triage_email`, `triage_email_batch`, `draft_reply`, `send_email`
 ## Related
 
 - [Email Triage](/guides/email) — the Agent UI / `gaia email` flow (GAIA owns the UX).
-- [Email Triage Contract](/spec/email-contract) — the full #1262 request/response schema.
+- [Email Triage Contract](https://github.com/amd/gaia/blob/main/hub/agents/python/email/CONTRACT.md) — the full #1262 request/response schema.
 - [`@amd-gaia/agent-email`](https://github.com/amd/gaia/tree/main/hub/agents/npm/agent-email) — the JS/TS client + frozen sidecar.
