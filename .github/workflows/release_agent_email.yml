@@ -547,6 +547,14 @@ jobs:
           if [ -f "${SCORECARD}" ]; then
             scorecard_args+=(--eval-scorecard "${SCORECARD}")
           fi
+          # EVALUATION.md (evaluation guide) renders as its own hub doc tab. It
+          # only lands with PR #1989 — guard on presence so releases cut before it
+          # merges still publish cleanly.
+          evaluation_args=()
+          EVALUATION="hub/agents/npm/agent-email/EVALUATION.md"
+          if [ -f "${EVALUATION}" ]; then
+            evaluation_args+=(--evaluation "${EVALUATION}")
+          fi
           python hub/agents/python/email/packaging/publish_to_r2.py \
             --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
             --manifest "${MANIFEST}" \
@@ -555,6 +563,7 @@ jobs:
             --spec "${SPEC}" \
             --skill "${SKILL}" \
             "${scorecard_args[@]}" \
+            "${evaluation_args[@]}" \
             "${args[@]}" \
             --summary-out published.json
           echo "=== publish summary ==="

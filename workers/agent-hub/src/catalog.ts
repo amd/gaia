@@ -14,6 +14,7 @@ import {
   readAgentManifest,
   readChangelog,
   readEvalScorecard,
+  readEvaluation,
   readPackageFiles,
   readReadme,
   readSkill,
@@ -147,6 +148,7 @@ export function toIndexEntry(
   packageFiles: { files: { name: string; size_bytes: number }[] } | null,
   spec = "",
   skill = "",
+  evaluation = "",
   evalScorecard: string | null = null,
   baseUrl = "https://hub.amd-gaia.ai"
 ): IndexEntry {
@@ -192,6 +194,7 @@ export function toIndexEntry(
     changelog,
     spec,
     skill,
+    evaluation,
     // Render-ready scorecard body (front matter stripped); "" when none published.
     scorecard: evalScorecard !== null ? stripFrontMatter(evalScorecard) : "",
     // undefined serializes to "key absent" — only present when the manifest set it.
@@ -224,8 +227,11 @@ export async function rebuildIndex(
     const packageFiles = await readPackageFiles(bucket, id, agent.latest_version);
     const spec = await readSpec(bucket, id, agent.latest_version);
     const skill = await readSkill(bucket, id, agent.latest_version);
+    const evaluation = await readEvaluation(bucket, id, agent.latest_version);
     const evalScorecard = await readEvalScorecard(bucket, id, agent.latest_version);
-    entries.push(toIndexEntry(agent, readme, changelog, packageFiles, spec, skill, evalScorecard, baseUrl));
+    entries.push(
+      toIndexEntry(agent, readme, changelog, packageFiles, spec, skill, evaluation, evalScorecard, baseUrl)
+    );
   }
   entries.sort((a, b) => a.id.localeCompare(b.id));
 
