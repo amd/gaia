@@ -25,10 +25,34 @@ review that files **one ranked triage issue** a maintainer skims and promotes.
 | Dimension | Looks for |
 |-----------|-----------|
 | `security` | injection, unsafe subprocess/eval, unsafe deserialization, secret handling, path traversal, fork-PR surface — **never posts detail publicly** (see below) |
-| `correctness` | real logic bugs **and** every CLAUDE.md "Fail Loudly" violation (`except Exception: pass`, try/except returning a placeholder, silent degradation). **This dimension owns the silent-fallback check.** |
-| `docs` | new feature with no `docs/` page or `docs.json` entry; `cli.mdx` drift; `amd-gaia.ai` links missing `/docs/`; hub-agent README/SPEC/SKILL/CHANGELOG drift |
-| `tests` | new/changed code paths with no coverage; assertions that prove invocation, not call validity (CLAUDE.md "#1655" boundary rule) |
-| `features` | half-finished follow-ups, TODO-as-placeholder, gaps a recent feature implies |
+| `correctness` | code that is **wired but misbehaves** — a handler that flips a success flag without doing the work (a rollback that never rolls back), a poller that always returns null, a mode that no-ops, a flag whose handler raises `NotImplementedError` — plus real logic bugs and every CLAUDE.md "Fail Loudly" violation. **Owns wired-but-broken behavior and the silent-fallback check.** |
+| `docs` | new feature with no `docs/` page or `docs.json` entry; `cli.mdx` drift; `amd-gaia.ai` links missing `/docs/`; hub-agent README/SPEC/SKILL/CHANGELOG drift. A feature **documented as working but stubbed** is a docs finding (doc-vs-code drift), not features. |
+| `tests` | code paths with no test, or assertions that prove invocation not call validity (#1655). In **deep** mode, plain "module X has no coverage" rolls up into ONE aggregate finding; separate findings only for risk-bearing untested logic (auth/gate/precedence/error-mapping/#1655). |
+| `features` | a genuinely **missing or half-shipped** capability where nothing is wired yet (a TODO standing in for unwritten code). If the code is wired but broken, that is `correctness`, not features. |
+
+The five lenses are **mutually exclusive** — the decisive question for a broken thing is
+*is the code wired but misbehaving (correctness), never written (features), or contradicted
+by its docs (docs)?* Without that boundary, correctness findings leak into features and the
+priciest job's output disappears.
+
+### Published hub agents — the highest bar
+
+Published agents are the project's shop window: an integrator installs them and judges GAIA
+by them. In **both** modes, each lens double-checks any published agent explicitly and
+**bumps a gap up one severity** (never 🟡; a default-path break is 🔴). Published agents are
+detected by a `release_agent_<id>.yml` workflow, a shipped `SCORECARD.md`, or a released
+`version:` in `gaia-agent.yaml` — currently the **email agent** (`hub/agents/python/email/`
++ `hub/agents/npm/agent-email/`). The bar, per lens:
+
+- **docs** — README (integrator-facing, high quality), `SPEC.md` (full reference), `SKILL.md`
+  (AI-integration playbook), `CHANGELOG.md`, and any shipped contract spec, all present,
+  mutually consistent, and genuinely written; a `SCORECARD.md` exists and is linked from the README.
+- **tests** — solid unit + integration coverage of the real request/response contract
+  (#1655, not mock-only); the `SCORECARD.md` comes from a real eval and passes
+  `gaia.eval.scorecard_gate` (never hand-authored).
+- **correctness** — runtime code is bulletproof: no stubs, no silent fallbacks, no
+  half-finished paths, actionable errors at every boundary.
+- **security** — strictest reading (agent code runs on integrators' machines).
 
 > **Fix vs. the original handoff:** the first draft had four dimensions
 > (security/tests/docs/features) and listed the silent-fallback check in the scope
@@ -39,13 +63,17 @@ review that files **one ranked triage issue** a maintainer skims and promotes.
 ## Synthesis → one triage issue + child issues
 
 A synthesis job collects the five structured outputs, dedupes against already-open
-`weekly-audit` issues, ranks by severity (🔴/🟡/🟢), and files:
+`weekly-audit` issues, ranks by severity (**🔴 high · 🟠 medium · 🟡 low** — no green;
+green reads as "pass"), and files:
 
-- **Parent triage issue** (`weekly-audit`): a ranked checklist grouped by dimension, each
-  line linking its child issue.
-- **Per-finding child issues**, opened **without** any auto-fix label. A maintainer
-  promotes one by applying **`bug`**; the existing `auto-fix` job (`claude.yml`) opens the
-  PR. No new PR-creation code — humans gate every code change.
+- **Parent triage issue** (`weekly-audit`): a section for **every** dimension with a
+  finding, in fixed order (Security, Correctness, Features, Docs, Tests), each finding
+  grouped under the dimension it *declares* (the synthesis never re-buckets). Broken
+  behavior always outranks a missing test.
+- **Per-finding child issues** for **🔴/🟠 only** — 🟡 (low) findings are listed in the
+  parent, not filed as separate issues, to cap tracker churn. Children carry no auto-fix
+  label; a maintainer promotes one by applying **`bug`**, and the existing `auto-fix` job
+  (`claude.yml`) opens the PR. No new PR-creation code — humans gate every code change.
 
 ## Invariants (see the `weekly-audit-patterns` skill)
 
