@@ -5,7 +5,7 @@ follows [SemVer](https://semver.org/): the **MAJOR** of the on-the-wire
 `SCHEMA_VERSION` is what `checkVersion` enforces at startup, so a contract MAJOR
 bump is always at least a package MINOR bump with a migration note.
 
-## 0.4.0 — 2026-07-08
+## Unreleased
 
 Contract bumped to `SCHEMA_VERSION` **2.2** — additive over 2.1, so `checkVersion`
 (MAJOR-only) keeps accepting existing clients.
