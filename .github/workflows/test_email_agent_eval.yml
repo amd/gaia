@@ -51,9 +51,12 @@
 name: Email Agent Eval (offline, report mode)
 
 on:
-  # Nightly — 07:00 UTC daily.
+  # Weekly — Mondays 07:17 UTC. Was nightly; moved to weekly because the run now
+  # includes the judge-scored voice-drafting eval, which spends Claude tokens.
+  # (The release itself re-runs the full suite as a hard gate — see
+  # release_agent_email.yml eval-gate — so daily cadence here is unnecessary.)
   schedule:
-    - cron: '0 7 * * *'
+    - cron: '17 7 * * 1'
   # Manual trigger, with a knob for repeat experiments (variance).
   workflow_dispatch:
     inputs:
@@ -136,8 +139,12 @@ jobs:
           python-version: '3.12'
           # [dev] + [eval] for the benchmark + quality/perf gate machinery and
           # the Anthropic/scikit-learn judge deps; [api] for the connectors
-          # layer the email agent boots.
-          install-package: '.[dev,eval,api]'
+          # layer the email agent boots. The email agent ships as the standalone
+          # gaia-agent-email wheel (#1102) and is NOT pulled by those extras —
+          # `gaia eval benchmark` imports gaia_agent_email.agent, so install the
+          # LOCAL editable hub package (this branch's code, not the PyPI wheel)
+          # or the benchmark dies with ModuleNotFoundError on a clean venv.
+          install-package: '.[dev,eval,api] -e hub/agents/python/email'
 
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade

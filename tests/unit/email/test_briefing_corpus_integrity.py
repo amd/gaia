@@ -17,8 +17,9 @@ plus offline coverage of the judge scorer in ``gaia.eval.briefing_quality``:
   fields, and out-of-range scores.
 - The scorer runs end-to-end on a mocked judge (no backend, no network) and
   produces an approval rate in range plus a build_scorecard-compatible summary.
-- The committed thresholds manifest ships the #1951 bars in report mode
-  (``enforce: false``) and the gate honors the ``should_fail`` contract.
+- The committed thresholds manifest ships the #1951 bars as a hard gate
+  (``enforce: true`` — release_agent_email.yml eval-gate) and the gate
+  honors the ``should_fail`` contract.
 
 Everything here runs offline: no Lemonade, no Anthropic, no live mailbox.
 """

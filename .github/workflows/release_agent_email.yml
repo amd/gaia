@@ -49,6 +49,12 @@
 #                              as an ENVIRONMENT secret on `agent-publish` (NOT a
 #                              repo secret) so it's unreadable until the gate is
 #                              approved.
+#     ANTHROPIC_API_KEY      — Claude judge credential for the eval-gate's
+#                              voice-drafting eval. REQUIRED: the eval-gate asserts
+#                              it and FAILS the release if absent, so a release
+#                              never ships an un-judged drafting eval. A repo (or
+#                              org) secret — the eval-gate runs before the approval
+#                              gate, on the self-hosted stx pool.
 #   Variables:
 #     GAIA_HUB_BASE_URL      — public Worker origin for downloads + the lock
 #                              baseUrl, default https://hub.amd-gaia.ai.
@@ -349,11 +355,22 @@ jobs:
     uses: ./.github/workflows/test_email_agent_eval.yml
     secrets: inherit
 
+  # ── Stage 1d: email test suite (release gate, hosted) ──────────────
+  # The full email test suite — unit + connectors + eval-framework tests AND the
+  # REST-sidecar contract + OpenAPI-conformance (spec) tests — must pass before a
+  # release publishes. Fully mocked (no Lemonade / network), so it runs on hosted
+  # CI. `publish` gates on it, so a spec/contract or unit regression blocks the
+  # release, not just a PR.
+  email-tests:
+    name: Email test suite (release gate)
+    uses: ./.github/workflows/test_email_agent_unit.yml
+    secrets: inherit
+
   # ── Stage 2: publish to the hub + npm (single atomic step) ─────────
   publish:
     name: Publish to Hub + npm
     runs-on: ubuntu-latest
-    needs: [build, verify-darwin-x64-compat, scorecard-gate, email-eval]
+    needs: [build, verify-darwin-x64-compat, scorecard-gate, email-eval, email-tests]
     # Manual approval gate: the `agent-publish` environment is configured (repo
     # Settings → Environments) with required reviewers, so this job pauses until a
     # maintainer approves — the human backstop for an accidental/tampered release

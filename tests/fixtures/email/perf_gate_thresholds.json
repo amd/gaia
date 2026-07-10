@@ -1,9 +1,9 @@
 {
-  "_comment": "Strix Halo perf bars for the email-triage benchmark (#1277). These are the AC targets; 'enforce' is the SINGLE switch CI (#1112) keys off. It ships FALSE (report mode) on purpose: the bars only become gating once they are confirmed on actual Ryzen AI / Strix Halo hardware in the nightly self-hosted job. #1112 flips 'enforce' to true HERE (data, not code) to make the harness fail on a missed gating bar. Loaded by gaia.eval.performance.load_perf_thresholds.",
+  "_comment": "Strix Halo perf bars for the email-triage benchmark (#1277). These are the AC targets; 'enforce' is the SINGLE switch CI (#1112) keys off. It is now TRUE — a missed gating bar (ttft/tps/pipeline/mem) blocks the release (release_agent_email.yml eval-gate runs on the stx pool). NOTE: these bars are not yet independently hardware-confirmed; if the stx pool proves noisy, widen the bars HERE (data, not code) rather than reverting to report mode. Loaded by gaia.eval.performance.load_perf_thresholds.",
   "_gating": "ttft_max_s, throughput_min_tps, pipeline_max_s, peak_memory_max_gb are GATING bars when enforced. NPU utilization is REPORTED-ONLY (no bar) — it is observed and exported but never gates the build.",
   "ttft_max_s": 5.0,
   "throughput_min_tps": 10.0,
   "pipeline_max_s": 300.0,
   "peak_memory_max_gb": 8.0,
-  "enforce": false
+  "enforce": true
 }

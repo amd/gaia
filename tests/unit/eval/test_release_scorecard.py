@@ -690,6 +690,58 @@ class TestEmailAdapter:
         assert "gen_scorecard.py" in payload.reproduction_command
         assert "PYTHON_KEYRING_BACKEND" in payload.reproduction_command
 
+    def _bench_and_gt(self, tmp_path):
+        benchmark_dir = tmp_path / "benchmark"
+        benchmark_dir.mkdir()
+        (benchmark_dir / "email_benchmark_scorecard.json").write_text(
+            EMAIL_BENCHMARK_FIXTURE.read_text()
+        )
+        gt_path = tmp_path / "ground_truth.json"
+        gt_path.write_text(json.dumps({"_meta": {}, "a": {"label": "x"}}))
+        return benchmark_dir, gt_path
+
+    def test_drafting_report_folds_reported_metric(self, tmp_path):
+        # A judged drafting report adds draft_approval_rate as a REPORTED metric
+        # (weight 0) without changing the aggregate (still 100 x within_one).
+        from gaia.eval.release_scorecard import compute_aggregate
+
+        mod = self._load_gen_scorecard()
+        bench, gt = self._bench_and_gt(tmp_path)
+        report = tmp_path / "drafting_gate_report.json"
+        report.write_text(
+            json.dumps({"summary": {"drafting": {"draft_approval_rate": 0.73}}})
+        )
+
+        base = mod.build_payload(bench, gt)
+        withd = mod.build_payload(bench, gt, drafting_report=str(report))
+
+        names = {m["name"]: m["weight"] for m in withd.metrics}
+        assert names.get("draft_approval_rate") == 0.0
+        draft = next(m for m in withd.metrics if m["name"] == "draft_approval_rate")
+        assert draft["value"] == pytest.approx(0.73)
+        # Aggregate unchanged — drafting is reported, not weighted.
+        assert compute_aggregate(withd.metrics)[1] == compute_aggregate(base.metrics)[1]
+
+    def test_drafting_report_skip_omits_metric(self, tmp_path):
+        # A loud-skip report (no ANTHROPIC_API_KEY) must NOT invent a metric.
+        mod = self._load_gen_scorecard()
+        bench, gt = self._bench_and_gt(tmp_path)
+        report = tmp_path / "drafting_gate_report.json"
+        report.write_text(json.dumps({"skipped": True, "reason": "no key"}))
+
+        payload = mod.build_payload(bench, gt, drafting_report=str(report))
+        assert not any(m["name"] == "draft_approval_rate" for m in payload.metrics)
+
+    def test_drafting_report_malformed_fails_loud(self, tmp_path):
+        # A non-skip report missing the rate is a hard error, never a silent omit.
+        mod = self._load_gen_scorecard()
+        bench, gt = self._bench_and_gt(tmp_path)
+        report = tmp_path / "drafting_gate_report.json"
+        report.write_text(json.dumps({"summary": {"drafting": {}}}))
+
+        with pytest.raises(ValueError, match="draft_approval_rate"):
+            mod.build_payload(bench, gt, drafting_report=str(report))
+
 
 # ---------------------------------------------------------------------------
 # 11. Task 1: breakdown round-trip (release_scorecard core)
