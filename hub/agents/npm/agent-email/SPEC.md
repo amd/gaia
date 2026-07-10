@@ -90,7 +90,7 @@ result.
 | `POST /v1/email/calendar/events/preview` | `previewCalendarEvent()` | **Standalone** | Nothing external — mints a single-use confirmation token bound to the event (calendar analogue of `draft`). |
 | `POST /v1/email/calendar/events` | `createCalendarEvent()` | **Connector** | A valid `preview` token **and** a connected calendar. Token gate fires first: no/invalid token → `403`; then the calendar-scope / account checks. |
 | `POST /v1/email/calendar/events/respond` | `respondToCalendarEvent()` | **Connector** | A connected calendar. RSVPs `accepted`/`declined`/`tentative` to an existing invite. |
-| `GET /v1/email/init` | — (plain `fetch`; no wrapper yet) | **Standalone** | **Readiness preflight** (#1795): probes the whole triage stack — Lemonade reachable **and** version-compatible **and** the triage model downloaded. Returns `200` when ready, `503` when not, with an actionable `hint` either way (same `InitResponse` envelope). Read-only — no model pull. Unlike `/health` (liveness only), this verifies "ready to triage," not just "process up." |
+| `GET /v1/email/init` | `init()` | **Standalone** | **Readiness preflight** (#1795): probes the whole triage stack — Lemonade reachable **and** version-compatible **and** the triage model downloaded. Returns `200` when ready, `503` when not, with an actionable `hint` either way (same `InitResponse` envelope). Read-only — no model pull. Unlike `/health` (liveness only), this verifies "ready to triage," not just "process up." |
 | `POST /v1/email/init` | — (streaming; no wrapper yet) | **Standalone** | **Provisioning** (#1795): tells the *running* local Lemonade to download the configured triage model, streaming `text/plain` progress line-by-line. Lemonade unreachable → real `503` (pulls nothing); once a pull starts the `200` is committed, so the trailing `✓`/`✗` line carries the true outcome. Not in the OpenAPI JSON — a streaming operational verb (like `GET /spec`), so `include_in_schema=False`. |
 | `GET /health` | `health()` | **Standalone** | Liveness only — does **not** check Lemonade/model. |
 | `GET /version` | `version()` | **Standalone** | Version negotiation. |
@@ -209,10 +209,10 @@ configured model is pulled.
 The authoritative readiness signal is **`GET /v1/email/init`** (#1795): it probes the
 whole triage stack — Lemonade reachable **and** version-compatible **and** the triage
 model downloaded — and returns `200` when ready, `503` when not, with an actionable
-`hint`. There is no client wrapper yet, so call it with a plain `fetch` (the
-`InitResponse` type is exported for the response shape). Like every non-exempt
-`/v1/email/*` route it requires the per-session bearer token (#1706) — a raw
-`fetch` must attach it explicitly (the `EmailClient` methods do this for you):
+`hint`. The **`init()`** client method wraps it — returning the `InitResponse` on
+both the ready (`200`) and not-ready (`503`) paths (branch on `.ready`), and, like
+every `EmailClient` method, attaching the per-session bearer token (#1706) for you.
+A raw `fetch` works too (the `InitResponse` type is exported) but must attach it:
 
 ```ts
 const r = await fetch("http://127.0.0.1:8131/v1/email/init", {
