@@ -728,15 +728,17 @@ class TestEmailAdapter:
         # Aggregate unchanged — drafting is reported, not weighted.
         assert compute_aggregate(withd.metrics)[1] == compute_aggregate(base.metrics)[1]
 
-    def test_drafting_report_skip_omits_metric(self, tmp_path):
-        # A loud-skip report (no ANTHROPIC_API_KEY) must NOT invent a metric.
+    def test_drafting_report_skip_marker_fails_loud(self, tmp_path):
+        # No silent skip (CLAUDE.md fail-loudly): the judged drafting eval now
+        # hard-fails on a missing key instead of emitting a skip report, so a
+        # legacy `skipped` marker must raise — never silently omit the metric.
         mod = self._load_gen_scorecard()
         bench, gt = self._bench_and_gt(tmp_path)
         report = tmp_path / "drafting_gate_report.json"
         report.write_text(json.dumps({"skipped": True, "reason": "no key"}))
 
-        payload = mod.build_payload(bench, gt, drafting_report=str(report))
-        assert not any(m["name"] == "draft_approval_rate" for m in payload.metrics)
+        with pytest.raises(ValueError, match="skipped"):
+            mod.build_payload(bench, gt, drafting_report=str(report))
 
     def test_drafting_report_malformed_fails_loud(self, tmp_path):
         # A non-skip report missing the rate is a hard error, never a silent omit.
@@ -747,6 +749,38 @@ class TestEmailAdapter:
 
         with pytest.raises(ValueError, match="draft_approval_rate"):
             mod.build_payload(bench, gt, drafting_report=str(report))
+
+    def _load_eval_drafting_report(self):
+        path = (
+            Path(__file__).parents[3]
+            / "hub"
+            / "agents"
+            / "python"
+            / "email"
+            / "packaging"
+            / "eval_drafting_report.py"
+        )
+        spec = importlib.util.spec_from_file_location("eval_drafting_report", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_drafting_eval_missing_key_hard_fails(self, tmp_path, monkeypatch, capsys):
+        # No silent skip (CLAUDE.md fail-loudly): a missing ANTHROPIC_API_KEY makes
+        # the judged drafting eval exit 1 with an actionable error naming the key —
+        # it must NOT write a skip report or return 0.
+        mod = self._load_eval_drafting_report()
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("EMAIL_EVAL_MODEL", "test-model")
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+        rc = mod.main()
+
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "ANTHROPIC_API_KEY" in err
+        # Never emits a skip report the scorecard could silently omit.
+        assert not (tmp_path / "eval-out" / "drafting_gate_report.json").exists()
 
 
 # ---------------------------------------------------------------------------
