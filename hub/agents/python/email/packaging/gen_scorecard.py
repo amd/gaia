@@ -230,11 +230,32 @@ def _compute_breakdown(judged: list) -> Optional[dict]:
     return {"per_category": per_category, "top_confusions": top_confusions}
 
 
+def _load_draft_approval_rate(drafting_report: Path) -> Optional[float]:
+    """Read ``summary.drafting.draft_approval_rate`` from a drafting gate report.
+
+    Returns ``None`` when the report is a loud-skip (no judge credential) so the
+    scorecard simply omits the metric rather than inventing a value. Fails loud if
+    the file exists but is malformed — a judged run must yield a real rate.
+    """
+    data = json.loads(drafting_report.read_text(encoding="utf-8"))
+    if data.get("skipped"):
+        return None
+    rate = data.get("summary", {}).get("drafting", {}).get("draft_approval_rate")
+    if rate is None:
+        raise ValueError(
+            f"No summary.drafting.draft_approval_rate in {drafting_report} "
+            f"(judged run expected). Re-run eval_drafting_report.py with "
+            f"ANTHROPIC_API_KEY set."
+        )
+    return float(rate)
+
+
 def build_payload(
     benchmark_dir: Path,
     ground_truth_path: Path,
     limit=None,
     environment=None,
+    drafting_report=None,
 ):
     """Build a :class:`~gaia.eval.release_scorecard.ResultPayload` from benchmark output.
 
@@ -379,6 +400,20 @@ def build_payload(
             "weight": 0.0,
         },
     ]
+    # Fold the judge-scored voice-drafting result in as a REPORTED metric
+    # (weight 0) when a drafting report is supplied — visible on the card without
+    # changing the aggregate (still 100 x within_one). Blocking on a drafting
+    # regression is the drafting gate's job (enforce:true), not the aggregate's.
+    if drafting_report is not None:
+        draft_rate = _load_draft_approval_rate(Path(drafting_report))
+        if draft_rate is not None:
+            metrics.append(
+                {
+                    "name": "draft_approval_rate",
+                    "value": float(draft_rate),
+                    "weight": 0.0,
+                }
+            )
     compute_aggregate(
         metrics
     )  # validate metrics; aggregate embedded in render_scorecard
@@ -591,6 +626,17 @@ def main(argv=None) -> int:
         default=None,
         help="Sampling temperature used for the eval run, if applicable.",
     )
+    parser.add_argument(
+        "--drafting-report",
+        default=None,
+        help=(
+            "Path to eval-out/drafting_gate_report.json (from "
+            "eval_drafting_report.py). When given and not a loud-skip, folds "
+            "draft_approval_rate into the scorecard as a reported metric "
+            "(weight 0). Blocking on a drafting regression is the drafting "
+            "gate's job (enforce:true), not the aggregate's."
+        ),
+    )
 
     args = parser.parse_args(argv)
 
@@ -636,7 +682,11 @@ def main(argv=None) -> int:
 
     try:
         payload = build_payload(
-            benchmark_dir, gt_path, limit=args.limit, environment=environment
+            benchmark_dir,
+            gt_path,
+            limit=args.limit,
+            environment=environment,
+            drafting_report=args.drafting_report,
         )
     except (ValueError, FileNotFoundError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

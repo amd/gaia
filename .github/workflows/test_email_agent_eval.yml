@@ -51,9 +51,12 @@
 name: Email Agent Eval (offline, report mode)
 
 on:
-  # Nightly — 07:00 UTC daily.
+  # Weekly — Mondays 07:17 UTC. Was nightly; moved to weekly because the run now
+  # includes the judge-scored voice-drafting eval, which spends Claude tokens.
+  # (The release itself re-runs the full suite as a hard gate — see
+  # release_agent_email.yml eval-gate — so daily cadence here is unnecessary.)
   schedule:
-    - cron: '0 7 * * *'
+    - cron: '17 7 * * 1'
   # Manual trigger, with a knob for repeat experiments (variance).
   workflow_dispatch:
     inputs:
