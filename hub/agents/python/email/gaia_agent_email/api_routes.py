@@ -18,8 +18,8 @@ endpoints, mounted on the existing OpenAI-compatible FastAPI app
                              valid confirmation token for *this* payload is
                              supplied. This is the send-confirmation gate
                              (#1264) translated to the API boundary — the
-                             same rule the agent enforces via
-                             ``TOOLS_REQUIRING_CONFIRMATION`` /
+                             same rule the agent enforces via its
+                             ``CONFIRMATION_REQUIRED_TOOLS`` /
                              ``console.confirm_tool_execution``.
 
 Design commitments
@@ -51,8 +51,9 @@ import secrets
 import threading
 from typing import Any, Dict, Iterator, List, Literal, NoReturn, Optional, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
+from gaia_agent_email import caller_auth
 from gaia_agent_email.contract import (
     ActionItem,
     AttachmentMeta,
@@ -69,6 +70,7 @@ from gaia_agent_email.contract import (
     CalendarRespondRequest,
     CalendarRespondResponse,
     DraftReply,
+    DraftScaffold,
     EmailActionConfirmRequest,
     EmailActionConfirmResponse,
     EmailAddress,
@@ -122,6 +124,46 @@ from gaia.logger import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/v1/email", tags=["email"])
+
+
+# ---------------------------------------------------------------------------
+# Caller authentication (#1706)
+# ---------------------------------------------------------------------------
+
+
+async def require_caller_token(request: Request) -> None:
+    """Reject a request that lacks a valid per-session bearer token (401).
+
+    Wired onto the email router ONLY by the frozen sidecar app
+    (``packaging/server.py``) — the product server and OpenAPI-export app mount
+    the same router without this dependency, so their posture is unchanged. The
+    policy is read from :mod:`gaia_agent_email.caller_auth`:
+
+    - No policy configured, or a policy with ``token is None`` (a dev running the
+      sidecar by hand without ``GAIA_EMAIL_SIDECAR_TOKEN``) → allowed. The Host/
+      Origin controls in ``HostOriginMiddleware`` still apply.
+    - Liveness/version probes and the HTML pages are exempt (:data:`caller_auth.
+      EXEMPT_PATHS`) so the readiness handshake works before a token is in play.
+    - Otherwise a missing/malformed/wrong ``Authorization: Bearer <token>`` is a
+      loud, actionable 401.
+    """
+    config = caller_auth.get_config()
+    if config is None or config.token is None:
+        return
+    if caller_auth.is_exempt_path(request.url.path):
+        return
+    if not caller_auth.token_ok(config, request.headers.get("authorization", "")):
+        raise HTTPException(
+            status_code=401,
+            detail=(
+                "Unauthorized: this email sidecar endpoint requires the "
+                "per-session bearer token. Send 'Authorization: Bearer "
+                "<token>' using the token the sidecar was started with "
+                f"(the parent process passes it via the {caller_auth.TOKEN_ENV_VAR} "
+                "env var on spawn). Requests without a valid token are refused so "
+                "no other local process or web page can act on your mailbox."
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -797,7 +839,7 @@ class EmailTriageService:
         principal: EmailAddress,
         is_spam: bool,
         is_phishing: bool,
-    ) -> Optional[DraftReply]:
+    ) -> Optional[DraftScaffold]:
         # Never propose a reply to spam/phishing — surfacing a draft would
         # nudge the user toward engaging with a hostile sender.
         if is_spam or is_phishing or reply_to is None:
@@ -811,11 +853,9 @@ class EmailTriageService:
             reply_subject = f"Re: {reply_subject}"
         elif not reply_subject:
             reply_subject = "Re:"
-        return DraftReply(
-            to=[reply_to],
-            subject=reply_subject,
-            body="",  # proposal scaffold; the user/agent fills the body in
-        )
+        # Triage returns a scaffold (recipient + subject) — it never composes a
+        # body. Callers compose the body and POST it to /v1/email/draft.
+        return DraftScaffold(to=[reply_to], subject=reply_subject)
 
 
 def _format_address(addr: EmailAddress) -> str:
@@ -1993,7 +2033,7 @@ async def send_email(request: EmailSendRequest) -> EmailSendResponse:
     The confirmation gate is enforced FIRST: a request without a valid,
     payload-bound confirmation token is rejected with HTTP 403 before any
     backend call (or even backend resolution). This mirrors the agent's
-    ``TOOLS_REQUIRING_CONFIRMATION`` guard, translated to the API boundary,
+    ``CONFIRMATION_REQUIRED_TOOLS`` guard, translated to the API boundary,
     and guarantees the gate fires regardless of backend health. Never
     auto-confirms.
     """
@@ -2764,6 +2804,7 @@ async def email_playground() -> HTMLResponse:
 
 __all__ = [
     "router",
+    "require_caller_token",
     "EmailTriageService",
     "ConfirmationStore",
     "confirmation_store",

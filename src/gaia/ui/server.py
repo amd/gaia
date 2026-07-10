@@ -252,7 +252,12 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             import sys
 
             import faiss  # noqa: F401
-            import sentence_transformers  # noqa: F401
+
+            # sentence-transformers is NOT pre-imported: RAG embeds via Lemonade,
+            # and the memory cross-encoder reranker imports it lazily with graceful
+            # degradation. Eagerly importing it here pulled the fragile torch/
+            # torchcodec stack into boot and made a broken install look like a RAG
+            # failure (#RAG-embedder-switch).
 
             # Log which SWIG backend faiss actually loaded.
             # Order matters: check most-optimized first.

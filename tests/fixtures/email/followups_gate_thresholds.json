@@ -1,0 +1,7 @@
+{
+  "_comment": "Detection-quality bars for the email follow-up tracking eval (#1606 feature, #1950 tracking). 'f1_min' is the primary reported target (micro-averaged F1 of the awaits_reply flag over the labeled corpus of sent threads); 'recall_min' guards against silently dropping real follow-ups (false negatives, e.g. an out-of-office auto-reply masking a genuine unanswered question); 'precision_min' guards against nagging the user about mail that needs no reply (false positives, e.g. thanks/FYI/acknowledgment notes). 'enforce' is the SINGLE switch CI keys off and it ships FALSE (report mode) on purpose: NO real baseline exists yet, and the shipped detector is a deterministic latest-outbound heuristic with a KNOWN false-positive gap on courtesy/FYI notes, so these bars are PROVISIONAL placeholders, NOT measured numbers -- do not treat them as a confirmed floor. Flip 'enforce' to true HERE (data, not code) once the first report establishes a stable baseline (and, if follow-up classification gains an LLM judgment layer, re-measure against that), RE-MEASURING f1_min/recall_min/precision_min to the observed numbers at that point. Loaded by gaia.eval.followup_quality.load_followup_thresholds (which ignores extra keys).",
+  "f1_min": 0.70,
+  "recall_min": 0.80,
+  "precision_min": 0.60,
+  "enforce": false
+}

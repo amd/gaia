@@ -30,10 +30,14 @@
  * Schema 2.2 (additive over 2.1, #1542): attachment handling — AttachmentMeta
  * on EmailMessage / EmailTriageResult / DraftReply / EmailSendResponse, and
  * OutgoingAttachment accepted by draft/send.
+ * Schema 2.3 (BREAKING triage-shape change): EmailTriageResult.draft is now a
+ * DraftScaffold (recipient + subject only) instead of a DraftReply — triage
+ * never composed a body, so the always-empty draft.body is dropped. DraftReply
+ * (with body) is unchanged and remains the draft()/send() shape.
  */
 
 /** Frozen contract version echoed by the server's `/version` endpoint. */
-export const SCHEMA_VERSION = "2.2" as const;
+export const SCHEMA_VERSION = "2.3" as const;
 
 /**
  * The five-bucket triage taxonomy (schema 2.0 — contract.py: EmailCategory).
@@ -165,6 +169,19 @@ export interface ActionItem {
   url?: string | null;
 }
 
+/**
+ * A reply scaffold the triage path proposes (contract.py: DraftScaffold —
+ * schema 2.3). Recipient + subject only, no body: triage never composes reply
+ * prose. To send a reply, compose the body yourself and call `draft()`, which
+ * returns a full `DraftReply` and a single-use confirmation token.
+ */
+export interface DraftScaffold {
+  /** Proposed recipients (non-empty). */
+  to: EmailAddress[];
+  /** Proposed subject line (Re:-prefixed). */
+  subject: string;
+}
+
 /** A drafted reply the agent proposes (contract.py: DraftReply). */
 export interface DraftReply {
   /** Proposed recipients (non-empty). */
@@ -204,8 +221,12 @@ export interface EmailTriageResult {
   summary: string;
   /** Extracted actions (may be empty). */
   action_items: ActionItem[];
-  /** Proposed reply, or null when none is suggested. */
-  draft?: DraftReply | null;
+  /**
+   * Proposed reply SCAFFOLD (recipient + subject only, no body), or null when
+   * none is suggested (schema 2.3). Triage never composes reply prose — compose
+   * the body and call `draft()` to get a full DraftReply + confirmation token.
+   */
+  draft?: DraftScaffold | null;
   /**
    * Suggested next action (schema 2.0): "reply" for URGENT/NEEDS_RESPONSE,
    * "archive" for PROMOTIONAL, "none" for FYI/PERSONAL. Default "none".

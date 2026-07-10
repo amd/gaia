@@ -2,7 +2,7 @@
 
 Detailed reference for `@amd-gaia/agent-email`. For a quick start, see
 [`README.md`](./README.md); for an AI-assisted integration walkthrough, see
-[`SKILL.md`](./SKILL.md). The contract version is `SCHEMA_VERSION` **2.2**.
+[`SKILL.md`](./SKILL.md). The contract version is `SCHEMA_VERSION` **2.3**.
 
 ## Architecture
 
@@ -35,9 +35,34 @@ your process exits, crashes, or is interrupted (default `autoCleanup`); call
 `shutdown` for a graceful, awaited stop, or pass `autoCleanup: false` to manage
 signals yourself.
 
+## Authentication
+
+The sidecar binds `127.0.0.1` and can send mail as the user, so it authenticates
+its **caller** (#1706) — distinct from the draft→send `confirmation_token`, which
+binds a send to one exact message but does not identify the caller.
+
+- **Per-session bearer token.** `spawnSidecar` / `startSidecar` mint a
+  cryptographically-random token, pass it to the sidecar over the private
+  `GAIA_EMAIL_SIDECAR_TOKEN` env channel, and bind it to `sidecar.client`. Every
+  `/v1/email/*` request must carry `Authorization: Bearer <token>` → otherwise
+  **401**. Construct-your-own clients pass `authToken` (from `sidecar.authToken`);
+  `generateSessionToken()` is exported for advanced flows. Exempt: `/health`,
+  `/version`, `/v1/email/health`, `/v1/email/version`, `/v1/email/spec`,
+  `/v1/email/playground`.
+- **Host allowlist** — non-loopback `Host` → **400** (DNS-rebinding).
+- **Origin rejection** — non-loopback browser `Origin` → **403** (drive-by page).
+  Non-browser clients send no `Origin` and are unaffected. No CORS is ever sent.
+
+Running the sidecar by hand without `GAIA_EMAIL_SIDECAR_TOKEN` disables the token
+check (local development only, logged loudly); the Host/Origin controls still
+apply. The shipped product always spawns with a token.
+
 ## REST API
 
-`EmailClient` is a typed wrapper over the sidecar's HTTP surface. Methods:
+Every `/v1/email/*` request also requires the per-session bearer token (see
+[Authentication](#authentication)); the "Auth" column below covers the additional
+per-endpoint connector/token requirements. `EmailClient` is a typed wrapper over
+the sidecar's HTTP surface. Methods:
 `triage`, `triageBatch`, `search`, `prescan`, `draft`, `send`, `confirmAction`,
 `archive`, `unarchive`, `quarantine`, `unquarantine`, `listCalendarEvents`,
 `previewCalendarEvent`, `createCalendarEvent`, `respondToCalendarEvent`, `health`,
@@ -81,6 +106,30 @@ zero connector setup. The read-only `search` and `prescan` read the live inbox (
 connected mailbox, but no token); the mutating calls (`send`, `archive`, `quarantine`,
 `createCalendarEvent`) and the reversals/calendar views need a connected mailbox whose
 relevant scope was granted.
+
+### Stateful agent surface (`/v1/email/agent/*`, 0.4.0)
+
+Everything above is **stateless** — each call analyzes the payload you send, with no
+memory and no agent loop. The sidecar also hosts a **session-scoped, conversational
+agent** so a host can drive the full `EmailTriageAgent` (memory, personalization, and
+every agent tool) over HTTP instead of importing it in-process. This is the surface the
+Agent UI uses to back its email experience with the packaged sidecar. It is **not wrapped
+by the typed npm client yet** — call it directly (e.g. `fetch`) or via the Agent UI.
+
+| Endpoint | Notes |
+|---|---|
+| `POST /v1/email/agent/session` | Create/reset a session (`{ session_id, reset? }`) → `{ created, memory }`. Builds the agent (surfaces failures early). |
+| `POST /v1/email/agent/query` | Run one turn; **SSE** stream (`text/event-stream`) of the loop — `thinking`/`step`/tool/`permission_request`/`error`/terminal `run_complete`. Body `{ session_id, message, memory_enabled? }`. Every agent tool is reachable via natural language. Overlapping turn → **409**. |
+| `POST /v1/email/agent/confirm-tool` | Approve/deny a gated tool the run is blocking on (`{ session_id, approved }`). |
+| `POST /v1/email/agent/cancel` | Cooperatively cancel the in-flight run. |
+| `DELETE /v1/email/agent/session/{id}` | Evict a session + tear down its agent. |
+| `GET /v1/email/agent/session/{id}/history` | Conversation so far (`turns[]`, oldest first). |
+| `POST /v1/email/agent/memory` | Runtime memory toggle (#1666), `{ session_id, enabled }` → `{ enabled, available, message }`. Enabling memory that was never initialized (started with `GAIA_MEMORY_DISABLED` / Lemonade unreachable) → **409**, never a silent no-op. |
+| `GET /v1/email/agent/memory/{id}` | Memory status without changing it. |
+
+Sessions are in-process and single-tenant (the sidecar hosts one user's agent); one turn
+runs at a time per session. Memory uses FAISS locally; embeddings still go over Lemonade
+HTTP, so the frozen binary stays free of torch/transformers.
 
 ### Mailbox actions (archive / quarantine, schema 2.1)
 
@@ -148,7 +197,7 @@ land in a future schema bump:
   overdue first. **Detection only** — it never sends a nudge (any send stays
   confirmation-gated).
 
-None of these are on the REST/MCP contract, so `SCHEMA_VERSION` stays `2.2`.
+None of these are on the REST/MCP contract, so it does not move `SCHEMA_VERSION`.
 
 ### Readiness vs liveness
 
@@ -239,7 +288,7 @@ limit) — a larger file fails the send loudly rather than being truncated.
 | `summary` | `string` | Plain-text summary of the message/thread. |
 | `action_items` | `ActionItem[]` | Each `{ description, due_hint?, type?: "text" \| "link", url? }`; may be empty. |
 | `suggested_action` | `"reply" \| "none" \| "archive"` | `"reply"` for URGENT/NEEDS_RESPONSE, `"archive"` for PROMOTIONAL, else `"none"`. |
-| `draft` | `DraftReply \| null` | A proposed reply (`{ to, subject, body, attachments }`) when one is suggested. |
+| `draft` | `DraftScaffold \| null` | A proposed reply **scaffold** (`{ to, subject }` — no body) when one is suggested (schema 2.3). Triage never composes reply prose; compose the body yourself and call `draft()` for a full `DraftReply` + confirmation token. |
 | `usage` | `TriageUsage \| null` | LLM token/latency metrics; `null` on the heuristic-only path. |
 | `attachments` | `AttachmentMeta[]` | Metadata (`{ filename, mime_type, size_bytes, attachment_id? }`) of the analyzed message's attachments, echoed from the request for downstream processing (schema 2.2; empty when none). |
 
@@ -367,7 +416,7 @@ connection through this package's API**, so connector-backed calls only work on 
 machine where the mailbox is already connected in GAIA. Triage and draft, which
 need no connector, work anywhere.
 
-As of `SCHEMA_VERSION` 2.2 this package's REST API exposes the read-only inbox
+As of `SCHEMA_VERSION` 2.3 this package's REST API exposes the read-only inbox
 **search** and **pre-scan** (`search` / `prescan`), the **archive** and
 phishing-**quarantine** mailbox actions plus their undo (`confirmAction` / `archive` /
 `unarchive` / `quarantine` / `unquarantine`), calendar **view / create / respond**
@@ -421,9 +470,9 @@ editors autocomplete but your code never imports them.
 TypeScript types in `src/types.ts` mirror two Python sources of truth:
 
 - `contract.py` — the triage request/response contract plus the schema-2.1
-  additions (inbox search, mailbox actions, calendar, pre-scan) and the
-  schema-2.2 attachment models (`AttachmentMeta` / `OutgoingAttachment`,
-  `SCHEMA_VERSION = "2.2"`).
+  additions (inbox search, mailbox actions, calendar, pre-scan), the schema-2.2
+  attachment models (`AttachmentMeta` / `OutgoingAttachment`), and the schema-2.3
+  triage draft scaffold (`DraftScaffold`; `SCHEMA_VERSION = "2.3"`).
 - `api_routes.py` — the local draft/send confirmation handshake models, the
   readiness-preflight envelope (`InitResponse` / `InitLemonadeStatus` /
   `InitModelStatus`, #1795), and the scheduled-briefing response

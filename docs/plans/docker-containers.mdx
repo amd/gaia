@@ -124,7 +124,7 @@ ENV SHELL=/bin/zsh
 RUN chsh -s /bin/zsh
 
 # Expose standard GAIA ports
-EXPOSE 3000 5174 8000 9229 9222
+EXPOSE 3000 5174 8080 13305 9229 9222
 
 # Keep container running
 CMD ["tail", "-f", "/dev/null"]
@@ -179,7 +179,7 @@ RUN C:\git-installer.exe /VERYSILENT /NORESTART && \
 RUN pip install --no-cache-dir amd-gaia
 
 # Expose standard GAIA ports
-EXPOSE 3000 5174 8000 9229 9222
+EXPOSE 3000 5174 8080 13305 9229 9222
 
 # Keep container running
 CMD ["powershell", "-NoExit", "-Command", "while ($true) { Start-Sleep -Seconds 3600 }"]
@@ -291,7 +291,7 @@ RUN chsh -s /bin/zsh
 RUN mkdir -p /src
 
 # Expose standard GAIA ports
-EXPOSE 3000 5174 8000 9229 9222
+EXPOSE 3000 5174 8080 13305 9229 9222
 
 # Copy entrypoint script
 COPY entrypoint.sh /entrypoint.sh

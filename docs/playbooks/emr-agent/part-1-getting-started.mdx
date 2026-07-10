@@ -34,7 +34,7 @@ Medical staff spend hours manually entering intake form data. This agent automat
 ## The Architecture (What You're Building)
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#A87B2D', 'edgeLabelBackground':'#ffffff', 'fontFamily':'system-ui, -apple-system, sans-serif'}}}%%
 graph TD
     A(["MedicalIntakeAgent"]) --> B(["Agent Base"])
     A --> C(["FileWatcherMixin"])
@@ -61,7 +61,7 @@ graph TD
 **Flow:**
 1. New form dropped in watched folder
 2. FileWatcherMixin triggers callback → `_on_file_created()`
-3. VLM extracts patient data (Qwen3-VL GGUF runs on the iGPU via llama.cpp/Vulkan)
+3. VLM extracts patient data (Gemma-4-E4B-it GGUF runs on the iGPU via llama.cpp/Vulkan)
 4. JSON parsed and validated
 5. DatabaseMixin stores structured record in SQLite
 6. Agent can now query patients via natural language
@@ -85,10 +85,10 @@ Get a working intake agent running to understand the basic flow.
         cd my-emr-agent
         uv venv .venv
         source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
-        uv pip install "amd-gaia[api,rag]"
+        uv pip install "amd-gaia[agent-emr,api,rag]"
         ```
 
-        The `api` extra provides FastAPI/uvicorn for the web dashboard. The `rag` extra provides PyMuPDF for PDF processing.
+        The `agent-emr` extra installs the standalone `gaia-agent-emr` package (which provides `gaia_agent_emr` and the `gaia-emr` command). The `api` extra provides FastAPI/uvicorn for the web dashboard. The `rag` extra provides PyMuPDF for PDF processing.
 
         <Info>
         This is the recommended path for most users. You'll create your agent scripts in this folder.
@@ -104,7 +104,10 @@ Get a working intake agent running to understand the basic flow.
         uv venv .venv
         source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
         uv pip install -e ".[api,rag]"
+        uv pip install -e hub/agents/python/emr
         ```
+
+        The EMR agent ships as a standalone hub package, so install it separately (the second command) to make `gaia_agent_emr` and the `gaia-emr` command available.
 
         <Info>
         Use this path if you want to modify GAIA source code or contribute to the project.
@@ -120,7 +123,7 @@ Get a working intake agent running to understand the basic flow.
     ```
 
     <Info>
-    The VLM model (Qwen3-VL-4B-Instruct-GGUF) will be downloaded automatically on first use. This may take time depending on your connection.
+    The VLM model (Gemma-4-E4B-it-GGUF) will be downloaded automatically on first use. This may take time depending on your connection.
     </Info>
   </Step>
 
@@ -197,7 +200,7 @@ self.insert("patients", {"first_name": "John", "last_name": "Smith"})
 results = self.query("SELECT * FROM patients WHERE last_name = :name", {"name": "Smith"})
 
 # VLMClient - image to structured data
-vlm = VLMClient(vlm_model="Qwen3-VL-4B-Instruct-GGUF")
+vlm = VLMClient(vlm_model="Gemma-4-E4B-it-GGUF")
 json_str = vlm.extract_from_image(image_bytes, prompt="Extract as JSON: {first_name, last_name}")
 ```
 
@@ -315,7 +318,7 @@ Add VLM to extract patient data from images.
         def _get_vlm(self):
             """Lazy VLM initialization."""
             if self._vlm is None:
-                self._vlm = VLMClient(vlm_model="Qwen3-VL-4B-Instruct-GGUF")
+                self._vlm = VLMClient(vlm_model="Gemma-4-E4B-it-GGUF")
             return self._vlm
 
         def _register_tools(self):
@@ -368,7 +371,7 @@ Add VLM to extract patient data from images.
 process_intake_form("patient1.jpg")
   → Read image file as bytes
   → Send to VLM with extraction prompt
-  → VLM processes image (Qwen3-VL GGUF runs on the iGPU via llama.cpp/Vulkan)
+  → VLM processes image (Gemma-4-E4B-it GGUF runs on the iGPU via llama.cpp/Vulkan)
   → Returns JSON string: {"first_name": "John", ...}
   → Parse JSON to dict
   → Insert into database

@@ -69,7 +69,12 @@ CATEGORY_PERSONAL = "PERSONAL"
 # 2.2 is additive over 2.1 (#1542 attachment handling): EmailMessage /
 # EmailTriageResult / DraftReply gain an ``attachments`` metadata list
 # (default empty), and draft/send accept ``OutgoingAttachment`` payloads.
-SCHEMA_VERSION = "2.2"
+# 2.3 is a BREAKING triage-shape change: EmailTriageResult.draft is now a
+# ``DraftScaffold`` (recipient + subject only) instead of a ``DraftReply`` —
+# triage never composed a body, so the always-empty ``draft.body`` it used to
+# return is dropped rather than left as a confusing "". ``DraftReply`` (with
+# ``body``) is unchanged and still the /v1/email/draft + MCP draft_reply shape.
+SCHEMA_VERSION = "2.3"
 
 # Maximum number of items in a single batch request. Protects the single-tenant
 # local model slot from runaway batches. Enforced via Pydantic max_length.
@@ -147,9 +152,7 @@ class AttachmentMeta(_Strict):
     """
 
     filename: str = Field(..., description="Attachment filename, e.g. 'report.pdf'.")
-    mime_type: str = Field(
-        ..., description="MIME type as reported by the provider."
-    )
+    mime_type: str = Field(..., description="MIME type as reported by the provider.")
     size_bytes: int = Field(
         ..., ge=0, description="Attachment size in bytes (decoded)."
     )
@@ -206,9 +209,7 @@ class OutgoingAttachment(_Strict):
     def _mime_type_plausible(cls, v: str) -> str:
         v = (v or "").strip()
         if not _MIME_TYPE_RE.match(v):
-            raise ValueError(
-                f"not a valid MIME type (expected 'type/subtype'): {v!r}"
-            )
+            raise ValueError(f"not a valid MIME type (expected 'type/subtype'): {v!r}")
         return v
 
     @field_validator("content_base64")
@@ -217,9 +218,7 @@ class OutgoingAttachment(_Strict):
         try:
             decoded = base64.b64decode(v or "", validate=True)
         except (binascii.Error, ValueError) as e:
-            raise ValueError(
-                f"content_base64 is not valid standard base64: {e}"
-            ) from e
+            raise ValueError(f"content_base64 is not valid standard base64: {e}") from e
         if not decoded:
             raise ValueError("attachment content must be non-empty")
         if len(decoded) > MAX_ATTACHMENT_BYTES:
@@ -411,6 +410,25 @@ class ActionItem(_Strict):
         return self
 
 
+class DraftScaffold(_Strict):
+    """A reply *scaffold* the triage path proposes — recipient + subject only,
+    no body (schema 2.3).
+
+    Triage classifies and summarizes; it never composes reply prose. So the
+    scaffold it returns carries only the resolved reply recipient and a
+    ``Re:``-prefixed subject. To turn it into a sendable reply, compose the body
+    yourself (e.g. an LLM call over the triage ``summary`` + ``action_items`` +
+    the original message) and pass ``(to, subject, body)`` to
+    ``POST /v1/email/draft`` — that endpoint returns a full :class:`DraftReply`
+    and a single-use send-confirmation token.
+    """
+
+    to: List[EmailAddress] = Field(
+        ..., min_length=1, description="Proposed recipients (non-empty)."
+    )
+    subject: str = Field(..., description="Proposed subject line.")
+
+
 class DraftReply(_Strict):
     """A drafted reply the agent proposes. Never sent without confirmation
     (#1264) — this is a proposal, not an action.
@@ -467,8 +485,14 @@ class EmailTriageResult(_Strict):
     action_items: List[ActionItem] = Field(
         default_factory=list, description="Extracted actions (may be empty)."
     )
-    draft: Optional[DraftReply] = Field(
-        default=None, description="Proposed reply, or null when none is suggested."
+    draft: Optional[DraftScaffold] = Field(
+        default=None,
+        description=(
+            "Proposed reply SCAFFOLD (recipient + subject only, no body), or "
+            "null when no reply is suggested (schema 2.3). Triage never composes "
+            "reply prose; to send a reply, compose the body and POST it to "
+            "/v1/email/draft."
+        ),
     )
     suggested_action: Literal["reply", "none", "archive"] = Field(
         default="none",
@@ -1358,6 +1382,7 @@ __all__ = [
     "TriageContext",
     "EmailTriageRequest",
     "ActionItem",
+    "DraftScaffold",
     "DraftReply",
     "TriageUsage",
     "EmailTriageResult",

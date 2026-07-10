@@ -26,14 +26,14 @@ Included demos:
 
 ### 2. LLM Server (Lemonade)
 
-The agent connects to an OpenAI-compatible LLM server at `http://localhost:8000/api/v1` by default. The reference backend is [Lemonade Server](https://github.com/lemonade-sdk/lemonade), which runs models locally on AMD hardware.
+The agent connects to an OpenAI-compatible LLM server at `http://localhost:13305/api/v1` by default. The reference backend is [Lemonade Server](https://github.com/lemonade-sdk/lemonade), which runs models locally on AMD hardware.
 
-Download and install Lemonade Server v10.9.0, then start it:
+Download and install Lemonade Server v10.10.0, then start it:
 
 **Windows:**
 ```powershell
 # Download and run the MSI installer
-curl -L -o lemonade-server-minimal.msi https://github.com/lemonade-sdk/lemonade/releases/download/v10.9.0/lemonade-server-minimal.msi
+curl -L -o lemonade-server-minimal.msi https://github.com/lemonade-sdk/lemonade/releases/download/v10.10.0/lemonade-server-minimal.msi
 msiexec /i lemonade-server-minimal.msi
 ```
 
@@ -44,7 +44,7 @@ sudo add-apt-repository ppa:lemonade-team/stable
 sudo apt install lemonade-server
 ```
 
-Or browse all platform options on the [Lemonade v10.9.0 release page](https://github.com/lemonade-sdk/lemonade/releases/tag/v10.9.0).
+Or browse all platform options on the [Lemonade v10.10.0 release page](https://github.com/lemonade-sdk/lemonade/releases/tag/v10.10.0).
 
 After installation, start the server:
 ```bash
@@ -179,7 +179,7 @@ The agent will:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GAIA_CPP_BASE_URL` | `http://localhost:8000/api/v1` | LLM server base URL. Overrides `AgentConfig::baseUrl`. |
+| `GAIA_CPP_BASE_URL` | `http://localhost:13305/api/v1` | LLM server base URL. Overrides `AgentConfig::baseUrl`. |
 | `LEMONADE_MODEL` | _(none)_ | Model to load. Overrides `AgentConfig::modelId`. |
 | `GAIA_CPP_CTX_SIZE` | `16384` | LLM context window size in tokens. Overrides `AgentConfig::contextSize`. |
 | `GAIA_STREAMING` | _(unset)_ | Set to `1` to enable token streaming without changing code. Overrides the default for `AgentConfig::streaming`. |
@@ -191,7 +191,7 @@ GAIA_STREAMING=1 ./build/my_agent
 
 **Example — point to a remote server:**
 ```bash
-GAIA_CPP_BASE_URL=http://192.168.1.50:8000 ./build/my_agent
+GAIA_CPP_BASE_URL=http://192.168.1.50:13305 ./build/my_agent
 ```
 
 **Example — point to Ollama's OpenAI-compatible endpoint:**
@@ -375,7 +375,7 @@ protected:
 private:
     static gaia::AgentConfig makeConfig() {
         gaia::AgentConfig cfg;
-        cfg.baseUrl = "http://localhost:8000/api/v1";
+        cfg.baseUrl = "http://localhost:13305/api/v1";
         cfg.modelId = "Qwen3-4B-GGUF";  // or any model on your server
         cfg.maxSteps = 20;
         return cfg;

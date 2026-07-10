@@ -898,9 +898,11 @@ Used to reach the UI from a phone.
 
 <AccordionGroup>
   <Accordion title="POST /api/chat/confirm-tool">
-    Tool-confirmation handshake. When `TOOLS_REQUIRING_CONFIRMATION`
-    triggers the agent to pause, the UI prompts the user and posts the
-    outcome (`approve` / `deny`) back on this endpoint.
+    Tool-confirmation handshake. When a tool in the agent's
+    `confirmation_required_tools()` set (the generic base set merged with the
+    agent's own `CONFIRMATION_REQUIRED_TOOLS`) triggers the agent to pause,
+    the UI prompts the user and posts the outcome (`approve` / `deny`) back on
+    this endpoint.
   </Accordion>
 </AccordionGroup>
 
@@ -1383,10 +1385,12 @@ The Agent UI server delegates to the GAIA [Agent](/sdk/core/agent-system) for LL
 ```python
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
-# The server creates a ChatAgent instance per request
+# The server creates a ChatAgent instance per request. ChatAgent derives its
+# system prompt from `prompt_profile` ("chat" | "doc" | "file" | "data" |
+# "web" | "full") — there is no `system_prompt` config field.
 config = ChatAgentConfig(
     model_id=session.get("model", "Qwen3.5-35B-A3B-GGUF"),
-    system_prompt=session.get("system_prompt"),
+    prompt_profile="doc",
     allowed_paths=["/path/to/files"],
 )
 agent = ChatAgent(config)
@@ -1433,7 +1437,7 @@ The npm package includes:
 
 | Path | Description |
 |------|-------------|
-| `bin/gaia-ui.mjs` | CLI entry point (Node.js) |
+| `bin/gaia-ui.cjs` | CLI entry point (Node.js) |
 | `dist/` | Pre-built frontend (React SPA) |
 
 ### Release Management

@@ -1,0 +1,341 @@
+{
+  "_meta": {
+    "fixture": "briefing_ground_truth.json",
+    "fixture_kind": "hand-authored-seed",
+    "schema_version": 1,
+    "description": "Labeled seed corpus for the scheduled-daily-inbox-briefing summary-quality eval (#1608 feature, #1951 tracking). Each case is one inbox slice the daily briefing summarizes, plus a rubric of the high-priority threads it MUST surface and the noise it MUST NOT flag as high-priority. Scored by gaia.eval.briefing_quality: the REAL scheduled-briefing path (gaia_agent_email.briefing.run_briefing_job -> pre_scan_inbox_impl) produces the email_pre_scan envelope over a FakeGmailBackend seeded with the inbox slice (read-only, nothing sent/archived), an LLM judge scores it against the inbox + rubric on faithfulness / must-include recall / hallucination-free / grouping, and the aggregate briefing_approval_rate is compared to briefing_gate_thresholds.json in report mode.",
+    "case_schema": {
+      "scenario": "str — short label for the inbox situation this case exercises",
+      "inbox": "list[{from: str, subject: str, body: str}] (>=3) — the inbox slice the briefing summarizes; the ONLY ground truth for faithfulness + hallucination checks",
+      "rubric": "{must_surface: list[str] (non-empty), must_not_surface: list[str] (may be empty), notes?: str} — must_surface = high-priority threads that must appear in urgent/actionable (drives must-include recall); must_not_surface = noise that must NOT be flagged high-priority"
+    }
+  },
+  "briefing-001": {
+    "scenario": "prod incident + review request buried under newsletters",
+    "inbox": [
+      {
+        "from": "PagerDuty <alerts@pagerduty.com>",
+        "subject": "[P1] Checkout API 5xx error rate above threshold",
+        "body": "A P1 incident has been triggered for the Checkout API. Error rate is at 34% (threshold 2%) for the last 12 minutes. On-call has been paged. Ack this alert or it escalates to the secondary on-call in 5 minutes."
+      },
+      {
+        "from": "Dana Kim <dana@acme.io>",
+        "subject": "Need your sign-off on the Q3 budget by EOD",
+        "body": "Hi — finance needs the Q3 budget locked today. I've attached the final numbers; can you reply with your approval before 5pm? Nothing else is blocking the submission."
+      },
+      {
+        "from": "TechCrunch Daily <newsletter@techcrunch.com>",
+        "subject": "Today in tech: 10 startups to watch",
+        "body": "Your daily roundup of the biggest stories in tech. This morning: a new AI unicorn, chip supply updates, and more."
+      },
+      {
+        "from": "Amazon <ship-confirm@amazon.com>",
+        "subject": "Your order has shipped",
+        "body": "Your recent order of USB-C cables has shipped and will arrive Thursday. Track your package here."
+      },
+      {
+        "from": "LinkedIn <notifications@linkedin.com>",
+        "subject": "You have 3 new connection requests",
+        "body": "See who wants to connect with you this week. Grow your network."
+      }
+    ],
+    "rubric": {
+      "must_surface": [
+        "The PagerDuty P1 checkout-API incident (time-critical, on-call escalation)",
+        "Dana Kim's Q3 budget sign-off request due EOD today"
+      ],
+      "must_not_surface": [
+        "The TechCrunch daily newsletter",
+        "The Amazon shipping-confirmation receipt",
+        "The LinkedIn connection-request digest"
+      ],
+      "notes": "The incident should read as the single most urgent item; the budget sign-off is a same-day action, not an emergency."
+    }
+  },
+  "briefing-002": {
+    "scenario": "two competing deadlines, one genuine FYI",
+    "inbox": [
+      {
+        "from": "Legal <legal@acme.io>",
+        "subject": "Signature required: vendor NDA before tomorrow's call",
+        "body": "The Globex NDA needs your signature before the 9am call tomorrow or we cannot share the roadmap. DocuSign link inside — it takes two minutes."
+      },
+      {
+        "from": "Priya Nair <priya@acme.io>",
+        "subject": "Can you review the launch blog post today?",
+        "body": "Marketing wants to publish the launch post tomorrow morning. Could you review the draft today and flag anything inaccurate? Draft is in the shared doc."
+      },
+      {
+        "from": "IT Helpdesk <it@acme.io>",
+        "subject": "Scheduled maintenance this weekend",
+        "body": "Heads up: VPN will be down for maintenance Saturday 2-4am. No action needed; just avoid scheduling anything critical in that window."
+      }
+    ],
+    "rubric": {
+      "must_surface": [
+        "The Legal NDA signature needed before tomorrow's 9am call",
+        "Priya's request to review the launch blog post today"
+      ],
+      "must_not_surface": [
+        "The IT weekend-maintenance FYI (explicitly says no action needed)"
+      ],
+      "notes": "Both surfaced items are time-boxed actions; the IT notice is purely informational."
+    }
+  },
+  "briefing-003": {
+    "scenario": "mostly noise with a single real action item",
+    "inbox": [
+      {
+        "from": "Spotify <no-reply@spotify.com>",
+        "subject": "Your 2026 Wrapped is here",
+        "body": "See the songs and artists that defined your year. Tap to view your personalized Wrapped."
+      },
+      {
+        "from": "Medium Daily Digest <noreply@medium.com>",
+        "subject": "Stories for you",
+        "body": "Based on your reading history, here are today's recommended stories across product, design, and engineering."
+      },
+      {
+        "from": "Marcus Lee <marcus@partner.co>",
+        "subject": "Contract renewal — decision needed this week",
+        "body": "Our current contract lapses Friday. Can you confirm whether you want to renew at the same terms? If I don't hear back by Thursday we'll have to pause service."
+      },
+      {
+        "from": "Grammarly <insights@grammarly.com>",
+        "subject": "Your weekly writing stats",
+        "body": "You were more productive than 78% of Grammarly users this week. See your streak and insights."
+      }
+    ],
+    "rubric": {
+      "must_surface": [
+        "Marcus Lee's contract-renewal decision needed by Thursday/Friday"
+      ],
+      "must_not_surface": [
+        "The Spotify Wrapped promo",
+        "The Medium daily digest",
+        "The Grammarly weekly-stats email"
+      ],
+      "notes": "Only one thread carries a real deadline; the rest are promotional and must not be flagged high-priority."
+    }
+  },
+  "briefing-004": {
+    "scenario": "phishing attempt mixed with legitimate mail",
+    "inbox": [
+      {
+        "from": "Micr0soft Security <security@microsoft-account-verify.com>",
+        "subject": "Unusual sign-in — verify your account within 24 hours",
+        "body": "We detected an unusual sign-in to your Microsoft account. Verify your identity immediately at the link below or your account will be suspended. Enter your password to confirm it's you."
+      },
+      {
+        "from": "Sofia Martins <sofia@acme.io>",
+        "subject": "Slides for Thursday's board meeting — feedback?",
+        "body": "Draft board slides attached. Could you take a pass by Wednesday? Mainly want your eyes on the revenue section."
+      },
+      {
+        "from": "Coursera <no-reply@coursera.org>",
+        "subject": "New courses added to your recommendations",
+        "body": "We've added new machine-learning courses we think you'll like. Enroll now and start learning."
+      }
+    ],
+    "rubric": {
+      "must_surface": [
+        "The suspected phishing / account-verification scam email (user must review, not act on it blindly)",
+        "Sofia's request to review the board slides by Wednesday"
+      ],
+      "must_not_surface": [
+        "The Coursera course-recommendation promo"
+      ],
+      "notes": "A phishing lure must be surfaced for the user's attention (never silently archived), and never summarized as a legitimate security request the user should comply with."
+    }
+  },
+  "briefing-005": {
+    "scenario": "personal note among work threads",
+    "inbox": [
+      {
+        "from": "Mom <mom@family.net>",
+        "subject": "Dinner Sunday?",
+        "body": "Hi honey, are you free for dinner this Sunday? Your sister is coming too. No rush, just let me know when you can. Love you."
+      },
+      {
+        "from": "Deploy Bot <ci@acme.io>",
+        "subject": "Build failed on main — your commit",
+        "body": "The main branch build is red after your last merge. The email-agent test suite failed. Please fix or revert so the team isn't blocked."
+      },
+      {
+        "from": "Calendar <calendar-notification@google.com>",
+        "subject": "Reminder: 1:1 with manager at 2pm",
+        "body": "This is a reminder for your event '1:1 with manager' today at 2:00 PM."
+      },
+      {
+        "from": "Notion <team@notion.so>",
+        "subject": "What's new in Notion this month",
+        "body": "Check out the latest features we shipped: improved search, new templates, and more."
+      }
+    ],
+    "rubric": {
+      "must_surface": [
+        "The failed main-branch build caused by the user's commit (blocking the team)"
+      ],
+      "must_not_surface": [
+        "The Notion product-update newsletter"
+      ],
+      "notes": "The broken build is the one blocking action. The personal dinner note and the calendar reminder are legitimate but low-priority; they must not be distorted into work emergencies, and the personal note must never be summarized inaccurately."
+    }
+  },
+  "briefing-006": {
+    "scenario": "escalating customer thread plus routine approvals",
+    "inbox": [
+      {
+        "from": "Big Customer <cto@bigcustomer.com>",
+        "subject": "Escalation: data export broken for 3 days, considering churn",
+        "body": "This is the third day our nightly data export has failed and support has not resolved it. We are evaluating alternatives. I need someone senior to call me today with a plan, or we will start migrating off the platform."
+      },
+      {
+        "from": "Expense System <expenses@acme.io>",
+        "subject": "2 expense reports awaiting your approval",
+        "body": "You have two expense reports from your team awaiting approval. They are within policy. Approve or reject at your convenience."
+      },
+      {
+        "from": "Meetup <info@meetup.com>",
+        "subject": "Events happening near you this week",
+        "body": "Discover tech meetups and networking events in your area this week."
+      }
+    ],
+    "rubric": {
+      "must_surface": [
+        "The Big Customer churn-risk escalation demanding a senior call today",
+        "The two expense reports awaiting the user's approval"
+      ],
+      "must_not_surface": [
+        "The Meetup events-near-you promo"
+      ],
+      "notes": "The churn escalation is the clear top priority; the expense approvals are a genuine but routine action, not an emergency."
+    }
+  },
+  "briefing-007": {
+    "scenario": "all-informational morning with one soft ask",
+    "inbox": [
+      {
+        "from": "Company All-Hands <comms@acme.io>",
+        "subject": "Recap: this week's all-hands recording",
+        "body": "In case you missed it, the all-hands recording and slides are now available on the intranet. No action needed."
+      },
+      {
+        "from": "Alex Chen <alex@acme.io>",
+        "subject": "When you get a chance — thoughts on the API naming?",
+        "body": "No rush at all, but when you have a spare moment this week I'd love your take on whether we call it 'workspaces' or 'projects'. Happy to grab coffee to discuss."
+      },
+      {
+        "from": "GitHub <noreply@github.com>",
+        "subject": "Weekly digest: activity in your repositories",
+        "body": "Here's what happened across your repositories this week: 12 pull requests merged, 4 new issues opened."
+      },
+      {
+        "from": "Uber Receipts <receipts@uber.com>",
+        "subject": "Your Tuesday afternoon trip receipt",
+        "body": "Thanks for riding. Your trip total was $18.40. View the full receipt and trip details."
+      }
+    ],
+    "rubric": {
+      "must_surface": [
+        "Alex Chen's low-urgency request for input on API naming (a real ask, even if 'no rush')"
+      ],
+      "must_not_surface": [
+        "The all-hands recap (explicitly no action)",
+        "The GitHub weekly activity digest",
+        "The Uber trip receipt"
+      ],
+      "notes": "Alex's message is the only one asking anything of the user; the briefing should surface it as a light actionable, not inflate it into something urgent, and must not fabricate deadlines it doesn't contain."
+    }
+  },
+  "briefing-008": {
+    "scenario": "duplicate-looking subjects that are actually distinct threads",
+    "inbox": [
+      {
+        "from": "Jordan Blake <jordan@acme.io>",
+        "subject": "Re: Onboarding docs — one blocker",
+        "body": "Thanks for the docs! One blocker: the API key section links to a 404. New hires start Monday, so could you fix the link before then?"
+      },
+      {
+        "from": "Jordan Blake <jordan@acme.io>",
+        "subject": "Onboarding docs — separate question about access",
+        "body": "Unrelated to the doc thread: can you also grant the two new hires read access to the analytics dashboard? Not urgent, sometime before Monday is fine."
+      },
+      {
+        "from": "Atlassian <noreply@atlassian.com>",
+        "subject": "Your Jira weekly summary",
+        "body": "Here's a summary of your Jira activity this week across boards and sprints."
+      }
+    ],
+    "rubric": {
+      "must_surface": [
+        "Jordan's broken API-key link blocking Monday's new-hire onboarding",
+        "Jordan's separate request to grant the new hires analytics-dashboard access before Monday"
+      ],
+      "must_not_surface": [
+        "The Atlassian/Jira weekly summary"
+      ],
+      "notes": "Two genuinely distinct asks from the same sender with similar subjects — the briefing must not collapse them into one item or drop one; both share a Monday deadline."
+    }
+  },
+  "briefing-009": {
+    "scenario": "time-zone-sensitive meeting request plus a receipt",
+    "inbox": [
+      {
+        "from": "Yuki Tanaka <yuki@partner.jp>",
+        "subject": "Can we move our sync 2 hours earlier? My end is late-night",
+        "body": "Our recurring sync lands at 11pm my time. Could we shift it two hours earlier going forward? If today works for a one-off earlier slot, I'm free from 3pm your time. Let me know today so I can plan."
+      },
+      {
+        "from": "Stripe <receipts@stripe.com>",
+        "subject": "Receipt for your subscription payment",
+        "body": "Your monthly subscription of $49.00 was charged successfully. This is your receipt; no action is required."
+      },
+      {
+        "from": "Figma <updates@figma.com>",
+        "subject": "New in Figma: dev mode improvements",
+        "body": "We've shipped improvements to dev mode. See what's new and how to use it."
+      }
+    ],
+    "rubric": {
+      "must_surface": [
+        "Yuki's request to reschedule the recurring sync, needing a reply today"
+      ],
+      "must_not_surface": [
+        "The Stripe subscription receipt (no action required)",
+        "The Figma product-update newsletter"
+      ],
+      "notes": "The reschedule ask needs a same-day reply; the briefing must summarize the specific time request faithfully (2 hours earlier / 3pm your time) without inventing a confirmed new time."
+    }
+  },
+  "briefing-010": {
+    "scenario": "security advisory plus a genuine deadline and a promo",
+    "inbox": [
+      {
+        "from": "Security Team <security@acme.io>",
+        "subject": "Action required: rotate your API tokens by Friday",
+        "body": "Following the dependency advisory, all engineers must rotate their personal API tokens by end of day Friday. Instructions are on the security wiki. Tokens not rotated will be revoked automatically."
+      },
+      {
+        "from": "Rachel Ortiz <rachel@acme.io>",
+        "subject": "Interview feedback needed for tomorrow's debrief",
+        "body": "Could you submit your written feedback for yesterday's candidate before tomorrow's 10am debrief? We can't make a decision without it."
+      },
+      {
+        "from": "DoorDash <no-reply@doordash.com>",
+        "subject": "50% off your next 3 orders",
+        "body": "Limited time: get 50% off your next three orders. Tap to claim your offer before it expires."
+      }
+    ],
+    "rubric": {
+      "must_surface": [
+        "The security team's mandatory API-token rotation by Friday",
+        "Rachel's interview-feedback request needed before tomorrow's 10am debrief"
+      ],
+      "must_not_surface": [
+        "The DoorDash discount promo"
+      ],
+      "notes": "Both surfaced items are hard deadlines with consequences; the briefing must keep their due dates accurate (Friday for rotation, tomorrow 10am for feedback)."
+    }
+  }
+}

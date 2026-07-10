@@ -177,7 +177,9 @@ class TestSidecarMount:
 
         monkeypatch.setattr(capi, "connected_mailbox_providers", lambda: [])
         monkeypatch.setattr(capi, "get_connection", lambda p: None)
-        client = TestClient(self._build_app())
+        # Loopback base_url: the sidecar app's caller-auth Host allowlist (#1706)
+        # rejects TestClient's default `testserver` Host with 400.
+        client = TestClient(self._build_app(), base_url="http://127.0.0.1")
         # Always mounted (never 404) and the core surface is intact.
         assert client.get("/v1/email/connectors").status_code == 200
         assert client.get("/v1/email/playground").status_code == 200
@@ -186,7 +188,10 @@ class TestSidecarMount:
     def test_connectors_excluded_from_openapi_contract(self):
         # Playground convenience, not part of the frozen REST contract.
         paths = (
-            TestClient(self._build_app()).get("/openapi.json").json().get("paths", {})
+            TestClient(self._build_app(), base_url="http://127.0.0.1")
+            .get("/openapi.json")
+            .json()
+            .get("paths", {})
         )
         assert "/v1/email/connectors" not in paths
         assert "/v1/email/triage" in paths

@@ -3,12 +3,12 @@ title: "BlenderAgent"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/agents/blender/agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/blender/agent.py)
+  **Source Code:** [`hub/agents/python/blender/gaia_agent_blender/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/python/blender/gaia_agent_blender/agent.py)
 </Info>
 
 <Note>
 **Component:** BlenderAgent - 3D Scene Creation via Natural Language
-**Module:** `gaia.agents.blender.agent`
+**Module:** `gaia_agent_blender.agent`
 **Inherits:** Agent
 **MCP:** BlenderMCPClient for Blender communication
 </Note>
@@ -305,9 +305,9 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import tool
 from gaia.mcp.blender_mcp_client import MCPClient
 
-# Blender core modules (separate package)
-from gaia.agents.blender.core.scene import SceneManager
-from gaia.agents.blender.core.materials import MaterialManager
+# Blender core modules (ship with the gaia-agent-blender package)
+from gaia_agent_blender.core.scene import SceneManager
+from gaia_agent_blender.core.materials import MaterialManager
 ```
 
 ---
@@ -317,7 +317,7 @@ from gaia.agents.blender.core.materials import MaterialManager
 ### Example 1: Simple Scene
 
 ```python
-from gaia.agents.blender.agent import BlenderAgent
+from gaia_agent_blender.agent import BlenderAgent
 
 agent = BlenderAgent()
 

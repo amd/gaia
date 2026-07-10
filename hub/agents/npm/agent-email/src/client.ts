@@ -85,6 +85,13 @@ export interface EmailClientOptions {
   timeoutMs?: number;
   /** Optional fetch override (for tests). Defaults to the global `fetch`. */
   fetchImpl?: typeof fetch;
+  /**
+   * Per-session caller-auth bearer token (#1706). When set, it is sent as
+   * `Authorization: Bearer <token>` on every request. The sidecar requires it on
+   * `/v1/email/*` calls (401 otherwise); `spawnSidecar` generates one and binds
+   * it to the sidecar's client automatically.
+   */
+  authToken?: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -93,6 +100,7 @@ export class EmailClient {
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
+  private readonly authToken?: string;
 
   constructor(opts: EmailClientOptions) {
     if (!opts?.baseUrl) {
@@ -103,6 +111,7 @@ export class EmailClient {
     // Normalize: strip trailing slashes so path joins are predictable.
     this.baseUrl = stripTrailingSlashes(opts.baseUrl);
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.authToken = opts.authToken;
     const rawFetch = opts.fetchImpl ?? globalThis.fetch;
     if (typeof rawFetch !== "function") {
       throw new TypeError(
@@ -396,14 +405,18 @@ export class EmailClient {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
     log.debug(`${method} ${url}`);
+    // Per-session caller-auth token (#1706), when the client was given one.
+    const authHeaders: Record<string, string> = this.authToken
+      ? { authorization: `Bearer ${this.authToken}` }
+      : {};
     let res: Response;
     try {
       res = await this.fetchImpl(url, {
         method,
         signal: ctrl.signal,
         headers: hasBody
-          ? { accept, "content-type": "application/json" }
-          : { accept },
+          ? { accept, "content-type": "application/json", ...authHeaders }
+          : { accept, ...authHeaders },
         body: hasBody ? JSON.stringify(opts!.body) : undefined,
       });
     } catch (e) {

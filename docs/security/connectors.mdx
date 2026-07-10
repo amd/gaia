@@ -1,9 +1,8 @@
 ---
-title: "Connections — security model"
+title: "OAuth Connection Threat Model"
 description: "OAuth connection threat model, refresh-token hygiene, and what GAIA does and does not protect against."
+icon: "lock"
 ---
-
-# Connections — security model
 
 GAIA's `gaia.connectors` package implements OAuth 2.0 PKCE
 (RFC 7636/8252) for desktop authorization flows. This page describes the
@@ -136,4 +135,8 @@ the failure becomes common.
 - [ ] Sensitive-scope verification is submitted for the production
   client id (4–6 wk timeline).
 
-See also: [Google OAuth Client runbook](../runbooks/google-oauth-client.md).
+## See also
+
+- [Connections security model](/security/connections) — credential storage, the grant + activation model, and revocation across every connector type.
+- [Connectors overview](/connectors)
+- [Google OAuth Client runbook](https://github.com/amd/gaia/blob/main/docs/runbooks/google-oauth-client.md)

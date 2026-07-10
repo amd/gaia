@@ -195,6 +195,13 @@ export interface IndexEntry {
   spec: string;
   /** SKILL.md (AI-integration playbook) markdown of the latest version; "" if none was published. */
   skill: string;
+  /**
+   * Eval-scorecard markdown (SCORECARD.md body, YAML front matter stripped) of the
+   * latest version, rendered as its own doc tab on the hub page; "" if none was
+   * published. The machine-readable aggregate lives in `eval_score`, and the
+   * canonical source in `eval_scorecard_url`.
+   */
+  scorecard: string;
   /** npm package name when the agent is distributed via npm; absent otherwise. */
   npm_package?: string;
   /** Localhost playground URL served by the agent's sidecar; absent otherwise. */

@@ -76,6 +76,8 @@ class AgentMCPServer:
         host: str = None,
         verbose: bool = False,
         agent_params: Dict[str, Any] = None,
+        transport: Transport = "streamable-http",
+        register_typed_tools: bool = False,
     ):
         """
         Initialize MCP server for an agent.
@@ -83,21 +85,28 @@ class AgentMCPServer:
         Args:
             agent_class: MCPAgent subclass to wrap
             name: Display name (default: "GAIA {AgentName} MCP")
-            port: Port to listen on (default: 8080)
-            host: Host to bind to (default: localhost)
+            port: Port to listen on (default: 8080). Ignored for stdio.
+            host: Host to bind to (default: localhost). Ignored for stdio.
             verbose: Enable verbose logging
             agent_params: Parameters for agent __init__
+            transport: Default transport for start() — "streamable-http"
+                (binds a port) or "stdio" (JSON-RPC over stdin/stdout)
+            register_typed_tools: When True, register each tool with an explicit
+                typed signature derived from its inputSchema. When False (default),
+                use the legacy **kwargs wrapper that tolerates VSCode/Copilot's
+                {"kwargs": ...} envelope.
 
         Raises:
             TypeError: If agent_class doesn't inherit MCPAgent
         """
         pass
 
-    def start(self):
+    def start(self, transport: Transport = None):
         """
-        Start MCP server with streamable-http transport.
+        Start the MCP server.
 
-        Prints startup banner and blocks until Ctrl+C.
+        Uses the transport passed here, or the instance default from __init__.
+        Prints the startup banner and blocks until Ctrl+C.
         """
         pass
 
@@ -274,7 +283,7 @@ def _print_startup_info(self):
 
 def test_server_initialization():
     """Test AgentMCPServer initializes."""
-    from gaia.agents.docker.agent import DockerAgent
+    from gaia_agent_docker.agent import DockerAgent
 
     server = AgentMCPServer(
         agent_class=DockerAgent,
@@ -294,7 +303,7 @@ def test_server_rejects_non_mcp_agent():
 
 def test_tool_registration():
     """Test tools are registered from agent."""
-    from gaia.agents.docker.agent import DockerAgent
+    from gaia_agent_docker.agent import DockerAgent
 
     server = AgentMCPServer(
         agent_class=DockerAgent,
@@ -310,7 +319,7 @@ def test_tool_registration():
 @pytest.mark.asyncio
 async def test_parameter_mapping():
     """Test VSCode parameter unwrapping."""
-    from gaia.agents.docker.agent import DockerAgent
+    from gaia_agent_docker.agent import DockerAgent
 
     server = AgentMCPServer(
         agent_class=DockerAgent,
@@ -367,7 +376,7 @@ from gaia.logger import get_logger
 
 ```python
 from gaia.mcp.agent_mcp_server import AgentMCPServer
-from gaia.agents.docker.agent import DockerAgent
+from gaia_agent_docker.agent import DockerAgent
 
 # Create server
 server = AgentMCPServer(
@@ -385,19 +394,49 @@ server = AgentMCPServer(
 server.start()
 ```
 
-### Example 2: Start Jira MCP Server
+### Example 2: Wrap a Custom MCPAgent
+
+Any subclass of `MCPAgent` can be served — `agent_class` is validated against
+`MCPAgent` at construction, so the agent must implement
+`get_mcp_tool_definitions()` and `execute_mcp_tool()`.
 
 ```python
-from gaia.agents.jira.agent import JiraAgent
+from typing import Any, Dict, List
+from gaia.agents.base.mcp_agent import MCPAgent
+from gaia.agents.base.console import SilentConsole
+from gaia.mcp.agent_mcp_server import AgentMCPServer
+
+class GreeterAgent(MCPAgent):
+    def _get_system_prompt(self) -> str:
+        return "You greet users."
+
+    def _create_console(self):
+        return SilentConsole()
+
+    def _register_tools(self):
+        pass
+
+    def get_mcp_tool_definitions(self) -> List[Dict[str, Any]]:
+        return [{
+            "name": "greet",
+            "description": "Greet a person by name",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
+            },
+        }]
+
+    def execute_mcp_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        if tool_name == "greet":
+            return {"message": f"Hello, {arguments['name']}!"}
+        raise ValueError(f"Unknown tool: {tool_name}")
 
 server = AgentMCPServer(
-    agent_class=JiraAgent,
+    agent_class=GreeterAgent,
     port=8081,
     verbose=False,
-    agent_params={
-        "jira_config": discovered_config,  # Pre-discovered config
-        "silent_mode": True
-    }
+    agent_params={"silent_mode": True},
 )
 
 server.start()
@@ -409,7 +448,7 @@ server.start()
 # src/gaia/mcp/start_docker_mcp.py
 import argparse
 from gaia.mcp.agent_mcp_server import AgentMCPServer
-from gaia.agents.docker.agent import DockerAgent
+from gaia_agent_docker.agent import DockerAgent
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--port", type=int, default=8080)
@@ -434,9 +473,8 @@ python -m gaia.mcp.start_docker_mcp --port 8080 --verbose
 
 ## Related Specifications
 
-- [agent-base](/spec/agent-base) - MCPAgent interface
+- [mcp-agent](/spec/mcp-agent) - MCPAgent interface
 - [docker-agent](/spec/docker-agent) - Example agent using MCP
-- [jira-agent](/spec/jira-agent) - Another MCP-enabled agent
 - [electron-integration](/spec/electron-integration) - Electron MCP client
 
 ---

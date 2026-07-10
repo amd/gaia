@@ -58,6 +58,18 @@ boots and serves the contract surface with no model. `POST /v1/email/triage`
 uses the **real local Lemonade model** and requires a reachable Lemonade Server;
 if there is none it returns **HTTP 502 (`local LLM triage failed`)**.
 
+### Caller authentication (#1706)
+
+The sidecar can send mail as the user, so it authenticates its caller. Set
+`GAIA_EMAIL_SIDECAR_TOKEN` in the environment (the `@amd-gaia/agent-email`
+lifecycle and the GAIA UI sidecar manager do this automatically on spawn) and
+every `/v1/email/*` request must send `Authorization: Bearer <token>` or it is
+rejected with **401**. A non-loopback `Host` → **400** (DNS-rebinding) and a
+non-loopback browser `Origin` → **403** (drive-by page); `/health`, `/version`,
+`/v1/email/spec`, and `/v1/email/playground` are exempt from the token. Launching
+by hand without the env var disables the token check (local dev only, logged
+loudly) — Host/Origin protection still applies.
+
 ## Smoke test
 
 ```bash

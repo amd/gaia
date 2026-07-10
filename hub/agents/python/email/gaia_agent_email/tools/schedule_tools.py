@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: MIT
 """Scheduled send + snooze tools (#1609).
 
-``schedule_send`` is registered in ``TOOLS_REQUIRING_CONFIRMATION`` at the
-agent level — the user confirms the LITERAL ``to``/``subject``/``body`` and
+``schedule_send`` is declared in the email agent's
+``CONFIRMATION_REQUIRED_TOOLS`` (#1440) — the user confirms the LITERAL
+``to``/``subject``/``body`` and
 the fire time AT CREATION (#1264); the send then fires unattended at/after
 that time. The body is persisted as a backend draft (visible in the user's
 mail client), never in SQLite — the job row carries only the draft_id and a

@@ -34,10 +34,12 @@ audio = AudioClient(
     enable_tts=True,               # Enable text-to-speech
 )
 
-# Define message processor (sync function — callback invoked per transcription)
-def process_user_message(message: str) -> str:
+# Define message processor. It is awaited once per transcription, so it
+# MUST be `async def` — AudioClient invokes it via asyncio.run(callback(text)).
+# The return value is ignored; do your work (respond, speak, print) inside it.
+async def process_user_message(message: str) -> None:
     # Your agent logic
-    return f"You said: {message}"
+    print(f"You said: {message}")
 
 # Start voice chat (async — must be awaited)
 async def main():
@@ -100,13 +102,13 @@ while True:
 ```python
 from gaia.audio.kokoro_tts import KokoroTTS
 
-# Initialize TTS (voice defaults to "af_sarah")
+# Initialize TTS (voice defaults to "af_bella")
 tts = KokoroTTS()
 
 # List available voices
 voices = tts.list_available_voices()
 for voice_id, voice_data in voices.items():
-    print(f"{voice_id}: {voice_data.get('description', voice_id)}")
+    print(f"{voice_id}: {voice_data['name']} (quality: {voice_data['quality']})")
 
 # Select a voice (must be called before generate_speech)
 tts.set_voice("af_sarah")  # American female voice
