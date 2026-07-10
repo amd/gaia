@@ -73,11 +73,6 @@ class ResultPayload:
         reproduction_command: Optional exact shell command(s) to reproduce this
             scorecard run.  Rendered in the ``## Reproduction`` section.  If None,
             a generic pointer to the docs/skill is rendered instead.
-        notes: Optional free-form Markdown appended verbatim to the end of the
-            body (e.g. dataset pointers, a worked example, a metric glossary).
-            Agent-specific; the core renderer emits it unchanged, wrapped in
-            invisible HTML-comment markers so :func:`carry_forward` can preserve
-            it across a patch release without re-running the eval.
     """
 
     agent_name: str
@@ -95,24 +90,6 @@ class ResultPayload:
     reproduction_command: Optional[str] = None
     breakdown: Optional[dict] = None
     environment: Optional[dict] = None
-    notes: Optional[str] = None
-
-
-# Invisible markers bounding the free-form ``notes`` block in the rendered body.
-# HTML comments render to nothing on GitHub/npm, so they don't clutter the page,
-# but let ``carry_forward`` recover the block verbatim on a patch release.
-_NOTES_START = "<!-- scorecard:notes:start -->"
-_NOTES_END = "<!-- scorecard:notes:end -->"
-
-
-def _extract_notes(text: str) -> Optional[str]:
-    """Recover the free-form notes block from a rendered scorecard, if present."""
-    start = text.find(_NOTES_START)
-    end = text.find(_NOTES_END)
-    if start == -1 or end == -1 or end < start:
-        return None
-    block = text[start + len(_NOTES_START) : end].strip()
-    return block or None
 
 
 def _md_cell(value) -> str:
@@ -331,9 +308,6 @@ matter alone — no eval-harness access needed.
             breakdown_section += f"\n**Top confusions:**\n\n{conf_lines}\n"
         body += breakdown_section
 
-    if payload.notes:
-        body += f"\n{_NOTES_START}\n{payload.notes.strip()}\n{_NOTES_END}\n"
-
     if payload.inherited_from:
         body += f"\n> **Inherited from {payload.inherited_from}** — results carried forward verbatim (patch release).\n"
 
@@ -531,8 +505,7 @@ def carry_forward(prev_scorecard_path: Path, new_version: str) -> ResultPayload:
     _assert_valid_version(new_version)
     prev_scorecard_path = Path(prev_scorecard_path)
 
-    prev_text = prev_scorecard_path.read_text(encoding="utf-8")
-    parsed = parse_scorecard(prev_text)
+    parsed = parse_scorecard(prev_scorecard_path)
 
     # Extract prior version from front matter (agent.version)
     agent = parsed.get("agent", {})
@@ -564,9 +537,6 @@ def carry_forward(prev_scorecard_path: Path, new_version: str) -> ResultPayload:
     # promise "carried forward verbatim").
     breakdown = results.get("breakdown")
     environment = recipe.get("environment")
-    # The notes block lives in the body (not front matter); recover it from the
-    # prior render so a patch release keeps the dataset/example docs verbatim.
-    notes = _extract_notes(prev_text)
 
     import datetime
 
@@ -585,5 +555,4 @@ def carry_forward(prev_scorecard_path: Path, new_version: str) -> ResultPayload:
         inherited_from=prev_version,
         breakdown=breakdown,
         environment=environment,
-        notes=notes,
     )
