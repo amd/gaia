@@ -307,7 +307,7 @@
   <div class="wrap">
     <div class="eyebrow"><span class="bar"></span>At a glance</div>
     <h2 style="margin-top:16px">The capability surface at a glance</h2>
-    <p class="body-t">Mail is read through your connected <b>Gmail or Outlook</b>. Every action runs under a <b>guardrail tier</b>: <b>Tier&nbsp;0</b> read-only, <b>Tier&nbsp;1</b> reversible (30-second undo), <b>Tier&nbsp;2</b> needs your confirmation. <b>17 capabilities</b> across three states — <b>5 validated, 11 wired, 1 planned</b> — plus a personalization track that learns how you work. Click any row to jump to its full entry.</p>
+    <p class="body-t">Mail is read through your connected <b>Gmail or Outlook</b>. Every action runs under a <b>guardrail tier</b>: <b>Tier&nbsp;0</b> read-only, <b>Tier&nbsp;1</b> reversible (30-second undo), <b>Tier&nbsp;2</b> needs your confirmation. <b>17 capabilities</b> across two states — <b>5 validated, 12 wired</b>, none outstanding — plus a personalization track that learns how you work. Click any row to jump to its full entry.</p>
 
     <div class="cards3">
       <div class="gcard" style="border-top-color:var(--ok)">
@@ -321,18 +321,18 @@
       </div>
       <div class="gcard t1">
         <div class="lab">In progress</div>
-        <h3>11 wired</h3>
+        <h3>12 wired</h3>
         <ul>
-          <li>Pre-scan, threads, send, batch archive, calendar, tasks, follow-ups, briefing, scheduled send &amp; snooze — built, validation underway</li>
-          <li>5 personalization features in progress (P1–P5, incl. attachments + voice drafting)</li>
+          <li>Pre-scan, threads, send, batch archive, calendar, search, tasks, follow-ups, briefing, scheduled send &amp; snooze — built, validation underway</li>
+          <li>5 personalization features (P1–P5) — P1–P3 learned/durable preferences, P4 attachments, P5 voice drafting</li>
         </ul>
       </div>
-      <div class="gcard" style="border-top-color:var(--faint)">
-        <div class="lab" style="color:var(--faint)">Planned</div>
-        <h3>1 + schema 2.0</h3>
+      <div class="gcard" style="border-top-color:var(--ok)">
+        <div class="lab" style="color:var(--ok)">Contract</div>
+        <h3>schema 2.2</h3>
         <ul>
-          <li>Capability 13 — <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (smallest lift of the set)</li>
-          <li><b>Schema 2.0</b> (breaking) — 5-bucket taxonomy + <code>suggested_action</code></li>
+          <li><b>Schema 2.0</b> — 5-bucket taxonomy + <code>suggested_action</code> (<a class="iss" href="https://github.com/amd/gaia/issues/1615" target="_blank" rel="noopener">#1615</a>) — <b>shipped</b></li>
+          <li><b>2.1</b> search / pre-scan / archive · quarantine / calendar &nbsp;·&nbsp; <b>2.2</b> attachments (<a class="iss" href="https://github.com/amd/gaia/issues/1542" target="_blank" rel="noopener">#1542</a>)</li>
         </ul>
       </div>
     </div>
@@ -340,7 +340,7 @@
     <table class="tbl">
       <thead><tr><th>#</th><th>Capability</th><th>Status</th><th>What it does</th><th>Guardrail</th><th>Trigger</th><th>Personal.</th></tr></thead>
       <tbody>
-        <tr><td><b>1</b></td><td><b>4-way triage</b></td><td><span class="dot ok"></span>Validated</td><td>Classify each message: urgent / actionable / informational / low-pri (+ spam &amp; phishing flags)</td><td><span class="pill t0">Tier 0</span></td><td><span style="color:var(--soft)">New&nbsp;mail</span></td><td><span style="color:var(--ok)">○</span></td></tr>
+        <tr><td><b>1</b></td><td><b>5-bucket triage</b></td><td><span class="dot ok"></span>Validated</td><td>Classify each message: URGENT / NEEDS_RESPONSE / FYI / PROMOTIONAL / PERSONAL, plus a <code>suggested_action</code> verb (+ spam &amp; phishing flags)</td><td><span class="pill t0">Tier 0</span></td><td><span style="color:var(--soft)">New&nbsp;mail</span></td><td><span style="color:var(--ok)">○</span></td></tr>
         <tr><td><b>2</b></td><td><b>Per-email summary</b></td><td><span class="dot ok"></span>Validated</td><td>One-line gist of any single message</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>3</b></td><td><b>Draft reply</b></td><td><span class="dot ok"></span>Validated</td><td>In-thread <code>Re:</code> scaffold; agent fills the body</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">Manual</span></td><td><span style="color:var(--ok)">○</span></td></tr>
         <tr><td><b>4</b></td><td><b>Phishing detection</b></td><td><span class="dot ok"></span>Validated</td><td>Flag phishing; opt-in auto-quarantine like spam (notify + reversible)</td><td><span class="pill t0">Tier 0</span> <span class="pill t1">auto (opt-in)</span></td><td><span style="color:var(--soft)">New&nbsp;mail</span></td><td><span class="opt">—</span></td></tr>
@@ -352,7 +352,7 @@
         <tr><td><b>10</b></td><td><b>Calendar — detect</b></td><td><span class="dot wip"></span>Wired</td><td>Spot meeting requests inside email bodies</td><td><span class="pill t0">Tier 0</span></td><td><span style="color:var(--soft)">New&nbsp;mail</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>11</b></td><td><b>Calendar — conflicts</b></td><td><span class="dot wip"></span>Wired</td><td>Check the calendar in-line for overlaps</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>12</b></td><td><b>Calendar — create</b></td><td><span class="dot wip"></span>Wired</td><td>Create events from email context</td><td><span class="pill t2">Tier 2</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
-        <tr><td><b>13</b></td><td><b>Search past email</b></td><td><span class="dot" style="background:var(--faint)"></span>Planned</td><td>Natural-language / keyword search across the mailbox</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
+        <tr><td><b>13</b></td><td><b>Search past email</b></td><td><span class="dot wip"></span>Wired</td><td>Keyword / provider-syntax search across the mailbox</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>14</b></td><td><b>Task extraction → list</b></td><td><span class="dot wip"></span>Wired</td><td>Persist action items into a trackable task list</td><td><span class="pill t0">Tier 0</span></td><td><span style="color:var(--soft)">New&nbsp;mail</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>15</b></td><td><b>Follow-up tracking</b></td><td><span class="dot wip"></span>Wired</td><td>Flag sent mail awaiting a reply past a configurable window (detection only)</td><td><span class="pill t0">Tier 0</span></td><td><span class="opt">Manual</span></td><td><span class="opt">—</span></td></tr>
         <tr><td><b>16</b></td><td><b>Proactive daily briefing</b></td><td><span class="dot wip"></span>Wired</td><td>Scheduled morning inbox brief, no prompt (calendar + tasks planned)</td><td><span class="pill t0">Tier 0</span></td><td><span style="color:var(--c1)">Scheduled</span></td><td><span style="color:var(--ok)">○</span></td></tr>
@@ -364,8 +364,8 @@
     <div class="stats">
       <div class="st"><div class="v">17</div><div class="l">Capabilities</div></div>
       <div class="st"><div class="v g">5</div><div class="l">Completed</div></div>
-      <div class="st"><div class="v">16</div><div class="l">In progress</div></div>
-      <div class="st"><div class="v">1</div><div class="l">Planned</div></div>
+      <div class="st"><div class="v">12</div><div class="l">In progress</div></div>
+      <div class="st"><div class="v">0</div><div class="l">Planned</div></div>
       <div class="st"><div class="v r">3</div><div class="l">Approval tiers</div></div>
     </div>
   </div>
@@ -388,11 +388,11 @@
     </div>
 
     <h3 style="margin-top:40px">Capability → surface</h3>
-    <p class="body-t">REST and MCP expose the <b>analysis + reply + send</b> core (capabilities 1–4, 6, 7). As of <b>schema 2.1</b> the <b>REST</b> surface additionally exposes the reversible mailbox mutations <b>archive</b> and <b>phishing-quarantine</b> (capabilities 8, 9) — each gated on a single-use confirmation token like <code>/send</code>, each reversible within a 30-second undo window — plus <b>calendar view / create / respond</b> (<a class="iss" href="https://github.com/amd/gaia/issues/1780" target="_blank" rel="noopener">#1780</a>; calendar <i>detect</i> and <i>conflicts</i> remain agent-only). As of <b>schema 2.2</b> it also handles <b>attachments</b> (<a class="iss" href="https://github.com/amd/gaia/issues/1542" target="_blank" rel="noopener">#1542</a>): triage exposes attachment metadata, and <code>/draft</code> · <code>/send</code> accept base64 file payloads bound into the confirmation token. MCP does not surface these. The remaining mailbox/calendar capabilities run through the <b>full agent</b>, which acts via a forwarded connection.</p>
+    <p class="body-t">REST and MCP expose the <b>analysis + reply + send</b> core (capabilities 1–4, 6, 7). As of <b>schema 2.1</b> the <b>REST</b> surface additionally exposes the reversible mailbox mutations <b>archive</b> and <b>phishing-quarantine</b> (capabilities 8, 9) — each gated on a single-use confirmation token like <code>/send</code>, each reversible within a 30-second undo window — plus <b>inbox pre-scan</b> (<a class="iss" href="https://github.com/amd/gaia/issues/1778" target="_blank" rel="noopener">#1778</a>), <b>inbox search</b> (capability 13, <a class="iss" href="https://github.com/amd/gaia/issues/1781" target="_blank" rel="noopener">#1781</a>) and <b>calendar view / create / respond</b> (<a class="iss" href="https://github.com/amd/gaia/issues/1780" target="_blank" rel="noopener">#1780</a>; calendar <i>detect</i> and <i>conflicts</i> remain agent-only). As of <b>schema 2.2</b> it also handles <b>attachments</b> (<a class="iss" href="https://github.com/amd/gaia/issues/1542" target="_blank" rel="noopener">#1542</a>): triage exposes attachment metadata, and <code>/draft</code> · <code>/send</code> accept base64 file payloads bound into the confirmation token. MCP does not surface these. The remaining mailbox/calendar capabilities run through the <b>full agent</b>, which acts via a forwarded connection.</p>
     <table class="tbl">
       <thead><tr><th>Capability</th><th>REST</th><th>MCP</th><th>Agent</th></tr></thead>
       <tbody>
-        <tr><td><b>1</b> · 4-way triage</td><td>✓ <code>/v1/email/triage</code> <span class="opt">· batch: <code>/v1/email/triage/batch</code></span></td><td>✓ <code>triage_email</code> <span class="opt">· <code>triage_email_batch</code></span></td><td>✓</td></tr>
+        <tr><td><b>1</b> · 5-bucket triage</td><td>✓ <code>/v1/email/triage</code> <span class="opt">· batch: <code>/v1/email/triage/batch</code></span></td><td>✓ <code>triage_email</code> <span class="opt">· <code>triage_email_batch</code></span></td><td>✓</td></tr>
         <tr><td><b>2</b> · Per-email summary</td><td>✓ <span class="opt">(in triage result)</span></td><td>✓</td><td>✓</td></tr>
         <tr><td><b>3</b> · Draft reply</td><td>✓ <code>/v1/email/draft</code></td><td>✓ <code>draft_reply</code></td><td>✓</td></tr>
         <tr><td><b>4</b> · Phishing detection</td><td>✓ <span class="opt">(flag in triage)</span></td><td>✓</td><td>✓ <span class="opt">(+ quarantine)</span></td></tr>
@@ -401,11 +401,11 @@
         <tr><td><b>5</b> · Inbox pre-scan</td><td>✓ <code>/v1/email/prescan</code> <span class="opt">(read-only)</span></td><td>—</td><td>✓ <code>pre_scan_inbox</code></td></tr>
         <tr><td><b>8</b> · Archive (+ undo)</td><td>✓ <code>/v1/email/archive</code> · <code>/unarchive</code></td><td>—</td><td>✓ <code>archive_message</code></td></tr>
         <tr><td><b>9</b> · Quarantine (+ undo)</td><td>✓ <code>/v1/email/quarantine</code> · <code>/unquarantine</code> <span class="opt">(Gmail)</span></td><td>—</td><td>✓ <code>quarantine_phishing_message</code></td></tr>
-        <tr><td>Inbox search <span class="opt">(read-only, <a class="iss" href="https://github.com/amd/gaia/issues/1781" target="_blank" rel="noopener">#1781</a>)</span></td><td>✓ <code>/v1/email/search</code></td><td>—</td><td>✓ <code>search_messages</code></td></tr>
+        <tr><td><b>13</b> · Inbox search <span class="opt">(read-only, <a class="iss" href="https://github.com/amd/gaia/issues/1781" target="_blank" rel="noopener">#1781</a>)</span></td><td>✓ <code>/v1/email/search</code></td><td>—</td><td>✓ <code>search_messages</code></td></tr>
         <tr><td>Calendar · view / create / respond <span class="opt">(of capability <b>12</b>)</span></td><td>✓ <code>/v1/email/calendar/*</code> <span class="opt">(2.1)</span></td><td>—</td><td>✓</td></tr>
         <tr><td>Attachments · read exposes / draft·send accept <span class="opt">(<b>P4</b>, <a class="iss" href="https://github.com/amd/gaia/issues/1542" target="_blank" rel="noopener">#1542</a>)</span></td><td>✓ <span class="opt">(in triage, <code>/draft</code>, <code>/send</code> — 2.2)</span></td><td>—</td><td>✓ <code>draft_reply</code> / <code>send_now</code> file paths</td></tr>
         <tr><td><b>16</b> · Daily briefing <span class="opt">(scheduled, <a class="iss" href="https://github.com/amd/gaia/issues/1608" target="_blank" rel="noopener">#1608</a>)</span></td><td>✓ <code>/v1/email/briefing</code> <span class="opt">(read-only · off by default)</span></td><td>—</td><td>✓ <span class="opt">(reuses <code>pre_scan_inbox</code>)</span></td></tr>
-        <tr><td>calendar <b>detect / conflicts</b> (10–11) &nbsp;·&nbsp; <b>13</b> planned &nbsp;·&nbsp; <b>P1–P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
+        <tr><td>calendar <b>detect / conflicts</b> (10–11) &nbsp;·&nbsp; tasks (<b>14</b>) &nbsp;·&nbsp; follow-ups (<b>15</b>) &nbsp;·&nbsp; scheduled send &amp; snooze (<b>17</b>) &nbsp;·&nbsp; <b>P1–P3, P5</b> personalization</td><td>—</td><td>—</td><td>✓ <b>agent only</b></td></tr>
       </tbody>
     </table>
 
@@ -546,14 +546,14 @@
   <div class="wrap">
     <div class="eyebrow"><span class="bar"></span>Part 1 · Capabilities</div>
     <h2 style="margin-top:16px">Each capability, in full</h2>
-    <p class="body-t">Capabilities <b>1–12 and 14–17</b> are shipped or wired today; only <b>13</b> is planned (clearly tagged). Each is defined with its use-case, why it matters, the backing tool / endpoint, its guardrail tier, and — for the shipped ones — an example and the evaluation dataset shape. Cards are collapsed by default; click a header (or an at-a-glance row above) to expand.</p>
+    <p class="body-t">All <b>17</b> capabilities are shipped or wired today. Each is defined with its use-case, why it matters, the backing tool / endpoint, its guardrail tier, and — for the shipped ones — an example and the evaluation dataset shape. Cards are collapsed by default; click a header (or an at-a-glance row above) to expand.</p>
 
     <!-- 1 -->
     <div class="cap">
-      <div class="cap-head"><span class="num">1</span><h3>4-way triage</h3><span class="pill ok">Validated</span><span class="pill t0">Tier 0 · read-only</span></div>
-      <div class="field"><div class="fl">Use-case</div><div class="fv">Read each inbound message and assign it to exactly one of four priority buckets — <code>urgent</code> (needs attention now), <code>actionable</code> (a task is owed), <code>informational</code> (FYI, no action), or <code>low priority</code> — alongside two independent boolean signals, <code>is_spam</code> and <code>is_phishing</code>. A deterministic heuristic over sender, subject, and mailbox labels decides the obvious cases instantly; messages whose bucket depends on body content — especially <code>urgent</code> vs. <code>actionable</code> — are escalated to the local LLM. This single classification drives every downstream view: the pre-scan card, the ranked work-list, and which messages are safe to bulk-archive. <span class="opt">Schema 2.0 expands this to five buckets (URGENT / NEEDS_RESPONSE / FYI / PROMOTIONAL / PERSONAL) plus a <code>suggested_action</code> verb — see <a class="iss" href="#schema2">Schema 2.0</a>.</span></div></div>
+      <div class="cap-head"><span class="num">1</span><h3>5-bucket triage</h3><span class="pill ok">Validated</span><span class="pill t0">Tier 0 · read-only</span></div>
+      <div class="field"><div class="fl">Use-case</div><div class="fv">Read each inbound message and assign it to exactly one of five buckets — <code>URGENT</code> (needs attention now), <code>NEEDS_RESPONSE</code> (a reply or decision is owed), <code>FYI</code> (no action), <code>PROMOTIONAL</code> (marketing / bulk), or <code>PERSONAL</code> (non-actionable personal mail) — plus a <code>suggested_action</code> verb (<code>reply</code> / <code>archive</code> / <code>none</code>) and two independent boolean signals, <code>is_spam</code> and <code>is_phishing</code>. A deterministic heuristic over sender, subject, and Gmail system labels decides the obvious cases instantly; messages whose bucket depends on body content — especially <code>URGENT</code> vs. <code>NEEDS_RESPONSE</code> — are escalated to the local LLM. <b>Spam is content-derived</b> (<a class="iss" href="https://github.com/amd/gaia/issues/1911" target="_blank" rel="noopener">#1911</a>): the heuristic commits <code>is_spam=true</code> only for a narrow set of high-confidence sender patterns inside <code>PROMOTIONAL</code> (the only bucket spam lives in); everything else is deferred to the LLM to judge from the actual content rather than trusting a provider SPAM label. Priority wins over content-type, and <code>PERSONAL</code> is the tie-break for non-actionable personal mail; the threat flags stay independent of the bucket. This single classification drives every downstream view: the pre-scan card, the ranked work-list, and which messages are safe to bulk-archive.</div></div>
       <div class="field"><div class="fl">Why it matters</div><div class="fv">Turns an undifferentiated inbox into a ranked work-list in one pass — read the 2 urgent items first instead of scrolling 40.</div></div>
-      <div class="field"><div class="fl">Backed by</div><div class="fv"><code>triage_inbox</code> · <a class="eplink" href="#ep-triage"><code>POST /v1/email/triage</code></a> · MCP <code>triage_email</code>. A deterministic heuristic decides clear cases; ambiguous urgent-vs-actionable escalates to the local model.</div></div>
+      <div class="field"><div class="fl">Backed by</div><div class="fv"><code>triage_inbox</code> · <a class="eplink" href="#ep-triage"><code>POST /v1/email/triage</code></a> · MCP <code>triage_email</code>. A deterministic heuristic decides clear cases; ambiguous URGENT-vs-NEEDS_RESPONSE escalates to the local model.</div></div>
       <div class="field"><div class="fl">Guardrails</div><div class="fv">Read-only — analyzes only the payload; bodies treated as untrusted data.</div></div>
       <div class="field"><div class="fl">Example</div><div class="fv">
         <div class="io">
@@ -570,23 +570,28 @@
   }
 }</pre></div>
           <div><div class="iolab">Expected output</div><pre class="code">{
+  "schema_version": "2.2",
   "request_kind": "single",
   "result": {
-    "category": "actionable",
+    "category": "NEEDS_RESPONSE",
+    "suggested_action": "reply",
     "is_spam": false,
     "is_phishing": false,
     "summary": "Action required: sign by Friday — Please review the MSA …",
     "action_items": [
       { "description": "Please review the MSA and reply … by Friday EOD.",
-        "due_hint": "by Friday" }
+        "due_hint": "by Friday", "type": "text", "url": null }
     ],
     "draft": { "to": [{ "email": "dana@vendor.com" }],
-               "subject": "Re: Action required: sign by Friday", "body": "" }
+               "subject": "Re: Action required: sign by Friday", "body": "" },
+    "message_id": "m-1001",
+    "usage": null,
+    "attachments": []
   }
 }</pre></div>
         </div>
       </div></div>
-      <div class="field"><div class="fl">Dataset</div><div class="fv"><b>Input:</b> ~40 labelled emails across all 4 categories + spam/phishing decoys. <b>Expected:</b> predicted <code>category</code> matches label; spam/phishing flags match; primary action item extracted. Score: per-category precision/recall + 4-bucket confusion matrix.</div></div>
+      <div class="field"><div class="fl">Dataset</div><div class="fv"><b>Input:</b> ~40 labelled emails across all 5 categories + spam/phishing decoys. <b>Expected:</b> predicted <code>category</code> and <code>suggested_action</code> match the label; spam/phishing flags match; primary action item extracted. Score: per-category precision/recall + 5-bucket confusion matrix.</div></div>
     </div>
 
     <!-- 2 -->
@@ -781,14 +786,14 @@ quarantine_phishing_message → { "ok": true, "data": {
       <div class="field"><div class="fl">Dataset</div><div class="fv"><b>Input:</b> (a) emails with explicit time, (b) emails with no concrete time, (c) inverted windows. <b>Expected:</b> (a) created after confirmation; (b) refusal with no-datetime error; (c) rejected. Refusal cases are the discriminating metric.</div></div>
     </div>
 
-    <!-- 13 · planned -->
+    <!-- 13 · wired -->
     <div class="cap">
-      <div class="cap-head"><span class="num">13</span><h3>Search past email</h3><span class="pill planned">Planned</span><span class="pill t0">Tier 0 · read-only</span></div>
-      <div class="field"><div class="fl">Use-case</div><div class="fv">Let the user (or the agent) find past mail by natural-language or keyword query — "the contract Dana sent in March", "anything about the Q3 budget" — and get back the matching messages to read, summarize, or act on. This is the backbone of an agentic inbox: every higher-level request ("reply to the invoice from Acme") starts with locating the right message. The underlying <code>search_messages</code> tool already exists in the agent; the planned work exposes it on the REST/MCP surface and documents it as a first-class capability.</div></div>
+      <div class="cap-head"><span class="num">13</span><h3>Search past email</h3><span class="pill wip">Wired</span><span class="pill t0">Tier 0 · read-only</span></div>
+      <div class="field"><div class="fl">Use-case</div><div class="fv">Let the user (or the agent) find past mail by keyword or provider-syntax query — <code>from:dana newer_than:90d</code>, "anything about the Q3 budget" — and get back the matching messages to read, summarize, or act on. This is the backbone of an agentic inbox: every higher-level request ("reply to the invoice from Acme") starts with locating the right message.</div></div>
       <div class="field"><div class="fl">Why it matters</div><div class="fv">Without search, the agent can only act on what's already in front of it; with it, the user can drive the whole mailbox by description instead of by scrolling.</div></div>
-      <div class="field"><div class="fl">Backed by</div><div class="fv"><code>search_messages</code> (exists in code, not yet surfaced) → planned REST/MCP exposure + docs. <b>Smallest lift of the planned set.</b></div></div>
+      <div class="field"><div class="fl">Backed by</div><div class="fv"><code>search_messages</code> · <b>on the REST contract</b> (schema 2.1, <a class="iss" href="https://github.com/amd/gaia/issues/1781" target="_blank" rel="noopener">#1781</a>): <a class="eplink" href="#ep-search"><code>POST /v1/email/search</code></a>. Results are <b>metadata only</b> — <code>id</code>, <code>thread_id</code>, <code>subject</code>, <code>from</code>, <code>to</code>, <code>date</code>, <code>snippet</code>, <code>label_ids</code> — never message bodies. Not surfaced on MCP.</div></div>
       <div class="field"><div class="fl">Guardrails</div><div class="fv">Tier 0 — read-only.</div></div>
-      <div class="field"><div class="fl">Tracking</div><div class="fv"><a class="iss" href="https://github.com/amd/gaia/issues/1604" target="_blank" rel="noopener">#1604</a> · <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a> (P3 stretch)</div></div>
+      <div class="field"><div class="fl">Tracking</div><div class="fv"><a class="iss" href="https://github.com/amd/gaia/issues/1604" target="_blank" rel="noopener">#1604</a> · <a class="iss" href="https://github.com/amd/gaia/issues/1781" target="_blank" rel="noopener">#1781</a> · <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a></div></div>
     </div>
 
     <!-- 14 · wired -->
@@ -835,36 +840,36 @@ quarantine_phishing_message → { "ok": true, "data": {
   </div>
 </section>
 
-<!-- ───────── PERSONALIZATION (in flight) ───────── -->
+<!-- ───────── PERSONALIZATION ───────── -->
 <section class="sec" id="personalization">
   <div class="wrap">
     <div class="eyebrow"><span class="bar"></span>Part 1b · Personalization &amp; memory</div>
     <h2 style="margin-top:16px">Learns how you work <span class="pill t0" style="vertical-align:middle"><a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a></span></h2>
-    <p class="body-t">These features make the agent <b>adapt to the individual user</b>, entirely on-device. Today, classification preferences are <b>session-scoped</b> (<code>set_priority_sender</code>, <code>set_low_priority_sender</code>, <code>set_category_default</code>) and wiped on restart by design; the work below makes them <b>durable and learned</b> rather than hand-set. P1–P3 are <b>in flight</b>; P4 (attachments) and P5 (voice drafting) are <b>wired</b>.</p>
+    <p class="body-t">These features make the agent <b>adapt to the individual user</b>, entirely on-device. Classification preferences (<code>set_priority_sender</code>, <code>set_low_priority_sender</code>, <code>set_category_default</code>) now <b>persist across restarts</b> via the agent's on-device MemoryStore, and the agent learns priority signals from your behavior rather than requiring you to hand-write every rule. All five personalization tracks are <b>wired</b>: P1 behavioral prioritization, P2 memory-derived inbox profiling, P3 durable preferences, P4 attachments, P5 voice drafting.</p>
 
     <div class="cap">
-      <div class="cap-head"><span class="num">P1</span><h3>Behavioral sender prioritization</h3><span class="pill wip">In flight</span><span class="pill t0">Tier 0</span></div>
-      <div class="field"><div class="fl">Use-case</div><div class="fv">Notice which senders the user consistently reads, replies to, or archives, and feed that behavior back into triage so important people float up and noise sinks — without the user hand-writing rules. It builds on the existing session-preference store (priority / low-priority senders) but <em>learns</em> the signal from actions rather than requiring explicit input.</div></div>
+      <div class="cap-head"><span class="num">P1</span><h3>Behavioral sender prioritization</h3><span class="pill wip">Wired</span><span class="pill t0">Tier 0</span></div>
+      <div class="field"><div class="fl">Use-case</div><div class="fv">Notice which senders the user consistently reads, replies to, or archives, and feed that behavior back into triage so important people float up and noise sinks — without the user hand-writing rules. It builds on the persisted preference store (priority / low-priority senders) but <em>learns</em> the signal from actions rather than requiring explicit input.</div></div>
       <div class="field"><div class="fl">Why it matters</div><div class="fv">The inbox ranks by your behavior, not just keywords — the personalization that makes triage feel "yours."</div></div>
-      <div class="field"><div class="fl">Backed by</div><div class="fv">Builds on the session-preference store (<code>set_priority_sender</code> / <code>set_low_priority_sender</code>), promoting hand-set hints to learned signals fed into the triage classifier.</div></div>
+      <div class="field"><div class="fl">Backed by</div><div class="fv"><code>_evaluate_promotions</code> reads per-sender reply-latency records from memory and promotes fast-turnaround senders into the priority set during each inbox triage (agent loop), on top of the hand-set <code>set_priority_sender</code> / <code>set_low_priority_sender</code> hints.</div></div>
       <div class="field"><div class="fl">Guardrails</div><div class="fv">Tier 0 — influences classification only; no mailbox mutation.</div></div>
       <div class="field"><div class="fl">Milestone</div><div class="fv"><a class="iss" href="https://github.com/amd/gaia/issues/1290" target="_blank" rel="noopener">#1290</a> · <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a></div></div>
     </div>
 
     <div class="cap">
-      <div class="cap-head"><span class="num">P2</span><h3>Inbox profiling from memory</h3><span class="pill wip">In flight</span><span class="pill t0">Tier 0</span></div>
-      <div class="field"><div class="fl">Use-case</div><div class="fv">Build a lightweight profile of the user's inbox — frequent correspondents, recurring topics, typical cadence — and use it to tune classification so the model's priorities match this specific mailbox rather than a generic average. Pairs with P3 so the profile persists and sharpens over time.</div></div>
+      <div class="cap-head"><span class="num">P2</span><h3>Inbox profiling from memory</h3><span class="pill wip">Wired</span><span class="pill t0">Tier 0</span></div>
+      <div class="field"><div class="fl">Use-case</div><div class="fv">Build a lightweight profile of the user's inbox — frequent correspondents and their dominant category, most-recent contact — from the interaction history the agent accumulates during triage, so the user can ask "who emails me most?" and the model's priorities match this specific mailbox. Pairs with P3 so the profile persists and sharpens over time.</div></div>
       <div class="field"><div class="fl">Why it matters</div><div class="fv">Higher triage accuracy on <em>your</em> mail than a generic model can reach.</div></div>
-      <div class="field"><div class="fl">Backed by</div><div class="fv">A memory-derived inbox profile feeding the triage classifier (paired with P3's persistence).</div></div>
+      <div class="field"><div class="fl">Backed by</div><div class="fv"><code>profile_inbox</code> — returns a per-sender frequency ranking (count, dominant category, last-contact timestamp) built from rolling per-sender interaction records in memory (<code>_record_interaction</code> upserts one record per sender during triage).</div></div>
       <div class="field"><div class="fl">Guardrails</div><div class="fv">Tier 0 — read/analysis only; profile is local.</div></div>
       <div class="field"><div class="fl">Milestone</div><div class="fv"><a class="iss" href="https://github.com/amd/gaia/issues/1289" target="_blank" rel="noopener">#1289</a> · <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a></div></div>
     </div>
 
     <div class="cap">
-      <div class="cap-head"><span class="num">P3</span><h3>Persistent preferences via memory</h3><span class="pill wip">In flight</span><span class="pill t0">Tier 0</span></div>
-      <div class="field"><div class="fl">Use-case</div><div class="fv">Persist preferences and learned signals across restarts so the agent doesn't forget the user between sessions. Today the preference store is wiped on restart by design; durable memory makes priority senders, low-priority senders, and category defaults persist — and kept local.</div></div>
+      <div class="cap-head"><span class="num">P3</span><h3>Persistent preferences via memory</h3><span class="pill wip">Wired</span><span class="pill t0">Tier 0</span></div>
+      <div class="field"><div class="fl">Use-case</div><div class="fv">Persist preferences and learned signals across restarts so the agent doesn't forget the user between sessions. Priority senders, low-priority senders, and category defaults are snapshotted to the on-device MemoryStore on every change and re-seeded on the next start — all kept local.</div></div>
       <div class="field"><div class="fl">Why it matters</div><div class="fv">The agent remembers you between runs — table stakes for a daily driver.</div></div>
-      <div class="field"><div class="fl">Backed by</div><div class="fv">Durable on-device memory persisting the preference store across restarts.</div></div>
+      <div class="field"><div class="fl">Backed by</div><div class="fv"><code>_persist_preferences</code> writes the preference snapshot to memory after each mutation; <code>_load_persisted_preferences</code> re-seeds <code>_session_preferences</code> at agent construction. When memory is disabled the tools still work in-process, just without cross-session persistence.</div></div>
       <div class="field"><div class="fl">Guardrails</div><div class="fv">Tier 0 — config/state; local-only, never leaves the device.</div></div>
       <div class="field"><div class="fl">Milestone</div><div class="fv"><a class="iss" href="https://github.com/amd/gaia/issues/1288" target="_blank" rel="noopener">#1288</a> · <a class="iss" href="https://github.com/amd/gaia/issues/1114" target="_blank" rel="noopener">#1114</a> · <a class="iss" href="https://github.com/amd/gaia/milestone/40" target="_blank" rel="noopener">Milestone 40</a></div></div>
     </div>
@@ -979,12 +984,12 @@ quarantine_phishing_message → { "ok": true, "data": {
     </div>
 
     <div class="wf">
-      <div class="wt"><span class="id">W7</span><h3>Find it, then act on it</h3> <span class="pill planned">uses planned search</span></div>
+      <div class="wt"><span class="id">W7</span><h3>Find it, then act on it</h3> <span class="pill wip">uses search</span></div>
       <div class="wb">The user half-remembers an email and wants to act on it: "find Dana's contract thread and tell her we're signing."</div>
       <div class="chain">search (13) → thread (6) / summary (2) → draft (3) → send (7)</div>
       <div class="trig"><b>Trigger:</b> <span class="tg">Manual</span> — user asks to locate a thread and act on it.</div>
       <ol>
-        <li>User: "find the contract thread from Dana and tell her we're signing." → <b>search_messages</b> locates the thread <span class="pill t0">T0</span> <span class="opt">(13, planned)</span></li>
+        <li>User: "find the contract thread from Dana and tell her we're signing." → <b>search_messages</b> locates the thread <span class="pill t0">T0</span> <span class="opt">(13, wired)</span></li>
         <li><b>summarize_thread</b> → the outstanding ask + last sender <span class="pill t0">T0</span></li>
         <li><b>draft_reply</b> to that sender, satisfying the intent <span class="pill t0">T0</span></li>
         <li>User confirms → <b>send</b> <span class="pill t2">T2</span></li>
@@ -993,7 +998,7 @@ quarantine_phishing_message → { "ok": true, "data": {
     </div>
 
     <div class="wf">
-      <div class="wt"><span class="id">W8</span><h3>Commitment tracking</h3> <span class="pill planned">uses planned follow-up</span></div>
+      <div class="wt"><span class="id">W8</span><h3>Commitment tracking</h3> <span class="pill wip">uses follow-up</span></div>
       <div class="wb">Promises made over email get forgotten. The agent captures them as tasks and nudges when a sent message goes unanswered.</div>
       <div class="chain">triage (1) → task extraction (14) → follow-up tracking (15)</div>
       <div class="trig"><b>Trigger:</b> <span class="tg" style="color:var(--soft)">New&nbsp;mail</span> (capture) + <span class="tg" style="color:var(--c1)">Scheduled</span> <code>daily</code> follow-up sweep.</div>
@@ -1013,19 +1018,19 @@ quarantine_phishing_message → { "ok": true, "data": {
       <ol>
         <li>Triage ranks an important sender too low <span class="pill t0">T0</span></li>
         <li>User marks them important → <b>set_priority_sender</b> <span class="pill t0">T0</span></li>
-        <li>The preference persists across restarts via on-device memory <span class="pill t0">T0</span> <span class="opt">(P3, in flight)</span></li>
+        <li>The preference persists across restarts via on-device memory <span class="pill t0">T0</span> <span class="opt">(P3, wired)</span></li>
         <li>The next triage floats that sender up automatically — no rule written by hand</li>
       </ol>
       <div class="ds"><b>Dataset:</b> repeated triage of the same sender before and after a priority correction, across a restart. Expected: the sender's rank/category shifts after the correction and stays shifted on restart.</div>
     </div>
 
     <div class="wf">
-      <div class="wt"><span class="id">W10</span><h3>Attachment-aware reply</h3> <span class="pill wip">attachments in flight</span></div>
+      <div class="wt"><span class="id">W10</span><h3>Attachment-aware reply</h3> <span class="pill wip">attachments wired</span></div>
       <div class="wb">An email asks for a file back. The agent reads the attachment, drafts the reply, and sends it with the right file attached.</div>
       <div class="chain">read + attachment (P4) → summary (2) → draft (3) → send with attachment (7, P4)</div>
       <div class="trig"><b>Trigger:</b> <span class="tg">Manual</span> — user asks to reply with a file.</div>
       <ol>
-        <li>Read the message and expose its attachment (name, type, size) <span class="pill t0">T0</span> <span class="opt">(P4, in flight)</span></li>
+        <li>Read the message and expose its attachment (name, type, size) <span class="pill t0">T0</span> <span class="opt">(P4, wired)</span></li>
         <li><b>summarize_message</b> accounting for the attachment's content <span class="pill t0">T0</span></li>
         <li><b>draft_reply</b> that references — or returns — a file <span class="pill t0">T0</span></li>
         <li>User confirms → <b>send</b> with the attachment; the attachment is shown in the confirmation <span class="pill t2">T2</span></li>
@@ -1260,7 +1265,7 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
     <table class="tbl">
       <thead><tr><th>#</th><th>Item</th><th>Fixture</th><th>Key assertion</th></tr></thead>
       <tbody>
-        <tr><td>1</td><td>4-way triage</td><td>msg</td><td><code>expected.triage.category</code> + <code>suggested_action</code> + flags match</td></tr>
+        <tr><td>1</td><td>5-bucket triage</td><td>msg</td><td><code>expected.triage.category</code> + <code>suggested_action</code> + flags match</td></tr>
         <tr><td>2</td><td>Per-email summary</td><td>msg</td><td><code>expected.summary</code> &mdash; judge faithfulness + length cap</td></tr>
         <tr><td>3</td><td>Draft reply</td><td>msg</td><td>recipient/subject exact + body intent; no draft for phishing</td></tr>
         <tr><td>4</td><td>Phishing detection</td><td>msg</td><td><code>is_phishing</code> matches; injection refused; FP rate on legit notices</td></tr>
@@ -1334,6 +1339,26 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
       <span class="badge">POST</span><span class="path">/v1/email/init</span>
       <p class="desc">Provision the triage stack and <b>stream terminal-style progress</b> (<a class="iss" href="https://github.com/amd/gaia/issues/1795" target="_blank" rel="noopener">#1795</a>). Tells the running local Lemonade Server to download the configured email model, streaming newline-delimited progress lines (<code>text/plain</code>) a consumer can render line by line. A line beginning <code>✓</code> marks success, <code>✗</code> a failure; the final line is authoritative.</p>
       <p class="body-t"><b>Scope (frozen-binary reality):</b> the sidecar can’t run the full <code>gaia init</code> or install Lemonade itself (chicken-and-egg). If Lemonade is unreachable it returns <b>503</b> with an actionable line and pulls nothing. Once a pull starts the response is a committed <b>200</b> — the HTTP status can’t change mid-stream, so the trailing <code>✓</code>/<code>✗</code> line carries the real outcome. On success, re-run <a class="eplink" href="#ep-init"><code>GET /v1/email/init</code></a> to confirm readiness.</p>
+    </div>
+
+    <div class="endpoint" id="ep-health">
+      <span class="badge get">GET</span><span class="path">/v1/email/health</span>
+      <p class="desc"><b>Liveness only.</b> Confirms the email router is mounted and serving. Dependency-light by design — it never touches a mailbox, a connector, or the LLM, so a host can probe it before anything is configured. For &ldquo;ready to triage,&rdquo; use <a class="eplink" href="#ep-init"><code>GET /v1/email/init</code></a> instead.</p>
+      <h4>Response body — HealthResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>status</code></td><td>"ok"</td><td>Always <code>"ok"</code> when the surface is serving.</td></tr>
+        <tr><td><code>service</code></td><td>"gaia-agent-email"</td><td>Stable service identifier.</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="endpoint" id="ep-version">
+      <span class="badge get">GET</span><span class="path">/v1/email/version</span>
+      <p class="desc">The two version numbers a host negotiates against. Both are sourced from <code>gaia_agent_email.version</code>, so this endpoint and the frozen sidecar's <code>/version</code> always report identical values.</p>
+      <h4>Response body — VersionResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>apiVersion</code></td><td>string</td><td>REST/contract version — aliased to <code>contract.SCHEMA_VERSION</code>, so a contract bump <i>is</i> an API bump. Currently <code>"2.2"</code>.</td></tr>
+        <tr><td><code>agentVersion</code></td><td>string</td><td>Package build version (the wheel's <code>__version__</code>).</td></tr>
+      </tbody></table>
     </div>
 
     <div class="endpoint" id="ep-triage">
@@ -1439,6 +1464,42 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
       </tbody></table>
       <h4>Mailbox resolution</h4>
       <p class="body-t">The mailbox is the one connected in GAIA (<i>Settings → Connectors</i>). Fails loud on an ambiguous count — never silently picks: <b>0</b> connected → <code>503</code>, <b>2+</b> connected → <code>400</code>, exactly one → that mailbox.</p>
+    </div>
+
+    <div class="endpoint" id="ep-prescan">
+      <span class="badge">POST</span><span class="path">/v1/email/prescan</span>
+      <p class="desc">Scan the connected inbox and return the aggregate triage card (<b>read-only</b>, <a class="iss" href="https://github.com/amd/gaia/issues/1778" target="_blank" rel="noopener">#1778</a>). Suggests, never acts. Spam and phishing are filtered out before the scan, so a dangerous message is never proposed for archiving.</p>
+      <h4>Request body — EmailPreScanRequest</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>schema_version</code></td><td>string <span class="opt">optional</span></td><td>Contract version. Defaults to <code>"2.2"</code>; a mismatch lets a consumer fail loudly.</td></tr>
+        <tr><td><code>max_messages</code></td><td>int <span class="opt">optional</span></td><td>How many recent inbox messages to classify.</td></tr>
+      </tbody></table>
+      <h4>Response body — EmailPreScanResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>schema_version</code></td><td>string</td><td>Echoes the contract version.</td></tr>
+        <tr><td><code>result</code></td><td>EmailPreScanResult</td><td>The <code>email_pre_scan</code> envelope (see below).</td></tr>
+      </tbody></table>
+      <h4>EmailPreScanResult</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>kind</code></td><td>"email_pre_scan"</td><td>Discriminator the chat surface detects to render the card.</td></tr>
+        <tr><td><code>urgent</code> / <code>actionable</code></td><td>list[PreScanItem]</td><td>Top <code>URGENT</code> and top <code>NEEDS_RESPONSE</code> messages (capped). <span class="opt">The <code>actionable</code> field name predates the 5-bucket rename and is retained for wire compatibility.</span></td></tr>
+        <tr><td><code>informational_count</code></td><td>int</td><td>Count of <code>FYI</code> / <code>PERSONAL</code> messages — counted, not listed.</td></tr>
+        <tr><td><code>suggested_archives</code></td><td>list[PreScanItem]</td><td><code>PROMOTIONAL</code> / low-priority messages suggested for archive (capped).</td></tr>
+        <tr><td><code>suggested_drafts</code></td><td>list</td><td>Reserved; empty today.</td></tr>
+        <tr><td><code>preferences_applied</code></td><td>object | null</td><td>The persisted preferences that shaped this pre-scan.</td></tr>
+        <tr><td><code>totals</code></td><td>object | null</td><td>Pre-cap totals per bucket.</td></tr>
+      </tbody></table>
+    </div>
+
+    <div class="endpoint" id="ep-briefing">
+      <span class="badge get">GET</span><span class="path">/v1/email/briefing</span>
+      <p class="desc">Pull the latest <b>scheduled</b> inbox briefing (<a class="iss" href="https://github.com/amd/gaia/issues/1608" target="_blank" rel="noopener">#1608</a>). The briefing is produced without a user prompt by the sidecar's daily scheduler — <b>off by default</b>, enabled with <code>GAIA_EMAIL_BRIEFING_ENABLED=true</code> (fire time <code>GAIA_EMAIL_BRIEFING_TIME</code>, 24h local, default <code>08:00</code>) — and persisted locally. Returns <b>404</b> until a scheduled run has happened. Read-only.</p>
+      <h4>Response body — EmailBriefingResponse</h4>
+      <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
+        <tr><td><code>schema_version</code></td><td>string</td><td>Echoes the contract version.</td></tr>
+        <tr><td><code>generated_at</code></td><td>string</td><td>UTC ISO-8601 timestamp of the scheduled run.</td></tr>
+        <tr><td><code>briefing</code></td><td>EmailPreScanResult</td><td>The same <code>email_pre_scan</code> envelope <a class="eplink" href="#ep-prescan"><code>/prescan</code></a> returns.</td></tr>
+      </tbody></table>
     </div>
 
     <div class="endpoint" id="ep-confirm">
@@ -1635,25 +1696,30 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
       <tr><td><code>ThreadInput</code></td><td>kind: "thread"</td><td><code>principal</code> + <code>thread_id</code> (string) + <code>messages</code> (list, min 1, oldest-first).</td></tr>
     </tbody></table>
 
-    <table class="tbl"><thead><tr><th colspan="3">EmailTriageResult &nbsp;·&nbsp; EmailCategory ∈ { urgent, actionable, informational, low priority }</th></tr></thead><tbody>
-      <tr><td><code>category</code></td><td>EmailCategory</td><td>One of the four buckets.</td></tr>
+    <table class="tbl"><thead><tr><th colspan="3">EmailTriageResult &nbsp;·&nbsp; EmailCategory ∈ { URGENT, NEEDS_RESPONSE, FYI, PROMOTIONAL, PERSONAL }</th></tr></thead><tbody>
+      <tr><td><code>category</code></td><td>EmailCategory</td><td>One of the five taxonomy buckets (schema 2.0).</td></tr>
+      <tr><td><code>suggested_action</code></td><td>"reply" | "none" | "archive"</td><td>Recommended next action (default <code>"none"</code>): <code>reply</code> for URGENT/NEEDS_RESPONSE, <code>archive</code> for PROMOTIONAL, <code>none</code> for FYI/PERSONAL. Derived by precedence — optional so existing consumers are unaffected.</td></tr>
       <tr><td><code>is_spam</code> / <code>is_phishing</code></td><td>bool</td><td>Independent signals (default false).</td></tr>
       <tr><td><code>summary</code></td><td>string</td><td>Plain-text summary of the email/thread.</td></tr>
-      <tr><td><code>action_items</code></td><td>list[ActionItem]</td><td>Extracted actions: <code>description</code> (required) + <code>due_hint</code> (optional, free-text).</td></tr>
+      <tr><td><code>action_items</code></td><td>list[ActionItem]</td><td>Extracted actions: <code>description</code> (required), <code>due_hint</code> (optional, free-text), <code>type</code> (<code>"text"</code>|<code>"link"</code>, default text), <code>url</code> (required for a link action).</td></tr>
       <tr><td><code>draft</code></td><td>DraftReply | null</td><td>Proposed reply (<code>to</code> ≥1, <code>subject</code>, <code>body</code>), or null when none is suggested.</td></tr>
-    </tbody></table>
-
-    <h3 style="margin-top:40px" id="schema2">Schema 2.0 <span class="opt" style="font-family:'Hanken Grotesk';text-transform:none;letter-spacing:0">— proposed · breaking</span></h3>
-    <p class="body-t"><b>Schema 1.0 (above) is what ships today.</b> Schema 2.0 is the proposed next revision — it is <b>breaking</b> (a consumer pinned to 1.0 must opt in) and bundles a taxonomy change with the additive fields. The driver: align the triage labels with the evaluation dataset and give every message an explicit action verb. Tracked in <a class="iss" href="https://github.com/amd/gaia/issues/1615" target="_blank" rel="noopener">#1615</a>.</p>
-    <table class="tbl"><thead><tr><th>Change</th><th>On</th><th>Type</th><th>Notes</th><th>Issue</th></tr></thead><tbody>
-      <tr><td><code>category</code> <span class="opt">(taxonomy)</span></td><td>EmailTriageResult</td><td>enum (5)</td><td><b>Breaking.</b> Replaces the 4-bucket ladder with <code>URGENT · NEEDS_RESPONSE · FYI · PROMOTIONAL · PERSONAL</code>.</td><td><a class="iss" href="https://github.com/amd/gaia/issues/1615" target="_blank" rel="noopener">#1615</a></td></tr>
-      <tr><td><code>suggested_action</code> <span class="opt">(new)</span></td><td>EmailTriageResult</td><td>"reply" | "none" | "archive"</td><td>One recommended action per message; powers pre-scan &amp; auto-archive.</td><td><a class="iss" href="https://github.com/amd/gaia/issues/1615" target="_blank" rel="noopener">#1615</a></td></tr>
-      <tr><td><code>is_spam</code> / <code>is_phishing</code> <span class="opt">(kept)</span></td><td>EmailTriageResult</td><td>bool</td><td><b>Retained</b> as independent flags — threat is orthogonal to priority, so it is never folded into <code>category</code>.</td><td><a class="iss" href="https://github.com/amd/gaia/issues/1615" target="_blank" rel="noopener">#1615</a></td></tr>
-      <tr><td><code>context</code> <span class="opt">(additive)</span></td><td>EmailTriageRequest payload</td><td>object <span class="opt">opt</span></td><td>People / projects / tone hints to steer triage &amp; draft generation.</td><td><a class="iss" href="https://github.com/amd/gaia/issues/1541" target="_blank" rel="noopener">#1541</a></td></tr>
-      <tr><td><code>usage</code> <span class="opt">(additive)</span></td><td>EmailTriageResponse</td><td>object</td><td>Inference metrics for the triage call — tokens + TPS.</td><td><a class="iss" href="https://github.com/amd/gaia/issues/1540" target="_blank" rel="noopener">#1540</a></td></tr>
-      <tr><td><code>type</code> <span class="opt">(additive)</span></td><td>ActionItem</td><td>"text" | "link"</td><td>Discriminator so the UI renders a link action as a button rather than text.</td><td><a class="iss" href="https://github.com/amd/gaia/issues/1538" target="_blank" rel="noopener">#1538</a></td></tr>
+      <tr><td><code>message_id</code></td><td>string | null</td><td>Echoes the request message-id; null when produced from a raw Gmail-API message.</td></tr>
+      <tr><td><code>usage</code></td><td>TriageUsage | null</td><td>LLM usage metrics (tokens + aggregate TPS); null on the heuristic-only path.</td></tr>
+      <tr><td><code>attachments</code></td><td>list[AttachmentMeta]</td><td>Attachment metadata of the analyzed message / thread (schema 2.2, <a class="iss" href="https://github.com/amd/gaia/issues/1542" target="_blank" rel="noopener">#1542</a>; empty when none).</td></tr>
     </tbody></table>
     <p class="body-t" style="margin-top:16px"><b>Precedence (mixed axes):</b> the five buckets mix priority (URGENT / NEEDS_RESPONSE / FYI) with content-type (PROMOTIONAL / PERSONAL). Rule: priority wins, and <code>PERSONAL</code> is the tie-break for non-actionable personal mail; the threat flags stay independent.</p>
+
+    <h3 style="margin-top:40px" id="schema2">Schema evolution <span class="opt" style="font-family:'Hanken Grotesk';text-transform:none;letter-spacing:0">— 1.0 → 2.2, all shipped</span></h3>
+    <p class="body-t">The contract shipped at <b>1.0</b> (4-bucket taxonomy) and has since advanced to the implemented <b>schema 2.2</b>. The table below records the changes each revision landed. <b>2.0 was breaking</b> — it replaced the 4-bucket ladder with the 5-bucket taxonomy and added a <code>suggested_action</code> verb; a consumer pinned to 1.0 must migrate via the <a href="#eval">legacy 1.0 mapping</a>. <b>2.1</b> added the REST search / pre-scan / archive · quarantine / calendar surfaces; <b>2.2</b> added attachment handling. Tracked in <a class="iss" href="https://github.com/amd/gaia/issues/1615" target="_blank" rel="noopener">#1615</a>.</p>
+    <table class="tbl"><thead><tr><th>Change</th><th>On</th><th>Type</th><th>Schema</th><th>Issue</th></tr></thead><tbody>
+      <tr><td><code>category</code> <span class="opt">(taxonomy)</span></td><td>EmailTriageResult</td><td>enum (5)</td><td><b>2.0</b> — breaking: <code>URGENT · NEEDS_RESPONSE · FYI · PROMOTIONAL · PERSONAL</code></td><td><a class="iss" href="https://github.com/amd/gaia/issues/1615" target="_blank" rel="noopener">#1615</a></td></tr>
+      <tr><td><code>suggested_action</code></td><td>EmailTriageResult</td><td>"reply" | "none" | "archive"</td><td><b>2.0</b> — one recommended action per message; powers pre-scan &amp; auto-archive.</td><td><a class="iss" href="https://github.com/amd/gaia/issues/1615" target="_blank" rel="noopener">#1615</a></td></tr>
+      <tr><td><code>is_spam</code> / <code>is_phishing</code> <span class="opt">(kept)</span></td><td>EmailTriageResult</td><td>bool</td><td><b>1.0+</b> — independent flags; threat is never folded into <code>category</code>. Spam is content-derived (<a class="iss" href="https://github.com/amd/gaia/issues/1911" target="_blank" rel="noopener">#1911</a>).</td><td><a class="iss" href="https://github.com/amd/gaia/issues/1615" target="_blank" rel="noopener">#1615</a></td></tr>
+      <tr><td><code>context</code> <span class="opt">(additive)</span></td><td>EmailTriageRequest payload</td><td>object <span class="opt">opt</span></td><td><b>2.0</b> — people / projects / tone hints to steer triage &amp; draft generation.</td><td><a class="iss" href="https://github.com/amd/gaia/issues/1541" target="_blank" rel="noopener">#1541</a></td></tr>
+      <tr><td><code>usage</code> <span class="opt">(additive)</span></td><td>EmailTriageResult</td><td>object | null</td><td><b>2.0</b> — inference metrics for the triage call (tokens + TPS); null on the heuristic path.</td><td><a class="iss" href="https://github.com/amd/gaia/issues/1540" target="_blank" rel="noopener">#1540</a></td></tr>
+      <tr><td><code>type</code> / <code>url</code> <span class="opt">(additive)</span></td><td>ActionItem</td><td>"text" | "link"</td><td><b>2.0</b> — discriminator so the UI renders a link action as a button rather than text.</td><td><a class="iss" href="https://github.com/amd/gaia/issues/1538" target="_blank" rel="noopener">#1538</a></td></tr>
+      <tr><td><code>attachments</code> <span class="opt">(additive)</span></td><td>triage · <code>DraftReply</code> · <code>/draft</code> · <code>/send</code></td><td>list</td><td><b>2.2</b> — read exposes <code>AttachmentMeta</code>; draft/send accept <code>OutgoingAttachment</code> payloads bound into the token.</td><td><a class="iss" href="https://github.com/amd/gaia/issues/1542" target="_blank" rel="noopener">#1542</a></td></tr>
+    </tbody></table>
 
     <h3 style="margin-top:40px">Connections API <span class="opt" style="font-family:'Hanken Grotesk';text-transform:none;letter-spacing:0">— forward a pre-authenticated connection (<a class="iss" href="https://github.com/amd/gaia/issues/1292" target="_blank" rel="noopener">#1292</a>)</span></h3>
     <p class="body-t">Forwarding hands GAIA an OAuth grant the host already obtained — GAIA refreshes as the host's client with no second consent step. <code>POST</code> and <code>DELETE</code> require the <code>X-Gaia-UI: 1</code> header. Secrets (refresh token, client secret) are inputs only and are never echoed.</p>

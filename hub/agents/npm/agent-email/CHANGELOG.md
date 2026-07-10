@@ -33,6 +33,17 @@ Contract bumped to `SCHEMA_VERSION` **2.2** — additive over 2.1, so `checkVers
   writes; `clear_voice_profile` forgets it. **Agent-loop only** (chat / Agent UI /
   `gaia email`) — no REST endpoint, no npm client method, `SCHEMA_VERSION` stays
   `2.2`.
+- **Content-based spam detection (#1911).** Spam detection previously keyed
+  entirely off Gmail's own `SPAM` label — so it did nothing for Outlook or any
+  non-Gmail mailbox and wasn't real detection. It's now provider-agnostic: a
+  narrow mechanical prefilter (auto-generated sender addresses, freemail-domain
+  impersonation) handles the clear-cut cases, and the local LLM makes the real
+  content-vs-legitimate-marketing call on the rest. The `is_spam` signal on
+  `triage()` keeps its shape — only its derivation changed — so `SCHEMA_VERSION`
+  stays `2.2`. The eval corpus was expanded to exercise it (spam examples 7 →
+  57, corpus → 299 messages) and the scorecard gains `is_spam` recall /
+  precision / F1 as the primary spam metrics (plain accuracy is misleading on a
+  minority class this size).
 - **Follow-up tracking (#1606).** The agent gains a read-only `check_followups`
   tool that scans the Sent folder of every connected mailbox and flags threads
   whose latest message is still the user's own outbound mail past a
