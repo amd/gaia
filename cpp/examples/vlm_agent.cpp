@@ -8,7 +8,7 @@
 //
 // Requires a Lemonade server running with a VLM model loaded.
 //   Environment:
-//     LEMONADE_BASE_URL   (default: http://localhost:8000/api/v1)
+//     LEMONADE_BASE_URL   (default: http://localhost:13305/api/v1)
 //     GAIA_MODEL_ID       (default: Qwen3-VL-4B-Instruct-GGUF)
 
 #include <cstdlib>

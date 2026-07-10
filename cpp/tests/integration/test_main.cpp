@@ -14,7 +14,7 @@
 //   tests_integration.exe --health
 //   tests_integration.exe --all
 //   tests_integration.exe --model Qwen3-4B-Instruct-2507-GGUF
-//   tests_integration.exe --url http://localhost:8000/api/v1
+//   tests_integration.exe --url http://localhost:13305/api/v1
 //
 // GTest passthrough (suppresses menu):
 //   tests_integration.exe --gtest_filter=IntegrationMCP*

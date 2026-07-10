@@ -5,7 +5,7 @@ icon: "code"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/agents/code/`](https://github.com/amd/gaia/blob/main/src/gaia/agents/code/)
+  **Source Code:** [`hub/agents/python/code/`](https://github.com/amd/gaia/blob/main/hub/agents/python/code/)
 </Info>
 
 <Info>
@@ -68,7 +68,7 @@ gaia-code "Build me a movie tracking app in nextjs where I can track the movie t
 ## System Architecture
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#A87B2D', 'edgeLabelBackground':'#ffffff', 'fontFamily':'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
     A["User Prompt"] --> B(["Code Agent"])
     B --> C["LLM Analysis"]
@@ -201,7 +201,7 @@ GAIA Code uses a **Minimum Viable Product (MVP) approach** when generating appli
 GAIA Code generates applications using modern web technologies:
 
 ### Frontend
-- **Next.js 14** with App Router
+- **Next.js 15** with App Router
 - **React** for UI components
 - **TypeScript** for type safety
 - **Tailwind CSS** for styling
@@ -305,11 +305,11 @@ Let's see GAIA Code in action:
         cd my-code-agent
         uv venv .venv
         source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
-        uv pip install "amd-gaia[dev]"
+        uv pip install "amd-gaia[agent-code]"
         ```
 
         <Info>
-        This is the recommended path for most users. The `gaia-code` command will be available after installation.
+        This is the recommended path for most users. The `agent-code` extra pulls in the standalone `gaia-agent-code` wheel, which provides the `gaia-code` command. (`gaia-code` is *not* a `gaia` subcommand — it ships as its own console script.)
         </Info>
       </Tab>
 
@@ -322,10 +322,11 @@ Let's see GAIA Code in action:
         uv venv .venv
         source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
         uv pip install -e ".[dev]"
+        uv pip install -e hub/agents/python/code   # provides the gaia-code command
         ```
 
         <Info>
-        Use this path if you want to modify GAIA source code or contribute to the project.
+        Use this path if you want to modify GAIA source code or contribute to the project. The Code agent lives in the standalone `gaia-agent-code` package under `hub/agents/python/code/`, so install it as a second editable wheel to get the `gaia-code` command.
         </Info>
       </Tab>
     </Tabs>

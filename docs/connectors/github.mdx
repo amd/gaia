@@ -10,8 +10,8 @@ description: "Connect GAIA agents to GitHub repos, PRs, issues, and Actions."
 
 ## What you'll need
 
-The GitHub connector is an **MCP server** — GAIA spawns the official
-[`@modelcontextprotocol/server-github`](https://github.com/github/github-mcp-server)
+The GitHub connector is an **MCP server** — GAIA spawns the
+[`@modelcontextprotocol/server-github`](https://www.npmjs.com/package/@modelcontextprotocol/server-github)
 process on demand and routes tool calls through it. It needs a single
 secret: a **GitHub Personal Access Token (PAT)** with the scopes you
 want agents to use.
@@ -89,6 +89,21 @@ gaia connectors grants grant mcp-github builtin:chat \
 ```
 
 (In the UI: open the connector tile → **Per-agent grants** section.)
+
+### Activate the tools for the agent
+
+For MCP servers, a grant alone isn't enough — the agent also needs an
+**activation** before the GitHub tools appear in its prompt. Activation
+defaults to OFF (least-privilege), so activate it explicitly:
+
+```bash
+gaia connectors activations activate mcp-github builtin:chat
+```
+
+(In the UI: the tile's **Per-agent** toggle flips both at once.) An
+agent that has a grant but no activation still can't see or call the
+tools. See the [connections security model](/security/connections) for
+why visibility and credential access are gated separately.
 
 ## Common issues
 

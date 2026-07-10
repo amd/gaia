@@ -25,7 +25,7 @@ using json = nlohmann::json;
 
 // ---- Constants (mirrors Python LemonadeClient defaults) ----
 
-inline constexpr const char* LEMONADE_DEFAULT_URL        = "http://localhost:8000/api/v1";
+inline constexpr const char* LEMONADE_DEFAULT_URL        = "http://localhost:13305/api/v1";
 inline constexpr const char* LEMONADE_DEFAULT_MODEL      = "Qwen3-0.6B-GGUF";
 inline constexpr int         LEMONADE_REQUEST_TIMEOUT    = 900;   // 15 min  (matches Python)
 inline constexpr int         LEMONADE_MODEL_LOAD_TIMEOUT = 12000; // ~200 min (matches Python)
@@ -93,7 +93,7 @@ public:
     /// Legacy constructor for backward compatibility.
     /// Delegates to the config-based constructor.
     ///
-    /// @param baseUrl  Server root, e.g. "http://localhost:8000"
+    /// @param baseUrl  Server root, e.g. "http://localhost:13305"
     /// @param debug    Emit extra diagnostics to stderr when true
     LemonadeClient(const std::string& baseUrl, bool debug = false);
 

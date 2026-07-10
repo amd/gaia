@@ -96,7 +96,7 @@ class ChatAgentConfig:
     claude_model: str = "claude-sonnet-4-20250514"
     # None = fall back to LEMONADE_BASE_URL env var, then the default
     base_url: Optional[str] = None
-    model_id: Optional[str] = None  # Default: Qwen3.5-35B
+    model_id: Optional[str] = None  # None = use the default model (Gemma-4-E4B-it-GGUF)
 
     # Execution
     max_steps: int = 10

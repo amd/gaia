@@ -33,7 +33,7 @@ Use this integration path when you want:
 - **Your own UX and mailbox connection** — your app runs OAuth, owns the tokens, and
   forwards a connection to GAIA so the agent can read/send on the user's behalf.
 - **A structured contract** — a frozen request/response schema (`SCHEMA_VERSION`
-  `2.1`) you can code against, over REST **or** MCP stdio.
+  `2.2`) you can code against, over REST **or** MCP stdio.
 
 ## Architecture
 
@@ -253,7 +253,7 @@ token, the forwarded client credentials, and every per-agent grant.
 
 ## The triage contract
 
-*(#1262, frozen at `SCHEMA_VERSION` 2.1)* `POST /v1/email/triage` takes an email or a full
+*(#1262, frozen at `SCHEMA_VERSION` 2.2)* `POST /v1/email/triage` takes an email or a full
 thread and returns structured analysis. **No mail is read or sent** — it analyzes only the
 payload in the request, so you can build and verify triage with **zero connector setup**.
 See the full schema in the [Email Triage Contract](/spec/email-contract).
@@ -285,7 +285,7 @@ curl -s -X POST http://127.0.0.1:4200/v1/email/triage \
 
 ```json
 {
-  "schema_version": "2.1",
+  "schema_version": "2.2",
   "request_kind": "single",
   "result": {
     "category": "URGENT",
@@ -425,7 +425,7 @@ Tools exposed: `triage_email`, `triage_email_batch`, `draft_reply`, `send_email`
 ## Self-describing reference
 
 - **`GET /v1/email/spec`** — a human-readable HTML page describing every endpoint.
-- **`GET /v1/email/version`** — `{"apiVersion": "2.1", "agentVersion": "…"}`. `apiVersion`
+- **`GET /v1/email/version`** — `{"apiVersion": "2.2", "agentVersion": "…"}`. `apiVersion`
   is the frozen contract version; negotiate against its MAJOR so a breaking upgrade fails
   loudly.
 - **`GET /v1/email/health`** — liveness only (`{"status":"ok"}`). A green health check means

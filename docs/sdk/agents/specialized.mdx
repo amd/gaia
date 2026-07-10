@@ -3,7 +3,7 @@ title: "Specialized"
 ---
 
 <Info>
-  **Source Code:** [`hub/agents/python/chat/gaia_agent_chat/`](https://github.com/amd/gaia/blob/main/hub/agents/python/chat/gaia_agent_chat/), [`src/gaia/agents/docker/`](https://github.com/amd/gaia/blob/main/src/gaia/agents/docker/), [`src/gaia/agents/jira/`](https://github.com/amd/gaia/blob/main/src/gaia/agents/jira/), [`src/gaia/agents/blender/`](https://github.com/amd/gaia/blob/main/src/gaia/agents/blender/)
+  **Source Code:** [`hub/agents/python/chat/gaia_agent_chat/`](https://github.com/amd/gaia/blob/main/hub/agents/python/chat/gaia_agent_chat/), [`hub/agents/python/docker/gaia_agent_docker/`](https://github.com/amd/gaia/blob/main/hub/agents/python/docker/gaia_agent_docker/), [`hub/agents/python/jira/gaia_agent_jira/`](https://github.com/amd/gaia/blob/main/hub/agents/python/jira/gaia_agent_jira/), [`hub/agents/python/blender/gaia_agent_blender/`](https://github.com/amd/gaia/blob/main/hub/agents/python/blender/gaia_agent_blender/)
 </Info>
 
 <Note>
@@ -49,14 +49,14 @@ result = agent.process_query(
 
 ## 12.2 DockerAgent (Containerization)
 
-**Import:** `from gaia.agents.docker.agent import DockerAgent`
+**Import:** `from gaia_agent_docker.agent import DockerAgent`
 
 **Detailed Spec:** [spec/docker-agent](/spec/docker-agent)
 
 **Purpose:** Intelligent Docker assistance for containerizing applications with LLM-generated Dockerfiles.
 
 ```python
-from gaia.agents.docker.agent import DockerAgent
+from gaia_agent_docker.agent import DockerAgent
 from pathlib import Path
 
 # Create Docker agent
@@ -87,14 +87,14 @@ result = agent.process_query(
 
 ## 12.3 JiraAgent (Issue Tracking)
 
-**Import:** `from gaia.agents.jira.agent import JiraAgent`
+**Import:** `from gaia_agent_jira.agent import JiraAgent`
 
 **Detailed Spec:** [spec/jira-agent](/spec/jira-agent)
 
 **Purpose:** Natural language interface to Jira with automatic configuration discovery and JQL generation.
 
 ```python
-from gaia.agents.jira.agent import JiraAgent
+from gaia_agent_jira.agent import JiraAgent
 import os
 
 # Set credentials
@@ -132,14 +132,14 @@ result = agent.process_query(
 
 ## 12.4 BlenderAgent (3D Graphics)
 
-**Import:** `from gaia.agents.blender.agent import BlenderAgent`
+**Import:** `from gaia_agent_blender.agent import BlenderAgent`
 
 **Detailed Spec:** [spec/blender-agent](/spec/blender-agent)
 
 **Purpose:** Natural language interface for Blender 3D modeling, scene creation, and rendering.
 
 ```python
-from gaia.agents.blender.agent import BlenderAgent
+from gaia_agent_blender.agent import BlenderAgent
 
 # Create Blender agent
 agent = BlenderAgent(
