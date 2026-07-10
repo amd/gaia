@@ -88,7 +88,12 @@ jobs:
         uses: ./.github/actions/setup-venv
         with:
           python-version: '3.12'
-          install-package: '.[dev,eval,api]'
+          # The email agent ships as the standalone gaia-agent-email wheel (#1102),
+          # so it is NOT pulled by [dev,eval,api]. `gaia eval benchmark` imports
+          # gaia_agent_email.agent — install the LOCAL editable hub package (this
+          # branch's agent code, not the published PyPI wheel) or the benchmark
+          # dies with ModuleNotFoundError on a clean venv.
+          install-package: '.[dev,eval,api] -e hub/agents/python/email'
 
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade

@@ -100,10 +100,14 @@ jobs:
           uv pip install --system -e ".[dev,api]" -e hub/agents/python/email
 
       - name: Run email-agent unit tests
-        env:
-          # Skip memory init — Lemonade isn't available in this CI job; the
-          # email-agent unit tests don't exercise memory functionality.
-          GAIA_MEMORY_DISABLED: "1"
+        # NOTE: do NOT set GAIA_MEMORY_DISABLED here. The hub/agents/python/email
+        # memory / inbox-profiling / behavioral-learning / preferences suites DO
+        # exercise memory: they mock the Lemonade embedder per-test (so no server
+        # is needed) and toggle GAIA_MEMORY_DISABLED themselves where a test wants
+        # the disabled path. A process-wide GAIA_MEMORY_DISABLED=1 would force the
+        # memory store to None for every agent, skip memory-tool registration, and
+        # fail those tests. Agents that don't mock the embedder just get a
+        # store=None fast (connection refused), so nothing here needs the flag.
         run: |
           echo "================================================================"
           echo "                  EMAIL AGENT UNIT TESTS"
