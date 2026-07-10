@@ -167,10 +167,11 @@ jobs:
         env:
           # eval_drafting_report.py reads EMAIL_EVAL_MODEL; reuse the refresh model.
           EMAIL_EVAL_MODEL: ${{ env.MODEL }}
-          # Judge credential. Absent -> loud skip (report says so); the metric is
-          # then simply omitted from the card (gen_scorecard never invents one).
-          # With drafting_gate_thresholds.json enforce:true, a real breach fails
-          # here and the refresh does not commit a regressed card.
+          # Judge credential — REQUIRED. Absent -> eval_drafting_report.py exits 1
+          # (fail-loudly, no silent skip), so this step throws and the refresh
+          # never commits a card with a silently-omitted drafting metric. With
+          # drafting_gate_thresholds.json enforce:true a real breach also fails
+          # here, so the refresh does not commit a regressed card.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           python hub/agents/python/email/packaging/eval_drafting_report.py
@@ -179,7 +180,9 @@ jobs:
       - name: Regenerate SCORECARD.md from the real run
         run: |
           # --drafting-report folds draft_approval_rate into the card as a
-          # reported metric (weight 0); a loud-skip report omits it cleanly.
+          # reported metric (weight 0). The drafting eval above hard-fails on a
+          # missing key, so a report here is always a real judged run; a missing
+          # or unjudged report makes gen_scorecard fail loudly (never omits).
           python hub/agents/python/email/packaging/gen_scorecard.py --benchmark-dir eval-out --limit "$env:LIMIT" --drafting-report eval-out/drafting_gate_report.json
           if ($LASTEXITCODE -ne 0) { throw "gen_scorecard failed" }
 

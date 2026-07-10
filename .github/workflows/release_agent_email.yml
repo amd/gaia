@@ -50,9 +50,10 @@
 #                              repo secret) so it's unreadable until the gate is
 #                              approved.
 #     ANTHROPIC_API_KEY      — Claude judge credential for the eval-gate's
-#                              voice-drafting eval. REQUIRED: the eval-gate asserts
-#                              it and FAILS the release if absent, so a release
-#                              never ships an un-judged drafting eval. A repo (or
+#                              voice-drafting eval. REQUIRED: eval_drafting_report.py
+#                              exits 1 when it is absent (no silent skip — CLAUDE.md
+#                              fail-loudly), so the eval-gate step FAILS the release
+#                              and never ships an un-judged drafting eval. A repo (or
 #                              org) secret — the eval-gate runs before the approval
 #                              gate, on the self-hosted stx pool.
 #   Variables:

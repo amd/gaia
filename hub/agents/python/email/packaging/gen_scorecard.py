@@ -269,16 +269,23 @@ def _build_reproduction_command(model, ground_truth_rel: str, limit=None) -> str
     )
 
 
-def _load_draft_approval_rate(drafting_report: Path) -> Optional[float]:
+def _load_draft_approval_rate(drafting_report: Path) -> float:
     """Read ``summary.drafting.draft_approval_rate`` from a drafting gate report.
 
-    Returns ``None`` when the report is a loud-skip (no judge credential) so the
-    scorecard simply omits the metric rather than inventing a value. Fails loud if
-    the file exists but is malformed — a judged run must yield a real rate.
+    A drafting report passed here must be a real judged run — ``eval_drafting_report.py``
+    hard-fails (exit 1) rather than emitting a skip report, so there is no silent
+    "skipped" path (CLAUDE.md: No Silent Fallbacks). Fails loud on a legacy
+    ``skipped`` marker or any report missing the rate — never silently omits the
+    metric.
     """
     data = json.loads(drafting_report.read_text(encoding="utf-8"))
     if data.get("skipped"):
-        return None
+        raise ValueError(
+            f"Drafting report {drafting_report} is marked skipped, but the judged "
+            f"drafting eval must not skip (ANTHROPIC_API_KEY is required and "
+            f"eval_drafting_report.py exits 1 when it is absent). Re-run "
+            f"eval_drafting_report.py with ANTHROPIC_API_KEY set."
+        )
     rate = data.get("summary", {}).get("drafting", {}).get("draft_approval_rate")
     if rate is None:
         raise ValueError(
@@ -444,15 +451,16 @@ def build_payload(
     # changing the aggregate (still 100 x within_one). Blocking on a drafting
     # regression is the drafting gate's job (enforce:true), not the aggregate's.
     if drafting_report is not None:
+        # A judged run always yields a real rate; _load_draft_approval_rate raises
+        # loudly otherwise (no silent omit).
         draft_rate = _load_draft_approval_rate(Path(drafting_report))
-        if draft_rate is not None:
-            metrics.append(
-                {
-                    "name": "draft_approval_rate",
-                    "value": float(draft_rate),
-                    "weight": 0.0,
-                }
-            )
+        metrics.append(
+            {
+                "name": "draft_approval_rate",
+                "value": float(draft_rate),
+                "weight": 0.0,
+            }
+        )
     compute_aggregate(
         metrics
     )  # validate metrics; aggregate embedded in render_scorecard
@@ -649,10 +657,11 @@ def main(argv=None) -> int:
         default=None,
         help=(
             "Path to eval-out/drafting_gate_report.json (from "
-            "eval_drafting_report.py). When given and not a loud-skip, folds "
-            "draft_approval_rate into the scorecard as a reported metric "
-            "(weight 0). Blocking on a drafting regression is the drafting "
-            "gate's job (enforce:true), not the aggregate's."
+            "eval_drafting_report.py, a judged run). Folds draft_approval_rate "
+            "into the scorecard as a reported metric (weight 0); a missing/"
+            "unjudged report fails loudly, never silently omits. Blocking on a "
+            "drafting regression is the drafting gate's job (enforce:true), not "
+            "the aggregate's."
         ),
     )
 
