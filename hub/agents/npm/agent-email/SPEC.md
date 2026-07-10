@@ -197,7 +197,7 @@ land in a future schema bump:
   overdue first. **Detection only** — it never sends a nudge (any send stays
   confirmation-gated).
 
-None of these are on the REST/MCP contract, so `SCHEMA_VERSION` stays `2.2`.
+None of these are on the REST/MCP contract, so none of them moves `SCHEMA_VERSION`.
 
 ### Readiness vs liveness
 
@@ -210,10 +210,14 @@ The authoritative readiness signal is **`GET /v1/email/init`** (#1795): it probe
 whole triage stack — Lemonade reachable **and** version-compatible **and** the triage
 model downloaded — and returns `200` when ready, `503` when not, with an actionable
 `hint`. There is no client wrapper yet, so call it with a plain `fetch` (the
-`InitResponse` type is exported for the response shape):
+`InitResponse` type is exported for the response shape). Like every non-exempt
+`/v1/email/*` route it requires the per-session bearer token (#1706) — a raw
+`fetch` must attach it explicitly (the `EmailClient` methods do this for you):
 
 ```ts
-const r = await fetch("http://127.0.0.1:8131/v1/email/init");
+const r = await fetch("http://127.0.0.1:8131/v1/email/init", {
+  headers: { Authorization: `Bearer ${sidecar.authToken}` },
+});
 const init = (await r.json()) as import("@amd-gaia/agent-email").InitResponse;
 if (!init.ready) throw new Error(init.hint ?? "email agent not ready to triage");
 ```

@@ -205,7 +205,9 @@ green `/health` means the REST surface is up, not that triage will work.
 To check *actual* readiness before your first `triage`, call **`GET
 /v1/email/init`** (#1795) — it probes Lemonade reachability + version + the triage
 model and returns `200` when ready, `503` with an actionable `hint` when not (no
-client wrapper yet; use `fetch` with the exported `InitResponse` type). `POST
+client wrapper yet; use `fetch` with the exported `InitResponse` type — and attach
+the per-session bearer token, `Authorization: Bearer ${sidecar.authToken}`, since a
+raw `fetch` doesn't inject it like the client methods do). `POST
 /v1/email/init` can then ask the running Lemonade to pull the model, streaming
 progress. See [`SPEC.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md) → *Readiness vs liveness*.
 
@@ -262,7 +264,8 @@ const sidecar = await startSidecar({
 ```
 
 Each run persists the `email_pre_scan` envelope with a `generated_at` stamp; pull the
-latest one from `GET /v1/email/briefing` (plain `fetch` — no client wrapper yet). It
+latest one from `GET /v1/email/briefing` (plain `fetch` — no client wrapper yet, so
+attach the per-session bearer token yourself). It
 returns **404** until the first scheduled run has happened, and an invalid env value
 fails sidecar startup loudly rather than guessing a schedule.
 `archive`/`quarantine` are reversible within a 30-second window via

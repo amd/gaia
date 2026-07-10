@@ -259,7 +259,7 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
   `check_followups` flags sent mail still awaiting a reply, detection only) all
   run in the agent tool loop. The REST contract has no routes for them yet, so
   don't look for `client.scheduleSend()` / `client.snooze()` / a voice or
-  follow-up method — they don't exist (`SCHEMA_VERSION` stays `2.2`).
+  follow-up method — they don't exist (and none of these moves `SCHEMA_VERSION`).
 - **ESM-only.** `require("@amd-gaia/agent-email")` fails; use `import` / dynamic
   `import()`.
 

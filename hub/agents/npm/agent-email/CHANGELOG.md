@@ -153,6 +153,16 @@ Contract bumped to `SCHEMA_VERSION` **2.3**. `checkVersion` is MAJOR-only, so th
   startup loudly; the endpoint returns `404` until the first scheduled run. REST-only
   for now — no npm client wrapper method yet.
 
+### Fixed
+
+- **MCP `serverInfo.version` now reports the real package version.** The stdio MCP
+  server's `get_mcp_server_info` had a hardcoded `"1.0.0"` placeholder; it now sources
+  `AGENT_VERSION` from `gaia_agent_email.version`, so all three version surfaces (wheel
+  metadata, `GET /v1/email/version` `agentVersion`, MCP server info) agree.
+- **Hub manifest `tools_count` corrected 6 → 52** (`gaia-agent.yaml` + the in-code agent
+  registration): the agent registers 52 `@tool` functions; the stale `6` under-reported
+  the surface on the hub page and the Agent UI card.
+
 ## 0.3.0
 
 Contract bumped to `SCHEMA_VERSION` **2.1** — additive, no triage shape change, so
