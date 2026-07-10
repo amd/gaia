@@ -139,8 +139,12 @@ jobs:
           python-version: '3.12'
           # [dev] + [eval] for the benchmark + quality/perf gate machinery and
           # the Anthropic/scikit-learn judge deps; [api] for the connectors
-          # layer the email agent boots.
-          install-package: '.[dev,eval,api]'
+          # layer the email agent boots. The email agent ships as the standalone
+          # gaia-agent-email wheel (#1102) and is NOT pulled by those extras —
+          # `gaia eval benchmark` imports gaia_agent_email.agent, so install the
+          # LOCAL editable hub package (this branch's code, not the PyPI wheel)
+          # or the benchmark dies with ModuleNotFoundError on a clean venv.
+          install-package: '.[dev,eval,api] -e hub/agents/python/email'
 
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
