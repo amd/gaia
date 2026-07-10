@@ -120,6 +120,10 @@ def test_contract_models_present_in_spec(spec):
         "EmailTriageRequest",
         "EmailTriageResponse",
         "EmailTriageResult",
+        # Draft models: triage returns DraftScaffold (no body); /draft returns
+        # the full DraftReply (with body) — schema 2.3.
+        "DraftScaffold",
+        "DraftReply",
         # Batch models (#1887 additive)
         "BatchTriageRequest",
         "BatchTriageResponse",
@@ -1285,6 +1289,59 @@ def test_triage_result_echoes_message_attachments(monkeypatch):
     )
     out = email_routes.EmailTriageService().triage_request(req)
     assert [a.filename for a in out.result.attachments] == ["coupon.pdf"]
+
+
+def test_triage_draft_is_scaffold_without_body(monkeypatch):
+    # schema 2.3: triage returns a reply SCAFFOLD (to + subject) with NO body.
+    # Triage never composed prose, so the always-empty body it used to return is
+    # dropped from the shape entirely rather than left as a confusing "".
+    from gaia_agent_email import api_routes as email_routes
+
+    monkeypatch.setattr(
+        email_routes.EmailTriageService, "_build_llm_chat", lambda self: object()
+    )
+    monkeypatch.setattr(
+        "gaia_agent_email.tools.summarize_tools.summarize_email_llm",
+        lambda chat, **kw: "Stub summary.",
+    )
+    monkeypatch.setattr(
+        "gaia_agent_email.tools.llm_triage.classify_email_llm",
+        lambda chat, **kw: {"category": "NEEDS_RESPONSE", "suggested_action": "reply"},
+    )
+    req = parse_request(
+        {
+            "payload": {
+                "kind": "single",
+                "principal": {"email": "user@example.com"},
+                "message": {
+                    "message_id": "m1",
+                    "from": {"name": "Alice", "email": "alice@example.com"},
+                    "subject": "Cost proposal?",
+                    "body": "Could you please send a cost proposal for this?",
+                },
+            }
+        }
+    )
+    out = email_routes.EmailTriageService().triage_request(req)
+    draft = out.result.draft
+    assert draft is not None
+    assert [a.email for a in draft.to] == ["alice@example.com"]
+    assert draft.subject == "Re: Cost proposal?"
+    # No body field at all on the scaffold — not even an empty string.
+    dumped = draft.model_dump()
+    assert set(dumped) == {"to", "subject"}
+    assert "body" not in dumped
+
+
+def test_draft_endpoint_still_returns_body(client):
+    # DraftReply (the /draft response) is UNCHANGED by schema 2.3 — it still
+    # carries the caller-composed body so the send-confirmation UI can show the
+    # literal message the token authorizes.
+    resp = client.post(
+        "/v1/email/draft", json=_draft_payload(body="Hi Bob, report attached.")
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["draft"]["body"] == "Hi Bob, report attached."
 
 
 def test_draft_echoes_attachment_metadata_never_content(client):

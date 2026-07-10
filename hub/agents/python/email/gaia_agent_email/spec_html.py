@@ -45,6 +45,7 @@ from gaia_agent_email.contract import (
     CalendarRespondRequest,
     CalendarRespondResponse,
     DraftReply,
+    DraftScaffold,
     EmailActionConfirmRequest,
     EmailActionConfirmResponse,
     EmailAddress,
@@ -389,11 +390,22 @@ def render_endpoint_spec_html() -> str:
         f'<p class="desc">Triage a single email or a full thread. '
         f"Accepts the frozen #1262 EmailTriageRequest and returns "
         f"a structured EmailTriageResponse — category, spam/phishing signals, "
-        f"a plain-text summary, extracted action items, and an optional draft reply. "
+        f"a plain-text summary, extracted action items, and an optional reply "
+        f"scaffold. "
         f"No mail is read or sent; this analyses only the payload in the request. "
         f"Extracted action items also persist to the local task store, linked to "
         f"the source <code>message_id</code> and de-duplicated per message (#1605) "
         f"— the response shape is unchanged.</p>"
+        f"<p class='desc'><strong>The draft is a scaffold, not a written reply "
+        f"(schema 2.3):</strong> when one is proposed it is a "
+        f"<code>DraftScaffold</code> carrying only <code>to</code> and "
+        f"<code>subject</code> — triage classifies and summarises, it never "
+        f"composes reply prose (so the model choice does not change this). To "
+        f"obtain a sendable reply, compose the body yourself (e.g. an LLM call "
+        f"over the returned <code>summary</code> + <code>action_items</code> + "
+        f"the original message) and pass <code>(to, subject, body)</code> to "
+        f"<code>POST /v1/email/draft</code>, which returns a full "
+        f"<code>DraftReply</code> and a single-use send-confirmation token.</p>"
         f"<h3>Request envelope</h3>"
         f"{_model_table(EmailTriageRequest, 'EmailTriageRequest')}"
         f"<h3>Payload shapes</h3>"
@@ -401,7 +413,7 @@ def render_endpoint_spec_html() -> str:
         f"<h3>Response envelope</h3>"
         f"{_model_table(EmailTriageResponse, 'EmailTriageResponse')}"
         f"{_model_table(EmailTriageResult, 'EmailTriageResult')}"
-        f"{_model_table(DraftReply, 'DraftReply (optional)')}"
+        f"{_model_table(DraftScaffold, 'DraftScaffold (optional — reply scaffold, no body)')}"
         f"{_model_table(ActionItem, 'ActionItem')}"
         f"</div>"
     )
@@ -515,7 +527,10 @@ def render_endpoint_spec_html() -> str:
             ("EmailDraftRequest", EmailDraftRequest),
             ("OutgoingAttachment", OutgoingAttachment),
         ],
-        response_sections=[("EmailDraftResponse", EmailDraftResponse)],
+        response_sections=[
+            ("EmailDraftResponse", EmailDraftResponse),
+            ("DraftReply (full reply — includes the composed body)", DraftReply),
+        ],
     )
 
     send_block = _endpoint_block(

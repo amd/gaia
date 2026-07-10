@@ -2,7 +2,7 @@
 
 Detailed reference for `@amd-gaia/agent-email`. For a quick start, see
 [`README.md`](./README.md); for an AI-assisted integration walkthrough, see
-[`SKILL.md`](./SKILL.md). The contract version is `SCHEMA_VERSION` **2.2**.
+[`SKILL.md`](./SKILL.md). The contract version is `SCHEMA_VERSION` **2.3**.
 
 ## Architecture
 
@@ -254,7 +254,7 @@ limit) — a larger file fails the send loudly rather than being truncated.
 | `summary` | `string` | Plain-text summary of the message/thread. |
 | `action_items` | `ActionItem[]` | Each `{ description, due_hint?, type?: "text" \| "link", url? }`; may be empty. |
 | `suggested_action` | `"reply" \| "none" \| "archive"` | `"reply"` for URGENT/NEEDS_RESPONSE, `"archive"` for PROMOTIONAL, else `"none"`. |
-| `draft` | `DraftReply \| null` | A proposed reply (`{ to, subject, body, attachments }`) when one is suggested. |
+| `draft` | `DraftScaffold \| null` | A proposed reply **scaffold** (`{ to, subject }` — no body) when one is suggested (schema 2.3). Triage never composes reply prose; compose the body yourself and call `draft()` for a full `DraftReply` + confirmation token. |
 | `usage` | `TriageUsage \| null` | LLM token/latency metrics; `null` on the heuristic-only path. |
 | `attachments` | `AttachmentMeta[]` | Metadata (`{ filename, mime_type, size_bytes, attachment_id? }`) of the analyzed message's attachments, echoed from the request for downstream processing (schema 2.2; empty when none). |
 
@@ -436,9 +436,9 @@ editors autocomplete but your code never imports them.
 TypeScript types in `src/types.ts` mirror two Python sources of truth:
 
 - `contract.py` — the triage request/response contract plus the schema-2.1
-  additions (inbox search, mailbox actions, calendar, pre-scan) and the
-  schema-2.2 attachment models (`AttachmentMeta` / `OutgoingAttachment`,
-  `SCHEMA_VERSION = "2.2"`).
+  additions (inbox search, mailbox actions, calendar, pre-scan), the schema-2.2
+  attachment models (`AttachmentMeta` / `OutgoingAttachment`), and the schema-2.3
+  triage draft scaffold (`DraftScaffold`; `SCHEMA_VERSION = "2.3"`).
 - `api_routes.py` — the local draft/send confirmation handshake models.
 
 They are hand-written (vs. generated from `/openapi.json`) because the contract is

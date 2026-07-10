@@ -1,6 +1,6 @@
 # @amd-gaia/agent-email
 
-[![npm version](https://img.shields.io/npm/v/@amd-gaia/agent-email?label=version)](https://www.npmjs.com/package/@amd-gaia/agent-email) · contract `SCHEMA_VERSION` **2.2** · last updated **2026-07-01**
+[![npm version](https://img.shields.io/npm/v/@amd-gaia/agent-email?label=version)](https://www.npmjs.com/package/@amd-gaia/agent-email) · contract `SCHEMA_VERSION` **2.3** · last updated **2026-07-10**
 
 **Eval scorecard (v0.3.0): aggregate 83.4 / 100** — within-one-bucket **acceptance** accuracy (3-run mean, 95% CI [82.1, 84.7]) over the full 249-email labeled corpus ([`SCORECARD.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SCORECARD.md)). Triage priority is ordinal, so the bar (#1437) credits exact-or-adjacent buckets — what users feel — not exact 4-way match (reported as a secondary, 0.77). The linked scorecard carries the full recipe, metrics + reported secondaries, run-to-run variance/CI, a per-category breakdown, the run environment, and a worked recomputation; [`EVALUATION.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/EVALUATION.md) is the companion guide — what's measured, the dataset, a worked example, and step-by-step reproduction.
 

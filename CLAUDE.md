@@ -908,3 +908,4 @@ authoritative set (run `ls .claude/skills/`); invoke them with the `Skill` tool.
 - `lemonade-client-patterns` — modifying LemonadeClient and threading changes through its callers (providers, VLM, UI routers, agent base): deferred-import patch targets, assertLogs child-logger levels, SSE test-hang prevention, 401 error safety, `openai.AuthenticationError` ordering.
 - `gaia-release` — cut a GAIA core release end-to-end (draft notes, release PR, pre-tag verification, push the tag, monitor the publish pipeline).
 - `gaia-testing` — GAIA testing workflows, fixtures, and conventions.
+- `weekly-audit-patterns` — the proactive weekly Claude audit (`.github/workflows/claude-weekly-audit.yml`): the stable dedup-key scheme, the private channel for security findings, the five dimensions (and which one owns the Fail-Loudly check), and the `bug`→`auto-fix` promotion path. Read before editing that workflow or how findings are filed/deduped.
