@@ -185,6 +185,7 @@ example above). Every non-2xx response throws `HttpError` (with `status`, `url`,
 
 | Call | Needs | Does |
 |------|-------|------|
+| `init()` | Nothing external | **Readiness preflight** (#1795): probes Lemonade reachability + version and triage-model presence, read-only (never pulls a model). Returns `{ ready, lemonade, model, hint }` — `ready: true` when triage will actually work, else `ready: false` with an actionable `hint`. Branch on `.ready`; the not-ready case is a value, not a thrown error. This is the real readiness signal, unlike liveness-only `health()`. |
 | `triage(req)` | Local LLM only | Classifies the message you pass, summarizes it, and extracts action items + spam/phishing signals. No mailbox is read. Action items also persist to the sidecar's local task list, linked to the `message_id` and de-duplicated per message — the response shape is unchanged. |
 | `triageBatch(req)` | Local LLM only | Same as `triage`, but for an `items` array (1–100). Returns a parallel `results` array; per-item failures isolate (HTTP 200 can carry errored items — inspect `results[].error`). |
 | `search(req)` | A connected Gmail/Outlook mailbox | Searches the connected inbox (**read-only**) by Gmail-style `query`/`labels` and returns message metadata — id, subject, sender, snippet, labels. No message is read in full or modified; no confirmation token needed. |

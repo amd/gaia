@@ -200,6 +200,61 @@ describe("EmailClient", () => {
     expect(v.agentVersion).toBe("0.2.0");
   });
 
+  it("init() parses the ready (200) readiness preflight", async () => {
+    const ready = {
+      ready: true,
+      lemonade: {
+        reachable: true,
+        base_url: "http://localhost:8000/api/v1",
+        version: "8.1.0",
+        min_version: "8.0.0",
+        compatible: true,
+      },
+      model: { id: "Gemma-4-E4B-it-GGUF", present: true, loadable: null },
+      hint: null,
+    };
+    const fetchImpl = vi.fn(async (url) => {
+      expect(String(url)).toBe("http://x/v1/email/init");
+      return jsonResponse(ready, 200);
+    }) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    const r = await client.init();
+    expect(r.ready).toBe(true);
+    expect(r.model.present).toBe(true);
+    expect(r.hint).toBeNull();
+  });
+
+  it("init() returns the not-ready body on 503 instead of throwing", async () => {
+    const notReady = {
+      ready: false,
+      lemonade: {
+        reachable: false,
+        base_url: "http://localhost:8000/api/v1",
+        version: null,
+        min_version: "8.0.0",
+        compatible: null,
+      },
+      model: { id: "Gemma-4-E4B-it-GGUF", present: false, loadable: null },
+      hint: "Lemonade Server not reachable — run `lemonade-server serve`.",
+    };
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse(notReady, 503),
+    ) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    const r = await client.init();
+    expect(r.ready).toBe(false);
+    expect(r.lemonade.reachable).toBe(false);
+    expect(r.hint).toMatch(/lemonade-server serve/);
+  });
+
+  it("init() still throws HttpError on a non-503 failure", async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response("upstream boom", { status: 500 }),
+    ) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    await expect(client.init()).rejects.toBeInstanceOf(HttpError);
+  });
+
   it("draft + send round-trip types", async () => {
     const draftRes: EmailDraftResponse = {
       draft: { to: [{ email: "a@b.com" }], subject: "Re: x", body: "ok" },

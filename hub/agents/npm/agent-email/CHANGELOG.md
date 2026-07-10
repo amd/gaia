@@ -22,8 +22,10 @@ Contract bumped to `SCHEMA_VERSION` **2.2** — additive over 2.1, so `checkVers
   Lemonade to download the model and streams `text/plain` progress (it can't
   install Lemonade itself — a host prerequisite — so an unreachable server is a
   loud `503`, not a silent no-op). New exported types: `InitResponse`,
-  `InitLemonadeStatus`, `InitModelStatus`; no client wrapper yet (call with
-  `fetch`). `SCHEMA_VERSION` stays `2.2`.
+  `InitLemonadeStatus`, `InitModelStatus`, and a typed `EmailClient.init()`
+  wrapper that returns the `InitResponse` on both the 200 (ready) and 503
+  (not-ready) paths — branch on `.ready` / read `.hint` instead of catching an
+  error. `SCHEMA_VERSION` stays `2.2`.
 - **Voice / style-matched drafting (#1607).** The agent can now draft replies in
   the user's **own voice** instead of a neutral scaffold. `build_voice_profile`
   samples the user's Sent mail into a local style profile — top greetings /
