@@ -226,7 +226,10 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
   non-loopback browser `Origin` → 403. `/health` · `/version` · `/v1/email/spec` ·
   `/v1/email/playground` are exempt.
 - **`health()` is liveness-only.** A green `/health` means the REST surface is up,
-  NOT that triage will work. The real readiness signal is a `triage` returning 200.
+  NOT that triage will work. For real readiness call **`GET /v1/email/init`**
+  (#1795) — it probes Lemonade + the triage model and returns `200` when ready,
+  `503` + an actionable `hint` when not (no client wrapper yet; `fetch` it, the
+  `InitResponse` type is exported). `POST /v1/email/init` streams a model-pull.
 - **HTTP 502 from `triage`** → Lemonade isn't running/reachable, or the model isn't
   pulled. It is not a bug in this package.
 - **Addresses are objects, not strings.** `to` (and `triage`'s `from` / `principal`)
@@ -249,9 +252,14 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
 - **Cleanup is automatic by default** — the sidecar is reaped on exit/crash/signal;
   only `autoCleanup: false` (or a hard `SIGKILL` of your process) can orphan the
   child. `shutdown` stays the graceful stop.
-- **No scheduled-send / snooze endpoints.** The agent implements them (#1609),
-  but only in its tool loop — the REST contract has no routes for them yet, so
-  don't look for a `client.scheduleSend()` / `client.snooze()`; they don't exist.
+- **Some capabilities are agent-loop-only — no REST endpoint, no client method.**
+  Scheduled send / snooze (#1609), **voice / style-matched drafting** (#1607 —
+  `build_voice_profile` learns a local style profile from Sent mail so drafts
+  come out in the user's own voice), and **follow-up tracking** (#1606 —
+  `check_followups` flags sent mail still awaiting a reply, detection only) all
+  run in the agent tool loop. The REST contract has no routes for them yet, so
+  don't look for `client.scheduleSend()` / `client.snooze()` / a voice or
+  follow-up method — they don't exist (and none of these moves `SCHEMA_VERSION`).
 - **ESM-only.** `require("@amd-gaia/agent-email")` fails; use `import` / dynamic
   `import()`.
 

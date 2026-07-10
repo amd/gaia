@@ -50,6 +50,7 @@ from gaia_agent_email.api_routes import (  # read-only reuse of the REST surface
 )
 from gaia.connectors.api import connected_mailbox_providers
 from gaia.logger import get_logger
+from gaia_agent_email.version import AGENT_VERSION
 
 logger = get_logger(__name__)
 
@@ -248,7 +249,7 @@ class EmailTriageMCPAgent(MCPAgent):
     # -- MCP interface ------------------------------------------------------
 
     def get_mcp_server_info(self) -> Dict[str, Any]:
-        return {"name": "GAIA Email Triage", "version": "1.0.0"}
+        return {"name": "GAIA Email Triage", "version": AGENT_VERSION}
 
     def get_mcp_tool_definitions(self) -> List[Dict[str, Any]]:
         return [

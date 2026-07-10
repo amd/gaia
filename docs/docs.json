@@ -365,7 +365,6 @@
               "spec/docker-agent",
               "spec/jira-agent",
               "spec/blender-agent",
-              "spec/email-contract",
               "spec/summarizer-app",
               "spec/component-status"
             ]
