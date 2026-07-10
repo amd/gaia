@@ -15,7 +15,15 @@ on:
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
       - 'setup.py'
+      # Repo-side email suites this workflow runs — changing them must trigger it.
       - 'tests/test_email_openapi_conformance.py'
+      - 'tests/unit/agents/email/**'
+      - 'tests/unit/email/**'
+      - 'tests/unit/agents/test_email_*.py'
+      - 'tests/unit/agents/test_email_llm_triage.py'
+      - 'tests/unit/test_email_cli.py'
+      - 'tests/integration/test_never_auto_send.py'
+      - 'tests/integration/test_email_rest_api_e2e.py'
       - '.github/workflows/test_email_agent.yml'
   pull_request:
     branches: [ main ]
@@ -25,7 +33,15 @@ on:
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
       - 'setup.py'
+      # Repo-side email suites this workflow runs — changing them must trigger it.
       - 'tests/test_email_openapi_conformance.py'
+      - 'tests/unit/agents/email/**'
+      - 'tests/unit/email/**'
+      - 'tests/unit/agents/test_email_*.py'
+      - 'tests/unit/agents/test_email_llm_triage.py'
+      - 'tests/unit/test_email_cli.py'
+      - 'tests/integration/test_never_auto_send.py'
+      - 'tests/integration/test_email_rest_api_e2e.py'
       - '.github/workflows/test_email_agent.yml'
   merge_group:
   workflow_dispatch:

@@ -10,7 +10,7 @@ title: "Email Triage Contract Schema"
 **Component:** Email request/response contract (issue #1262)
 **Module:** `gaia_agent_email.contract`
 **Validation:** pydantic v2
-**Schema version:** `2.2`
+**Schema version:** `2.3`
 </Note>
 
 ---
@@ -37,7 +37,7 @@ stable shape.
 - **Fail loudly.** Every model forbids unknown fields (`extra="forbid"`). An
   off-contract payload raises a `ValidationError` naming the offending field,
   never a silently coerced result.
-- **Versioned.** `SCHEMA_VERSION` (`"2.2"`) is pinned in the module and echoed in
+- **Versioned.** `SCHEMA_VERSION` (`"2.3"`) is pinned in the module and echoed in
   every request and response so a consumer can detect a breaking change.
 
 ### Version history
@@ -51,6 +51,7 @@ consumers working.
 | `2.0` | Five-bucket taxonomy (#1615); batch triage (#1887). |
 | `2.1` | Additive REST surfaces: inbox search (#1781), archive + phishing-quarantine and their undo (#1779), calendar view/create/respond (#1780), inbox pre-scan (#1778). |
 | `2.2` | Additive attachment handling (#1542): `EmailMessage` / `EmailTriageResult` / `DraftReply` gain an `attachments` metadata list; draft/send accept `OutgoingAttachment` payloads. |
+| `2.3` | **Breaking:** `EmailTriageResult.draft` is now a `DraftScaffold` (recipient + subject only) instead of a `DraftReply` — triage never composed a body, so the always-empty `draft.body` is dropped. `DraftReply` (with `body`) is unchanged and remains the `POST /v1/email/draft` + MCP `draft_reply` response. |
 
 ---
 
@@ -86,7 +87,7 @@ test asserts byte-for-byte equality, so drift in either place fails CI.
 
 | Field | Type | Notes |
 |---|---|---|
-| `schema_version` | string | Contract version. Defaults to `"2.2"`. |
+| `schema_version` | string | Contract version. Defaults to `"2.3"`. |
 | `payload` | `SingleEmailInput` \| `ThreadInput` | Discriminated on `kind`. |
 | `context` | `TriageContext` \| null | Optional; biases categorization/summary. |
 
@@ -181,7 +182,7 @@ the principal is not necessarily a recipient of every message.
 | `is_phishing` | bool | Phishing signal, independent of `is_spam`. |
 | `summary` | string | Plain-text summary of the email / thread. Required. |
 | `action_items` | `ActionItem[]` | Extracted actions. May be empty. |
-| `draft` | `DraftReply` \| null | Proposed reply, or `null` when none is suggested. Never sent without explicit confirmation (#1264). |
+| `draft` | `DraftScaffold` \| null | Proposed reply **scaffold** (recipient + subject only, no body), or `null` when none is suggested (schema 2.3). Triage never composes reply prose — compose the body yourself and `POST /v1/email/draft` to get a full `DraftReply` + confirmation token. |
 | `suggested_action` | `"reply"` \| `"none"` \| `"archive"` | Derived next action (reply for URGENT/NEEDS_RESPONSE, archive for PROMOTIONAL, none otherwise). Defaults to `"none"`. |
 | `message_id` | string \| null | Echoes the request message-id when available; null for raw Gmail-API-sourced results. |
 | `usage` | `TriageUsage` \| null | LLM token/throughput metrics. Null on the heuristic-only path (no LLM call). |
@@ -196,14 +197,17 @@ the principal is not necessarily a recipient of every message.
 | `type` | `"text"` \| `"link"` | Discriminator; defaults to `"text"`. |
 | `url` | string \| null | Required and non-empty when `type="link"`; must be `null` when `type="text"`. |
 
-`DraftReply`:
+`DraftScaffold` (the triage-response draft, schema 2.3):
 
 | Field | Type | Notes |
 |---|---|---|
 | `to` | `EmailAddress[]` | **Non-empty** proposed recipients. |
-| `subject` | string | Proposed subject. |
-| `body` | string | Proposed body. |
-| `attachments` | `AttachmentMeta[]` | Metadata of proposed attachments (schema 2.2). Content stays in the caller's `OutgoingAttachment` payload. |
+| `subject` | string | Proposed subject (`Re:`-prefixed). |
+
+There is deliberately **no `body`** here — triage does not write replies. The full
+`DraftReply` returned by `POST /v1/email/draft` adds `body` (the reply prose you
+compose) and `attachments` (`AttachmentMeta[]`, schema 2.2), and mints a
+single-use send-confirmation token.
 
 `TriageUsage`:
 
@@ -222,7 +226,7 @@ the principal is not necessarily a recipient of every message.
 
 ```json
 {
-  "schema_version": "2.2",
+  "schema_version": "2.3",
   "payload": {
     "kind": "single",
     "principal": { "name": "Alice Example", "email": "alice@example.com" },
@@ -244,7 +248,7 @@ the principal is not necessarily a recipient of every message.
 
 ```json
 {
-  "schema_version": "2.2",
+  "schema_version": "2.3",
   "request_kind": "single",
   "result": {
     "category": "NEEDS_RESPONSE",
@@ -256,8 +260,7 @@ the principal is not necessarily a recipient of every message.
     ],
     "draft": {
       "to": [{ "name": "Bob Sender", "email": "bob@vendor.com" }],
-      "subject": "Re: Q2 invoice attached",
-      "body": "Thanks Bob, I'll review and confirm by Friday."
+      "subject": "Re: Q2 invoice attached"
     },
     "suggested_action": "reply"
   }
@@ -272,7 +275,7 @@ the principal is not necessarily a recipient of every message.
 
 ```json
 {
-  "schema_version": "2.2",
+  "schema_version": "2.3",
   "payload": {
     "kind": "thread",
     "principal": { "name": "Alice Example", "email": "alice@example.com" },
@@ -305,7 +308,7 @@ the principal is not necessarily a recipient of every message.
 
 ```json
 {
-  "schema_version": "2.2",
+  "schema_version": "2.3",
   "request_kind": "thread",
   "result": {
     "category": "NEEDS_RESPONSE",
@@ -332,7 +335,7 @@ triages up to `MAX_BATCH_SIZE` (**100**) emails or threads in one request: an
 
 | Field | Type | Notes |
 |---|---|---|
-| `schema_version` | string | Contract version. Defaults to `"2.2"`. |
+| `schema_version` | string | Contract version. Defaults to `"2.3"`. |
 | `items` | `(SingleEmailInput \| ThreadInput)[]` | 1–100 inputs, discriminated on `kind` — the same item shapes the single endpoint's `payload` accepts. Over 100 → `422`. |
 | `context` | `TriageContext` \| null | Optional; applied to **all** items. |
 
@@ -364,7 +367,7 @@ The MCP surface mirrors this with a `triage_email_batch` tool (the single
 
 ```json
 {
-  "schema_version": "2.2",
+  "schema_version": "2.3",
   "items": [
     {
       "kind": "single",
@@ -394,7 +397,7 @@ The MCP surface mirrors this with a `triage_email_batch` tool (the single
 
 ```json
 {
-  "schema_version": "2.2",
+  "schema_version": "2.3",
   "results": [
     {
       "index": 0,
