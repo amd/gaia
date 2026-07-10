@@ -12,15 +12,29 @@ The **Email Triage** agent sorts a Gmail inbox into priority/category buckets �
 important gets buried. It runs **100% locally** on AMD Ryzen AI: no cloud, no
 mail leaving the device.
 
-The eval measures triage **quality** on a fixed, labelled corpus. The agent
-triages every email through a **`FakeGmailBackend`** (a synthetic inbox loaded
-from an mbox file — never a live mailbox), and each prediction is compared to a
-human/vendor label. **No LLM judge is used** — scoring is deterministic
-label-matching, so the numbers are stable and cheap to reproduce.
+This scorecard measures triage **quality** on a fixed, labelled corpus. The
+agent triages every email through a **`FakeGmailBackend`** (a synthetic inbox
+loaded from an mbox file — never a live mailbox), and each prediction is compared
+to a human/vendor label. **The triage scoring is deterministic label-matching —
+not LLM-judged** (`predicted == expected`; see
+[`quality_metrics.py`](https://github.com/amd/gaia/blob/main/src/gaia/eval/quality_metrics.py)),
+so these numbers are stable, cheap, and need **no Claude/`ANTHROPIC_API_KEY`**.
+
+> The agent *itself* uses a **local** LLM to classify each email; "not
+> LLM-judged" refers to the *scoring*, which is exact label comparison.
 
 The harness is [`gaia eval benchmark`](https://github.com/amd/gaia/blob/main/src/gaia/eval/benchmark.py)
 (`src/gaia/eval/benchmark.py`); it drives the unchanged agent and reuses the
 shared scorecard renderer.
+
+### A second eval that *does* use an LLM judge
+
+The email agent also ships a separate **voice-drafting quality** eval (#1269):
+a **Claude judge** ([`eval_drafting_report.py`](https://github.com/amd/gaia/blob/main/hub/agents/python/email/packaging/eval_drafting_report.py),
+requires `ANTHROPIC_API_KEY`) scores each generated draft against a rubric. It is
+**report-mode and independent** of this scorecard — the 83.4 triage aggregate
+does not depend on it. If you only want to reproduce the scorecard below, you do
+**not** need the judge; if you want to run the drafting eval too, you do.
 
 ## The dataset
 
@@ -171,12 +185,14 @@ Notes:
 
 ## CI
 
-- **Nightly** (`.github/workflows/test_email_agent_eval.yml`) — runs the benchmark
-  over the synthetic corpus on the self-hosted AMD (`stx`) pool and uploads a gate
-  report. It is **report mode**: the quality/perf/drafting gates log and upload but
-  do not fail the build (the threshold manifests under `tests/fixtures/email/` ship
-  `enforce: false`). Flip `enforce: true` in a manifest — data, not workflow — to
-  start blocking on a breach.
+- **Nightly** (`.github/workflows/test_email_agent_eval.yml`) — runs the triage
+  benchmark over the synthetic corpus on the self-hosted AMD (`stx`) pool, then the
+  judge-scored **voice-drafting** eval (which needs `ANTHROPIC_API_KEY`; absent →
+  loud skip, never a pass), and uploads a gate report. It is **report mode**: the
+  quality / perf / drafting gates log and upload but do not fail the build (the
+  threshold manifests under `tests/fixtures/email/` ship `enforce: false`). Flip
+  `enforce: true` in a manifest — data, not workflow — to start blocking on a
+  breach.
 - **Scorecard refresh** (`.github/workflows/email_scorecard_refresh.yml`) — when
   the agent's LLM-affecting code or the corpus changes, re-runs the real eval,
   regenerates `SCORECARD.md`, and runs a same-version regression check.
