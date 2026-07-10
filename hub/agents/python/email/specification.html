@@ -1472,7 +1472,7 @@ one-shot: "in 2 days", "tomorrow at 9am"</pre>
       <h4>Request body — EmailPreScanRequest</h4>
       <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
         <tr><td><code>schema_version</code></td><td>string <span class="opt">optional</span></td><td>Contract version. Defaults to <code>"2.2"</code>; a mismatch lets a consumer fail loudly.</td></tr>
-        <tr><td><code>max_messages</code></td><td>int <span class="opt">optional</span></td><td>How many recent inbox messages to classify.</td></tr>
+        <tr><td><code>max_messages</code></td><td>int <span class="opt">optional</span></td><td>How many recent inbox messages to scan, <code>1–100</code> (default <code>25</code>). Bounded so a caller can't request an unbounded mailbox sweep.</td></tr>
       </tbody></table>
       <h4>Response body — EmailPreScanResponse</h4>
       <table class="tbl"><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody>
