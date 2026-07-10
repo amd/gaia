@@ -371,7 +371,7 @@ isolated, and dogfoods the exact binary shipped to integrators.
 `GAIA_EMAIL_AGENT_MODE` only selects which *process* answers (`user` default /
 `dev`); there is no in-process fallback. Two surfaces run through it:
 
-- **The `/v1/email/*` REST surface** — the full schema-2.2 contract (init
+- **The `/v1/email/*` REST surface** — the full schema-2.3 contract (init
   readiness probe + provisioning, triage,
   batch triage, search, inbox pre-scan, scheduled daily briefing, draft/send +
   confirm — attachments included, archive/unarchive, quarantine/unquarantine,
@@ -396,7 +396,7 @@ The sidecar is spawned lazily on first email use and tree-killed on shutdown; th
 REST surface and the chat agent share one sidecar process.
 
 **Chat tool surface (in-app email agent):** the sidecar-backed chat agent exposes
-the tools the schema-2.2 REST contract serves today — inbox pre-scan, search,
+the tools the schema-2.3 REST contract serves today — inbox pre-scan, search,
 calendar view, and archive + undo. Tools that have no REST route yet (labels,
 stars, mark-read, move, trash/delete, summarize, profile, preferences, forward,
 send, scheduled send / snooze) are not exposed in the chat agent until their

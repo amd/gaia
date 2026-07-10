@@ -63,15 +63,13 @@ test asserts byte-for-byte equality, so drift in either place fails CI.
 | `PROMOTIONAL` | Marketing / bulk mail. |
 | `PERSONAL` | Personal correspondence. |
 
-<Note>
-  **Transport authentication is separate from this schema.** The frozen sidecar
-  requires a **per-session bearer token** (`Authorization: Bearer <token>`) on
-  every `/v1/email/*` request and enforces a loopback Host/Origin allowlist
-  ([#1706](https://github.com/amd/gaia/issues/1706)) — `401`/`400`/`403` on
-  failure. That is a deployment/transport control, not part of the request/response
-  contract, so it is **not** encoded in the frozen OpenAPI document. See
-  [Email Integration → Authentication](/guides/email-integration#authentication).
-</Note>
+> **Transport authentication is separate from this schema.** The frozen sidecar
+> requires a **per-session bearer token** (`Authorization: Bearer <token>`) on
+> every `/v1/email/*` request and enforces a loopback Host/Origin allowlist
+> ([#1706](https://github.com/amd/gaia/issues/1706)) — `401`/`400`/`403` on
+> failure. That is a deployment/transport control, not part of the request/response
+> contract, so it is **not** encoded in the frozen OpenAPI document. See
+> [Email Integration → Authentication](https://amd-gaia.ai/docs/guides/email-integration#authentication).
 
 ---
 
