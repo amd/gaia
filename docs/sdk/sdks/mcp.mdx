@@ -103,9 +103,19 @@ flowchart TB
   </Step>
 
   <Step title="Add an MCP server">
-    ```bash
-    gaia mcp add time "uvx mcp-server-time"
+    Add a server entry to `~/.gaia/mcp_servers.json`:
+    ```json
+    {
+      "mcpServers": {
+        "time": { "command": "uvx", "args": ["mcp-server-time"] }
+      }
+    }
     ```
+    <Note>
+    `gaia mcp add` / `gaia mcp remove` were removed in #977 — MCP servers are
+    now configured through the connectors framework (`gaia connectors --help`)
+    or by editing `mcp_servers.json` directly.
+    </Note>
   </Step>
 
   <Step title="Use in your agent">
@@ -342,12 +352,16 @@ if "error" in result:
 ## CLI Commands
 
 ```bash
-gaia mcp add <name> "<command>"  # Add server
-gaia mcp list                    # List servers
+gaia mcp list                    # List configured servers
 gaia mcp tools <name>            # List tools from server
 gaia mcp test-client <name>      # Test connection
-gaia mcp remove <name>           # Remove server
 ```
+
+<Note>
+`gaia mcp add` and `gaia mcp remove` were removed in #977. MCP servers are now
+managed through the connectors framework (`gaia connectors --help`) or by editing
+`~/.gaia/mcp_servers.json` directly.
+</Note>
 
 ---
 
@@ -405,9 +419,13 @@ gaia mcp remove <name>           # Remove server
   </Accordion>
 
   <Accordion title="Server process hangs or times out">
-    Some servers need initialization time:
+    Requests time out after 30s by default. For servers that need a longer
+    timeout, use the lower-level `MCPClient`, which accepts `timeout` (seconds):
     ```python
-    agent.connect_mcp_server("server", config, timeout=30)
+    from gaia.mcp.client import MCPClient
+
+    client = MCPClient.from_config("server", config, timeout=60)
+    client.connect()
     ```
     Test directly: `gaia mcp test-client <server-name>`
   </Accordion>

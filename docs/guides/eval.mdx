@@ -107,7 +107,7 @@ gaia eval agent --category rag_quality
 
 ### 3. Run the Full Benchmark
 
-Run all 54 scenarios across 10 categories:
+Run all scenarios across every category (91 scenarios in 12 categories at the time of writing):
 
 ```bash
 gaia eval agent
@@ -199,19 +199,21 @@ Each turn is scored across 7 dimensions. The overall score is a weighted sum:
 
 ## Scenario Categories
 
-The benchmark includes 54 scenarios across 10 categories:
+The benchmark includes 91 scenarios across 12 categories (counts as of this writing — the runner discovers scenarios dynamically, so totals grow as new YAML is added):
 
 | Category | Count | What It Tests |
 |----------|:-----:|---------------|
-| `rag_quality` | 7 | Factual extraction, hallucination resistance, negation handling, CSV/table data |
+| `memory` | 25 | Cross-session persistence, fact accumulation, conflict resolution, temporal recall |
+| `real_world` | 19 | Real PDFs, XLSX, 10-K filings, RFC specs, datasheets |
+| `mcp_reliability` | 10 | Tool-call reliability: parameter passing, conditional tool use, multi-step chains |
+| `rag_quality` | 8 | Factual extraction, hallucination resistance, negation handling, CSV/table data |
+| `web_system` | 6 | Clipboard, desktop notifications, webpage fetching, system info |
+| `tool_selection` | 5 | Correct tool usage, smart discovery, multi-step planning |
 | `context_retention` | 4 | Cross-turn recall, pronoun resolution, multi-document context |
-| `tool_selection` | 4 | Correct tool usage, smart discovery, multi-step planning |
-| `error_recovery` | 3 | Graceful handling of missing files, empty results, vague requests |
 | `adversarial` | 3 | Empty files, large documents (>100k tokens), topic switching |
 | `personality` | 3 | Concise responses, no sycophancy, honest limitations |
 | `vision` | 3 | Screenshot capture, VLM integration |
-| `real_world` | 19 | Real PDFs, XLSX, 10-K filings, RFC specs, datasheets |
-| `web_system` | 6 | Clipboard, desktop notifications, webpage fetching, system info |
+| `error_recovery` | 3 | Graceful handling of missing files, empty results, vague requests |
 | `captured` | 2 | Golden-path replays from real user sessions |
 
 ---
@@ -299,7 +301,7 @@ gaia eval agent --output-format markdown
 
 **Typical costs:**
 - Single scenario: $0.02 -- $0.10
-- Full benchmark (54 scenarios): $1.00 -- $5.00
+- Full benchmark (all scenarios): $1.00 -- $5.00 (scenarios whose corpus files aren't on disk are skipped)
 - Architecture audit: $0.00 (no LLM calls)
 
 <Tip>

@@ -3,12 +3,12 @@ title: "DockerAgent"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/agents/docker/agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/docker/agent.py)
+  **Source Code:** [`hub/agents/python/docker/gaia_agent_docker/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/python/docker/gaia_agent_docker/agent.py)
 </Info>
 
 <Note>
 **Component:** DockerAgent - Intelligent Docker Containerization
-**Module:** `gaia.agents.docker.agent`
+**Module:** `gaia_agent_docker.agent`
 **Inherits:** MCPAgent
 **Model:** Qwen3.5-35B-A3B-GGUF (default)
 </Note>
@@ -432,7 +432,7 @@ gaia docker "Containerize my Flask app in ./myapp"
 ### Example 2: Python API
 
 ```python
-from gaia.agents.docker.agent import DockerAgent
+from gaia_agent_docker.agent import DockerAgent
 
 # Initialize agent
 agent = DockerAgent(
@@ -452,7 +452,7 @@ print(result["result"])
 
 ```python
 from gaia.mcp.agent_mcp_server import AgentMCPServer
-from gaia.agents.docker.agent import DockerAgent
+from gaia_agent_docker.agent import DockerAgent
 
 # Start MCP server
 server = AgentMCPServer(

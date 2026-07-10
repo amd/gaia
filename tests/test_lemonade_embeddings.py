@@ -4,7 +4,7 @@
 Tests for Lemonade server embeddings integration.
 
 These tests validate that the Lemonade server can generate embeddings
-using the nomic-embed-text-v2-moe-GGUF model for RAG applications.
+using the user.embeddinggemma-300m-GGUF model for RAG applications.
 """
 
 import pytest
@@ -23,7 +23,7 @@ class TestLemonadeEmbeddings:
     @pytest.fixture
     def embedding_model(self):
         """Default embedding model to use."""
-        return "nomic-embed-text-v2-moe-GGUF"
+        return "user.embeddinggemma-300m-GGUF"
 
     def test_embeddings_method_exists(self, client):
         """Test that embeddings method exists on client."""

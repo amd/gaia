@@ -7,7 +7,10 @@
 //   1. The in-resources path layout for the bundled `uv` binary
 //      (mirrors electron-builder.yml `extraResources.to: vendor/uv`).
 //   2. Parsing BUNDLED_UV_SHA256 out of backend-installer.cjs.
-//   3. The full existence + executable-bit + SHA256 check.
+//   3. The full existence + executable-bit + verification check — SHA256
+//      pin on linux-x64/win-x64, `codesign --verify --strict` on mac-arm64
+//      (see the BUNDLED_UV_SHA256 comment in backend-installer.cjs for why
+//      mac-arm64 cannot use a fixed digest pin).
 //
 // Consumed by tests/electron/appimage-smoke.test.mjs and
 // tests/electron/dmg-smoke.test.mjs. A future NSIS smoke test should
@@ -18,6 +21,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 
 // Mirrors electron-builder.yml `extraResources.to: vendor/uv` — the single
 // source of truth for the in-resources layout. If electron-builder.yml
@@ -69,12 +73,16 @@ export function parseBundledUvSha(installerCjsPath, platformKey) {
 }
 
 /**
- * Existence + executable-bit (POSIX only) + SHA256-vs-pin check.
+ * Existence + executable-bit (POSIX only) + verification check.
  *
- * Catches the failure mode that bit issue #849 and motivated #941:
- * a packaged binary whose SHA does not match the pin in
- * BUNDLED_UV_SHA256, which `ensureUv()` would reject at runtime with
- * a hard SHA256 mismatch error on the user's first launch.
+ * mac-arm64 verifies via `codesign --verify --strict` — matching
+ * ensureUv()'s runtime check (see the BUNDLED_UV_SHA256 comment in
+ * backend-installer.cjs: ad-hoc codesign output is not deterministic
+ * across CI runner images, so mac-arm64 has no fixed digest to pin
+ * against). Other platforms compare SHA256 against the pin in
+ * BUNDLED_UV_SHA256, catching the failure mode that bit issue #849 and
+ * motivated #941: a packaged binary whose SHA does not match the pin,
+ * which `ensureUv()` would reject at runtime on the user's first launch.
  *
  * @param {string} uvPath              absolute path to packaged `uv` binary
  * @param {string} platformKey         e.g. "mac-arm64"
@@ -91,6 +99,21 @@ export function assertUvBinary(uvPath, platformKey, installerCjsPath) {
       `uv binary should be executable; mode=${(st.mode & 0o777).toString(8)}`,
     );
   }
+
+  if (platformKey === "mac-arm64") {
+    const result = spawnSync("codesign", ["--verify", "--strict", uvPath], {
+      encoding: "utf8",
+    });
+    const output = `${result.stdout || ""}${result.stderr || ""}`.trim();
+    assert.equal(
+      result.status,
+      0,
+      `bundled mac-arm64 uv failed \`codesign --verify --strict\`; ` +
+        `ensureUv() will reject this at runtime. Output: ${output || "(none)"}`,
+    );
+    return;
+  }
+
   const expected = parseBundledUvSha(installerCjsPath, platformKey);
   const actual = crypto
     .createHash("sha256")

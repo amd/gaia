@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0",
-  "agentVersion": "0.3.0",
-  "baseUrl": "https://hub.amd-gaia.ai/agents/email/0.3.0",
+  "agentVersion": "0.4.0",
+  "baseUrl": "https://hub.amd-gaia.ai/agents/email/0.4.0",
   "binaries": {
     "win32-x64": {
       "filename": "email-agent-win32-x64.exe",

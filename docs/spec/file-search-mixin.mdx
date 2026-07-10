@@ -46,6 +46,7 @@ class FileSearchToolsMixin:
     - read_file: Type-aware file reading with analysis
     - search_file_content: Grep-like content search
     - write_file: Generic file writer
+    - edit_file: Partial string replacement in an existing file
     - browse_directory: List directory contents with metadata
     - get_file_info: Inspect a single file's metadata
     - analyze_data_file: Summarise CSV / JSON / XLSX / log files
@@ -216,6 +217,38 @@ class FileSearchToolsMixin:
                 "file_path": str,
                 "bytes_written": int,
                 "line_count": int
+            }
+        """
+        pass
+
+    @tool
+    def edit_file(
+        file_path: str,
+        old_content: str,
+        new_content: str,
+    ) -> Dict[str, Any]:
+        """
+        Edit a file by replacing old content with new content.
+
+        Partial string replacement (first occurrence only) rather than a full
+        overwrite — like Claude Code's Edit tool. Runs the same security
+        guardrails as write_file (PathValidator allowlist, blocked-dir and
+        sensitive-file checks, backup creation, audit logging). The target file
+        must already exist and contain old_content verbatim.
+
+        Args:
+            file_path: File to edit
+            old_content: Exact text to find and replace
+            new_content: Replacement text
+
+        Returns:
+            {
+                "status": "success",
+                "file_path": str,
+                "old_size": int,   # chars before edit
+                "new_size": int,   # chars after edit
+                "diff": str,       # unified diff
+                "backup_path": str # only when a backup was created
             }
         """
         pass

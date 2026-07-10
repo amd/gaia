@@ -28,12 +28,12 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-from gaia.agents.base.agent import TOOLS_REQUIRING_CONFIRMATION  # noqa: E402
 from gaia.agents.base.tools import _TOOL_REGISTRY  # noqa: E402
 
 pytest.importorskip("gaia_agent_email")
 
 from gaia_agent_email import action_store  # noqa: E402
+from gaia_agent_email.agent import EmailTriageAgent  # noqa: E402
 from gaia_agent_email.tools.phishing_tools import (  # noqa: E402
     QUARANTINE_LABEL_NAME,
     PhishingToolsMixin,
@@ -306,10 +306,14 @@ class TestUnquarantineWrapperErrorSurfacing:
 
 class TestConfirmationGating:
     def test_quarantine_phishing_message_is_confirmation_gated(self):
-        """quarantine_phishing_message must be in TOOLS_REQUIRING_CONFIRMATION."""
-        assert "quarantine_phishing_message" in TOOLS_REQUIRING_CONFIRMATION, (
-            "'quarantine_phishing_message' is missing from TOOLS_REQUIRING_CONFIRMATION. "
-            "This tool mutates message state and must require explicit user confirmation."
+        """quarantine_phishing_message must be in the agent's confirmation set."""
+        assert (
+            "quarantine_phishing_message"
+            in EmailTriageAgent.confirmation_required_tools()
+        ), (
+            "'quarantine_phishing_message' is missing from the EmailTriageAgent "
+            "confirmation set. This tool mutates message state and must require "
+            "explicit user confirmation."
         )
 
 

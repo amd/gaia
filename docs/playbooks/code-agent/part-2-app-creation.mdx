@@ -5,7 +5,7 @@ icon: "puzzle-piece"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/agents/code/`](https://github.com/amd/gaia/blob/main/src/gaia/agents/code/)
+  **Source Code:** [`hub/agents/python/code/`](https://github.com/amd/gaia/blob/main/hub/agents/python/code/)
 </Info>
 
 <Note>
@@ -40,7 +40,7 @@ The agent's first task is creating the database schema via Prisma.
 ### How Schema Generation Works
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#A87B2D', 'edgeLabelBackground':'#ffffff', 'fontFamily':'system-ui, -apple-system, sans-serif'}}}%%
 flowchart LR
     A["User Prompt"] --> B(["LLM Analysis"])
     B --> C["Extract Fields"]

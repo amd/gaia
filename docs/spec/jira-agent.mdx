@@ -3,12 +3,12 @@ title: "JiraAgent"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/agents/jira/agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/jira/agent.py)
+  **Source Code:** [`hub/agents/python/jira/gaia_agent_jira/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/python/jira/gaia_agent_jira/agent.py)
 </Info>
 
 <Note>
 **Component:** JiraAgent - Natural Language Jira Interface
-**Module:** `gaia.agents.jira.agent`
+**Module:** `gaia_agent_jira.agent`
 **Inherits:** Agent
 **Model:** Qwen3.5-35B-A3B-GGUF (default)
 </Note>
@@ -69,10 +69,7 @@ class JiraAgent(Agent):
     def __init__(
         self,
         jira_config: Dict[str, Any] = None,
-        max_steps: int = 10,
-        model_id: str = "Qwen3.5-35B-A3B-GGUF",
-        silent_mode: bool = False,
-        **kwargs
+        **kwargs,
     ):
         """
         Initialize Jira agent.
@@ -84,6 +81,9 @@ class JiraAgent(Agent):
                 "statuses": ["To Do", "In Progress", "Done"],
                 "priorities": ["Highest", "High", "Medium", "Low"]
             }
+            **kwargs: Forwarded to the base Agent — e.g. max_steps
+                (default: the global default), model_id (default:
+                Qwen3.5-35B-A3B-GGUF), silent_mode, debug, show_prompts.
         """
         pass
 
@@ -349,7 +349,7 @@ gaia jira "Show me high priority bugs assigned to me"
 ### Example 2: Python API
 
 ```python
-from gaia.agents.jira.agent import JiraAgent
+from gaia_agent_jira.agent import JiraAgent
 
 # Initialize and discover
 agent = JiraAgent()

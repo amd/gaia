@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 //
 // C++ GAIA agent integration tests.
-// Requires: lemonade-server running at GAIA_CPP_BASE_URL (default: http://localhost:8000/api/v1)
+// Requires: lemonade-server running at GAIA_CPP_BASE_URL (default: http://localhost:13305/api/v1)
 //           with GAIA_CPP_TEST_MODEL (default: Qwen3-4B-GGUF) loaded.
 //
 // Build:
@@ -29,7 +29,7 @@ static std::string testModel() {
 }
 
 static std::string testBaseUrl() {
-    return gaia::getEnvVar("GAIA_CPP_BASE_URL", "http://localhost:8000/api/v1");
+    return gaia::getEnvVar("GAIA_CPP_BASE_URL", "http://localhost:13305/api/v1");
 }
 
 static std::string toLower(std::string s) {

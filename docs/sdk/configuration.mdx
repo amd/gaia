@@ -15,16 +15,22 @@ export LEMONADE_BASE_URL="http://localhost:13305/api/v1"
 # Required only when connecting to an authenticated remote Lemonade.
 # See https://lemonade-server.ai/docs/guide/configuration/#api-key-and-security
 export LEMONADE_API_KEY=""
-export GAIA_API_DEBUG="true"
-export GAIA_API_STREAMING="true"
+
+# API server (gaia api). These are read as the literal string "1" —
+# any other value (including "true") leaves the feature OFF.
+export GAIA_API_DEBUG="1"      # debug logging + console output
+export GAIA_API_STREAMING="1"  # stream LLM responses over the API
 
 # API Keys (for cloud providers)
 export ANTHROPIC_API_KEY="sk-ant-..."
 export OPENAI_API_KEY="sk-..."
-
-# Logging
-export GAIA_LOG_LEVEL="INFO"
 ```
+
+<Note>
+GAIA has no `GAIA_LOG_LEVEL` environment variable. Log levels are set
+programmatically through `gaia.logger` (`set_level(name, level)`); the default
+is `INFO`.
+</Note>
 
 ---
 
@@ -35,7 +41,7 @@ import os
 
 # Read configuration
 base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
-debug = os.getenv("GAIA_API_DEBUG", "false").lower() == "true"
+debug = os.getenv("GAIA_API_DEBUG") == "1"  # matches how gaia api reads it
 
 # Use in agent
 agent = MyAgent(

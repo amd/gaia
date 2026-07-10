@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import atexit
 import os
+import secrets
 import socket
 import subprocess
 import sys
@@ -49,6 +50,12 @@ logger = get_logger(__name__)
 _HOST = "127.0.0.1"
 _RESERVED_PORT = 4001
 _VALID_MODES = ("user", "dev")
+# Private channel for handing the sidecar its per-session caller-auth token
+# (#1706). Kept as a literal (not imported from the email wheel) so core never
+# depends on the hub package — matches how the service id / expected version are
+# passed in rather than imported. MUST equal
+# ``gaia_agent_email.caller_auth.TOKEN_ENV_VAR``.
+_TOKEN_ENV_VAR = "GAIA_EMAIL_SIDECAR_TOKEN"
 # The sidecar's stable service identifier (server.py /health + api_routes
 # HealthResponse). Used to confirm the process answering our ephemeral port is
 # actually the email sidecar and not some unrelated server.
@@ -121,6 +128,10 @@ class EmailSidecarManager:
         self.base_url: Optional[str] = None
         self.api_version: Optional[str] = None
         self.agent_version: Optional[str] = None
+        # Per-session caller-auth token handed to the sidecar on spawn (#1706).
+        # Generated once per manager instance and passed over the private env
+        # channel; the proxy replays it as a bearer token on every request.
+        self.auth_token: str = secrets.token_urlsafe(32)
 
     @property
     def mode(self) -> str:
@@ -149,6 +160,7 @@ class EmailSidecarManager:
             raise SidecarError(
                 "email sidecar is not started — call start() before proxy()."
             )
+        kwargs.setdefault("auth_token", self.auth_token)
         return EmailSidecarProxy(self.base_url, **kwargs)
 
     def __enter__(self) -> "EmailSidecarManager":
@@ -247,6 +259,11 @@ class EmailSidecarManager:
         else:
             start_new_session = True  # own process group for tree-kill
         log_handle = self._open_log(port)
+        # Hand the sidecar its per-session caller-auth token over the private env
+        # channel (#1706). Merge over the inherited env / any cwd already in
+        # popen_kwargs — never clobber them.
+        spawn_env = {**os.environ, **(popen_kwargs.pop("env", None) or {})}
+        spawn_env[_TOKEN_ENV_VAR] = self.auth_token
         try:
             self._proc = subprocess.Popen(
                 argv,
@@ -254,6 +271,7 @@ class EmailSidecarManager:
                 stderr=subprocess.STDOUT,
                 start_new_session=start_new_session,
                 creationflags=creationflags,
+                env=spawn_env,
                 **popen_kwargs,
             )
         except OSError as e:
@@ -462,3 +480,37 @@ class EmailSidecarManager:
         self._proc = None
         self._close_log()
         logger.info("email sidecar: shut down")
+
+
+# ---------------------------------------------------------------------------
+# Shared process-wide manager
+# ---------------------------------------------------------------------------
+# The Agent UI has exactly ONE email backend (design: "One backend for the UI").
+# Both consumers — the /v1/email REST router and the in-app email chat agent
+# (agent_type=email) — share this single manager so they drive the SAME sidecar
+# process (one ephemeral port, one lazy spawn, one tree-kill) instead of racing
+# to spawn two. The contract MAJOR is pinned here so a breaking sidecar upgrade
+# fails loudly (kept in lockstep with the contract SCHEMA_VERSION major).
+_EXPECTED_API_MAJOR = "2"
+_shared_manager: Optional["EmailSidecarManager"] = None
+_shared_manager_lock = threading.Lock()
+
+
+def get_shared_manager() -> "EmailSidecarManager":
+    """Return the process-wide email sidecar manager, creating it once."""
+    global _shared_manager
+    with _shared_manager_lock:
+        if _shared_manager is None:
+            _shared_manager = EmailSidecarManager(
+                expected_api_version=_EXPECTED_API_MAJOR
+            )
+        return _shared_manager
+
+
+def reset_shared_manager() -> None:
+    """Shut down and clear the shared manager (test isolation seam)."""
+    global _shared_manager
+    with _shared_manager_lock:
+        if _shared_manager is not None:
+            _shared_manager.shutdown()
+            _shared_manager = None

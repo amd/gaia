@@ -1118,6 +1118,9 @@ def cmd_dashboard(args):
         console.print("[red]Error: Dashboard dependencies not installed[/red]")
         console.print("Install with: [cyan]pip install 'amd-gaia[api]'[/cyan]")
         return 1
+    except RuntimeError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        return 1
     except KeyboardInterrupt:
         console.print("\n[dim]Shutting down dashboard...[/dim]")
         return 0

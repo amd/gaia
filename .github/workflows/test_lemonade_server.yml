@@ -8,6 +8,7 @@ on:
   push:
     branches: [ main ]
     paths:
+      - 'src/gaia/version.py'
       - 'src/gaia/llm/**'
       - 'src/gaia/installer/**'
       - 'setup.py'
@@ -20,6 +21,7 @@ on:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
+      - 'src/gaia/version.py'
       - 'src/gaia/llm/**'
       - 'src/gaia/installer/**'
       - 'setup.py'
@@ -50,11 +52,14 @@ concurrency:
 jobs:
   test-lemonade-server:
     name: Lemonade Server Smoke Test (${{ inputs.runson || (contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test') || 'stx' }})
-    runs-on: ${{ inputs.runson || (contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test') || 'stx' }}
+    runs-on:
+      - self-hosted
+      - Windows
+      - ${{ inputs.runson || (contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test') || 'stx' }}
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Python environment
         uses: ./.github/actions/setup-venv

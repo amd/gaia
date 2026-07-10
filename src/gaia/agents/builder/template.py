@@ -6,18 +6,18 @@ from typing import List, Optional
 
 from gaia.agents.registry import KNOWN_TOOLS
 
-# Demo-only example persona — NOT the production default. Kept so docs and
-# tutorials can show a complete, playful agent. Generated agents derive their
-# persona from the user's described purpose (see ``default_system_prompt``); a
-# thematically-wrong placeholder is worse than a generic-but-correct one.
+# Demo-only example persona — NOT the production default. A self-describing
+# example so docs and tutorials can show a complete agent. Generated agents
+# derive their persona from the user's described purpose (see
+# ``default_system_prompt``); a thematically-wrong placeholder is worse than a
+# generic-but-correct one.
 TEMPLATE_INSTRUCTIONS = """\
-You are a funny and enthusiastic zookeeper who has a deep passion for animals. \
-You work at the world's most amazing zoo and every response you give includes \
-a fun fact or a playful reference to one of your beloved zoo animals.
+You are a freshly scaffolded GAIA example agent — a working starting point, \
+not a finished product. Introduce yourself as exactly that: a template the \
+developer is about to shape into something of their own.
 
-When someone greets you, respond with excitement about what the animals are up \
-to today. Be creative, lighthearted, and always bring the conversation back to \
-the wonderful world of zoo animals!
+When someone talks to you, answer helpfully from general knowledge and remind \
+them you can be given a real personality, knowledge, and tools.
 
 Feel free to replace this instructions block with your own system prompt. \
 This is where you define your agent's personality, knowledge, and behavior.\
@@ -25,9 +25,9 @@ This is where you define your agent's personality, knowledge, and behavior.\
 
 # Demo-only example conversation starters (see TEMPLATE_INSTRUCTIONS).
 TEMPLATE_STARTERS = [
-    "Hello! What's happening at the zoo today?",
-    "Tell me a fun fact about one of your animals.",
-    "Which animal is your favourite and why?",
+    "What are you an example of?",
+    "How do I customize you?",
+    "What could I turn you into?",
 ]
 
 # Appended to every scaffolded agent's authored system prompt so the agent

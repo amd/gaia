@@ -690,6 +690,168 @@ class TestLemonadeClientMock(unittest.TestCase):
             # Restore original log level
             logger.setLevel(original_level)
 
+    # ------------------------------------------------------------------
+    # Transient "llama-server failed to start" load retry
+    # ------------------------------------------------------------------
+
+    _TRANSIENT_LOAD_BODY = {
+        "error": {
+            "code": "model_load_error",
+            "message": (
+                f"Failed to load model '{TEST_MODEL}': llama-server failed to start"
+            ),
+            "type": "model_load_error",
+        }
+    }
+
+    def test_is_transient_load_error_classification(self):
+        """Only the backend-startup fault counts as transient."""
+        self.assertTrue(
+            self.client._is_transient_load_error("llama-server failed to start")
+        )
+        # Corrupt-download and missing-model failures are NOT transient.
+        self.assertFalse(
+            self.client._is_transient_load_error("download validation failed")
+        )
+        self.assertFalse(self.client._is_transient_load_error("model not found"))
+
+    @responses.activate
+    def test_load_model_retries_transient_then_succeeds(self):
+        """A transient backend-startup failure is retried and recovers."""
+        logger = logging.getLogger("gaia.llm.lemonade_client")
+        original_level = logger.level
+        logger.setLevel(logging.CRITICAL)
+        try:
+            success = {"status": "success", "message": f"Loaded model: {TEST_MODEL}"}
+            # First call fails transiently, the retry succeeds.
+            responses.add(
+                responses.POST,
+                f"{API_BASE}/load",
+                json=self._TRANSIENT_LOAD_BODY,
+                status=500,
+            )
+            responses.add(responses.POST, f"{API_BASE}/load", json=success, status=200)
+            with patch("gaia.llm.lemonade_client.time.sleep") as mock_sleep:
+                result = self.client.load_model(model_name=TEST_MODEL)
+            self.assertEqual(result, success)
+            self.assertEqual(len(responses.calls), 2)  # initial + one retry
+            mock_sleep.assert_called_once()  # backed off once before retrying
+        finally:
+            logger.setLevel(original_level)
+
+    @responses.activate
+    def test_load_model_retries_exhausted_raises_loudly(self):
+        """Persistent transient failure re-raises with context after retries."""
+        logger = logging.getLogger("gaia.llm.lemonade_client")
+        original_level = logger.level
+        logger.setLevel(logging.CRITICAL)
+        try:
+            responses.add(
+                responses.POST,
+                f"{API_BASE}/load",
+                json=self._TRANSIENT_LOAD_BODY,
+                status=500,
+            )
+            with patch("gaia.llm.lemonade_client.time.sleep"):
+                with self.assertRaises(LemonadeClientError) as ctx:
+                    self.client.load_model(model_name=TEST_MODEL, load_retries=2)
+            self.assertIn("llama-server failed to start", str(ctx.exception))
+            # 1 initial attempt + 2 retries = 3 load calls.
+            self.assertEqual(len(responses.calls), 3)
+        finally:
+            logger.setLevel(original_level)
+
+    @responses.activate
+    def test_load_model_no_retry_when_disabled(self):
+        """load_retries=0 fails immediately without retrying or sleeping."""
+        logger = logging.getLogger("gaia.llm.lemonade_client")
+        original_level = logger.level
+        logger.setLevel(logging.CRITICAL)
+        try:
+            responses.add(
+                responses.POST,
+                f"{API_BASE}/load",
+                json=self._TRANSIENT_LOAD_BODY,
+                status=500,
+            )
+            with patch("gaia.llm.lemonade_client.time.sleep") as mock_sleep:
+                with self.assertRaises(LemonadeClientError):
+                    self.client.load_model(model_name=TEST_MODEL, load_retries=0)
+            self.assertEqual(len(responses.calls), 1)  # no retry
+            mock_sleep.assert_not_called()
+        finally:
+            logger.setLevel(original_level)
+
+    @responses.activate
+    def test_load_model_does_not_retry_non_transient(self):
+        """A non-transient 500 (e.g. generic) is NOT retried."""
+        logger = logging.getLogger("gaia.llm.lemonade_client")
+        original_level = logger.level
+        logger.setLevel(logging.CRITICAL)
+        try:
+            responses.add(
+                responses.POST,
+                f"{API_BASE}/load",
+                json={"error": "Internal server error"},
+                status=500,
+            )
+            with patch("gaia.llm.lemonade_client.time.sleep") as mock_sleep:
+                with self.assertRaises(LemonadeClientError):
+                    self.client.load_model(model_name=TEST_MODEL, load_retries=2)
+            self.assertEqual(len(responses.calls), 1)  # failed immediately
+            mock_sleep.assert_not_called()
+        finally:
+            logger.setLevel(original_level)
+
+    @responses.activate
+    def test_load_model_retry_stops_when_error_turns_corrupt(self):
+        """A retry error that turns corrupt stops the loop and enters repair."""
+        logger = logging.getLogger("gaia.llm.lemonade_client")
+        original_level = logger.level
+        logger.setLevel(logging.CRITICAL)
+        try:
+            corrupt_body = {
+                "error": {
+                    "code": "model_load_error",
+                    "message": (
+                        f"Failed to load model '{TEST_MODEL}': "
+                        f"download validation failed"
+                    ),
+                    "type": "model_load_error",
+                }
+            }
+            # First call fails transiently; the retry surfaces a corrupt
+            # download. The loop must break (no further retries) and the
+            # corrupt-repair path must take over.
+            responses.add(
+                responses.POST,
+                f"{API_BASE}/load",
+                json=self._TRANSIENT_LOAD_BODY,
+                status=500,
+            )
+            responses.add(
+                responses.POST,
+                f"{API_BASE}/load",
+                json=corrupt_body,
+                status=500,
+            )
+            with patch("gaia.llm.lemonade_client.time.sleep") as mock_sleep:
+                with patch.object(
+                    self.client, "_consume_pull_stream", return_value=False
+                ) as mock_pull:
+                    with self.assertRaises(LemonadeClientError) as ctx:
+                        self.client.load_model(
+                            model_name=TEST_MODEL, load_retries=3, prompt=False
+                        )
+            # 1 initial + 1 retry, NOT 4: the corrupt error stopped the loop.
+            self.assertEqual(len(responses.calls), 2)
+            mock_sleep.assert_called_once()
+            # The repair path ran (resume attempted) instead of more retries.
+            mock_pull.assert_called_once_with(TEST_MODEL, "resume")
+            self.assertIn("download validation failed", str(ctx.exception))
+        finally:
+            logger.setLevel(original_level)
+
     @responses.activate
     def test_unload_model_scoped_vs_global(self):
         """unload_model(name) targets only that model; unload_model() stays global.
@@ -705,7 +867,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         responses.add(
             responses.POST, f"{API_BASE}/unload", json=unload_response, status=200
         )
-        embed_model = "nomic-embed-text-v2-moe-GGUF"
+        embed_model = "user.embeddinggemma-300m-GGUF"
         result = self.client.unload_model(embed_model)
         self.assertEqual(result, unload_response)
         self.assertEqual(
@@ -729,7 +891,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         into a no-op; every other failure — and the default strict mode — still
         raises, so a global unload or a real outage is never swallowed.
         """
-        embed_model = "nomic-embed-text-v2-moe-GGUF"
+        embed_model = "user.embeddinggemma-300m-GGUF"
         not_loaded = {"error": f"Model not loaded: {embed_model}"}
 
         # 404 "not loaded" + flag ON → no-op, no raise.
@@ -828,6 +990,86 @@ class TestLemonadeClientMock(unittest.TestCase):
             reasoning=False,
         )
         self.assertEqual(result, pull_response)
+
+    @responses.activate
+    def test_pull_embedding_model_request_shape(self):
+        """The embedder registration must send a VALID /pull body, not just any
+        pull. EmbeddingGemma is a custom user-model: the request must carry the
+        ``user.`` prefix, the checkpoint, ``recipe=llamacpp`` AND ``embedding=true``
+        together. The ``embedding`` flag is what sets the 'embeddings' label —
+        omitting it reproduces the #1745 501 "server does not support embeddings".
+        Asserts shape (per CLAUDE.md: mocks prove validity, not just invocation).
+        """
+        from gaia.llm.lemonade_client import (
+            DEFAULT_EMBEDDING_CHECKPOINT,
+            DEFAULT_EMBEDDING_MODEL,
+            MODELS,
+        )
+
+        # The registry entry that drives init/RAG/code-index registration.
+        mr = MODELS["embeddinggemma"]
+        self.assertEqual(mr.model_id, DEFAULT_EMBEDDING_MODEL)
+        self.assertTrue(mr.model_id.startswith("user."))
+        self.assertEqual(mr.checkpoint, DEFAULT_EMBEDDING_CHECKPOINT)
+        self.assertEqual(mr.recipe, "llamacpp")
+        self.assertTrue(mr.embedding)
+        self.assertFalse(mr.tool_calling)
+
+        responses.add(
+            responses.POST,
+            f"{API_BASE}/pull",
+            json={"status": "success", "message": "ok"},
+            status=200,
+        )
+
+        self.client.pull_model(
+            model_name=mr.model_id,
+            checkpoint=mr.checkpoint,
+            recipe=mr.recipe,
+            embedding=mr.embedding,
+        )
+
+        body = json.loads(responses.calls[-1].request.body)
+        self.assertEqual(body["model_name"], DEFAULT_EMBEDDING_MODEL)
+        self.assertTrue(body["model_name"].startswith("user."))
+        self.assertEqual(body["checkpoint"], DEFAULT_EMBEDDING_CHECKPOINT)
+        self.assertEqual(body["recipe"], "llamacpp")
+        self.assertIs(body["embedding"], True)
+
+    @responses.activate
+    def test_ensure_model_downloaded_matches_user_namespace_display_id(self):
+        """A ``user.``-registered model is listed by /v1/models under its STRIPPED
+        id (e.g. ``embeddinggemma-300m-GGUF``), but referenced elsewhere as
+        ``user.embeddinggemma-300m-GGUF``. ensure_model_downloaded must treat the
+        two as the same model — otherwise the availability check never matches and
+        it re-pulls forever (observed hang against a live Lemonade server).
+        """
+        from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL, _model_ids_match
+
+        # The matcher is namespace-tolerant and case-insensitive, but not a
+        # substring match (must not confuse distinct models).
+        self.assertTrue(
+            _model_ids_match(DEFAULT_EMBEDDING_MODEL, "embeddinggemma-300m-GGUF")
+        )
+        self.assertTrue(_model_ids_match("user.Foo-GGUF", "foo-gguf"))
+        self.assertFalse(
+            _model_ids_match(DEFAULT_EMBEDDING_MODEL, "nomic-embed-text-v2-moe-GGUF")
+        )
+
+        # Server lists the stripped id; requesting the user.-prefixed name must
+        # resolve to "already downloaded" without issuing a pull.
+        responses.add(
+            responses.GET,
+            f"{API_BASE}/models",
+            json={"data": [{"id": "embeddinggemma-300m-GGUF", "downloaded": True}]},
+            status=200,
+        )
+        result = self.client.ensure_model_downloaded(
+            DEFAULT_EMBEDDING_MODEL, show_progress=False
+        )
+        self.assertTrue(result)
+        # No /pull call was made — only the /models availability probe.
+        self.assertTrue(all("/pull" not in c.request.url for c in responses.calls))
 
     @responses.activate
     def test_delete_model(self):
@@ -1049,7 +1291,7 @@ class TestLemonadeClientMock(unittest.TestCase):
         model_ids = self.client.get_required_models("chat")
 
         self.assertIn("Gemma-4-E4B-it-GGUF", model_ids)
-        self.assertIn("nomic-embed-text-v2-moe-GGUF", model_ids)
+        self.assertIn("user.embeddinggemma-300m-GGUF", model_ids)
 
     def test_get_required_models_for_code(self):
         """Test get_required_models returns correct models for code agent."""
@@ -1069,9 +1311,9 @@ class TestLemonadeClientMock(unittest.TestCase):
         """Test get_required_models returns all unique models."""
         model_ids = self.client.get_required_models("all")
 
-        # All profiles use gemma-4-e4b; some also use nomic-embed
+        # All profiles use gemma-4-e4b; some also use embeddinggemma
         self.assertIn("Gemma-4-E4B-it-GGUF", model_ids)
-        self.assertIn("nomic-embed-text-v2-moe-GGUF", model_ids)
+        self.assertIn("user.embeddinggemma-300m-GGUF", model_ids)
         self.assertEqual(len(model_ids), 2)
 
     def test_get_required_models_unknown_agent(self):
@@ -1262,7 +1504,12 @@ class TestLemonadeClientMock(unittest.TestCase):
         self.assertIsNotNone(error)
         self.assertIn("4096", error)
         self.assertIn("32768", error)
-        self.assertIn("--ctx-size", error)
+        # The restart hint renders the resolved tooling's command: legacy
+        # uses `--ctx-size`, modern passes ctx via LEMONADE_CTX_SIZE env.
+        self.assertTrue(
+            "--ctx-size" in error or "LEMONADE_CTX_SIZE" in error,
+            f"restart hint missing ctx-size guidance: {error}",
+        )
 
     @responses.activate
     def test_validate_context_size_health_failure(self):
@@ -1691,6 +1938,127 @@ class TestLemonadeClientMock(unittest.TestCase):
                 )
         finally:
             logging.disable(logging.NOTSET)
+
+
+class TestLaunchServerModernLegacyDispatch(unittest.TestCase):
+    """AC7 (issue #316): launch_server() must build its Popen argv/env from
+    resolve_lemonade()/build_start_command() rather than the hardcoded
+    ["lemonade-server", "serve"] literal, so it works against both modern
+    (LemonadeServer.exe / lemond) and legacy (lemonade-server) tooling.
+    """
+
+    @patch("gaia.llm.lemonade_client.kill_process_on_port")
+    @patch("subprocess.Popen")
+    @patch("gaia.llm.lemonade_client.build_start_command")
+    @patch("gaia.llm.lemonade_client.resolve_lemonade")
+    def test_launch_server_uses_resolved_modern_command(
+        self, mock_resolve, mock_build_cmd, mock_popen, mock_kill_port
+    ):
+        """When resolve_lemonade() resolves to modern tooling, launch_server()'s
+        Popen call must match exactly what build_start_command() produced —
+        not the old hardcoded legacy argv literal."""
+        from gaia.llm.lemonade_launcher import LemonadeTooling, StartSpec
+
+        mock_resolve.return_value = LemonadeTooling(
+            found=True,
+            kind="modern",
+            client_path=r"C:\lemonade_server\bin\lemonade.exe",
+            server_launcher=r"C:\lemonade_server\bin\LemonadeServer.exe",
+        )
+        mock_build_cmd.return_value = StartSpec(
+            argv=[r"C:\lemonade_server\bin\LemonadeServer.exe", "--silent"],
+            env={"LEMONADE_CTX_SIZE": "32768"},
+        )
+        mock_popen.return_value = MagicMock()
+
+        client = LemonadeClient(host=HOST, port=PORT, verbose=False)
+        # health_check would normally gate this via kill_process_on_port —
+        # patch it out directly since launch_server() calls it unconditionally
+        # today; the "skip when already healthy" behavior is asserted
+        # separately below.
+        with patch.dict(os.environ, {"GAIA_TEST_SENTINEL": "1"}):
+            with patch.object(client, "health_check", return_value=None):
+                with patch("socket.create_connection"):
+                    client.launch_server(background="silent", ctx_size=32768)
+
+        mock_popen.assert_called_once()
+        call_args, call_kwargs = mock_popen.call_args
+        argv = call_args[0] if call_args else call_kwargs.get("args")
+        self.assertEqual(
+            argv, [r"C:\lemonade_server\bin\LemonadeServer.exe", "--silent"]
+        )
+        env = call_kwargs.get("env", {})
+        self.assertEqual(env.get("LEMONADE_CTX_SIZE"), "32768")
+        # spec.env must be MERGED into the parent environment — a bare
+        # Popen(argv, env=spec.env) drops PATH/LOCALAPPDATA and breaks
+        # LemonadeServer.exe.
+        self.assertEqual(env.get("GAIA_TEST_SENTINEL"), "1")
+        self.assertIn("PATH", env)
+
+    @patch("gaia.llm.lemonade_client.kill_process_on_port")
+    @patch("subprocess.Popen")
+    @patch("gaia.llm.lemonade_client.build_start_command")
+    @patch("gaia.llm.lemonade_client.resolve_lemonade")
+    def test_launch_server_legacy_fallback_unchanged(
+        self, mock_resolve, mock_build_cmd, mock_popen, mock_kill_port
+    ):
+        """When resolve_lemonade() resolves to legacy tooling, the Popen argv
+        shape must remain byte-identical to today's:
+        ["lemonade-server", "serve", "--ctx-size", "N"] — regression guard."""
+        from gaia.llm.lemonade_launcher import LemonadeTooling, StartSpec
+
+        mock_resolve.return_value = LemonadeTooling(
+            found=True,
+            kind="legacy",
+            client_path="lemonade-server",
+            server_launcher="lemonade-server",
+        )
+        mock_build_cmd.return_value = StartSpec(
+            argv=["lemonade-server", "serve", "--ctx-size", "32768"],
+            env={},
+        )
+        mock_popen.return_value = MagicMock()
+
+        client = LemonadeClient(host=HOST, port=PORT, verbose=False)
+        with patch.object(client, "health_check", return_value=None):
+            with patch("socket.create_connection"):
+                client.launch_server(background="silent", ctx_size=32768)
+
+        mock_popen.assert_called_once()
+        call_args, call_kwargs = mock_popen.call_args
+        argv = call_args[0] if call_args else call_kwargs.get("args")
+        self.assertEqual(argv, ["lemonade-server", "serve", "--ctx-size", "32768"])
+
+    @patch("gaia.llm.lemonade_client.kill_process_on_port")
+    @patch("subprocess.Popen")
+    @patch("gaia.llm.lemonade_client.build_start_command")
+    @patch("gaia.llm.lemonade_client.resolve_lemonade")
+    def test_launch_server_skips_kill_when_already_healthy(
+        self, mock_resolve, mock_build_cmd, mock_popen, mock_kill_port
+    ):
+        """kill_process_on_port(self.port) must NOT be called when
+        health_check() already reports OK at entry to launch_server() —
+        a healthy server already listening should not be killed."""
+        from gaia.llm.lemonade_launcher import LemonadeTooling, StartSpec
+
+        mock_resolve.return_value = LemonadeTooling(
+            found=True,
+            kind="legacy",
+            client_path="lemonade-server",
+            server_launcher="lemonade-server",
+        )
+        mock_build_cmd.return_value = StartSpec(
+            argv=["lemonade-server", "serve", "--ctx-size", "32768"],
+            env={},
+        )
+        mock_popen.return_value = MagicMock()
+
+        client = LemonadeClient(host=HOST, port=PORT, verbose=False)
+        with patch.object(client, "health_check", return_value={"status": "ok"}):
+            with patch("socket.create_connection"):
+                client.launch_server(background="silent", ctx_size=32768)
+
+        mock_kill_port.assert_not_called()
 
 
 def is_server_running(host=HOST, port=PORT):

@@ -1,13 +1,18 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-LLM-assisted triage classification (issue #1107).
+LLM-assisted triage classification (issue #1107; ``is_spam`` added in #1906).
 
 The heuristic fast path (``triage_heuristics``) commits a category only when it
 is confident; for the rest — and always for ``urgent`` vs ``actionable``, which
-depend on body content — it flags the message for LLM follow-up. This module
-performs that follow-up: it reads the (HTML-stripped) body and asks the local
-LLM for a structured ``{category, confidence, reasoning}`` decision.
+depend on body content — it flags the message for LLM follow-up. The same is
+true of ``is_spam``: the heuristic only commits it for a narrow set of
+mechanical sender-pattern signals (#1906); everything else within
+``PROMOTIONAL`` (where spam exclusively lives) needs the LLM's actual reading
+of the content to separate real spam from merely aggressive marketing. This
+module performs that follow-up: it reads the (HTML-stripped) body and asks the
+local LLM for a structured ``{category, is_spam, confidence, reasoning}``
+decision.
 
 Fail-loud contract (#1107 AC): if the LLM is unreachable, returns unparseable
 output, or names a category outside the taxonomy, we **raise**
@@ -95,11 +100,23 @@ _SYSTEM_PROMPT = (
     "\n"
     "When genuinely unsure between two adjacent categories, prefer the "
     "lower-urgency one "
-    "(URGENT > NEEDS_RESPONSE > PROMOTIONAL > PERSONAL > FYI). "
+    "(URGENT > NEEDS_RESPONSE > PROMOTIONAL > PERSONAL > FYI).\n"
+    "\n"
+    "SPAM (separate from category -- a PROMOTIONAL email is not "
+    "automatically spam): set \"is_spam\" true only for unsolicited, "
+    "indiscriminate mass-market junk mail -- pharmacy/drug ads, "
+    "prize/lottery/inheritance scams, adult content, or garbled "
+    "filter-evasion spelling (e.g. 'v1agra', 'cia1is'). A marketing email "
+    "from what reads as a real or plausible business -- even if pushy, "
+    "urgent-sounding, or from a sketchy-looking domain -- is NOT spam by "
+    "itself; that kind of targeted social-engineering/phishing pressure is "
+    "tracked separately and should NOT be marked is_spam. When unsure, set "
+    "is_spam false.\n"
+    "\n"
     "Respond with a single JSON object and nothing else, with keys: "
-    '"category" (one of the allowed values), "confidence" (a float 0.0-1.0), '
-    '"reasoning" (one short sentence), and "suggested_action" (one of: '
-    '"reply", "none", "archive").'
+    '"category" (one of the allowed values), "is_spam" (boolean), '
+    '"confidence" (a float 0.0-1.0), "reasoning" (one short sentence), and '
+    '"suggested_action" (one of: "reply", "none", "archive").'
 )
 
 # Case-insensitive lookup: the model may return "urgent" or "URGENT" -- both map to "URGENT".
@@ -215,6 +232,7 @@ def _parse_response(text: str, *, message_id: str) -> dict[str, Any]:
 
     return {
         "category": category_resolved,
+        "is_spam": bool(parsed.get("is_spam", False)),
         "confidence": confidence,
         "reasoning": str(parsed.get("reasoning", "")).strip(),
         "suggested_action": suggested_action,

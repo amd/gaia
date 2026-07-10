@@ -5,7 +5,7 @@ icon: "cube"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/agents/blender/agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/blender/agent.py) · [`src/gaia/mcp/blender_mcp_server.py`](https://github.com/amd/gaia/blob/main/src/gaia/mcp/blender_mcp_server.py)
+  **Source Code:** [`hub/agents/python/blender/gaia_agent_blender/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/python/blender/gaia_agent_blender/agent.py) · [`src/gaia/mcp/blender_mcp_server.py`](https://github.com/amd/gaia/blob/main/src/gaia/mcp/blender_mcp_server.py)
 </Info>
 
 GAIA provides a powerful Blender agent that enables natural language interaction with Blender for 3D scene creation and modification. The agent can create objects, apply materials, manipulate transformations, and manage scenes through conversational commands.
@@ -101,7 +101,7 @@ gaia blender [OPTIONS]
 |--------|------|---------|-------------|
 | `--model` | string | auto-selected by agent | Language model ID for AI processing (not a Blender 3D model). When omitted, the Blender agent picks a model based on your installed profile — typically a Qwen3 variant. Pass e.g. `--model Qwen3.5-35B-A3B-GGUF` to pin the 35B model. |
 | `--example` | int (1-6) | None | Run a specific example, if not specified run interactive mode |
-| `--steps` | int | 5 | Maximum number of steps per query |
+| `--steps` | int | global limit (50) | Maximum number of steps per query. Defaults to the global agent step limit (50, or `$GAIA_AGENT_MAX_STEPS` if set). |
 | `--output-dir` | string | "output" | Directory to save output files |
 | `--stream` | flag | False | Enable streaming mode for LLM responses |
 | `--stats` | flag | False | Enable statistics collection (stats saved to output files, not displayed) |

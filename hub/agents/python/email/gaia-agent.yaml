@@ -1,6 +1,6 @@
 id: email
 name: Email Triage
-version: 0.3.0
+version: 0.4.0
 description: "GAIA email triage agent — read, triage, organize, and reply to Gmail/Outlook locally"
 author: AMD
 license: MIT
@@ -27,6 +27,11 @@ python:
 
 requirements:
   min_memory_gb: 8
+  # Minimum Lemonade Server version the triage stack needs. Mirrors
+  # gaia_agent_email.version.MIN_LEMONADE_VERSION (the runtime source of truth
+  # for the GET /v1/email/init readiness check); a test keeps the two in
+  # lock-step. `gaia init` reads this manifest value for the install path.
+  min_lemonade_version: "10.2.0"
   platforms: [win-x64, linux-x64, darwin-arm64]
 
 interfaces:

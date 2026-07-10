@@ -118,6 +118,7 @@ def score(model: str, max_messages: int = 1000) -> Dict[str, Any]:
     total = 0
     correct_spam = 0
     correct_phishing = 0
+    spam_tp = spam_fp = spam_fn = 0
     per_cat_total: Counter = Counter()
     per_cat_correct: Counter = Counter()
     misses = []
@@ -143,6 +144,12 @@ def score(model: str, max_messages: int = 1000) -> Dict[str, Any]:
             )
         if result["is_spam"] == gt["is_spam"]:
             correct_spam += 1
+        if result["is_spam"] and gt["is_spam"]:
+            spam_tp += 1
+        elif result["is_spam"] and not gt["is_spam"]:
+            spam_fp += 1
+        elif not result["is_spam"] and gt["is_spam"]:
+            spam_fn += 1
         if result["is_phishing"] == gt["is_phishing"]:
             correct_phishing += 1
 
@@ -159,12 +166,33 @@ def score(model: str, max_messages: int = 1000) -> Dict[str, Any]:
         for cat in ALL_CATEGORIES
         if per_cat_total[cat]
     }
+    # Plain accuracy is misleading for is_spam: spam is a small minority class
+    # (~19% of this corpus) so a trivial always-False classifier already scores
+    # high. Precision/recall/F1 are the metrics that actually distinguish real
+    # detection from doing nothing (#1906).
+    spam_precision = (
+        round(spam_tp / (spam_tp + spam_fp), 4) if (spam_tp + spam_fp) else 0.0
+    )
+    spam_recall = (
+        round(spam_tp / (spam_tp + spam_fn), 4) if (spam_tp + spam_fn) else 0.0
+    )
+    spam_f1 = (
+        round(2 * spam_precision * spam_recall / (spam_precision + spam_recall), 4)
+        if (spam_precision + spam_recall)
+        else 0.0
+    )
     return {
         "model": model,
         "fixture": CORPUS_MBOX.name,
         "category_accuracy": category_accuracy,
         "category_breakdown": breakdown,
         "is_spam_accuracy": round(correct_spam / total, 4),
+        "is_spam_precision": spam_precision,
+        "is_spam_recall": spam_recall,
+        "is_spam_f1": spam_f1,
+        "is_spam_tp": spam_tp,
+        "is_spam_fp": spam_fp,
+        "is_spam_fn": spam_fn,
         "is_phishing_accuracy": round(correct_phishing / total, 4),
         "scored": total,
         "correct": correct,
@@ -172,7 +200,8 @@ def score(model: str, max_messages: int = 1000) -> Dict[str, Any]:
         "_recorded_on": date.today().isoformat(),
         "_recorded_by": (
             f"real measurement on {model} via production heuristic + "
-            "LLM-assist triage path (#1107)"
+            "LLM-assist triage path (#1107); is_spam now content-based "
+            "detection with precision/recall/F1 (#1906)"
         ),
         "_misses": misses,
     }

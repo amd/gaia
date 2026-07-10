@@ -80,6 +80,44 @@ def test_send_endpoint_present():
     assert "/v1/email/send" in _html()
 
 
+def test_init_endpoint_present():
+    # Readiness preflight (#1795) must be documented on the spec page.
+    html = _html()
+    assert "/v1/email/init" in html
+    assert "InitResponse" in html
+    # The GET method badge must render (init is the only GET endpoint shown).
+    assert ">GET<" in html
+
+
+def test_provision_verb_documented():
+    # The POST provisioning verb (#1795 follow-up) streams progress and is not in
+    # the JSON OpenAPI, so the HTML spec is where it must be documented.
+    html = _html()
+    assert "stream terminal-style progress" in html.lower()
+    assert "text/plain" in html
+
+
+# ---------------------------------------------------------------------------
+# Authentication (#1706) — the caller-auth posture must be documented on the
+# spec page so integrators know the sidecar requires a per-session token.
+# ---------------------------------------------------------------------------
+
+
+def test_authentication_section_present():
+    html = _html()
+    assert "Authentication" in html
+    assert "GAIA_EMAIL_SIDECAR_TOKEN" in html
+    assert "Authorization: Bearer" in html
+
+
+def test_authentication_documents_status_codes():
+    html = _html()
+    # Token-missing 401, rebinding Host 400, drive-by Origin 403.
+    assert "401" in html
+    assert "400" in html
+    assert "403" in html
+
+
 # ---------------------------------------------------------------------------
 # Contract field names — sourced from the models so a contract change that
 # drops a field will break this test, not slip through silently.

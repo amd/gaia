@@ -8,6 +8,8 @@ on:
   push:
     branches: [ main ]
     paths:
+      - 'src/gaia/version.py'
+      - '.github/actions/install-lemonade/**'
       - 'src/gaia/rag/**'
       - 'src/gaia/llm/**'
       - 'tests/test_lemonade_embeddings.py'
@@ -17,6 +19,8 @@ on:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
+      - 'src/gaia/version.py'
+      - '.github/actions/install-lemonade/**'
       - 'src/gaia/rag/**'
       - 'src/gaia/llm/**'
       - 'tests/test_lemonade_embeddings.py'
@@ -36,11 +40,17 @@ permissions:
 jobs:
   test-embeddings:
     name: Test Lemonade Embeddings API
-    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
+    runs-on:
+      - self-hosted
+      - Windows
+      - ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
+    # Bound a wedged model pull/load — the LemonadeClient pull timeout alone
+    # is 200 min; don't let one hold the self-hosted runner for the 6h default.
+    timeout-minutes: 30
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Setup Python environment
       uses: ./.github/actions/setup-venv
@@ -52,7 +62,7 @@ jobs:
     - name: Install Lemonade Server
       uses: ./.github/actions/install-lemonade
 
-    - name: Start Lemonade Server and Run Tests
+    - name: Start Lemonade Server and run embedding tests
       shell: powershell
       run: |
         # Set console to UTF-8 for Unicode support
@@ -64,154 +74,40 @@ jobs:
         chcp 65001 | Out-Null
 
         try {
-            Write-Host "Starting Lemonade server..."
-            $serverJob = Start-Job -ScriptBlock {
-                # Workaround for Issue #612: Disable Vulkan cooperative matrix optimization
-                $env:GGML_VK_DISABLE_COOPMAT = "1"
-                & lemonade-server serve --host localhost --port 13305 --no-tray 2>&1
-            }
-            Write-Host "Started Lemonade server job with ID: $($serverJob.Id)"
-            $env:LEMONADE_JOB_ID = $serverJob.Id
+            # Start the server via the shared launcher (server + tests run in ONE
+            # step so the detached server survives for the test run). It reaps
+            # stray procs, frees the port, launches LemonadeServer.exe --port
+            # directly (the `lemonade-server serve` shim was removed in Lemonade
+            # v10.5 and no longer exists on the runner), captures stdout/stderr
+            # to logs, waits for health (dumping the logs on failure), and sets
+            # LEMONADE_PROCESS_ID for cleanup.
+            .\installer\scripts\start-lemonade.ps1 -Port 13305 -NoModel
+            if ($LASTEXITCODE -ne 0) { throw "Lemonade server failed to start" }
 
-            # Wait for server to be ready
-            Write-Host "Waiting for Lemonade server to start..."
-            $maxWaitTime = 60
-            $waitTime = 0
-            $serverReady = $false
-
-            while ($waitTime -lt $maxWaitTime -and -not $serverReady) {
-                Start-Sleep -Seconds 2
-                $waitTime += 2
-
-                try {
-                    $response = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/health" -Method GET -TimeoutSec 5
-                    Write-Host "[OK] Lemonade server is ready"
-                    Write-Host "Health response: $($response | ConvertTo-Json -Compress)"
-                    $serverReady = $true
-                } catch {
-                    Write-Host "Waiting... ($waitTime/$maxWaitTime seconds)"
-                }
+            # Register + load + verify the embedding model THROUGH GAIA's
+            # LemonadeClient so CI validates our actual interface to Lemonade
+            # (including the model-load retry that absorbs the transient
+            # AMD-Vulkan "llama-server failed to start" fault) rather than raw
+            # REST. EmbeddingGemma is a custom user-model, so pass the checkpoint
+            # + recipe + embedding label to register it on first pull.
+            Write-Host "`n=== Register + load + verify embedding model via LemonadeClient ==="
+            uv run python tests/ci_lemonade_check.py --model user.embeddinggemma-300m-GGUF --checkpoint ggml-org/embeddinggemma-300M-GGUF:Q8_0 --recipe llamacpp --register-embedding --embeddings
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "=== Server stdout (last 100 lines) ==="
+                Get-Content lemonade-server-stdout.log -Tail 100 -ErrorAction SilentlyContinue
+                Write-Host "=== Server stderr (last 100 lines) ==="
+                Get-Content lemonade-server-stderr.log -Tail 100 -ErrorAction SilentlyContinue
+                throw "Embedding model setup/verify via LemonadeClient failed"
             }
 
-            if (-not $serverReady) {
-                Write-Host "[ERROR] Server health check failed after $maxWaitTime seconds"
-                throw "Server failed to start"
-            }
-
-            # Stale-backend cleanup on a version change is handled by the
-            # install-lemonade action's reconcile step (it clears the versioned
-            # llama.cpp backend under %USERPROFILE%\.cache\lemonade\bin so a
-            # downgraded server doesn't fail with "llama-server failed to
-            # start"). The previous model-cache wipe here targeted a v9-era path
-            # (%LOCALAPPDATA%\lemonade-server\models) that doesn't exist in
-            # v10 -- GGUF weights live in the HuggingFace hub cache -- so it was
-            # a silent no-op and has been removed.
-
-            # Pull embedding model (actual model used in tests)
-            Write-Host "`n=== Pulling Embedding Model ==="
-            Write-Host "Pulling nomic-embed-text-v2-moe-GGUF..."
-            try {
-                $body = @{ model_name = "nomic-embed-text-v2-moe-GGUF" } | ConvertTo-Json
-                $response = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/pull" `
-                    -Method POST -ContentType "application/json" -Body $body -TimeoutSec 600
-                Write-Host "   [OK] Model pull initiated"
-            } catch {
-                Write-Host "   [WARN] Pull may have failed: $($_.Exception.Message)"
-            }
-
-            # Load embedding model into memory (required in Lemonade v9.x)
-            Write-Host "`n=== Loading Embedding Model ==="
-            try {
-                $loadRequest = @{
-                    model_name = "nomic-embed-text-v2-moe-GGUF"
-                } | ConvertTo-Json
-
-                Write-Host "Loading model: nomic-embed-text-v2-moe-GGUF"
-                $loadResponse = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/load" `
-                    -Method POST -Body $loadRequest -ContentType "application/json" -TimeoutSec 60
-                Write-Host "[OK] Model loaded successfully: $($loadResponse | ConvertTo-Json -Compress)"
-            } catch {
-                Write-Host "[ERROR] Model load failed: $($_.Exception.Message)"
-                if ($_.ErrorDetails) {
-                    Write-Host "Error details: $($_.ErrorDetails.Message)"
-                }
-                throw "Failed to load embedding model"
-            }
-
-            # Wait for llamacpp backend to fully initialize (increased from 10s)
-            Write-Host "Waiting 30 seconds for llamacpp backend initialization..."
-            Start-Sleep -Seconds 30
-
-            # Verify model is available
-            try {
-                $models = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/models" -Method GET
-                Write-Host "`n[OK] Available models:"
-                $models.data | ForEach-Object { Write-Host "   - $($_.id)" }
-            } catch {
-                Write-Host "[WARN] Could not verify model: $($_.Exception.Message)"
-            }
-
-            # Verify server is still responding before embeddings test
-            Write-Host "`n=== Verifying Server Health ==="
-            try {
-                $health = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/health" -Method GET -TimeoutSec 10
-                Write-Host "[OK] Server responding: $($health | ConvertTo-Json -Compress)"
-            } catch {
-                Write-Host "[ERROR] Server health check failed: $($_.Exception.Message)"
-                # Show server job output for debugging
-                if ($env:LEMONADE_JOB_ID) {
-                    $jobOutput = Receive-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
-                    Write-Host "Server output: $jobOutput"
-                }
-                throw "Server not responding after model load"
-            }
-
-            # Verify embedding model with actual API call
-            Write-Host "`n=== Verifying Embedding Model ==="
-            $maxRetries = 3
-            $retryCount = 0
-            $modelReady = $false
-
-            while ($retryCount -lt $maxRetries -and -not $modelReady) {
-                try {
-                    $testBody = @{ input = @("test embedding"); model = "nomic-embed-text-v2-moe-GGUF" } | ConvertTo-Json
-                    # Use localhost consistently and increased timeout for first embedding request
-                    $response = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/embeddings" `
-                        -Method POST -ContentType "application/json" -Body $testBody -TimeoutSec 300
-                    Write-Host "[OK] Embedding model verified successfully"
-                    $modelReady = $true
-                } catch {
-                    $retryCount++
-                    Write-Host "[WARN] Embedding verification attempt $retryCount failed: $($_.Exception.Message)"
-                    if ($retryCount -lt $maxRetries) {
-                        Write-Host "Waiting 30 seconds before retry..."
-                        Start-Sleep -Seconds 30
-                    }
-                }
-            }
-
-            if (-not $modelReady) {
-                throw "Embedding model failed to load after $maxRetries attempts"
-            }
-
-            # Run tests in same session while server is running
             Write-Host "`n=== Running Embedding Tests ==="
             # Use --tb=long for full traceback, -rA for all test output summary
             pytest tests/test_lemonade_embeddings.py -v -s --tb=long -rA --log-cli-level=DEBUG
-            $testExitCode = $LASTEXITCODE
-
-            Write-Host "`nTests completed with exit code: $testExitCode"
-
-            if ($testExitCode -ne 0) {
-                throw "Tests failed with exit code $testExitCode"
-            }
+            if ($LASTEXITCODE -ne 0) { throw "Tests failed with exit code $LASTEXITCODE" }
         } finally {
-            # Always cleanup server
-            if ($env:LEMONADE_JOB_ID) {
-                Write-Host "`n=== Stopping Lemonade Server ==="
-                Stop-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
-                Remove-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
-                Write-Host "[OK] Server stopped"
+            if ($env:LEMONADE_PROCESS_ID) {
+                Write-Host "`n=== Stopping Lemonade Server (PID $env:LEMONADE_PROCESS_ID) ==="
+                Stop-Process -Id $env:LEMONADE_PROCESS_ID -Force -ErrorAction SilentlyContinue
             }
         }
 

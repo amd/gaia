@@ -149,7 +149,7 @@ const terminalLines = [
     </section>
 
     <!-- Body: tabbed docs (README / Spec / Skill / Scorecard / Changelog / Files) + cards -->
-    <div class="mt-12 grid lg:grid-cols-[minmax(0,1fr)_280px] gap-12">
+    <div class="mt-12 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_280px] gap-12">
       <div class="min-w-0" data-doc-tabs>
         {docTabs.length > 1 && (
           <div role="tablist" aria-label={`${agent.name} documentation`} class="flex gap-1 border-b border-g-border mb-7 overflow-x-auto">
