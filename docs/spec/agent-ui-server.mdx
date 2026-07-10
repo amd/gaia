@@ -53,7 +53,11 @@ src/gaia/ui/
 
 ### Routers (`src/gaia/ui/routers/`)
 
-As of v0.17.x the HTTP surface is split into focused router modules:
+As of v0.17.x the HTTP surface is split into focused router modules. Every route
+is registered under the `/api` prefix (e.g. the `chat` router serves
+`POST /api/chat/send`); the **Mount** column below names the surface, not the
+literal path prefix. Additional routers exist beyond the core set below
+(`connectors`, `goals`, `hub`, `memory`, `schedules`).
 
 | Module | Mount | Purpose |
 |---|---|---|
@@ -73,7 +77,7 @@ As of v0.17.x the HTTP surface is split into focused router modules:
 ### App Factory
 
 ```python
-def create_app(db_path: str = None) -> FastAPI:
+def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 ```
 
 Creates a configured FastAPI application with:

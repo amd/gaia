@@ -9,7 +9,7 @@ title: "ApiAgent"
 <Note>
 **Component:** ApiAgent
 **Module:** `gaia.agents.base.api_agent`
-**Import:** `from gaia.agents.base import ApiAgent`
+**Import:** `from gaia.agents.base.api_agent import ApiAgent`
 </Note>
 ---
 
@@ -294,7 +294,8 @@ class JiraAgent(MCPAgent, ApiAgent, Agent):
 
 ```python
 import pytest
-from gaia.agents.base import Agent, ApiAgent
+from gaia.agents.base import Agent
+from gaia.agents.base.api_agent import ApiAgent
 
 class TestApiAgent(ApiAgent, Agent):
     """Test agent for ApiAgent mixin."""
@@ -302,7 +303,7 @@ class TestApiAgent(ApiAgent, Agent):
         return "Test agent"
 
     def _create_console(self):
-        from gaia import SilentConsole
+        from gaia.agents.base.console import SilentConsole
         return SilentConsole()
 
     def _register_tools(self):
@@ -310,7 +311,7 @@ class TestApiAgent(ApiAgent, Agent):
 
 def test_api_agent_can_be_imported():
     """Verify ApiAgent can be imported."""
-    from gaia.agents.base import ApiAgent
+    from gaia.agents.base.api_agent import ApiAgent
     assert ApiAgent is not None
 
 def test_get_model_id_default():
@@ -329,7 +330,7 @@ def test_get_model_id_custom():
             return "Custom"
 
         def _create_console(self):
-            from gaia import SilentConsole
+            from gaia.agents.base.console import SilentConsole
             return SilentConsole()
 
         def _register_tools(self):
@@ -358,7 +359,7 @@ def test_get_model_info_custom():
             return "Custom"
 
         def _create_console(self):
-            from gaia import SilentConsole
+            from gaia.agents.base.console import SilentConsole
             return SilentConsole()
 
         def _register_tools(self):
@@ -400,7 +401,7 @@ def test_estimate_tokens_custom():
             return "Custom"
 
         def _create_console(self):
-            from gaia import SilentConsole
+            from gaia.agents.base.console import SilentConsole
             return SilentConsole()
 
         def _register_tools(self):
@@ -421,7 +422,7 @@ def test_inheritance_single_protocol():
             return "Test"
 
         def _create_console(self):
-            from gaia import SilentConsole
+            from gaia.agents.base.console import SilentConsole
             return SilentConsole()
 
         def _register_tools(self):
@@ -440,7 +441,7 @@ def test_inheritance_multiple_protocols():
             return "Test"
 
         def _create_console(self):
-            from gaia import SilentConsole
+            from gaia.agents.base.console import SilentConsole
             return SilentConsole()
 
         def _register_tools(self):
@@ -482,7 +483,7 @@ def test_naming_conventions():
             return "Code"
 
         def _create_console(self):
-            from gaia import SilentConsole
+            from gaia.agents.base.console import SilentConsole
             return SilentConsole()
 
         def _register_tools(self):
@@ -493,7 +494,7 @@ def test_naming_conventions():
             return "Jira"
 
         def _create_console(self):
-            from gaia import SilentConsole
+            from gaia.agents.base.console import SilentConsole
             return SilentConsole()
 
         def _register_tools(self):
@@ -513,7 +514,8 @@ def test_naming_conventions():
 ### Example 1: Basic API Agent
 
 ```python
-from gaia.agents.base import Agent, ApiAgent
+from gaia.agents.base import Agent
+from gaia.agents.base.api_agent import ApiAgent
 from gaia import tool
 
 class MyAgent(ApiAgent, Agent):
@@ -523,7 +525,7 @@ class MyAgent(ApiAgent, Agent):
         return "You are a helpful assistant."
 
     def _create_console(self):
-        from gaia import AgentConsole
+        from gaia.agents.base.console import AgentConsole
         return AgentConsole()
 
     def _register_tools(self):
@@ -539,7 +541,8 @@ class MyAgent(ApiAgent, Agent):
 ### Example 2: Custom Model ID and Metadata
 
 ```python
-from gaia.agents.base import Agent, ApiAgent
+from gaia.agents.base import Agent
+from gaia.agents.base.api_agent import ApiAgent
 from typing import Dict, Any
 
 class CodeAgent(ApiAgent, Agent):
@@ -549,7 +552,7 @@ class CodeAgent(ApiAgent, Agent):
         return "You are an autonomous Python coding agent."
 
     def _create_console(self):
-        from gaia import AgentConsole
+        from gaia.agents.base.console import AgentConsole
         return AgentConsole()
 
     def _register_tools(self):
@@ -577,7 +580,8 @@ class CodeAgent(ApiAgent, Agent):
 ### Example 3: Custom Token Estimation
 
 ```python
-from gaia.agents.base import Agent, ApiAgent
+from gaia.agents.base import Agent
+from gaia.agents.base.api_agent import ApiAgent
 import tiktoken
 
 class PreciseAgent(ApiAgent, Agent):
@@ -592,7 +596,7 @@ class PreciseAgent(ApiAgent, Agent):
         return "Precise agent"
 
     def _create_console(self):
-        from gaia import SilentConsole
+        from gaia.agents.base.console import SilentConsole
         return SilentConsole()
 
     def _register_tools(self):
@@ -608,7 +612,8 @@ class PreciseAgent(ApiAgent, Agent):
 ### Example 4: Multi-Protocol Agent (MCP + API)
 
 ```python
-from gaia.agents.base import Agent, MCPAgent, ApiAgent
+from gaia.agents.base import Agent, MCPAgent
+from gaia.agents.base.api_agent import ApiAgent
 from typing import List, Dict, Any
 
 class JiraAgent(MCPAgent, ApiAgent, Agent):
@@ -618,7 +623,7 @@ class JiraAgent(MCPAgent, ApiAgent, Agent):
         return "You are a Jira project management assistant."
 
     def _create_console(self):
-        from gaia import AgentConsole
+        from gaia.agents.base.console import AgentConsole
         return AgentConsole()
 
     def _register_tools(self):
@@ -659,7 +664,8 @@ class JiraAgent(MCPAgent, ApiAgent, Agent):
 ### Example 5: Agent Without API Customization
 
 ```python
-from gaia.agents.base import Agent, ApiAgent
+from gaia.agents.base import Agent
+from gaia.agents.base.api_agent import ApiAgent
 
 class SimpleAgent(ApiAgent, Agent):
     """Agent using all default API behavior."""
@@ -668,7 +674,7 @@ class SimpleAgent(ApiAgent, Agent):
         return "Simple agent"
 
     def _create_console(self):
-        from gaia import AgentConsole
+        from gaia.agents.base.console import AgentConsole
         return AgentConsole()
 
     def _register_tools(self):
@@ -701,7 +707,8 @@ Add to Agent Section:
 
 **Quick Start:**
 ```python
-from gaia.agents.base import Agent, ApiAgent
+from gaia.agents.base import Agent
+from gaia.agents.base.api_agent import ApiAgent
 
 class MyAgent(ApiAgent, Agent):
     def _get_system_prompt(self):

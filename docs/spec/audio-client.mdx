@@ -11,7 +11,12 @@ icon: "headphones"
 <Note>
 **Components:** AudioClient, WhisperAsr, KokoroTTS
 **Module:** `gaia.audio`
-**Import:** `from gaia.audio import AudioClient, WhisperAsr, KokoroTTS`
+**Import:**
+```python
+from gaia.audio.audio_client import AudioClient
+from gaia.audio.whisper_asr import WhisperAsr
+from gaia.audio.kokoro_tts import KokoroTTS
+```
 </Note>
 
 ---
@@ -61,7 +66,7 @@ The audio subsystem provides complete voice interaction capabilities including A
 ### AudioClient
 
 ```python
-from gaia.audio import AudioClient
+from gaia.audio.audio_client import AudioClient
 
 class AudioClient:
     """Handles all audio-related functionality including TTS, ASR, and voice chat."""
@@ -131,7 +136,7 @@ class AudioClient:
 ### WhisperAsr
 
 ```python
-from gaia.audio import WhisperAsr
+from gaia.audio.whisper_asr import WhisperAsr
 
 class WhisperAsr:
     """Whisper-based Automatic Speech Recognition."""
@@ -182,7 +187,7 @@ class WhisperAsr:
 ### KokoroTTS
 
 ```python
-from gaia.audio import KokoroTTS
+from gaia.audio.kokoro_tts import KokoroTTS
 
 class KokoroTTS:
     """Kokoro-based Text-to-Speech synthesis."""
@@ -264,7 +269,7 @@ talk = [
 
 ```python
 import asyncio
-from gaia.audio import AudioClient
+from gaia.audio.audio_client import AudioClient
 
 async def main():
     audio = AudioClient(
@@ -284,7 +289,7 @@ asyncio.run(main())
 ### Custom Voice Settings
 
 ```python
-from gaia.audio import AudioClient
+from gaia.audio.audio_client import AudioClient
 
 audio = AudioClient(enable_tts=True)
 audio.initialize_tts()
@@ -300,7 +305,7 @@ await audio.speak_text("Hello in a different voice")
 
 ```python
 import queue
-from gaia.audio import WhisperAsr
+from gaia.audio.whisper_asr import WhisperAsr
 
 # Create transcription queue
 transcription_queue = queue.Queue()
@@ -329,7 +334,7 @@ except KeyboardInterrupt:
 ```python
 import queue
 import threading
-from gaia.audio import KokoroTTS
+from gaia.audio.kokoro_tts import KokoroTTS
 
 tts = KokoroTTS()
 text_queue = queue.Queue()

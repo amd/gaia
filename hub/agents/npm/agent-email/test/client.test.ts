@@ -605,4 +605,37 @@ describe("EmailClient", () => {
     await client.health();
     expect(calledThis).toBe(globalThis);
   });
+
+  it("sends the per-session bearer token on every request when given (#1706)", async () => {
+    const seen: (string | null)[] = [];
+    const fetchImpl = vi.fn(async (_url, init) => {
+      const headers = new Headers(init?.headers as HeadersInit);
+      seen.push(headers.get("authorization"));
+      return jsonResponse({ status: "ok", service: "gaia-agent-email" });
+    }) as unknown as typeof fetch;
+
+    const client = new EmailClient({
+      baseUrl: "http://127.0.0.1:8131",
+      fetchImpl,
+      authToken: "tok-abc",
+    });
+    await client.health(); // GET (no body)
+    await client.draft({
+      to: [{ email: "a@b.com" }],
+      subject: "Re: x",
+      body: "hi",
+    });
+
+    expect(seen).toEqual(["Bearer tok-abc", "Bearer tok-abc"]);
+  });
+
+  it("omits the Authorization header when no token is configured", async () => {
+    const fetchImpl = vi.fn(async (_url, init) => {
+      const headers = new Headers(init?.headers as HeadersInit);
+      expect(headers.has("authorization")).toBe(false);
+      return jsonResponse({ status: "ok", service: "gaia-agent-email" });
+    }) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    await client.health();
+  });
 });

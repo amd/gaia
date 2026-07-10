@@ -4,13 +4,12 @@ description: "Connect GAIA agents to external MCP servers and use their tools"
 ---
 
 <Warning>
-  **CLI update (#977):** `gaia mcp add` and `gaia mcp remove` shown in this guide
-  have been removed. MCP servers are now defined as **connectors** and configured
-  with `gaia connectors configure <id> --set KEY=VALUE` (secrets are stored in the
-  OS keyring; the entry is written to `~/.gaia/mcp_servers.json`). `gaia mcp list`
-  still lists configured servers. The `gaia mcp add ...` examples below predate this
-  change and are pending a rewrite — run `gaia connectors --help` for current usage,
-  and see issue #1339.
+  **CLI update (#977):** `gaia mcp add` and `gaia mcp remove` have been removed.
+  Configure MCP servers by editing `~/.gaia/mcp_servers.json` directly (shown below),
+  or, for catalog connectors, with `gaia connectors configure <id> --set KEY=VALUE`
+  (secrets are stored in the OS keyring). `gaia mcp list`, `gaia mcp tools`, and
+  `gaia mcp test-client` still work. Run `gaia connectors --help` for connector usage;
+  see issue #1339 for the ongoing connectors migration.
 </Warning>
 
 **Connect your GAIA agent to any tool ecosystem with a single line of code.**
@@ -89,11 +88,8 @@ MCP server connected, tools auto-discovered, and the agent uses them naturally.
   </Step>
 
   <Step title="Add an MCP server">
-    Add the official [MCP Time Server](https://github.com/modelcontextprotocol/servers/tree/main/src/time):
-    ```bash
-    gaia mcp add time "uvx mcp-server-time"
-    ```
-    Or edit `~/.gaia/mcp_servers.json` directly:
+    Add the official [MCP Time Server](https://github.com/modelcontextprotocol/servers/tree/main/src/time)
+    by editing `~/.gaia/mcp_servers.json`:
     ```json
     {
       "mcpServers": {
@@ -155,7 +151,7 @@ MCP server connected, tools auto-discovered, and the agent uses them naturally.
 ## How It Works
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#E2A33E', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}, 'flowchart': {'curve': 'basis'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#A87B2D', 'edgeLabelBackground':'#ffffff', 'fontFamily':'system-ui, -apple-system, sans-serif'}, 'flowchart': {'curve': 'basis'}}}%%
 flowchart TB
     User(["User Query"])
     YourAgent(["Your Agent"])
@@ -249,12 +245,10 @@ flowchart TB
     ```
   </Tab>
 
-  <Tab title="Via CLI">
+  <Tab title="Via config file">
     ```bash
-    # Add server to config
-    gaia mcp add filesystem "npx -y @modelcontextprotocol/server-filesystem /tmp"
-
-    # List configured servers
+    # Add the server by editing ~/.gaia/mcp_servers.json (see Config File Format below),
+    # then list what's configured:
     gaia mcp list
     ```
   </Tab>
@@ -347,12 +341,16 @@ This format is compatible with Claude Desktop and other Anthropic tools. The `mc
   </Step>
 
   <Step title="Add to config">
-    ```bash
-    gaia mcp add <name> "<command>"
-    ```
-    For example, to add the Memory server:
-    ```bash
-    gaia mcp add memory "npx -y @modelcontextprotocol/server-memory"
+    Add an entry to `~/.gaia/mcp_servers.json`. For example, the Memory server:
+    ```json
+    {
+      "mcpServers": {
+        "memory": {
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-memory"]
+        }
+      }
+    }
     ```
   </Step>
 
@@ -410,22 +408,22 @@ For detailed API usage and patterns, see the [SDK Reference](/sdk/sdks/mcp).
 
 <AccordionGroup>
   <Accordion title="CLI Commands">
-    GAIA provides CLI commands for managing MCP server configurations without writing code.
+    GAIA provides CLI commands for inspecting MCP servers without writing code.
 
     <Card title="MCP CLI Reference" icon="terminal" href="/reference/cli#mcp-client">
-      Complete documentation of all MCP CLI commands: `add`, `list`, `tools`, `test-client`, `remove`
+      Documentation for the MCP CLI commands: `list`, `tools`, `test-client`
     </Card>
 
     **Quick reference:**
     ```bash
-    gaia mcp add <name> "<command>"     # Add server to config
     gaia mcp list                        # List configured servers
-    gaia mcp tools <name>                # List tools from server
-    gaia mcp test-client <name>          # Test connection
-    gaia mcp remove <name>               # Remove server
+    gaia mcp tools <name>                # List tools from a server
+    gaia mcp test-client <name>          # Test a server connection
     ```
 
-    For detailed usage, parameters, and output examples, see the [CLI Reference](/reference/cli#mcp-client).
+    Adding and removing servers moved to the connectors framework (#977): edit
+    `~/.gaia/mcp_servers.json` directly, or use `gaia connectors configure <id> --set KEY=VALUE`
+    for catalog connectors. For detailed usage, see the [CLI Reference](/reference/cli#mcp-client).
   </Accordion>
 
   <Accordion title="Best Practices">

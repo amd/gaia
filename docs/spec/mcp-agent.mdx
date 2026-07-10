@@ -398,7 +398,7 @@ class TestMCPAgent(MCPAgent, Agent):
         return "Test MCP agent"
 
     def _create_console(self):
-        from gaia import SilentConsole
+        from gaia.agents.base.console import SilentConsole
         return SilentConsole()
 
     def _register_tools(self):
@@ -437,7 +437,7 @@ def test_mcp_agent_is_abstract():
             def _get_system_prompt(self):
                 return "Test"
             def _create_console(self):
-                from gaia import SilentConsole
+                from gaia.agents.base.console import SilentConsole
                 return SilentConsole()
             def _register_tools(self):
                 pass
@@ -556,7 +556,7 @@ def test_multiple_tools():
             return "Multi-tool agent"
 
         def _create_console(self):
-            from gaia import SilentConsole
+            from gaia.agents.base.console import SilentConsole
             return SilentConsole()
 
         def _register_tools(self):
@@ -584,14 +584,14 @@ def test_multiple_tools():
 
 def test_inheritance_with_api_agent():
     """Test multiple inheritance with ApiAgent."""
-    from gaia.agents.base import ApiAgent
+    from gaia.agents.base.api_agent import ApiAgent
 
     class DualAgent(MCPAgent, ApiAgent, Agent):
         def _get_system_prompt(self):
             return "Dual agent"
 
         def _create_console(self):
-            from gaia import SilentConsole
+            from gaia.agents.base.console import SilentConsole
             return SilentConsole()
 
         def _register_tools(self):
@@ -635,7 +635,7 @@ class FileAgent(MCPAgent, Agent):
         return "You are a file management agent."
 
     def _create_console(self):
-        from gaia import AgentConsole
+        from gaia.agents.base.console import AgentConsole
         return AgentConsole()
 
     def _register_tools(self):
@@ -695,7 +695,7 @@ class ProjectAgent(MCPAgent, Agent):
         return "You are a project management agent."
 
     def _create_console(self):
-        from gaia import AgentConsole
+        from gaia.agents.base.console import AgentConsole
         return AgentConsole()
 
     def _register_tools(self):
@@ -742,7 +742,8 @@ class ProjectAgent(MCPAgent, Agent):
 ### Example 3: Multi-Protocol Agent
 
 ```python
-from gaia.agents.base import Agent, MCPAgent, ApiAgent
+from gaia.agents.base import Agent, MCPAgent
+from gaia.agents.base.api_agent import ApiAgent
 from typing import List, Dict, Any
 
 class CodeAgent(MCPAgent, ApiAgent, Agent):
@@ -752,7 +753,7 @@ class CodeAgent(MCPAgent, ApiAgent, Agent):
         return "You are an autonomous coding agent."
 
     def _create_console(self):
-        from gaia import AgentConsole
+        from gaia.agents.base.console import AgentConsole
         return AgentConsole()
 
     def _register_tools(self):

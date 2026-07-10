@@ -35,7 +35,7 @@ The routing agent solves these problems by:
 ## How It Works
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#A87B2D', 'edgeLabelBackground':'#ffffff', 'fontFamily':'system-ui, -apple-system, sans-serif'}}}%%
 flowchart LR
     A[/"REQUEST"/] --> B(["ANALYZE"])
     B --> C{"CONFIDENT?"}
@@ -242,7 +242,7 @@ gaia-code "Create an Express API with SQLite"
 For implementation details, see:
 - Source code: `hub/agents/python/routing/gaia_agent_routing/agent.py`
 - System prompt: `hub/agents/python/routing/gaia_agent_routing/system_prompt.py`
-- CLI integration: `src/gaia/cli.py` (search for "RoutingAgent")
+- CLI integration: `hub/agents/python/code/gaia_agent_code/cli.py` (search for "RoutingAgent")
 
 ## See Also
 

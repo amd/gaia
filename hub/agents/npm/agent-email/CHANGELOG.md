@@ -10,6 +10,23 @@ bump is always at least a package MINOR bump with a migration note.
 Contract bumped to `SCHEMA_VERSION` **2.2** — additive over 2.1, so `checkVersion`
 (MAJOR-only) keeps accepting existing clients.
 
+### Security
+
+- **Caller authentication for the local sidecar API (#1706).** The sidecar binds
+  `127.0.0.1` and can send mail as the user, but its REST API had **no caller
+  authentication** — any other local process, or a web page in the user's browser
+  (via DNS-rebinding), could reach draft/send. `spawnSidecar` / `startSidecar` now
+  mint a cryptographically-random **per-session bearer token**, hand it to the
+  sidecar over the private `GAIA_EMAIL_SIDECAR_TOKEN` env channel, and bind it to
+  `sidecar.client`; every `/v1/email/*` request must present `Authorization:
+  Bearer <token>` or it is **401**. A non-loopback `Host` is **400** and a
+  non-loopback browser `Origin` is **403**, closing DNS-rebinding / drive-by
+  access. The draft→send confirmation-token gate is unchanged (it is
+  payload-integrity, not caller-auth). `EmailClient` gains an `authToken` option;
+  `sidecar.authToken` and `generateSessionToken` are exported for the
+  construct-your-own-client / renderer-over-IPC paths. Wire-compatible: no
+  contract change, `SCHEMA_VERSION` stays `2.2`.
+
 ### Added
 
 - **Stateful agent surface (`/v1/email/agent/*`, #1666).** A session-scoped,

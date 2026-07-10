@@ -448,7 +448,9 @@ def test_init_route_mounted_via_packaging_server():
         "_probe_lemonade_health",
         return_value=(False, "http://localhost:8000/api/v1", None),
     ):
-        resp = TestClient(app).get("/v1/email/init")
+        # Loopback base_url: the sidecar app's caller-auth Host allowlist (#1706)
+        # rejects TestClient's default `testserver` Host with 400.
+        resp = TestClient(app, base_url="http://127.0.0.1").get("/v1/email/init")
     assert resp.status_code != 404, "/v1/email/init is not mounted on the sidecar app"
     assert resp.status_code == 503
     assert resp.json()["ready"] is False

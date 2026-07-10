@@ -19,22 +19,34 @@ Both suites use [Google Test](https://github.com/google/googletest) (fetched aut
 
 ## Unit Tests
 
-Unit tests are built by default and run without an LLM server. They cover all twelve core modules:
+Unit tests are built by default and run without an LLM server. They cover all twenty core modules:
 
 | Module | Test file | What it covers |
 |--------|-----------|----------------|
 | Agent loop | `test_agent.cpp` | State machine, multi-step planning, error recovery |
+| Agent (VLM) | `test_agent_vlm.cpp` | `processQuery` image overloads, history stripping |
 | Tool registry | `test_tool_registry.cpp` | Registration, lookup, execution, parameter schemas |
 | Tool integration | `test_tool_integration.cpp` | End-to-end tool calling with mocked LLM |
 | JSON utilities | `test_json_utils.cpp` | Multi-strategy JSON extraction, fallback parsing |
+| JSON event handler | `test_json_event_handler.cpp` | Structured JSONL event emission (thought/goal/answer) |
 | MCP client | `test_mcp_client.cpp` | JSON-RPC protocol, stdio transport, tool discovery |
 | Console | `test_console.cpp` | TerminalConsole and SilentConsole output |
 | Clean console | `test_clean_console.cpp` | CleanConsole TUI, word-wrap, ANSI colors |
 | Types | `test_types.cpp` | AgentConfig, Message, ToolInfo, ParsedResponse |
+| Image | `test_image.cpp` | Image loading, MIME detection, base64 encoding |
 | Decision types | `test_decision.cpp` | `Decision` struct and interactive menu parsing |
 | Security | `test_security.cpp` | `ToolPolicy`, `validatePath`, shell-arg sanitisation, `AllowedToolsStore` |
 | SSE parser | `test_sse_parser.cpp` | OpenAI-style streaming-event parsing and recovery |
 | Lemonade client | `test_lemonade_client.cpp` | Lemonade HTTP surface (health, models, chat completions) |
+| Process runner | `test_process.cpp` | Cross-platform subprocess execution and pipes |
+| File tools | `test_file_tools.cpp` | `file_read`/`file_write`/`file_edit`/`file_search` |
+| Git tools | `test_git_tools.cpp` | `git_status`/`git_diff`/`git_log`/`git_show` |
+| Session store | `test_session.cpp` | Session persistence (save/list/resume) |
+| REPL | `test_repl.cpp` | Interactive REPL loop and slash-command parsing |
+
+<Note>
+  One additional module, `test_tui_console.cpp` (FTXUI TUI console), is compiled into `tests_mock` only when `GAIA_BUILD_TUI=ON` (the default).
+</Note>
 
 ### Building Unit Tests
 
@@ -129,6 +141,7 @@ Integration tests exercise the full stack — real LLM inference, live MCP serve
 | `test_integration_mcp.cpp` | MCP server connection, tool discovery, tool execution |
 | `test_integration_wifi.cpp` | Wi-Fi agent end-to-end diagnostic flow |
 | `test_integration_health.cpp` | Health agent MCP-based system diagnostics |
+| `test_integration_vlm.cpp` | Vision-language inference against a real VLM model |
 
 ### Building Integration Tests
 
@@ -175,7 +188,7 @@ This produces the `tests_integration` binary alongside the unit test binary.
 
 ## CI Pipeline
 
-The C++ CI workflow (`.github/workflows/build_cpp.yml`) runs four jobs on every PR that touches `cpp/`:
+The C++ CI workflow (`.github/workflows/build_cpp.yml`) runs five jobs on every PR that touches `cpp/`:
 
 | Job | Runs on | What it validates |
 |-----|---------|-------------------|
@@ -183,6 +196,7 @@ The C++ CI workflow (`.github/workflows/build_cpp.yml`) runs four jobs on every 
 | **Install Test** | Ubuntu + Windows (cloud) | `cmake --install` + `find_package` round-trip |
 | **Shared Library** | Ubuntu + Windows (cloud) | `BUILD_SHARED_LIBS=ON` compiles cleanly |
 | **Integration Tests** | STX hardware (self-hosted) | Full stack: LLM + MCP + WiFi + Health |
+| **Benchmarks** | Ubuntu + Windows (cloud) | Performance benchmarks (`benchmark_cpp.yml`), runs after Build & Test succeeds |
 
 The integration test job runs on AMD STX hardware with a real Lemonade Server and Qwen3-4B model. It is treated as non-blocking in CI (infrastructure issues on self-hosted runners don't fail the PR).
 

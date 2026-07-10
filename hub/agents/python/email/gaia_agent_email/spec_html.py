@@ -811,6 +811,30 @@ def render_endpoint_spec_html() -> str:
   in sync with the contract automatically.
 </p>
 
+<h2>Authentication</h2>
+<p class="subtitle">
+  The sidecar binds <code>127.0.0.1</code> and can send mail as the user, so it
+  authenticates its <strong>caller</strong> (#1706). This is separate from the
+  draft&rarr;send <code>confirmation_token</code>, which binds a send to one exact
+  message but does not identify who is calling.
+</p>
+<ul class="desc">
+  <li><strong>Per-session bearer token.</strong> The parent process that spawns
+    the sidecar (the <code>@amd-gaia/agent-email</code> lifecycle or the GAIA UI
+    sidecar manager) generates a cryptographically-random token and hands it to
+    the sidecar over the private <code>GAIA_EMAIL_SIDECAR_TOKEN</code> env
+    channel. Every <code>/v1/email/*</code> request must carry
+    <code>Authorization: Bearer &lt;token&gt;</code> or it is rejected with
+    <strong>HTTP 401</strong>. Liveness/version probes
+    (<code>/health</code>, <code>/version</code>) and these HTML pages are exempt.</li>
+  <li><strong>Host allowlist.</strong> A non-loopback <code>Host</code> header is
+    rejected with <strong>HTTP 400</strong>, closing DNS-rebinding.</li>
+  <li><strong>Origin rejection.</strong> A request carrying a non-loopback browser
+    <code>Origin</code> is rejected with <strong>HTTP 403</strong>, closing
+    drive-by web-page access. Non-browser clients send no Origin and are
+    unaffected.</li>
+</ul>
+
 <h2>Endpoints</h2>
 
 {triage_block}

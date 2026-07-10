@@ -60,6 +60,9 @@ class RAGConfig:
     max_file_size_mb: int = 100
     warn_file_size_mb: int = 50
 
+    # Chunking strategy
+    use_llm_chunking: bool = False
+
     # VLM settings
     vlm_model: str = "Qwen3-VL-4B-Instruct-GGUF"
 

@@ -245,7 +245,7 @@ class MockChatAgent(Agent, FileToolsMixin):
         return "Test agent"
 
     def _create_console(self):
-        from gaia import SilentConsole
+        from gaia.agents.base.console import SilentConsole
         return SilentConsole()
 
     def _register_tools(self):

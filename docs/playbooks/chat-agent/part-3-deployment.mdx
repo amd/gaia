@@ -5,7 +5,7 @@ icon: "graduation-cap"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/chat/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/chat/sdk.py) | [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py)
+  **Source Code:** [`hub/agents/python/chat/gaia_agent_chat/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/python/chat/gaia_agent_chat/agent.py) | [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py)
 </Info>
 
 <Badge text="development" color="orange" />
@@ -146,17 +146,18 @@ def _generate_search_keys(self, query: str) -> List[str]:
   <Tab title="Implementation">
     The `query_documents` tool searches across ALL indexed documents by default. The LLM receives chunks from multiple sources and synthesizes them.
 
-    For more control, call the RAG SDK directly (tools are also callable via
-    `agent.rag.*` — there is no public `agent.execute_tool()` on the base
-    `Agent` class):
+    For more control, call the RAG SDK directly via `agent.rag` (there is no
+    public `agent.execute_tool()` on the base `Agent` class):
 
     ```python
-    # Query a specific file via RAGSDK
-    response = agent.rag.query(
-        "safety protocols",
-        target_file="oil-manual.pdf",
-    )
+    # Query across all indexed documents
+    response = agent.rag.query("safety protocols")
+    print(response.text, response.source_files)
     ```
+
+    To target a single file, use the `query_specific_file` tool the agent
+    already exposes (`file_path` + `query`) rather than `agent.rag.query()`,
+    which searches every indexed document.
   </Tab>
 </Tabs>
 
@@ -358,7 +359,8 @@ def _generate_search_keys(self, query: str) -> List[str]:
     [project]
     name = "doc-qa-agent"
     version = "1.0.0"
-    dependencies = ["amd-gaia>=0.14.0"]
+    # gaia-agent-chat provides ChatAgent and depends on amd-gaia
+    dependencies = ["gaia-agent-chat"]
 
     [project.scripts]
     doc-qa = "my_agent.cli:main"
@@ -557,13 +559,16 @@ def _generate_search_keys(self, query: str) -> List[str]:
 
   <Tab title="Memory Management">
     ```python
-    # Limit indexed files
-    config = ChatAgentConfig(
+    # Index/file-size caps live on RAGConfig (used by the RAG SDK), not on
+    # ChatAgentConfig. Build a RAGSDK directly to tune them:
+    from gaia.rag.sdk import RAGSDK, RAGConfig
+
+    rag = RAGSDK(RAGConfig(
         max_indexed_files=100,   # Cap at 100 files
         max_file_size_mb=50      # Skip files > 50MB
-    )
+    ))
 
-    # Manual cleanup
+    # Manual cleanup on a running ChatAgent
     agent.rag.clear_cache()      # Clear cached embeddings/index
     agent.stop_watching()        # Stop file observers
     ```

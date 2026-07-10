@@ -196,8 +196,8 @@ def test_api_mode_defaults():
 
 ## Dependencies
 
-RoutingAgent stays in the core framework and depends only on the LLM client.
-CodeAgent ships as the standalone `gaia-agent-code` wheel (#1397, #1102);
+RoutingAgent ships as the standalone `gaia-agent-routing` wheel and depends only
+on the LLM client. CodeAgent ships as the standalone `gaia-agent-code` wheel (#1397, #1102);
 RoutingAgent resolves it lazily at runtime through the agent registry
 (`AgentRegistry().create_agent("code", ...)`) and raises an actionable error
 if the wheel is not installed — it does **not** hard-depend on the package.
