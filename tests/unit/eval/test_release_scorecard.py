@@ -689,6 +689,12 @@ class TestEmailAdapter:
         assert "gaia eval benchmark" in payload.reproduction_command
         assert "gen_scorecard.py" in payload.reproduction_command
         assert "PYTHON_KEYRING_BACKEND" in payload.reproduction_command
+        # The corpus is generated (not committed), so the recipe MUST build it
+        # from the seed first — a fresh checkout fails otherwise.
+        assert "generate_mbox.py" in payload.reproduction_command
+        assert 'uv pip install -e ".[dev,eval,api]"' in payload.reproduction_command
+        # Points readers to the standalone eval guide for background/examples.
+        assert "EVALUATION.md" in payload.reproduction_command
 
     def _bench_and_gt(self, tmp_path):
         benchmark_dir = tmp_path / "benchmark"

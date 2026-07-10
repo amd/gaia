@@ -230,6 +230,45 @@ def _compute_breakdown(judged: list) -> Optional[dict]:
     return {"per_category": per_category, "top_confusions": top_confusions}
 
 
+def _build_reproduction_command(model, ground_truth_rel: str, limit=None) -> str:
+    """Build the exact, portable shell recipe that reproduces this scorecard.
+
+    Repo-relative paths and a generic output dir only — never a local absolute
+    path (this ships in a published artifact).
+    """
+    limit_flag = f" \\\n    --limit {limit}" if limit is not None else ""
+    return (
+        "# Prerequisites: install the eval extras and start a Lemonade Server\n"
+        "# with the model on AMD Ryzen AI hardware (Strix Halo recommended).\n"
+        'uv pip install -e ".[dev,eval,api]"\n'
+        "lemonade-server serve   # in a separate shell; must stay running\n\n"
+        "# Step 0: build the corpus from the committed seed. The mbox +\n"
+        "# ground_truth are GENERATED artifacts (gitignored), so a fresh\n"
+        "# checkout must materialise them before the benchmark can read them.\n"
+        "python tests/fixtures/email/generate_mbox.py\n\n"
+        "# Step 1: run the benchmark (requires the Lemonade Server above with the\n"
+        "# model loaded; AMD Ryzen AI / Strix Halo recommended)\n"
+        "PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \\\n"
+        # Full-corpus triage is one tool call (~17 min on a 4B local model); a
+        # lower timeout abandons it mid-run and scores 0 emails.
+        "GAIA_AGENT_TOOL_TIMEOUT=1800 \\\n"
+        'PYTHONPATH="$(pwd)" \\\n'
+        "gaia eval benchmark \\\n"
+        f"    --model {model} \\\n"
+        "    --mbox-path tests/fixtures/email/synthetic_inbox.mbox \\\n"
+        f"    --ground-truth {ground_truth_rel}{limit_flag} \\\n"
+        "    --output-dir /tmp/email-eval\n\n"
+        "# Step 2: generate this scorecard from the benchmark output\n"
+        'PYTHONPATH="$(pwd)" \\\n'
+        "python hub/agents/python/email/packaging/gen_scorecard.py \\\n"
+        "    --benchmark-dir /tmp/email-eval \\\n"
+        f"    --ground-truth {ground_truth_rel}"
+        + (f"{limit_flag}" if limit is not None else "")
+        + "\n\n# Background, dataset details, a worked example, and metric\n"
+        "# definitions: see EVALUATION.md (next to this scorecard)."
+    )
+
+
 def _load_draft_approval_rate(drafting_report: Path) -> Optional[float]:
     """Read ``summary.drafting.draft_approval_rate`` from a drafting gate report.
 
@@ -421,34 +460,13 @@ def build_payload(
     import datetime
 
     # Construct a portable, exact reproduction command so any reader can reproduce
-    # this scorecard from scratch. Use repo-relative paths and a generic output dir
-    # only — never a local absolute path (this ships in a published artifact).
-    limit_flag = f" \\\n    --limit {limit}" if limit is not None else ""
+    # this scorecard from scratch.
     ground_truth_rel = (
         str(ground_truth_path.relative_to(_REPO_ROOT))
         if str(ground_truth_path).startswith(str(_REPO_ROOT))
         else ground_truth_path.name
     )
-    reproduction_command = (
-        "# Step 1: run the benchmark (requires a Lemonade Server with the model "
-        "loaded; AMD Ryzen AI / Strix Halo recommended)\n"
-        "PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \\\n"
-        # Full-corpus triage is one tool call (~17 min on a 4B local model); a
-        # lower timeout abandons it mid-run and scores 0 emails.
-        "GAIA_AGENT_TOOL_TIMEOUT=1800 \\\n"
-        'PYTHONPATH="$(pwd)" \\\n'
-        "gaia eval benchmark \\\n"
-        f"    --model {model} \\\n"
-        "    --mbox-path tests/fixtures/email/synthetic_inbox.mbox \\\n"
-        f"    --ground-truth {ground_truth_rel}{limit_flag} \\\n"
-        "    --output-dir /tmp/email-eval\n\n"
-        "# Step 2: generate this scorecard from the benchmark output\n"
-        'PYTHONPATH="$(pwd)" \\\n'
-        "python hub/agents/python/email/packaging/gen_scorecard.py \\\n"
-        "    --benchmark-dir /tmp/email-eval \\\n"
-        f"    --ground-truth {ground_truth_rel}"
-        + (f"{limit_flag}" if limit is not None else "")
-    )
+    reproduction_command = _build_reproduction_command(model, ground_truth_rel, limit)
 
     breakdown = _compute_breakdown(judged)
 

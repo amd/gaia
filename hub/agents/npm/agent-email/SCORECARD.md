@@ -204,7 +204,18 @@ matter alone — no eval-harness access needed.
 Run the following commands from the repository root:
 
 ```sh
-# Step 1: run the benchmark (requires a Lemonade Server with the model loaded; AMD Ryzen AI / Strix Halo recommended)
+# Prerequisites: install the eval extras and start a Lemonade Server
+# with the model on AMD Ryzen AI hardware (Strix Halo recommended).
+uv pip install -e ".[dev,eval,api]"
+lemonade-server serve   # in a separate shell; must stay running
+
+# Step 0: build the corpus from the committed seed. The mbox +
+# ground_truth are GENERATED artifacts (gitignored), so a fresh
+# checkout must materialise them before the benchmark can read them.
+python tests/fixtures/email/generate_mbox.py
+
+# Step 1: run the benchmark (requires the Lemonade Server above with the
+# model loaded; AMD Ryzen AI / Strix Halo recommended)
 PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \
 GAIA_AGENT_TOOL_TIMEOUT=1800 \
 PYTHONPATH="$(pwd)" \
@@ -221,6 +232,9 @@ python hub/agents/python/email/packaging/gen_scorecard.py \
     --benchmark-dir /tmp/email-eval \
     --ground-truth tests/fixtures/email/ground_truth.json \
     --limit 250
+
+# Background, dataset details, a worked example, and metric
+# definitions: see EVALUATION.md (next to this scorecard).
 ```
 
 See [eval-scorecard docs](https://amd-gaia.ai/docs/reference/eval-scorecard) and the [`adding-eval-scorecard` skill](.claude/skills/adding-eval-scorecard/SKILL.md) for the full setup guide.
