@@ -133,6 +133,13 @@ env:
   # `ModuleNotFoundError: No module named 'tests'`. Set job-wide so every eval
   # step is covered — mirrors email_scorecard_refresh.yml.
   PYTHONPATH: ${{ github.workspace }}
+  # The benchmark triages the whole corpus in ONE `triage_inbox` tool call
+  # (~20s/email on a 4B local model), so the default 180s tool timeout abandons
+  # it mid-run. Match the scorecard refresh's 30-min budget.
+  GAIA_AGENT_TOOL_TIMEOUT: "1800"
+  # The agent's calendar-connector resolution blocks on the OS keyring in a
+  # headless runner — disable it so agent construction/triage doesn't hang.
+  PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
 
 jobs:
   email-eval:
