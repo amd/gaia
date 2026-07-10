@@ -127,6 +127,29 @@ describe("eval scorecard in catalog", () => {
     expect(entry.scorecard.startsWith("---")).toBe(false);
   });
 
+  it("strips front matter and parses the score from a CRLF scorecard", async () => {
+    const env = makeEnv();
+    await worker.fetch(
+      publishRequest({
+        token: "tok_amd",
+        manifestYaml: sampleManifest({ id: "chat", version: "0.1.0" }),
+        artifact: "chat-wheel",
+        filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
+        // A Windows-authored scorecard: CRLF line endings must not defeat the
+        // front-matter strip or the score parse.
+        evalScorecard: SAMPLE_SCORECARD.replace(/\n/g, "\r\n"),
+      }),
+      env as never
+    );
+
+    const res = await worker.fetch(get("/index.json"), env as never);
+    const entry = ((await res.json()) as any).agents[0];
+    expect(entry.eval_score).toBe(87.5);
+    expect(entry.scorecard).not.toContain("schema_version:");
+    expect(entry.scorecard.startsWith("---")).toBe(false);
+    expect(entry.scorecard).toContain("# Test Agent — Eval Scorecard v0.1.0");
+  });
+
   it("omits eval_score and eval_scorecard_url when no scorecard is published", async () => {
     const env = makeEnv();
     await worker.fetch(

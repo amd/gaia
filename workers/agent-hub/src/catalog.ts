@@ -108,7 +108,8 @@ export function upsertVersion(
 function parseScorecardScore(markdown: string | null): number | undefined {
   if (!markdown) return undefined;
   // Extract the YAML front matter block between the leading --- delimiters.
-  const match = /^---\n([\s\S]*?)\n---/.exec(markdown);
+  // Tolerate CRLF so a Windows-authored scorecard still yields a score.
+  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(markdown);
   if (!match) return undefined;
   try {
     const fm = parseYaml(match[1]) as Record<string, unknown> | null;
@@ -127,8 +128,10 @@ function parseScorecardScore(markdown: string | null): number | undefined {
  * `eval_score`; the tab only needs the human-facing body.
  */
 function stripFrontMatter(markdown: string): string {
-  const match = /^---\n[\s\S]*?\n---\n?/.exec(markdown);
-  return (match ? markdown.slice(match[0].length) : markdown).replace(/^\n+/, "");
+  // Tolerate CRLF: a stray \r would otherwise leave the raw front matter in the
+  // rendered body AND cost the eval_score, so both regexes accept \r?\n.
+  const match = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(markdown);
+  return (match ? markdown.slice(match[0].length) : markdown).replace(/^[\r\n]+/, "");
 }
 
 /**

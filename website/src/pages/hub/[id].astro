@@ -49,6 +49,12 @@ const skillHtml = agent.skill ? renderMarkdown(agent.skill) : '';
 // a tab; the sidebar badge links out to the canonical source (eval_scorecard_url).
 const scorecardHtml = agent.scorecard ? renderMarkdown(agent.scorecard) : '';
 const hasScore = typeof agent.eval_score === 'number';
+// Clamp display precision to 2 dp so an unrounded upstream aggregate (e.g.
+// 84.66666667) can't render a long decimal; already-clean values (84.67) are
+// unchanged.
+const scoreDisplay = typeof agent.eval_score === 'number'
+  ? Math.round(agent.eval_score * 100) / 100
+  : undefined;
 const req = agent.requirements;
 
 const packageFiles = agent.package?.files ?? [];
@@ -188,7 +194,7 @@ const terminalLines = [
           <article role="tabpanel" id="docpanel-scorecard" aria-labelledby="doctab-scorecard" data-doc-panel="scorecard" class="doc max-w-[70ch]" hidden>
             {agent.eval_scorecard_url && (
               <p class="text-[13px] text-g-muted">
-                {hasScore && <span>Aggregate score <strong class="text-g-text">{agent.eval_score} / 100</strong>. </span>}
+                {hasScore && <span>Aggregate score <strong class="text-g-text">{scoreDisplay} / 100</strong>. </span>}
                 <a href={agent.eval_scorecard_url} target="_blank" rel="noopener" class="text-g-gold-text hover:underline">View the canonical scorecard ↗</a>
               </p>
             )}
@@ -238,7 +244,7 @@ const terminalLines = [
           <section class="rounded-xl border border-g-border bg-g-surface p-5">
             <Eyebrow class="mb-2">Eval scorecard</Eyebrow>
             <div class="flex items-baseline gap-1.5">
-              <span class="text-3xl font-bold tracking-tight text-g-text">{agent.eval_score}</span>
+              <span class="text-3xl font-bold tracking-tight text-g-text">{scoreDisplay}</span>
               <span class="text-sm text-g-muted">/ 100</span>
             </div>
             <p class="mt-1 text-[12px] leading-relaxed text-g-muted">Aggregate benchmark score for the latest version.</p>
