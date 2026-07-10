@@ -57,7 +57,9 @@ A synthesis job collects the five structured outputs, dedupes against already-op
   `findings-security.json`; the public issue shows a count + run-log pointer + `@kovtcharov-amd`.
 - **Skip-if-empty**: normal mode exits before any Claude call on a no-change week.
 - **Read-only**: `--allowedTools Read,Grep,Glob,Bash`; never install or run repo code.
-- **Model** `claude-fable-5` via the top-level `AUDIT_MODEL` env (one place to change).
+- **Model** `claude-opus-4-8` via the top-level `AUDIT_MODEL` env (one place to change);
+  `claude-fable-5` for max depth at ~2x cost. Dimensions run `max-parallel: 1` (serialized)
+  to stay under the Max subscription's rolling rate limit.
 
 ## Non-goals
 
