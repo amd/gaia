@@ -165,8 +165,8 @@ setup(
             "torch>=2.0.0",
         ],
         "audio": [
-            "torch>=2.0.0,<2.13",
-            "torchvision<0.28.0",
+            "torch>=2.0.0,<2.14",
+            "torchvision<0.29.0",
             "torchaudio",
         ],
         "blender": [

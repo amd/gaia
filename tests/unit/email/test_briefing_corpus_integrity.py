@@ -320,14 +320,17 @@ def test_unknown_case_id_in_generations_is_loud(corpus):
 # ---------------------------------------------------------------------------
 
 
-def test_committed_thresholds_manifest_is_enforcing():
+def test_committed_thresholds_manifest_is_report_mode():
     thresholds = bq.load_briefing_thresholds(THRESHOLDS_PATH)
     assert thresholds.approval_min == 0.70  # the #1951 primary target
     assert thresholds.recall_min == 0.80
     assert thresholds.hallucination_free_min == 0.95
     assert thresholds.faithfulness_min == 0.90
-    # Enforcing gate — a breach blocks the build (see the manifest comment).
-    assert thresholds.enforce is True
+    # Temporarily report mode: flipped enforcing (#1951) before the gate ever
+    # completed a CI run (the perf gate failed first and masked it), so the bars
+    # aren't hardware-validated yet. Re-enforce once a passing baseline exists
+    # (see the manifest comment).
+    assert thresholds.enforce is False
     # The module default points at the same committed manifest.
     assert bq.default_briefing_thresholds_path() == THRESHOLDS_PATH
 
