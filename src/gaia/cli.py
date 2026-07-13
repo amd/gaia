@@ -6959,8 +6959,6 @@ def _handle_daemon_logs(args):
     lines = getattr(args, "lines", 100)
     if getattr(args, "follow", False):
         # Simple follow loop: print the tail, then stream appended bytes.
-        import time as _time
-
         with open(log_file, "r", encoding="utf-8", errors="replace") as f:
             existing = f.readlines()
             for line in existing[-lines:]:
@@ -6971,7 +6969,7 @@ def _handle_daemon_logs(args):
                     if chunk:
                         print(chunk, end="")
                     else:
-                        _time.sleep(0.3)
+                        time.sleep(0.3)
             except KeyboardInterrupt:
                 return
         return

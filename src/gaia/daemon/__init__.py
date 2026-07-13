@@ -18,6 +18,8 @@ two concurrent callers yield exactly one daemon.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from gaia.daemon.constants import DAEMON_API_VERSION, SERVICE_ID
 from gaia.daemon.errors import (
     DaemonError,
@@ -32,6 +34,11 @@ from gaia.daemon.instance import (
     read_instance,
     write_instance,
 )
+
+if TYPE_CHECKING:
+    # Declared for static analysis / `__all__`; resolved lazily at runtime via
+    # __getattr__ so importing gaia.daemon doesn't pull in the client machinery.
+    from gaia.daemon.client import attach, request_shutdown, start_or_attach
 
 __all__ = [
     "DAEMON_API_VERSION",
