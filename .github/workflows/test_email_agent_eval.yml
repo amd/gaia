@@ -147,7 +147,12 @@ env:
 jobs:
   email-eval:
     name: Email Triage Eval (synthetic corpus, report mode)
-    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
+    # OS-qualified like the other STX workflows (#1975): the stx/stx-test pools
+    # include a Linux box, and this job's install-lemonade steps are PowerShell.
+    runs-on:
+      - self-hosted
+      - Windows
+      - ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
     timeout-minutes: 90
     steps:
       - name: Checkout

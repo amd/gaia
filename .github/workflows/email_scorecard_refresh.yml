@@ -79,7 +79,12 @@ env:
 jobs:
   refresh:
     name: Re-run eval, refresh-or-reject scorecard
-    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
+    # OS-qualified like the other STX workflows (#1975): the stx/stx-test pools
+    # include a Linux box, and this job's install-lemonade steps are PowerShell.
+    runs-on:
+      - self-hosted
+      - Windows
+      - ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
     # The refresh triages the full ~220-email corpus in one call (~38s/email
     # -> ~2.3h) to regenerate a representative card, so the job needs a wide
     # budget. (Faster triage is tracked separately; until then the refresh is
