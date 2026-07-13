@@ -13,10 +13,10 @@ undone. After the window, restore raises with an actionable message.
 
 from __future__ import annotations
 
-import json
 from typing import Any, Dict, Optional
 
 from gaia.agents.base.tools import tool
+from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email import action_store
 from gaia_agent_email.verbose import log_tool_call
 from gaia.connectors.errors import ConnectorsError
@@ -24,14 +24,6 @@ from gaia.connectors.formatting import format_connector_error
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
-
-
-def _envelope_ok(data: Any) -> str:
-    return json.dumps({"ok": True, "data": data}, default=str)
-
-
-def _envelope_err(message: str) -> str:
-    return json.dumps({"ok": False, "error": message})
 
 
 def trash_message_impl(

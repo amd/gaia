@@ -13,7 +13,7 @@ playground_url: "http://127.0.0.1:8131/v1/email/playground"
 category: productivity
 tags: [email, gmail, calendar, triage]
 icon: mail
-tools_count: 52
+tools_count: 52 # guarded by tests/test_email_agent.py (#1232)
 
 language: python
 min_gaia_version: "0.20.0"

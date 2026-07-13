@@ -15,9 +15,8 @@ leaves the device (derived features only are stored).
 
 from __future__ import annotations
 
-import json
-from typing import Any
 
+from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email import action_store
 from gaia_agent_email.gmail_backend import decode_message_body
 from gaia_agent_email.verbose import log_tool_call
@@ -33,14 +32,6 @@ log = get_logger(__name__)
 # Default Sent-mail sample. Big enough to smooth over one-off outliers,
 # small enough to stay fast on first run (one get_message per sample).
 DEFAULT_SAMPLE_SIZE = 50
-
-
-def _envelope_ok(data: Any) -> str:
-    return json.dumps({"ok": True, "data": data}, default=str)
-
-
-def _envelope_err(message: str) -> str:
-    return json.dumps({"ok": False, "error": message})
 
 
 def build_voice_profile_impl(
