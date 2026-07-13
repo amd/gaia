@@ -491,9 +491,9 @@ def build_payload(
         dataset_size=dataset_size,
         methodology=(
             "gaia eval benchmark over the vendor-derived labelled corpus via "
-            "FakeGmailBackend; no LLM judge. The full 249-email corpus is scored "
-            "(GAIA_EMAIL_TRIAGE_MAX_MESSAGES lifts the interactive per-call scan "
-            "cap for the eval so the whole balanced corpus is covered). Aggregate "
+            "FakeGmailBackend; no LLM judge. The full corpus is scored — see "
+            "dataset_size (GAIA_EMAIL_TRIAGE_MAX_MESSAGES lifts the interactive "
+            "per-call scan cap for the eval so the whole corpus is covered). Aggregate "
             "= within-one-bucket ACCEPTANCE accuracy (#1437): triage priority is "
             "ordinal (URGENT>NEEDS_RESPONSE>FYI>PROMOTIONAL), so a prediction is "
             "credited when it is exact or an adjacent bucket (|rank diff|<=1) — "
