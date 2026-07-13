@@ -208,7 +208,10 @@ def _compute_performance(judged: list) -> Optional[dict]:
         # Same corpus per run; record the sample size so the numbers are read in
         # context (TTFT/throughput are per-token, but pipeline scales with it).
         perf["emails_per_run"] = max(emails)
-    perf = {k: v for k, v in perf.items() if v is not None}
+    # Drop absent (None) AND zero values: peak_memory_gb is 0.0 when the runner's
+    # /stats omits memory (see performance.py), and a 0 for any of these means
+    # "not measured", not a real reading — showing "0.0" on the hub is misleading.
+    perf = {k: v for k, v in perf.items() if v}
     return perf or None
 
 

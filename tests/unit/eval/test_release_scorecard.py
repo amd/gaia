@@ -1325,6 +1325,36 @@ class TestBreakdownAdapter:
         # It reaches the rendered card so it shows on the hub.
         assert "## Performance" in render_scorecard(payload)
 
+    def test_performance_drops_unmeasured_memory(self, tmp_path):
+        """peak_memory_gb=0.0 (runner /stats omits it) is dropped, not shown as 0."""
+        mod = self._load_gen_scorecard()
+        scorecard = {
+            "run_id": "nomem",
+            "scenarios": [
+                {
+                    "category": "m",
+                    "status": "PASS",
+                    "total_emails": 20,
+                    "quality": {
+                        "category_accuracy": 0.5,
+                        "within_one_bucket_accuracy": 0.8,
+                    },
+                    "performance_summary": {
+                        "avg_time_to_first_token": 8.5,
+                        "avg_tokens_per_second": 12.1,
+                        "pipeline_latency_s": 760.0,
+                        "peak_memory_gb": 0.0,
+                        "total_emails": 20,
+                    },
+                }
+            ],
+        }
+        bd = self._make_benchmark_dir(tmp_path, scorecard)
+        payload = mod.build_payload(bd, self._make_gt(tmp_path))
+        assert payload.performance is not None
+        assert "peak_memory_gb" not in payload.performance
+        assert payload.performance["throughput_tps"] == 12.1
+
     def test_performance_none_when_no_summary(self, tmp_path):
         """No performance_summary in any scenario -> perf block omitted."""
         mod = self._load_gen_scorecard()
