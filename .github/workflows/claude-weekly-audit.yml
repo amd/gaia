@@ -183,7 +183,7 @@ jobs:
       - name: Run Claude (${{ matrix.dimension }} lens)
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a  # v1.0.165
+        uses: anthropics/claude-code-action@e90deca47693f9457b72f2b53c17d7c445a87342  # v1.0.171
         with:
           # Prefer subscription OAuth, fall back to API key — see claude.yml "Authentication".
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -262,7 +262,7 @@ jobs:
 
       - name: Upload findings
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: findings-${{ matrix.dimension }}
           path: findings-${{ matrix.dimension }}.json
@@ -287,7 +287,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download all findings
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: audit-findings
 
@@ -303,7 +303,7 @@ jobs:
       - name: Synthesize and file the triage issue
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a  # v1.0.165
+        uses: anthropics/claude-code-action@e90deca47693f9457b72f2b53c17d7c445a87342  # v1.0.171
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

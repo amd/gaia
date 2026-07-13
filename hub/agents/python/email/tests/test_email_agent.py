@@ -2,7 +2,11 @@
 # SPDX-License-Identifier: MIT
 """Smoke tests for the standalone gaia-agent-email package."""
 
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
 import pytest
+import yaml
 
 
 def test_build_registration_shape():
@@ -221,3 +225,67 @@ def test_triage_fails_fast_when_lemonade_unreachable(monkeypatch):
     # scalar the real chat path uses.
     assert isinstance(captured["timeout"], tuple)
     assert captured["timeout"][0] <= 5
+
+
+# ---------------------------------------------------------------------------
+# tools_count anti-drift guard (#1232 AC1)
+# ---------------------------------------------------------------------------
+
+
+class _MinimalMailBackend:
+    """Satisfies the GmailBackend protocol just enough to construct."""
+
+
+class _MinimalCalendarBackend:
+    """Satisfies the CalendarBackend protocol just enough to construct."""
+
+
+def _build_memory_disabled_agent(tmp_path, monkeypatch):
+    """Construct an EmailTriageAgent with memory forced off.
+
+    Mirrors ``tests/test_email_memory.py::_build_agent(memory_disabled=True)``
+    so the live tool registry never picks up the 5 memory CRUD tools that a
+    Lemonade-connected dev box would otherwise add, which would silently
+    corrupt any tools_count comparison.
+    """
+    from gaia_agent_email.agent import EmailTriageAgent
+    from gaia_agent_email.config import EmailAgentConfig
+
+    cfg = EmailAgentConfig(
+        gmail_backend=_MinimalMailBackend(),
+        calendar_backend=_MinimalCalendarBackend(),
+        db_path=str(tmp_path / "state.db"),
+        memory_db_path=str(tmp_path / "memory.db"),
+        silent_mode=True,
+        debug=False,
+    )
+    monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
+    with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:
+        mock_sdk.return_value = MagicMock()
+        return EmailTriageAgent(config=cfg)
+
+
+def test_tools_count_matches_live_registry_and_manifest(tmp_path, monkeypatch):
+    """build_registration().tools_count and gaia-agent.yaml's tools_count must
+    both track the LIVE tool registry, not a hand-maintained literal (#1232).
+
+    A future @tool added to the agent without bumping both pinned copies
+    must fail this test.
+    """
+    import gaia_agent_email as m
+
+    agent = _build_memory_disabled_agent(tmp_path, monkeypatch)
+    try:
+        # Precondition: memory tools are NOT part of the live count.
+        assert agent._memory_store is None
+
+        live = len(agent._tools_registry)
+
+        reg = m.build_registration()
+        assert reg.tools_count == live
+
+        manifest_path = Path(__file__).resolve().parents[1] / "gaia-agent.yaml"
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+        assert manifest["tools_count"] == live
+    finally:
+        agent.close_db()

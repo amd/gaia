@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email import action_store
 from gaia_agent_email.tools.read_tools import extract_sender_email
 from gaia_agent_email.verbose import log_tool_call
@@ -78,14 +79,6 @@ def _load_attachment_files(paths: str) -> Optional[List[Dict[str, Any]]]:
             {"filename": path.name, "mime_type": mime_type, "content": content}
         )
     return out
-
-
-def _envelope_ok(data: Any) -> str:
-    return json.dumps({"ok": True, "data": data}, default=str)
-
-
-def _envelope_err(message: str) -> str:
-    return json.dumps({"ok": False, "error": message})
 
 
 def _compute_reply_latency_seconds(original_msg: Dict[str, Any]) -> Optional[float]:

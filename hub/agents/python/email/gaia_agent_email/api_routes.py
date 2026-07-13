@@ -1831,7 +1831,59 @@ def _triage_batch_and_persist(request: BatchTriageRequest) -> BatchTriageRespons
     return response
 
 
-@router.post("/triage", response_model=EmailTriageResponse)
+# Error contract shared by every route that resolves a connected-mailbox /
+# calendar backend (#1897): auth/scope/revocation (and the confirmation gate on
+# gated routes) -> 403, upstream provider/connector failure -> 502, no account
+# connected or configuration missing -> 503. Mirrors the send handler's
+# except-ladder and ``_raise_calendar_connector_http``. Description-only on
+# purpose: these routes raise plain ``HTTPException`` whose body is FastAPI's
+# ``{"detail": ...}`` — there is no shared error model to reference (only
+# ``/init`` returns a real model on its error path).
+_CONNECTOR_ERROR_RESPONSES = {
+    403: {
+        "description": (
+            "Authorization failed — the account's auth is missing, expired, or "
+            "revoked (reconnect via Settings → Connectors), or a confirmation "
+            "gate rejected the request (mint a fresh confirmation token)."
+        )
+    },
+    502: {"description": "Upstream provider/connector failure."},
+    503: {
+        "description": (
+            "No account connected, or backend configuration is missing — "
+            "connect Google or Microsoft in Settings → Connectors."
+        )
+    },
+}
+
+# Passing an unconnected provider, or omitting it with 2+ accounts connected,
+# is ambiguous — the backend resolvers refuse to guess (fail-loud, never a
+# silent pick). Shared by every route that resolves a provider-bound backend.
+_AMBIGUOUS_PROVIDER_400 = {
+    400: {
+        "description": (
+            "Ambiguous or unknown account: the named provider is not connected, "
+            "or no provider was given while several accounts are connected."
+        )
+    }
+}
+
+# LLM-backed triage: Lemonade unreachable / invalid LLM output -> 502.
+_TRIAGE_ERROR_RESPONSES = {
+    502: {
+        "description": (
+            "Local LLM triage failed — Lemonade Server unreachable or it "
+            "returned an unusable result."
+        )
+    }
+}
+
+
+@router.post(
+    "/triage",
+    response_model=EmailTriageResponse,
+    responses={**_TRIAGE_ERROR_RESPONSES},
+)
 async def triage_email(request: EmailTriageRequest) -> EmailTriageResponse:
     """Triage a single email or a full thread.
 
@@ -1852,7 +1904,11 @@ async def triage_email(request: EmailTriageRequest) -> EmailTriageResponse:
         ) from e
 
 
-@router.post("/triage/batch", response_model=BatchTriageResponse)
+@router.post(
+    "/triage/batch",
+    response_model=BatchTriageResponse,
+    responses={**_TRIAGE_ERROR_RESPONSES},
+)
 async def triage_email_batch(request: BatchTriageRequest) -> BatchTriageResponse:
     """Triage an array of emails or threads in a single request (#1887).
 
@@ -1877,7 +1933,11 @@ async def triage_email_batch(request: BatchTriageRequest) -> BatchTriageResponse
         ) from e
 
 
-@router.post("/search", response_model=EmailSearchResponse)
+@router.post(
+    "/search",
+    response_model=EmailSearchResponse,
+    responses={**_CONNECTOR_ERROR_RESPONSES, **_AMBIGUOUS_PROVIDER_400},
+)
 async def search_inbox(
     request: EmailSearchRequest,
     backend: Any = Depends(get_search_backend),
@@ -1911,7 +1971,11 @@ async def search_inbox(
         raise HTTPException(status_code=502, detail=str(e)) from e
 
 
-@router.post("/prescan", response_model=EmailPreScanResponse)
+@router.post(
+    "/prescan",
+    response_model=EmailPreScanResponse,
+    responses={**_CONNECTOR_ERROR_RESPONSES, **_AMBIGUOUS_PROVIDER_400},
+)
 async def prescan_inbox(
     request: EmailPreScanRequest,
     backend=Depends(get_prescan_backend),
@@ -1961,7 +2025,24 @@ class EmailBriefingResponse(_Strict):
     )
 
 
-@router.get("/briefing", response_model=EmailBriefingResponse)
+@router.get(
+    "/briefing",
+    response_model=EmailBriefingResponse,
+    responses={
+        404: {
+            "description": (
+                "No briefing generated yet — enable the daily schedule "
+                "(GAIA_EMAIL_BRIEFING_ENABLED) or POST /v1/email/prescan."
+            )
+        },
+        500: {
+            "description": (
+                "The persisted briefing could not be read or does not match "
+                "the email_pre_scan envelope."
+            )
+        },
+    },
+)
 async def get_briefing() -> EmailBriefingResponse:
     """Return the latest scheduled inbox briefing (#1608).
 
@@ -2026,7 +2107,19 @@ async def draft_reply(request: EmailDraftRequest) -> EmailDraftResponse:
     return EmailDraftResponse(draft=draft, confirmation_token=token)
 
 
-@router.post("/send", response_model=EmailSendResponse)
+@router.post(
+    "/send",
+    response_model=EmailSendResponse,
+    responses={
+        **_CONNECTOR_ERROR_RESPONSES,
+        **_AMBIGUOUS_PROVIDER_400,
+        413: {
+            "description": (
+                "An attachment exceeds the connected provider's size ceiling."
+            )
+        },
+    },
+)
 async def send_email(request: EmailSendRequest) -> EmailSendResponse:
     """Send a reply — gated on explicit confirmation (#1264).
 
@@ -2150,7 +2243,11 @@ async def confirm_action(
     )
 
 
-@router.post("/archive", response_model=EmailArchiveResponse)
+@router.post(
+    "/archive",
+    response_model=EmailArchiveResponse,
+    responses={**_CONNECTOR_ERROR_RESPONSES, **_AMBIGUOUS_PROVIDER_400},
+)
 async def archive_email(request: EmailArchiveRequest) -> EmailArchiveResponse:
     """Archive a message — gated on confirmation, reversible for 30s.
 
@@ -2200,7 +2297,25 @@ async def archive_email(request: EmailArchiveRequest) -> EmailArchiveResponse:
     )
 
 
-@router.post("/unarchive", response_model=EmailUnarchiveResponse)
+_UNDO_WINDOW_409 = {
+    409: {
+        "description": (
+            "The undo window has expired, or the handle is unknown or already "
+            "undone — the action can no longer be reversed via the API."
+        )
+    }
+}
+
+
+@router.post(
+    "/unarchive",
+    response_model=EmailUnarchiveResponse,
+    responses={
+        **_CONNECTOR_ERROR_RESPONSES,
+        **_AMBIGUOUS_PROVIDER_400,
+        **_UNDO_WINDOW_409,
+    },
+)
 async def unarchive_email(request: EmailUnarchiveRequest) -> EmailUnarchiveResponse:
     """Reverse an archive within the undo window (NOT gated — it restores).
 
@@ -2240,7 +2355,20 @@ async def unarchive_email(request: EmailUnarchiveRequest) -> EmailUnarchiveRespo
     )
 
 
-@router.post("/quarantine", response_model=EmailQuarantineResponse)
+@router.post(
+    "/quarantine",
+    response_model=EmailQuarantineResponse,
+    responses={
+        **_CONNECTOR_ERROR_RESPONSES,
+        400: {
+            "description": (
+                "Refused: is_phishing was false (only phishing-flagged mail may "
+                "be quarantined), the mailbox is Outlook (quarantine is "
+                "Gmail-only), or the provider is ambiguous/not connected."
+            )
+        },
+    },
+)
 async def quarantine_email(
     request: EmailQuarantineRequest,
 ) -> EmailQuarantineResponse:
@@ -2294,7 +2422,20 @@ async def quarantine_email(
     )
 
 
-@router.post("/unquarantine", response_model=EmailUnquarantineResponse)
+@router.post(
+    "/unquarantine",
+    response_model=EmailUnquarantineResponse,
+    responses={
+        **_CONNECTOR_ERROR_RESPONSES,
+        400: {
+            "description": (
+                "Refused: the recorded mailbox is Outlook (quarantine is "
+                "Gmail-only), or the provider is ambiguous/not connected."
+            )
+        },
+        **_UNDO_WINDOW_409,
+    },
+)
 async def unquarantine_email(
     request: EmailUnquarantineRequest,
 ) -> EmailUnquarantineResponse:
@@ -2615,7 +2756,11 @@ async def email_provision() -> StreamingResponse:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/calendar/events", response_model=CalendarEventsResponse)
+@router.get(
+    "/calendar/events",
+    response_model=CalendarEventsResponse,
+    responses={**_CONNECTOR_ERROR_RESPONSES, **_AMBIGUOUS_PROVIDER_400},
+)
 async def list_calendar_events(
     time_min: Optional[str] = None,
     time_max: Optional[str] = None,
@@ -2674,7 +2819,19 @@ async def preview_calendar_event(
     )
 
 
-@router.post("/calendar/events", response_model=CalendarEventResponse)
+@router.post(
+    "/calendar/events",
+    response_model=CalendarEventResponse,
+    responses={
+        **_CONNECTOR_ERROR_RESPONSES,
+        400: {
+            "description": (
+                "Bad event input (no usable time / inverted window), or the "
+                "provider is ambiguous/not connected."
+            )
+        },
+    },
+)
 async def create_calendar_event(
     request: CalendarCreateEventRequest,
 ) -> CalendarEventResponse:
@@ -2732,7 +2889,11 @@ async def create_calendar_event(
     )
 
 
-@router.post("/calendar/events/respond", response_model=CalendarRespondResponse)
+@router.post(
+    "/calendar/events/respond",
+    response_model=CalendarRespondResponse,
+    responses={**_CONNECTOR_ERROR_RESPONSES, **_AMBIGUOUS_PROVIDER_400},
+)
 async def respond_calendar_event(
     request: CalendarRespondRequest,
 ) -> CalendarRespondResponse:

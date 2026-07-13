@@ -24,8 +24,8 @@ from typing import (
 import httpx
 
 from gaia_agent_email.scopes import AGENT_NAMESPACED_ID, CALENDAR_SCOPES
+from gaia.connectors.api import get_access_token_sync
 from gaia.connectors.errors import ConnectorsError
-from gaia.connectors.handler import get_credential_sync
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -246,12 +246,11 @@ class LiveCalendarBackend:
 
 def _get_calendar_token() -> str:
     """Return a Calendar access token via the standard grant-checked path."""
-    cred = get_credential_sync(
-        "google",
+    return get_access_token_sync(
+        provider="google",
         agent_id=AGENT_NAMESPACED_ID,
-        required_scopes=list(CALENDAR_SCOPES),
+        scopes=list(CALENDAR_SCOPES),
     )
-    return cred["access_token"]
 
 
 __all__ = [

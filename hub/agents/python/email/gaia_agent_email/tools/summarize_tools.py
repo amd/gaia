@@ -22,9 +22,9 @@ summarizer (Phase I1, mirroring ``llm_triage.py``).
 
 from __future__ import annotations
 
-import json
 from typing import Any, Dict, List, Optional
 
+from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email.gmail_backend import decode_message_body
 from gaia_agent_email.tools.read_tools import wrap_untrusted_body
 from gaia_agent_email.verbose import log_tool_call
@@ -84,14 +84,6 @@ class EmailSummarizeError(RuntimeError):
     def __init__(self, message: str, *, message_id: str = "") -> None:
         super().__init__(message)
         self.message_id = message_id
-
-
-def _envelope_ok(data: Any) -> str:
-    return json.dumps({"ok": True, "data": data}, default=str)
-
-
-def _envelope_err(message: str) -> str:
-    return json.dumps({"ok": False, "error": message})
 
 
 def _build_user_prompt(
