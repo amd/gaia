@@ -200,10 +200,11 @@ def test_surface_counts_match_code(matrix):
     assert rest_in_contract == _EXPECTED_REST_IN_CONTRACT_COUNT
 
 
-def test_tools_count_guard_rejects_ast_drift(monkeypatch):
+def test_tools_count_guard_rejects_ast_drift():
     """Changing only the AST-derived count must be detectable as a mismatch
     against the yaml/__init__.py literals (proves the guard is non-vacuous,
-    not that the AST count is hardcoded to agree with the other two sources)."""
+    not that the AST count is hardcoded to agree with the other two sources).
+    The #2013 scenario: a new @tool lands but the literals are not bumped."""
     manifest = yaml.safe_load(_GAIA_AGENT_YAML.read_text(encoding="utf-8"))
     manifest_count = manifest["tools_count"]
 
@@ -214,34 +215,15 @@ def test_tools_count_guard_rejects_ast_drift(monkeypatch):
 
     drifted_ast_count = _EXPECTED_TOOLS_TOTAL + 1
 
-    reconcile = getattr(capability_matrix, "reconcile_tools_count", None)
-    if reconcile is not None:
-        with pytest.raises(Exception) as excinfo:
-            reconcile(
-                manifest_count=manifest_count,
-                registration_count=registration_count,
-                ast_count=drifted_ast_count,
-            )
-        message = str(excinfo.value)
-        assert str(manifest_count) in message
-        assert str(drifted_ast_count) in message
-        return
-
-    # No standalone reconcile function is exposed — monkeypatch the module's
-    # own AST-counting entrypoint and prove a fresh derive_matrix() reacts to
-    # it and now disagrees with the two literal sources (both still 52).
-    counter_name = _find_ast_counter_name()
-    assert counter_name is not None, (
-        "capability_matrix.py must expose either reconcile_tools_count or a "
-        "top-level AST tool-counting function this guard test can patch"
-    )
-    monkeypatch.setattr(
-        capability_matrix, counter_name, lambda *a, **k: drifted_ast_count
-    )
-    drifted_matrix = capability_matrix.derive_matrix(_REPO_ROOT)
-    drifted_total = _field(drifted_matrix, "tools_total")
-    assert drifted_total != manifest_count
-    assert drifted_total != registration_count
+    with pytest.raises(ValueError) as excinfo:
+        capability_matrix.reconcile_tools_count(
+            manifest_count=manifest_count,
+            registration_count=registration_count,
+            ast_count=drifted_ast_count,
+        )
+    message = str(excinfo.value)
+    assert str(manifest_count) in message
+    assert str(drifted_ast_count) in message
 
 
 def test_tools_count_guard_rejects_manifest_drift(tmp_path):
@@ -263,36 +245,14 @@ def test_tools_count_guard_rejects_manifest_drift(tmp_path):
 
     registration_count = gaia_agent_email.build_registration().tools_count
 
-    reconcile = getattr(capability_matrix, "reconcile_tools_count", None)
-    if reconcile is not None:
-        with pytest.raises(Exception) as excinfo:
-            reconcile(
-                manifest_count=drifted["tools_count"],
-                registration_count=registration_count,
-                ast_count=_EXPECTED_TOOLS_TOTAL,
-            )
-        message = str(excinfo.value)
-        assert "99" in message
-    else:
-        assert drifted["tools_count"] != registration_count or (
-            registration_count != _EXPECTED_TOOLS_TOTAL
+    with pytest.raises(ValueError) as excinfo:
+        capability_matrix.reconcile_tools_count(
+            manifest_count=drifted["tools_count"],
+            registration_count=registration_count,
+            ast_count=_EXPECTED_TOOLS_TOTAL,
         )
-
-
-_AST_COUNTER_NAMES = (
-    "count_tools_in_source",
-    "count_at_tool_functions",
-    "_count_tool_decorated_functions",
-)
-
-
-def _find_ast_counter_name():
-    """Return whichever top-level AST tool-counting entrypoint name
-    capability_matrix.py exposes (exact name is the module author's choice)."""
-    for name in _AST_COUNTER_NAMES:
-        if getattr(capability_matrix, name, None) is not None:
-            return name
-    return None
+    message = str(excinfo.value)
+    assert "99" in message
 
 
 def test_ast_counter_reacts_to_source_change(tmp_path):
@@ -331,14 +291,7 @@ def not_a_tool(x: int) -> int:
         encoding="utf-8",
     )
 
-    counter_name = _find_ast_counter_name()
-    assert counter_name is not None, (
-        "capability_matrix.py must expose a top-level AST tool-counting "
-        "function (e.g. count_tools_in_source) that tests can call standalone"
-    )
-    counter = getattr(capability_matrix, counter_name)
-
-    result = counter(synthetic)
+    result = capability_matrix.count_tools_in_source(synthetic)
     assert result == 3
 
 

@@ -109,8 +109,8 @@ _NO_EVAL_SENTINEL = "no quality eval (contract-tested only)"
 # "/v1/email/" (disambiguated with " (GET)"/" (POST)" only where a suffix is
 # shared across methods), and the literal MCP tool name.
 OP_EVAL_COVERAGE: Dict[str, str] = {
-    "triage": _NO_EVAL_SENTINEL,
-    "triage/batch": _NO_EVAL_SENTINEL,
+    "triage": "quality",
+    "triage/batch": "quality",
     "search": _NO_EVAL_SENTINEL,
     "prescan": _NO_EVAL_SENTINEL,
     "briefing": "briefing",
@@ -169,22 +169,26 @@ EVAL_FOLLOWUP_PLAN: Dict[str, str] = {
         "_comment."
     ),
     "quality": (
-        "Report-mode today (enforce:false) pending categorization accuracy "
-        "improvements (#1266); a separate acceptance_enforce:true release "
-        "gate already runs on the within-one-bucket metric. Follow-up: flip "
-        "enforce to true once #1266 lands, per the fixture's own _comment."
+        "Report-mode today (enforce:false): the FP/FN bars only become "
+        "meaningful once 4-way categorization accuracy improves (see the "
+        "#1266 history), per the fixture's own _comment. A separate "
+        "acceptance_enforce:true release gate already runs on the "
+        "within-one-bucket metric. Follow-up: flip enforce to true in the "
+        "fixture once accuracy stabilizes above the gate's bars."
     ),
     "action_items": (
         "Report-mode today (enforce:false); no judged baseline exists yet. "
         "Follow-up: generate the first nightly Strix Halo / Gemma-4-E4B "
-        "baseline (#1949) and flip enforce to true once it stabilizes."
+        "baseline (the #1949 eval's documented follow-up) and flip enforce "
+        "to true once it stabilizes."
     ),
     "followups": (
         "Report-mode today (enforce:false) AND CI-unwired: no "
         "eval_followup_report.py exists, unlike the other five suites. "
-        "Follow-up: this issue (#2013) files a tracking issue for wiring an "
-        "eval_followup_report.py and, separately, establishing a judged "
-        "baseline (#1950) before flipping enforce to true."
+        "Follow-up: a tracking issue filed alongside this change covers "
+        "wiring an eval_followup_report.py and, separately, establishing a "
+        "judged baseline (the #1950 eval's documented follow-up) before "
+        "flipping enforce to true."
     ),
 }
 
@@ -476,8 +480,8 @@ def render_markdown(matrix: CapabilityMatrix) -> str:
         lines.append(EVAL_FOLLOWUP_PLAN[suite])
         lines.append("")
     lines.append(
-        "Tracking issue for wiring `followups` into CI: see the #2013 "
-        "follow-up filed by the orchestrator."
+        "A tracking issue for wiring `followups` into CI is filed alongside "
+        "this change (#2013 follow-up)."
     )
     lines.append("")
 
