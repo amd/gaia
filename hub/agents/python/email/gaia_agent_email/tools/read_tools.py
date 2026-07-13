@@ -17,10 +17,10 @@ module because every read tool that returns body bytes needs to honor it.
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
+from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email.gmail_backend import decode_message_body
 
 # Re-exported so the pre-scan tests can monkeypatch ``read_tools.make_llm_classifier``
@@ -93,14 +93,6 @@ UNTRUSTED_BODY_CLOSE = "<<<UNTRUSTED_EMAIL_BODY_END>>>"
 def wrap_untrusted_body(body: str) -> str:
     """Wrap a body in the untrusted-input delimiter pair."""
     return f"{UNTRUSTED_BODY_OPEN}\n{body}\n{UNTRUSTED_BODY_CLOSE}"
-
-
-def _envelope_ok(data: Any) -> str:
-    return json.dumps({"ok": True, "data": data}, default=str)
-
-
-def _envelope_err(message: str) -> str:
-    return json.dumps({"ok": False, "error": message})
 
 
 def _truncate(text: str, limit: int) -> tuple[str, bool]:

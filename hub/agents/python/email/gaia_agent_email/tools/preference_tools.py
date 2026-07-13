@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict
 
+from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email.tools.triage_heuristics import (
     CATEGORY_FYI,
     CATEGORY_PROMOTIONAL,
@@ -49,14 +50,6 @@ _PREF_CATEGORY = "preference"
 # would silently drop important mail.
 _CATEGORIES_WITH_DEFAULTS = (CATEGORY_FYI, CATEGORY_PROMOTIONAL)
 _VALID_ACTIONS = ("archive", "keep")
-
-
-def _envelope_ok(data: Any) -> str:
-    return json.dumps({"ok": True, "data": data}, default=str)
-
-
-def _envelope_err(message: str) -> str:
-    return json.dumps({"ok": False, "error": message})
 
 
 def _normalize_email(value: str) -> str:
