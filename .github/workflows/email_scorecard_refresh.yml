@@ -70,6 +70,16 @@ env:
   LIMIT: ${{ github.event.inputs.limit || '220' }}
   MODEL: ${{ github.event.inputs.model || 'Gemma-4-E4B-it-GGUF' }}
   PYTHONIOENCODING: "utf-8"
+  # JOB-WIDE so EVERY eval step (benchmark AND the drafting eval) can import the
+  # tests.fixtures.email FakeGmailBackend — eval_drafting_report.py died with
+  # 'ModuleNotFoundError: No module named tests' because PYTHONPATH was only set
+  # on the benchmark step. Mirrors test_email_agent_eval.yml (job-wide env).
+  PYTHONPATH: ${{ github.workspace }}
+  # Match the nightly/release eval: run WITHOUT agent memory. Memory-on made the
+  # refresh try to load an embedding model (embeddinggemma-300m) that fails to
+  # start on the runner, spamming errors + per-email work, and measured the
+  # scorecard under different conditions than the release gate. Disable it.
+  GAIA_MEMORY_DISABLED: "1"
   # Loopback Lemonade — bypass any runner proxy so Python requests reaches it.
   # Bare host (no /api/v1): the LemonadeClient normalizes it, and gen_scorecard.py
   # appends /api/v1/health itself — a suffixed value would double to /api/v1/api/v1.
