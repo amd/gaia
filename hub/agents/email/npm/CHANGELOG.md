@@ -44,6 +44,13 @@ Contract bumped to `SCHEMA_VERSION` **2.3**. `checkVersion` is MAJOR-only, so th
 
 ### Added
 
+- **Code-derived capability matrix (#2013).** New committed
+  [`CAPABILITY_MATRIX.md`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/CAPABILITY_MATRIX.md)
+  inventories every capability surface (52 internal agent-loop tools, 16
+  functional REST verbs, 4 MCP tools, 6 eval suites) with per-op eval
+  coverage; a CI drift test regenerates and byte-compares it so the surfaces
+  can no longer silently diverge. Doc-only for this package (referenced from
+  README/SPEC); no wire or client change.
 - **Readiness preflight — `GET /v1/email/init` (#1795).** A green `/health` never
   meant "ready to triage": on a fresh host the binary boots fine but the first
   `triage` 502s until Lemonade is up and the model is pulled. The new endpoint

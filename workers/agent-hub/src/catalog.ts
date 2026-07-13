@@ -12,6 +12,7 @@ import {
   evalScorecardKey,
   listAgentIds,
   readAgentManifest,
+  readCapabilityMatrix,
   readChangelog,
   readEvalScorecard,
   readEvaluation,
@@ -136,22 +137,48 @@ function stripFrontMatter(markdown: string): string {
 }
 
 /**
+ * Optional per-agent doc fields for {@link toIndexEntry}, collapsed into a
+ * single options object rather than positional params: 4+ consecutive string
+ * params followed by `string | null` + `string` are mutually assignable, so a
+ * transposition would typecheck and silently corrupt scorecard/eval fields for
+ * every catalog agent on every rebuild.
+ */
+export interface ToIndexEntryOptions {
+  /** SPEC.md (technical reference) markdown of the latest version; "" if none was published. */
+  spec?: string;
+  /** SKILL.md (AI-integration playbook) markdown of the latest version; "" if none was published. */
+  skill?: string;
+  /** EVALUATION.md (evaluation guide) markdown of the latest version; "" if none was published. */
+  evaluation?: string;
+  /** CAPABILITY_MATRIX.md markdown of the latest version; "" if none was published. */
+  capabilityMatrix?: string;
+  /** Eval scorecard markdown (SCORECARD.md), null if none was published. */
+  evalScorecard?: string | null;
+  /** Public base URL used to build `eval_scorecard_url`. */
+  baseUrl?: string;
+}
+
+/**
  * Build the catalog entry for one agent manifest. `readme`/`changelog` are the
  * latest version's markdown ("" if none was published); `packageFiles` is the
  * whole-package zip's file listing (null if no package zip was published);
- * `evalScorecard` is the scorecard markdown (null if none was published).
+ * `opts.evalScorecard` is the scorecard markdown (null if none was published).
  */
 export function toIndexEntry(
   agent: AgentManifest,
   readme: string,
   changelog: string,
   packageFiles: { files: { name: string; size_bytes: number }[] } | null,
-  spec = "",
-  skill = "",
-  evaluation = "",
-  evalScorecard: string | null = null,
-  baseUrl = "https://hub.amd-gaia.ai"
+  opts: ToIndexEntryOptions = {}
 ): IndexEntry {
+  const {
+    spec = "",
+    skill = "",
+    evaluation = "",
+    capabilityMatrix = "",
+    evalScorecard = null,
+    baseUrl = "https://hub.amd-gaia.ai",
+  } = opts;
   const latest = agent.versions[agent.latest_version];
   const req = agent.requirements;
   // The whole-package download is the published `.zip` artifact of the latest
@@ -195,6 +222,7 @@ export function toIndexEntry(
     spec,
     skill,
     evaluation,
+    capability_matrix: capabilityMatrix,
     // Render-ready scorecard body (front matter stripped); "" when none published.
     scorecard: evalScorecard !== null ? stripFrontMatter(evalScorecard) : "",
     // undefined serializes to "key absent" — only present when the manifest set it.
@@ -228,9 +256,17 @@ export async function rebuildIndex(
     const spec = await readSpec(bucket, id, agent.latest_version);
     const skill = await readSkill(bucket, id, agent.latest_version);
     const evaluation = await readEvaluation(bucket, id, agent.latest_version);
+    const capabilityMatrix = await readCapabilityMatrix(bucket, id, agent.latest_version);
     const evalScorecard = await readEvalScorecard(bucket, id, agent.latest_version);
     entries.push(
-      toIndexEntry(agent, readme, changelog, packageFiles, spec, skill, evaluation, evalScorecard, baseUrl)
+      toIndexEntry(agent, readme, changelog, packageFiles, {
+        spec,
+        skill,
+        evaluation,
+        capabilityMatrix,
+        evalScorecard,
+        baseUrl,
+      })
     );
   }
   entries.sort((a, b) => a.id.localeCompare(b.id));

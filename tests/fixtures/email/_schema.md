@@ -37,17 +37,20 @@ fixture; new tests should use `synthetic_inbox.mbox`.
 
 ## Size / category split
 
-- **249 messages**, balanced across the **five** schema-2.0 taxonomy categories
-  (`URGENT`, `NEEDS_RESPONSE`, `FYI`, `PROMOTIONAL`, `PERSONAL`).
+- **299 messages** (`generate_mbox.TOTAL_MESSAGES` — always the committed seed
+  size; derive counts from it, never hardcode), covering the **five** schema-2.0
+  taxonomy categories (`URGENT`, `NEEDS_RESPONSE`, `FYI`, `PROMOTIONAL`,
+  `PERSONAL`).
 - The authoritative taxonomy is `ALL_CATEGORIES` in the email agent's
   `triage_heuristics` (now in the `gaia-agent-email` wheel); the builder imports it
   so the corpus can't carry a label outside it.
-- Distribution: **54** each of URGENT / NEEDS_RESPONSE / FYI / PROMOTIONAL, and
-  **33** PERSONAL (the scarcest bucket in the source — all eligible PERSONAL are
-  taken). Balanced on purpose so per-category accuracy is meaningful and PERSONAL
-  (#1437) is measurable. The spam/phishing axes are non-empty (≈7 spam, ≈48
-  phishing) so they stay scoreable.
-- The corpus stays under the 1 MB CI size guard (~312 KB).
+- Distribution: **54** each of URGENT / NEEDS_RESPONSE / FYI, **104** PROMOTIONAL
+  (the 54-per-category quota plus the unconditional Enron-spam carve-out,
+  #1906/#1911), and **33** PERSONAL (the scarcest bucket in the source — all
+  eligible PERSONAL are taken). Balanced on purpose so per-category accuracy is
+  meaningful and PERSONAL (#1437) is measurable. The spam/phishing axes are
+  non-empty (57 spam, 97 phishing) so they stay scoreable.
+- The corpus stays under the 1 MB CI size guard (~380 KB).
 
 ## ground_truth.json keying
 
@@ -117,7 +120,7 @@ apply. What is enforced:
 ## Baseline
 
 > `baseline_accuracy.json` / `baseline_accuracy_e2b.json` have been **re-recorded
-> against the 249-message vendor corpus** (`scored: 249`, Gemma-4-E4B / E2B,
+> against the 299-message vendor corpus** (`scored: 299`, Gemma-4-E4B / E2B,
 > no-lever) and are current. Re-run the commands below on AMD hardware
 > (`score_baseline.py`) whenever the corpus or the triage path changes, before
 > relying on the `test_email_agent_triage` integration gate (which is

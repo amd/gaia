@@ -349,8 +349,9 @@ triages up to `MAX_BATCH_SIZE` (**100**) emails or threads in one request: an
 **Per-item isolation — read the results, not the status.** A failure on one item
 sets that entry's `error` and the rest still run, so **HTTP 200 with every item
 errored is a valid response**. Consumers MUST inspect each `results[].error`, never
-just the HTTP status. A `502` means the local LLM was unreachable before any item
-was processed — the whole batch fails.
+just the HTTP status. A `502` means the local LLM was unreachable or the triage
+model is unavailable there, detected before any item was processed — the whole
+batch fails.
 
 The MCP surface mirrors this with a `triage_email_batch` tool (the single
 `triage_email` tool is unchanged).

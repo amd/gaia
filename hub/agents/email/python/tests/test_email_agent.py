@@ -2,7 +2,11 @@
 # SPDX-License-Identifier: MIT
 """Smoke tests for the standalone gaia-agent-email package."""
 
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
 import pytest
+import yaml
 
 
 def test_build_registration_shape():
@@ -195,7 +199,6 @@ def test_thread_newest_first():
 def test_triage_fails_fast_when_lemonade_unreachable(monkeypatch):
     """Unreachable Lemonade → prompt LLMTriageError, not a ~30s hang (#1677)."""
     import requests
-
     from gaia_agent_email.api_routes import EmailTriageService
     from gaia_agent_email.tools.llm_triage import LLMTriageError
 
@@ -221,3 +224,261 @@ def test_triage_fails_fast_when_lemonade_unreachable(monkeypatch):
     # scalar the real chat path uses.
     assert isinstance(captured["timeout"], tuple)
     assert captured["timeout"][0] <= 5
+
+
+# ---------------------------------------------------------------------------
+# Configurable LEMONADE_BASE_URL for embedded-Lemonade consumers (#1888)
+# ---------------------------------------------------------------------------
+
+
+def test_llm_chat_respects_lemonade_base_url_override_env(monkeypatch):
+    """LEMONADE_BASE_URL redirects both the pre-flight probes and the
+    constructed chat client to the overridden Lemonade server (AC1).
+
+    Note: the ``/draft`` verb composes a scaffold with no LLM call, so it has
+    no probe/redirect path to test here — out of scope by design.
+    """
+    import requests
+    from gaia_agent_email.api_routes import EmailTriageService, _resolve_email_model_id
+
+    monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:9555")
+    resolved_model_id = _resolve_email_model_id()
+    captured_urls = []
+
+    def _fake_get(url, *args, **kwargs):
+        captured_urls.append(url)
+        if url == "http://127.0.0.1:9555/api/v1/health":
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"version": "10.2.0"}
+            return resp
+        if url == "http://127.0.0.1:9555/api/v1/models":
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"data": [{"id": resolved_model_id}]}
+            return resp
+        raise AssertionError(f"unexpected probe URL: {url}")
+
+    monkeypatch.setattr(requests, "get", _fake_get)
+
+    chat = EmailTriageService()._build_llm_chat()
+
+    assert "http://127.0.0.1:9555/api/v1/health" in captured_urls
+    # Fails today: _build_llm_chat does not yet probe /models (the planned
+    # _assert_model_present is not wired in) — AC2 is not implemented yet.
+    assert "http://127.0.0.1:9555/api/v1/models" in captured_urls
+    # Exact equality — LemonadeClient normalization is deterministic.
+    assert chat.llm_client._backend.base_url == "http://127.0.0.1:9555/api/v1"
+
+
+def test_llm_chat_respects_lemonade_base_url_explicit_param(monkeypatch):
+    """_build_llm_chat(base_url=...) probes the explicit URL with the env
+    var unset (AC1)."""
+    import requests
+    from gaia_agent_email.api_routes import EmailTriageService, _resolve_email_model_id
+
+    monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+    resolved_model_id = _resolve_email_model_id()
+    captured_urls = []
+
+    def _fake_get(url, *args, **kwargs):
+        captured_urls.append(url)
+        if url == "http://127.0.0.1:9555/api/v1/health":
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"version": "10.2.0"}
+            return resp
+        if url == "http://127.0.0.1:9555/api/v1/models":
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"data": [{"id": resolved_model_id}]}
+            return resp
+        raise AssertionError(f"unexpected probe URL: {url}")
+
+    monkeypatch.setattr(requests, "get", _fake_get)
+
+    chat = EmailTriageService()._build_llm_chat(base_url="http://127.0.0.1:9555")
+
+    assert "http://127.0.0.1:9555/api/v1/health" in captured_urls
+    assert chat.llm_client._backend.base_url == "http://127.0.0.1:9555/api/v1"
+
+
+def test_wrong_model_raises_llm_triage_error(monkeypatch):
+    """Model absent on the Lemonade server → loud LLMTriageError naming the
+    model, the fix, and where to verify — never a silent heuristic fallback
+    (AC2). ``pytest.raises`` catching the error IS the "no fallback"
+    assertion: no chat object is ever returned to fall back with.
+
+    Exercises the planned ``_assert_model_present`` (#1888) via
+    ``_build_llm_chat`` — not wired in yet, so this currently fails with
+    "DID NOT RAISE" rather than the LLMTriageError it will raise once the
+    fix lands.
+    """
+    import requests
+    from gaia_agent_email.api_routes import EmailTriageService, _resolve_email_model_id
+    from gaia_agent_email.tools.llm_triage import LLMTriageError
+
+    monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:9555")
+    probe_base = "http://127.0.0.1:9555/api/v1"
+    model_id = _resolve_email_model_id()
+
+    def _fake_get(url, *args, **kwargs):
+        if url == f"{probe_base}/health":
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"version": "10.2.0"}
+            return resp
+        if url == f"{probe_base}/models":
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"data": []}  # model absent
+            return resp
+        raise AssertionError(f"unexpected probe URL: {url}")
+
+    monkeypatch.setattr(requests, "get", _fake_get)
+
+    with pytest.raises(LLMTriageError) as exc:
+        EmailTriageService()._build_llm_chat()
+
+    message = str(exc.value)
+    assert (
+        f"Model '{model_id}' is not available on the Lemonade Server at {probe_base}"
+        in message
+    )
+    assert (
+        f"pull it on that server (POST {probe_base}/pull or 'gaia init'), or "
+        "point LEMONADE_BASE_URL at a server that has it" in message
+    )
+    assert "verify with GET /v1/email/init" in message
+
+
+def test_wrong_model_check_transport_failure_is_loud(monkeypatch):
+    """A /models transport failure must raise LLMTriageError naming
+    ``<probe_base>/models`` — never silently skip the model-presence check.
+
+    Same not-wired-in-yet caveat as ``test_wrong_model_raises_llm_triage_error``:
+    currently fails with "DID NOT RAISE" instead of LLMTriageError.
+    """
+    import requests
+    from gaia_agent_email.api_routes import EmailTriageService
+    from gaia_agent_email.tools.llm_triage import LLMTriageError
+
+    monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:9555")
+    probe_base = "http://127.0.0.1:9555/api/v1"
+
+    def _fake_get(url, *args, **kwargs):
+        if url == f"{probe_base}/health":
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"version": "10.2.0"}
+            return resp
+        if url == f"{probe_base}/models":
+            raise requests.ConnectionError("reset by peer")
+        raise AssertionError(f"unexpected probe URL: {url}")
+
+    monkeypatch.setattr(requests, "get", _fake_get)
+
+    with pytest.raises(LLMTriageError) as exc:
+        EmailTriageService()._build_llm_chat()
+
+    assert f"{probe_base}/models" in str(exc.value)
+
+
+def test_model_present_check_tolerant_of_user_dot_prefix(monkeypatch):
+    """A `user.`-prefixed resolved model id must still match a stripped id in
+    the /models listing (and vice versa) — locks in the planned tolerant
+    ``_model_ids_match`` comparison (#1888).
+
+    Calls the planned ``_assert_model_present(self, base_url)`` directly (the
+    exact seam named in the spec) rather than through ``_build_llm_chat``.
+    Today this fails with AttributeError (the method does not exist yet).
+    Once the next increment adds ``_assert_model_present`` with an *exact*
+    id comparison, this test will still fail — now via a raised
+    LLMTriageError — until the tolerant ``_model_ids_match`` fix additionally
+    lands. Both failure modes are expected and correct for TDD.
+    """
+    import requests
+    from gaia_agent_email.api_routes import EmailTriageService, _resolve_email_model_id
+
+    monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:9555")
+    probe_base = "http://127.0.0.1:9555/api/v1"
+    resolved_model_id = _resolve_email_model_id()
+    # Flip the "user." prefix: the listed id differs textually from the
+    # resolved id but names the same underlying model.
+    if resolved_model_id.startswith("user."):
+        listed_id = resolved_model_id[len("user.") :]
+    else:
+        listed_id = f"user.{resolved_model_id}"
+
+    def _fake_get(url, *args, **kwargs):
+        if url == f"{probe_base}/health":
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"version": "10.2.0"}
+            return resp
+        if url == f"{probe_base}/models":
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"data": [{"id": listed_id}]}
+            return resp
+        raise AssertionError(f"unexpected probe URL: {url}")
+
+    monkeypatch.setattr(requests, "get", _fake_get)
+
+    # Must NOT raise — the tolerant id match should treat this as present.
+    EmailTriageService()._assert_model_present("http://127.0.0.1:9555")
+
+
+# ---------------------------------------------------------------------------
+# tools_count anti-drift guard (#1232 AC1)
+# ---------------------------------------------------------------------------
+
+
+class _MinimalMailBackend:
+    """Satisfies the GmailBackend protocol just enough to construct."""
+
+
+class _MinimalCalendarBackend:
+    """Satisfies the CalendarBackend protocol just enough to construct."""
+
+
+def _build_memory_disabled_agent(tmp_path, monkeypatch):
+    """Construct an EmailTriageAgent with memory forced off.
+
+    Mirrors ``tests/test_email_memory.py::_build_agent(memory_disabled=True)``
+    so the live tool registry never picks up the 5 memory CRUD tools that a
+    Lemonade-connected dev box would otherwise add, which would silently
+    corrupt any tools_count comparison.
+    """
+    from gaia_agent_email.agent import EmailTriageAgent
+    from gaia_agent_email.config import EmailAgentConfig
+
+    cfg = EmailAgentConfig(
+        gmail_backend=_MinimalMailBackend(),
+        calendar_backend=_MinimalCalendarBackend(),
+        db_path=str(tmp_path / "state.db"),
+        memory_db_path=str(tmp_path / "memory.db"),
+        silent_mode=True,
+        debug=False,
+    )
+    monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
+    with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:
+        mock_sdk.return_value = MagicMock()
+        return EmailTriageAgent(config=cfg)
+
+
+def test_tools_count_matches_live_registry_and_manifest(tmp_path, monkeypatch):
+    """build_registration().tools_count and gaia-agent.yaml's tools_count must
+    both track the LIVE tool registry, not a hand-maintained literal (#1232).
+
+    A future @tool added to the agent without bumping both pinned copies
+    must fail this test.
+    """
+    import gaia_agent_email as m
+
+    agent = _build_memory_disabled_agent(tmp_path, monkeypatch)
+    try:
+        # Precondition: memory tools are NOT part of the live count.
+        assert agent._memory_store is None
+
+        live = len(agent._tools_registry)
+
+        reg = m.build_registration()
+        assert reg.tools_count == live
+
+        manifest_path = Path(__file__).resolve().parents[1] / "gaia-agent.yaml"
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+        assert manifest["tools_count"] == live
+    finally:
+        agent.close_db()

@@ -52,6 +52,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from gaia.eval.fixture_paths import resolve_repo_fixture
 from gaia.eval.quality_metrics import Confusion
 
 # ---------------------------------------------------------------------------
@@ -474,21 +475,13 @@ def load_followup_thresholds(path: str | Path) -> FollowupThresholds:
     )
 
 
-# Canonical location of the committed follow-up-gate thresholds manifest. The
-# single entry point CI consumes — flip 'enforce' in this file (data, not code)
-# to make CI gate on the #1950 precision/recall/F1 bars.
-_FOLLOWUP_THRESHOLDS_MANIFEST = (
-    Path(__file__).resolve().parents[3]
-    / "tests"
-    / "fixtures"
-    / "email"
-    / "followups_gate_thresholds.json"
-)
-
-
 def default_followup_thresholds_path() -> Path:
-    """Path to the committed follow-up-gate thresholds manifest (#1950)."""
-    return _FOLLOWUP_THRESHOLDS_MANIFEST
+    """Path to the committed follow-up-gate thresholds manifest (#1950).
+
+    The single entry point CI consumes — flip 'enforce' in that file (data, not
+    code) to make CI gate on the #1950 precision/recall/F1 bars.
+    """
+    return resolve_repo_fixture("email", "followups_gate_thresholds.json")
 
 
 def load_default_followup_thresholds() -> FollowupThresholds:

@@ -580,6 +580,17 @@ jobs:
           if [ -f "${EVALUATION}" ]; then
             evaluation_args+=(--evaluation "${EVALUATION}")
           fi
+          # CAPABILITY_MATRIX.md renders as its own hub doc tab. It lives in the
+          # PYTHON package (not the npm dir the other docs use) because the
+          # generator derives it from gaia_agent_email/tools/*.py — a future
+          # doc-dir consolidation must update this path. It only lands with PR
+          # #2044 — guard on presence so releases cut before it merges still
+          # publish cleanly.
+          capability_matrix_args=()
+          CAPABILITY_MATRIX="hub/agents/email/python/CAPABILITY_MATRIX.md"
+          if [ -f "${CAPABILITY_MATRIX}" ]; then
+            capability_matrix_args+=(--capability-matrix "${CAPABILITY_MATRIX}")
+          fi
           python hub/agents/email/python/packaging/publish_to_r2.py \
             --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
             --manifest "${MANIFEST}" \
@@ -589,6 +600,7 @@ jobs:
             --skill "${SKILL}" \
             "${scorecard_args[@]}" \
             "${evaluation_args[@]}" \
+            "${capability_matrix_args[@]}" \
             "${args[@]}" \
             --summary-out published.json
           echo "=== publish summary ==="

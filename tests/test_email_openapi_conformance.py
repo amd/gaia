@@ -23,7 +23,10 @@ This is distinct from the static-analysis tests in
 
 from __future__ import annotations
 
+import ast
+import inspect
 import json
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -32,7 +35,9 @@ import pytest
 # skip the whole module cleanly when a framework-only env lacks it.
 pytest.importorskip("gaia_agent_email")
 
+import jsonschema  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+from gaia_agent_email import api_routes  # noqa: E402
 from gaia_agent_email.contract import (  # noqa: E402
     BatchTriageResponse,
     EmailCategory,
@@ -41,6 +46,8 @@ from gaia_agent_email.contract import (  # noqa: E402
 )
 from gaia_agent_email.export_openapi import ARTIFACT_PATH, build_app  # noqa: E402
 from gaia_agent_email.version import AGENT_VERSION, API_VERSION  # noqa: E402
+from referencing import Registry, Resource  # noqa: E402
+from referencing.jsonschema import DRAFT202012  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -60,6 +67,105 @@ def _required_keys(spec: dict, schema_name: str) -> set:
     """Return the ``required`` field-names for a top-level component schema."""
     schema = spec["components"]["schemas"][schema_name]
     return set(schema.get("required", []))
+
+
+_SPEC_URI = "urn:gaia-email-openapi"
+
+
+def _assert_body_conforms(spec: dict, schema_name: str, body: dict) -> None:
+    """Validate ``body`` against ``components.schemas.<schema_name>`` with a
+    real JSON-Schema validator.
+
+    Key-presence checks (the ``_required_keys`` loop) prove a field exists but
+    not that its TYPE or enum value is right — ``{"count": "five"}`` passes
+    them. This helper runs jsonschema with a registry seeded from the WHOLE
+    committed spec so nested ``$ref``/``anyOf`` (e.g.
+    ``category -> #/components/schemas/EmailCategory``) resolve — never an
+    extracted sub-schema, which would break those refs.
+    """
+    registry = Registry().with_resource(
+        uri=_SPEC_URI,
+        resource=Resource(contents=spec, specification=DRAFT202012),
+    )
+    validator = jsonschema.Draft202012Validator(
+        schema={"$ref": f"{_SPEC_URI}#/components/schemas/{schema_name}"},
+        registry=registry,
+    )
+    validator.validate(body)
+
+
+def _derive_error_codes_by_route() -> dict:
+    """Derive each route's raisable HTTPException codes from api_routes.py.
+
+    Source-derived on purpose (#1897): a hand-maintained code map would
+    reintroduce exactly the spec/handler drift these tests exist to close.
+    AST-walks every function for ``HTTPException(status_code=<const>)``, then
+    propagates codes through the module-level call graph (helpers like
+    ``_resolve_mutate_backend`` raise on behalf of many handlers) and through
+    FastAPI ``Depends()`` targets (their raises surface on the route too).
+    """
+    tree = ast.parse(Path(inspect.getfile(api_routes)).read_text(encoding="utf-8"))
+
+    def _call_name(node: ast.Call):
+        if isinstance(node.func, ast.Name):
+            return node.func.id
+        if isinstance(node.func, ast.Attribute):
+            return node.func.attr
+        return None
+
+    direct: dict = {}
+    calls: dict = {}
+    routes: dict = {}  # handler name -> (method, decorator path)
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        codes, called = set(), set()
+        for sub in ast.walk(node):
+            if not isinstance(sub, ast.Call):
+                continue
+            name = _call_name(sub)
+            if name == "HTTPException":
+                for kw in sub.keywords:
+                    if kw.arg == "status_code" and isinstance(kw.value, ast.Constant):
+                        codes.add(kw.value.value)
+            elif name == "Depends":
+                if sub.args and isinstance(sub.args[0], ast.Name):
+                    called.add(sub.args[0].id)
+            elif name:
+                called.add(name)
+        direct[node.name] = codes
+        calls[node.name] = called
+        for dec in node.decorator_list:
+            if (
+                isinstance(dec, ast.Call)
+                and isinstance(dec.func, ast.Attribute)
+                and dec.func.attr in ("get", "post")
+                and dec.args
+                and isinstance(dec.args[0], ast.Constant)
+            ):
+                hidden = any(
+                    kw.arg == "include_in_schema"
+                    and isinstance(kw.value, ast.Constant)
+                    and kw.value.value is False
+                    for kw in dec.keywords
+                )
+                if not hidden:
+                    routes[node.name] = (dec.func.attr, dec.args[0].value)
+
+    # Fixpoint: a handler can raise everything its (transitive) callees raise.
+    effective = {name: set(codes) for name, codes in direct.items()}
+    changed = True
+    while changed:
+        changed = False
+        for name in effective:
+            for callee in calls[name]:
+                if callee in effective and not effective[callee] <= effective[name]:
+                    effective[name] |= effective[callee]
+                    changed = True
+
+    return {
+        (method, path): effective[handler] for handler, (method, path) in routes.items()
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +232,7 @@ def test_health_conforms_to_spec(client, committed_spec):
 
     for key in required:
         assert key in body, f"required key {key!r} missing from /health response"
+    _assert_body_conforms(committed_spec, schema_name, body)
 
     assert body["status"] == "ok"
     assert body["service"] == "gaia-agent-email"
@@ -147,6 +254,7 @@ def test_version_conforms_to_spec(client, committed_spec):
 
     for key in required:
         assert key in body, f"required key {key!r} missing from /version response"
+    _assert_body_conforms(committed_spec, schema_name, body)
 
     assert body["apiVersion"] == API_VERSION, (
         f"apiVersion mismatch: server reports {body['apiVersion']!r}, "
@@ -197,6 +305,7 @@ def test_init_conforms_to_spec_when_not_ready(client, committed_spec):
     body = resp.json()
     for key in required:
         assert key in body, f"required key {key!r} missing from /init response"
+    _assert_body_conforms(committed_spec, schema_name, body)
     assert body["ready"] is False
     assert body["hint"]  # actionable, non-empty
 
@@ -217,6 +326,7 @@ def test_init_conforms_to_spec_when_ready(client, committed_spec):
 
     assert resp.status_code == 200
     body = resp.json()
+    _assert_body_conforms(committed_spec, "InitResponse", body)
     assert body["ready"] is True
     # No undocumented fields leak from the running server.
     documented = set(
@@ -249,6 +359,7 @@ def test_triage_conforms_to_spec(client, committed_spec):
 
     for key in required:
         assert key in body, f"required key {key!r} missing from /triage response"
+    _assert_body_conforms(committed_spec, schema_name, body)
 
     assert body.get("schema_version") == API_VERSION
     assert body.get("request_kind") == "single"
@@ -338,6 +449,7 @@ def test_search_conforms_to_spec(client, committed_spec):
 
     for key in required:
         assert key in body, f"required key {key!r} missing from /search response"
+    _assert_body_conforms(committed_spec, schema_name, body)
 
     assert body["schema_version"] == API_VERSION
     assert body["count"] == 1
@@ -384,6 +496,7 @@ def test_draft_conforms_to_spec(client, committed_spec):
 
     for key in required:
         assert key in body, f"required key {key!r} missing from /draft response"
+    _assert_body_conforms(committed_spec, schema_name, body)
 
     assert "draft" in body
     assert "confirmation_token" in body
@@ -508,6 +621,7 @@ def test_calendar_view_conforms_to_spec(client, committed_spec, fake_calendar):
     body = resp.json()
     for key in required:
         assert key in body, f"required key {key!r} missing from calendar view response"
+    _assert_body_conforms(committed_spec, schema_name, body)
     assert body["events"][0]["id"] == "evt-conf-1"
 
 
@@ -540,6 +654,7 @@ def test_calendar_preview_then_create_conforms(client, committed_spec, fake_cale
         assert (
             key in body
         ), f"required key {key!r} missing from calendar create response"
+    _assert_body_conforms(committed_spec, schema_name, body)
     assert body["event_id"] == "evt-conf-created"
 
 
@@ -562,6 +677,7 @@ def test_calendar_respond_conforms_to_spec(client, committed_spec, fake_calendar
         assert (
             key in body
         ), f"required key {key!r} missing from calendar respond response"
+    _assert_body_conforms(committed_spec, schema_name, body)
     assert body["status"] == "declined"
 
 
@@ -633,6 +749,7 @@ def test_triage_batch_conforms_to_spec(client, committed_spec):
 
     for key in required:
         assert key in body, f"required key {key!r} missing from /triage/batch response"
+    _assert_body_conforms(committed_spec, schema_name, body)
 
     assert body.get("schema_version") == API_VERSION
     assert "results" in body
@@ -686,6 +803,7 @@ def test_confirm_conforms_to_spec(client, committed_spec):
     body = resp.json()
     for key in required:
         assert key in body, f"required key {key!r} missing from /confirm response"
+    _assert_body_conforms(committed_spec, schema_name, body)
     assert body["action"] == "archive"
     assert body["message_id"] == "m-conf-1"
     assert isinstance(body["confirmation_token"], str) and body["confirmation_token"]
@@ -791,6 +909,7 @@ def test_briefing_conforms_to_spec(client, committed_spec, tmp_path, monkeypatch
     assert schema_name == "EmailBriefingResponse"
     for key in _required_keys(committed_spec, schema_name):
         assert key in body, f"required key {key!r} missing from /briefing response"
+    _assert_body_conforms(committed_spec, schema_name, body)
     assert body["schema_version"] == API_VERSION
     assert body["briefing"]["kind"] == "email_pre_scan"
 
@@ -838,3 +957,75 @@ def test_all_documented_paths_covered(committed_spec):
         f"Spec has routes not covered by conformance tests: "
         f"{documented - expected}. Add a conformance test for each new route."
     )
+
+
+# ---------------------------------------------------------------------------
+# 8. Error contract — the spec must document every raisable error code (#1897)
+# ---------------------------------------------------------------------------
+
+
+def test_spec_documents_every_raisable_error_code(committed_spec):
+    """Every HTTPException status code a handler can raise is documented in
+    that route's spec ``responses``.
+
+    The expected set is DERIVED from api_routes.py (AST + call-graph), never
+    hand-listed — so adding a new ``raise HTTPException(status_code=...)``
+    without documenting it in the route's ``responses=`` fails here.
+    """
+    derived = _derive_error_codes_by_route()
+    assert derived, "AST derivation found no routes — api_routes.py moved?"
+
+    missing = {}
+    for (method, route_path), codes in sorted(derived.items()):
+        spec_path = f"/v1/email{route_path}"
+        assert (
+            spec_path in committed_spec["paths"]
+        ), f"route {spec_path} not in committed spec"
+        documented = set(committed_spec["paths"][spec_path][method]["responses"])
+        undocumented = {str(c) for c in codes} - documented
+        if undocumented:
+            missing[f"{method.upper()} {spec_path}"] = sorted(undocumented)
+
+    assert not missing, (
+        "handlers raise error codes the spec does not document — add them to "
+        f"the route's responses= and regenerate openapi.email.json: {missing}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 9. jsonschema helper self-test — a wrong-typed body MUST fail validation.
+#    Direct calls on hand-built dicts: TestClient/response_model would reject
+#    a bad body before the validator ever saw it (false confidence otherwise).
+# ---------------------------------------------------------------------------
+
+
+def test_body_validator_accepts_a_valid_triage_body(committed_spec):
+    body = json.loads(_canned_triage_response().model_dump_json(by_alias=True))
+    _assert_body_conforms(committed_spec, "EmailTriageResponse", body)
+
+
+def test_body_validator_rejects_out_of_enum_category(committed_spec):
+    body = json.loads(_canned_triage_response().model_dump_json(by_alias=True))
+    body["result"]["category"] = "NOT_A_CATEGORY"
+    with pytest.raises(jsonschema.ValidationError):
+        _assert_body_conforms(committed_spec, "EmailTriageResponse", body)
+
+
+def test_body_validator_rejects_wrong_typed_field(committed_spec):
+    bad = {
+        "schema_version": API_VERSION,
+        "query": None,
+        "count": "five",  # int in the contract — key-presence checks miss this
+        "messages": [],
+        "next_page_token": None,
+    }
+    with pytest.raises(jsonschema.ValidationError):
+        _assert_body_conforms(committed_spec, "EmailSearchResponse", bad)
+
+
+def test_body_validator_rejects_missing_required_field(committed_spec):
+    # ``count`` is the schema's only required field — omit exactly it.
+    required = _required_keys(committed_spec, "EmailSearchResponse")
+    assert "count" in required  # guard: the contract still requires it
+    with pytest.raises(jsonschema.ValidationError):
+        _assert_body_conforms(committed_spec, "EmailSearchResponse", {"messages": []})

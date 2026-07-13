@@ -286,11 +286,13 @@ def _probe_model_present(probe_base: str, model_id: str) -> bool:
     """Cheaply check whether ``model_id`` is downloaded on the Lemonade server.
 
     Queries the model list (downloaded models only) with the same short
-    timeout as the reachability probe and matches on the ``id`` field. Sends
-    the resolved Lemonade auth header so an authenticated server answers
-    instead of 401-ing. Raises ``requests.RequestException`` on a transport
-    failure — the caller turns that into an actionable readiness hint rather
-    than silently reporting "absent".
+    timeout as the reachability probe and matches on the ``id`` field using
+    the core tolerant comparison (``user.``-prefixed registrations are listed
+    under the stripped id). Sends the resolved Lemonade auth header so an
+    authenticated server answers instead of 401-ing. Raises
+    ``requests.RequestException`` on a transport failure — the caller turns
+    that into an actionable readiness hint rather than silently reporting
+    "absent".
 
     "Present" is intentionally cheap (a list lookup, no model load). Whether
     the model actually *loads* (``loadable``) is not probed in v1 — forcing a
@@ -299,6 +301,7 @@ def _probe_model_present(probe_base: str, model_id: str) -> bool:
     import requests
 
     from gaia.llm.lemonade_client import (
+        _model_ids_match,
         lemonade_auth_headers,
         resolve_lemonade_api_key,
     )
@@ -311,7 +314,9 @@ def _probe_model_present(probe_base: str, model_id: str) -> bool:
     resp.raise_for_status()
     payload = resp.json()
     data = payload.get("data", []) if isinstance(payload, dict) else []
-    return any(isinstance(m, dict) and m.get("id") == model_id for m in data)
+    return any(
+        isinstance(m, dict) and _model_ids_match(m.get("id"), model_id) for m in data
+    )
 
 
 def _pull_model(probe_base: str, model_id: str) -> None:
@@ -483,8 +488,9 @@ class EmailTriageService:
         """Triage a batch of emails/threads into a per-item result array (#1887).
 
         The pre-loop Lemonade probe runs ONCE — if it raises ``LLMTriageError``
-        (server unreachable), the whole request fails with a 502; that error is
-        intentionally NOT caught here. Per-item failures (``LLMTriageError``,
+        (server unreachable, or the triage model unavailable there, #1888), the
+        whole request fails with a 502; that error is intentionally NOT caught
+        here. Per-item failures (``LLMTriageError``,
         ``EmailSummarizeError``) are caught inside the loop and surfaced as a
         ``BatchItemResult.error`` for that index while remaining items continue.
 
@@ -493,8 +499,8 @@ class EmailTriageService:
             chat:    Pre-built chat client. When None a local Lemonade client
                      is constructed via :meth:`_build_llm_chat` (probe once).
         """
-        # Pre-loop probe: fail fast if Lemonade is unreachable before spending
-        # time on any item. Raises LLMTriageError → propagates as 502.
+        # Pre-loop probe: fail fast if Lemonade is unreachable or missing the
+        # model before spending time on any item. LLMTriageError → 502.
         resolved_chat = chat or self._build_llm_chat()
         context = request.context
         results: List[BatchItemResult] = []
@@ -522,6 +528,12 @@ class EmailTriageService:
         Validates the AC3 local-only contract before constructing the client.
         Raises ``ConfigurationError`` loudly when ``base_url`` points at a
         cloud LLM — no silent fallback to heuristic.
+
+        The pre-flight (which honors the same ``base_url``/``LEMONADE_BASE_URL``
+        resolution as the chat client itself, #1888) guarantees the target
+        server is reachable AND has the triage model before the client is
+        returned; either failure raises ``LLMTriageError`` (→ HTTP 502) naming
+        the URL and the fix.
         """
         from gaia_agent_email.config import EmailAgentConfig
 
@@ -533,6 +545,9 @@ class EmailTriageService:
         # Fail fast + loud if Lemonade isn't reachable, before the chat path's
         # long-timeout connect can stall ~30s (#1677).
         self._assert_lemonade_reachable(base_url)
+        # ...and if the triage model isn't on that server (#1888) — a loud 502
+        # with the fix beats a generic chat-time failure with no URL/model.
+        self._assert_model_present(base_url)
 
         sdk_cfg = AgentConfig(
             base_url=base_url,
@@ -578,6 +593,41 @@ class EmailTriageService:
                 f"({type(exc).__name__}: {exc}). Start it with "
                 "`lemonade-server serve` (or run `gaia init`), then retry."
             ) from exc
+
+    def _assert_model_present(self, base_url: Optional[str]) -> None:
+        """Pre-flight: the triage model must exist on the target server (#1888).
+
+        Reuses :func:`_probe_model_present` against the same
+        ``base_url``/``LEMONADE_BASE_URL`` resolution as the chat client.
+        Raises ``LLMTriageError`` (→ HTTP 502 at the route) when the model is
+        absent — naming the model, the server URL, and the fix — or when the
+        ``/models`` read itself fails (never silently skip the check). No
+        fallback: presence is required, though a present-but-unloadable model
+        still fails later on the chat call.
+        """
+        import requests
+
+        probe_base = _resolve_probe_base(base_url)
+        model_id = _resolve_email_model_id()
+
+        try:
+            present = _probe_model_present(probe_base, model_id)
+        except requests.RequestException as exc:
+            raise LLMTriageError(
+                f"Could not read the model list at {probe_base}/models "
+                f"({type(exc).__name__}: {exc}). The model-presence pre-flight "
+                "cannot be skipped; fix the server (or LEMONADE_BASE_URL), "
+                "then retry."
+            ) from exc
+
+        if not present:
+            raise LLMTriageError(
+                f"Model '{model_id}' is not available on the Lemonade Server "
+                f"at {probe_base}. To fix: pull it on that server "
+                f"(POST {probe_base}/pull or 'gaia init'), or point "
+                "LEMONADE_BASE_URL at a server that has it; "
+                "verify with GET /v1/email/init."
+            )
 
     def triage_gmail_message(
         self, msg: dict, *, principal_email: str
@@ -1831,7 +1881,59 @@ def _triage_batch_and_persist(request: BatchTriageRequest) -> BatchTriageRespons
     return response
 
 
-@router.post("/triage", response_model=EmailTriageResponse)
+# Error contract shared by every route that resolves a connected-mailbox /
+# calendar backend (#1897): auth/scope/revocation (and the confirmation gate on
+# gated routes) -> 403, upstream provider/connector failure -> 502, no account
+# connected or configuration missing -> 503. Mirrors the send handler's
+# except-ladder and ``_raise_calendar_connector_http``. Description-only on
+# purpose: these routes raise plain ``HTTPException`` whose body is FastAPI's
+# ``{"detail": ...}`` — there is no shared error model to reference (only
+# ``/init`` returns a real model on its error path).
+_CONNECTOR_ERROR_RESPONSES = {
+    403: {
+        "description": (
+            "Authorization failed — the account's auth is missing, expired, or "
+            "revoked (reconnect via Settings → Connectors), or a confirmation "
+            "gate rejected the request (mint a fresh confirmation token)."
+        )
+    },
+    502: {"description": "Upstream provider/connector failure."},
+    503: {
+        "description": (
+            "No account connected, or backend configuration is missing — "
+            "connect Google or Microsoft in Settings → Connectors."
+        )
+    },
+}
+
+# Passing an unconnected provider, or omitting it with 2+ accounts connected,
+# is ambiguous — the backend resolvers refuse to guess (fail-loud, never a
+# silent pick). Shared by every route that resolves a provider-bound backend.
+_AMBIGUOUS_PROVIDER_400 = {
+    400: {
+        "description": (
+            "Ambiguous or unknown account: the named provider is not connected, "
+            "or no provider was given while several accounts are connected."
+        )
+    }
+}
+
+# LLM-backed triage: Lemonade unreachable / invalid LLM output -> 502.
+_TRIAGE_ERROR_RESPONSES = {
+    502: {
+        "description": (
+            "Local LLM triage failed — Lemonade Server unreachable or it "
+            "returned an unusable result."
+        )
+    }
+}
+
+
+@router.post(
+    "/triage",
+    response_model=EmailTriageResponse,
+    responses={**_TRIAGE_ERROR_RESPONSES},
+)
 async def triage_email(request: EmailTriageRequest) -> EmailTriageResponse:
     """Triage a single email or a full thread.
 
@@ -1852,7 +1954,11 @@ async def triage_email(request: EmailTriageRequest) -> EmailTriageResponse:
         ) from e
 
 
-@router.post("/triage/batch", response_model=BatchTriageResponse)
+@router.post(
+    "/triage/batch",
+    response_model=BatchTriageResponse,
+    responses={**_TRIAGE_ERROR_RESPONSES},
+)
 async def triage_email_batch(request: BatchTriageRequest) -> BatchTriageResponse:
     """Triage an array of emails or threads in a single request (#1887).
 
@@ -1860,8 +1966,9 @@ async def triage_email_batch(request: BatchTriageRequest) -> BatchTriageResponse
     and returns a ``BatchTriageResponse`` — one ``BatchItemResult`` per item,
     order-preserved. Per-item failures surface as ``BatchItemResult.error``
     (HTTP 200 with all items errored is valid — inspect each result). A 502
-    means Lemonade was unreachable before any item was processed. No mail is
-    read or sent; this analyzes only the items in the request. Each
+    means Lemonade was unreachable or the triage model is unavailable there,
+    detected before any item was processed. No mail is read or sent; this
+    analyzes only the items in the request. Each
     successful item's action items are persisted to the local task store,
     linked to its source ``message_id`` and de-duplicated per message
     (#1605) — additive, the response shape is unchanged.
@@ -1870,14 +1977,19 @@ async def triage_email_batch(request: BatchTriageRequest) -> BatchTriageResponse
         return await asyncio.to_thread(_triage_batch_and_persist, request)
     except LLMTriageError as e:
         # Only LLMTriageError can escape triage_batch — it is raised by the
-        # pre-loop Lemonade probe when the server is unreachable. Per-item
+        # pre-loop pre-flight when the server is unreachable or the triage
+        # model is unavailable there (#1888). Per-item
         # EmailSummarizeError/LLMTriageError are caught inside triage_batch.
         raise HTTPException(
             status_code=502, detail=f"local LLM triage failed: {e}"
         ) from e
 
 
-@router.post("/search", response_model=EmailSearchResponse)
+@router.post(
+    "/search",
+    response_model=EmailSearchResponse,
+    responses={**_CONNECTOR_ERROR_RESPONSES, **_AMBIGUOUS_PROVIDER_400},
+)
 async def search_inbox(
     request: EmailSearchRequest,
     backend: Any = Depends(get_search_backend),
@@ -1911,7 +2023,11 @@ async def search_inbox(
         raise HTTPException(status_code=502, detail=str(e)) from e
 
 
-@router.post("/prescan", response_model=EmailPreScanResponse)
+@router.post(
+    "/prescan",
+    response_model=EmailPreScanResponse,
+    responses={**_CONNECTOR_ERROR_RESPONSES, **_AMBIGUOUS_PROVIDER_400},
+)
 async def prescan_inbox(
     request: EmailPreScanRequest,
     backend=Depends(get_prescan_backend),
@@ -1961,7 +2077,24 @@ class EmailBriefingResponse(_Strict):
     )
 
 
-@router.get("/briefing", response_model=EmailBriefingResponse)
+@router.get(
+    "/briefing",
+    response_model=EmailBriefingResponse,
+    responses={
+        404: {
+            "description": (
+                "No briefing generated yet — enable the daily schedule "
+                "(GAIA_EMAIL_BRIEFING_ENABLED) or POST /v1/email/prescan."
+            )
+        },
+        500: {
+            "description": (
+                "The persisted briefing could not be read or does not match "
+                "the email_pre_scan envelope."
+            )
+        },
+    },
+)
 async def get_briefing() -> EmailBriefingResponse:
     """Return the latest scheduled inbox briefing (#1608).
 
@@ -2026,7 +2159,19 @@ async def draft_reply(request: EmailDraftRequest) -> EmailDraftResponse:
     return EmailDraftResponse(draft=draft, confirmation_token=token)
 
 
-@router.post("/send", response_model=EmailSendResponse)
+@router.post(
+    "/send",
+    response_model=EmailSendResponse,
+    responses={
+        **_CONNECTOR_ERROR_RESPONSES,
+        **_AMBIGUOUS_PROVIDER_400,
+        413: {
+            "description": (
+                "An attachment exceeds the connected provider's size ceiling."
+            )
+        },
+    },
+)
 async def send_email(request: EmailSendRequest) -> EmailSendResponse:
     """Send a reply — gated on explicit confirmation (#1264).
 
@@ -2150,7 +2295,11 @@ async def confirm_action(
     )
 
 
-@router.post("/archive", response_model=EmailArchiveResponse)
+@router.post(
+    "/archive",
+    response_model=EmailArchiveResponse,
+    responses={**_CONNECTOR_ERROR_RESPONSES, **_AMBIGUOUS_PROVIDER_400},
+)
 async def archive_email(request: EmailArchiveRequest) -> EmailArchiveResponse:
     """Archive a message — gated on confirmation, reversible for 30s.
 
@@ -2200,7 +2349,25 @@ async def archive_email(request: EmailArchiveRequest) -> EmailArchiveResponse:
     )
 
 
-@router.post("/unarchive", response_model=EmailUnarchiveResponse)
+_UNDO_WINDOW_409 = {
+    409: {
+        "description": (
+            "The undo window has expired, or the handle is unknown or already "
+            "undone — the action can no longer be reversed via the API."
+        )
+    }
+}
+
+
+@router.post(
+    "/unarchive",
+    response_model=EmailUnarchiveResponse,
+    responses={
+        **_CONNECTOR_ERROR_RESPONSES,
+        **_AMBIGUOUS_PROVIDER_400,
+        **_UNDO_WINDOW_409,
+    },
+)
 async def unarchive_email(request: EmailUnarchiveRequest) -> EmailUnarchiveResponse:
     """Reverse an archive within the undo window (NOT gated — it restores).
 
@@ -2240,7 +2407,20 @@ async def unarchive_email(request: EmailUnarchiveRequest) -> EmailUnarchiveRespo
     )
 
 
-@router.post("/quarantine", response_model=EmailQuarantineResponse)
+@router.post(
+    "/quarantine",
+    response_model=EmailQuarantineResponse,
+    responses={
+        **_CONNECTOR_ERROR_RESPONSES,
+        400: {
+            "description": (
+                "Refused: is_phishing was false (only phishing-flagged mail may "
+                "be quarantined), the mailbox is Outlook (quarantine is "
+                "Gmail-only), or the provider is ambiguous/not connected."
+            )
+        },
+    },
+)
 async def quarantine_email(
     request: EmailQuarantineRequest,
 ) -> EmailQuarantineResponse:
@@ -2294,7 +2474,20 @@ async def quarantine_email(
     )
 
 
-@router.post("/unquarantine", response_model=EmailUnquarantineResponse)
+@router.post(
+    "/unquarantine",
+    response_model=EmailUnquarantineResponse,
+    responses={
+        **_CONNECTOR_ERROR_RESPONSES,
+        400: {
+            "description": (
+                "Refused: the recorded mailbox is Outlook (quarantine is "
+                "Gmail-only), or the provider is ambiguous/not connected."
+            )
+        },
+        **_UNDO_WINDOW_409,
+    },
+)
 async def unquarantine_email(
     request: EmailUnquarantineRequest,
 ) -> EmailUnquarantineResponse:
@@ -2615,7 +2808,11 @@ async def email_provision() -> StreamingResponse:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/calendar/events", response_model=CalendarEventsResponse)
+@router.get(
+    "/calendar/events",
+    response_model=CalendarEventsResponse,
+    responses={**_CONNECTOR_ERROR_RESPONSES, **_AMBIGUOUS_PROVIDER_400},
+)
 async def list_calendar_events(
     time_min: Optional[str] = None,
     time_max: Optional[str] = None,
@@ -2674,7 +2871,19 @@ async def preview_calendar_event(
     )
 
 
-@router.post("/calendar/events", response_model=CalendarEventResponse)
+@router.post(
+    "/calendar/events",
+    response_model=CalendarEventResponse,
+    responses={
+        **_CONNECTOR_ERROR_RESPONSES,
+        400: {
+            "description": (
+                "Bad event input (no usable time / inverted window), or the "
+                "provider is ambiguous/not connected."
+            )
+        },
+    },
+)
 async def create_calendar_event(
     request: CalendarCreateEventRequest,
 ) -> CalendarEventResponse:
@@ -2732,7 +2941,11 @@ async def create_calendar_event(
     )
 
 
-@router.post("/calendar/events/respond", response_model=CalendarRespondResponse)
+@router.post(
+    "/calendar/events/respond",
+    response_model=CalendarRespondResponse,
+    responses={**_CONNECTOR_ERROR_RESPONSES, **_AMBIGUOUS_PROVIDER_400},
+)
 async def respond_calendar_event(
     request: CalendarRespondRequest,
 ) -> CalendarRespondResponse:

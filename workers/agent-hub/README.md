@@ -14,10 +14,10 @@ depend on any `src/gaia` code.
 
 | Route | Auth | Purpose |
 |-------|------|---------|
-| `POST /publish` | Bearer | Publish a new agent version (validate → scope-check → immutability-check → checksum → store → rebuild index). Form parts: `manifest` (gaia-agent.yaml text), `artifact` (wheel/binary/zip file), optional `readme` + `changelog` + `spec` + `skill` (markdown, rendered as the Hub page's doc tabs), and optional `package_files` (JSON `{files:[{name,size_bytes}]}` listing the contents of a whole-package `.zip` artifact — surfaced as the catalog's `package`) |
-| `GET /index.json` | none | Catalog of every agent (latest version only), including the latest README + CHANGELOG + SPEC + SKILL markdown |
+| `POST /publish` | Bearer | Publish a new agent version (validate → scope-check → immutability-check → checksum → store → rebuild index). Form parts: `manifest` (gaia-agent.yaml text), `artifact` (wheel/binary/zip file), optional `readme` + `changelog` + `spec` + `skill` + `evaluation` + `capability_matrix` + `eval_scorecard` (markdown, rendered as the Hub page's doc tabs), and optional `package_files` (JSON `{files:[{name,size_bytes}]}` listing the contents of a whole-package `.zip` artifact — surfaced as the catalog's `package`) |
+| `GET /index.json` | none | Catalog of every agent (latest version only), including the latest README + CHANGELOG + SPEC + SKILL + EVALUATION + CAPABILITY_MATRIX + scorecard markdown |
 | `GET /agents/<id>/manifest.json` | none | Per-agent aggregate manifest (all versions) |
-| `GET /agents/<id>/<version>/<file>` | none | Download an artifact, the raw `gaia-agent.yaml`, `README.md`, `CHANGELOG.md`, `SPEC.md`, or `SKILL.md` |
+| `GET /agents/<id>/<version>/<file>` | none | Download an artifact, the raw `gaia-agent.yaml`, `README.md`, `CHANGELOG.md`, `SPEC.md`, `SKILL.md`, `EVALUATION.md`, `CAPABILITY_MATRIX.md`, or `SCORECARD.md` |
 | `GET /health` | none | Liveness probe |
 
 ### Publish guarantees
@@ -59,6 +59,9 @@ agents/<id>/<version>/README.md                 # README markdown for this versi
 agents/<id>/<version>/CHANGELOG.md              # CHANGELOG markdown for this version (if published)
 agents/<id>/<version>/SPEC.md                   # SPEC markdown for this version (if published)
 agents/<id>/<version>/SKILL.md                  # SKILL markdown for this version (if published)
+agents/<id>/<version>/EVALUATION.md             # EVALUATION markdown for this version (if published)
+agents/<id>/<version>/CAPABILITY_MATRIX.md      # capability matrix markdown for this version (if published)
+agents/<id>/<version>/SCORECARD.md              # eval scorecard markdown for this version (if published)
 agents/<id>/<version>/<filename>                # the artifact (wheel or binary)
 ```
 
@@ -93,8 +96,13 @@ schemas live in [`schemas/`](./schemas):
   `min_disk_gb`, `min_context_size`, `platforms`, `npu` as
   `"required"`/`"optional"`, `gpu_vram_gb`), `readme` (latest version's README
   markdown, `""` if none was published), `changelog` (latest version's CHANGELOG
-  markdown, `""` if none was published), `spec` + `skill` (latest version's SPEC.md
-  / SKILL.md markdown, `""` if none was published), the optional `npm_package` /
+  markdown, `""` if none was published), `spec` + `skill` + `evaluation` +
+  `capability_matrix` (latest version's SPEC.md / SKILL.md / EVALUATION.md /
+  CAPABILITY_MATRIX.md markdown, `""` if none was published), `scorecard` (latest
+  version's SCORECARD.md body with the YAML front matter stripped, `""` if none
+  was published), the optional `eval_scorecard_url` + `eval_score` (the raw
+  scorecard's public URL and its parsed 0–100 aggregate, absent when no scorecard
+  was published), the optional `npm_package` /
   `playground_url` (present only when the manifest declares them — they drive the
   hub page's npm install method and playground launcher), and the optional
   `package` (`{ filename, size_bytes, files: [{name, size_bytes}] }` — the
