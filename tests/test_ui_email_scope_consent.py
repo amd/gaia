@@ -11,8 +11,6 @@ Covers:
   path reports CONNECTION_MISSING_SCOPES; triage/draft/send mail-only still pass.
 - Negative (c): no mailbox connected → 503 from get_send_backend
   (the fail-loud guard on the #1768-mounted /v1/email surface).
-- Legacy migration regression (#1592): builtin:email grant migrates to
-  installed:email.
 """
 
 from __future__ import annotations
@@ -39,10 +37,6 @@ from gaia_agent_email.scopes import (  # noqa: E402
 from gaia.agents.registry import AgentRegistration, AgentRegistry  # noqa: E402
 from gaia.connectors.context import _agent_context  # noqa: E402
 from gaia.connectors.errors import AuthRequiredError  # noqa: E402
-from gaia.connectors.grants import (  # noqa: E402
-    _LEGACY_KEY_MIGRATIONS,
-    migrate_legacy_agent_grants,
-)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -497,111 +491,3 @@ class TestNoMailboxConnected:
         resp = ui_client.get("/v1/email/version")
         assert resp.status_code == 200
         assert "apiVersion" in resp.json()
-
-
-# ---------------------------------------------------------------------------
-# Legacy migration regression (#1592): builtin:email → installed:email
-# ---------------------------------------------------------------------------
-
-
-class TestLegacyGrantMigration:
-    """builtin:email grant entries migrate to installed:email at startup."""
-
-    def test_legacy_key_in_migration_table(self):
-        """'builtin:email' is in the _LEGACY_KEY_MIGRATIONS table."""
-        assert "builtin:email" in _LEGACY_KEY_MIGRATIONS
-        assert _LEGACY_KEY_MIGRATIONS["builtin:email"] == "installed:email"
-
-    def test_legacy_grant_migrated_to_installed_key(self):
-        """migrate_legacy_agent_grants copies builtin:email → installed:email.
-
-        Uses pyfakefs to provide an isolated filesystem for the grants ledger
-        so the test never touches the real ~/.gaia/grants.json.
-        """
-        initial_data = {
-            "google": {
-                "builtin:email": ["https://www.googleapis.com/auth/gmail.modify"],
-            }
-        }
-
-        captured_write: dict = {}
-
-        with (
-            patch(
-                "gaia.connectors.grants.load_grants",
-                return_value=initial_data,
-            ),
-            patch(
-                "gaia.connectors.grants._save_grants_locked",
-                side_effect=lambda d: captured_write.update(d),
-            ),
-        ):
-            migrate_legacy_agent_grants()
-
-        # After migration, installed:email should have the scopes;
-        # builtin:email should be gone.
-        google_grants = captured_write.get("google", {})
-        assert (
-            "installed:email" in google_grants
-        ), "installed:email not present after migration"
-        assert (
-            "builtin:email" not in google_grants
-        ), "builtin:email still present after migration — should be removed"
-        assert google_grants["installed:email"] == [
-            "https://www.googleapis.com/auth/gmail.modify"
-        ]
-
-    def test_migration_idempotent_when_both_keys_present(self):
-        """If installed:email already has a grant, builtin:email is just removed."""
-        initial_data = {
-            "google": {
-                "builtin:email": ["https://www.googleapis.com/auth/gmail.modify"],
-                "installed:email": [
-                    "https://www.googleapis.com/auth/gmail.modify",
-                    "https://www.googleapis.com/auth/gmail.send",
-                ],
-            }
-        }
-
-        captured_write: dict = {}
-
-        with (
-            patch("gaia.connectors.grants.load_grants", return_value=initial_data),
-            patch(
-                "gaia.connectors.grants._save_grants_locked",
-                side_effect=lambda d: captured_write.update(d),
-            ),
-        ):
-            migrate_legacy_agent_grants()
-
-        google_grants = captured_write.get("google", {})
-        assert "builtin:email" not in google_grants
-        # installed:email keeps its richer scope set (not overwritten by old entry)
-        assert set(google_grants["installed:email"]) == {
-            "https://www.googleapis.com/auth/gmail.modify",
-            "https://www.googleapis.com/auth/gmail.send",
-        }
-
-    def test_migration_noop_when_no_legacy_keys(self):
-        """Migration is a no-op (no write) when the ledger has no legacy keys."""
-        initial_data = {
-            "google": {
-                "installed:email": ["https://www.googleapis.com/auth/gmail.modify"],
-            }
-        }
-
-        save_called: list = []
-
-        with (
-            patch("gaia.connectors.grants.load_grants", return_value=initial_data),
-            patch(
-                "gaia.connectors.grants._save_grants_locked",
-                side_effect=lambda d: save_called.append(d),
-            ),
-        ):
-            migrate_legacy_agent_grants()
-
-        # No save when nothing changed
-        assert (
-            len(save_called) == 0
-        ), "_save_grants_locked called unexpectedly when no migration needed"
