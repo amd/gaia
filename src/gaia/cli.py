@@ -2768,9 +2768,7 @@ Examples:
     daemon_subparsers.add_parser(
         "start", help="Start the daemon (or attach if one is already running)"
     )
-    daemon_subparsers.add_parser(
-        "status", help="Show daemon pid / port / uptime"
-    )
+    daemon_subparsers.add_parser("status", help="Show daemon pid / port / uptime")
     daemon_subparsers.add_parser("stop", help="Stop the running daemon")
     daemon_subparsers.add_parser(
         "restart", help="Restart the daemon (stop if running, then start)"
@@ -6915,7 +6913,12 @@ def _handle_daemon_status():
 def _handle_daemon_stop():
     from gaia.daemon import client
     from gaia.daemon.errors import DaemonError
-    from gaia.daemon.instance import pid_alive, read_instance, remove_instance, terminate_instance
+    from gaia.daemon.instance import (
+        pid_alive,
+        read_instance,
+        remove_instance,
+        terminate_instance,
+    )
 
     inst = read_instance()
     if inst is None:
