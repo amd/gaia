@@ -60,8 +60,8 @@ Three tiers, all on the user's machine — no cloud inference, no separate mailb
   email locally. It never runs a second consent flow — it refreshes **as your
   client**.
 - **Lemonade Server** is the one runtime dependency: the agent calls a **local**
-  Lemonade for inference. With none reachable, `POST /v1/email/triage` returns
-  **HTTP 502**.
+  Lemonade for inference. With none reachable — or the triage model unavailable on
+  it — `POST /v1/email/triage` returns **HTTP 502**.
 
 <Warning>
   The GAIA repository ships a demo **harness** used to prove this integration path
@@ -136,6 +136,45 @@ pick one of the entry points below.
     ```
   </Tab>
 </Tabs>
+
+### Pointing the sidecar at an existing (embedded) Lemonade
+
+If your application already ships its own Lemonade Server, set `LEMONADE_BASE_URL`
+before starting the email surface and **every LLM call the agent makes** (triage
+classification and summarization) targets that endpoint — every entry point above
+inherits it from the environment. The agent never spawns a Lemonade of its own and
+never discovers a different one: if the endpoint is unreachable, or the triage model
+isn't available there, the call fails loudly with the URL and the fix in the error —
+no fallback.
+
+```bash
+export LEMONADE_BASE_URL=http://127.0.0.1:8555   # your app's embedded Lemonade
+python -m gaia.ui.server --port 4200 --host 127.0.0.1
+
+# Confirm the wiring:
+curl -s http://127.0.0.1:4200/v1/email/init | jq '.lemonade.base_url, .model.id'
+# "http://127.0.0.1:8555/api/v1"
+# "Gemma-4-E4B-it-GGUF"
+```
+
+**Verify with `GET /v1/email/init`** — `lemonade.base_url` is the effective URL the
+agent will call and `model.id` is the model it will use. When something is wrong,
+the endpoint returns **503** with a `hint` naming exactly what to fix.
+
+<Warning>
+  `LEMONADE_BASE_URL` is not restricted to loopback: pointing it at a non-local
+  host sends email content (and the Lemonade API key, if configured) to that host.
+  Only point it at a Lemonade instance you trust with mailbox contents.
+</Warning>
+
+<Note>
+  **Migration note:** triage no longer auto-downloads the model on its first call.
+  On a fresh server, provision once — `POST /v1/email/init` (or pull the model on
+  your Lemonade) — before the first triage request; until then triage returns
+  **502** with the fix in the error. The target server's catalog must list the
+  model that `GET /v1/email/init` reports as `model.id` (`user.`-prefixed
+  registrations match tolerantly).
+</Note>
 
 ## Authentication
 
@@ -260,7 +299,8 @@ See the full schema in the [Email Triage Contract](https://github.com/amd/gaia/b
 
 Triage always uses the **local Lemonade LLM** (there is no `engine` toggle; a
 high-confidence spam/promotional heuristic may skip the classify call internally, but the
-summary is always model-generated). With Lemonade unreachable, triage returns **HTTP 502**.
+summary is always model-generated). With Lemonade unreachable — or the triage model
+unavailable on it — triage returns **HTTP 502** naming the URL and the fix.
 
 ### Single email
 
@@ -329,7 +369,8 @@ categorization, add an optional top-level `context` object
 `POST /v1/email/triage/batch` takes an `items` array (1–100 email/thread inputs) and
 returns one result per item, order-preserved. Per-item failures are isolated: **HTTP 200
 can carry errored items**, so inspect each `results[].error`, not just the status. A
-**502** means Lemonade was unreachable before any item was processed.
+**502** means Lemonade was unreachable or the triage model is unavailable there,
+detected before any item was processed.
 
 ## Draft → confirmed send
 
@@ -429,9 +470,13 @@ Tools exposed: `triage_email`, `triage_email_batch`, `draft_reply`, `send_email`
 - **`GET /v1/email/version`** — `{"apiVersion": "2.3", "agentVersion": "…"}`. `apiVersion`
   is the frozen contract version; negotiate against its MAJOR so a breaking upgrade fails
   loudly.
+- **`GET /v1/email/init`** — readiness: the effective Lemonade `base_url`, the resolved
+  `model.id`, and a **503** with an actionable `hint` when not ready. This is how you
+  confirm a [`LEMONADE_BASE_URL` override](#pointing-the-sidecar-at-an-existing-embedded-lemonade)
+  took effect.
 - **`GET /v1/email/health`** — liveness only (`{"status":"ok"}`). A green health check means
-  the REST surface is up, **not** that Lemonade is reachable — the real readiness signal is
-  a `triage` returning 200.
+  the REST surface is up, **not** that Lemonade is reachable — the readiness signal is
+  `GET /v1/email/init`.
 
 ## Provider coverage
 
