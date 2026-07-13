@@ -1,0 +1,53 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# PR + main CI for the Agent Hub Worker (workers/agent-hub/, Cloudflare Worker).
+# The worker's test suite guards the shared catalog contract (POST /publish,
+# index.json shape) that every hub agent release and the website depend on —
+# previously it was local-only, so a contract regression could reach main
+# without any CI ever running the suite. Deploys stay manual; this only tests.
+
+name: Agent Hub Worker CI
+
+on:
+  pull_request:
+    paths:
+      - 'workers/agent-hub/**'
+      - '.github/workflows/agent_hub_worker_ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'workers/agent-hub/**'
+      - '.github/workflows/agent_hub_worker_ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-hub-worker-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Type-check, test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: workers/agent-hub
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: workers/agent-hub/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check (tsc --noEmit)
+        run: npm run typecheck
+
+      - name: Unit tests (vitest)
+        run: npm test
