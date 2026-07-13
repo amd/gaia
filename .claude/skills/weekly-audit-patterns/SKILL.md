@@ -53,8 +53,13 @@ route promotions through `bug` unless you deliberately widen the auto-fix `if`.
 
 ## Cost & safety invariants
 
-- **Model** is `AUDIT_MODEL` (top-level env, `claude-fable-5`). One place to change it;
-  swap to `claude-opus-4-8` if Fable isn't on the subscription tier.
+- **Model** is `AUDIT_MODEL` (top-level env, `claude-opus-4-8` — ~half the token burn of
+  Fable for comparable static-review quality). One place to change it; swap to
+  `claude-fable-5` for maximum depth at ~2x cost. A measured Fable deep run was ~$45 of
+  API-equivalent subscription usage; Opus roughly halves that.
+- **Serialized dimensions**: the matrix runs `max-parallel: 1` so the run is a steady
+  drip, not a 5-job burst — this keeps it under the Max subscription's rolling (5-hour)
+  rate limit. If you re-parallelize, expect a token spike that can trip that limit.
 - **Skip-if-empty**: normal mode exits in `preflight` before any Claude call on a
   no-change week. Deep mode never skips.
 - **Modes**: `normal` = last N days' diff; `deep` = whole codebase, auto-selected on the
