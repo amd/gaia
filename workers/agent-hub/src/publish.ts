@@ -7,8 +7,9 @@
  * Flow: authenticate -> parse multipart -> validate manifest -> enforce
  * publisher scope -> enforce version immutability -> generate server-side
  * SHA-256 -> store artifact + raw manifest + optional README + optional
- * CHANGELOG + per-agent manifest -> rebuild index.json. Every guard fails
- * loudly with a structured error.
+ * CHANGELOG + optional SPEC + optional SKILL + optional EVALUATION +
+ * per-agent manifest -> rebuild index.json. Every guard fails loudly with a
+ * structured error.
  */
 
 import { assertAuthorAllowed, authenticate } from "./auth";
@@ -19,6 +20,7 @@ import {
   artifactKey,
   changelogKey,
   evalScorecardKey,
+  evaluationKey,
   packageFilesKey,
   rawManifestKey,
   readAgentManifest,
@@ -174,6 +176,9 @@ export async function handlePublish(
   // semantics as README/CHANGELOG.
   const specText = await optionalMarkdownPart(form, "spec", "SPEC.md");
   const skillText = await optionalMarkdownPart(form, "skill", "SKILL.md");
+  // Optional EVALUATION.md (evaluation guide), rendered as its own doc tab on the
+  // hub page. Same per-version, first-POST semantics as SPEC/SKILL.
+  const evaluationText = await optionalMarkdownPart(form, "evaluation", "EVALUATION.md");
   // Optional eval scorecard markdown (the agent's benchmark results, rendered on
   // the hub listing as an aggregate score + link). Per-version, first-POST semantics.
   const evalScorecardText = await optionalMarkdownPart(form, "eval_scorecard", "SCORECARD.md");
@@ -277,6 +282,11 @@ export async function handlePublish(
     }
     if (skillText != null) {
       await env.BUCKET.put(skillKey(manifest.id, manifest.version), skillText, {
+        httpMetadata: { contentType: "text/markdown; charset=utf-8" },
+      });
+    }
+    if (evaluationText != null) {
+      await env.BUCKET.put(evaluationKey(manifest.id, manifest.version), evaluationText, {
         httpMetadata: { contentType: "text/markdown; charset=utf-8" },
       });
     }

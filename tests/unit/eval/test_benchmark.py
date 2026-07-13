@@ -454,7 +454,11 @@ class TestAcceptanceMetrics:
 
 
 class TestPerfGateInBenchmark:
-    """The perf gate (#1277) added alongside #1278's quality gate — report mode."""
+    """The perf gate (#1277) added alongside #1278's quality gate.
+
+    The committed manifest is enforcing (#1990); the report-mode cases below
+    exercise the gate logic with inline ``enforce=False`` thresholds.
+    """
 
     def _results(self, *, total_duration_ms=2000):
         return [
@@ -534,16 +538,21 @@ class TestPerfGateInBenchmark:
         assert "quality_gate" in summary
         assert "perf_gate" in summary
 
-    def test_committed_perf_manifest_loads_in_report_mode(self):
-        # #1112 contract: the shipped perf manifest must exist, parse, and default
-        # to report mode until the Strix Halo bars are ratified on hardware.
+    def test_committed_perf_manifest_is_enforcing(self):
+        # #1990 contract: the shipped perf manifest is a hard release gate — a
+        # missed Strix Halo bar blocks the build (release_agent_email.yml runs
+        # it on the stx pool). If the pool proves noisy, widen the bars in the
+        # manifest (data) rather than reverting to report mode.
+        # Bars calibrated from the first real stx release run (v0.4.0): the prior
+        # 5s / 10tps / 300s aspirations false-failed it, so they were widened
+        # above observed (TTFT 8.5s, 12.1 tok/s, ~1894s/50-email) with margin.
         assert default_perf_thresholds_path().exists()
         pth = load_default_perf_thresholds()
-        assert pth.ttft_max_s == 5.0
-        assert pth.throughput_min_tps == 10.0
-        assert pth.pipeline_max_s == 300.0
-        assert pth.peak_memory_max_gb == 8.0
-        assert pth.enforce is False
+        assert pth.ttft_max_s == 15.0
+        assert pth.throughput_min_tps == 8.0
+        assert pth.pipeline_max_s == 2700.0
+        assert pth.peak_memory_max_gb == 16.0
+        assert pth.enforce is True
 
 
 if __name__ == "__main__":

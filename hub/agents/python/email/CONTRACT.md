@@ -1,17 +1,11 @@
----
-title: "Email Triage Contract Schema"
----
+# Email Triage Contract Schema
 
-<Info>
-  **Source Code:** [`hub/agents/python/email/gaia_agent_email/contract.py`](https://github.com/amd/gaia/blob/main/hub/agents/python/email/gaia_agent_email/contract.py)
-</Info>
-
-<Note>
-**Component:** Email request/response contract (issue #1262)
-**Module:** `gaia_agent_email.contract`
-**Validation:** pydantic v2
-**Schema version:** `2.3`
-</Note>
+> **Source code:** [`gaia_agent_email/contract.py`](gaia_agent_email/contract.py)
+>
+> **Component:** Email request/response contract (issue #1262)
+> **Module:** `gaia_agent_email.contract`
+> **Validation:** pydantic v2
+> **Schema version:** `2.3`
 
 ---
 
@@ -69,15 +63,13 @@ test asserts byte-for-byte equality, so drift in either place fails CI.
 | `PROMOTIONAL` | Marketing / bulk mail. |
 | `PERSONAL` | Personal correspondence. |
 
-<Note>
-  **Transport authentication is separate from this schema.** The frozen sidecar
-  requires a **per-session bearer token** (`Authorization: Bearer <token>`) on
-  every `/v1/email/*` request and enforces a loopback Host/Origin allowlist
-  ([#1706](https://github.com/amd/gaia/issues/1706)) — `401`/`400`/`403` on
-  failure. That is a deployment/transport control, not part of the request/response
-  contract, so it is **not** encoded in the frozen OpenAPI document. See
-  [Email Integration → Authentication](/guides/email-integration#authentication).
-</Note>
+> **Transport authentication is separate from this schema.** The frozen sidecar
+> requires a **per-session bearer token** (`Authorization: Bearer <token>`) on
+> every `/v1/email/*` request and enforces a loopback Host/Origin allowlist
+> ([#1706](https://github.com/amd/gaia/issues/1706)) — `401`/`400`/`403` on
+> failure. That is a deployment/transport control, not part of the request/response
+> contract, so it is **not** encoded in the frozen OpenAPI document. See
+> [Email Integration → Authentication](https://amd-gaia.ai/docs/guides/email-integration#authentication).
 
 ---
 
@@ -357,8 +349,9 @@ triages up to `MAX_BATCH_SIZE` (**100**) emails or threads in one request: an
 **Per-item isolation — read the results, not the status.** A failure on one item
 sets that entry's `error` and the rest still run, so **HTTP 200 with every item
 errored is a valid response**. Consumers MUST inspect each `results[].error`, never
-just the HTTP status. A `502` means the local LLM was unreachable before any item
-was processed — the whole batch fails.
+just the HTTP status. A `502` means the local LLM was unreachable or the triage
+model is unavailable there, detected before any item was processed — the whole
+batch fails.
 
 The MCP surface mirrors this with a `triage_email_batch` tool (the single
 `triage_email` tool is unchanged).

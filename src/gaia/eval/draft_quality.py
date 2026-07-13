@@ -43,6 +43,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from gaia.eval.fixture_paths import resolve_repo_fixture
+
 # ---------------------------------------------------------------------------
 # Corpus loading (offline)
 # ---------------------------------------------------------------------------
@@ -440,21 +442,13 @@ def load_drafting_thresholds(path: str | Path) -> DraftingThresholds:
     )
 
 
-# Canonical location of the committed drafting-gate thresholds manifest. The
-# single entry point CI consumes — flip 'enforce' in this file (data, not
-# code) to make CI gate on the #1269 draft-approval bar.
-_DRAFTING_THRESHOLDS_MANIFEST = (
-    Path(__file__).resolve().parents[3]
-    / "tests"
-    / "fixtures"
-    / "email"
-    / "drafting_gate_thresholds.json"
-)
-
-
 def default_drafting_thresholds_path() -> Path:
-    """Path to the committed drafting-gate thresholds manifest (#1269/#1948)."""
-    return _DRAFTING_THRESHOLDS_MANIFEST
+    """Path to the committed drafting-gate thresholds manifest (#1269/#1948).
+
+    The single entry point CI consumes — flip 'enforce' in that file (data, not
+    code) to make CI gate on the #1269 draft-approval bar.
+    """
+    return resolve_repo_fixture("email", "drafting_gate_thresholds.json")
 
 
 def load_default_drafting_thresholds() -> DraftingThresholds:

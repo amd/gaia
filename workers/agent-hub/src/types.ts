@@ -195,6 +195,8 @@ export interface IndexEntry {
   spec: string;
   /** SKILL.md (AI-integration playbook) markdown of the latest version; "" if none was published. */
   skill: string;
+  /** EVALUATION.md (evaluation guide) markdown of the latest version; "" if none was published. */
+  evaluation: string;
   /**
    * Eval-scorecard markdown (SCORECARD.md body, YAML front matter stripped) of the
    * latest version, rendered as its own doc tab on the hub page; "" if none was

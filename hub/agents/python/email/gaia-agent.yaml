@@ -13,7 +13,13 @@ playground_url: "http://127.0.0.1:8131/v1/email/playground"
 category: productivity
 tags: [email, gmail, calendar, triage]
 icon: mail
-tools_count: 6
+# tools_count = the number of internal @tool-decorated agent-loop functions
+# across gaia_agent_email/tools/*.py mixins — NOT the REST (16 verbs) or MCP
+# (4 tools) surface. Full definition: CAPABILITY_MATRIX.md. Drift guards:
+# tests/test_capability_matrix.py (AST-derived, reconciled against
+# __init__.py) and tests/test_email_agent.py (live registry, #1232);
+# a mismatch fails CI.
+tools_count: 52
 
 language: python
 min_gaia_version: "0.20.0"

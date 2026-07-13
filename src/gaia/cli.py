@@ -4358,7 +4358,14 @@ Let me know your answer!
                     "quality scoring skipped"
                 )
 
-            with tempfile.TemporaryDirectory(prefix="gaia-bench-") as tmp:
+            # ignore_cleanup_errors: the benchmark's per-email SQLite state.db can
+            # still hold a Windows file lock when the block exits (WinError 32 on
+            # rmtree). `results` is already captured, and the temp dir is a
+            # throwaway in the OS temp space, so a failed cleanup must not fail an
+            # otherwise-successful eval.
+            with tempfile.TemporaryDirectory(
+                prefix="gaia-bench-", ignore_cleanup_errors=True
+            ) as tmp:
                 results = run_benchmark(
                     args.model,
                     mbox_path=mbox_path,

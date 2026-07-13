@@ -57,6 +57,10 @@ export interface Agent {
   // published. Optional for the same older-index.json resilience as `changelog`.
   spec?: string;
   skill?: string;
+  // EVALUATION.md (evaluation guide) markdown of the latest version, rendered as its
+  // own doc tab. "" / absent if none was published. Optional for the same
+  // older-index.json resilience as `spec`/`skill`.
+  evaluation?: string;
   // Eval-scorecard markdown (SCORECARD.md body, YAML front matter already stripped
   // by the hub Worker), rendered as its own doc tab. "" / absent if none was
   // published. Same older-index.json resilience as `spec`/`skill`.

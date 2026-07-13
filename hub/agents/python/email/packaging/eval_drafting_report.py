@@ -1,23 +1,26 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Voice-drafting quality eval (judge-scored, report mode) — CI helper.
+"""Voice-drafting quality eval (judge-scored, enforcing) — CI helper.
 
 Drives the #1607 voice-profile drafting path over the committed drafting seed
 corpus (Lemonade + FakeGmailBackend — drafting only, nothing is ever sent) and
 scores each draft with a Claude judge against the case rubric. The aggregate
 ``draft_approval_rate`` is compared to the committed manifest
-``tests/fixtures/email/drafting_gate_thresholds.json`` (enforce:false) via
+``tests/fixtures/email/drafting_gate_thresholds.json`` (enforce:true) via
 ``gaia.eval.draft_quality`` — same single-source rule as the other gates: no
-thresholds inlined here. Flip ``enforce`` in the manifest (data, not code) to
-make this gate block.
+thresholds inlined here. The manifest owns the enforce switch (data, not code).
 
-When ``ANTHROPIC_API_KEY`` is absent the judge cannot score drafts, so this
-writes a LOUD, explicit skip report (never an invented pass) and exits 0.
+``ANTHROPIC_API_KEY`` is REQUIRED — the Claude judge cannot score drafts without
+it, and per CLAUDE.md's fail-loudly rule there is NO silent skip: its absence is
+a HARD FAILURE (exit 1), never a skip report and never an invented pass. The
+workflows that run this (release_agent_email.yml, test_email_agent_eval.yml,
+email_scorecard_refresh.yml) inject the key from ``secrets.ANTHROPIC_API_KEY``
+and never run on fork PRs, so the key is always present in a legitimate run.
 
 Config comes from the environment (shell-agnostic):
   EMAIL_EVAL_MODEL   Lemonade model id (required)
-  ANTHROPIC_API_KEY  Claude judge credential (optional; absence -> loud skip)
+  ANTHROPIC_API_KEY  Claude judge credential (REQUIRED; absence -> exit 1)
 
 Extracted verbatim from the former inline ``python - <<'PY'`` step so the eval
 can run on the Windows ``stx`` runner pool (PowerShell, no heredocs).
@@ -54,25 +57,23 @@ def main() -> int:
     )
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
-        # Loud, explicit skip — the judge credential is absent, so no draft can
-        # be scored. Never invents a pass; the report says so.
-        report = {
-            "skipped": True,
-            "reason": (
-                "ANTHROPIC_API_KEY not available on this runner — the Claude "
-                "judge cannot score drafts"
-            ),
-            "enforce": thresholds.enforce,
-            "should_fail": False,
-        }
-        (out / "drafting_gate_report.json").write_text(
-            json.dumps(report, indent=2), encoding="utf-8"
-        )
+        # Fail loudly (CLAUDE.md: No Silent Fallbacks — Fail Loudly). The judge
+        # credential is REQUIRED to score drafts; its absence is a hard failure,
+        # never a skip — regardless of the manifest's enforce flag. No skip report
+        # is written and no pass is invented, so the release / nightly cannot ship
+        # a silently un-judged drafting gate.
         print(
-            "[DRAFT-EVAL] SKIPPED: no judge credential — wrote "
-            "eval-out/drafting_gate_report.json"
+            "[DRAFT-EVAL] ERROR: ANTHROPIC_API_KEY is not set — the Claude judge "
+            "cannot score the voice-drafting eval.\n"
+            "  What to do: set ANTHROPIC_API_KEY on this runner. The workflow step "
+            "injects it from secrets.ANTHROPIC_API_KEY; add/repair that repo (or "
+            "org) secret.\n"
+            "  Where: the 'Voice-drafting quality eval' step in "
+            ".github/workflows/{release_agent_email,test_email_agent_eval,"
+            "email_scorecard_refresh}.yml.",
+            file=sys.stderr,
         )
-        return 0
+        return 1
 
     # Generation: drives the #1607 voice-profile drafting path per case
     # (Lemonade — this job holds the serial lemonade-eval slot).
@@ -94,7 +95,7 @@ def main() -> int:
 
     gate = summary.get("drafting_gate", {})
     agg = summary.get("drafting", {})
-    print("\n============ EMAIL DRAFTING EVAL REPORT (report mode) ============")
+    print("\n============ EMAIL DRAFTING EVAL REPORT (enforcing) ============")
     print(
         f"  Draft-approval rate : {agg.get('draft_approval_rate')}   "
         f"(target >={thresholds.approval_min} #1269, REPORTED)"
@@ -123,11 +124,11 @@ def main() -> int:
     )
     print("[OUT] wrote eval-out/drafting_gate_report.json")
 
-    # Same hook contract as the other gates: report mode never fails.
+    # Same hook contract as the other gates: with enforce:true a breach blocks.
     if gate.get("should_fail"):
         print("[DRAFT-EVAL] enforced gate breach — failing the build.")
         return 1
-    print("[DRAFT-EVAL] report mode (or no breach) — gate does not block the build.")
+    print("[DRAFT-EVAL] drafting gate passed — no breach.")
     return 0
 
 

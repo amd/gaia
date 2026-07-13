@@ -561,6 +561,9 @@ class EmailTriageAgent(
         self._register_profile_tools()
         self._register_voice_tools()
         self.register_memory_tools()
+        # Freeze the per-instance registry so a later agent in the same
+        # process can't mutate this agent's effective tool set.
+        self._snapshot_tools()
 
     # -- Phase 2 multi-inbox routing (#1603) -------------------------------
 

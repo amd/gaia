@@ -2524,6 +2524,12 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "description": "Ambiguous or unknown account: the named provider is not connected, or no provider was given while several accounts are connected."
+          },
+          "403": {
+            "description": "Authorization failed — the account's auth is missing, expired, or revoked (reconnect via Settings → Connectors), or a confirmation gate rejected the request (mint a fresh confirmation token)."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -2533,6 +2539,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "502": {
+            "description": "Upstream provider/connector failure."
+          },
+          "503": {
+            "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
         "summary": "Archive Email",
@@ -2555,6 +2567,12 @@
               }
             },
             "description": "Successful Response"
+          },
+          "404": {
+            "description": "No briefing generated yet — enable the daily schedule (GAIA_EMAIL_BRIEFING_ENABLED) or POST /v1/email/prescan."
+          },
+          "500": {
+            "description": "The persisted briefing could not be read or does not match the email_pre_scan envelope."
           }
         },
         "summary": "Get Briefing",
@@ -2628,6 +2646,12 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "description": "Ambiguous or unknown account: the named provider is not connected, or no provider was given while several accounts are connected."
+          },
+          "403": {
+            "description": "Authorization failed — the account's auth is missing, expired, or revoked (reconnect via Settings → Connectors), or a confirmation gate rejected the request (mint a fresh confirmation token)."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -2637,6 +2661,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "502": {
+            "description": "Upstream provider/connector failure."
+          },
+          "503": {
+            "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
         "summary": "List Calendar Events",
@@ -2668,6 +2698,12 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "description": "Bad event input (no usable time / inverted window), or the provider is ambiguous/not connected."
+          },
+          "403": {
+            "description": "Authorization failed — the account's auth is missing, expired, or revoked (reconnect via Settings → Connectors), or a confirmation gate rejected the request (mint a fresh confirmation token)."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -2677,6 +2713,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "502": {
+            "description": "Upstream provider/connector failure."
+          },
+          "503": {
+            "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
         "summary": "Create Calendar Event",
@@ -2752,6 +2794,12 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "description": "Ambiguous or unknown account: the named provider is not connected, or no provider was given while several accounts are connected."
+          },
+          "403": {
+            "description": "Authorization failed — the account's auth is missing, expired, or revoked (reconnect via Settings → Connectors), or a confirmation gate rejected the request (mint a fresh confirmation token)."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -2761,6 +2809,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "502": {
+            "description": "Upstream provider/connector failure."
+          },
+          "503": {
+            "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
         "summary": "Respond Calendar Event",
@@ -2932,6 +2986,12 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "description": "Ambiguous or unknown account: the named provider is not connected, or no provider was given while several accounts are connected."
+          },
+          "403": {
+            "description": "Authorization failed — the account's auth is missing, expired, or revoked (reconnect via Settings → Connectors), or a confirmation gate rejected the request (mint a fresh confirmation token)."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -2941,6 +3001,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "502": {
+            "description": "Upstream provider/connector failure."
+          },
+          "503": {
+            "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
         "summary": "Prescan Inbox",
@@ -2974,6 +3040,12 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "description": "Refused: is_phishing was false (only phishing-flagged mail may be quarantined), the mailbox is Outlook (quarantine is Gmail-only), or the provider is ambiguous/not connected."
+          },
+          "403": {
+            "description": "Authorization failed — the account's auth is missing, expired, or revoked (reconnect via Settings → Connectors), or a confirmation gate rejected the request (mint a fresh confirmation token)."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -2983,6 +3055,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "502": {
+            "description": "Upstream provider/connector failure."
+          },
+          "503": {
+            "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
         "summary": "Quarantine Email",
@@ -3016,6 +3094,12 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "description": "Ambiguous or unknown account: the named provider is not connected, or no provider was given while several accounts are connected."
+          },
+          "403": {
+            "description": "Authorization failed — the account's auth is missing, expired, or revoked (reconnect via Settings → Connectors), or a confirmation gate rejected the request (mint a fresh confirmation token)."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -3025,6 +3109,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "502": {
+            "description": "Upstream provider/connector failure."
+          },
+          "503": {
+            "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
         "summary": "Search Inbox",
@@ -3058,6 +3148,15 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "description": "Ambiguous or unknown account: the named provider is not connected, or no provider was given while several accounts are connected."
+          },
+          "403": {
+            "description": "Authorization failed — the account's auth is missing, expired, or revoked (reconnect via Settings → Connectors), or a confirmation gate rejected the request (mint a fresh confirmation token)."
+          },
+          "413": {
+            "description": "An attachment exceeds the connected provider's size ceiling."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -3067,6 +3166,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "502": {
+            "description": "Upstream provider/connector failure."
+          },
+          "503": {
+            "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
         "summary": "Send Email",
@@ -3109,6 +3214,9 @@
               }
             },
             "description": "Validation Error"
+          },
+          "502": {
+            "description": "Local LLM triage failed — Lemonade Server unreachable or it returned an unusable result."
           }
         },
         "summary": "Triage Email",
@@ -3119,7 +3227,7 @@
     },
     "/v1/email/triage/batch": {
       "post": {
-        "description": "Triage an array of emails or threads in a single request (#1887).\n\nAccepts a ``BatchTriageRequest`` (1..MAX_BATCH_SIZE ``EmailInput`` items)\nand returns a ``BatchTriageResponse`` — one ``BatchItemResult`` per item,\norder-preserved. Per-item failures surface as ``BatchItemResult.error``\n(HTTP 200 with all items errored is valid — inspect each result). A 502\nmeans Lemonade was unreachable before any item was processed. No mail is\nread or sent; this analyzes only the items in the request. Each\nsuccessful item's action items are persisted to the local task store,\nlinked to its source ``message_id`` and de-duplicated per message\n(#1605) — additive, the response shape is unchanged.",
+        "description": "Triage an array of emails or threads in a single request (#1887).\n\nAccepts a ``BatchTriageRequest`` (1..MAX_BATCH_SIZE ``EmailInput`` items)\nand returns a ``BatchTriageResponse`` — one ``BatchItemResult`` per item,\norder-preserved. Per-item failures surface as ``BatchItemResult.error``\n(HTTP 200 with all items errored is valid — inspect each result). A 502\nmeans Lemonade was unreachable or the triage model is unavailable there,\ndetected before any item was processed. No mail is read or sent; this\nanalyzes only the items in the request. Each\nsuccessful item's action items are persisted to the local task store,\nlinked to its source ``message_id`` and de-duplicated per message\n(#1605) — additive, the response shape is unchanged.",
         "operationId": "triage_email_batch_v1_email_triage_batch_post",
         "requestBody": {
           "content": {
@@ -3151,6 +3259,9 @@
               }
             },
             "description": "Validation Error"
+          },
+          "502": {
+            "description": "Local LLM triage failed — Lemonade Server unreachable or it returned an unusable result."
           }
         },
         "summary": "Triage Email Batch",
@@ -3184,6 +3295,15 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "description": "Ambiguous or unknown account: the named provider is not connected, or no provider was given while several accounts are connected."
+          },
+          "403": {
+            "description": "Authorization failed — the account's auth is missing, expired, or revoked (reconnect via Settings → Connectors), or a confirmation gate rejected the request (mint a fresh confirmation token)."
+          },
+          "409": {
+            "description": "The undo window has expired, or the handle is unknown or already undone — the action can no longer be reversed via the API."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -3193,6 +3313,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "502": {
+            "description": "Upstream provider/connector failure."
+          },
+          "503": {
+            "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
         "summary": "Unarchive Email",
@@ -3226,6 +3352,15 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "description": "Refused: the recorded mailbox is Outlook (quarantine is Gmail-only), or the provider is ambiguous/not connected."
+          },
+          "403": {
+            "description": "Authorization failed — the account's auth is missing, expired, or revoked (reconnect via Settings → Connectors), or a confirmation gate rejected the request (mint a fresh confirmation token)."
+          },
+          "409": {
+            "description": "The undo window has expired, or the handle is unknown or already undone — the action can no longer be reversed via the API."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -3235,6 +3370,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "502": {
+            "description": "Upstream provider/connector failure."
+          },
+          "503": {
+            "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
         "summary": "Unquarantine Email",

@@ -44,6 +44,7 @@ const readmeHtml = renderMarkdown(agent.readme);
 const changelogHtml = agent.changelog ? renderMarkdown(agent.changelog) : '';
 const specHtml = agent.spec ? renderMarkdown(agent.spec) : '';
 const skillHtml = agent.skill ? renderMarkdown(agent.skill) : '';
+const evaluationHtml = agent.evaluation ? renderMarkdown(agent.evaluation) : '';
 // Eval scorecard: the Worker embeds the SCORECARD.md body (front matter already
 // stripped) as `scorecard`, and the aggregate as `eval_score`. Render the body as
 // a tab; the sidebar badge links out to the canonical source (eval_scorecard_url).
@@ -86,6 +87,7 @@ const docTabs = [
   ...(specHtml ? [{ key: 'spec', label: 'Spec' }] : []),
   ...(skillHtml ? [{ key: 'skill', label: 'Skill' }] : []),
   ...(scorecardHtml ? [{ key: 'scorecard', label: 'Scorecard' }] : []),
+  ...(evaluationHtml ? [{ key: 'evaluation', label: 'Evaluation' }] : []),
   ...(changelogHtml ? [{ key: 'changelog', label: 'Changelog' }] : []),
   ...(packageFiles.length ? [{ key: 'files', label: 'Files' }] : []),
 ];
@@ -154,7 +156,7 @@ const terminalLines = [
       </div>
     </section>
 
-    <!-- Body: tabbed docs (README / Spec / Skill / Scorecard / Changelog / Files) + cards -->
+    <!-- Body: tabbed docs (README / Spec / Skill / Scorecard / Evaluation / Changelog / Files) + cards -->
     <div class="mt-12 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_280px] gap-12">
       <div class="min-w-0" data-doc-tabs>
         {docTabs.length > 1 && (
@@ -199,6 +201,11 @@ const terminalLines = [
               </p>
             )}
             <div set:html={scorecardHtml} />
+          </article>
+        )}
+        {evaluationHtml && (
+          <article role="tabpanel" id="docpanel-evaluation" aria-labelledby="doctab-evaluation" data-doc-panel="evaluation" class="doc max-w-[70ch]" hidden>
+            <div set:html={evaluationHtml} />
           </article>
         )}
         {changelogHtml && (
@@ -714,7 +721,7 @@ const terminalLines = [
   .file-tree-chevron { transition: transform 0.15s ease; }
   .file-tree details[open] > summary .file-tree-chevron { transform: rotate(90deg); }
 
-  /* Doc tabs (README / Spec / Skill / Scorecard / Changelog / Files) */
+  /* Doc tabs (README / Spec / Skill / Scorecard / Evaluation / Changelog / Files) */
   .doc-tab {
     @apply -mb-px border-b-2 border-transparent px-4 py-2 text-sm font-medium text-g-muted transition-colors hover:text-g-text;
   }

@@ -17,10 +17,10 @@ module because every read tool that returns body bytes needs to honor it.
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
+from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email.gmail_backend import decode_message_body
 
 # Re-exported so the pre-scan tests can monkeypatch ``read_tools.make_llm_classifier``
@@ -73,6 +73,10 @@ def _inbox_scan_ceiling() -> int:
 # attack surface for indirect prompt injection.
 DEFAULT_BODY_LIMIT_CHARS = 4000
 
+# Opt-in ceiling for ``get_message(full_body=True)``. Finite on purpose —
+# an unbounded body is a single-email context DoS on a fixed-ctx local model.
+MAX_FULL_BODY_CHARS = 50_000
+
 # Combined body budget for a whole-thread transcript (#1268). Bounds the prompt
 # so a long thread can't overflow a local model's context window. When a thread
 # exceeds it, the per-message budget shrinks so every message stays represented
@@ -95,18 +99,13 @@ def wrap_untrusted_body(body: str) -> str:
     return f"{UNTRUSTED_BODY_OPEN}\n{body}\n{UNTRUSTED_BODY_CLOSE}"
 
 
-def _envelope_ok(data: Any) -> str:
-    return json.dumps({"ok": True, "data": data}, default=str)
-
-
-def _envelope_err(message: str) -> str:
-    return json.dumps({"ok": False, "error": message})
-
-
-def _truncate(text: str, limit: int) -> tuple[str, bool]:
+def _truncate(text: str, limit: int) -> tuple[str, int]:
+    """Return (possibly-truncated text, chars dropped). Dropped == 0 means untouched."""
+    if limit <= 0:
+        raise ValueError(f"body limit must be positive, got {limit}")
     if len(text) <= limit:
-        return text, False
-    return text[:limit] + "\n...[truncated]", True
+        return text, 0
+    return text[:limit] + "\n...[truncated]", len(text) - limit
 
 
 def _format_message_for_llm(
@@ -124,9 +123,9 @@ def _format_message_for_llm(
         for h in payload.get("headers", [])
     }
     body, attachments = decode_message_body(payload)
-    body_truncated = False
+    body_chars_dropped = 0
     if body:
-        body, body_truncated = _truncate(body, body_limit)
+        body, body_chars_dropped = _truncate(body, body_limit)
     return {
         "id": msg.get("id"),
         "thread_id": msg.get("threadId"),
@@ -137,7 +136,8 @@ def _format_message_for_llm(
         "label_ids": list(msg.get("labelIds", [])),
         "snippet": msg.get("snippet", ""),
         "body": wrap_untrusted_body(body),
-        "body_truncated": body_truncated,
+        "body_truncated": body_chars_dropped > 0,
+        "body_chars_dropped": body_chars_dropped,
         "attachments": attachments,
     }
 
@@ -160,10 +160,20 @@ def list_inbox_impl(
         return {"messages": out, "next_page_token": listing.get("nextPageToken")}
 
 
-def get_message_impl(gmail, *, message_id: str, debug: bool = False) -> Dict[str, Any]:
-    with log_tool_call("get_message", {"message_id": message_id}, debug=debug) as st:
+def get_message_impl(
+    gmail,
+    *,
+    message_id: str,
+    body_limit: int = DEFAULT_BODY_LIMIT_CHARS,
+    debug: bool = False,
+) -> Dict[str, Any]:
+    with log_tool_call(
+        "get_message",
+        {"message_id": message_id, "body_limit": body_limit},
+        debug=debug,
+    ) as st:
         msg = gmail.get_message(message_id)
-        formatted = _format_message_for_llm(msg)
+        formatted = _format_message_for_llm(msg, body_limit=body_limit)
         st["result_summary"] = {
             "id": formatted["id"],
             "subject": formatted["subject"],
@@ -787,7 +797,7 @@ class ReadToolsMixin:
                 JSON envelope with ``{"messages": [...]}`` per message:
                 id, thread_id, subject, from, to, date, label_ids,
                 snippet, body (wrapped in untrusted-input delimiters),
-                body_truncated, attachments, mailbox.
+                body_truncated, body_chars_dropped, attachments, mailbox.
             """
             try:
                 max_results = max(1, min(int(max_results or 25), 100))
@@ -815,17 +825,34 @@ class ReadToolsMixin:
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def get_message(message_id: str, mailbox: str = "") -> str:
-            """Fetch a single message by id, including full body.
+        def get_message(
+            message_id: str, mailbox: str = "", full_body: bool = False
+        ) -> str:
+            """Fetch a single message by id.
+
+            The body is truncated at 4000 chars by default for context safety.
+            Set ``full_body=True`` ONLY when the user explicitly asks to see
+            the complete/untruncated message — never as a self-directed step
+            while triaging or analyzing a message on your own initiative. The
+            body stays wrapped in the untrusted-input delimiters either way,
+            and the result reports ``body_truncated`` / ``body_chars_dropped``.
 
             ``mailbox`` (optional) names the source mailbox ('google' /
             'microsoft') from triage output so the read routes correctly when
             multiple mailboxes are connected.
             """
             try:
+                body_limit = (
+                    MAX_FULL_BODY_CHARS if full_body else DEFAULT_BODY_LIMIT_CHARS
+                )
                 backend = agent._backend_for_message(message_id, mailbox or None)
                 return _envelope_ok(
-                    get_message_impl(backend, message_id=message_id, debug=debug_flag)
+                    get_message_impl(
+                        backend,
+                        message_id=message_id,
+                        body_limit=body_limit,
+                        debug=debug_flag,
+                    )
                 )
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))

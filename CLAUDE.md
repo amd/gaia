@@ -195,7 +195,7 @@ self-contradicting lifecycle docs.
 
 **Before creating new functionality:**
 1. Check if similar functionality exists in `src/gaia/agents/base/`
-2. Check existing mixins in agent subdirectories (e.g., `chat/tools/`, `code/tools/`)
+2. Check existing mixins in agent packages (e.g., `hub/agents/python/chat/gaia_agent_chat/tools/`)
 3. Extract shared logic into base classes or mixins when patterns repeat
 
 ### Code Comments — Short or Skip
@@ -429,7 +429,7 @@ gaia/
 │   ├── agents/         # Agent framework + in-core agents
 │   │   ├── base/       # Base Agent class, MCPAgent, ApiAgent mixins
 │   │   ├── tools/      # Cross-agent tool mixins (rag, file, shell, browser, scratchpad, screenshot…)
-│   │   ├── chat/, builder/   # in-core agents
+│   │   ├── builder/    # in-core agent (ChatAgent moved to hub/agents/python/chat/)
 │   │   ├── code_index/ # CodeIndexToolsMixin — semantic code search (FAISS)
 │   │   └── registry.py # Agent registry + KNOWN_TOOLS map
 │   │   #   Packaged agents (code, analyst, browser, fileio, email, summarize, jira,
@@ -527,7 +527,7 @@ is set in its own `agent.py` (see [Default Models](#default-models)).
 
 | Agent | Description |
 |-------|-------------|
-| **ChatAgent** | Multi-profile conversation (chat/doc/file) with RAG — in-core (`chat/`) |
+| **ChatAgent** | Multi-profile conversation (chat/doc/file) with RAG — hub (`chat/`) |
 | **BuilderAgent** | Scaffolds new agents from templates — in-core (`builder/`) |
 | **DocumentQAAgent** | Standalone document Q&A with RAG — hub (`docqa/`) |
 | **RoutingAgent** | Intelligent agent selection (`AGENT_ROUTING_MODEL`) — hub (`routing/`) |
@@ -642,7 +642,7 @@ agent-hub, skill-format, OEM bundling, desktop-installer, MCP, CUA, Docker, and 
 Browse the directory rather than a partial list here.
 
 **Key architectural decisions (April 2026):**
-- **GaiaAgent** rename planned (#696) — not yet landed; the chat agent class is still `ChatAgent` (`src/gaia/agents/chat/agent.py`)
+- **GaiaAgent** rename planned (#696) — not yet landed; the chat agent class is still `ChatAgent` (`hub/agents/python/chat/gaia_agent_chat/agent.py`)
 - Voice-first is P0 enabling technology (#702)
 - No context compaction — memory + RAG handles long conversations
 - Configuration dashboard + Observability dashboard as separate Agent UI panels
@@ -683,7 +683,7 @@ The documentation is organized in [`docs/docs.json`](docs/docs.json) with the fo
 2. **Check for duplicates:** Search existing issues/PRs to avoid redundant responses
 
 3. **Reference specific files:** Use precise file references with line numbers when possible
-   - Agent implementations: `src/gaia/agents/` (in-core: base/, tools/, chat/, builder/, code_index/, registry.py) and `hub/agents/python/<id>/` (packaged agents: code, analyst, browser, email, jira, docker, sd, emr, docqa, routing, …)
+   - Agent implementations: `src/gaia/agents/` (in-core: base/, tools/, builder/, code_index/, registry.py) and `hub/agents/python/<id>/` (packaged agents: chat, code, analyst, browser, email, jira, docker, sd, emr, docqa, routing, …)
    - CLI commands: `src/gaia/cli.py`
    - MCP integration: `src/gaia/mcp/`
    - LLM backend: `src/gaia/llm/` (+ `providers/` for Claude/OpenAI)

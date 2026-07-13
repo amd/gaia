@@ -689,6 +689,98 @@ class TestEmailAdapter:
         assert "gaia eval benchmark" in payload.reproduction_command
         assert "gen_scorecard.py" in payload.reproduction_command
         assert "PYTHON_KEYRING_BACKEND" in payload.reproduction_command
+        # The corpus is generated (not committed), so the recipe MUST build it
+        # from the seed first — a fresh checkout fails otherwise.
+        assert "generate_mbox.py" in payload.reproduction_command
+        assert 'uv pip install -e ".[dev,eval,api]"' in payload.reproduction_command
+        # Points readers to the standalone eval guide for background/examples.
+        assert "EVALUATION.md" in payload.reproduction_command
+
+    def _bench_and_gt(self, tmp_path):
+        benchmark_dir = tmp_path / "benchmark"
+        benchmark_dir.mkdir()
+        (benchmark_dir / "email_benchmark_scorecard.json").write_text(
+            EMAIL_BENCHMARK_FIXTURE.read_text()
+        )
+        gt_path = tmp_path / "ground_truth.json"
+        gt_path.write_text(json.dumps({"_meta": {}, "a": {"label": "x"}}))
+        return benchmark_dir, gt_path
+
+    def test_drafting_report_folds_reported_metric(self, tmp_path):
+        # A judged drafting report adds draft_approval_rate as a REPORTED metric
+        # (weight 0) without changing the aggregate (still 100 x within_one).
+        from gaia.eval.release_scorecard import compute_aggregate
+
+        mod = self._load_gen_scorecard()
+        bench, gt = self._bench_and_gt(tmp_path)
+        report = tmp_path / "drafting_gate_report.json"
+        report.write_text(
+            json.dumps({"summary": {"drafting": {"draft_approval_rate": 0.73}}})
+        )
+
+        base = mod.build_payload(bench, gt)
+        withd = mod.build_payload(bench, gt, drafting_report=str(report))
+
+        names = {m["name"]: m["weight"] for m in withd.metrics}
+        assert names.get("draft_approval_rate") == 0.0
+        draft = next(m for m in withd.metrics if m["name"] == "draft_approval_rate")
+        assert draft["value"] == pytest.approx(0.73)
+        # Aggregate unchanged — drafting is reported, not weighted.
+        assert compute_aggregate(withd.metrics)[1] == compute_aggregate(base.metrics)[1]
+
+    def test_drafting_report_skip_marker_fails_loud(self, tmp_path):
+        # No silent skip (CLAUDE.md fail-loudly): the judged drafting eval now
+        # hard-fails on a missing key instead of emitting a skip report, so a
+        # legacy `skipped` marker must raise — never silently omit the metric.
+        mod = self._load_gen_scorecard()
+        bench, gt = self._bench_and_gt(tmp_path)
+        report = tmp_path / "drafting_gate_report.json"
+        report.write_text(json.dumps({"skipped": True, "reason": "no key"}))
+
+        with pytest.raises(ValueError, match="skipped"):
+            mod.build_payload(bench, gt, drafting_report=str(report))
+
+    def test_drafting_report_malformed_fails_loud(self, tmp_path):
+        # A non-skip report missing the rate is a hard error, never a silent omit.
+        mod = self._load_gen_scorecard()
+        bench, gt = self._bench_and_gt(tmp_path)
+        report = tmp_path / "drafting_gate_report.json"
+        report.write_text(json.dumps({"summary": {"drafting": {}}}))
+
+        with pytest.raises(ValueError, match="draft_approval_rate"):
+            mod.build_payload(bench, gt, drafting_report=str(report))
+
+    def _load_eval_drafting_report(self):
+        path = (
+            Path(__file__).parents[3]
+            / "hub"
+            / "agents"
+            / "python"
+            / "email"
+            / "packaging"
+            / "eval_drafting_report.py"
+        )
+        spec = importlib.util.spec_from_file_location("eval_drafting_report", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_drafting_eval_missing_key_hard_fails(self, tmp_path, monkeypatch, capsys):
+        # No silent skip (CLAUDE.md fail-loudly): a missing ANTHROPIC_API_KEY makes
+        # the judged drafting eval exit 1 with an actionable error naming the key —
+        # it must NOT write a skip report or return 0.
+        mod = self._load_eval_drafting_report()
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("EMAIL_EVAL_MODEL", "test-model")
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+        rc = mod.main()
+
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "ANTHROPIC_API_KEY" in err
+        # Never emits a skip report the scorecard could silently omit.
+        assert not (tmp_path / "eval-out" / "drafting_gate_report.json").exists()
 
 
 # ---------------------------------------------------------------------------

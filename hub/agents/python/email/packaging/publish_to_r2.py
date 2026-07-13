@@ -129,6 +129,7 @@ def publish_one(
     changelog_bytes: bytes | None = None,
     spec_bytes: bytes | None = None,
     skill_bytes: bytes | None = None,
+    evaluation_bytes: bytes | None = None,
     eval_scorecard_bytes: bytes | None = None,
     package_files_bytes: bytes | None = None,
 ) -> dict:
@@ -173,6 +174,10 @@ def publish_one(
             files["spec"] = ("SPEC.md", spec_bytes, "text/markdown")
         if skill_bytes is not None:
             files["skill"] = ("SKILL.md", skill_bytes, "text/markdown")
+        # EVALUATION.md rides along the same way — it becomes the catalog entry's
+        # `evaluation`, rendered as its own doc tab on the hub page.
+        if evaluation_bytes is not None:
+            files["evaluation"] = ("EVALUATION.md", evaluation_bytes, "text/markdown")
         # The eval scorecard rides along with the first platform binary and becomes
         # the catalog entry's `eval_score` and `eval_scorecard_url`.
         if eval_scorecard_bytes is not None:
@@ -277,6 +282,12 @@ def main(argv=None) -> int:
         "(POSTed as the multipart 'skill' part the Worker accepts).",
     )
     parser.add_argument(
+        "--evaluation",
+        type=Path,
+        help="Path to EVALUATION.md to publish as the agent's catalog evaluation "
+        "(POSTed as the multipart 'evaluation' part the Worker accepts).",
+    )
+    parser.add_argument(
         "--eval-scorecard",
         type=Path,
         help="Path to the eval scorecard markdown (e.g. SCORECARD.md) to "
@@ -354,6 +365,20 @@ def main(argv=None) -> int:
             flush=True,
         )
 
+    evaluation_bytes = None
+    if args.evaluation is not None:
+        if not args.evaluation.exists():
+            raise SystemExit(
+                f"error: --evaluation path not found: {args.evaluation}. Pass the "
+                "agent's EVALUATION.md, or omit --evaluation to publish without one."
+            )
+        evaluation_bytes = args.evaluation.read_bytes()
+        print(
+            f"[publish] attaching evaluation: {args.evaluation} "
+            f"({len(evaluation_bytes)} bytes)",
+            flush=True,
+        )
+
     eval_scorecard_bytes = None
     if args.eval_scorecard is not None:
         if not args.eval_scorecard.exists():
@@ -404,6 +429,7 @@ def main(argv=None) -> int:
                 changelog_bytes=changelog_bytes,
                 spec_bytes=spec_bytes,
                 skill_bytes=skill_bytes,
+                evaluation_bytes=evaluation_bytes,
                 eval_scorecard_bytes=eval_scorecard_bytes,
                 package_files_bytes=package_files_bytes,
             )
