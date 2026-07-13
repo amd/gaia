@@ -308,7 +308,7 @@ Source is visible in the dashboard and helps users understand why the agent "kno
 
 ### Embed
 
-After storage, the item is immediately embedded via Lemonade (`user.embeddinggemma-300m-GGUF`, 768-dim) and the embedding BLOB is written back. Embedding is a hard requirement — `init_memory()` validates Lemonade connectivity at startup and raises `RuntimeError` if the embedding endpoint is unreachable. All knowledge items must have embeddings; items without embeddings (e.g., from a schema migration) are backfilled on startup before the system becomes operational.
+After storage, the item is embedded via Lemonade (`user.embeddinggemma-300m-GGUF`, 768-dim) and the embedding BLOB is written back. `init_memory()` validates Lemonade connectivity at startup; if the endpoint is unreachable it disables memory for the session rather than raising (see [Hard Requirements](#hard-requirements)). All knowledge items must end up with embeddings; items without one -- from a schema migration, or from a `--chat-only` bootstrap run on a machine with no embedder -- are backfilled at the next agent start.
 
 The embedder switched from `nomic-embed-text-v2-moe-GGUF` to `user.embeddinggemma-300m-GGUF` because the current llama.cpp server cannot load the nomic MOE embedder. Both are 768-dim, so the embedding schema is unchanged — but old nomic vectors are not comparable to EmbeddingGemma vectors, so the changed model name invalidates the stored embeddings and existing stores are re-embedded automatically on the next run.
 
@@ -416,11 +416,12 @@ def _classify_query_complexity(query: str) -> int:
 ### Hard Requirements
 
 Embedding is not optional. If the Lemonade embedding service is unavailable:
-- `init_memory()` raises `RuntimeError("Lemonade embedding service required for memory system")`
-- `search_hybrid()` raises `RuntimeError` rather than silently returning BM25-only results
-- `store()` raises `RuntimeError` if it cannot embed the new item
+- `init_memory()` logs a WARNING and **disables memory for that session** (`memory_store` is `None`). It does *not* raise -- an agent must still start on a machine where Lemonade is not installed yet, on a cloud backend, or under `GAIA_MEMORY_DISABLED=1` in CI. Every caller that needs a live store checks `memory_store is None` and fails with an actionable message (see `MemoryMixin.run_bootstrap_conversation()`).
+- `search_hybrid()` raises `RuntimeError` rather than silently returning BM25-only results.
 
-This is a deliberate design choice. Silent degradation to keyword-only search produces inconsistent result quality, masks configuration problems, and makes performance benchmarking unreliable. The user should always know when the system is not fully operational.
+This is a deliberate design choice. Silent degradation to keyword-only *search* produces inconsistent result quality, masks configuration problems, and makes performance benchmarking unreliable. The user should always know when the system is not fully operational -- which is why memory switches off loudly rather than running at half strength.
+
+**Storing is not embedding.** `store()` writes the row; embedding is a separate step (`store_embedding()` + the FAISS add). A row stored without one is not lost: `_backfill_embeddings()` picks it up at the next agent start. That separation is what lets `gaia memory bootstrap --chat-only` onboard a user on a machine that has no embedding backend at all.
 
 ### FAISS Index Lifecycle
 
@@ -1331,36 +1332,50 @@ Agent: "Hi! I'm your GAIA assistant. Let me learn a bit about you so I can
         be helpful from the start. You can skip any question."
 
 Agent: "What's your name?"
--> remember(fact="User's name is Alex", category="fact", context="global")
+-> store(content="User's name is Alex", category="profile", context="global")
 
 Agent: "What do you do? (e.g., software engineer, student, designer)"
--> remember(fact="Alex is a senior software engineer", category="fact", context="global")
+-> store(content="User's role/profession: senior software engineer",
+        category="profile", context="global")
 
 Agent: "What are you mainly going to use me for?"
   User: "Work coding, personal task management, and learning"
--> remember(fact="Primary use cases: work coding, personal tasks, learning",
-           category="fact", context="global")
--> Suggests creating contexts: "work", "personal", "learning"
+-> store(content="User's primary use cases for GAIA: Work coding, personal task management, and learning",
+        category="profile", context="global")
+-> Suggests creating contexts: "work", "personal", "learning" -- when the answer
+   names 2+ of them, that suggestion is proposed as its own entry:
+   store(content="Uses GAIA across these contexts: work, personal, learning",
+         category="profile", context="global")
 
 Agent: "Any preferences for how I communicate? (concise vs detailed, formal vs casual)"
--> remember(fact="Prefers concise, casual communication", category="preference",
-           context="global")
+-> store(content="Preferred communication style: concise, casual",
+        category="preference", context="global")
 
 Agent: "What's your timezone?"
--> remember(fact="Timezone: America/Los_Angeles (PST/PDT)", category="fact",
-           context="global")
+-> store(content="Timezone: America/Los_Angeles", category="profile",
+        context="global")
 
 Agent: "What tools/languages do you use most for work?"
   User: "Python, TypeScript, VS Code, git"
--> remember(fact="Primary stack: Python, TypeScript", category="fact",
-           context="work", entity="app:vscode")
--> remember(fact="Uses VS Code as primary IDE", category="fact",
-           context="work", entity="app:vscode")
+-> store(content="User's primary tools and languages: Python, TypeScript, VS Code, git",
+        category="profile", context="global")
+-> store(content="Primary stack: Python, TypeScript, VS Code, git", category="fact",
+        context="work", entity="app:vscode")
+-> store(content="Uses VS Code as primary IDE", category="fact",
+        context="work", entity="app:vscode")
 ```
 
-**Implementation:** A predefined question flow in `memory.py` -- a method like `run_bootstrap_conversation()` that the agent or CLI can invoke. Not a separate agent -- just a structured conversation using the existing memory tools.
+**Why the stack is stored twice:** the `work`-context rows are the entity-linked, context-scoped truth. But a default chat session runs in the `global` context, and the prompt builder selects *only* `global` rows there -- so a `work`-only stack would never reach the system prompt and the agent would look like it had forgotten the user's tools. The `profile`/`global` row is the one the agent actually sees day one; the `work` rows are what an agent working in the `work` context recalls, and what entity search (`app:vscode`) finds.
 
-The questions are adaptive -- if the user says "I'm a student," follow-up questions shift to coursework and study habits, not deployment pipelines.
+**Why `profile` and not `fact` for identity:** `profile` is a *privileged* category (`_PRIVILEGED_CATEGORIES` in `memory_store.py`). Only explicit user action may write one -- the LLM conversation extractor cannot mint one from a chat turn -- and profile entries render into their own "User profile:" section of the system prompt, always in the `global` context. Identity answers therefore stay `profile`; only the work-shaped answers (stack, IDE, engineering workflow) are `fact` in the `work` context. First-boot detection also keys on a `profile`/`global` entry existing, so demoting these to `fact` would re-offer onboarding forever.
+
+**Why `store(source="user")` and not the `remember` tool:** `remember` writes `source="tool"`, and Reset Safety (below) requires onboarding answers to be `source="user"` so that a discovery reset never deletes them. Onboarding writes through `MemoryStore.store()` directly with `source="user"` and `confidence=0.8`.
+
+**Nothing is stored unreviewed:** the collected answers are shown back as a numbered list and stored one by one on approval (`[Y/n/q]`), the same show-before-store gate System Discovery uses.
+
+**Implementation:** `MemoryMixin.run_bootstrap_conversation()` (`memory.py`) is the entry point the agent or CLI invokes. Not a separate agent -- just a structured conversation. The engine itself is a pure core in `agents/base/bootstrap.py`: it takes an injected `MemoryStore` plus injected IO callables, so `gaia memory bootstrap --chat-only` runs it with no LLM and no embedding backend, while an agent runs it with an embedding hook that indexes each approved entry immediately.
+
+The questions are adaptive -- if the user says "I'm a student," follow-up questions shift to coursework and study habits, not deployment pipelines. Branching is keyword-based (`student`, `engineer`, `designer`, `researcher`, `manager`, plus a generic fallback), which keeps onboarding usable on a machine where no model is loaded yet.
 
 ### System Discovery
 
@@ -1424,7 +1439,7 @@ Agent: "I can learn more about your setup by looking at your system.
 class SystemDiscovery:
     """Local system scanner for bootstrap. No agent dependencies.
     Each method returns a list of DiscoveredFact dicts, NOT stored directly.
-    The caller (MemoryMixin.run_bootstrap) presents them for user review."""
+    The caller (`gaia memory bootstrap --discover`) presents them for review."""
 
     def scan_file_system(self, paths: List[Path] = None) -> List[Dict]
         """Walk project directories. Returns project names + languages."""
