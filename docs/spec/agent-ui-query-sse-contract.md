@@ -1,5 +1,9 @@
 # `/query` SSE Event Contract (Agent UI v2)
 
+> **Internal design spec** — not published to the Mintlify docs site (`.md`, not
+> registered in `docs/docs.json`), matching the sibling `docs/spec/*.md` design
+> specs. Integrator-facing rendering lands with the agent's own docs in #2016.
+>
 > **Status:** Frozen (v2 wire contract). This document is the single source of
 > truth for the `POST /v1/<agent>/query` request body and the Server-Sent Events
 > (SSE) response stream. Every v2 surface — the sidecar `/query` endpoint, the
