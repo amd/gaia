@@ -1,5 +1,5 @@
 {
-  "_comment": "Draft-approval bar for the voice/style drafting eval (#1607 feature, #1269 metric, #1948 tracking). 'approval_min' is the target from #1269 (draft-approval >= 70%). 'enforce' is the SINGLE switch CI keys off; it is now TRUE — the judge-scored drafting eval is a hard release gate (release_agent_email.yml eval-gate). A draft-approval regression below approval_min blocks the release; a missing ANTHROPIC_API_KEY also blocks it (the eval-gate asserts the key before running). Loaded by gaia.eval.draft_quality.load_drafting_thresholds.",
+  "_comment": "Draft-approval bar for the voice/style drafting eval (#1607 feature, #1269 metric, #1948 tracking). 'approval_min' is the target from #1269 (draft-approval >= 70%). 'enforce' is the SINGLE switch CI keys off. Temporarily FALSE (report mode): this judge gate was flipped enforcing (#1990) before it ever ran to completion in CI — the perf gate failed first and masked it, so its bar has never been validated on hardware. Report mode until a passing baseline is established, then re-enforce (tracking: re-enforce drafting + briefing judge gates). Same lesson as the perf bars. A draft-approval breach is logged + uploaded but does NOT block the release while false. Loaded by gaia.eval.draft_quality.load_drafting_thresholds.",
   "approval_min": 0.70,
-  "enforce": true
+  "enforce": false
 }
