@@ -34,6 +34,10 @@ The Agent Hub is a centralized platform for discovering, installing, and managin
 
 ## Phase 0: Restructure — `hub/agents/` Directory
 
+<Note>
+✅ **Shipped.** Production agents (chat, doc, file, code, analyst, browser, email, jira, docker, sd, emr, docqa, routing, …) already live as standalone packages under `hub/agents/python/<id>/`; `src/gaia/agents/` retains only the framework (base classes, shared tool mixins, registry). The remainder of this document is the still-in-progress hub platform plan.
+</Note>
+
 ### Directory structure
 
 ```

@@ -102,6 +102,7 @@
                     "group": "Connected Agents",
                     "pages": [
                       "guides/email",
+                      "guides/email-integration",
                       "guides/telegram-adapter",
                       "guides/jira"
                     ]
@@ -364,7 +365,6 @@
               "spec/docker-agent",
               "spec/jira-agent",
               "spec/blender-agent",
-              "spec/email-contract",
               "spec/summarizer-app",
               "spec/component-status"
             ]

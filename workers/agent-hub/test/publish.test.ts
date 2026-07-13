@@ -591,6 +591,7 @@ describe("POST /publish — SPEC & SKILL doc tabs", () => {
     const env = makeEnv();
     const spec = "# Spec\n\nThe wire contract is 2.0.\n";
     const skill = "# Skill\n\nSpawn the sidecar, then call triage.\n";
+    const evaluation = "# Evaluation\n\nRun the eval, compare to baseline.\n";
     const res = await publish(env, {
       token: "tok_amd",
       manifestYaml: sampleManifest(),
@@ -598,10 +599,12 @@ describe("POST /publish — SPEC & SKILL doc tabs", () => {
       filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
       spec,
       skill,
+      evaluation,
     });
     expect(res.status).toBe(201);
     expect(env.bucket.keys()).toContain("agents/chat/0.1.0/SPEC.md");
     expect(env.bucket.keys()).toContain("agents/chat/0.1.0/SKILL.md");
+    expect(env.bucket.keys()).toContain("agents/chat/0.1.0/EVALUATION.md");
 
     // Served by the existing GET /agents/... download route, as markdown.
     const getSpec = await worker.fetch(
@@ -612,10 +615,19 @@ describe("POST /publish — SPEC & SKILL doc tabs", () => {
     expect(getSpec.headers.get("content-type")).toContain("text/markdown");
     expect(await getSpec.text()).toBe(spec);
 
+    const getEvaluation = await worker.fetch(
+      new Request("https://hub.amd-gaia.ai/agents/chat/0.1.0/EVALUATION.md"),
+      env as never
+    );
+    expect(getEvaluation.status).toBe(200);
+    expect(getEvaluation.headers.get("content-type")).toContain("text/markdown");
+    expect(await getEvaluation.text()).toBe(evaluation);
+
     const index = (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex;
     const entry = index.agents.find((a) => a.id === "chat")!;
     expect(entry.spec).toBe(spec);
     expect(entry.skill).toBe(skill);
+    expect(entry.evaluation).toBe(evaluation);
   });
 
   it('defaults spec + skill to "" in index.json when none are published', async () => {
@@ -627,11 +639,13 @@ describe("POST /publish — SPEC & SKILL doc tabs", () => {
       filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
     });
     expect(env.bucket.keys()).not.toContain("agents/chat/0.1.0/SPEC.md");
+    expect(env.bucket.keys()).not.toContain("agents/chat/0.1.0/EVALUATION.md");
     const entry = (
       (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex
     ).agents.find((a) => a.id === "chat")!;
     expect(entry.spec).toBe("");
     expect(entry.skill).toBe("");
+    expect(entry.evaluation).toBe("");
   });
 
   it("rejects an empty spec part (400) — omit it instead", async () => {

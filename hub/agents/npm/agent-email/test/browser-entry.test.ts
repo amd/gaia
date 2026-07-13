@@ -58,7 +58,7 @@ describe("browser entry (./client)", () => {
 
   it("client-entry exports SCHEMA_VERSION and request/response types (runtime const)", async () => {
     const mod = await import("../src/client-entry.js");
-    expect(mod.SCHEMA_VERSION).toBe("2.1");
+    expect(mod.SCHEMA_VERSION).toBe("2.3");
   });
 
   it("client-entry does NOT export spawnSidecar (Node-only)", async () => {

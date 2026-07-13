@@ -42,9 +42,9 @@ icon: "terminal"
     lemonade-server serve
     ```
 
-    Ensure a coding model is loaded (Qwen3-Coder-Next recommended):
+    Ensure the default model is loaded (override with `--model` or `LEMONADE_MODEL`):
     ```bash
-    gaia download Qwen3-Coder-Next-GGUF
+    gaia download Gemma-4-E4B-it-GGUF
     ```
   </Step>
 
@@ -277,10 +277,10 @@ Health check:
 
 ```bash
 curl http://localhost:8200/health
-# {"status":"ok","model":"Gemma-4-E4B-it-GGUF","tools":10}
+# {"status":"ok","model":"Gemma-4-E4B-it-GGUF","tools":10,"port":8200}
 ```
 
-#### `GET /sessions`, `POST /sessions`, `DELETE /sessions/{id}`
+#### `GET /sessions`, `DELETE /sessions/{id}`
 
 Session management:
 
@@ -437,11 +437,10 @@ Claude Code> Use gaia-bash to check my deploy.sh for POSIX compliance
 
 | Variable | Default | Description |
 |---|---|---|
-| `LEMONADE_BASE_URL` | `http://localhost:8000/api/v1` | Lemonade Server URL |
-| `LEMONADE_MODEL` | `Qwen3-Coder-Next-GGUF` | Model to load |
+| `LEMONADE_BASE_URL` | `http://localhost:13305/api/v1` | Lemonade Server URL |
+| `LEMONADE_MODEL` | `Gemma-4-E4B-it-GGUF` | Model to load (honored by `LemonadeClient`) |
 | `GAIA_CPP_CTX_SIZE` | `16384` | Context window size (tokens) |
 | `GAIA_STREAMING` | `0` | Enable streaming (`1` = on) |
-| `GAIA_DEBUG` | unset | Enable debug logging |
 
 ### CLI Flags
 
@@ -451,9 +450,11 @@ Claude Code> Use gaia-bash to check my deploy.sh for POSIX compliance
 | `--mcp` | Start as MCP stdio server |
 | `--print` | Pipe-friendly output (no TUI) |
 | `--no-tui` | Force CleanConsole even on interactive terminal |
+| `--query <text>` | Run a single query and exit (same as a positional query argument) |
 | `--resume <id>` | Resume a saved session |
 | `--list-sessions` | List saved sessions and exit |
 | `--model <name>` | Override the LLM model |
+| `--json-events` | Emit structured JSONL events on stdout (internal — used by the TUI/WebUI) |
 | `--debug` | Enable debug logging |
 
 ---

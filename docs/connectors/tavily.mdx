@@ -50,12 +50,19 @@ other connectors) and writes a `$keyring` reference into
 
 ## Step 3 — Use it
 
-Once configured, the `tavily-search` / `tavily-extract` MCP tools are available
-to any agent you grant them to:
+Once configured, grant **and** activate the `tavily-search` /
+`tavily-extract` MCP tools for each agent that should use them. For MCP
+servers a grant covers credential access, but the agent won't see the
+tools until you also activate them (activation defaults to OFF):
 
 ```bash
 gaia connectors grants grant mcp-tavily builtin:chat --scopes "*"
+gaia connectors activations activate mcp-tavily builtin:chat
 ```
+
+(In the UI: the tile's **Per-agent** toggle flips both at once.) See the
+[connections security model](/security/connections) for why visibility
+and credential access are gated separately.
 
 GAIA also ships a Python wrapper (`gaia.web.tavily`) used by web-research
 workflows, with response caching, a credit budget, and a CLI:

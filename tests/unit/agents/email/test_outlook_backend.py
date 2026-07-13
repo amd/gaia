@@ -237,6 +237,14 @@ class TestReadTranslation:
         # MS Graph $filter for unread.
         assert any("isRead eq false" in v for v in params.get("$filter", []))
 
+    def test_list_messages_sent_hits_sentitems_folder(self):
+        # The follow-up tracker (#1606) scans SENT; falling through to the
+        # inbox folder here would make it silently scan the wrong mail.
+        backend, rec, _ = _backend(lambda r: _ok({"value": []}))
+        backend.list_messages(label_ids=["SENT"], max_results=5)
+        path = urlparse(str(rec.requests[0].url)).path
+        assert path.endswith("/me/mailFolders/sentitems/messages")
+
     def test_list_messages_query_uses_search(self):
         backend, rec, _ = _backend(lambda r: _ok({"value": []}))
         backend.list_messages(query="invoice", max_results=5)

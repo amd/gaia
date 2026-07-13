@@ -51,7 +51,7 @@ def ensure_models_downloaded():
         # Required models for RAG testing
         required_models = [
             "Qwen3-4B-Instruct-2507-GGUF",  # LLM model used in tests
-            "nomic-embed-text-v2-moe-GGUF",  # Embedding model (RAG default)
+            "user.embeddinggemma-300m-GGUF",  # Embedding model (RAG default)
             "Qwen3-VL-4B-Instruct-GGUF",  # VLM model (for PDFs with images)
         ]
 

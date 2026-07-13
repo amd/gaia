@@ -171,6 +171,31 @@ def test_start_registers_atexit_reaper(monkeypatch, tmp_path):
     assert m.shutdown in captured["atexit"]
 
 
+def test_spawn_passes_per_session_token_via_env(monkeypatch, tmp_path):
+    # #1706: the sidecar's caller-auth token is handed over the private env
+    # channel on spawn (never argv), so no other local process sees it in a
+    # process listing.
+    m, captured = _install_fake_spawn(monkeypatch, tmp_path)
+    m.start()
+    env = captured["popen_kwargs"]["env"]
+    assert m.auth_token  # a real random token was generated
+    assert env["GAIA_EMAIL_SIDECAR_TOKEN"] == m.auth_token
+    # The inherited environment is preserved (merged, not replaced).
+    assert "PATH" in env or "Path" in env
+    # The token must never appear on the command line.
+    assert all(m.auth_token not in str(a) for a in captured["argv"])
+
+
+def test_proxy_is_bound_with_the_session_token(monkeypatch, tmp_path):
+    # The UI path (manager.proxy()) must replay the token so the sidecar accepts
+    # its calls end-to-end.
+    m, _ = _install_fake_spawn(monkeypatch, tmp_path)
+    m.start()
+    proxy = m.proxy()
+    assert proxy._auth_token == m.auth_token
+    assert proxy._session.headers.get("Authorization") == f"Bearer {m.auth_token}"
+
+
 def test_start_captures_version(monkeypatch, tmp_path):
     m, captured = _install_fake_spawn(
         monkeypatch,

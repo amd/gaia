@@ -45,7 +45,7 @@ class RAGConfig:
     chunk_size: int = 500
     chunk_overlap: int = 100
     max_chunks: int = 5
-    embedding_model: str = "nomic-embed-text-v2-moe-GGUF"
+    embedding_model: str = "user.embeddinggemma-300m-GGUF"
     cache_dir: str = ".gaia"
     show_stats: bool = False
     use_local_llm: bool = True
@@ -59,6 +59,9 @@ class RAGConfig:
     # File size limits
     max_file_size_mb: int = 100
     warn_file_size_mb: int = 50
+
+    # Chunking strategy
+    use_llm_chunking: bool = False
 
     # VLM settings
     vlm_model: str = "Qwen3-VL-4B-Instruct-GGUF"

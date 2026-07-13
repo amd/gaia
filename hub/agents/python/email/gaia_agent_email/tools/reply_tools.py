@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: MIT
 """Reply / send / forward tools.
 
-``send_draft``, ``send_now``, and ``forward_message`` are registered in
-``TOOLS_REQUIRING_CONFIRMATION`` at the agent level — they never
+``send_draft``, ``send_now``, and ``forward_message`` are declared in the
+agent's ``CONFIRMATION_REQUIRED_TOOLS`` (merged with the generic base set
+via ``confirmation_required_tools()``, #1440) — they never
 auto-execute. The confirmation payload includes the LITERAL ``to``,
 ``subject``, and ``body[:200]`` (Phase I2 / S2.M1) so the user sees what
 will actually be sent, not an LLM-generated paraphrase.
@@ -12,10 +13,12 @@ will actually be sent, not an LLM-generated paraphrase.
 from __future__ import annotations
 
 import json
+import mimetypes
 import sqlite3
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from gaia_agent_email import action_store
 from gaia_agent_email.tools.read_tools import extract_sender_email
@@ -27,6 +30,54 @@ from gaia.connectors.formatting import format_connector_error
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
+
+
+# Gmail caps the whole raw message at 25 MB — mirror the contract's
+# MAX_ATTACHMENT_BYTES without importing the (pydantic-only) contract module
+# into the agent tool path.
+_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+
+
+def _load_attachment_files(paths: str) -> Optional[List[Dict[str, Any]]]:
+    """Resolve a comma/newline-separated list of file paths into backend
+    attachment dicts (``filename``/``mime_type``/``content``) — #1542.
+
+    Fail-loud by design: a missing file, an empty file, a file over the 25 MB
+    Gmail cap, or an extension whose MIME type cannot be determined raises a
+    ``ValueError`` with the offending path — never a silently skipped or
+    mislabeled attachment.
+    """
+    entries = [p.strip() for chunk in paths.split("\n") for p in chunk.split(",")]
+    entries = [p for p in entries if p]
+    if not entries:
+        return None
+    out: List[Dict[str, Any]] = []
+    for entry in entries:
+        path = Path(entry).expanduser()
+        if not path.is_file():
+            raise ValueError(
+                f"attachment not found: {entry!r} — pass the full path to an "
+                f"existing file"
+            )
+        content = path.read_bytes()
+        if not content:
+            raise ValueError(f"attachment is empty: {entry!r}")
+        if len(content) > _MAX_ATTACHMENT_BYTES:
+            raise ValueError(
+                f"attachment {entry!r} is {len(content)} bytes; the maximum is "
+                f"{_MAX_ATTACHMENT_BYTES} bytes (25 MB)"
+            )
+        mime_type, _ = mimetypes.guess_type(path.name)
+        if not mime_type:
+            raise ValueError(
+                f"cannot determine the MIME type of {entry!r} from its "
+                f"extension — rename the file with a standard extension "
+                f"(e.g. .pdf, .png, .csv) and retry"
+            )
+        out.append(
+            {"filename": path.name, "mime_type": mime_type, "content": content}
+        )
+    return out
 
 
 def _envelope_ok(data: Any) -> str:
@@ -121,6 +172,7 @@ def draft_reply_impl(
     message_id: str,
     body: str,
     subject_override: Optional[str] = None,
+    attachments: Optional[List[Dict[str, Any]]] = None,
     debug: bool = False,
 ) -> Dict[str, Any]:
     with log_tool_call(
@@ -143,7 +195,11 @@ def draft_reply_impl(
             subject = subject_override
         threading = _build_threading_headers(original)
         result = gmail.create_draft(
-            to=to, subject=subject, body=body, headers=threading
+            to=to,
+            subject=subject,
+            body=body,
+            headers=threading,
+            attachments=attachments,
         )
         draft_id = result["id"]
         action_store.record_draft(
@@ -160,6 +216,7 @@ def draft_reply_impl(
             "to": to,
             "subject": subject,
             "body_preview": body[:200],
+            "attachments": [a["filename"] for a in attachments or []],
             # The original message is returned so the caller can record a
             # reply-latency observation (behavioral learning, #1290). Kept out
             # of the user-facing envelope by the closure.
@@ -219,6 +276,7 @@ def send_now_impl(
     to: str,
     subject: str,
     body: str,
+    attachments: Optional[List[Dict[str, Any]]] = None,
     debug: bool = False,
 ) -> Dict[str, Any]:
     """One-shot send (no draft step). Confirmation-gated at the agent level.
@@ -233,7 +291,9 @@ def send_now_impl(
         {"to": to, "subject": subject, "body": body[:120]},
         debug=debug,
     ) as st:
-        result = gmail.send_message(to=to, subject=subject, body=body)
+        result = gmail.send_message(
+            to=to, subject=subject, body=body, attachments=attachments
+        )
         sent_id = result.get("id") or ""
         # The send-message API returns a Gmail message id, not a draft
         # id; we use that as the row key so the audit table stays
@@ -254,7 +314,13 @@ def send_now_impl(
                 exc,
             )
         st["result_summary"] = {"sent_id": sent_id}
-        return {"sent_id": sent_id, "to": to, "subject": subject, "sent": True}
+        return {
+            "sent_id": sent_id,
+            "to": to,
+            "subject": subject,
+            "attachments": [a["filename"] for a in attachments or []],
+            "sent": True,
+        }
 
 
 def forward_message_impl(
@@ -298,17 +364,26 @@ class ReplyToolsMixin:
         debug_flag = bool(getattr(self.config, "debug", False))
 
         @tool
-        def draft_reply(message_id: str, body: str, mailbox: str = "") -> str:
+        def draft_reply(
+            message_id: str, body: str, mailbox: str = "", attachments: str = ""
+        ) -> str:
             """Create a reply draft for a message (does NOT send).
 
             ``mailbox`` (optional) names the source mailbox so the draft is
             created in the right account when multiple mailboxes are connected.
+            ``attachments`` (optional) is a comma-separated list of full paths
+            to local files to attach to the draft.
             """
             try:
                 provider = agent._provider_for_message(message_id, mailbox or None)
                 backend = agent._backends[provider]
                 result = draft_reply_impl(
-                    backend, db, message_id=message_id, body=body, debug=debug_flag
+                    backend,
+                    db,
+                    message_id=message_id,
+                    body=body,
+                    attachments=_load_attachment_files(attachments),
+                    debug=debug_flag,
                 )
                 # Remember which mailbox holds this draft so send_draft routes
                 # back to the same backend.
@@ -386,11 +461,15 @@ class ReplyToolsMixin:
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def send_now(to: str, subject: str, body: str, mailbox: str = "") -> str:
+        def send_now(
+            to: str, subject: str, body: str, mailbox: str = "", attachments: str = ""
+        ) -> str:
             """Send an email immediately, no draft step. Requires user confirmation.
 
             ``mailbox`` (optional) chooses which account sends when multiple are
-            connected; defaults to the primary mailbox.
+            connected; defaults to the primary mailbox. ``attachments``
+            (optional) is a comma-separated list of full paths to local files
+            to attach.
             """
             try:
                 backend = agent._send_backend(mailbox or None)
@@ -401,6 +480,7 @@ class ReplyToolsMixin:
                         to=to,
                         subject=subject,
                         body=body,
+                        attachments=_load_attachment_files(attachments),
                         debug=debug_flag,
                     )
                 )

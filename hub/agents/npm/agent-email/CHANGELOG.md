@@ -5,6 +5,164 @@ follows [SemVer](https://semver.org/): the **MAJOR** of the on-the-wire
 `SCHEMA_VERSION` is what `checkVersion` enforces at startup, so a contract MAJOR
 bump is always at least a package MINOR bump with a migration note.
 
+## 0.4.0
+
+Contract bumped to `SCHEMA_VERSION` **2.3**. `checkVersion` is MAJOR-only, so the
+2.x MAJOR is unchanged and existing clients keep connecting.
+
+### Changed
+
+- **Triage returns a reply *scaffold*, not an empty draft (`SCHEMA_VERSION` 2.2 →
+  2.3).** `EmailTriageResult.draft` is now a `DraftScaffold` (`{ to, subject }`)
+  instead of a `DraftReply` — triage classifies and summarizes but never composes
+  reply prose, so the `draft.body` it used to return was *always* `""`
+  regardless of model or provider. That empty field read as a bug ("the model
+  failed to draft"), so it is dropped from the triage shape entirely. `DraftReply`
+  (with `body` + `attachments`) is **unchanged** and remains the `draft()` /
+  `send()` shape: to send a reply, compose the body yourself and call `draft()`
+  for a full `DraftReply` + confirmation token. MAJOR is unchanged (the removed
+  field carried no data), so `checkVersion` does not flag existing integrations;
+  TypeScript consumers that destructured `result.draft.body` will see it typed
+  away and should read the body from `draft()` instead.
+
+### Security
+
+- **Caller authentication for the local sidecar API (#1706).** The sidecar binds
+  `127.0.0.1` and can send mail as the user, but its REST API had **no caller
+  authentication** — any other local process, or a web page in the user's browser
+  (via DNS-rebinding), could reach draft/send. `spawnSidecar` / `startSidecar` now
+  mint a cryptographically-random **per-session bearer token**, hand it to the
+  sidecar over the private `GAIA_EMAIL_SIDECAR_TOKEN` env channel, and bind it to
+  `sidecar.client`; every `/v1/email/*` request must present `Authorization:
+  Bearer <token>` or it is **401**. A non-loopback `Host` is **400** and a
+  non-loopback browser `Origin` is **403**, closing DNS-rebinding / drive-by
+  access. The draft→send confirmation-token gate is unchanged (it is
+  payload-integrity, not caller-auth). `EmailClient` gains an `authToken` option;
+  `sidecar.authToken` and `generateSessionToken` are exported for the
+  construct-your-own-client / renderer-over-IPC paths. Wire-compatible: no
+  contract change, `SCHEMA_VERSION` stays `2.2`.
+
+### Added
+
+- **Readiness preflight — `GET /v1/email/init` (#1795).** A green `/health` never
+  meant "ready to triage": on a fresh host the binary boots fine but the first
+  `triage` 502s until Lemonade is up and the model is pulled. The new endpoint
+  probes the whole triage stack — Lemonade reachable **and** version-compatible
+  **and** the triage model downloaded — and returns `200` when ready, `503` with
+  an actionable `hint` when not (same `InitResponse` envelope either way).
+  Read-only: no model pull. The companion `POST /v1/email/init` asks the running
+  Lemonade to download the model and streams `text/plain` progress (it can't
+  install Lemonade itself — a host prerequisite — so an unreachable server is a
+  loud `503`, not a silent no-op). New exported types: `InitResponse`,
+  `InitLemonadeStatus`, `InitModelStatus`; no client wrapper yet (call with
+  `fetch`). `SCHEMA_VERSION` stays `2.2`.
+- **Voice / style-matched drafting (#1607).** The agent can now draft replies in
+  the user's **own voice** instead of a neutral scaffold. `build_voice_profile`
+  samples the user's Sent mail into a local style profile — top greetings /
+  sign-offs, typical length, contraction & exclamation rate (derived features
+  only, never raw content, stored on-device) — and the agent's system prompt
+  injects that guidance every turn so `draft_reply` bodies match how the user
+  writes; `clear_voice_profile` forgets it. **Agent-loop only** (chat / Agent UI /
+  `gaia email`) — no REST endpoint, no npm client method, `SCHEMA_VERSION` stays
+  `2.2`.
+- **Content-based spam detection (#1911).** Spam detection previously keyed
+  entirely off Gmail's own `SPAM` label — so it did nothing for Outlook or any
+  non-Gmail mailbox and wasn't real detection. It's now provider-agnostic: a
+  narrow mechanical prefilter (auto-generated sender addresses, freemail-domain
+  impersonation) handles the clear-cut cases, and the local LLM makes the real
+  content-vs-legitimate-marketing call on the rest. The `is_spam` signal on
+  `triage()` keeps its shape — only its derivation changed — so `SCHEMA_VERSION`
+  stays `2.2`. The eval corpus was expanded to exercise it (spam examples 7 →
+  57, corpus → 299 messages) and the scorecard gains `is_spam` recall /
+  precision / F1 as the primary spam metrics (plain accuracy is misleading on a
+  minority class this size).
+- **Stateful agent surface (`/v1/email/agent/*`, #1666).** A session-scoped,
+  conversational surface so a host can drive the full `EmailTriageAgent` over HTTP —
+  memory, personalization, and every agent tool — instead of importing it in-process.
+  This is what lets the Agent UI back its email experience with the packaged sidecar.
+  Additive and **not part of the frozen triage contract** (it runs the agent loop, not
+  the stateless `EmailTriageService`), so it does not itself move `SCHEMA_VERSION`. New
+  endpoints: `POST /v1/email/agent/session`, `DELETE /v1/email/agent/session/{id}`,
+  `GET /v1/email/agent/session/{id}/history`, `POST /v1/email/agent/query` (SSE stream
+  of the agent loop), `POST /v1/email/agent/confirm-tool` (approve/deny a gated tool),
+  `POST /v1/email/agent/cancel`, and the runtime memory toggle `POST /v1/email/agent/memory`
+  + `GET /v1/email/agent/memory/{id}`. Not wrapped by the typed npm client yet.
+- **Runtime memory enable/disable (#1666).** `EmailAgentConfig.memory_enabled` (startup)
+  and `EmailTriageAgent.set_memory_enabled()` (runtime, no restart) turn the agent's
+  memory — inbox profiling, behavioral learning, preference persistence, and
+  working-context injection — on or off, superseding the startup-only
+  `GAIA_MEMORY_DISABLED` env var. Reachable over HTTP via the agent surface above;
+  enabling memory that was never initialized (started with `GAIA_MEMORY_DISABLED` or
+  Lemonade unreachable) returns **409** with an actionable message, never a silent
+  no-op. The frozen binary now bundles FAISS (the memory index); embeddings still go
+  over Lemonade HTTP, so torch/transformers stay excluded.
+- **Follow-up tracking (#1606).** The agent gains a read-only `check_followups`
+  tool that scans the Sent folder of every connected mailbox and flags threads
+  whose latest message is still the user's own outbound mail past a
+  configurable window (default 3 days) — surfacing message id, recipient,
+  subject, and age, most overdue first. Detection only: it never sends a
+  nudge (any send stays confirmation-gated). The scan caps how many Sent
+  messages it enumerates per mailbox (default 50, max 200); the result now
+  also carries `scan_truncated: true` when a mailbox has more sent mail than
+  that cap, so the caller knows older threads weren't checked. Agent-loop
+  surface (chat / Agent UI / `gaia email`); the sidecar REST/MCP surface is
+  unchanged and `SCHEMA_VERSION` stays `2.2`.
+- **Attachment handling (#1542).** Real email has attachments; triage and replies
+  that ignored them were incomplete. Read/triage now exposes attachment metadata —
+  `EmailMessage` (request) and `EmailTriageResult` / `DraftReply` (response) carry
+  an `attachments` array of `{ filename, mime_type, size_bytes, attachment_id? }`
+  — and `draft` / `send` accept an `attachments` array of
+  `{ filename, mime_type, content_base64 }` (standard base64, ≤ 25 MB decoded
+  each) that reaches the mailbox as real MIME/Graph file attachments. The
+  draft→send confirmation token binds each attachment's filename, MIME type, and
+  content digest, so a confirmed payload can't have files swapped in or smuggled
+  past the user. Fail-loud validation throughout: bad base64 / MIME / oversize →
+  `422`, mismatched attachment set → `403`, Outlook > 3 MB (Graph simple-attach
+  limit) → a loud error, never truncation. The agent's in-loop `draft_reply` /
+  `send_now` tools gain an optional comma-separated `attachments` file-path
+  parameter with the same fail-loud checks.
+- **Scheduled send + snooze in the agent tool loop** (#1609): the agent can now
+  schedule a send for a future time ("send this tomorrow at 9am") and snooze a
+  message out of the inbox until a chosen time. A scheduled send is
+  user-confirmed **at creation** (literal recipient/subject/body + fire time),
+  stored as a regular mailbox draft plus a persistent one-shot job, and fired
+  at/after its time by the agent's scheduler; snooze archives now and re-adds
+  INBOX at the chosen time. Both are cancellable before they fire, and a firing
+  failure is recorded on the job and logged — never silently swallowed.
+  **Agent-loop only — no runtime/contract change**: no new REST endpoints, no
+  new npm surface in this package (see SPEC "Agent-loop capabilities not on the
+  contract").
+- **Triage action items now persist as a task list** (#1605): `triage()` /
+  `triageBatch()` write each extracted action item to the sidecar's local SQLite
+  (`~/.gaia/email/state.db`), linked back to the source `message_id` (or
+  `thread_id` for a thread) and de-duplicated per message on the normalized
+  description — re-triaging a message never duplicates tasks. Side-effect only:
+  the wire response, contract, and `SCHEMA_VERSION` are unchanged, and results
+  without a `message_id` are not persisted. Read/complete surfaces arrive with
+  GAIA's cross-agent task store (amd/gaia#1521); until then the store is the
+  email-local `email_tasks` table.
+- **Scheduled daily inbox briefing** (#1608): the sidecar can now run the inbox
+  pre-scan on a daily timer — no prompt, no live caller — and expose the result on
+  the new `GET /v1/email/briefing` (additive). The
+  briefing payload is the same `email_pre_scan` envelope as `POST /v1/email/prescan`,
+  produced by the agent's own `pre_scan_inbox` path, plus a `generated_at` stamp.
+  **Off by default**: opt in by launching the sidecar with
+  `GAIA_EMAIL_BRIEFING_ENABLED=true` (fire time `GAIA_EMAIL_BRIEFING_TIME`, 24h local
+  `HH:MM`, default `08:00`; scan size `GAIA_EMAIL_BRIEFING_MAX_MESSAGES`, 1–100,
+  default 25), e.g. via `startSidecar({ env: {...} })`. An invalid value fails sidecar
+  startup loudly; the endpoint returns `404` until the first scheduled run. REST-only
+  for now — no npm client wrapper method yet.
+
+### Fixed
+
+- **MCP `serverInfo.version` now reports the real package version.** The stdio MCP
+  server's `get_mcp_server_info` had a hardcoded `"1.0.0"` placeholder; it now sources
+  `AGENT_VERSION` from `gaia_agent_email.version`, so all three version surfaces (wheel
+  metadata, `GET /v1/email/version` `agentVersion`, MCP server info) agree.
+- **Hub manifest `tools_count` corrected 6 → 52** (`gaia-agent.yaml` + the in-code agent
+  registration): the agent registers 52 `@tool` functions; the stale `6` under-reported
+  the surface on the hub page and the Agent UI card.
+
 ## 0.3.0
 
 Contract bumped to `SCHEMA_VERSION` **2.1** — additive, no triage shape change, so
@@ -13,9 +171,9 @@ Contract bumped to `SCHEMA_VERSION` **2.1** — additive, no triage shape change
 - **Eval scorecard now measures acceptance, and the release gate enforces it** (#1437,
   #1894): the `SCORECARD.md` aggregate is now **within-one-bucket acceptance accuracy**
   (triage priority is ordinal, so exact-or-adjacent buckets are credited — what users
-  feel) instead of exact 4-way match. Measured **0.8467** (3-run mean on Strix Halo /
-  Gemma-4-E4B, 95% CI [0.834, 0.860]) vs the **0.80** bar (#1437); exact 4-way stays a
-  reported secondary (0.46). The card now carries run-to-run variance/CI, and the
+  feel) instead of exact 4-way match. Measured **0.834** (3-run mean on Strix Halo /
+  Gemma-4-E4B, 95% CI [0.821, 0.847]) vs the **0.80** bar (#1437); exact 4-way stays a
+  reported secondary (0.77). The card now carries run-to-run variance/CI, and the
   release gate enforces the 0.80 bar plus an anti-gaming URGENT-recall floor and a
   variance-aware regression check. No runtime/contract change — eval + packaging only.
 - **Batch triage endpoint** (#1887): new `POST /v1/email/triage/batch` /

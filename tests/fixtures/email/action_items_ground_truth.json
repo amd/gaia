@@ -1,0 +1,310 @@
+{
+  "_meta": {
+    "fixture": "action_items_ground_truth.json",
+    "fixture_kind": "hand-authored-seed",
+    "schema_version": 1,
+    "description": "Labeled seed corpus for the email action-item extraction quality eval (#1605 feature, #1949 tracking). Each case is one email whose body is hand-labeled with the action items the recipient (the principal) should actually take. Scored by gaia.eval.action_item_quality: the agent extracts action items locally (Lemonade), and the extracted set is matched against 'expected_action_items' with fuzzy-primary matching (an optional LLM judge only resolves borderline pairs). The aggregate precision / recall / F1 are compared to action_items_gate_thresholds.json in report mode. HARD NEGATIVES (expected_action_items == []) are deliberate: an email with no real task must extract nothing, and any extraction there is a false positive in the precision denominator -- the case unit tests miss most often. Expected items use the REAL ActionItem shape from gaia_agent_email.contract.ActionItem (description / due_hint / type / url); ground truth carries only what a human can confidently label from the body.",
+    "case_schema": {
+      "scenario": "str -- short label for what this email is",
+      "is_hard_negative": "bool -- true when the email has no real action items (expected_action_items is empty)",
+      "email": "{from: str, subject: str, body: str} -- the email being triaged",
+      "expected_action_items": "list[{description: str, due_hint?: str, type: 'text'|'link', url?: str}] -- the actions a careful human labels; matched on 'description' (fuzzy). Empty for hard negatives."
+    }
+  },
+  "ai-001": {
+    "scenario": "single reply-with-decision request",
+    "is_hard_negative": false,
+    "email": {
+      "from": "Dana Kim <dana@acme.io>",
+      "subject": "Design review time change",
+      "body": "Hey Sam,\n\nCan we move Thursday's design review from 1pm to 3pm? Rachel has a conflict at the earlier time. Just let me know if that works for you.\n\nDana"
+    },
+    "expected_action_items": [
+      {
+        "description": "Reply to Dana confirming whether the 3pm Thursday design review time works",
+        "due_hint": "Thursday",
+        "type": "text"
+      }
+    ]
+  },
+  "ai-002": {
+    "scenario": "two distinct actions in one email",
+    "is_hard_negative": false,
+    "email": {
+      "from": "Marcus Lee <marcus@acme.io>",
+      "subject": "Onboarding flow + pricing typo",
+      "body": "Sam,\n\nTwo things before Friday: (1) please review the new onboarding flow I shared Monday and send feedback, and (2) the pricing page still says $19 instead of $29 -- can you fix that or ping whoever owns it?\n\nThanks,\nMarcus"
+    },
+    "expected_action_items": [
+      {
+        "description": "Review the new onboarding flow and send Marcus feedback",
+        "due_hint": "before Friday",
+        "type": "text"
+      },
+      {
+        "description": "Fix the pricing page typo ($19 should be $29) or escalate to the page owner",
+        "due_hint": "before Friday",
+        "type": "text"
+      }
+    ]
+  },
+  "ai-003": {
+    "scenario": "link action -- form to fill out",
+    "is_hard_negative": false,
+    "email": {
+      "from": "People Ops <peopleops@acme.io>",
+      "subject": "Benefits enrollment closes June 30",
+      "body": "Hi all,\n\nOpen enrollment ends June 30. You must confirm or change your benefits selections in Workday before then, or your current elections roll over automatically. Complete the enrollment form here: https://workday.acme.io/enroll\n\nPeople Ops"
+    },
+    "expected_action_items": [
+      {
+        "description": "Confirm or change benefits selections in the Workday enrollment form",
+        "due_hint": "June 30",
+        "type": "link",
+        "url": "https://workday.acme.io/enroll"
+      }
+    ]
+  },
+  "ai-004": {
+    "scenario": "invoice with payment deadline",
+    "is_hard_negative": false,
+    "email": {
+      "from": "Billing <billing@cloudhost.com>",
+      "subject": "Invoice #4471 due",
+      "body": "Dear customer,\n\nInvoice #4471 for $1,240.00 is due on July 15. Please remit payment by the due date to avoid a late fee. You can pay online at https://cloudhost.com/pay/4471.\n\nCloudHost Billing"
+    },
+    "expected_action_items": [
+      {
+        "description": "Pay invoice #4471 for $1,240.00",
+        "due_hint": "July 15",
+        "type": "link",
+        "url": "https://cloudhost.com/pay/4471"
+      }
+    ]
+  },
+  "ai-005": {
+    "scenario": "meeting with prep task",
+    "is_hard_negative": false,
+    "email": {
+      "from": "Priya Rao <priya@acme.io>",
+      "subject": "Quarterly planning Wed 10am",
+      "body": "Hi team,\n\nReminder that quarterly planning is Wednesday at 10am. Before the meeting, please add your top three priorities to the shared planning doc so we can group them. Thanks!\n\nPriya"
+    },
+    "expected_action_items": [
+      {
+        "description": "Add your top three priorities to the shared planning doc before the meeting",
+        "due_hint": "before Wednesday 10am",
+        "type": "text"
+      }
+    ]
+  },
+  "ai-006": {
+    "scenario": "approval request",
+    "is_hard_negative": false,
+    "email": {
+      "from": "Tom Becker <tom@acme.io>",
+      "subject": "PTO approval needed",
+      "body": "Hi,\n\nI've requested PTO for August 4-8 in the HR system. Could you approve it when you get a chance? I'd like to book flights this week.\n\nTom"
+    },
+    "expected_action_items": [
+      {
+        "description": "Approve Tom's PTO request for August 4-8 in the HR system",
+        "due_hint": "this week",
+        "type": "text"
+      }
+    ]
+  },
+  "ai-007": {
+    "scenario": "document review with signature",
+    "is_hard_negative": false,
+    "email": {
+      "from": "Robert Alvarez <ralvarez@dunmorelaw.com>",
+      "subject": "Licensing agreement -- signature",
+      "body": "Dear Ms. Chen,\n\nThe licensing agreement is finalized. Please review the attached document and return a signed copy by Thursday, 12 June, so we can proceed to filing.\n\nRegards,\nRobert Alvarez"
+    },
+    "expected_action_items": [
+      {
+        "description": "Review the finalized licensing agreement and return a signed copy",
+        "due_hint": "Thursday, 12 June",
+        "type": "text"
+      }
+    ]
+  },
+  "ai-008": {
+    "scenario": "three actions -- schedule, send, forward",
+    "is_hard_negative": false,
+    "email": {
+      "from": "Elena Vasquez <elena@acme.io>",
+      "subject": "Customer escalation follow-ups",
+      "body": "Sam,\n\nAfter today's call with Northwind: please schedule a follow-up demo for next week, send them the updated SLA one-pager, and forward the ticket thread to the support lead so they have context. Let me know once these are done.\n\nElena"
+    },
+    "expected_action_items": [
+      {
+        "description": "Schedule a follow-up demo with Northwind for next week",
+        "due_hint": "next week",
+        "type": "text"
+      },
+      {
+        "description": "Send Northwind the updated SLA one-pager",
+        "type": "text"
+      },
+      {
+        "description": "Forward the ticket thread to the support lead",
+        "type": "text"
+      }
+    ]
+  },
+  "ai-009": {
+    "scenario": "RSVP request",
+    "is_hard_negative": false,
+    "email": {
+      "from": "Events <events@acme.io>",
+      "subject": "Team offsite -- headcount",
+      "body": "Hi everyone,\n\nWe're finalizing catering for the offsite. Please RSVP yes/no by Friday so we can confirm numbers. Reply to this email with your answer.\n\nEvents Team"
+    },
+    "expected_action_items": [
+      {
+        "description": "RSVP yes or no to the team offsite",
+        "due_hint": "Friday",
+        "type": "text"
+      }
+    ]
+  },
+  "ai-010": {
+    "scenario": "bug report needing action + info request",
+    "is_hard_negative": false,
+    "email": {
+      "from": "QA <qa@acme.io>",
+      "subject": "Login regression on staging",
+      "body": "Hi Sam,\n\nWe're seeing a login regression on staging since this morning's deploy. Can you investigate and let us know root cause? Also, could you share which commit went out in that deploy?\n\nQA"
+    },
+    "expected_action_items": [
+      {
+        "description": "Investigate the staging login regression and report the root cause",
+        "type": "text"
+      },
+      {
+        "description": "Share which commit shipped in this morning's deploy",
+        "type": "text"
+      }
+    ]
+  },
+  "ai-011": {
+    "scenario": "single link action -- password reset",
+    "is_hard_negative": false,
+    "email": {
+      "from": "Security <no-reply@acme.io>",
+      "subject": "Action required: reset your password",
+      "body": "Your password will expire in 3 days. To keep your account active, reset it now: https://sso.acme.io/reset. If you do not reset it, you will be locked out.\n\nAcme Security"
+    },
+    "expected_action_items": [
+      {
+        "description": "Reset your account password before it expires",
+        "due_hint": "within 3 days",
+        "type": "link",
+        "url": "https://sso.acme.io/reset"
+      }
+    ]
+  },
+  "ai-012": {
+    "scenario": "scheduling with a proposed slot to confirm",
+    "is_hard_negative": false,
+    "email": {
+      "from": "Grace Osei <grace@partnerco.com>",
+      "subject": "Intro call",
+      "body": "Hi Sam,\n\nGreat to connect. I'm free Tuesday 2pm or Thursday 11am for the intro call -- can you confirm which works and I'll send an invite?\n\nGrace"
+    },
+    "expected_action_items": [
+      {
+        "description": "Confirm whether Tuesday 2pm or Thursday 11am works for the intro call with Grace",
+        "type": "text"
+      }
+    ]
+  },
+  "ai-013": {
+    "scenario": "expense report submission",
+    "is_hard_negative": false,
+    "email": {
+      "from": "Finance <finance@acme.io>",
+      "subject": "Q2 expenses close soon",
+      "body": "Reminder: submit any outstanding Q2 expense reports by end of day June 28. Reports submitted after the cutoff will be processed in Q3.\n\nFinance"
+    },
+    "expected_action_items": [
+      {
+        "description": "Submit outstanding Q2 expense reports",
+        "due_hint": "end of day June 28",
+        "type": "text"
+      }
+    ]
+  },
+  "ai-neg-001": {
+    "scenario": "hard negative -- newsletter, purely informational",
+    "is_hard_negative": true,
+    "email": {
+      "from": "Acme Blog <newsletter@acme.io>",
+      "subject": "This week in Acme: 5 product updates",
+      "body": "Hi there,\n\nHere's what shipped this week: dark mode, faster search, a new dashboard, CSV export, and mobile push. Read the full changelog on our blog. Thanks for being a customer!\n\nThe Acme Team"
+    },
+    "expected_action_items": []
+  },
+  "ai-neg-002": {
+    "scenario": "hard negative -- FYI status update, no ask",
+    "is_hard_negative": true,
+    "email": {
+      "from": "Priya Rao <priya@acme.io>",
+      "subject": "Deploy went out cleanly",
+      "body": "Hi all,\n\nJust letting you know the 2.4 release deployed to production this afternoon with no issues. Metrics look normal. No action needed -- sharing for visibility.\n\nPriya"
+    },
+    "expected_action_items": []
+  },
+  "ai-neg-003": {
+    "scenario": "hard negative -- receipt / order confirmation",
+    "is_hard_negative": true,
+    "email": {
+      "from": "Orders <orders@shopmart.com>",
+      "subject": "Your order #88213 has shipped",
+      "body": "Thanks for your order! Your package shipped today and should arrive by Thursday. No action is needed on your part; we'll email you when it's delivered.\n\nShopMart"
+    },
+    "expected_action_items": []
+  },
+  "ai-neg-004": {
+    "scenario": "hard negative -- thank-you note",
+    "is_hard_negative": true,
+    "email": {
+      "from": "Grace Osei <grace@partnerco.com>",
+      "subject": "Thanks!",
+      "body": "Hi Sam,\n\nJust wanted to say thanks for the great demo yesterday -- the team was impressed. No need to reply, just wanted to pass along the kind words.\n\nGrace"
+    },
+    "expected_action_items": []
+  },
+  "ai-neg-005": {
+    "scenario": "hard negative -- promotional marketing blast",
+    "is_hard_negative": true,
+    "email": {
+      "from": "Deals <deals@gadgetzone.com>",
+      "subject": "48-hour flash sale inside",
+      "body": "Our biggest sale of the summer is here! Up to 60% off everything. Shop now before it's gone. Unsubscribe anytime at the link below.\n\nGadgetZone"
+    },
+    "expected_action_items": []
+  },
+  "ai-neg-006": {
+    "scenario": "hard negative -- calendar invite auto-notification",
+    "is_hard_negative": true,
+    "email": {
+      "from": "Calendar <calendar-notification@acme.io>",
+      "subject": "Accepted: Weekly sync",
+      "body": "Marcus Lee has accepted your invitation to Weekly sync on Monday 9:00am. This is an automated notification.\n\nAcme Calendar"
+    },
+    "expected_action_items": []
+  },
+  "ai-neg-007": {
+    "scenario": "hard negative -- personal social note",
+    "is_hard_negative": true,
+    "email": {
+      "from": "Mom <mom@family.net>",
+      "subject": "Photos from the weekend",
+      "body": "Hi honey,\n\nAttaching a few photos from Sunday's picnic -- everyone had such a nice time. Hope work isn't too crazy. Love you!\n\nMom"
+    },
+    "expected_action_items": []
+  }
+}

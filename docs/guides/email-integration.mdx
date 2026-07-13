@@ -1,0 +1,448 @@
+---
+title: "Email Integration (API)"
+description: "Embed the GAIA Email Triage agent in your own app as a local, on-device processing component — over REST or MCP."
+icon: "plug"
+---
+
+# Integrating the Email Triage Agent over the API
+
+This guide is for developers building an application that **owns the user-facing
+experience and the mailbox connection**, and wants GAIA's Email Triage agent as a
+**local, on-device processing component** — every email body analyzed on the
+user's machine via Lemonade, never sent to a cloud LLM.
+
+<Note>
+  **Not building an integration?** If you just want to triage your own Gmail/Outlook
+  from GAIA's chat, the Agent UI, or `gaia email`, read [Email Triage](/guides/email)
+  instead. That guide covers the flow where **GAIA owns the UX and the connection**.
+  This guide covers the flow where **your app does**.
+</Note>
+
+## When to use this guide
+
+| Your situation | Read |
+|---|---|
+| You want to triage your inbox from GAIA's chat / Agent UI / CLI | [Email Triage](/guides/email) |
+| You're embedding the agent in **your** app, which owns the mailbox UX and OAuth | **This guide** |
+
+Use this integration path when you want:
+
+- **Local inference** — email bodies are classified and summarized on-device by
+  Lemonade. There is no configuration path that routes email content to a cloud LLM;
+  the agent rejects a non-local `base_url` at startup.
+- **Your own UX and mailbox connection** — your app runs OAuth, owns the tokens, and
+  forwards a connection to GAIA so the agent can read/send on the user's behalf.
+- **A structured contract** — a frozen request/response schema (`SCHEMA_VERSION`
+  `2.3`) you can code against, over REST **or** MCP stdio.
+
+## Architecture
+
+Three tiers, all on the user's machine — no cloud inference, no separate mailbox for GAIA:
+
+```
+┌──────────────────────┐     HTTP / MCP stdio      ┌───────────────────────┐
+│   Your application    │ ────────────────────────► │  GAIA email surface   │
+│  (owns UX + OAuth +   │   /v1/email/*  (triage,   │  /v1/email/*          │
+│   mailbox tokens)     │    draft, send, …)        │  /v1/connections/*    │
+│                       │ ◄──────────────────────── │                       │
+└──────────────────────┘   structured results      └───────────┬───────────┘
+          │                                                     │ local inference
+          │ 1. self-OAuth (your client)                        ▼
+          │ 2. forward connection ───────────────►   ┌───────────────────────┐
+          │    POST /v1/connections/{provider}       │   Lemonade Server     │
+          │                                          │  (local, on-device)   │
+                                                     └───────────────────────┘
+```
+
+- **Your app** runs its own OAuth, holds the user's `refresh_token`, and drives the
+  agent over HTTP (or MCP).
+- **The GAIA email surface** persists the forwarded connection and processes each
+  email locally. It never runs a second consent flow — it refreshes **as your
+  client**.
+- **Lemonade Server** is the one runtime dependency: the agent calls a **local**
+  Lemonade for inference. With none reachable, `POST /v1/email/triage` returns
+  **HTTP 502**.
+
+<Warning>
+  The GAIA repository ships a demo **harness** used to prove this integration path
+  end-to-end. That harness is a **testing/proof tool, not part of the GAIA product** —
+  do not install it or depend on it. This guide teaches the integration *pattern* the
+  harness demonstrates (self-OAuth → connection forwarding → triage/draft/send), which
+  you implement against the real endpoints below.
+</Warning>
+
+## Standing up the API surface
+
+You need a **running Lemonade Server** (`lemonade-server serve`) and the model pulled
+(`gaia init` installs Lemonade and downloads the default `Gemma-4-E4B-it-GGUF`). Then
+pick one of the entry points below.
+
+<Tabs>
+  <Tab title="GAIA backend (REST — recommended)">
+    The GAIA Agent UI backend is the single process that co-serves **both** the email
+    REST surface (`/v1/email/*`) **and** the connection-forwarding router
+    (`/v1/connections/*`) — so your app can forward a connection and drive triage/send
+    against one host.
+
+    ```bash
+    pip install gaia-agent-email        # installs the email REST routes
+    python -m gaia.ui.server --port 4200 --host 127.0.0.1
+    ```
+
+    - `/v1/email/*` — triage, draft, send, search, prescan, calendar, health, version.
+    - `/v1/connections/*` — forward a pre-authenticated mailbox connection (below).
+
+    Confirm it's up:
+
+    ```bash
+    curl -s http://127.0.0.1:4200/v1/email/health
+    # {"status":"ok","service":"gaia-agent-email"}
+    ```
+  </Tab>
+  <Tab title="Frozen sidecar / npm">
+    For a JS/TS app, [`@amd-gaia/agent-email`](https://www.npmjs.com/package/@amd-gaia/agent-email)
+    fetches and spawns a **frozen, self-contained REST sidecar** (no Python on the host)
+    that serves `/v1/email/*` on `127.0.0.1:8131`. It's the same email REST contract.
+
+    ```ts
+    import { fetchBinary, startSidecar, shutdown } from "@amd-gaia/agent-email";
+    const { binaryPath } = await fetchBinary({ outDir: "resources" });
+    const sidecar = await startSidecar({ binaryPath, port: 8131 });
+    const res = await sidecar.client.triage({ payload: { /* … */ } });
+    await shutdown(sidecar);
+    ```
+
+    The sidecar serves `/v1/email/*`; it does **not** serve `/v1/connections/*`. Forward
+    the connection on the GAIA backend (left tab) or via the `gaia connectors` CLI — the
+    connection is stored in a **machine-global keyring shared by every GAIA surface**, so
+    the sidecar's `send` reads it from that shared store. See the package
+    [SPEC.md](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md).
+
+    <Note>
+      The frozen sidecar requires a **per-session bearer token** on every
+      `/v1/email/*` request (#1706) — `startSidecar` mints it, hands it to the
+      sidecar over the private `GAIA_EMAIL_SIDECAR_TOKEN` env channel, and binds it
+      to `sidecar.client`, so the snippet above just works. A client you construct
+      yourself must pass `authToken` (read `sidecar.authToken`); calls without it
+      get **HTTP 401**. See [Authentication](#authentication) below.
+    </Note>
+  </Tab>
+  <Tab title="MCP stdio">
+    For MCP-native hosts, launch the agent's **stdio** MCP server (see
+    [MCP stdio alternative](#mcp-stdio-alternative)):
+
+    ```bash
+    python -m gaia_agent_email.mcp_server --transport stdio
+    ```
+  </Tab>
+</Tabs>
+
+## Authentication
+
+The frozen sidecar binds `127.0.0.1` and can **send mail as the user**, so it
+authenticates its **caller** (#1706). This is separate from the draft→send
+`confirmation_token` (below), which binds a send to one exact message but does not
+identify who is calling.
+
+- **Per-session bearer token.** Every `/v1/email/*` request to the sidecar must
+  carry `Authorization: Bearer <token>` or it is rejected with **HTTP 401**. The
+  token is a cryptographically-random per-session secret the spawning parent hands
+  to the sidecar over the private `GAIA_EMAIL_SIDECAR_TOKEN` env channel.
+- **Host / Origin allowlist.** A non-loopback `Host` header → **HTTP 400**
+  (DNS-rebinding); a non-loopback browser `Origin` → **HTTP 403** (drive-by web
+  page). No permissive CORS is ever sent.
+
+How this maps to the entry points above:
+
+- **Frozen sidecar / npm** — `startSidecar` mints the token, injects it, and binds
+  it to `sidecar.client`, so `sidecar.client.triage(...)` just works. A client you
+  construct yourself must pass `authToken` (from `sidecar.authToken`); forward it to
+  a browser/Electron renderer over your own IPC — never embed it in a page.
+- **GAIA backend (REST)** — the Agent UI backend proxies `/v1/email/*` to a sidecar
+  it spawns and authenticates for you, so your calls to `127.0.0.1:4200` need **no**
+  bearer token; the token is internal to the backend→sidecar hop.
+- **Direct-to-sidecar for local dev** — if you launch the frozen binary yourself,
+  set `GAIA_EMAIL_SIDECAR_TOKEN` and send the matching bearer header. Running it
+  **without** the env var disables the token check (local development only, logged
+  loudly) — the Host/Origin controls still apply.
+
+```ts
+// npm path — the bound client carries the token for you.
+const sidecar = await startSidecar({ binaryPath, port: 8131 });
+await sidecar.client.draft({ to: [{ email: "a@b.com" }], subject: "Re: x", body: "hi" });
+
+// Construct-your-own client (e.g. renderer over IPC) — pass the token explicitly.
+import { EmailClient } from "@amd-gaia/agent-email/client";
+const client = new EmailClient({ baseUrl: sidecar.baseUrl, authToken: sidecar.authToken });
+```
+
+## Connection forwarding
+
+*(#1292)* Your app runs its **own** OAuth, then forwards the resulting grant to GAIA.
+GAIA persists the forwarded OAuth client and the user's `refresh_token`, and later
+refreshes **as your client** — there is **no second consent screen**.
+
+### 1. Run your own OAuth
+
+Obtain a long-lived `refresh_token` for the user with **your** OAuth client, requesting
+offline access and the scopes the agent needs:
+
+| Provider | OAuth flow | Mail scopes to request |
+|---|---|---|
+| **Gmail** | Web or Desktop-app client (authorization-code) | `https://www.googleapis.com/auth/gmail.modify`, `https://www.googleapis.com/auth/gmail.send` |
+| **Personal Outlook.com** | **Device-code** flow | `https://graph.microsoft.com/Mail.ReadWrite`, `https://graph.microsoft.com/Mail.Send` |
+
+Add calendar scopes only if you use the calendar endpoints: Google
+`https://www.googleapis.com/auth/calendar.events` (and/or `calendar.readonly`),
+Microsoft `https://graph.microsoft.com/Calendars.ReadWrite`.
+
+### 2. Forward the connection to GAIA
+
+```bash
+curl -s -X POST http://127.0.0.1:4200/v1/connections/google \
+  -H "Content-Type: application/json" \
+  -H "X-Gaia-UI: 1" \
+  -d '{
+    "client_id": "<YOUR_CLIENT_ID>",
+    "client_secret": "<YOUR_CLIENT_SECRET>",
+    "refresh_token": "<USER_REFRESH_TOKEN>",
+    "scopes": [
+      "https://www.googleapis.com/auth/gmail.modify",
+      "https://www.googleapis.com/auth/gmail.send"
+    ],
+    "account_email": "user@example.com",
+    "grant_agents": ["installed:email"]
+  }'
+```
+
+For personal Outlook, `POST /v1/connections/microsoft` with the Graph scopes above.
+
+**Response** — `201 Created`, metadata only (secrets are never echoed back):
+
+```json
+{
+  "provider": "google",
+  "account_email": "user@example.com",
+  "scopes": [
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.send"
+  ],
+  "connected_at": null,
+  "grant_agents": ["installed:email"],
+  "forwarded": true
+}
+```
+
+Key rules the endpoint enforces (all fail loudly):
+
+- **`refresh_token` and `client_secret` are write-only secret inputs.** They are stored
+  in the OS keyring and **never** returned by any endpoint (`GET /v1/connections` and
+  `GET /v1/connections/{provider}` return metadata only).
+- **`grant_agents` must include `installed:email`.** Without this grant the connection
+  exists but the email agent can't resolve it at send time, and you'll hit a "no grant"
+  dead end. (Ties to #1592.)
+- **`X-Gaia-UI: 1` header is required** on the POST and DELETE. It's a CSRF guard — a
+  custom header forces a CORS preflight, so a drive-by form POST can't forge it. Missing
+  header → **403**.
+- **Empty `client_id` / `refresh_token` → 422.** Missing required scopes for the granted
+  agent → **403** with a `missing_scopes` detail. GAIA cannot widen scope at refresh
+  time, so forward everything the agent needs up front.
+
+To revoke: `DELETE /v1/connections/{provider}` (with `X-Gaia-UI: 1`) clears the refresh
+token, the forwarded client credentials, and every per-agent grant.
+
+## The triage contract
+
+*(#1262, frozen at `SCHEMA_VERSION` 2.3)* `POST /v1/email/triage` takes an email or a full
+thread and returns structured analysis. **No mail is read or sent** — it analyzes only the
+payload in the request, so you can build and verify triage with **zero connector setup**.
+See the full schema in the [Email Triage Contract](https://github.com/amd/gaia/blob/main/hub/agents/python/email/CONTRACT.md).
+
+Triage always uses the **local Lemonade LLM** (there is no `engine` toggle; a
+high-confidence spam/promotional heuristic may skip the classify call internally, but the
+summary is always model-generated). With Lemonade unreachable, triage returns **HTTP 502**.
+
+### Single email
+
+```bash
+curl -s -X POST http://127.0.0.1:4200/v1/email/triage \
+  -H "Content-Type: application/json" \
+  -d '{
+    "payload": {
+      "kind": "single",
+      "principal": { "email": "me@example.com" },
+      "message": {
+        "message_id": "m1",
+        "from": { "name": "Sarah Chen", "email": "sarah@example.com" },
+        "subject": "Prod incident follow-up",
+        "body": "Please review the report and reply by Friday."
+      }
+    }
+  }'
+```
+
+**Response** (`EmailTriageResponse`):
+
+```json
+{
+  "schema_version": "2.3",
+  "request_kind": "single",
+  "result": {
+    "category": "URGENT",
+    "is_spam": false,
+    "is_phishing": false,
+    "summary": "Prod incident follow-up — Please review the report and reply by Friday.",
+    "action_items": [
+      { "description": "Please review the report and reply by Friday.",
+        "due_hint": "by Friday", "type": "text", "url": null }
+    ],
+    "draft": {
+      "to": [{ "name": "Sarah Chen", "email": "sarah@example.com" }],
+      "subject": "Re: Prod incident follow-up"
+    },
+    "suggested_action": "reply",
+    "message_id": "m1",
+    "usage": { "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "tokens_per_second": 0.0 }
+  }
+}
+```
+
+Field notes:
+
+- **`category`** is one of the five buckets: `URGENT`, `NEEDS_RESPONSE`, `FYI`,
+  `PROMOTIONAL`, `PERSONAL`. `is_spam` / `is_phishing` are independent boolean signals.
+- **`suggested_action`** is `reply`, `archive`, or `none`.
+- **`draft`** is a `DraftScaffold` (`to` + `subject` only, no `body` — schema 2.3) or
+  `null` — triage classifies and summarizes but never composes reply prose, and it never
+  proposes a reply to spam/phishing or to yourself. To get a sendable reply, compose the
+  body yourself and pass it to `POST /v1/email/draft`.
+- **`usage`** is `null` on the heuristic-only path (no LLM call made).
+
+### Thread
+
+Pass `"kind": "thread"` with a `thread_id` and a `messages` array (oldest-first). To bias
+categorization, add an optional top-level `context` object
+(`people` / `projects` / `tone` / `self_email`).
+
+### Batch
+
+`POST /v1/email/triage/batch` takes an `items` array (1–100 email/thread inputs) and
+returns one result per item, order-preserved. Per-item failures are isolated: **HTTP 200
+can carry errored items**, so inspect each `results[].error`, not just the status. A
+**502** means Lemonade was unreachable before any item was processed.
+
+## Draft → confirmed send
+
+*(#1264)* A send is **never** performed without an explicit, payload-bound confirmation
+token. This is a safety invariant, not a preference.
+
+### 1. Mint a token
+
+`POST /v1/email/draft` returns a single-use `confirmation_token` bound to the exact
+`(to, subject, body)`:
+
+```bash
+curl -s -X POST http://127.0.0.1:4200/v1/email/draft \
+  -H "Content-Type: application/json" \
+  -d '{
+    "to": [{ "email": "sarah@example.com" }],
+    "subject": "Re: Prod incident follow-up",
+    "body": "Thanks Sarah — reviewing now, will reply by Thursday."
+  }'
+```
+
+```json
+{
+  "draft": {
+    "to": [{ "name": null, "email": "sarah@example.com" }],
+    "subject": "Re: Prod incident follow-up",
+    "body": "Thanks Sarah — reviewing now, will reply by Thursday."
+  },
+  "confirmation_token": "a1b2c3…"
+}
+```
+
+Drafting reads no mailbox and needs no connector — surface the draft to your user for
+approval, and only echo the token back on an approved send.
+
+### 2. A send without the token is rejected (403)
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:4200/v1/email/send \
+  -H "Content-Type: application/json" \
+  -d '{ "to": [{ "email": "sarah@example.com" }],
+        "subject": "Re: Prod incident follow-up",
+        "body": "Thanks Sarah — reviewing now, will reply by Thursday." }'
+# 403
+```
+
+The 403 body explains the gate: call `/v1/email/draft` for a token bound to this exact
+`(to, subject, body)`, then echo it in `confirmation_token`.
+
+### 3. Send with the token (200)
+
+```bash
+curl -s -X POST http://127.0.0.1:4200/v1/email/send \
+  -H "Content-Type: application/json" \
+  -d '{
+    "to": [{ "email": "sarah@example.com" }],
+    "subject": "Re: Prod incident follow-up",
+    "body": "Thanks Sarah — reviewing now, will reply by Thursday.",
+    "confirmation_token": "a1b2c3…"
+  }'
+```
+
+```json
+{ "sent_id": "18f…", "to": [{ "name": null, "email": "sarah@example.com" }],
+  "subject": "Re: Prod incident follow-up", "sent": true }
+```
+
+The token is bound and single-use: a token minted for one message can't be replayed to
+send different content, and it's consumed on first use.
+
+<Note>
+  Unlike triage/draft, **send acts on the live mailbox**, so a connection must be
+  forwarded first (with `grant_agents: ["installed:email"]`). Status codes:
+  **403** = missing/invalid token *or* a mailbox auth/scope error;
+  **503** = no mailbox connected;
+  **400** = two mailboxes connected and neither the token nor the request names a
+  `provider`. (The event-loop crash tracked in #1594 is fixed — the documented flow runs.)
+</Note>
+
+## MCP stdio alternative
+
+*(#1104)* MCP-native hosts get the same capability over stdio. Launch:
+
+```bash
+python -m gaia_agent_email.mcp_server --transport stdio
+```
+
+Tools exposed: `triage_email`, `triage_email_batch`, `draft_reply`, `send_email`. The
+`triage_email` tool takes the **same** `EmailTriageRequest` and returns the **identical**
+#1262 structured result as `POST /v1/email/triage` — the REST and MCP paths call the same
+`EmailTriageService`, so output is byte-compatible. Parity is enforced by
+`tests/mcp/test_email_mcp_stdio_parity`.
+
+## Self-describing reference
+
+- **`GET /v1/email/spec`** — a human-readable HTML page describing every endpoint.
+- **`GET /v1/email/version`** — `{"apiVersion": "2.3", "agentVersion": "…"}`. `apiVersion`
+  is the frozen contract version; negotiate against its MAJOR so a breaking upgrade fails
+  loudly.
+- **`GET /v1/email/health`** — liveness only (`{"status":"ok"}`). A green health check means
+  the REST surface is up, **not** that Lemonade is reachable — the real readiness signal is
+  a `triage` returning 200.
+
+## Provider coverage
+
+- **Gmail** — full support (triage, search, draft/send, archive, quarantine, calendar).
+- **Personal Outlook.com** — supported via the device-code OAuth flow; phishing
+  quarantine is **Gmail-only** (an Outlook mailbox is refused with **400**, because its
+  label-based undo can't reverse Outlook's folder move).
+- **Enterprise Microsoft Graph** — deferred.
+
+## Related
+
+- [Email Triage](/guides/email) — the Agent UI / `gaia email` flow (GAIA owns the UX).
+- [Email Triage Contract](https://github.com/amd/gaia/blob/main/hub/agents/python/email/CONTRACT.md) — the full #1262 request/response schema.
+- [`@amd-gaia/agent-email`](https://github.com/amd/gaia/tree/main/hub/agents/npm/agent-email) — the JS/TS client + frozen sidecar.

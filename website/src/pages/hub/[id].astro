@@ -44,6 +44,18 @@ const readmeHtml = renderMarkdown(agent.readme);
 const changelogHtml = agent.changelog ? renderMarkdown(agent.changelog) : '';
 const specHtml = agent.spec ? renderMarkdown(agent.spec) : '';
 const skillHtml = agent.skill ? renderMarkdown(agent.skill) : '';
+const evaluationHtml = agent.evaluation ? renderMarkdown(agent.evaluation) : '';
+// Eval scorecard: the Worker embeds the SCORECARD.md body (front matter already
+// stripped) as `scorecard`, and the aggregate as `eval_score`. Render the body as
+// a tab; the sidebar badge links out to the canonical source (eval_scorecard_url).
+const scorecardHtml = agent.scorecard ? renderMarkdown(agent.scorecard) : '';
+const hasScore = typeof agent.eval_score === 'number';
+// Clamp display precision to 2 dp so an unrounded upstream aggregate (e.g.
+// 84.66666667) can't render a long decimal; already-clean values (84.67) are
+// unchanged.
+const scoreDisplay = typeof agent.eval_score === 'number'
+  ? Math.round(agent.eval_score * 100) / 100
+  : undefined;
 const req = agent.requirements;
 
 const packageFiles = agent.package?.files ?? [];
@@ -74,6 +86,8 @@ const docTabs = [
   { key: 'readme', label: 'README' },
   ...(specHtml ? [{ key: 'spec', label: 'Spec' }] : []),
   ...(skillHtml ? [{ key: 'skill', label: 'Skill' }] : []),
+  ...(scorecardHtml ? [{ key: 'scorecard', label: 'Scorecard' }] : []),
+  ...(evaluationHtml ? [{ key: 'evaluation', label: 'Evaluation' }] : []),
   ...(changelogHtml ? [{ key: 'changelog', label: 'Changelog' }] : []),
   ...(packageFiles.length ? [{ key: 'files', label: 'Files' }] : []),
 ];
@@ -142,8 +156,8 @@ const terminalLines = [
       </div>
     </section>
 
-    <!-- Body: tabbed docs (README / Spec / Skill / Changelog / Files) + cards -->
-    <div class="mt-12 grid lg:grid-cols-[minmax(0,1fr)_280px] gap-12">
+    <!-- Body: tabbed docs (README / Spec / Skill / Scorecard / Evaluation / Changelog / Files) + cards -->
+    <div class="mt-12 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_280px] gap-12">
       <div class="min-w-0" data-doc-tabs>
         {docTabs.length > 1 && (
           <div role="tablist" aria-label={`${agent.name} documentation`} class="flex gap-1 border-b border-g-border mb-7 overflow-x-auto">
@@ -176,6 +190,22 @@ const terminalLines = [
         {skillHtml && (
           <article role="tabpanel" id="docpanel-skill" aria-labelledby="doctab-skill" data-doc-panel="skill" class="doc max-w-[70ch]" hidden>
             <div set:html={skillHtml} />
+          </article>
+        )}
+        {scorecardHtml && (
+          <article role="tabpanel" id="docpanel-scorecard" aria-labelledby="doctab-scorecard" data-doc-panel="scorecard" class="doc max-w-[70ch]" hidden>
+            {agent.eval_scorecard_url && (
+              <p class="text-[13px] text-g-muted">
+                {hasScore && <span>Aggregate score <strong class="text-g-text">{scoreDisplay} / 100</strong>. </span>}
+                <a href={agent.eval_scorecard_url} target="_blank" rel="noopener" class="text-g-gold-text hover:underline">View the canonical scorecard ↗</a>
+              </p>
+            )}
+            <div set:html={scorecardHtml} />
+          </article>
+        )}
+        {evaluationHtml && (
+          <article role="tabpanel" id="docpanel-evaluation" aria-labelledby="doctab-evaluation" data-doc-panel="evaluation" class="doc max-w-[70ch]" hidden>
+            <div set:html={evaluationHtml} />
           </article>
         )}
         {changelogHtml && (
@@ -213,6 +243,28 @@ const terminalLines = [
           </div>
           <p class="mt-2 text-[12.5px] leading-relaxed text-g-muted">{securityTierDescription(agent.security_tier)}</p>
         </section>
+
+        {hasScore && (
+          <!-- Eval scorecard badge: headline aggregate score + jump to the full
+               scorecard tab, plus the canonical source link. Mirrors the Agent UI
+               (AgentDetailModal). Only shows once a scorecard was published. -->
+          <section class="rounded-xl border border-g-border bg-g-surface p-5">
+            <Eyebrow class="mb-2">Eval scorecard</Eyebrow>
+            <div class="flex items-baseline gap-1.5">
+              <span class="text-3xl font-bold tracking-tight text-g-text">{scoreDisplay}</span>
+              <span class="text-sm text-g-muted">/ 100</span>
+            </div>
+            <p class="mt-1 text-[12px] leading-relaxed text-g-muted">Aggregate benchmark score for the latest version.</p>
+            <div class="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[12px] font-medium">
+              {scorecardHtml && (
+                <button type="button" data-doc-goto="scorecard" class="text-g-gold-text hover:underline">View scorecard →</button>
+              )}
+              {agent.eval_scorecard_url && (
+                <a href={agent.eval_scorecard_url} target="_blank" rel="noopener" class="text-g-gold-text hover:underline">Source ↗</a>
+              )}
+            </div>
+          </section>
+        )}
 
         <!-- Details card -->
         <section class="rounded-xl border border-g-border bg-g-surface p-5">
@@ -669,7 +721,7 @@ const terminalLines = [
   .file-tree-chevron { transition: transform 0.15s ease; }
   .file-tree details[open] > summary .file-tree-chevron { transform: rotate(90deg); }
 
-  /* Doc tabs (README / Spec / Skill / Changelog / Files) */
+  /* Doc tabs (README / Spec / Skill / Scorecard / Evaluation / Changelog / Files) */
   .doc-tab {
     @apply -mb-px border-b-2 border-transparent px-4 py-2 text-sm font-medium text-g-muted transition-colors hover:text-g-text;
   }

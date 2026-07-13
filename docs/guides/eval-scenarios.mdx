@@ -21,12 +21,12 @@ The runner discovers scenarios automatically via recursive glob under `eval/scen
 Here is the complete schema with all fields documented:
 
 ```yaml
-# Required fields
+# Core fields (required: id, category, persona, setup, turns)
 id: my_custom_scenario           # Unique identifier (snake_case, alphanumeric + underscores)
-name: "My Custom Scenario"       # Human-readable display name
-category: rag_quality            # Category (see list below)
-severity: critical               # critical | high | medium | low
-description: |                   # Multi-line description of what this scenario tests
+name: "My Custom Scenario"       # (Optional) Human-readable display name
+category: rag_quality            # Category label (see list below)
+severity: critical               # (Optional) critical | high | medium | low
+description: |                   # (Optional) Multi-line description of what this scenario tests
   Describe the purpose and scope of this test.
 
 persona: power_user              # User persona (see Personas section below)
@@ -72,8 +72,8 @@ expected_outcome: |
 | Field | Required | Notes |
 |-------|----------|-------|
 | `id` | Yes | Unique across all scenarios. Use `snake_case`. |
-| `category` | Yes | Must be one of the 10 defined categories. |
-| `persona` | Yes | Must be one of the 5 defined personas. |
+| `category` | Yes | Free-text label for grouping and `--category` filtering; not validated against a fixed set. |
+| `persona` | Yes | Any non-empty string. The 9 built-in personas below are the documented defaults; a custom string is accepted (and logged). |
 | `setup.index_documents` | Yes | Can be empty (`[]`) for scenarios that test discovery. |
 | `turns` | Yes | At least one turn required. Numbers must be sequential starting from 1. |
 | `ground_truth` or `success_criteria` | One required per turn | Providing both gives maximum judging precision. |
@@ -95,6 +95,8 @@ eval/scenarios/
 ├── rag_quality/          # RAG retrieval and fact lookup
 ├── context_retention/    # Cross-turn context awareness
 ├── tool_selection/       # Correct tool usage and discovery
+├── mcp_reliability/      # Tool-call reliability (parameters, chains, conditionals)
+├── memory/               # Cross-session memory persistence and recall
 ├── error_recovery/       # Error handling and graceful degradation
 ├── adversarial/          # Edge cases and robustness
 ├── personality/          # GAIA voice and personality compliance
@@ -109,6 +111,8 @@ eval/scenarios/
 | `rag_quality` | Factual extraction, hallucination resistance, CSV/table parsing, cross-section synthesis |
 | `context_retention` | Pronoun resolution, remembering indexed documents, multi-document conversations |
 | `tool_selection` | Tool routing, smart document discovery, multi-step planning, knowing when NOT to use tools |
+| `mcp_reliability` | Parameter passing, conditional tool use, multi-step tool chains, no-tool-needed decisions |
+| `memory` | Cross-session persistence, fact accumulation, conflict/supersede resolution, temporal recall |
 | `error_recovery` | Missing files, empty search results, vague queries, graceful fallbacks |
 | `adversarial` | Empty files, very large documents, rapid topic switching |
 | `personality` | Conciseness, avoiding sycophancy, admitting limitations honestly |
@@ -117,11 +121,15 @@ eval/scenarios/
 | `web_system` | Clipboard, notifications, webpage fetching, system information |
 | `captured` | Replaying real user sessions as golden-path tests |
 
+<Note>
+  Category is a free-text label used for grouping and `--category` filtering — the runner does **not** validate it against a fixed enum, so you can introduce a new category simply by using it. The categories above are the ones currently in the suite.
+</Note>
+
 ---
 
 ## Personas
 
-Each scenario specifies a persona that shapes how the eval agent crafts user messages:
+Each scenario specifies a persona that shapes how the eval agent crafts user messages. Nine personas are built in (any non-empty custom string is also accepted):
 
 | Persona | Behavior | When to Use |
 |---------|----------|-------------|
@@ -130,6 +138,10 @@ Each scenario specifies a persona that shapes how the eval agent crafts user mes
 | `confused_user` | Wrong terminology, self-correcting mid-sentence | Testing error recovery and clarification |
 | `adversarial_user` | Edge cases, topic switches, impossible requests | Testing hallucination resistance and boundary handling |
 | `data_analyst` | Numbers, comparisons, aggregations, structured output expectations | Testing numerical accuracy and data synthesis |
+| `home_user` | Everyday consumer, texting-style lowercase, confused by jargon | Testing plain-language handling and simplicity |
+| `small_business_owner` | Time-pressed, ROI-focused, not deeply technical, mixes business and personal tasks | Testing practical, value-oriented interactions |
+| `student` | Academic/homework context, casual language with bursts of field jargon, appreciates step-by-step | Testing explanatory depth and research help |
+| `creative_professional` | Designer/writer/artist, project- and workflow-focused, values speed, may ask open-ended questions | Testing subjective/open-ended and impatient-with-verbosity cases |
 
 <Tip>
   Use `power_user` for straightforward RAG tests. Use `adversarial_user` for scenarios that test failure modes. Use `casual_user` to test whether the agent handles real-world ambiguity.

@@ -28,6 +28,7 @@ setup(
         "gaia.llm.providers",
         "gaia.audio",
         "gaia.chat",
+        "gaia.schedule",
         "gaia.ui",
         "gaia.ui.routers",
         "gaia.ui.email_sidecar",
@@ -105,6 +106,11 @@ setup(
         "beautifulsoup4",
         "watchdog>=2.1.0",
         "pillow>=9.0.0",
+        # Cron-based scheduler (issue #892): apscheduler drives the daemon;
+        # tomli/tomli-w read+write ~/.gaia/schedules.toml (tomllib is stdlib on 3.11+).
+        "apscheduler>=3.10.0",
+        "tomli-w>=1.0.0",
+        "tomli>=2.0.0; python_version < '3.11'",
         # Required by the `gaia-mcp` bridge (base console_script), which parses
         # multipart uploads via python_multipart at import time. Base — not an
         # extra — so a plain `pip install amd-gaia` ships a working gaia-mcp.
@@ -138,15 +144,18 @@ setup(
             # the OS credential store (macOS Keychain, Windows DPAPI, Linux
             # SecretService). Pinned upper bound per supply-chain advisory.
             "keyring>=24.0.0,<26.0.0",
-            # RAG runtime deps — gaia.ui.server boots faiss + sentence_transformers
-            # eagerly, and gaia.rag.sdk uses pypdf/pymupdf/numpy. See #845.
-            # Version specifiers match the standalone "rag" extra; "ui"
-            # additionally declares safetensors and a torch lower bound.
+            # RAG runtime deps — gaia.rag.sdk uses faiss/pypdf/pymupdf/numpy and
+            # embeds via Lemonade (NOT sentence-transformers). See #845.
+            # Version specifiers match the standalone "rag" extra.
             "faiss-cpu>=1.7.0",
             "numpy>=1.24.0",
             "pymupdf>=1.24.0",
             "pypdf",
             "python-pptx>=0.6.21",
+            "python-docx>=1.1.0",
+            # Memory cross-encoder reranker (gaia.agents.base.memory) — optional
+            # at runtime (graceful degradation) but bundled with "ui" so the
+            # full chat experience gets reranking out of the box. NOT a RAG dep.
             "sentence-transformers",
             "safetensors",
             # torch is pinned lower-bound only. The "audio" extra caps
@@ -156,8 +165,8 @@ setup(
             "torch>=2.0.0",
         ],
         "audio": [
-            "torch>=2.0.0,<2.13",
-            "torchvision<0.28.0",
+            "torch>=2.0.0,<2.14",
+            "torchvision<0.29.0",
             "torchaudio",
         ],
         "blender": [
@@ -228,12 +237,14 @@ setup(
             "llama-index-readers-youtube-transcript",
         ],
         "rag": [
+            # RAG embeds via Lemonade, not sentence-transformers — do NOT add it
+            # here. It is only needed for the optional memory reranker (see "ui").
             "faiss-cpu>=1.7.0",
             "numpy>=1.24.0",
             "pymupdf>=1.24.0",
             "pypdf",
             "python-pptx>=0.6.21",
-            "sentence-transformers",
+            "python-docx>=1.1.0",
         ],
         "lint": [
             "black",
@@ -267,9 +278,9 @@ setup(
         "agent-connectors-demo": ["gaia-agent-connectors-demo"],
         "agent-analyst": ["gaia-agent-analyst"],
         "agent-browser": ["gaia-agent-browser"],
-        "agent-email": ["gaia-agent-email"],
         "agent-docqa": ["gaia-agent-docqa"],
         "agent-routing": ["gaia-agent-routing"],
+        "agent-email": ["gaia-agent-email"],
         "agent-chat": ["gaia-agent-chat"],
         "agents": [
             "gaia-agent-summarize",
@@ -283,9 +294,9 @@ setup(
             "gaia-agent-connectors-demo",
             "gaia-agent-analyst",
             "gaia-agent-browser",
-            "gaia-agent-email",
             "gaia-agent-docqa",
             "gaia-agent-routing",
+            "gaia-agent-email",
             "gaia-agent-chat",
         ],
     },

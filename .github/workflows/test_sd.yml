@@ -11,6 +11,10 @@ on:
   push:
     branches: ["main"]
     paths:
+      - 'src/gaia/version.py'
+      - '.github/actions/install-lemonade/**'
+      - '.github/actions/setup-venv/**'
+      - '.github/workflows/test_sd.yml'
       - "src/gaia/sd/**"  # SD mixin and tools
       - "hub/agents/python/sd/**"  # SD agent (standalone wheel #1102)
       - "src/gaia/llm/lemonade_client.py"
@@ -21,6 +25,10 @@ on:
     branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
+      - 'src/gaia/version.py'
+      - '.github/actions/install-lemonade/**'
+      - '.github/actions/setup-venv/**'
+      - '.github/workflows/test_sd.yml'
       - "src/gaia/sd/**"  # SD mixin and tools
       - "hub/agents/python/sd/**"  # SD agent (standalone wheel #1102)
       - "src/gaia/llm/lemonade_client.py"
@@ -35,11 +43,14 @@ permissions:
 jobs:
   test-sd-windows:
     name: Test SD Image Generation (Lemonade Integration)
-    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
+    runs-on:
+      - self-hosted
+      - Windows
+      - ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Kill Stuck Processes (MSI and Lemonade Server)
         if: always()

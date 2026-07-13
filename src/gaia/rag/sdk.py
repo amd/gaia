@@ -30,22 +30,20 @@ except ImportError:
     except ImportError:
         PdfReader = None
 
-# Not just ImportError: a broken native dependency (e.g. torchcodec/FFmpeg
-# pulled in by sentence-transformers, or an arch-mismatched faiss build) raises
-# RuntimeError/OSError at import. Treat that the same as "not installed" so a
-# bad install can't crash every module that transitively imports RAG; the loud,
-# actionable error is deferred to RAGSDK._check_dependencies() at point of use.
-try:
-    from sentence_transformers import SentenceTransformer
-except Exception:  # pylint: disable=broad-except
-    SentenceTransformer = None
-
+# Not just ImportError: an arch-mismatched faiss build raises RuntimeError/OSError
+# at import. Treat that the same as "not installed" so a bad install can't crash
+# every module that transitively imports RAG; the loud, actionable error is
+# deferred to RAGSDK._check_dependencies() at point of use.
+# NOTE: RAG embeds via Lemonade (self.embedder.embeddings), NOT sentence-transformers.
+# sentence-transformers is intentionally NOT imported or required here — it is only
+# an optional dep of the memory cross-encoder reranker (gaia.agents.base.memory).
 try:
     import faiss
 except Exception:  # pylint: disable=broad-except
     faiss = None
 
 from gaia.chat.sdk import AgentConfig, AgentSDK
+from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL
 from gaia.logger import get_logger
 from gaia.security import PathValidator
 
@@ -94,9 +92,7 @@ class RAGConfig:
     chunk_size: int = 500
     chunk_overlap: int = 100  # Increased to 20% overlap for better context preservation
     max_chunks: int = 5  # Increased to retrieve more context
-    embedding_model: str = (
-        "nomic-embed-text-v2-moe-GGUF"  # Lemonade GGUF embedding model
-    )
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL  # Lemonade GGUF embedding model
     cache_dir: str = ".gaia"
     show_stats: bool = False
     use_local_llm: bool = True
@@ -169,6 +165,7 @@ class RAGSDK:
         self.embedder = None
         self.llm_client = None
         self.use_lemonade_embeddings = False
+        self._embedding_cache = None  # content-keyed query-embed cache (lazy)
         self.index = None
         self.chunks = []
         self.indexed_files = set()
@@ -217,8 +214,6 @@ class RAGSDK:
         missing = []
         if PdfReader is None:
             missing.append("pypdf (or PyPDF2)")
-        if SentenceTransformer is None:
-            missing.append("sentence-transformers")
         if faiss is None:
             missing.append("faiss-cpu")
 
@@ -236,29 +231,23 @@ class RAGSDK:
             # skipping genuinely-missing packages (ImportError) which the
             # install instructions above already cover.
             broken = []
-            for pkg, label in (
-                ("sentence_transformers", "sentence-transformers"),
-                ("faiss", "faiss"),
-            ):
-                if (pkg == "sentence_transformers" and SentenceTransformer is None) or (
-                    pkg == "faiss" and faiss is None
-                ):
-                    try:
-                        # Use the import statement (__import__), not
-                        # importlib.import_module — the latter bypasses
-                        # builtins.__import__, so this path can't be exercised
-                        # by tests that intercept imports, and re-running the
-                        # real import is what re-surfaces the native cause.
-                        __import__(pkg)
-                    except ImportError:
-                        pass  # genuinely missing → covered by install instructions
-                    except Exception as exc:  # pylint: disable=broad-except
-                        broken.append(f"  {label}: {exc}")
+            if faiss is None:
+                try:
+                    # Use the import statement (__import__), not
+                    # importlib.import_module — the latter bypasses
+                    # builtins.__import__, so this path can't be exercised
+                    # by tests that intercept imports, and re-running the
+                    # real import is what re-surfaces the native cause.
+                    __import__("faiss")
+                except ImportError:
+                    pass  # genuinely missing → covered by install instructions
+                except Exception as exc:  # pylint: disable=broad-except
+                    broken.append(f"  faiss: {exc}")
             if broken:
                 error_msg += (
                     "\nThe package(s) below are installed but failed to load — "
                     "reinstalling won't help until the underlying error is fixed "
-                    "(e.g. a missing FFmpeg for torchcodec):\n"
+                    "(e.g. an arch-mismatched faiss build):\n"
                     + "\n".join(broken)
                     + "\n"
                 )
@@ -482,10 +471,36 @@ class RAGSDK:
                 f"Loading embedding model via Lemonade: {self.config.embedding_model}"
             )
 
-            from gaia.llm.lemonade_client import LemonadeClient
+            from gaia.llm.lemonade_client import MODELS, LemonadeClient
 
             if not hasattr(self, "llm_client") or self.llm_client is None:
                 self.llm_client = LemonadeClient()
+
+            # Register + download the embedder before loading. Custom
+            # (``user.``) embedders aren't Lemonade built-ins — they need
+            # checkpoint + recipe + the embedding label on first pull. Fail
+            # loudly if registration fails (no silent fall-back to nomic).
+            mr = next(
+                (
+                    m
+                    for m in MODELS.values()
+                    if m.model_id == self.config.embedding_model
+                ),
+                None,
+            )
+            if mr and self.config.embedding_model.startswith("user."):
+                if not self.llm_client.ensure_model_downloaded(
+                    self.config.embedding_model,
+                    checkpoint=mr.checkpoint,
+                    recipe=mr.recipe,
+                    embedding=mr.embedding,
+                ):
+                    raise RuntimeError(
+                        f"Failed to register/download embedding model "
+                        f"{self.config.embedding_model!r}. Ensure Lemonade Server "
+                        f"is running and reachable, then retry "
+                        f"(or run `gaia init --profile rag`)."
+                    )
 
             # Scoped unload of the embedder ONLY — a global /unload would evict
             # the co-resident chat model and trigger a ~100s cold reload (#1544).
@@ -629,6 +644,34 @@ class RAGSDK:
 
         # Convert to numpy array
         return np.array(all_embeddings, dtype=np.float32)
+
+    def _get_embedding_cache(self):
+        """Lazy-init the content-keyed embedding cache (per-instance)."""
+        cache = getattr(self, "_embedding_cache", None)
+        if cache is None:
+            from gaia.llm.embedding_cache import EmbeddingCache
+
+            cache = EmbeddingCache()
+            self._embedding_cache = cache
+        return cache
+
+    def _encode_query(self, query: str) -> "np.ndarray":
+        """Encode a single query to a (1, dim) array, served from the
+        content-keyed cache so identical queries across turns skip the embed.
+
+        Falls back to ``_encode_texts`` on a miss. Stored/doc-chunk vectors
+        are persisted elsewhere; this targets repeated *query* embeds only.
+        """
+        cache = self._get_embedding_cache()
+        model_id = self.config.embedding_model
+        cached = cache.get(model_id, None, query)
+        if cached is not None:
+            return np.array([cached], dtype=np.float32)
+
+        embedding = self._encode_texts([query], show_progress=False)
+        if embedding.shape[0] > 0:
+            cache.put(model_id, None, query, embedding[0])
+        return embedding
 
     def _get_file_type(self, file_path: str) -> str:
         """Detect file type from extension."""
@@ -1601,6 +1644,188 @@ These positions indicate where to split the text."""
             self.log.error(f"Error reading Excel file {xlsx_path}: {e}")
             raise
 
+    def _extract_text_from_docx(self, docx_path: str) -> str:
+        """Extract text from a Word (.docx) document using python-docx.
+
+        Walks the document body in order so paragraphs and tables stay
+        interleaved. Paragraph text is collected by walking the inline tree,
+        so runs nested in hyperlinks, **content controls** (``w:sdt`` — the
+        fields used by form/template documents), and textboxes are captured —
+        not just the direct runs that ``Paragraph.text`` exposes. Tabs and
+        line/page breaks become whitespace so adjacent words don't glue
+        together, and the ``mc:Fallback`` (VML) twin of a DrawingML textbox is
+        skipped so shape text isn't emitted twice. Table cells (including
+        tables nested in a cell, and rows/cells wrapped in repeating-section
+        content controls) and block-level content controls are recursed into.
+
+        Corrupt / non-.docx files and a missing ``python-docx`` install raise
+        actionable errors, mirroring :meth:`_extract_text_from_pptx` (.docx is
+        a ZIP container like .pptx).
+
+        Known omissions: header/footer text (separate XML parts, usually
+        repeated boilerplate) and embedded images (TODO #1072: VLM extraction
+        for images embedded in .docx files).
+
+        Returns:
+            The extracted text as a single string.
+        """
+        file_name = Path(docx_path).name
+
+        try:
+            from docx import Document  # pylint: disable=import-outside-toplevel
+            from docx.oxml.ns import qn  # pylint: disable=import-outside-toplevel
+        except ImportError as e:
+            raise ImportError(
+                "python-docx is required for Word document processing. "
+                "Install it with: uv pip install python-docx"
+            ) from e
+
+        # Guard against zip bombs: .docx is a ZIP container. Check the total
+        # uncompressed size is sane before handing it to python-docx.
+        try:
+            with zipfile.ZipFile(docx_path, "r") as zf:
+                total_uncompressed = sum(info.file_size for info in zf.infolist())
+                max_uncompressed = 500 * 1024 * 1024  # 500 MB
+                if total_uncompressed > max_uncompressed:
+                    msg = (
+                        f"Word file too large after decompression: {file_name}\n"
+                        f"Uncompressed size: {total_uncompressed / (1024*1024):.0f} MB "
+                        f"(limit: {max_uncompressed / (1024*1024):.0f} MB)\n"
+                        "The file may be a zip bomb or contain very large embedded media.\n"
+                        "Suggestions:\n"
+                        "  1. Remove unnecessary images/media to reduce file size\n"
+                        "  2. Save as PDF and index the PDF instead"
+                    )
+                    self.log.error(
+                        f"DOCX zip bomb guard: {docx_path} "
+                        f"({total_uncompressed} bytes uncompressed)"
+                    )
+                    raise ValueError(msg)
+        except zipfile.BadZipFile as e:
+            msg = (
+                f"Could not read Word file: {file_name}\n"
+                f"Reason: {e}\n"
+                "The file appears to be corrupted or not a valid .docx file.\n"
+                "Suggestions:\n"
+                "  1. Re-download or re-export the document\n"
+                "  2. Try opening the file in Word to confirm it is readable\n"
+                "  3. Save as PDF and index the PDF instead"
+            )
+            self.log.error(f"Corrupted DOCX (bad zip): {docx_path}: {e}")
+            raise ValueError(msg) from e
+        except OSError as e:
+            # Missing file, a directory, or an unreadable path — surface an
+            # actionable error instead of a raw OSError traceback.
+            msg = (
+                f"Could not read Word file: {file_name}\n"
+                f"Reason: {e}\n"
+                "Check that the path exists and points to a readable .docx file."
+            )
+            self.log.error(f"Cannot open DOCX {docx_path}: {e}")
+            raise ValueError(msg) from e
+
+        try:
+            doc = Document(docx_path)
+        except Exception as e:
+            msg = (
+                f"Could not read Word file: {file_name}\n"
+                f"Reason: {e}\n"
+                "The file appears to be corrupted or not a valid .docx file.\n"
+                "Suggestions:\n"
+                "  1. Re-download or re-export the document\n"
+                "  2. Try opening the file in Word to confirm it is readable\n"
+                "  3. Save as PDF and index the PDF instead"
+            )
+            self.log.error(f"Corrupted DOCX {docx_path}: {e}")
+            raise ValueError(msg) from e
+
+        try:
+            w_p, w_tbl, w_sdt = qn("w:p"), qn("w:tbl"), qn("w:sdt")
+            w_sdt_content = qn("w:sdtContent")
+            w_tr, w_tc = qn("w:tr"), qn("w:tc")
+            w_t, w_tab = qn("w:t"), qn("w:tab")
+            w_br, w_cr = qn("w:br"), qn("w:cr")
+            # ``mc`` (markup-compatibility) isn't in python-docx's prefix map,
+            # so qn() can't resolve it — use the namespace URI directly.
+            mc_fallback = (
+                "{http://schemas.openxmlformats.org/markup-compatibility/2006}"
+                "Fallback"
+            )
+
+            def _para_runs(elem, out):
+                # Walk a paragraph's inline tree in document order, translating
+                # leaf elements to text. Descends through runs, hyperlinks,
+                # inline content controls (w:sdt), and textbox content so their
+                # text is captured — but skips ``mc:Fallback`` (the VML twin of
+                # a DrawingML textbox) so shape text is not emitted twice.
+                for child in elem:
+                    tag = child.tag
+                    if tag == w_t:
+                        out.append(child.text or "")
+                    elif tag == w_tab:
+                        out.append("\t")
+                    elif tag in (w_br, w_cr):
+                        out.append("\n")
+                    elif tag == mc_fallback:
+                        continue
+                    else:
+                        _para_runs(child, out)
+
+            def _paragraph_text(p_elem):
+                out = []
+                _para_runs(p_elem, out)
+                return "".join(out).strip()
+
+            def _iter_children(elem, wanted):
+                # Yield direct ``wanted`` children, transparently descending
+                # through w:sdt wrappers (repeating-section / row / cell content
+                # controls keep their rows and cells inside w:sdtContent).
+                for child in elem:
+                    if child.tag == wanted:
+                        yield child
+                    elif child.tag == w_sdt:
+                        content = child.find(w_sdt_content)
+                        if content is not None:
+                            yield from _iter_children(content, wanted)
+
+            def _emit(elem, parts):
+                # Recursively walk a block element in document order, appending
+                # text fragments. Unknown tags (section props, etc.) are skipped.
+                if elem.tag == w_p:
+                    para_text = _paragraph_text(elem)
+                    if para_text:
+                        parts.append(para_text)
+                elif elem.tag == w_tbl:
+                    for row in _iter_children(elem, w_tr):
+                        cells = []
+                        for cell in _iter_children(row, w_tc):
+                            cell_parts = []
+                            for cell_child in cell:
+                                _emit(cell_child, cell_parts)
+                            cells.append(" ".join(cell_parts).strip())
+                        if any(cells):
+                            parts.append(" | ".join(cells))
+                elif elem.tag == w_sdt:
+                    # Block-level content control — descend into its content.
+                    content = elem.find(w_sdt_content)
+                    if content is not None:
+                        for sdt_child in content:
+                            _emit(sdt_child, parts)
+
+            parts = []
+            for child in doc.element.body:
+                _emit(child, parts)
+
+            text = "\n".join(parts)
+
+            if self.config.show_stats:
+                print(f"  ✅ Loaded Word file ({len(text):,} chars)")
+            self.log.info(f"📄 Extracted {len(text):,} characters from Word file")
+            return text
+        except Exception as e:
+            self.log.error(f"Error reading Word file {docx_path}: {e}")
+            raise
+
     def _extract_text_from_file(self, file_path: str) -> tuple:
         """
         Extract text from file based on type.
@@ -1645,6 +1870,10 @@ These positions indicate where to split the text."""
         # Excel files
         elif file_type in [".xlsx", ".xls"]:
             return self._extract_text_from_xlsx(file_path), metadata
+
+        # Word files
+        elif file_type == ".docx":
+            return self._extract_text_from_docx(file_path), metadata
 
         # Code files (treat as text for Q&A purposes)
         elif file_type in [
@@ -2855,7 +3084,7 @@ These positions indicate where to split the text."""
 
         # Encode query only once
         self._load_embedder()
-        query_embedding = self._encode_texts([query], show_progress=False)
+        query_embedding = self._encode_query(query)
 
         # Search in cached file-specific index
         k = min(self.config.max_chunks, len(file_chunks))
@@ -2933,7 +3162,7 @@ These positions indicate where to split the text."""
         if self.config.show_stats:
             print(f"🔍 Searching through {len(chunks_snapshot)} chunks...")
         self.log.debug(f"Encoding query: {query[:50]}...")
-        query_embedding = self._encode_texts([query], show_progress=False)
+        query_embedding = self._encode_query(query)
 
         # Search for similar chunks
         k = min(self.config.max_chunks, len(chunks_snapshot))

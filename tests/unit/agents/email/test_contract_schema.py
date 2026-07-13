@@ -110,7 +110,6 @@ def _single_response() -> dict:
             "draft": {
                 "to": [{"name": "Bob Sender", "email": "bob@vendor.com"}],
                 "subject": "Re: Q2 invoice attached",
-                "body": "Thanks Bob, I'll review and confirm by Friday.",
             },
         },
     }
@@ -201,7 +200,9 @@ def test_valid_single_response_validates():
     resp = EmailTriageResponse.model_validate(_single_response())
     assert resp.request_kind == "single"
     assert resp.result.category == EmailCategory.NEEDS_RESPONSE
+    # schema 2.3: the triage draft is a DraftScaffold (to + subject, no body).
     assert resp.result.draft is not None
+    assert set(resp.result.draft.model_dump()) == {"to", "subject"}
     assert resp.result.action_items[0].due_hint == "Friday"
 
 
@@ -331,15 +332,19 @@ def test_result_summary_required():
 
 
 def test_schema_version_unchanged_by_multi_inbox():
-    """Schema 2.1 is the current frozen contract version.
+    """Schema 2.3 is the current frozen contract version.
 
-    2.1 is additive over the 2.0 5-bucket taxonomy (no triage shape change): it
-    added inbox search (#1781), mailbox actions (#1779), the calendar surface
-    (#1780), and inbox pre-scan (#1778). If this fails, someone changed the
+    2.1 was additive over the 2.0 5-bucket taxonomy (no triage shape change):
+    it added inbox search (#1781), mailbox actions (#1779), the calendar
+    surface (#1780), and inbox pre-scan (#1778). 2.2 is additive over 2.1:
+    attachment handling (#1542) — read/triage exposes attachment metadata,
+    draft/send accept attachments. 2.3 is a BREAKING triage-shape change:
+    EmailTriageResult.draft is now a DraftScaffold (recipient + subject only,
+    no body) instead of a DraftReply. If this fails, someone changed the
     version unexpectedly; that requires an explicit version negotiation, not a
     drive-by edit.
     """
-    assert SCHEMA_VERSION == "2.1"
+    assert SCHEMA_VERSION == "2.3"
 
 
 def test_triage_result_gained_no_new_required_field():

@@ -350,9 +350,12 @@ The agent supports the **Model Context Protocol** in both directions — connect
   </Accordion>
 
   <Accordion title="First-run network egress to huggingface.co">
-    The first time you index a document, the embedding model
-    (`sentence-transformers`) is downloaded from `huggingface.co` (~100 MB,
-    cached under `~/.cache/huggingface/`). Subsequent runs are offline.
+    The first time you index a document, Lemonade Server pulls the embedding
+    model (`user.embeddinggemma-300m-GGUF`, ~334 MB) from `huggingface.co`,
+    cached under `~/.cache/huggingface/hub/`. Subsequent runs are offline.
+    (Agent memory adds a small cross-encoder reranker,
+    `cross-encoder/ms-marco-MiniLM-L-6-v2` (~22 MB), fetched via
+    `sentence-transformers` on first hybrid search.)
 
     If your environment blocks `huggingface.co`, pre-seed the cache on a
     machine with internet access and copy it to the target machine, or set
@@ -408,7 +411,7 @@ The agent supports the **Model Context Protocol** in both directions — connect
 ## Architecture
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#A87B2D', 'edgeLabelBackground':'#ffffff', 'fontFamily':'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
     A(["Agent UI (Browser or Electron)"]) --> B(["FastAPI Backend · port 4200"])
     B --> C(["GAIA Core SDKs"])

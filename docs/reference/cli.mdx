@@ -154,7 +154,7 @@ gaia init [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--profile, -p` | string | chat | Profile to initialize (minimal, sd, chat, code, rag, vlm, npu, all) |
+| `--profile, -p` | string | chat | Profile to initialize (minimal, sd, chat, code, rag, mcp, vlm, email, npu, all) |
 | `--minimal` | flag | false | Shortcut for `--profile minimal` |
 | `--skip-models` | flag | false | Skip model downloads (only install Lemonade) |
 | `--skip-lemonade` | flag | false | Skip Lemonade installation check (for CI with pre-installed Lemonade) |
@@ -174,11 +174,13 @@ canonical choices list):
 |---------|--------|-------------|-------------|
 | `minimal` | Gemma-4-E4B-it-GGUF | Fast setup with Gemma 4 E4B multimodal model | ~3 GB |
 | `sd` | SDXL-Turbo, Gemma-4-E4B-it-GGUF | Image generation with multi-modal AI (LLM + SD) | ~10 GB |
-| `chat` | Gemma-4-E4B-it-GGUF, nomic-embed-text-v2-moe-GGUF | Interactive chat with RAG and vision support | ~4 GB |
+| `chat` | Gemma-4-E4B-it-GGUF, user.embeddinggemma-300m-GGUF | Interactive chat with RAG and vision support | ~4 GB |
 | `code` | Gemma-4-E4B-it-GGUF | Autonomous coding assistant | ~3 GB |
-| `rag` | Gemma-4-E4B-it-GGUF, nomic-embed-text-v2-moe-GGUF | Document Q&A with retrieval | ~4 GB |
+| `rag` | Gemma-4-E4B-it-GGUF, user.embeddinggemma-300m-GGUF | Document Q&A with retrieval | ~4 GB |
+| `mcp` | _(none)_ | Sets up the MCP servers config (`~/.gaia/mcp_servers.json`) — no Lemonade install or model downloads | – |
 | `vlm` | Gemma-4-E4B-it-GGUF | Vision pipeline for document and image extraction | ~3 GB |
-| `npu` | gemma4-it-e2b-FLM | Ryzen AI NPU acceleration via FLM backend (requires XDNA2 NPU) | ~3 GB |
+| `email` | Gemma-4-E4B-it-GGUF | Gmail/Outlook triage with local inference | ~3 GB |
+| `npu` | gemma4-it-e2b-FLM, embed-gemma-300m-FLM | Ryzen AI NPU acceleration via FLM backend (requires XDNA2 NPU) | ~3 GB |
 | `all` | All models | All models for all agents | ~26 GB |
 
 <Note>
@@ -673,6 +675,8 @@ gaia chat [MESSAGE] [OPTIONS]
 | `--max-chunks` | integer | 3 | Maximum chunks to retrieve for RAG |
 | `--max-indexed-files` | integer | 100 | Maximum number of files to keep indexed. Evicts least-recently-accessed files when LRU eviction is enabled; rejects new files when disabled. |
 | `--max-total-chunks` | integer | 10000 | Maximum total chunks across all indexed files. Same eviction behavior as `--max-indexed-files`. |
+| `--device` | `cpu`\|`gpu`\|`npu` | gpu | Inference device — selects the model and backend for this session |
+| `--mcp-tool-limit` | integer | 50 | Maximum MCP tools to register. Larger tool sets bloat the system prompt and degrade small-model tool-calling accuracy — keep as low as your workflow allows |
 | `--allowed-paths` | path(s) | - | Restrict RAG/file tools to these directories (security sandbox) |
 | `--stats`, `--show-stats` | flag | false | Show performance statistics |
 | `--stream` | flag | false | Enable streaming responses |
@@ -801,6 +805,8 @@ gaia prompt "MESSAGE" [OPTIONS]
 |--------|------|---------|-------------|
 | `--model` | string | auto | Model ID to use (default: auto-selected by each agent). Falls back to `default_model` from config — see [Configuration](#configuration) |
 | `--max-tokens` | integer | 512 | Maximum tokens to generate |
+| `--device` | `cpu`\|`gpu`\|`npu` | gpu | Inference device (Ryzen AI for `npu`) |
+| `--config` | path | `~/.gaia/config.json` | GAIA config file used to resolve `default_model` (or `$GAIA_CONFIG_FILE`) |
 | `--stats` | flag | false | Show performance statistics |
 
 **Examples:**
@@ -934,7 +940,7 @@ Common flags at the `index` level: `--repo`, `--max-files`, `--model`, `--base-u
 | `--query` | string | – | Custom query to run instead of the built-in examples |
 | `--interactive` | flag | false | Continuously input queries in interactive mode |
 | `--example` | string | – | Run a specific built-in example (1-6); omit for interactive mode |
-| `--steps` | integer | 5 | Maximum number of steps per query |
+| `--steps` | integer | 50 | Maximum number of steps per query (defaults to the global agent step limit, or `$GAIA_AGENT_MAX_STEPS` if set) |
 | `--output-dir` | path | output | Directory to save output files |
 | `--mcp-port` | integer | 9876 | Port for the Blender MCP server |
 | `--debug-prompts` | flag | false | Show prompts sent to the LLM |
@@ -981,6 +987,8 @@ gaia email -v -q "Triage my inbox"  # verbose logs for benchmarking
 | `-i, --interactive` | flag | false | REPL loop until `/quit`. |
 | `-v, --verbose` | flag | false | Emit structured logs for every triage decision and tool call. |
 | `--debug` | flag | false | Adds full prompt + LLM-response logging (sensitive payloads in logs). |
+| `--spec` | flag | false | Generate the HTML endpoint spec page, write it to disk, and open it in a browser. No LLM or Lemonade required. |
+| `--output PATH` | path | `~/.gaia/email/endpoint-spec.html` | Where to write the HTML spec (only used with `--spec`). |
 
 **Setup:** requires the Google connector. Run `gaia connectors connect google` first; you'll be asked to grant Gmail and Calendar scopes.
 
@@ -1016,14 +1024,14 @@ gaia sd <prompt> [OPTIONS]
 
 **Examples:**
 
-Fast generation with default (SD-Turbo, ~13s):
+Fast, good-quality generation with the default (SDXL-Turbo, ~17s):
 ```bash
 gaia sd "a sunset over mountains"
 ```
 
-Better quality with SDXL-Turbo (~17s):
+Even faster (lower quality) with SD-Turbo (~13s):
 ```bash
-gaia sd "cyberpunk city at night" --sd-model SDXL-Turbo
+gaia sd "cyberpunk city at night" --sd-model SD-Turbo
 ```
 
 Photorealistic with SDXL-Base-1.0 (slow, ~9min):
@@ -1399,6 +1407,7 @@ gaia mcp test --query "Hello from GAIA MCP!"
 | `test` | Test MCP bridge functionality (optionally against a specific `--tool`) |
 | `agent` | Invoke the MCP orchestrator agent (positional `request` arg + `--domain`, `--context`) |
 | `docker` | Start the Docker MCP server (default port 8080) |
+| `serve` | Start the Agent UI MCP server (wraps the Agent UI backend) |
 
 #### `gaia mcp start` options
 
@@ -1559,7 +1568,7 @@ gaia download [OPTIONS]
 | `--timeout` | integer | 1800 | Timeout per model in seconds |
 | `--host` | string | localhost | Lemonade server host |
 | `--port` | integer | 13305 | Lemonade server port |
-| `--clear-cache` | flag | false | Remove cached download progress/metadata before running |
+| `--clear-cache` | flag | false | Delete all downloaded GAIA models to free up disk space |
 
 **Available Agents:**
 chat, code, talk, rag, blender, jira, docker, vlm, minimal, mcp
@@ -1604,7 +1613,7 @@ gaia download --agent code
    ...
    ✅ Download complete
 
-✅ nomic-embed-text-v2-moe-GGUF (already downloaded)
+✅ user.embeddinggemma-300m-GGUF (already downloaded)
 
 ==================================================
 📊 Download Summary:
@@ -1686,7 +1695,11 @@ gaia eval agent [OPTIONS]
 | `--scenario` | string | all | Run a specific scenario by ID |
 | `--category` | string | all | Run all scenarios in a category |
 | `--backend` | string | `http://localhost:4200` | Agent UI backend URL |
+| `--agent-type` | string | backend default | Agent registration ID to target (e.g. `gaia-lite`); scenarios run against this agent |
 | `--model` | string | `claude-sonnet-4-6` | Judge/simulator model |
+| `--iterations` | integer | `1` | Run each scenario N times for reliability measurement |
+| `--keep-sessions` | flag | false | Don't delete Agent UI sessions after eval — leave them for manual inspection |
+| `--device` | `cpu`\|`gpu`\|`npu` | – | Inference device hint for the run |
 | `--budget` | string | `2.00` | Maximum USD spend per scenario |
 | `--timeout` | integer | `900` | Per-scenario timeout in seconds (auto-scaled for complex scenarios) |
 | `--audit-only` | flag | false | Run architecture audit without LLM calls (free) |
@@ -1903,6 +1916,95 @@ Manage agent memory: run day-zero onboarding and view memory statistics.
 </Tabs>
 
 [→ Full Memory Guide](/guides/memory) · [→ Memory SDK Reference](/sdk/sdks/memory)
+
+---
+
+## Schedule
+
+Run a prompt on a recurring cron schedule and route its output to a sink. Schedules are stored in `~/.gaia/schedules.toml` (hand-editable). The `daemon` action runs a long-lived scheduler that fires each enabled schedule when due.
+
+```bash
+gaia schedule {add,list,show,remove,pause,resume,run,daemon} [OPTIONS]
+```
+
+### Subcommands
+
+| Action | Description |
+|--------|-------------|
+| `add` | Register a new schedule (requires `--name`, `--cron`, and exactly one of `--prompt`/`--skill`) |
+| `list` | List all schedules with their next fire time |
+| `show <name>` | Show one schedule's full configuration and next fire time |
+| `remove <name>` | Delete a schedule |
+| `pause <name>` | Disable a schedule without deleting it |
+| `resume <name>` | Re-enable a paused schedule |
+| `run <name>` | Fire a schedule once now (for testing) |
+| `daemon` | Run the long-lived scheduler (blocks until interrupted) |
+
+### `add` Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--name` | string | _required_ | Unique schedule name |
+| `--cron` | string | _required_ | Cron expression, e.g. `"0 7 * * 1-5"` |
+| `--prompt` | string | - | One-shot prompt to run on each fire (mutually exclusive with `--skill`) |
+| `--skill` | string | - | Skill to run (mutually exclusive with `--prompt`) — see note below |
+| `--sink` | string | stdout | Where output goes: `stdout` \| `file:<path>` \| `notification` \| `telegram` |
+| `--to` | string | - | Recipient for the `telegram` sink (Telegram user/chat id) |
+
+**Examples:**
+
+<CodeGroup>
+```bash Add a Weekday Morning Brief
+gaia schedule add \
+  --name morning-brief \
+  --cron "0 7 * * 1-5" \
+  --prompt "Give me a 3-bullet summary of today's priorities"
+```
+
+```bash List Schedules
+gaia schedule list
+```
+
+```bash Fire Once (Test)
+gaia schedule run morning-brief
+```
+
+```bash Pause and Resume
+gaia schedule pause morning-brief
+gaia schedule resume morning-brief
+```
+
+```bash Run the Scheduler
+gaia schedule daemon
+```
+</CodeGroup>
+
+### Sinks
+
+A sink decides where each scheduled run's output goes. Set it with `--sink` on `add` (default `stdout`):
+
+| Sink | Description |
+|------|-------------|
+| `stdout` | Print output to the terminal (default) |
+| `file:<path>` | Append output to the given file (created if missing) |
+| `notification` | Desktop notification (macOS `osascript` / Linux `notify-send`) |
+| `telegram` | Send via a Telegram bot — needs a bot token (`GAIA_TELEGRAM_TOKEN` env var or `sink_args.token` in `schedules.toml`) and a recipient via `--to` |
+
+**Telegram example:**
+
+```bash
+export GAIA_TELEGRAM_TOKEN="<bot-token>"
+gaia schedule add \
+  --name daily-digest \
+  --cron "0 18 * * *" \
+  --prompt "Summarize what changed today" \
+  --sink telegram \
+  --to 123456789
+```
+
+<Note>
+`--skill` is not yet implemented — running a skill-backed schedule raises an error pending the skill format ([#888](https://github.com/amd/gaia/issues/888)). Use `--prompt` for now.
+</Note>
 
 ---
 

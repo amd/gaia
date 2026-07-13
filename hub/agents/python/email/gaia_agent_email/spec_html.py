@@ -31,6 +31,7 @@ from typing import (
 from gaia_agent_email.contract import (
     SCHEMA_VERSION,
     ActionItem,
+    AttachmentMeta,
     BatchItemError,
     BatchItemResult,
     BatchTriageRequest,
@@ -44,6 +45,7 @@ from gaia_agent_email.contract import (
     CalendarRespondRequest,
     CalendarRespondResponse,
     DraftReply,
+    DraftScaffold,
     EmailActionConfirmRequest,
     EmailActionConfirmResponse,
     EmailAddress,
@@ -66,6 +68,7 @@ from gaia_agent_email.contract import (
     EmailUnarchiveResponse,
     EmailUnquarantineRequest,
     EmailUnquarantineResponse,
+    OutgoingAttachment,
     PreScanItem,
     SingleEmailInput,
     ThreadInput,
@@ -377,6 +380,7 @@ def render_endpoint_spec_html() -> str:
         + _model_table(ThreadInput, "ThreadInput (kind: thread)")
         + _model_table(EmailMessage, "EmailMessage")
         + _model_table(EmailAddress, "EmailAddress")
+        + _model_table(AttachmentMeta, "AttachmentMeta (schema 2.2, #1542)")
     )
 
     triage_block = (
@@ -386,8 +390,22 @@ def render_endpoint_spec_html() -> str:
         f'<p class="desc">Triage a single email or a full thread. '
         f"Accepts the frozen #1262 EmailTriageRequest and returns "
         f"a structured EmailTriageResponse — category, spam/phishing signals, "
-        f"a plain-text summary, extracted action items, and an optional draft reply. "
-        f"No mail is read or sent; this analyses only the payload in the request.</p>"
+        f"a plain-text summary, extracted action items, and an optional reply "
+        f"scaffold. "
+        f"No mail is read or sent; this analyses only the payload in the request. "
+        f"Extracted action items also persist to the local task store, linked to "
+        f"the source <code>message_id</code> and de-duplicated per message (#1605) "
+        f"— the response shape is unchanged.</p>"
+        f"<p class='desc'><strong>The draft is a scaffold, not a written reply "
+        f"(schema 2.3):</strong> when one is proposed it is a "
+        f"<code>DraftScaffold</code> carrying only <code>to</code> and "
+        f"<code>subject</code> — triage classifies and summarises, it never "
+        f"composes reply prose (so the model choice does not change this). To "
+        f"obtain a sendable reply, compose the body yourself (e.g. an LLM call "
+        f"over the returned <code>summary</code> + <code>action_items</code> + "
+        f"the original message) and pass <code>(to, subject, body)</code> to "
+        f"<code>POST /v1/email/draft</code>, which returns a full "
+        f"<code>DraftReply</code> and a single-use send-confirmation token.</p>"
         f"<h3>Request envelope</h3>"
         f"{_model_table(EmailTriageRequest, 'EmailTriageRequest')}"
         f"<h3>Payload shapes</h3>"
@@ -395,7 +413,7 @@ def render_endpoint_spec_html() -> str:
         f"<h3>Response envelope</h3>"
         f"{_model_table(EmailTriageResponse, 'EmailTriageResponse')}"
         f"{_model_table(EmailTriageResult, 'EmailTriageResult')}"
-        f"{_model_table(DraftReply, 'DraftReply (optional)')}"
+        f"{_model_table(DraftScaffold, 'DraftScaffold (optional — reply scaffold, no body)')}"
         f"{_model_table(ActionItem, 'ActionItem')}"
         f"</div>"
     )
@@ -449,10 +467,35 @@ def render_endpoint_spec_html() -> str:
     # avoid any import-order coupling with email_routes (which imports this
     # module lazily for its GET /spec page).
     from gaia_agent_email.api_routes import (
+        EmailBriefingResponse,
         EmailDraftRequest,
         EmailDraftResponse,
         EmailSendRequest,
         EmailSendResponse,
+        InitLemonadeStatus,
+        InitModelStatus,
+        InitResponse,
+    )
+
+    briefing_block = _endpoint_block(
+        path="/v1/email/briefing",
+        method="GET",
+        description=(
+            "Latest scheduled daily inbox briefing (#1608). The email sidecar "
+            "generates the pre-scan envelope on a configurable daily schedule "
+            "— off by default; enable with GAIA_EMAIL_BRIEFING_ENABLED=true "
+            "(fire time via GAIA_EMAIL_BRIEFING_TIME, 24h local HH:MM, "
+            "default 08:00) — and this endpoint returns the most recent run. "
+            "The briefing payload is the same email_pre_scan envelope as "
+            "POST /v1/email/prescan, produced by the agent's own "
+            "pre_scan_inbox path. 404 until a scheduled run has happened."
+        ),
+        request_sections=[],
+        response_sections=[
+            ("EmailBriefingResponse", EmailBriefingResponse),
+            ("EmailPreScanResult", EmailPreScanResult),
+            ("PreScanItem", PreScanItem),
+        ],
     )
 
     search_block = _endpoint_block(
@@ -475,11 +518,19 @@ def render_endpoint_spec_html() -> str:
         path="/v1/email/draft",
         description=(
             "Propose a reply and obtain a single-use confirmation token bound "
-            "to the exact (to, subject, body) payload. Echo the token to "
-            "POST /v1/email/send to authorize sending."
+            "to the exact (to, subject, body, attachments) payload — "
+            "attachment binding covers filename, MIME type, and content digest "
+            "(schema 2.2, #1542). Echo the token to POST /v1/email/send to "
+            "authorize sending."
         ),
-        request_sections=[("EmailDraftRequest", EmailDraftRequest)],
-        response_sections=[("EmailDraftResponse", EmailDraftResponse)],
+        request_sections=[
+            ("EmailDraftRequest", EmailDraftRequest),
+            ("OutgoingAttachment", OutgoingAttachment),
+        ],
+        response_sections=[
+            ("EmailDraftResponse", EmailDraftResponse),
+            ("DraftReply (full reply — includes the composed body)", DraftReply),
+        ],
     )
 
     send_block = _endpoint_block(
@@ -488,11 +539,58 @@ def render_endpoint_spec_html() -> str:
             "Send a reply — gated on explicit confirmation (#1264). The "
             "confirmation gate fires FIRST: a request without a valid, "
             "payload-bound confirmation token is rejected with HTTP 403 before "
-            "any backend call. Emails are never sent without explicit "
-            "confirmation."
+            "any backend call. Attachments (schema 2.2) must exactly match the "
+            "confirmed draft's — a swapped or smuggled file is rejected. "
+            "Emails are never sent without explicit confirmation."
         ),
         request_sections=[("EmailSendRequest", EmailSendRequest)],
         response_sections=[("EmailSendResponse", EmailSendResponse)],
+    )
+
+    # Readiness preflight (#1795). GET, response-only — documents the
+    # structured status a host polls before triaging. Derived from the live
+    # route models so the table cannot drift from what the endpoint returns.
+    init_block = (
+        f'<div class="endpoint-block">'
+        f'<span class="method-badge">GET</span>'
+        f'<span class="path">/v1/email/init</span>'
+        f'<p class="desc">Readiness preflight for the whole triage stack. '
+        f"Returns HTTP 200 when ready and 503 when not, with an actionable "
+        f"<code>hint</code>. Unlike <code>/health</code> (liveness-only), this "
+        f"probes the local Lemonade Server, checks it is at a compatible "
+        f"<strong>version</strong> (&ge; <code>min_version</code>), and confirms "
+        f"the triage model is downloaded — so a host can verify &ldquo;ready to "
+        f"triage,&rdquo; not just &ldquo;process up.&rdquo; Read-only: probes "
+        f"only, no model pull.</p>"
+        f"<h3>Response body</h3>"
+        f"{_model_table(InitResponse, 'InitResponse')}"
+        f"{_model_table(InitLemonadeStatus, 'InitLemonadeStatus')}"
+        f"{_model_table(InitModelStatus, 'InitModelStatus')}"
+        f"</div>"
+    )
+
+    # Provisioning verb (#1795 follow-up). POST on the same path, but it STREAMS
+    # terminal-style progress instead of returning JSON — so it is documented
+    # here rather than in the JSON OpenAPI contract.
+    provision_block = (
+        f'<div class="endpoint-block">'
+        f'<span class="method-badge">POST</span>'
+        f'<span class="path">/v1/email/init</span>'
+        f'<p class="desc">Provision the triage stack and <strong>stream '
+        f"terminal-style progress</strong>. Tells the running local Lemonade "
+        f"Server to download the configured email model, emitting "
+        f"newline-delimited progress lines (<code>text/plain</code>) a consumer "
+        f"can render line by line. A line beginning <code>✓</code> marks "
+        f"success, <code>✗</code> a failure; the final line is authoritative.</p>"
+        f'<p class="desc"><strong>Scope:</strong> the sidecar cannot run the full '
+        f"<code>gaia init</code> or install Lemonade itself. If Lemonade is "
+        f"unreachable this returns <strong>503</strong> with an actionable line "
+        f"and pulls nothing. Once a pull starts the response is a committed "
+        f"<strong>200</strong> (HTTP status cannot change mid-stream), so the "
+        f"trailing <code>✓</code>/<code>✗</code> line carries the real outcome. "
+        f"On success, re-run <code>GET /v1/email/init</code> to confirm "
+        f"readiness.</p>"
+        f"</div>"
     )
 
     # Mailbox actions — archive / quarantine + reversal (schema 2.1, #1779).
@@ -616,6 +714,82 @@ def render_endpoint_spec_html() -> str:
         response_sections=[("CalendarRespondResponse", CalendarRespondResponse)],
     )
 
+    # Stateful agent surface (/v1/email/agent/*). Hand-authored (not model
+    # tables) because the request/response shapes live in agent_routes.py — not
+    # the frozen contract — and /query returns an SSE stream, not a JSON body.
+    agent_block = """
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/agent/session</span>
+  <p class="desc">Create (or, with <code>reset:true</code>, recreate) a
+    session-scoped agent. Body: <code>{ "session_id": str, "reset"?: bool }</code>.
+    Returns <code>{ session_id, created, memory:{ enabled, available, message } }</code>.
+    Building the agent here surfaces construction failures early and warms memory.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/agent/query</span>
+  <p class="desc">Run one conversational turn and stream the agent loop back as
+    <b>Server-Sent Events</b> (<code>text/event-stream</code>). Body:
+    <code>{ "session_id": str, "message": str, "memory_enabled"?: bool }</code>.
+    Each SSE frame is <code>data: {json}</code> with a <code>type</code> of
+    <code>status</code>, <code>thinking</code>, <code>step</code>, tool usage,
+    <code>permission_request</code> (a gated tool is waiting), <code>error</code>,
+    or the terminal <code>run_complete</code> (carrying <code>answer</code>).
+    Because this runs the real agent loop, every agent tool is reachable via
+    natural language. One turn at a time per session — an overlapping call
+    returns <b>HTTP 409</b>.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/agent/confirm-tool</span>
+  <p class="desc">Approve or deny a tool the agent is blocking on (send / forward /
+    delete / quarantine / calendar-create). Body:
+    <code>{ "session_id": str, "approved": bool }</code>. The run resumes when this
+    returns. 404 when no run is awaiting confirmation.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/agent/cancel</span>
+  <p class="desc">Cooperatively cancel the session's in-flight run. Body:
+    <code>{ "session_id": str }</code>.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">DELETE</span>
+  <span class="path">/v1/email/agent/session/{session_id}</span>
+  <p class="desc">Evict the session and tear down its agent. 404 if unknown.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">GET</span>
+  <span class="path">/v1/email/agent/session/{session_id}/history</span>
+  <p class="desc">Return the conversation so far:
+    <code>{ session_id, turns:[{ user, assistant }] }</code> (oldest first).</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/agent/memory</span>
+  <p class="desc">Enable/disable the session agent's memory at runtime (#1666).
+    Body: <code>{ "session_id": str, "enabled": bool }</code>. Returns
+    <code>{ enabled, available, message }</code>. Enabling memory that was never
+    initialized this session (started with <code>GAIA_MEMORY_DISABLED</code> or
+    Lemonade unreachable) returns <b>HTTP 409</b> with an actionable message —
+    never a silent no-op.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">GET</span>
+  <span class="path">/v1/email/agent/memory/{session_id}</span>
+  <p class="desc">Report the session agent's memory state without changing it:
+    <code>{ enabled, available, message }</code>.</p>
+</div>
+"""
+
     body = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -637,6 +811,30 @@ def render_endpoint_spec_html() -> str:
   in sync with the contract automatically.
 </p>
 
+<h2>Authentication</h2>
+<p class="subtitle">
+  The sidecar binds <code>127.0.0.1</code> and can send mail as the user, so it
+  authenticates its <strong>caller</strong> (#1706). This is separate from the
+  draft&rarr;send <code>confirmation_token</code>, which binds a send to one exact
+  message but does not identify who is calling.
+</p>
+<ul class="desc">
+  <li><strong>Per-session bearer token.</strong> The parent process that spawns
+    the sidecar (the <code>@amd-gaia/agent-email</code> lifecycle or the GAIA UI
+    sidecar manager) generates a cryptographically-random token and hands it to
+    the sidecar over the private <code>GAIA_EMAIL_SIDECAR_TOKEN</code> env
+    channel. Every <code>/v1/email/*</code> request must carry
+    <code>Authorization: Bearer &lt;token&gt;</code> or it is rejected with
+    <strong>HTTP 401</strong>. Liveness/version probes
+    (<code>/health</code>, <code>/version</code>) and these HTML pages are exempt.</li>
+  <li><strong>Host allowlist.</strong> A non-loopback <code>Host</code> header is
+    rejected with <strong>HTTP 400</strong>, closing DNS-rebinding.</li>
+  <li><strong>Origin rejection.</strong> A request carrying a non-loopback browser
+    <code>Origin</code> is rejected with <strong>HTTP 403</strong>, closing
+    drive-by web-page access. Non-browser clients send no Origin and are
+    unaffected.</li>
+</ul>
+
 <h2>Endpoints</h2>
 
 {triage_block}
@@ -645,11 +843,17 @@ def render_endpoint_spec_html() -> str:
 
 {prescan_block}
 
+{briefing_block}
+
 {search_block}
 
 {draft_block}
 
 {send_block}
+
+{init_block}
+
+{provision_block}
 
 <h2>Mailbox actions — archive &amp; quarantine (schema 2.1)</h2>
 <p class="subtitle">
@@ -684,6 +888,18 @@ def render_endpoint_spec_html() -> str:
 {calendar_create_block}
 
 {calendar_respond_block}
+
+<h2>Stateful agent surface</h2>
+<p class="subtitle">
+  A session-scoped, conversational surface (<code>/v1/email/agent/*</code>) that
+  hosts the full <code>EmailTriageAgent</code> — memory, personalization, and
+  every agent tool — behind an HTTP query interface. Distinct from the stateless
+  triage contract above: this runs the real agent loop and streams it back as
+  Server-Sent Events. This is the surface the Agent UI uses to drive the packaged
+  agent over the network instead of importing it in-process.
+</p>
+
+{agent_block}
 
 <h2>Convenience pages</h2>
 

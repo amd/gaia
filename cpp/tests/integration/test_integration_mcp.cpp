@@ -11,7 +11,7 @@
 //
 // Env vars:
 //   GAIA_CPP_TEST_MODEL  — model ID (default: Qwen3-4B-Instruct-2507-GGUF)
-//   GAIA_CPP_BASE_URL    — LLM endpoint (default: http://localhost:8000/api/v1)
+//   GAIA_CPP_BASE_URL    — LLM endpoint (default: http://localhost:13305/api/v1)
 
 #include <gtest/gtest.h>
 #include <gaia/agent.h>
@@ -50,12 +50,12 @@ static std::string testBaseUrl() {
     char* env = nullptr;
     size_t len = 0;
     _dupenv_s(&env, &len, "GAIA_CPP_BASE_URL");
-    std::string result = env ? std::string(env) : "http://localhost:8000/api/v1";
+    std::string result = env ? std::string(env) : "http://localhost:13305/api/v1";
     free(env);
     return result;
 #else
     const char* env = std::getenv("GAIA_CPP_BASE_URL");
-    return env ? std::string(env) : "http://localhost:8000/api/v1";
+    return env ? std::string(env) : "http://localhost:13305/api/v1";
 #endif
 }
 
@@ -128,7 +128,7 @@ TEST(IntegrationMCP, ConnectsToWindowsMcp) {
     McpTestAgent agent;
     bool connected = agent.connectMcpServer("windows", {
         {"command", "uvx"},
-        {"args", {"windows-mcp"}}
+        {"args", {"windows-mcp@0.8.2", "serve"}}
     });
     ASSERT_TRUE(connected) << "Failed to connect to Windows MCP server (uvx windows-mcp)";
 }
@@ -137,7 +137,7 @@ TEST(IntegrationMCP, DiscoversShellTool) {
     McpTestAgent agent;
     bool connected = agent.connectMcpServer("windows", {
         {"command", "uvx"},
-        {"args", {"windows-mcp"}}
+        {"args", {"windows-mcp@0.8.2", "serve"}}
     });
     ASSERT_TRUE(connected);
 
@@ -153,7 +153,7 @@ TEST(IntegrationMCP, DiscoversMultipleTools) {
     McpTestAgent agent;
     bool connected = agent.connectMcpServer("windows", {
         {"command", "uvx"},
-        {"args", {"windows-mcp"}}
+        {"args", {"windows-mcp@0.8.2", "serve"}}
     });
     ASSERT_TRUE(connected);
 
@@ -167,7 +167,7 @@ TEST(IntegrationMCP, DisconnectAndReconnect) {
     McpTestAgent agent;
     bool connected = agent.connectMcpServer("windows", {
         {"command", "uvx"},
-        {"args", {"windows-mcp"}}
+        {"args", {"windows-mcp@0.8.2", "serve"}}
     });
     ASSERT_TRUE(connected);
 
@@ -183,7 +183,7 @@ TEST(IntegrationMCP, DisconnectAndReconnect) {
     // Reconnect
     bool reconnected = agent.connectMcpServer("windows", {
         {"command", "uvx"},
-        {"args", {"windows-mcp"}}
+        {"args", {"windows-mcp@0.8.2", "serve"}}
     });
     ASSERT_TRUE(reconnected) << "Failed to reconnect to Windows MCP server";
     EXPECT_TRUE(agent.tools().hasTool(testTool))
@@ -194,7 +194,7 @@ TEST(IntegrationMCP, SystemPromptIncludesMcpTools) {
     McpTestAgent agent;
     bool connected = agent.connectMcpServer("windows", {
         {"command", "uvx"},
-        {"args", {"windows-mcp"}}
+        {"args", {"windows-mcp@0.8.2", "serve"}}
     });
     ASSERT_TRUE(connected);
 

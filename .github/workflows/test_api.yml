@@ -11,6 +11,8 @@ on:
   push:
     branches: ["main"]
     paths:
+      - 'src/gaia/version.py'
+      - '.github/actions/install-lemonade/**'
       - 'src/gaia/api/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/llm/**'
@@ -23,6 +25,8 @@ on:
     branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
+      - 'src/gaia/version.py'
+      - '.github/actions/install-lemonade/**'
       - 'src/gaia/api/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/llm/**'
@@ -45,12 +49,15 @@ permissions:
 jobs:
   test-api:
     name: API Tests
-    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
+    runs-on:
+      - self-hosted
+      - Windows
+      - ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
     timeout-minutes: 30
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Python environment
         uses: ./.github/actions/setup-venv
@@ -69,11 +76,15 @@ jobs:
           # tests exercise the real agent instead of the missing-wheel error.
           uv pip install -e hub/agents/python/routing --python .venv\Scripts\python.exe
           uv pip install -e hub/agents/python/code --python .venv\Scripts\python.exe
+          # The email REST router only mounts when gaia-agent-email is
+          # importable; without it every /v1/email test in tests/test_api.py
+          # 404s (red on main since the email agent moved to a hub wheel).
+          uv pip install -e hub/agents/python/email --python .venv\Scripts\python.exe
 
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
 
-      - name: Start Lemonade Server and Run Tests
+      - name: Start Lemonade + API server and run API tests
         shell: powershell
         run: |
           # Set console to UTF-8 for Unicode support
@@ -85,89 +96,26 @@ jobs:
           chcp 65001 | Out-Null
 
           try {
-              Write-Host "Starting Lemonade server..."
-              $serverJob = Start-Job -ScriptBlock {
-                  # Workaround for Issue #612: Disable Vulkan cooperative matrix optimization
-                  $env:GGML_VK_DISABLE_COOPMAT = "1"
-                  # v10.x ``lemonade-server serve`` (deprecation shim) and
-                  # ``LemonadeServer.exe serve`` no longer accept
-                  # ``--ctx-size`` and abort with "error: failed to start
-                  # lemonade-server" if it's passed. Drop the flag here; the
-                  # API tests don't pin a specific window, and any future
-                  # need for a larger ctx can be set per-model via the
-                  # ``/api/v1/load`` body.
-                  & lemonade-server serve --host localhost --port 13305 --no-tray 2>&1
-              }
-              Write-Host "Started Lemonade server job with ID: $($serverJob.Id)"
-              $env:LEMONADE_JOB_ID = $serverJob.Id
+              # Start Lemonade via the shared launcher (server + tests run in ONE
+              # step so the detached server survives for the test run). It launches
+              # LemonadeServer.exe --port directly (the `lemonade-server serve`
+              # shim was removed in Lemonade v10.5), captures stdout/stderr to
+              # logs, waits for health (dumping the logs on failure), and sets
+              # LEMONADE_PROCESS_ID for cleanup.
+              .\installer\scripts\start-lemonade.ps1 -Port 13305 -NoModel
+              if ($LASTEXITCODE -ne 0) { throw "Lemonade server failed to start" }
 
-              # Wait for server to be ready
-              Write-Host "Waiting for Lemonade server to start..."
-              $maxWaitTime = 60
-              $waitTime = 0
-              $serverReady = $false
-
-              while ($waitTime -lt $maxWaitTime -and -not $serverReady) {
-                  Start-Sleep -Seconds 2
-                  $waitTime += 2
-
-                  try {
-                      $response = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/health" -Method GET -TimeoutSec 5
-                      Write-Host "[OK] Lemonade server is ready"
-                      Write-Host "Health response: $($response | ConvertTo-Json -Compress)"
-                      $serverReady = $true
-                  } catch {
-                      Write-Host "Waiting... ($waitTime/$maxWaitTime seconds)"
-                  }
-              }
-
-              if (-not $serverReady) {
-                  Write-Host "[ERROR] Server health check failed after $maxWaitTime seconds"
-                  throw "Server failed to start"
-              }
-
-              # Pull required model for API tests
-              Write-Host "`n=== Pulling Required Models ==="
-              Write-Host "Pulling Qwen3-0.6B-GGUF..."
-              try {
-                  $body = @{ model_name = "Qwen3-0.6B-GGUF" } | ConvertTo-Json
-                  $response = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/pull" `
-                      -Method POST -ContentType "application/json" -Body $body -TimeoutSec 600
-                  Write-Host "   [OK] Qwen3-0.6B-GGUF pull initiated"
-              } catch {
-                  Write-Host "   [WARN] Pull may have failed: $($_.Exception.Message)"
-              }
-
-              # Wait for model to be available
-              Write-Host "Waiting 5 seconds for model files to sync..."
-              Start-Sleep -Seconds 5
-
-              # Load the model into Lemonade (required for inference)
-              Write-Host "`n=== Loading LLM Model ==="
-              try {
-                  $loadRequest = @{ model_name = "Qwen3-0.6B-GGUF" } | ConvertTo-Json
-                  Write-Host "Loading model: Qwen3-0.6B-GGUF"
-                  $loadResponse = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/load" `
-                      -Method POST -Body $loadRequest -ContentType "application/json" -TimeoutSec 120
-                  Write-Host "[OK] Model loaded successfully: $($loadResponse | ConvertTo-Json -Compress)"
-              } catch {
-                  Write-Host "[ERROR] Model load failed: $($_.Exception.Message)"
-                  if ($_.ErrorDetails) {
-                      Write-Host "Error details: $($_.ErrorDetails.Message)"
-                  }
-              }
-
-              # Wait for llamacpp backend initialization
-              Write-Host "Waiting 10 seconds for llamacpp backend initialization..."
-              Start-Sleep -Seconds 10
-
-              # Verify models
-              try {
-                  $models = Invoke-RestMethod -Uri "http://localhost:13305/api/v1/models" -Method GET
-                  Write-Host "`n[OK] Available models:"
-                  $models.data | ForEach-Object { Write-Host "   - $($_.id)" }
-              } catch {
-                  Write-Host "[WARN] Could not list models: $($_.Exception.Message)"
+              # Pull + load + verify the LLM via GAIA's LemonadeClient so CI
+              # validates our interface to Lemonade (incl. the model-load retry),
+              # not raw REST.
+              Write-Host "`n=== Pull + load + verify LLM via LemonadeClient ==="
+              uv run python tests/ci_lemonade_check.py --model Qwen3-0.6B-GGUF --chat
+              if ($LASTEXITCODE -ne 0) {
+                  Write-Host "=== Server stdout (last 100 lines) ==="
+                  Get-Content lemonade-server-stdout.log -Tail 100 -ErrorAction SilentlyContinue
+                  Write-Host "=== Server stderr (last 100 lines) ==="
+                  Get-Content lemonade-server-stderr.log -Tail 100 -ErrorAction SilentlyContinue
+                  throw "LLM setup/verify via LemonadeClient failed"
               }
 
               # Start API server using gaia CLI (runs on default port 8080)
@@ -202,6 +150,10 @@ jobs:
 
               if (-not $apiReady) {
                   Write-Host "[ERROR] API server failed to start after $maxWaitTime seconds"
+                  if ($env:API_JOB_ID) {
+                      Write-Host "=== API server job output ==="
+                      Receive-Job -Id $env:API_JOB_ID -ErrorAction SilentlyContinue
+                  }
                   throw "API server failed to start"
               }
 
@@ -209,27 +161,18 @@ jobs:
               Write-Host "`n=== Running API Integration Tests ==="
               $env:CI = "true"
               uv run pytest tests/test_api.py -v --tb=short --capture=no
-              $testExitCode = $LASTEXITCODE
-
-              Write-Host "`nTests completed with exit code: $testExitCode"
-
-              if ($testExitCode -ne 0) {
-                  throw "Tests failed with exit code $testExitCode"
-              }
+              if ($LASTEXITCODE -ne 0) { throw "Tests failed with exit code $LASTEXITCODE" }
           } finally {
-              # Always cleanup servers
+              # Always cleanup both servers (same-session vars).
               Write-Host "`n=== Stopping Servers ==="
               if ($env:API_JOB_ID) {
-                  Write-Host "Stopping API server..."
                   Stop-Job -Id $env:API_JOB_ID -ErrorAction SilentlyContinue
                   Remove-Job -Id $env:API_JOB_ID -ErrorAction SilentlyContinue
                   Write-Host "[OK] API server stopped"
               }
-              if ($env:LEMONADE_JOB_ID) {
-                  Write-Host "Stopping Lemonade server..."
-                  Stop-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
-                  Remove-Job -Id $env:LEMONADE_JOB_ID -ErrorAction SilentlyContinue
-                  Write-Host "[OK] Lemonade server stopped"
+              if ($env:LEMONADE_PROCESS_ID) {
+                  Stop-Process -Id $env:LEMONADE_PROCESS_ID -Force -ErrorAction SilentlyContinue
+                  Write-Host "[OK] Lemonade server stopped (PID $env:LEMONADE_PROCESS_ID)"
               }
           }
 

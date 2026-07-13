@@ -27,10 +27,17 @@
  *     confirm-token handshake (#1779)
  *   - calendar view/create/respond (#1780)
  *   - inbox pre-scan (POST /v1/email/prescan, #1778)
+ * Schema 2.2 (additive over 2.1, #1542): attachment handling — AttachmentMeta
+ * on EmailMessage / EmailTriageResult / DraftReply / EmailSendResponse, and
+ * OutgoingAttachment accepted by draft/send.
+ * Schema 2.3 (BREAKING triage-shape change): EmailTriageResult.draft is now a
+ * DraftScaffold (recipient + subject only) instead of a DraftReply — triage
+ * never composed a body, so the always-empty draft.body is dropped. DraftReply
+ * (with body) is unchanged and remains the draft()/send() shape.
  */
 
 /** Frozen contract version echoed by the server's `/version` endpoint. */
-export const SCHEMA_VERSION = "2.1" as const;
+export const SCHEMA_VERSION = "2.3" as const;
 
 /**
  * The five-bucket triage taxonomy (schema 2.0 — contract.py: EmailCategory).
@@ -49,6 +56,32 @@ export interface EmailAddress {
   name?: string | null;
   /** Bare email address, e.g. "a@b.com". Required. */
   email: string;
+}
+
+/** Attachment metadata — no content (contract.py: AttachmentMeta, schema 2.2, #1542). */
+export interface AttachmentMeta {
+  /** Attachment filename, e.g. "report.pdf". */
+  filename: string;
+  /** MIME type as reported by the provider. */
+  mime_type: string;
+  /** Attachment size in bytes (decoded). */
+  size_bytes: number;
+  /** Provider handle for fetching the content (Gmail body.attachmentId), or null. */
+  attachment_id?: string | null;
+}
+
+/**
+ * One attachment to include on a draft/send (contract.py: OutgoingAttachment,
+ * schema 2.2, #1542). Content travels as standard base64, ≤ 25 MB decoded;
+ * invalid base64 / MIME / oversize is a 422, never a silent drop.
+ */
+export interface OutgoingAttachment {
+  /** Filename shown to the recipient. */
+  filename: string;
+  /** MIME type of the content, e.g. "application/pdf". */
+  mime_type: string;
+  /** File content, standard base64 (RFC 4648). */
+  content_base64: string;
 }
 
 /** One email message (contract.py: EmailMessage). */
@@ -71,6 +104,8 @@ export interface EmailMessage {
   subject?: string;
   /** Plain-text message body to analyze. */
   body: string;
+  /** Attachment metadata on this message (schema 2.2; metadata only). */
+  attachments?: AttachmentMeta[];
 }
 
 /** A single email to triage (contract.py: SingleEmailInput). */
@@ -134,6 +169,19 @@ export interface ActionItem {
   url?: string | null;
 }
 
+/**
+ * A reply scaffold the triage path proposes (contract.py: DraftScaffold —
+ * schema 2.3). Recipient + subject only, no body: triage never composes reply
+ * prose. To send a reply, compose the body yourself and call `draft()`, which
+ * returns a full `DraftReply` and a single-use confirmation token.
+ */
+export interface DraftScaffold {
+  /** Proposed recipients (non-empty). */
+  to: EmailAddress[];
+  /** Proposed subject line (Re:-prefixed). */
+  subject: string;
+}
+
 /** A drafted reply the agent proposes (contract.py: DraftReply). */
 export interface DraftReply {
   /** Proposed recipients (non-empty). */
@@ -142,6 +190,8 @@ export interface DraftReply {
   subject: string;
   /** Proposed reply body. */
   body: string;
+  /** Metadata of the attachments the draft proposes to send (schema 2.2). */
+  attachments?: AttachmentMeta[];
 }
 
 /**
@@ -171,8 +221,12 @@ export interface EmailTriageResult {
   summary: string;
   /** Extracted actions (may be empty). */
   action_items: ActionItem[];
-  /** Proposed reply, or null when none is suggested. */
-  draft?: DraftReply | null;
+  /**
+   * Proposed reply SCAFFOLD (recipient + subject only, no body), or null when
+   * none is suggested (schema 2.3). Triage never composes reply prose — compose
+   * the body and call `draft()` to get a full DraftReply + confirmation token.
+   */
+  draft?: DraftScaffold | null;
   /**
    * Suggested next action (schema 2.0): "reply" for URGENT/NEEDS_RESPONSE,
    * "archive" for PROMOTIONAL, "none" for FYI/PERSONAL. Default "none".
@@ -182,6 +236,8 @@ export interface EmailTriageResult {
   message_id?: string | null;
   /** LLM usage metrics; null on the heuristic-only path. */
   usage?: TriageUsage | null;
+  /** Attachment metadata of the analyzed message/thread, echoed (schema 2.2). */
+  attachments?: AttachmentMeta[];
 }
 
 /** Top-level triage response envelope (contract.py: EmailTriageResponse). */
@@ -326,6 +382,21 @@ export interface EmailPreScanResponse {
   result: EmailPreScanResult;
 }
 
+/**
+ * Response of `GET /v1/email/briefing` (api_routes.py: EmailBriefingResponse,
+ * #1608). The latest scheduled daily inbox briefing — the same `email_pre_scan`
+ * envelope as `prescan`, produced by the sidecar's daily timer without a prompt,
+ * plus a `generated_at` stamp. `404` until the first scheduled run has happened.
+ */
+export interface EmailBriefingResponse {
+  /** Echoes the contract version. */
+  schema_version: string;
+  /** UTC ISO-8601 timestamp of the scheduled run that produced this briefing. */
+  generated_at: string;
+  /** The pre-scan envelope the scheduled run produced. */
+  briefing: EmailPreScanResult;
+}
+
 // ---------------------------------------------------------------------------
 // Batch triage (#1887) — ADDITIVE beside the single-email triage above.
 // POST /v1/email/triage/batch: an items array in, a results array out. The
@@ -388,6 +459,8 @@ export interface EmailDraftRequest {
   subject: string;
   /** Proposed reply body. */
   body: string;
+  /** Attachments to send (schema 2.2); the token binds their content digests. */
+  attachments?: OutgoingAttachment[];
   /** Optional provider binding ("google" or "microsoft"). */
   provider?: string | null;
 }
@@ -408,6 +481,8 @@ export interface EmailSendRequest {
   subject: string;
   /** Reply body. */
   body: string;
+  /** Attachments to send (schema 2.2) — must match the confirmed draft's exactly. */
+  attachments?: OutgoingAttachment[];
   /** Confirmation token from POST /v1/email/draft. Required for a real send. */
   confirmation_token?: string | null;
   /** Optional provider ("google" or "microsoft") fallback. */
@@ -422,6 +497,8 @@ export interface EmailSendResponse {
   to: EmailAddress[];
   /** Subject of the sent message. */
   subject: string;
+  /** Metadata of the attachments that went out (schema 2.2). */
+  attachments?: AttachmentMeta[];
   /** Always true on success. */
   sent: boolean;
 }
@@ -583,6 +660,53 @@ export interface VersionResponse {
   apiVersion: string;
   /** Package build version. */
   agentVersion: string;
+}
+
+// ---------------------------------------------------------------------------
+// Readiness preflight (api_routes.py — GET /v1/email/init, #1795). Unlike the
+// liveness-only /health, this probes the whole triage stack: Lemonade reachable
+// AND at a compatible version AND the triage model downloaded. Returns HTTP 200
+// when ready, 503 when not — with the same envelope either way, plus a `hint`.
+// ---------------------------------------------------------------------------
+
+/** Lemonade reachability + version compatibility (api_routes.py: InitLemonadeStatus). */
+export interface InitLemonadeStatus {
+  /** True when Lemonade answered the /health probe. */
+  reachable: boolean;
+  /** The /api/v1 base URL that was probed. */
+  base_url: string;
+  /** Lemonade's self-reported version, or null when it advertises none. */
+  version?: string | null;
+  /** Minimum Lemonade version the triage stack requires. */
+  min_version: string;
+  /** version >= min_version; null when the version could not be determined. */
+  compatible?: boolean | null;
+}
+
+/** Triage-model presence (api_routes.py: InitModelStatus). */
+export interface InitModelStatus {
+  /** Resolved Lemonade model id for triage. */
+  id: string;
+  /** True when the model is downloaded on the server. */
+  present: boolean;
+  /** Whether it actually loads — not probed in v1 (heavy), so null; `present` is the signal. */
+  loadable?: boolean | null;
+}
+
+/**
+ * Response of `GET /v1/email/init` (api_routes.py: InitResponse, #1795). The
+ * route returns HTTP 200 when `ready` and 503 when not (same shape); `hint`
+ * names the fix when not ready. Read-only — no model pull is triggered.
+ */
+export interface InitResponse {
+  /** True only when Lemonade is reachable/compatible AND the triage model is present. */
+  ready: boolean;
+  /** Lemonade Server reachability + version compatibility. */
+  lemonade: InitLemonadeStatus;
+  /** Triage-model status. */
+  model: InitModelStatus;
+  /** Actionable next step when not ready; null when ready. */
+  hint?: string | null;
 }
 
 // ---------------------------------------------------------------------------

@@ -41,7 +41,7 @@ const triageResponse: EmailTriageResponse = {
       { description: "Open the dashboard", type: "link", url: "https://example.com/dashboard" },
     ],
     suggested_action: "reply",
-    draft: { to: [{ email: "a@b.com" }], subject: "Re: x", body: "" },
+    draft: { to: [{ email: "a@b.com" }], subject: "Re: x" },
     message_id: "m1",
     usage: { prompt_tokens: 120, completion_tokens: 40, total_tokens: 160, tokens_per_second: 32.5 },
   },
@@ -82,7 +82,7 @@ describe("EmailClient", () => {
 
   it("sends a typed inbox-search request and parses the typed response", async () => {
     const searchResponse: EmailSearchResponse = {
-      schema_version: "2.1",
+      schema_version: "2.2",
       query: "is:unread",
       count: 1,
       messages: [
@@ -200,6 +200,72 @@ describe("EmailClient", () => {
     expect(v.agentVersion).toBe("0.2.0");
   });
 
+  it("init() parses the ready (200) readiness preflight", async () => {
+    const ready = {
+      ready: true,
+      lemonade: {
+        reachable: true,
+        base_url: "http://localhost:8000/api/v1",
+        version: "8.1.0",
+        min_version: "8.0.0",
+        compatible: true,
+      },
+      model: { id: "Gemma-4-E4B-it-GGUF", present: true, loadable: null },
+      hint: null,
+    };
+    const fetchImpl = vi.fn(async (url) => {
+      expect(String(url)).toBe("http://x/v1/email/init");
+      return jsonResponse(ready, 200);
+    }) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    const r = await client.init();
+    expect(r.ready).toBe(true);
+    expect(r.model.present).toBe(true);
+    expect(r.hint).toBeNull();
+  });
+
+  it("init() returns the not-ready body on 503 instead of throwing", async () => {
+    const notReady = {
+      ready: false,
+      lemonade: {
+        reachable: false,
+        base_url: "http://localhost:8000/api/v1",
+        version: null,
+        min_version: "8.0.0",
+        compatible: null,
+      },
+      model: { id: "Gemma-4-E4B-it-GGUF", present: false, loadable: null },
+      hint: "Lemonade Server not reachable — run `lemonade-server serve`.",
+    };
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse(notReady, 503),
+    ) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    const r = await client.init();
+    expect(r.ready).toBe(false);
+    expect(r.lemonade.reachable).toBe(false);
+    expect(r.hint).toMatch(/lemonade-server serve/);
+  });
+
+  it("init() still throws HttpError on a non-503 failure", async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response("upstream boom", { status: 500 }),
+    ) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    await expect(client.init()).rejects.toBeInstanceOf(HttpError);
+  });
+
+  it("init() throws HttpError (not SyntaxError) on a 503 with a non-JSON body", async () => {
+    // A proxy / load-balancer can return 503 with an HTML error page — the body
+    // isn't an InitResponse, so init() must surface the HttpError, not a bare
+    // JSON.parse SyntaxError.
+    const fetchImpl = vi.fn(async () =>
+      new Response("<html>Bad Gateway</html>", { status: 503 }),
+    ) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    await expect(client.init()).rejects.toBeInstanceOf(HttpError);
+  });
+
   it("draft + send round-trip types", async () => {
     const draftRes: EmailDraftResponse = {
       draft: { to: [{ email: "a@b.com" }], subject: "Re: x", body: "ok" },
@@ -238,7 +304,7 @@ describe("EmailClient", () => {
         expect(parsed.action).toBe("archive");
         expect(parsed.message_id).toBe("m1");
         return jsonResponse({
-          schema_version: "2.1",
+          schema_version: "2.2",
           confirmation_token: "atok",
           action: "archive",
           message_id: "m1",
@@ -247,7 +313,7 @@ describe("EmailClient", () => {
       if (path.endsWith("/v1/email/archive")) {
         expect(JSON.parse(String(init?.body)).confirmation_token).toBe("atok");
         return jsonResponse({
-          schema_version: "2.1",
+          schema_version: "2.2",
           message_id: "m1",
           action_id: "act-1",
           batch_id: "batch-1",
@@ -259,7 +325,7 @@ describe("EmailClient", () => {
       // unarchive
       expect(JSON.parse(String(init?.body)).batch_id).toBe("batch-1");
       return jsonResponse({
-        schema_version: "2.1",
+        schema_version: "2.2",
         batch_id: "batch-1",
         restored: 1,
         messages: [{ message_id: "m1", action_id: "act-1" }],
@@ -294,7 +360,7 @@ describe("EmailClient", () => {
       call += 1;
       if (String(url).endsWith("/v1/email/quarantine")) {
         return jsonResponse({
-          schema_version: "2.1",
+          schema_version: "2.2",
           message_id: "m2",
           action_id: "act-9",
           quarantine_label_id: "Label_3",
@@ -304,7 +370,7 @@ describe("EmailClient", () => {
         });
       }
       return jsonResponse({
-        schema_version: "2.1",
+        schema_version: "2.2",
         action_id: "act-9",
         message_id: "m2",
         restored: true,
@@ -333,7 +399,7 @@ describe("EmailClient", () => {
 
   it("lists calendar events with optional query params (GET)", async () => {
     const calResponse: CalendarEventsResponse = {
-      schema_version: "2.1",
+      schema_version: "2.2",
       events: [
         {
           id: "evt-1",
@@ -368,7 +434,7 @@ describe("EmailClient", () => {
     let seenUrl = "";
     const fetchImpl = vi.fn(async (url) => {
       seenUrl = String(url);
-      return jsonResponse({ schema_version: "2.1", events: [] });
+      return jsonResponse({ schema_version: "2.2", events: [] });
     }) as unknown as typeof fetch;
     const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
     await client.listCalendarEvents();
@@ -377,7 +443,7 @@ describe("EmailClient", () => {
 
   it("calendar preview → create round-trip (confirmation token)", async () => {
     const previewRes: CalendarEventPreviewResponse = {
-      schema_version: "2.1",
+      schema_version: "2.2",
       summary: "Project sync",
       start: { date_time: "2026-07-01T14:00:00Z" },
       end: { date_time: "2026-07-01T15:00:00Z" },
@@ -385,7 +451,7 @@ describe("EmailClient", () => {
       confirmation_token: "cal-tok-1",
     };
     const createRes: CalendarEventResponse = {
-      schema_version: "2.1",
+      schema_version: "2.2",
       event_id: "evt-created-1",
       summary: "Project sync",
       created: true,
@@ -436,7 +502,7 @@ describe("EmailClient", () => {
 
   it("responds to a calendar invite (RSVP)", async () => {
     const respondRes: CalendarRespondResponse = {
-      schema_version: "2.1",
+      schema_version: "2.2",
       event_id: "evt-1",
       status: "accepted",
       responded: true,
@@ -460,7 +526,7 @@ describe("EmailClient", () => {
 
   it("pre-scans the inbox and parses the card envelope", async () => {
     const preScanRes: EmailPreScanResponse = {
-      schema_version: "2.1",
+      schema_version: "2.2",
       result: {
         kind: "email_pre_scan",
         urgent: [
@@ -484,7 +550,7 @@ describe("EmailClient", () => {
     }) as unknown as typeof fetch;
     const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
     const res = await client.prescan({ max_messages: 10 });
-    expect(res.schema_version).toBe("2.1");
+    expect(res.schema_version).toBe("2.2");
     expect(res.result.kind).toBe("email_pre_scan");
     expect(res.result.urgent[0]?.message_id).toBe("u1");
     expect(res.result.informational_count).toBe(3);
@@ -496,7 +562,7 @@ describe("EmailClient", () => {
     const fetchImpl = vi.fn(async (_url, init) => {
       expect(JSON.parse(String(init?.body))).toEqual({});
       return jsonResponse({
-        schema_version: "2.1",
+        schema_version: "2.2",
         result: {
           kind: "email_pre_scan",
           urgent: [],
@@ -604,5 +670,38 @@ describe("EmailClient", () => {
     const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
     await client.health();
     expect(calledThis).toBe(globalThis);
+  });
+
+  it("sends the per-session bearer token on every request when given (#1706)", async () => {
+    const seen: (string | null)[] = [];
+    const fetchImpl = vi.fn(async (_url, init) => {
+      const headers = new Headers(init?.headers as HeadersInit);
+      seen.push(headers.get("authorization"));
+      return jsonResponse({ status: "ok", service: "gaia-agent-email" });
+    }) as unknown as typeof fetch;
+
+    const client = new EmailClient({
+      baseUrl: "http://127.0.0.1:8131",
+      fetchImpl,
+      authToken: "tok-abc",
+    });
+    await client.health(); // GET (no body)
+    await client.draft({
+      to: [{ email: "a@b.com" }],
+      subject: "Re: x",
+      body: "hi",
+    });
+
+    expect(seen).toEqual(["Bearer tok-abc", "Bearer tok-abc"]);
+  });
+
+  it("omits the Authorization header when no token is configured", async () => {
+    const fetchImpl = vi.fn(async (_url, init) => {
+      const headers = new Headers(init?.headers as HeadersInit);
+      expect(headers.has("authorization")).toBe(false);
+      return jsonResponse({ status: "ok", service: "gaia-agent-email" });
+    }) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    await client.health();
   });
 });

@@ -27,8 +27,16 @@
 .PARAMETER ClearCache
     Clear model cache before pulling (default: false)
 
+.PARAMETER NoModel
+    Start the server only (skip pull/load). Use when the caller registers/loads
+    its own models afterwards (e.g. a custom user-model via LemonadeClient).
+
 .EXAMPLE
     .\installer\scripts\start-lemonade.ps1 -ModelName "Qwen3-0.6B-GGUF"
+
+.EXAMPLE
+    # Start the server robustly, then let the caller register a custom embedder:
+    .\installer\scripts\start-lemonade.ps1 -Port 13305 -NoModel
 
 .EXAMPLE
     .\installer\scripts\start-lemonade.ps1 -ModelName "nomic-embed-text-v2-moe-GGUF" -AdditionalModels "Qwen3-0.6B-GGUF,Qwen3-VL-4B-Instruct-GGUF" -InitWaitTime 30 -ClearCache
@@ -51,7 +59,10 @@ param(
     [int]$InitWaitTime = 10,
 
     [Parameter(Mandatory=$false)]
-    [switch]$ClearCache
+    [switch]$ClearCache,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$NoModel
 )
 
 $ErrorActionPreference = "Stop"
@@ -62,20 +73,10 @@ try {
     Write-Host "=========================================="
     Write-Host ""
 
-    # Check port availability
-    Write-Host "=== Checking Port $Port ==="
-    $portInUse = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
-    if ($portInUse) {
-        # Get unique PIDs (may have multiple connections on same port)
-        $processIds = $portInUse.OwningProcess | Select-Object -Unique
-        foreach ($processId in $processIds) {
-            Write-Host "[WARN] Port $Port in use by PID: $processId - killing orphaned process"
-            Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
-        }
-        Start-Sleep -Seconds 2
-    } else {
-        Write-Host "[OK] Port $Port is available"
-    }
+    # Free the port and reap stray Lemonade/llama-server processes from prior
+    # jobs on this shared runner (otherwise the server dies with a winerror
+    # 10048 bind collision). Shared with the inline-start CI workflows.
+    & "$PSScriptRoot\cleanup-lemonade.ps1" -Port $Port
     Write-Host ""
 
     # Check installation. v10.x ships:
@@ -146,7 +147,10 @@ try {
     Write-Host "[OK] Started server PID: $($serverProcess.Id)"
     Write-Host "     Logs: lemonade-server-stdout.log, lemonade-server-stderr.log"
 
-    # Export process ID for cleanup (GitHub Actions)
+    # Export process ID for cleanup. Set it on the live process env too (not
+    # just GITHUB_ENV, which only reaches *later* steps) so a caller that starts
+    # the server and runs its tests in the SAME step can stop it in a finally.
+    $env:LEMONADE_PROCESS_ID = "$($serverProcess.Id)"
     if ($env:GITHUB_OUTPUT) {
         "lemonade-process-id=$($serverProcess.Id)" >> $env:GITHUB_OUTPUT
     }
@@ -174,9 +178,32 @@ try {
 
     if (-not $ready) {
         Write-Host "[ERROR] Server failed to start"
+        # Dump the server's own output so a startup failure is diagnosable
+        # (missing exe, bind collision, backend crash) instead of an opaque
+        # health-check timeout.
+        Write-Host "=== Server stdout (last 100 lines) ==="
+        if (Test-Path "lemonade-server-stdout.log") {
+            Get-Content "lemonade-server-stdout.log" -Tail 100
+        }
+        Write-Host "=== Server stderr (last 100 lines) ==="
+        if (Test-Path "lemonade-server-stderr.log") {
+            Get-Content "lemonade-server-stderr.log" -Tail 100
+        }
         throw "Server startup timeout"
     }
     Write-Host ""
+
+    # Start-only mode: the caller registers/loads its own models (e.g. a custom
+    # user-model via LemonadeClient), so skip the built-in pull/load path.
+    if ($NoModel) {
+        Write-Host "=========================================="
+        Write-Host "✅ LEMONADE SERVER READY (no model preloaded)"
+        Write-Host "=========================================="
+        Write-Host "Port: $Port"
+        Write-Host "Process ID: $($serverProcess.Id)"
+        Write-Host ""
+        exit 0
+    }
 
     # Pull primary model.
     #

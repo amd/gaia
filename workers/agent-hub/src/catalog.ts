@@ -14,6 +14,7 @@ import {
   readAgentManifest,
   readChangelog,
   readEvalScorecard,
+  readEvaluation,
   readPackageFiles,
   readReadme,
   readSkill,
@@ -108,7 +109,8 @@ export function upsertVersion(
 function parseScorecardScore(markdown: string | null): number | undefined {
   if (!markdown) return undefined;
   // Extract the YAML front matter block between the leading --- delimiters.
-  const match = /^---\n([\s\S]*?)\n---/.exec(markdown);
+  // Tolerate CRLF so a Windows-authored scorecard still yields a score.
+  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(markdown);
   if (!match) return undefined;
   try {
     const fm = parseYaml(match[1]) as Record<string, unknown> | null;
@@ -118,6 +120,19 @@ function parseScorecardScore(markdown: string | null): number | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Strip a leading YAML front-matter block (`---\n…\n---`) from markdown so the
+ * rendered scorecard tab shows the prose body, not the raw front matter. The
+ * machine-readable fields (aggregate, recipe) are parsed separately for
+ * `eval_score`; the tab only needs the human-facing body.
+ */
+function stripFrontMatter(markdown: string): string {
+  // Tolerate CRLF: a stray \r would otherwise leave the raw front matter in the
+  // rendered body AND cost the eval_score, so both regexes accept \r?\n.
+  const match = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(markdown);
+  return (match ? markdown.slice(match[0].length) : markdown).replace(/^[\r\n]+/, "");
 }
 
 /**
@@ -133,6 +148,7 @@ export function toIndexEntry(
   packageFiles: { files: { name: string; size_bytes: number }[] } | null,
   spec = "",
   skill = "",
+  evaluation = "",
   evalScorecard: string | null = null,
   baseUrl = "https://hub.amd-gaia.ai"
 ): IndexEntry {
@@ -178,6 +194,9 @@ export function toIndexEntry(
     changelog,
     spec,
     skill,
+    evaluation,
+    // Render-ready scorecard body (front matter stripped); "" when none published.
+    scorecard: evalScorecard !== null ? stripFrontMatter(evalScorecard) : "",
     // undefined serializes to "key absent" — only present when the manifest set it.
     npm_package: agent.npm_package,
     playground_url: agent.playground_url,
@@ -208,8 +227,11 @@ export async function rebuildIndex(
     const packageFiles = await readPackageFiles(bucket, id, agent.latest_version);
     const spec = await readSpec(bucket, id, agent.latest_version);
     const skill = await readSkill(bucket, id, agent.latest_version);
+    const evaluation = await readEvaluation(bucket, id, agent.latest_version);
     const evalScorecard = await readEvalScorecard(bucket, id, agent.latest_version);
-    entries.push(toIndexEntry(agent, readme, changelog, packageFiles, spec, skill, evalScorecard, baseUrl));
+    entries.push(
+      toIndexEntry(agent, readme, changelog, packageFiles, spec, skill, evaluation, evalScorecard, baseUrl)
+    );
   }
   entries.sort((a, b) => a.id.localeCompare(b.id));
 

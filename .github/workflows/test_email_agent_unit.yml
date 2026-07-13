@@ -2,9 +2,12 @@
 # SPDX-License-Identifier: MIT
 
 # Fast PR gate for the email-triage agent (#1112).
-# Runs the email-agent unit suite plus the connectors and eval unit tests it
-# depends on, fully mocked — no Lemonade server, no network, no live mailbox.
-# Target: well under ~2 minutes (the local suite runs in ~10s).
+# Runs the email-agent unit suite plus the connectors + eval unit tests it
+# depends on, AND the REST-sidecar contract + OpenAPI-conformance tests (spec
+# validation) — all fully mocked, no Lemonade server, no network, no live
+# mailbox. Also called by release_agent_email.yml as a hard release gate, so a
+# spec/contract regression blocks a release, not just a PR.
+# Target: a couple of minutes (the mocked suite runs in seconds).
 
 name: Email Agent Unit Tests
 
@@ -23,6 +26,7 @@ on:
       - 'tests/unit/connectors/**'
       - 'tests/unit/eval/**'
       - 'tests/fixtures/email/**'
+      - 'tests/test_email_openapi_conformance.py'
       - 'setup.py'
       - 'pyproject.toml'
       - '.github/workflows/test_email_agent_unit.yml'
@@ -40,6 +44,7 @@ on:
       - 'tests/unit/connectors/**'
       - 'tests/unit/eval/**'
       - 'tests/fixtures/email/**'
+      - 'tests/test_email_openapi_conformance.py'
       - 'setup.py'
       - 'pyproject.toml'
       - '.github/workflows/test_email_agent_unit.yml'
@@ -65,7 +70,7 @@ jobs:
       matrix:
         python-version: ['3.10', '3.12']
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -88,29 +93,40 @@ jobs:
           # respx, keyring, httpx). [api] adds fastapi/uvicorn, which the
           # tests/unit/connectors/ router tests import via the UI connectors
           # router. The in-memory keyring backend in tests/conftest.py avoids
-          # the SecretService daemon prerequisite on Linux runners.
-          uv pip install --system -e ".[dev,api]"
+          # the SecretService daemon prerequisite on Linux runners. The email
+          # hub package is installed so the REST-contract + OpenAPI-conformance
+          # tests can import gaia_agent_email (they build the app in-process and
+          # mock Lemonade — no server needed).
+          uv pip install --system -e ".[dev,api]" -e hub/agents/python/email
 
       - name: Run email-agent unit tests
-        env:
-          # Skip memory init — Lemonade isn't available in this CI job; the
-          # email-agent unit tests don't exercise memory functionality.
-          GAIA_MEMORY_DISABLED: "1"
+        # NOTE: do NOT set GAIA_MEMORY_DISABLED here. The hub/agents/python/email
+        # memory / inbox-profiling / behavioral-learning / preferences suites DO
+        # exercise memory: they mock the Lemonade embedder per-test (so no server
+        # is needed) and toggle GAIA_MEMORY_DISABLED themselves where a test wants
+        # the disabled path. A process-wide GAIA_MEMORY_DISABLED=1 would force the
+        # memory store to None for every agent, skip memory-tool registration, and
+        # fail those tests. Agents that don't mock the embedder just get a
+        # store=None fast (connection refused), so nothing here needs the flag.
         run: |
           echo "================================================================"
           echo "                  EMAIL AGENT UNIT TESTS"
           echo "================================================================"
           echo "Scope (fast, fully mocked — no Lemonade, no live mailbox):"
-          echo "  - tests/unit/agents/email/   contract schema"
-          echo "  - tests/unit/email/          gmail client, triage heuristics, corpus integrity"
-          echo "  - tests/unit/connectors/     OAuth/MCP connector plumbing (email uses it)"
-          echo "  - tests/unit/eval/           benchmark / quality + perf gate machinery"
+          echo "  - tests/unit/agents/email/         contract schema"
+          echo "  - tests/unit/email/                gmail client, triage heuristics, corpus integrity"
+          echo "  - tests/unit/connectors/           OAuth/MCP connector plumbing (email uses it)"
+          echo "  - tests/unit/eval/                 benchmark / quality + perf gate machinery"
+          echo "  - hub/agents/python/email/tests/   REST sidecar contract"
+          echo "  - tests/test_email_openapi_conformance.py  OpenAPI spec conformance"
           echo ""
           python -m pytest \
             tests/unit/agents/email/ \
             tests/unit/email/ \
             tests/unit/connectors/ \
             tests/unit/eval/ \
+            hub/agents/python/email/tests/ \
+            tests/test_email_openapi_conformance.py \
             -v --tb=short
 
       - name: Test summary

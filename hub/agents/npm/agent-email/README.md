@@ -1,8 +1,8 @@
 # @amd-gaia/agent-email
 
-[![npm version](https://img.shields.io/npm/v/@amd-gaia/agent-email?label=version)](https://www.npmjs.com/package/@amd-gaia/agent-email) · contract `SCHEMA_VERSION` **2.1** · last updated **2026-06-26**
+[![npm version](https://img.shields.io/npm/v/@amd-gaia/agent-email?label=version)](https://www.npmjs.com/package/@amd-gaia/agent-email) · contract `SCHEMA_VERSION` **2.3** · last updated **2026-07-10**
 
-**Eval scorecard (v0.3.0): aggregate 84.67 / 100** — within-one-bucket **acceptance** accuracy (3-run mean, 95% CI [83.4, 86.0]) over 100 of 220 labeled emails ([`./SCORECARD.md`](./SCORECARD.md)). Triage priority is ordinal, so the bar (#1437) credits exact-or-adjacent buckets — what users feel — not exact 4-way match (reported as a secondary, 0.46). The linked scorecard carries the full recipe, metrics + reported secondaries, run-to-run variance/CI, a per-category breakdown, the run environment, a worked recomputation, and reproduction steps.
+**Eval scorecard (v0.3.0): aggregate 83.4 / 100** — within-one-bucket **acceptance** accuracy (3-run mean, 95% CI [82.1, 84.7]) over the full 249-email labeled corpus ([`SCORECARD.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SCORECARD.md)). Triage priority is ordinal, so the bar (#1437) credits exact-or-adjacent buckets — what users feel — not exact 4-way match (reported as a secondary, 0.77). The linked scorecard carries the full recipe, metrics + reported secondaries, run-to-run variance/CI, a per-category breakdown, the run environment, and a worked recomputation; [`EVALUATION.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/EVALUATION.md) is the companion guide — what's measured, the dataset, a worked example, and step-by-step reproduction.
 
 Embed the **GAIA email agent** in your JS/TS app. It triages, organizes, replies
 to, and schedules from Gmail and Outlook — with every email body analyzed
@@ -21,8 +21,19 @@ the agent runs as a frozen, self-contained REST sidecar your app launches and ow
 
 - **Triage** — classify each message (urgent / needs-response / FYI / promotional /
   personal), summarize a thread, and extract action items and phishing signals.
+  Extracted action items also persist as a local task list linked back to the
+  source message, de-duplicated on re-triage.
 - **Organize** — archive, label, move, mark read/unread — one message or in batches.
-- **Reply & send** — draft context-aware replies and forwards, then send.
+- **Reply & send** — draft context-aware replies and forwards, then send —
+  attachments included (schema 2.2): triage exposes attachment metadata, and
+  draft/send accept base64 file payloads. In the agent tool loop it can also
+  draft in the user's **own voice** (a local style profile learned from Sent
+  mail, #1607), schedule a confirmed send for a future time, and snooze messages
+  out of the inbox — agent-loop capabilities today, not yet on this package's
+  REST surface.
+- **Track** — flag sent mail still awaiting a reply past a configurable window
+  (follow-up tracking, #1606; detection only — it never auto-sends a nudge) and
+  run a scheduled daily inbox briefing.
 - **Calendar** — detect meeting requests, flag conflicts, RSVP, and create events
   from an email.
 - **Safe by construction** — email bodies are treated as untrusted **data, never
@@ -140,10 +151,43 @@ app-proxied path to the sidecar:
 import { EmailClient } from "@amd-gaia/agent-email/client";
 
 // Only from a same-origin page, or behind a proxy you control — not a
-// cross-origin fetch straight at 127.0.0.1:8131.
-const client = new EmailClient({ baseUrl: "http://127.0.0.1:8131" });
+// cross-origin fetch straight at 127.0.0.1:8131. Pass the sidecar's session
+// token (see Authentication) — get it from your main process via IPC; the
+// renderer never spawns the sidecar itself.
+const client = new EmailClient({
+  baseUrl: "http://127.0.0.1:8131",
+  authToken, // from sidecar.authToken in the main process
+});
 const res = await client.triage({ payload: { /* … */ } });
 ```
+
+## Authentication
+
+The sidecar binds `127.0.0.1` and can **send mail as the user**, so it
+authenticates its **caller** (#1706). This is separate from the draft→send
+`confirmation_token`, which binds a send to one exact message but does not
+identify who is calling.
+
+- **Per-session bearer token.** `spawnSidecar` / `startSidecar` mint a
+  cryptographically-random token, hand it to the sidecar over the private
+  `GAIA_EMAIL_SIDECAR_TOKEN` env channel, and bind it to `sidecar.client`. Every
+  `/v1/email/*` request must carry `Authorization: Bearer <token>` or the sidecar
+  returns **HTTP 401**. Using `sidecar.client` you get this for free; a client you
+  construct yourself must pass `authToken` (read it from `sidecar.authToken`).
+- **Host / Origin allowlist.** A non-loopback `Host` header → **400**
+  (DNS-rebinding); a non-loopback browser `Origin` → **403** (drive-by web page).
+  No permissive CORS is ever sent.
+
+```ts
+const sidecar = await startSidecar({ binaryPath, port: 8131 });
+sidecar.authToken; // the per-session token, if you need to forward it (e.g. IPC)
+await sidecar.client.draft({ to: [{ email: "a@b.com" }], subject: "Re: x", body: "hi" });
+// A raw client without the token is refused:
+new EmailClient({ baseUrl: sidecar.baseUrl }).send(/* … */); // → HttpError 401
+```
+
+Liveness/version probes (`/health`, `/version`) and the HTML pages
+(`/v1/email/spec`, `/v1/email/playground`) are exempt from the token.
 
 ## Prerequisites
 
@@ -158,6 +202,15 @@ On a fresh machine the binary boots fine, but the first `triage` returns **HTTP
 502** until Lemonade and the model are in place. `health()` is **liveness-only** — a
 green `/health` means the REST surface is up, not that triage will work.
 
+To check *actual* readiness before your first `triage`, call **`client.init()`**
+(`GET /v1/email/init`, #1795) — it probes Lemonade reachability + version + the
+triage model and returns the `InitResponse` on both the ready (`200`) and
+not-ready (`503`) paths, so branch on `.ready` / read `.hint` instead of catching an
+error. As a client method it attaches the per-session bearer token for you (a raw
+`fetch` would have to add `Authorization: Bearer ${sidecar.authToken}` itself).
+`POST /v1/email/init` can then ask the running Lemonade to pull the model, streaming
+progress. See [`SPEC.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md) → *Readiness vs liveness*.
+
 ## Interface
 
 You drive everything through the typed `EmailClient` — `sidecar.client` after
@@ -167,12 +220,12 @@ example above). Every non-2xx response throws `HttpError` (with `status`, `url`,
 
 | Call | Needs | Does |
 |------|-------|------|
-| `triage(req)` | Local LLM only | Classifies the message you pass, summarizes it, and extracts action items + spam/phishing signals. No mailbox is read. |
+| `triage(req)` | Local LLM only | Classifies the message you pass, summarizes it, and extracts action items + spam/phishing signals. No mailbox is read. Action items also persist to the sidecar's local task list, linked to the `message_id` and de-duplicated per message — the response shape is unchanged. |
 | `triageBatch(req)` | Local LLM only | Same as `triage`, but for an `items` array (1–100). Returns a parallel `results` array; per-item failures isolate (HTTP 200 can carry errored items — inspect `results[].error`). |
 | `search(req)` | A connected Gmail/Outlook mailbox | Searches the connected inbox (**read-only**) by Gmail-style `query`/`labels` and returns message metadata — id, subject, sender, snippet, labels. No message is read in full or modified; no confirmation token needed. |
 | `prescan(req?)` | A connected Gmail/Outlook mailbox | Reads recent inbox messages and returns the triage-card envelope (urgent / needs-response / suggested-archive rows + an informational count). Read-only — nothing is archived, marked, or sent. |
-| `draft(req)` | Nothing external | Proposes a reply (`to` is a list of `{ email }` objects, not strings) and returns a single-use confirmation token. |
-| `send(req)` | A connected Gmail/Outlook mailbox + the token | Actually transmits the mail. |
+| `draft(req)` | Nothing external | Proposes a reply (`to` is a list of `{ email }` objects, not strings) and returns a single-use confirmation token. Optional `attachments` (schema 2.2): `{ filename, mime_type, content_base64 }` each, ≤ 25 MB decoded — the token binds to their content digests. |
+| `send(req)` | A connected Gmail/Outlook mailbox + the token | Actually transmits the mail, attachments included. Must carry the exact attachment set the token was minted for — a swapped file or a smuggled extra is rejected with **403**. |
 | `confirmAction(req)` | Nothing external | Mints a single-use token for a destructive action (`"archive"` / `"quarantine"`), bound to that exact `(action, message_id)`. |
 | `archive(req)` | A connected mailbox + the token | Removes the message from the inbox. Returns a `batch_id` undo handle. |
 | `unarchive(req)` | A connected mailbox | Restores an archived message within the 30s window (ungated — pass the `batch_id`). |
@@ -193,6 +246,28 @@ requires a single-use confirmation token (call `draft` for `send`, `confirmActio
 missing/invalid token is rejected with **403** before anything else), and each acts on
 the mailbox **connected in GAIA on the host** (under *Settings → Connectors*) — so even
 with a valid token, a headless server returns **HTTP 503** until a mailbox is connected.
+
+### Scheduled daily briefing (#1608)
+
+The sidecar can generate the `prescan` triage card on a daily schedule — no prompt,
+no caller. **Off by default**; opt in with env vars when launching:
+
+```ts
+const sidecar = await startSidecar({
+  binaryPath,
+  env: {
+    GAIA_EMAIL_BRIEFING_ENABLED: "true",
+    GAIA_EMAIL_BRIEFING_TIME: "08:00", // 24h local HH:MM (default 08:00)
+    GAIA_EMAIL_BRIEFING_MAX_MESSAGES: "25", // 1–100 (default 25)
+  },
+});
+```
+
+Each run persists the `email_pre_scan` envelope with a `generated_at` stamp; pull the
+latest one from `GET /v1/email/briefing` (plain `fetch` — no client wrapper yet, so
+attach the per-session bearer token yourself). It
+returns **404** until the first scheduled run has happened, and an invalid env value
+fails sidecar startup loudly rather than guessing a schedule.
 `archive`/`quarantine` are reversible within a 30-second window via
 `unarchive`/`unquarantine` (which are *not* gated — they restore, never destroy); the
 calendar actions additionally need the account's calendar scope (a missing scope fails
@@ -214,12 +289,27 @@ When you need finer control, the steps are exported individually:
 | `checkVersion(client)` | Throw if the sidecar's contract MAJOR differs from the client's. |
 | `shutdown(sidecar)` | Kill the whole process tree. |
 
-As of `SCHEMA_VERSION` 2.1 this package exposes inbox **search** (read-only),
-the **archive** / phishing-**quarantine** mailbox actions (+ their undo), and
-calendar **view / create / respond**. The remaining mailbox **actions** (label,
-move, mark read/unread) are part of the full agent but not yet exposed through
-this package — see
+As of `SCHEMA_VERSION` 2.2 this package exposes inbox **search** (read-only),
+the **archive** / phishing-**quarantine** mailbox actions (+ their undo),
+calendar **view / create / respond**, and **attachments** (#1542: triage
+exposes metadata, draft/send accept files). The remaining mailbox **actions**
+(label, move, mark read/unread) are part of the full agent but not yet exposed
+through this package — see
 [`SPEC.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md) for the complete surface.
+
+### Stateful agent surface (`/v1/email/agent/*`, 0.4.0)
+
+The typed client above is **stateless** — each call analyzes the payload you pass,
+with no memory and no conversation. As of 0.4.0 the sidecar *also* hosts a
+**session-scoped, conversational agent** (`/v1/email/agent/*`) that runs the full
+`EmailTriageAgent` — memory, personalization, and every agent tool — over HTTP,
+streaming each turn back as Server-Sent Events. Create a session, `POST
+/v1/email/agent/query` to run a turn, approve gated tools via `/confirm-tool`, and
+toggle memory at runtime via `/memory`. This is the surface the Agent UI uses; it is
+**not wrapped by the typed client yet** — drive it with `fetch`. See
+[`SPEC.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md)
+and [`SKILL.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SKILL.md)
+for the endpoint table and a streaming example.
 
 ## Running in production
 
@@ -310,7 +400,7 @@ while a `send` transmits to your mail provider by definition. Press Ctrl+C to st
 | Symptom | Cause & fix |
 |---------|-------------|
 | `triage()` returns **HTTP 502** | Lemonade isn't running or the model isn't pulled. Start it (`lemonade-server serve`) and provision the model (`gaia init`). Not a bug in this package. |
-| `/health` is green but `triage` fails | `health()` is **liveness-only** — it doesn't check Lemonade or the model. The real readiness signal is a `triage` returning 200. |
+| `/health` is green but `triage` fails | `health()` is **liveness-only** — it doesn't check Lemonade or the model. Use `GET /v1/email/init` for real readiness (it probes Lemonade + the model; `503` + `hint` when not ready). |
 | `npm install` fails with `UNABLE_TO_GET_ISSUER_CERT` | Corporate TLS proxy. Reinstall with Node's system CA store: `NODE_OPTIONS=--use-system-ca npm install` (Node ≥ 22). |
 | `require(...)` throws `ERR_REQUIRE_ESM` | The package is ESM-only. Use `import`, or `await import("@amd-gaia/agent-email")` from CommonJS. |
 | Sidecar process lingers after exit | Auto-cleanup reaps it on exit/crash/signal by default; a lingering sidecar means `autoCleanup: false` (call `shutdown(sidecar)` yourself) or a hard `SIGKILL` of the host. |
@@ -322,6 +412,8 @@ Set `DEBUG=agent-email` for verbose spawn/fetch/health logs (on stderr).
 
 - [`SPEC.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md) — full API, lifecycle helpers, connectors, module format, and platforms.
 - [`SKILL.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SKILL.md) — load into Claude Code (or similar) for a step-by-step integration playbook.
+- [`SCORECARD.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SCORECARD.md) — latest eval results (score, metrics, per-category breakdown, run environment).
+- [`EVALUATION.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/EVALUATION.md) — evaluation guide: what's measured, the dataset, a worked example, and how to reproduce the scorecard.
 - [`CHANGELOG.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/CHANGELOG.md) — version history.
 
 ## License

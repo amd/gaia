@@ -18,6 +18,7 @@
  *   POST /v1/email/calendar/events/preview     (mint a calendar confirmation token)
  *   POST /v1/email/calendar/events             (create — gated on a valid token)
  *   POST /v1/email/calendar/events/respond     (RSVP accept/decline/tentative)
+ *   GET  /v1/email/init       (readiness preflight — Lemonade + model probe)
  *   GET  /health              (root liveness — what the standalone sidecar serves)
  *   GET  /version             (root apiVersion / agentVersion)
  *   GET  /v1/email/health     (router-scoped liveness — for the mounted-on-app case)
@@ -27,9 +28,11 @@
  *
  * NOTE: `/health` is liveness-only — it does NOT check Lemonade or the model, so a
  * green health probe does not guarantee `triage` will succeed (a cold/unprovisioned
- * host returns 502 on the first triage). A real readiness endpoint is tracked
- * separately. The interactive `/docs` and `/redoc` UIs are intentionally not
- * wrapped — they are browser pages, not a programmatic surface.
+ * host returns 502 on the first triage). For the real readiness signal, call
+ * `init()` (`GET /v1/email/init`, #1795): it probes Lemonade reachability + model
+ * presence and returns a structured `InitResponse` — 200 when ready, 503 when not,
+ * both parsed the same way. The interactive `/docs` and `/redoc` UIs are
+ * intentionally not wrapped — they are browser pages, not a programmatic surface.
  *
  * Uses the global `fetch` (Node >= 18). Every non-2xx response raises an
  * `HttpError` carrying the status and body — no silent empty/null fallback.
@@ -68,6 +71,7 @@ import type {
   EmailUnquarantineRequest,
   EmailUnquarantineResponse,
   HealthResponse,
+  InitResponse,
   OpenApiDocument,
   VersionResponse,
 } from "./types.js";
@@ -81,6 +85,13 @@ export interface EmailClientOptions {
   timeoutMs?: number;
   /** Optional fetch override (for tests). Defaults to the global `fetch`. */
   fetchImpl?: typeof fetch;
+  /**
+   * Per-session caller-auth bearer token (#1706). When set, it is sent as
+   * `Authorization: Bearer <token>` on every request. The sidecar requires it on
+   * `/v1/email/*` calls (401 otherwise); `spawnSidecar` generates one and binds
+   * it to the sidecar's client automatically.
+   */
+  authToken?: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -89,6 +100,7 @@ export class EmailClient {
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
+  private readonly authToken?: string;
 
   constructor(opts: EmailClientOptions) {
     if (!opts?.baseUrl) {
@@ -99,6 +111,7 @@ export class EmailClient {
     // Normalize: strip trailing slashes so path joins are predictable.
     this.baseUrl = stripTrailingSlashes(opts.baseUrl);
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.authToken = opts.authToken;
     const rawFetch = opts.fetchImpl ?? globalThis.fetch;
     if (typeof rawFetch !== "function") {
       throw new TypeError(
@@ -278,8 +291,38 @@ export class EmailClient {
   }
 
   /**
+   * Readiness preflight (GET /v1/email/init, #1795) — the real "can triage
+   * actually run?" signal, unlike liveness-only `health()`. Probes Lemonade
+   * reachability + version and triage-model presence (read-only; never pulls a
+   * model). The endpoint answers **200 when `ready`** and **503 when not**, both
+   * carrying the same `InitResponse`; this method parses either into a value —
+   * branch on `.ready` / read `.hint` rather than catching an error. Any other
+   * status (or a network failure) still throws `HttpError` as usual.
+   */
+  async init(): Promise<InitResponse> {
+    try {
+      return await this.get<InitResponse>("/v1/email/init");
+    } catch (e) {
+      // 503 is the expected not-ready response — its body IS a valid
+      // InitResponse (ready:false, with a hint), not an error to swallow.
+      if (e instanceof HttpError && e.status === 503 && e.bodyText) {
+        try {
+          return JSON.parse(e.bodyText) as InitResponse;
+        } catch {
+          // A 503 whose body isn't the InitResponse JSON (e.g. a proxy/LB
+          // HTML error page) is a real failure — re-throw the HttpError so
+          // callers still get the promised HttpError, not a bare SyntaxError.
+          throw e;
+        }
+      }
+      throw e;
+    }
+  }
+
+  /**
    * Root liveness probe (GET /health). LIVENESS ONLY — it does not check
    * Lemonade or the model, so a green result does not guarantee `triage` works.
+   * For the real readiness signal, use `init()`.
    */
   async health(): Promise<HealthResponse> {
     return this.get<HealthResponse>("/health");
@@ -369,14 +412,18 @@ export class EmailClient {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
     log.debug(`${method} ${url}`);
+    // Per-session caller-auth token (#1706), when the client was given one.
+    const authHeaders: Record<string, string> = this.authToken
+      ? { authorization: `Bearer ${this.authToken}` }
+      : {};
     let res: Response;
     try {
       res = await this.fetchImpl(url, {
         method,
         signal: ctrl.signal,
         headers: hasBody
-          ? { accept, "content-type": "application/json" }
-          : { accept },
+          ? { accept, "content-type": "application/json", ...authHeaders }
+          : { accept, ...authHeaders },
         body: hasBody ? JSON.stringify(opts!.body) : undefined,
       });
     } catch (e) {

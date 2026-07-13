@@ -20,6 +20,18 @@ Custom agents can have their own:
 - **MCP servers** (any Model Context Protocol server)
 - **Connectors** ([Google, GitHub, and more](/connectors)) — give your agent permission to read your real email, calendar, repos, etc.
 
+<Note>
+  This guide builds a **local** custom agent in `~/.gaia/agents/` for your own Agent UI.
+  When it's ready to **share** — so anyone can install it from the [Agent Hub](https://amd-gaia.ai/hub) —
+  jump to [Publish and share your agent](#publish-and-share-your-agent).
+</Note>
+
+<Tip>
+  **Using Claude Code in the GAIA repo?** Invoke the **`gaia-build-agent`** skill — it
+  walks scaffolding → tools → model → test end-to-end, then hands off to the
+  **`agent-hub-release`** skill for shipping.
+</Tip>
+
 ---
 
 ## Quick Start: Gaia Builder Agent
@@ -79,7 +91,6 @@ For full control — custom tools, built-in tool mixins, MCP servers, or complex
 
 ```python
 from gaia.agents.base.agent import Agent
-from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 
 
@@ -91,31 +102,28 @@ class MyPythonAgent(Agent):
     def _get_system_prompt(self) -> str:
         return "You are a helpful assistant with a custom greet tool."
 
-    def _create_console(self) -> AgentConsole:
-        return AgentConsole()
-
     def _register_tools(self) -> None:
         _TOOL_REGISTRY.clear()
-        self._register_custom_tools()
 
-    def _register_custom_tools(self) -> None:
         @tool
         def greet(name: str) -> str:
             """Greet a person by name."""
             return f"Hello, {name}! Welcome to GAIA."
 ```
 
-The three required methods are:
+This mirrors what the Builder Agent scaffolds. The only method a subclass **must**
+implement is `_register_tools()` (it's abstract on the base `Agent`); the other two
+have sensible defaults you can override:
 
-| Method | Purpose |
-|--------|---------|
-| `_get_system_prompt()` | Returns the system prompt string |
-| `_create_console()` | Returns an `AgentConsole` instance |
-| `_register_tools()` | Registers tools into `_TOOL_REGISTRY` |
+| Method | Required? | Purpose |
+|--------|-----------|---------|
+| `_register_tools()` | **Yes** | Registers tools into `_TOOL_REGISTRY` |
+| `_get_system_prompt()` | Optional | Returns the system prompt string (defaults to `""`, i.e. mixin prompts only) |
+| `_create_console()` | Optional | Returns the console handler (defaults to `AgentConsole`, or a silent console in silent mode) |
 
 ### Adding built-in tools
 
-GAIA ships with ready-to-use tool mixins. To enable them, inherit the mixin and call its `register_*_tools()` method from `_register_tools()`:
+GAIA ships with ready-to-use tool mixins. To enable most of them, inherit the mixin and call its `register_*_tools()` method from `_register_tools()`. The `sd` and `vlm` mixins are the exception — call `init_sd()` / `init_vlm()` (which set up the client **and** register the tools in one step):
 
 | Tool | Mixin | Register call |
 |------|-------|---------------|
@@ -124,8 +132,8 @@ GAIA ships with ready-to-use tool mixins. To enable them, inherit the mixin and 
 | `file_io` | `gaia.agents.tools.file_io_tools.FileIOToolsMixin` | `self.register_file_io_tools()` |
 | `shell` | `gaia.agents.tools.shell_tools.ShellToolsMixin` | `self.register_shell_tools()` |
 | `screenshot` | `gaia.agents.tools.screenshot_tools.ScreenshotToolsMixin` | `self.register_screenshot_tools()` |
-| `sd` | `gaia.sd.mixin.SDToolsMixin` | `self.register_sd_tools()` |
-| `vlm` | `gaia.vlm.mixin.VLMToolsMixin` | `self.register_vlm_tools()` |
+| `sd` | `gaia.sd.mixin.SDToolsMixin` | `self.init_sd()` |
+| `vlm` | `gaia.vlm.mixin.VLMToolsMixin` | `self.init_vlm()` |
 
 <Tip>
   To call out to external services (Gmail, GitHub, Slack, etc.) without baking API keys into your code, use [GAIA connectors](#using-gaia-connectors) instead of writing your own auth.
@@ -186,7 +194,7 @@ is a working reference for both `oauth_pkce` (Google) and `mcp_server`
 
 ## Export and import agents
 
-Custom agents can be packaged into a single `.zip` bundle and shared between machines, teammates, or environments. GAIA supports export and import from both the Agent UI and the CLI.
+Custom agents can be packaged into a single `.zip` bundle and shared between machines, teammates, or environments. GAIA supports export and import from both the Agent UI and the CLI. Exports include every `~/.gaia/agents/*` directory with an `agent.py` — the installer-seeded bundled example included; imported copies land as user-owned agents the seeder never touches.
 
 ### From the Agent UI
 
@@ -254,34 +262,37 @@ The UI endpoints (`POST /api/agents/export` and `POST /api/agents/import`) are l
 ## Examples
 
 <AccordionGroup>
-  <Accordion title="Zoo Agent — simple personality">
+  <Accordion title="Example Agent — simple personality">
     ```python
     from gaia.agents.base.agent import Agent
     from gaia.agents.base.console import AgentConsole
-    from gaia.agents.base.tools import _TOOL_REGISTRY
 
 
-    class ZooAgent(Agent):
-        AGENT_ID = "zoo-agent"
-        AGENT_NAME = "Zoo Agent"
-        AGENT_DESCRIPTION = "A zookeeper who loves animals"
+    class ExampleAgent(Agent):
+        AGENT_ID = "example-agent"
+        AGENT_NAME = "Example Agent"
+        AGENT_DESCRIPTION = (
+            "A bundled example agent that shows how installer-seeded custom agents work"
+        )
         CONVERSATION_STARTERS = [
-            "Hello! What's happening at the zoo today?",
-            "Tell me a fun fact about one of your animals.",
+            "What are you an example of?",
+            "How do I build my own agent like you?",
         ]
 
         def _get_system_prompt(self) -> str:
             return (
-                "You are a funny and enthusiastic zookeeper! You work at the world's "
-                "best zoo and every response you give includes a fun fact or a playful "
-                "reference to one of your beloved zoo animals."
+                "You are GAIA's bundled Example Agent — a working demonstration of a "
+                "custom agent seeded by the installer. Explain plainly that you exist "
+                "to show how custom agents are packaged and loaded, and point anyone "
+                "who wants to build their own to "
+                "https://amd-gaia.ai/docs/guides/custom-agent."
             )
 
         def _create_console(self) -> AgentConsole:
             return AgentConsole()
 
         def _register_tools(self) -> None:
-            _TOOL_REGISTRY.clear()
+            pass
     ```
   </Accordion>
 
@@ -366,7 +377,7 @@ The UI endpoints (`POST /api/agents/export` and `POST /api/agents/import`) are l
   </Accordion>
 
   <Accordion title="Agent fails to load">
-    Check the server logs for load errors. Ensure `AGENT_ID`, `AGENT_NAME`, and `AGENT_DESCRIPTION` are set as class attributes, and that the three required methods (`_get_system_prompt`, `_create_console`, `_register_tools`) are implemented.
+    Check the server logs for load errors. Ensure `AGENT_ID`, `AGENT_NAME`, and `AGENT_DESCRIPTION` are set as class attributes, and that the required `_register_tools()` method is implemented (`_get_system_prompt()` and `_create_console()` are optional overrides).
   </Accordion>
 
   <Accordion title="Imported agent doesn't appear or shows errors">
@@ -386,6 +397,48 @@ The UI endpoints (`POST /api/agents/export` and `POST /api/agents/import`) are l
     If your preferred model isn't loaded on the Lemonade server, GAIA falls back to the server default. Run `gaia init` to download additional models.
   </Accordion>
 </AccordionGroup>
+
+---
+
+## Publish and share your agent
+
+The agent you built lives in `~/.gaia/agents/` — yours, on your machine. To let
+**anyone install it** from the [Agent Hub](https://amd-gaia.ai/hub) (and PyPI/npm), package it as a hub
+agent and publish it through the curated PR route:
+
+<Steps>
+  <Step title="Package it">
+    `gaia agent init <id>` scaffolds a publishable package under
+    `hub/agents/python/<id>/` — a `gaia-agent.yaml` manifest, your agent code, a
+    README, and `pyproject.toml`. Move your `agent.py` logic in and fill the manifest.
+  </Step>
+  <Step title="Validate it">
+    `gaia agent test --lint` checks the manifest and that the agent loads. Add tests
+    and a README — both are required for review.
+  </Step>
+  <Step title="Open a PR">
+    Commit the package under `hub/agents/python/<id>/` and open a PR to
+    [`amd/gaia`](https://github.com/amd/gaia). The **PR route needs no token** —
+    maintainers review, and the automated pipeline publishes it to the Hub + PyPI on
+    merge. (A direct-publish token route exists too, for maintainers.)
+  </Step>
+</Steps>
+
+**What's required:** a valid manifest, a README, tests, and passing review. The full
+contract — manifest fields, the four package parts, versioning + immutability, and
+both publish routes — is in the publishing guide.
+
+<CardGroup cols={2}>
+  <Card title="Publishing guide → Hub + PyPI" icon="upload" href="/guides/hub-publishing">
+    The complete walkthrough: package layout, manifest, the no-token PR route vs
+    direct token publish, requirements, and verification.
+  </Card>
+  <Card title="Claude Code skills" icon="robot" href="https://github.com/amd/gaia/tree/main/.claude/skills">
+    In the GAIA repo, the **`gaia-build-agent`** skill builds and the
+    **`agent-hub-release`** skill cuts a frozen-binary + npm sidecar release (like the
+    email agent). Invoke them with the Skill tool.
+  </Card>
+</CardGroup>
 
 ---
 

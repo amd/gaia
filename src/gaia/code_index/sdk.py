@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL
+
 log = logging.getLogger(__name__)
 
 _MISSING_DEPS_MSG = (
@@ -63,7 +65,7 @@ class CodeIndexConfig:
     max_files: int = 5000
     max_file_size_mb: float = 1
     chunk_overlap: int = 50
-    embedding_model: str = "nomic-embed-text-v2-moe-GGUF"
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL
     cache_dir: str = "~/.gaia/code_index"
     embedding_base_url: Optional[str] = None
 
@@ -642,7 +644,7 @@ class CodeIndexSDK:
         if self._embedder is not None:
             return
 
-        from gaia.llm.lemonade_client import LemonadeClient
+        from gaia.llm.lemonade_client import MODELS, LemonadeClient
 
         if self._llm_client is None:
             kwargs = {}
@@ -651,6 +653,25 @@ class CodeIndexSDK:
             self._llm_client = LemonadeClient(**kwargs)
 
         try:
+            # Register + download custom (``user.``) embedders on first use —
+            # they aren't Lemonade built-ins and need checkpoint + recipe + the
+            # embedding label to install (built-ins are pulled by name at load).
+            mr = next(
+                (
+                    m
+                    for m in MODELS.values()
+                    if m.model_id == self.config.embedding_model
+                ),
+                None,
+            )
+            if mr and self.config.embedding_model.startswith("user."):
+                self._llm_client.ensure_model_downloaded(
+                    self.config.embedding_model,
+                    checkpoint=mr.checkpoint,
+                    recipe=mr.recipe,
+                    embedding=mr.embedding,
+                )
+
             # Use health endpoint to check actually running models, not just
             # downloaded ones (list_models/get_status returns all downloaded).
             health = self._llm_client.health_check()
