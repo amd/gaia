@@ -67,6 +67,17 @@ _EXPECTED_RESPONSE_MODELS = {
     ("post", "/v1/email/calendar/events"): "CalendarEventResponse",
     ("post", "/v1/email/calendar/events/preview"): "CalendarEventPreviewResponse",
     ("post", "/v1/email/calendar/events/respond"): "CalendarRespondResponse",
+    # Canonical streaming agent-loop surface (schema 2.4, #2016). The cancel
+    # route returns a JSON model; /query streams text/event-stream (no JSON
+    # response model) and is asserted separately in _EXPECTED_STREAMING_ROUTES.
+    ("post", "/v1/email/query/{run_id}/cancel"): "QueryCancelResponse",
+}
+
+# Routes whose 200 response is a text/event-stream (not an application/json
+# model), so they are excluded from the response-model assertions below and
+# checked by ``test_query_route_streams_event_stream`` instead.
+_EXPECTED_STREAMING_ROUTES = {
+    ("post", "/v1/email/query"),
 }
 
 
@@ -154,7 +165,19 @@ def test_documented_routes_match_expected_set(spec):
     documented = {
         (method, path) for path, ops in spec["paths"].items() for method in ops
     }
-    assert documented == set(_EXPECTED_RESPONSE_MODELS)
+    assert documented == set(_EXPECTED_RESPONSE_MODELS) | _EXPECTED_STREAMING_ROUTES
+
+
+def test_query_route_streams_event_stream(spec):
+    """POST /v1/email/query documents a text/event-stream 200 (the SSE contract),
+    not an application/json body — the canonical seven-event wire (#2016)."""
+    responses = spec["paths"]["/v1/email/query"]["post"]["responses"]
+    assert "text/event-stream" in responses["200"]["content"]
+    # The request body is the canonical QueryRequest contract model.
+    req = spec["paths"]["/v1/email/query"]["post"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]
+    assert req == {"$ref": "#/components/schemas/QueryRequest"}
 
 
 @pytest.mark.parametrize(

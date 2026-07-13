@@ -297,6 +297,24 @@ exposes metadata, draft/send accept files). The remaining mailbox **actions**
 through this package — see
 [`SPEC.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md) for the complete surface.
 
+### Canonical agent-loop query (`POST /v1/email/query`, schema 2.4)
+
+The v2 keystone (#2016): a natural-language request in, the agent reasons and chains
+its tools into a multi-step workflow, and the **seven canonical Server-Sent Event
+types** out — `status` / `token` / `tool_call` / `tool_result` /
+`needs_confirmation` / `final` / `error`, terminated by exactly one `final` or
+`error`. Every v2 front-door (the Agent UI relay, the `gaia email` CLI, `gaia api`)
+relays to this one loop. The **host mints `run_id`** (so the run is cancellable from
+the instant the request is sent via `POST /v1/email/query/{run_id}/cancel`, which
+stops tool execution between steps), and the transcript slice is **pushed** in
+`context` so the sidecar stays stateless. A confirmation-requiring step emits
+`needs_confirmation` then ends with a `final` refusal pointing at the fixed-function
+`draft` → `send` route (stateless stub, epic decision D1). Not wrapped by the typed
+client yet — drive it with `fetch` (`Accept: text/event-stream`). See
+[`SPEC.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md)
+and [`SKILL.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SKILL.md)
+for the event schema and a streaming example.
+
 ### Stateful agent surface (`/v1/email/agent/*`, 0.4.0)
 
 The typed client above is **stateless** — each call analyzes the payload you pass,

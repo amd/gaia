@@ -7,8 +7,33 @@ bump is always at least a package MINOR bump with a migration note.
 
 ## 0.4.0
 
-Contract bumped to `SCHEMA_VERSION` **2.3**. `checkVersion` is MAJOR-only, so the
-2.x MAJOR is unchanged and existing clients keep connecting.
+Contract bumped to `SCHEMA_VERSION` **2.4** (via **2.3**). `checkVersion` is
+MAJOR-only, so the 2.x MAJOR is unchanged and existing clients keep connecting.
+
+### Added
+
+- **`POST /v1/email/query` — the canonical streaming agent-loop surface
+  (`SCHEMA_VERSION` 2.3 → 2.4, additive, #2016).** The sidecar becomes a complete
+  agent product: a natural-language request in, the agent reasons and chains its
+  tools into a multi-step workflow, and the **seven canonical Server-Sent Event
+  types** out — `status` / `token` / `tool_call` / `tool_result` /
+  `needs_confirmation` / `final` / `error` — terminated by exactly one `final` or
+  `error` (the frozen `/query` wire contract, #2015). Every v2 front-door (the
+  Agent UI relay, the `gaia email` CLI, `gaia api`) relays to this one loop instead
+  of inventing a private dialect. The **host mints `run_id`** so the run is
+  cancellable from the instant the request is sent (`POST
+  /v1/email/query/{run_id}/cancel`, which stops tool execution between steps), and
+  the transcript slice is **pushed** in `context` (the sidecar stays stateless).
+  This is additive — no existing shape changed, so 2.3 clients keep working and
+  `checkVersion` does not flag them. Not wrapped by the typed npm client yet; call
+  it directly (`fetch` with `Accept: text/event-stream`).
+- **Confirmation is a stateless stub (epic decision D1, UNSIGNED).** A step that
+  needs approval (a destructive/external tool such as `send_now`) emits
+  `needs_confirmation` (specced shape) and then the run ends with a `final` refusal
+  pointing at the deterministic fixed-function route — mint a token via `draft()` /
+  `POST /v1/email/draft`, then `send()` / `POST /v1/email/send`. Server-side resume
+  is intentionally not wired, so `confirm_url` is omitted; when D1 is signed off the
+  resume model can be added without changing the event's shape.
 
 ### Changed
 
