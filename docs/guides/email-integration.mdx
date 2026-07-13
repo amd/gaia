@@ -169,11 +169,12 @@ the endpoint returns **503** with a `hint` naming exactly what to fix.
 
 <Note>
   **Migration note:** triage no longer auto-downloads the model on its first call.
-  On a fresh server, provision once — `POST /v1/email/init` (or pull the model on
-  your Lemonade) — before the first triage request; until then triage returns
-  **502** with the fix in the error. The target server's catalog must list the
-  model that `GET /v1/email/init` reports as `model.id` (`user.`-prefixed
-  registrations match tolerantly).
+  On a fresh server, provision once — `POST /v1/email/init` directly on the
+  sidecar (the GAIA backend proxies only the readiness `GET /v1/email/init`, not
+  the provisioning `POST`), or pull the model on your Lemonade — before the first
+  triage request; until then triage returns **502** with the fix in the error.
+  The target server's catalog must list the model that `GET /v1/email/init`
+  reports as `model.id` (`user.`-prefixed registrations match tolerantly).
 </Note>
 
 ## Authentication
