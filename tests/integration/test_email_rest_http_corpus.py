@@ -39,8 +39,10 @@ if str(_REPO_ROOT) not in sys.path:
 pytestmark = pytest.mark.integration
 
 # EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
-# skip cleanly when a framework-only env lacks it.
+# skip cleanly when a framework-only env lacks it. fastapi comes from the
+# [api] extra, so a [dev]-only env must skip too — not error at collection.
 pytest.importorskip("gaia_agent_email")
+pytest.importorskip("fastapi")
 
 from fastapi.testclient import TestClient  # noqa: E402
 from gaia_agent_email import api_routes as email_routes  # noqa: E402
