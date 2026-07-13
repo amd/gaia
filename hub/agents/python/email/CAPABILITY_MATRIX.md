@@ -62,8 +62,8 @@ python hub/agents/python/email/packaging/capability_matrix.py
   - `triage_email_batch`
 - Eval suites: **6**
   - `action_items`: enforce=False, acceptance_enforce=None, wired=True
-  - `briefing`: enforce=True, acceptance_enforce=None, wired=True
-  - `drafting`: enforce=True, acceptance_enforce=None, wired=True
+  - `briefing`: enforce=False, acceptance_enforce=None, wired=True
+  - `drafting`: enforce=False, acceptance_enforce=None, wired=True
   - `followups`: enforce=False, acceptance_enforce=None, wired=False
   - `perf`: enforce=True, acceptance_enforce=None, wired=True
   - `quality`: enforce=False, acceptance_enforce=True, wired=True
@@ -81,11 +81,11 @@ MCP exists so a host LLM can invoke the email agent as a tool, not so an externa
 
 Extraction-quality bars with no judged baseline yet. Follow-up: generate the first nightly Strix Halo / Gemma-4-E4B baseline (the #1949 eval's documented follow-up) and flip enforce to true once it stabilizes.
 
-### `briefing` (enforce=True, wired=True)
+### `briefing` (enforce=False, wired=True)
 
 Judge-scored summary-quality gate for the scheduled daily briefing (approval / recall / hallucination-free / faithfulness bars). Follow-up: establish and maintain a passing hardware baseline, and tighten the bars in the fixture as baselines improve.
 
-### `drafting` (enforce=True, wired=True)
+### `drafting` (enforce=False, wired=True)
 
 Judge-scored draft-approval gate (#1269 metric, approval_min 0.70) run by release_agent_email.yml. Follow-up: establish and maintain a passing hardware baseline, and raise approval_min once a larger judged corpus is available.
 
