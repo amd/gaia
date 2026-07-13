@@ -214,6 +214,9 @@ setup(
             # Tokenizer proxy for the tool-prompt cost harness (#1448,
             # gaia.eval.tool_cost) so the budget test can count tokens.
             "tiktoken>=0.7.0,<1.0.0",
+            # OpenAPI response-body validation against the committed spec
+            # (tests/test_email_openapi_conformance.py, #1897).
+            "jsonschema>=4.0.0,<5.0.0",
         ],
         "eval": [
             "anthropic",
