@@ -2,11 +2,10 @@
 # SPDX-License-Identifier: MIT
 """Fixed test contract for the email-agent capability matrix (#2013).
 
-``packaging/capability_matrix.py`` does not exist yet — this file is the
-red-state TDD contract it must satisfy. It introspects four surfaces
-(internal ``@tool`` agent-loop functions, REST verbs, MCP tools, eval-gate
-coverage), renders a committed ``CAPABILITY_MATRIX.md``, and asserts nothing
-drifts silently:
+This is the fixed contract ``packaging/capability_matrix.py`` satisfies. The
+module introspects four surfaces (internal ``@tool`` agent-loop functions,
+REST verbs, MCP tools, eval-gate coverage), renders a committed
+``CAPABILITY_MATRIX.md``, and asserts nothing drifts silently:
 
 - AC1: the committed matrix doc is byte-identical to a freshly regenerated one.
 - AC2: ``tools_count`` (52) is identical across ``gaia-agent.yaml``,
