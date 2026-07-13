@@ -200,15 +200,21 @@ def is_live(inst: DaemonInstance, timeout: float = _PROBE_TIMEOUT) -> bool:
 def terminate_instance(inst: DaemonInstance, timeout: float = 5.0) -> None:
     """Best-effort tree-kill of a stale-but-alive daemon so its slot can be reclaimed.
 
-    Used when the recorded pid is alive but unresponsive to the probe (§0.25). The
-    pid comes from our own registry file, so terminating it is legitimate reclaim,
-    not killing an arbitrary process.
+    Used when the recorded pid is alive but unresponsive to the probe (§0.25).
+    The pid comes from our own registry file, but after a hard crash (SIGKILL /
+    OOM / power-loss) the OS may have reused it for an unrelated process, so we
+    verify the pid is still *our* daemon (cmdline references ``gaia.daemon``)
+    before killing it — same skepticism ``probe`` applies before trusting it.
     """
     import psutil
 
     try:
         proc = psutil.Process(inst.pid)
-    except psutil.NoSuchProcess:
+        cmdline = " ".join(proc.cmdline())
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return
+    if "gaia.daemon" not in cmdline:
+        # PID was reused by an unrelated process — do not kill it.
         return
     procs = []
     try:

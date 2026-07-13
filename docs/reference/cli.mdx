@@ -2115,6 +2115,35 @@ gaia youtube \
 
 ---
 
+### Daemon Command
+
+Manage the headless custody daemon — the always-on, single-instance background
+process that later Agent UI v2 phases (sidecar supervision, `/host/v1/*` custody,
+the model-slot broker, the scheduler clock) mount into. This Phase-1 skeleton
+provides single-instance identity, client-token auth, and lifecycle control.
+
+Requires the daemon extras (`fastapi`/`uvicorn`/`psutil`) — install with
+`pip install "amd-gaia[ui]"` (or `[api]`/`[dev]`). Running it on a base install
+fails loudly with that instruction.
+
+```bash
+gaia daemon start      # start the daemon, or attach if one is already running
+gaia daemon status     # show pid, port, and uptime
+gaia daemon stop       # graceful shutdown (tree-kills the instance)
+gaia daemon restart    # stop then start
+gaia daemon logs [--lines N] [--follow]   # tail the daemon log
+```
+
+| Action | Options | Description |
+|--------|---------|-------------|
+| `start` | — | Start the daemon or attach to the running one (two callers → one daemon). |
+| `status` | — | Print pid / port / uptime, or report if no daemon is running. |
+| `stop` | — | Shut the daemon down and release `~/.gaia/host/instance.json`. |
+| `restart` | — | `stop` followed by `start`. |
+| `logs` | `--lines`, `--follow` | Print (or stream) the daemon log tail. |
+
+---
+
 ### Cache Command
 
 Inspect or clear GAIA's on-disk caches (document-Q7 metadata, chat history,
