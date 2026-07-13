@@ -59,6 +59,11 @@ apply. The shipped product always spawns with a token.
 
 ## REST API
 
+The code-derived, CI-guarded inventory of every capability surface (internal
+agent-loop tools, REST, MCP, eval coverage) is
+[`CAPABILITY_MATRIX.md`](https://github.com/amd/gaia/blob/main/hub/agents/python/email/CAPABILITY_MATRIX.md) —
+the canonical cross-surface reference.
+
 Every `/v1/email/*` request also requires the per-session bearer token (see
 [Authentication](#authentication)); the "Auth" column below covers the additional
 per-endpoint connector/token requirements. `EmailClient` is a typed wrapper over
