@@ -12,8 +12,12 @@ from gaia.ui.email_sidecar.router import router as email_router
 
 
 class _FakeProxy:
-    def __init__(self, *, error=None):
+    def __init__(self, *, error=None, init_result=None):
         self._error = error
+        self._init_result = init_result or (
+            200,
+            {"ready": True, "lemonade": {"base_url": "http://127.0.0.1:8000/api/v1"}},
+        )
 
     def triage(self, body):
         if self._error:
@@ -46,13 +50,19 @@ class _FakeProxy:
     def version(self):
         return {"apiVersion": "2.0", "agentVersion": "0.2.2"}
 
+    def init(self):
+        if self._error:
+            raise self._error
+        return self._init_result
+
 
 class _FakeManager:
-    def __init__(self, *, start_error=None, proxy_error=None):
+    def __init__(self, *, start_error=None, proxy_error=None, init_result=None):
         self.started = 0
         self._running = False
         self._start_error = start_error
         self._proxy_error = proxy_error
+        self._init_result = init_result
 
     @property
     def is_running(self):
@@ -66,7 +76,7 @@ class _FakeManager:
         return "http://127.0.0.1:9999"
 
     def proxy(self, **kwargs):
-        return _FakeProxy(error=self._proxy_error)
+        return _FakeProxy(error=self._proxy_error, init_result=self._init_result)
 
 
 def _client(manager) -> TestClient:
@@ -97,6 +107,36 @@ def test_health_and_version_proxied():
     client = _client(_FakeManager())
     assert client.get("/v1/email/health").json()["service"] == "gaia-agent-email"
     assert client.get("/v1/email/version").json()["apiVersion"] == "2.0"
+
+
+def test_init_ready_200_body_passthrough():
+    # #1888: GET /v1/email/init must be proxied (the docs' verify curl targets
+    # the backend), preserving the sidecar's 200 + InitResponse body verbatim.
+    ready_body = {
+        "ready": True,
+        "lemonade": {"reachable": True, "base_url": "http://127.0.0.1:8555/api/v1"},
+        "model": {"id": "Gemma-4-E4B-it-GGUF", "present": True},
+        "hint": None,
+    }
+    client = _client(_FakeManager(init_result=(200, ready_body)))
+    r = client.get("/v1/email/init")
+    assert r.status_code == 200
+    assert r.json() == ready_body
+
+
+def test_init_not_ready_503_body_passthrough():
+    # The 503 is contract (full InitResponse with an actionable hint), not a
+    # transport failure — the body must survive the proxy hop intact.
+    not_ready_body = {
+        "ready": False,
+        "lemonade": {"reachable": False, "base_url": "http://127.0.0.1:9999/api/v1"},
+        "model": {"id": "Gemma-4-E4B-it-GGUF", "present": False},
+        "hint": "Lemonade Server not reachable — start it with `lemonade-server serve`",
+    }
+    client = _client(_FakeManager(init_result=(503, not_ready_body)))
+    r = client.get("/v1/email/init")
+    assert r.status_code == 503
+    assert r.json() == not_ready_body
 
 
 def test_prescan_route_forwards_and_preserves_card_envelope():
