@@ -259,12 +259,14 @@ def test_missing_draft_and_unparseable_judge_become_errored(corpus):
 # ---------------------------------------------------------------------------
 
 
-def test_committed_thresholds_manifest_is_enforcing():
+def test_committed_thresholds_manifest_is_report_mode():
     thresholds = dq.load_drafting_thresholds(THRESHOLDS_PATH)
     assert thresholds.approval_min == 0.70  # the #1269 target
-    # Enforcing gate (#1990) — a draft-approval breach blocks the release
-    # (release_agent_email.yml eval-gate). See the manifest comment.
-    assert thresholds.enforce is True
+    # Temporarily report mode: flipped enforcing (#1990) before the gate ever
+    # completed a CI run (the perf gate failed first and masked it), so the bar
+    # isn't hardware-validated yet. Re-enforce once a passing baseline exists
+    # (see the manifest comment).
+    assert thresholds.enforce is False
     # The module default points at the same committed manifest.
     assert dq.default_drafting_thresholds_path() == THRESHOLDS_PATH
 

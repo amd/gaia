@@ -1,8 +1,8 @@
 {
-  "_comment": "Summary-quality bars for the scheduled daily inbox briefing eval (#1608 feature, #1951 tracking). 'approval_min' is the primary target (fraction of briefings a judge would trust to start the day); 'recall_min' guards against dropping high-priority threads (must-include recall); 'hallucination_free_min' guards against inventing threads not in the inbox; 'faithfulness_min' guards against distorted summaries. 'enforce' is the SINGLE switch CI keys off and it ships TRUE: this is an ENFORCING gate — a breach (or any errored/unjudged case) fails the build and blocks the release. No report-mode fallback, no silent skip: if the eval cannot run or the digest quality drops below these bars, the pipeline goes red. Tighten the bars HERE (data, not code) as baselines improve. Loaded by gaia.eval.briefing_quality.load_briefing_thresholds (which ignores extra keys).",
+  "_comment": "Summary-quality bars for the scheduled daily inbox briefing eval (#1608 feature, #1951 tracking). 'approval_min' is the primary target (fraction of briefings a judge would trust to start the day); 'recall_min' guards against dropping high-priority threads (must-include recall); 'hallucination_free_min' guards against inventing threads not in the inbox; 'faithfulness_min' guards against distorted summaries. 'enforce' is the SINGLE switch CI keys off. Temporarily FALSE (report mode): this judge gate ran enforcing (#1951) but never completed a CI run — the perf gate failed first and masked it, so its bars have never been validated on hardware. Report mode until a passing baseline is established, then re-enforce (tracking: re-enforce drafting + briefing judge gates). A breach is logged + uploaded but does NOT block the release while false (a missing judge credential still fails loudly regardless). Tighten the bars HERE (data, not code) as baselines improve. Loaded by gaia.eval.briefing_quality.load_briefing_thresholds (which ignores extra keys).",
   "approval_min": 0.70,
   "recall_min": 0.80,
   "hallucination_free_min": 0.95,
   "faithfulness_min": 0.90,
-  "enforce": true
+  "enforce": false
 }
