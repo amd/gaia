@@ -183,6 +183,36 @@ def test_tools_count_matches_derived(matrix):
     assert ast_count == _EXPECTED_TOOLS_TOTAL
 
 
+def test_gaia_agent_yaml_carries_definition_comment():
+    """The comment block directly above ``tools_count`` in gaia-agent.yaml must
+    carry the documented definition. The marker is SLICED from
+    ``TOOLS_COUNT_DEFINITION`` itself (not a duplicated string literal), so the
+    yaml comment, the matrix Definitions section, and this test all trace to
+    the one constant — rewording the constant without updating the yaml
+    comment fails here."""
+    definition = capability_matrix.TOOLS_COUNT_DEFINITION
+    marker = "internal @tool-decorated agent-loop functions"
+    assert marker in definition, (
+        "marker phrase no longer appears in TOOLS_COUNT_DEFINITION — update "
+        "this test's slice and the gaia-agent.yaml comment together"
+    )
+
+    lines = _GAIA_AGENT_YAML.read_text(encoding="utf-8").splitlines()
+    idx = next(
+        i for i, line in enumerate(lines) if line.startswith("tools_count:")
+    )
+    comment_block: list[str] = []
+    j = idx - 1
+    while j >= 0 and lines[j].lstrip().startswith("#"):
+        comment_block.append(lines[j])
+        j -= 1
+    assert comment_block, "no comment block directly above tools_count"
+    assert marker in "\n".join(comment_block), (
+        f"the comment above tools_count in {_GAIA_AGENT_YAML} must carry the "
+        f"TOOLS_COUNT_DEFINITION marker phrase: {marker!r}"
+    )
+
+
 def test_internal_tool_counts_per_mixin(matrix):
     tools_by_mixin = _field(matrix, "tools_by_mixin")
     assert dict(tools_by_mixin) == _EXPECTED_TOOLS_BY_MIXIN

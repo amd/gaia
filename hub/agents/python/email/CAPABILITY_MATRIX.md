@@ -9,7 +9,7 @@ python hub/agents/python/email/packaging/capability_matrix.py
 
 ## Definitions
 
-- **tools_count**: tools_count = the number of internal @tool-decorated agent-loop functions across gaia_agent_email/tools/*.py mixins (one per capability the agent's own LLM tool-calling loop can invoke). This is distinct from, and larger than, the REST API's 16 functional verbs and the MCP interface's 4 task-level tools -- both smaller, purpose-built surfaces for external callers, not agent-loop tools.
+- **tools_count**: the number of internal @tool-decorated agent-loop functions across gaia_agent_email/tools/*.py mixins (one per capability the agent's own LLM tool-calling loop can invoke). This is distinct from, and larger than, the REST API's 16 functional verbs and the MCP interface's 4 task-level tools -- both smaller, purpose-built surfaces for external callers, not agent-loop tools.
 - **no quality eval sentinel**: `no quality eval (contract-tested only)` -- the op is contract/shape-tested only; no judged quality bar exists for it.
 
 ## Capability matrix
@@ -91,7 +91,7 @@ Already an enforcing release gate (enforce:true) wired into release_agent_email.
 
 ### `followups` (enforce=False, wired=False)
 
-Report-mode today (enforce:false) AND CI-unwired: no eval_followup_report.py exists, unlike the other five suites. Follow-up: a tracking issue filed alongside this change covers wiring an eval_followup_report.py and, separately, establishing a judged baseline (the #1950 eval's documented follow-up) before flipping enforce to true.
+Report-mode today (enforce:false) AND CI-unwired: no eval_followup_report.py exists, unlike the other five suites. Follow-up: #2040 tracks wiring an eval_followup_report.py plus a workflow step and, separately, establishing a judged baseline (the #1950 eval's documented follow-up) before flipping enforce to true.
 
 ### `perf` (enforce=True, wired=True)
 
@@ -101,5 +101,5 @@ Already an enforcing release gate (enforce:true) on the Strix Halo runner pool. 
 
 Report-mode today (enforce:false): the FP/FN bars only become meaningful once 4-way categorization accuracy improves (see the #1266 history), per the fixture's own _comment. A separate acceptance_enforce:true release gate already runs on the within-one-bucket metric. Follow-up: flip enforce to true in the fixture once accuracy stabilizes above the gate's bars.
 
-A tracking issue for wiring `followups` into CI is filed alongside this change (#2013 follow-up).
+Wiring `followups` into CI (report script + workflow step) is tracked in #2040.
 

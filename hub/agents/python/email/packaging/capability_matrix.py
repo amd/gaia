@@ -185,10 +185,9 @@ EVAL_FOLLOWUP_PLAN: Dict[str, str] = {
     "followups": (
         "Report-mode today (enforce:false) AND CI-unwired: no "
         "eval_followup_report.py exists, unlike the other five suites. "
-        "Follow-up: a tracking issue filed alongside this change covers "
-        "wiring an eval_followup_report.py and, separately, establishing a "
-        "judged baseline (the #1950 eval's documented follow-up) before "
-        "flipping enforce to true."
+        "Follow-up: #2040 tracks wiring an eval_followup_report.py plus a "
+        "workflow step and, separately, establishing a judged baseline (the "
+        "#1950 eval's documented follow-up) before flipping enforce to true."
     ),
 }
 
@@ -415,7 +414,10 @@ def render_markdown(matrix: CapabilityMatrix) -> str:
 
     lines.append("## Definitions")
     lines.append("")
-    lines.append(f"- **tools_count**: {TOOLS_COUNT_DEFINITION}")
+    # The constant leads with "tools_count = " (right for the yaml comment);
+    # the bullet already labels it, so strip the prefix to avoid doubling.
+    definition_body = TOOLS_COUNT_DEFINITION.removeprefix("tools_count = ")
+    lines.append(f"- **tools_count**: {definition_body}")
     lines.append(
         f"- **no quality eval sentinel**: `{_NO_EVAL_SENTINEL}` -- the op is "
         "contract/shape-tested only; no judged quality bar exists for it."
@@ -480,8 +482,8 @@ def render_markdown(matrix: CapabilityMatrix) -> str:
         lines.append(EVAL_FOLLOWUP_PLAN[suite])
         lines.append("")
     lines.append(
-        "A tracking issue for wiring `followups` into CI is filed alongside "
-        "this change (#2013 follow-up)."
+        "Wiring `followups` into CI (report script + workflow step) is "
+        "tracked in #2040."
     )
     lines.append("")
 
