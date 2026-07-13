@@ -894,6 +894,67 @@ class TestBreakdownRoundTrip:
 # ---------------------------------------------------------------------------
 
 
+class TestPerformanceRoundTrip:
+    """performance field: render→parse round-trip, absence, validate invariant."""
+
+    def _make_perf(self):
+        return {
+            "ttft_s": 8.541,
+            "throughput_tps": 12.1,
+            "pipeline_s": 1894.0,
+            "peak_memory_gb": 6.2,
+            "emails_per_run": 20,
+        }
+
+    def test_performance_present_in_front_matter(self):
+        payload = _make_payload()
+        payload.performance = self._make_perf()
+        parsed = parse_scorecard(render_scorecard(payload))
+        assert "performance" in parsed.get(
+            "results", {}
+        ), "'performance' must appear under results in front matter when set"
+        assert parsed["results"]["performance"]["throughput_tps"] == 12.1
+
+    def test_performance_absent_when_none(self):
+        parsed = parse_scorecard(render_scorecard(_make_payload()))
+        assert "performance" not in parsed.get("results", {})
+
+    def test_performance_body_section_rendered_when_present(self):
+        payload = _make_payload()
+        payload.performance = self._make_perf()
+        text = render_scorecard(payload)
+        assert "## Performance" in text
+        assert "throughput_tps" in text and "8.541" in text
+
+    def test_performance_body_section_absent_when_none(self):
+        assert "## Performance" not in render_scorecard(_make_payload())
+
+    def test_performance_not_in_required_fields(self):
+        assert "performance" not in REQUIRED_FIELDS
+
+    def test_performance_validate_still_passes(self):
+        payload = _make_payload()
+        payload.performance = self._make_perf()
+        parsed = parse_scorecard(render_scorecard(payload))
+        assert validate_scorecard(parsed) == []
+
+    def test_performance_does_not_affect_aggregate(self):
+        base = parse_scorecard(render_scorecard(_make_payload(accuracy=0.46)))
+        withp = _make_payload(accuracy=0.46)
+        withp.performance = self._make_perf()
+        withp_parsed = parse_scorecard(render_scorecard(withp))
+        assert base["aggregate"]["value"] == withp_parsed["aggregate"]["value"]
+
+    def test_carry_forward_preserves_performance(self, tmp_path):
+        src = _make_payload(version="0.2.3", accuracy=0.75)
+        src.performance = self._make_perf()
+        card = tmp_path / "SCORECARD.md"
+        card.write_text(render_scorecard(src))
+        result = carry_forward(card, "0.2.4")
+        assert result.performance is not None
+        assert result.performance["throughput_tps"] == 12.1
+
+
 class TestEnvironmentRoundTrip:
     """environment field: render→parse round-trip, absence, validate invariant."""
 
@@ -1228,6 +1289,62 @@ class TestBreakdownAdapter:
         gt_path = tmp_path / "ground_truth.json"
         gt_path.write_text(json.dumps(gt))
         return gt_path
+
+    def test_performance_extracted_from_summary(self, tmp_path):
+        """build_payload folds performance_summary into a versioned perf block."""
+        mod = self._load_gen_scorecard()
+        scorecard = {
+            "run_id": "perf",
+            "scenarios": [
+                {
+                    "category": "Gemma-4-E4B-it-GGUF",
+                    "status": "PASS",
+                    "total_emails": 20,
+                    "quality": {
+                        "category_accuracy": 0.5,
+                        "within_one_bucket_accuracy": 0.8,
+                    },
+                    "performance_summary": {
+                        "avg_time_to_first_token": 8.5,
+                        "avg_tokens_per_second": 12.1,
+                        "pipeline_latency_s": 760.0,
+                        "peak_memory_gb": 6.2,
+                        "total_emails": 20,
+                    },
+                }
+            ],
+        }
+        bd = self._make_benchmark_dir(tmp_path, scorecard)
+        payload = mod.build_payload(bd, self._make_gt(tmp_path))
+        assert payload.performance is not None
+        assert payload.performance["ttft_s"] == 8.5
+        assert payload.performance["throughput_tps"] == 12.1
+        assert payload.performance["pipeline_s"] == 760.0
+        assert payload.performance["peak_memory_gb"] == 6.2
+        assert payload.performance["emails_per_run"] == 20
+        # It reaches the rendered card so it shows on the hub.
+        assert "## Performance" in render_scorecard(payload)
+
+    def test_performance_none_when_no_summary(self, tmp_path):
+        """No performance_summary in any scenario -> perf block omitted."""
+        mod = self._load_gen_scorecard()
+        scorecard = {
+            "run_id": "noperf",
+            "scenarios": [
+                {
+                    "category": "m",
+                    "status": "PASS",
+                    "total_emails": 10,
+                    "quality": {
+                        "category_accuracy": 0.5,
+                        "within_one_bucket_accuracy": 0.8,
+                    },
+                }
+            ],
+        }
+        bd = self._make_benchmark_dir(tmp_path, scorecard)
+        payload = mod.build_payload(bd, self._make_gt(tmp_path))
+        assert payload.performance is None
 
     def test_per_category_accuracy_fyi(self, tmp_path):
         """fyi: 6+10=16 total, 6+10=16 correct in scenario1+2 combined."""

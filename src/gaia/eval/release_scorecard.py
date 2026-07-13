@@ -90,6 +90,7 @@ class ResultPayload:
     reproduction_command: Optional[str] = None
     breakdown: Optional[dict] = None
     environment: Optional[dict] = None
+    performance: Optional[dict] = None
 
 
 def _md_cell(value) -> str:
@@ -185,6 +186,7 @@ def render_scorecard(payload: ResultPayload) -> str:
                 for m in payload.metrics
             ],
             **({"breakdown": payload.breakdown} if payload.breakdown else {}),
+            **({"performance": payload.performance} if payload.performance else {}),
         },
         "aggregate": {
             "name": payload.aggregate_name,
@@ -307,6 +309,18 @@ matter alone — no eval-harness access needed.
             )
             breakdown_section += f"\n**Top confusions:**\n\n{conf_lines}\n"
         body += breakdown_section
+
+    if payload.performance:
+        perf_rows = "\n".join(
+            f"| {_md_cell(k)} | {_md_cell(v)} |" for k, v in payload.performance.items()
+        )
+        body += (
+            "\n## Performance\n\n"
+            "_Measured on the run environment above (model / hardware / gaia_commit / "
+            "corpus size); the perf gate is report-only, so these are observed values, "
+            "not pass/fail bars (see `tests/fixtures/email/perf_gate_thresholds.json`)._\n\n"
+            f"| Metric | Value |\n|--------|-------|\n{perf_rows}\n"
+        )
 
     if payload.inherited_from:
         body += f"\n> **Inherited from {payload.inherited_from}** — results carried forward verbatim (patch release).\n"
@@ -537,6 +551,7 @@ def carry_forward(prev_scorecard_path: Path, new_version: str) -> ResultPayload:
     # promise "carried forward verbatim").
     breakdown = results.get("breakdown")
     environment = recipe.get("environment")
+    performance = results.get("performance")
 
     import datetime
 
@@ -555,4 +570,5 @@ def carry_forward(prev_scorecard_path: Path, new_version: str) -> ResultPayload:
         inherited_from=prev_version,
         breakdown=breakdown,
         environment=environment,
+        performance=performance,
     )

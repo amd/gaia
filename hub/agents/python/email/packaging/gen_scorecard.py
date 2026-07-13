@@ -167,6 +167,51 @@ def _mean_scenario_metric(judged: list, key: str) -> Optional[float]:
     return round(sum(vals) / len(vals), 4) if vals else None
 
 
+def _compute_performance(judged: list) -> Optional[dict]:
+    """Mean of the key perf metrics across judged scenarios' performance_summary.
+
+    Each judged scenario is one run over the same corpus, so the cross-run mean is
+    the representative figure (same convention as the quality metrics). These are
+    surfaced on the versioned scorecard (and thus the hub) so the perf numbers are
+    visible per release, not just buried in a CI artifact. Returns ``None`` when no
+    scenario carries a ``performance_summary`` (older benchmark output).
+    """
+    summaries = [
+        s["performance_summary"]
+        for s in judged
+        if isinstance(s.get("performance_summary"), dict)
+    ]
+    if not summaries:
+        return None
+
+    def _mean(key: str) -> Optional[float]:
+        vals = [
+            float(ps[key])
+            for ps in summaries
+            if isinstance(ps.get(key), (int, float)) and not isinstance(ps[key], bool)
+        ]
+        return round(sum(vals) / len(vals), 3) if vals else None
+
+    perf = {
+        "ttft_s": _mean("avg_time_to_first_token"),
+        "throughput_tps": _mean("avg_tokens_per_second"),
+        "pipeline_s": _mean("pipeline_latency_s"),
+        "peak_memory_gb": _mean("peak_memory_gb"),
+    }
+    emails = [
+        int(ps["total_emails"])
+        for ps in summaries
+        if isinstance(ps.get("total_emails"), (int, float))
+        and not isinstance(ps["total_emails"], bool)
+    ]
+    if emails:
+        # Same corpus per run; record the sample size so the numbers are read in
+        # context (TTFT/throughput are per-token, but pipeline scales with it).
+        perf["emails_per_run"] = max(emails)
+    perf = {k: v for k, v in perf.items() if v is not None}
+    return perf or None
+
+
 def _compute_breakdown(judged: list) -> Optional[dict]:
     """Aggregate per-category accuracy and top confusion pairs across judged scenarios.
 
@@ -477,6 +522,7 @@ def build_payload(
     reproduction_command = _build_reproduction_command(model, ground_truth_rel, limit)
 
     breakdown = _compute_breakdown(judged)
+    performance = _compute_performance(judged)
 
     return ResultPayload(
         agent_name="Email Triage",
@@ -525,6 +571,7 @@ def build_payload(
         reproduction_command=reproduction_command,
         breakdown=breakdown,
         environment=environment,
+        performance=performance,
     )
 
 
