@@ -45,6 +45,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from gaia.eval.fixture_paths import resolve_repo_fixture
+
 # ---------------------------------------------------------------------------
 # Corpus loading (offline)
 # ---------------------------------------------------------------------------
@@ -509,21 +511,13 @@ def load_briefing_thresholds(path: str | Path) -> BriefingThresholds:
     )
 
 
-# Canonical location of the committed briefing-gate thresholds manifest. The
-# single entry point CI consumes — flip 'enforce' in this file (data, not
-# code) to make CI gate on the #1951 summary-quality bars.
-_BRIEFING_THRESHOLDS_MANIFEST = (
-    Path(__file__).resolve().parents[3]
-    / "tests"
-    / "fixtures"
-    / "email"
-    / "briefing_gate_thresholds.json"
-)
-
-
 def default_briefing_thresholds_path() -> Path:
-    """Path to the committed briefing-gate thresholds manifest (#1951)."""
-    return _BRIEFING_THRESHOLDS_MANIFEST
+    """Path to the committed briefing-gate thresholds manifest (#1951).
+
+    The single entry point CI consumes — flip 'enforce' in that file (data, not
+    code) to make CI gate on the #1951 summary-quality bars.
+    """
+    return resolve_repo_fixture("email", "briefing_gate_thresholds.json")
 
 
 def load_default_briefing_thresholds() -> BriefingThresholds:
