@@ -452,22 +452,6 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 e,
             )
 
-        # ── Grant key migration (#1592) ────────────────────────────────
-        # Migrate orphaned legacy grant keys (e.g. builtin:email ->
-        # installed:email from the #1520 hub rename) so users who granted
-        # permissions under the old key don't silently lose access.
-        try:
-            from gaia.connectors.grants import migrate_legacy_agent_grants
-
-            migrate_legacy_agent_grants()
-            logger.info("connections: legacy grant migration complete")
-        except Exception as e:  # noqa: BLE001 — defence in depth
-            logger.warning(
-                "connections: legacy grant migration failed (%s); "
-                "users may need to re-grant permissions manually.",
-                e,
-            )
-
         # ── Connectors live-reload (issue #1004) ────────────────────────
         # Wire the McpServerHandler.reload_callback so a Settings →
         # Connectors enable/disable/configure/disconnect from the UI
