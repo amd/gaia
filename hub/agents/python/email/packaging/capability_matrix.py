@@ -149,45 +149,49 @@ MCP_SCOPE_DECISION = {
     ),
 }
 
-# AC5: every eval suite gets a documented follow-up plan, even the ones that
-# already gate CI -- "what happens next" for each, not just current status.
+# AC5: every eval suite gets a documented follow-up plan -- "what happens
+# next" for each. The plan text stays state-agnostic where it can: the LIVE
+# enforce/wired state is derived from the fixtures and rendered in each
+# suite's section header, so the prose never duplicates a flag that the
+# fixture can flip out from under it.
 EVAL_FOLLOWUP_PLAN: Dict[str, str] = {
     "briefing": (
-        "Already an enforcing release gate (enforce:true). Follow-up: keep "
-        "tightening approval/recall/hallucination/faithfulness bars as "
-        "baselines improve; no CI wiring work outstanding."
+        "Judge-scored summary-quality gate for the scheduled daily briefing "
+        "(approval / recall / hallucination-free / faithfulness bars). "
+        "Follow-up: establish and maintain a passing hardware baseline, and "
+        "tighten the bars in the fixture as baselines improve."
     ),
     "drafting": (
-        "Already an enforcing release gate (enforce:true) wired into "
-        "release_agent_email.yml's eval-gate job. Follow-up: raise "
-        "approval_min above 0.70 once a larger judged corpus is available."
+        "Judge-scored draft-approval gate (#1269 metric, approval_min 0.70) "
+        "run by release_agent_email.yml. Follow-up: establish and maintain a "
+        "passing hardware baseline, and raise approval_min once a larger "
+        "judged corpus is available."
     ),
     "perf": (
-        "Already an enforcing release gate (enforce:true) on the Strix Halo "
-        "runner pool. Follow-up: hardware-confirm the bars independently "
-        "and widen them if the pool proves noisy, per the fixture's own "
-        "_comment."
+        "Strix Halo perf bars (ttft / throughput / pipeline / memory) run by "
+        "release_agent_email.yml. Follow-up: keep the bars in the fixture "
+        "calibrated to observed hardware runs -- re-tighten as the agent "
+        "gets faster, widen only with measured evidence."
     ),
     "quality": (
-        "Report-mode today (enforce:false): the FP/FN bars only become "
-        "meaningful once 4-way categorization accuracy improves (see the "
-        "#1266 history), per the fixture's own _comment. A separate "
-        "acceptance_enforce:true release gate already runs on the "
-        "within-one-bucket metric. Follow-up: flip enforce to true in the "
-        "fixture once accuracy stabilizes above the gate's bars."
+        "Triage FP/FN bars that only become meaningful once 4-way "
+        "categorization accuracy improves (see the #1266 history), per the "
+        "fixture's own _comment; a separate acceptance_enforce release gate "
+        "runs on the within-one-bucket metric. Follow-up: flip enforce to "
+        "true in the fixture once accuracy stabilizes above the gate's bars."
     ),
     "action_items": (
-        "Report-mode today (enforce:false); no judged baseline exists yet. "
-        "Follow-up: generate the first nightly Strix Halo / Gemma-4-E4B "
-        "baseline (the #1949 eval's documented follow-up) and flip enforce "
-        "to true once it stabilizes."
+        "Extraction-quality bars with no judged baseline yet. Follow-up: "
+        "generate the first nightly Strix Halo / Gemma-4-E4B baseline (the "
+        "#1949 eval's documented follow-up) and flip enforce to true once "
+        "it stabilizes."
     ),
     "followups": (
-        "Report-mode today (enforce:false) AND CI-unwired: no "
-        "eval_followup_report.py exists, unlike the other five suites. "
-        "Follow-up: #2040 tracks wiring an eval_followup_report.py plus a "
-        "workflow step and, separately, establishing a judged baseline (the "
-        "#1950 eval's documented follow-up) before flipping enforce to true."
+        "Detection-quality bars, CI-unwired: no eval_followup_report.py "
+        "exists, unlike the other five suites. Follow-up: #2040 tracks "
+        "wiring an eval_followup_report.py plus a workflow step and, "
+        "separately, establishing a judged baseline (the #1950 eval's "
+        "documented follow-up) before flipping enforce to true."
     ),
 }
 
