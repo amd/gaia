@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: MIT
 """Smoke tests for the standalone gaia-agent-email package."""
 
-import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -241,7 +240,7 @@ class _MinimalCalendarBackend:
     """Satisfies the CalendarBackend protocol just enough to construct."""
 
 
-def _build_memory_disabled_agent(tmp_path):
+def _build_memory_disabled_agent(tmp_path, monkeypatch):
     """Construct an EmailTriageAgent with memory forced off.
 
     Mirrors ``tests/test_email_memory.py::_build_agent(memory_disabled=True)``
@@ -260,20 +259,13 @@ def _build_memory_disabled_agent(tmp_path):
         silent_mode=True,
         debug=False,
     )
-    old = os.environ.get("GAIA_MEMORY_DISABLED")
-    os.environ["GAIA_MEMORY_DISABLED"] = "1"
-    try:
-        with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:
-            mock_sdk.return_value = MagicMock()
-            return EmailTriageAgent(config=cfg)
-    finally:
-        if old is None:
-            del os.environ["GAIA_MEMORY_DISABLED"]
-        else:
-            os.environ["GAIA_MEMORY_DISABLED"] = old
+    monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
+    with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:
+        mock_sdk.return_value = MagicMock()
+        return EmailTriageAgent(config=cfg)
 
 
-def test_tools_count_matches_live_registry_and_manifest(tmp_path):
+def test_tools_count_matches_live_registry_and_manifest(tmp_path, monkeypatch):
     """build_registration().tools_count and gaia-agent.yaml's tools_count must
     both track the LIVE tool registry, not a hand-maintained literal (#1232).
 
@@ -282,7 +274,7 @@ def test_tools_count_matches_live_registry_and_manifest(tmp_path):
     """
     import gaia_agent_email as m
 
-    agent = _build_memory_disabled_agent(tmp_path)
+    agent = _build_memory_disabled_agent(tmp_path, monkeypatch)
     try:
         # Precondition: memory tools are NOT part of the live count.
         assert agent._memory_store is None
