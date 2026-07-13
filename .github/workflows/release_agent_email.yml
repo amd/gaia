@@ -354,6 +354,13 @@ jobs:
   email-eval:
     name: Email eval suite (release gate)
     uses: ./.github/workflows/test_email_agent_eval.yml
+    # Triage a smaller slice for the release gate: the full 50-email corpus is one
+    # ~32-min tool call on a 4B local model (~38s/email). 20 emails keeps the perf
+    # signal (TTFT / throughput are per-token, count-independent) and the judge
+    # evals (drafting / action-item / briefing — own seed corpora) unchanged, while
+    # cutting ~19 min off the release. The weekly nightly still runs the full 50.
+    with:
+      limit: '20'
     secrets: inherit
 
   # ── Stage 1d: email test suite (release gate, hosted) ──────────────
