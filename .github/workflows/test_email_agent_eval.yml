@@ -134,9 +134,12 @@ env:
   # step is covered — mirrors email_scorecard_refresh.yml.
   PYTHONPATH: ${{ github.workspace }}
   # The benchmark triages the whole corpus in ONE `triage_inbox` tool call
-  # (~20s/email on a 4B local model), so the default 180s tool timeout abandons
-  # it mid-run. Match the scorecard refresh's 30-min budget.
-  GAIA_AGENT_TOOL_TIMEOUT: "1800"
+  # (~38s/email measured on the stx pool for Gemma-4-E4B), so the tool timeout
+  # must cover the largest limit run here: the weekly default is 50 emails
+  # (~1900s) and the release gate passes limit=20 (~760s). 1800s abandoned the
+  # 50-email run mid-flight -> 0 triage results -> Category acc 0.0; 2700s
+  # (45 min) covers it with margin. (Faster triage is tracked separately.)
+  GAIA_AGENT_TOOL_TIMEOUT: "2700"
   # The agent's calendar-connector resolution blocks on the OS keyring in a
   # headless runner — disable it so agent construction/triage doesn't hang.
   PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
@@ -161,7 +164,13 @@ jobs:
           # `gaia eval benchmark` imports gaia_agent_email.agent, so install the
           # LOCAL editable hub package (this branch's code, not the PyPI wheel)
           # or the benchmark dies with ModuleNotFoundError on a clean venv.
-          install-package: '.[dev,eval,api] -e hub/agents/python/email'
+          # Core gaia is installed EDITABLE (-e .) too: the eval reads committed
+          # threshold manifests via gaia.eval's default_*_thresholds_path(), which
+          # resolve `Path(__file__).parents[3]/tests/fixtures/email/...`. A
+          # non-editable core lands in site-packages, so parents[3] points at
+          # .venv/Lib -> FileNotFoundError on the gate manifests. Editable keeps
+          # __file__ in the repo so the manifests resolve.
+          install-package: '-e .[dev,eval,api] -e hub/agents/python/email'
 
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
