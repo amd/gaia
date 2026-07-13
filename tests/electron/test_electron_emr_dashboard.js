@@ -10,7 +10,7 @@ const path = require('path');
 const fs = require('fs');
 
 describe('EMR Dashboard Integration', () => {
-  const emrAppPath = path.join(__dirname, '../../hub/agents/python/emr/gaia_agent_emr/dashboard/electron');
+  const emrAppPath = path.join(__dirname, '../../hub/agents/emr/python/gaia_agent_emr/dashboard/electron');
 
   describe('app configuration', () => {
     it('should have valid package.json', () => {

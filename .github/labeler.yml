@@ -50,71 +50,71 @@ talk:
     - any-glob-to-any-file: ['src/gaia/talk/**/*', 'docs/guides/talk.md', 'docs/sdk/agents/talk.md']
 
 # ---------------------------------------------------------------------------
-# Hub agents (hub/agents/python/<id>, hub/agents/npm/<id>). One label per
+# Hub agents (hub/agents/<id>/python, hub/agents/<id>/npm). One label per
 # packaged agent so a PR touching a single agent's sources is labelled for it.
 # ---------------------------------------------------------------------------
 
 # Email agent changes (hub package: frozen Python sidecar + npm client)
 agent::email:
   - changed-files:
-    - any-glob-to-any-file: ['hub/agents/python/email/**/*', 'hub/agents/npm/agent-email/**/*', 'docs/guides/email.mdx']
+    - any-glob-to-any-file: ['hub/agents/email/python/**/*', 'hub/agents/email/npm/**/*', 'docs/guides/email.mdx']
 
 agent::analyst:
   - changed-files:
-    - any-glob-to-any-file: ['hub/agents/python/analyst/**/*', 'docs/guides/analyze.mdx']
+    - any-glob-to-any-file: ['hub/agents/analyst/python/**/*', 'docs/guides/analyze.mdx']
 
 agent::blender:
   - changed-files:
-    - any-glob-to-any-file: ['hub/agents/python/blender/**/*', 'docs/guides/blender.mdx']
+    - any-glob-to-any-file: ['hub/agents/blender/python/**/*', 'docs/guides/blender.mdx']
 
 agent::browser:
   - changed-files:
-    - any-glob-to-any-file: ['hub/agents/python/browser/**/*', 'docs/guides/browse.mdx']
+    - any-glob-to-any-file: ['hub/agents/browser/python/**/*', 'docs/guides/browse.mdx']
 
 agent::code:
   - changed-files:
-    - any-glob-to-any-file: ['hub/agents/python/code/**/*', 'docs/guides/code.mdx']
+    - any-glob-to-any-file: ['hub/agents/code/python/**/*', 'docs/guides/code.mdx']
 
 agent::connectors-demo:
   - changed-files:
-    - any-glob-to-any-file: ['hub/agents/python/connectors-demo/**/*']
+    - any-glob-to-any-file: ['hub/agents/connectors-demo/python/**/*']
 
 agent::docker:
   - changed-files:
-    - any-glob-to-any-file: ['hub/agents/python/docker/**/*', 'docs/guides/docker.mdx']
+    - any-glob-to-any-file: ['hub/agents/docker/python/**/*', 'docs/guides/docker.mdx']
 
 agent::docqa:
   - changed-files:
-    - any-glob-to-any-file: ['hub/agents/python/docqa/**/*']
+    - any-glob-to-any-file: ['hub/agents/docqa/python/**/*']
 
 agent::emr:
   - changed-files:
-    - any-glob-to-any-file: ['hub/agents/python/emr/**/*', 'docs/guides/emr.mdx']
+    - any-glob-to-any-file: ['hub/agents/emr/python/**/*', 'docs/guides/emr.mdx']
 
 agent::fileio:
   - changed-files:
-    - any-glob-to-any-file: ['hub/agents/python/fileio/**/*']
+    - any-glob-to-any-file: ['hub/agents/fileio/python/**/*']
 
 agent::jira:
   - changed-files:
-    - any-glob-to-any-file: ['hub/agents/python/jira/**/*', 'src/gaia/apps/jira/**/*', 'docs/guides/jira.mdx']
+    - any-glob-to-any-file: ['hub/agents/jira/python/**/*', 'src/gaia/apps/jira/**/*', 'docs/guides/jira.mdx']
 
 agent::routing:
   - changed-files:
-    - any-glob-to-any-file: ['hub/agents/python/routing/**/*', 'docs/guides/routing.mdx']
+    - any-glob-to-any-file: ['hub/agents/routing/python/**/*', 'docs/guides/routing.mdx']
 
 agent::sd:
   - changed-files:
-    - any-glob-to-any-file: ['hub/agents/python/sd/**/*']
+    - any-glob-to-any-file: ['hub/agents/sd/python/**/*']
 
 agent::summarize:
   - changed-files:
-    - any-glob-to-any-file: ['hub/agents/python/summarize/**/*']
+    - any-glob-to-any-file: ['hub/agents/summarize/python/**/*']
 
 # Tutorial / reference example agents (hello-world, word-count, doc-search)
 agent::examples:
   - changed-files:
-    - any-glob-to-any-file: ['hub/agents/python/hello-world/**/*', 'hub/agents/python/word-count/**/*', 'hub/agents/python/doc-search/**/*']
+    - any-glob-to-any-file: ['hub/agents/hello-world/python/**/*', 'hub/agents/word-count/python/**/*', 'hub/agents/doc-search/python/**/*']
 
 # Evaluation framework changes
 eval:

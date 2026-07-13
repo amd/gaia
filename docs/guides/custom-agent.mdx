@@ -177,7 +177,7 @@ A connector lets users:
 Declare what your agent needs by setting `REQUIRED_CONNECTORS` on the
 class, and call `get_credential_sync(connector_id, agent_id, required_scopes=[...])`
 from inside a tool to get a usable token. The
-[`connectors-demo` agent](https://github.com/amd/gaia/blob/main/hub/agents/python/connectors-demo/gaia_agent_connectors_demo/agent.py)
+[`connectors-demo` agent](https://github.com/amd/gaia/blob/main/hub/agents/connectors-demo/python/gaia_agent_connectors_demo/agent.py)
 is a working reference for both `oauth_pkce` (Google) and `mcp_server`
 (GitHub) connectors.
 
@@ -409,7 +409,7 @@ agent and publish it through the curated PR route:
 <Steps>
   <Step title="Package it">
     `gaia agent init <id>` scaffolds a publishable package under
-    `hub/agents/python/<id>/` — a `gaia-agent.yaml` manifest, your agent code, a
+    `hub/agents/<id>/python/` — a `gaia-agent.yaml` manifest, your agent code, a
     README, and `pyproject.toml`. Move your `agent.py` logic in and fill the manifest.
   </Step>
   <Step title="Validate it">
@@ -417,7 +417,7 @@ agent and publish it through the curated PR route:
     and a README — both are required for review.
   </Step>
   <Step title="Open a PR">
-    Commit the package under `hub/agents/python/<id>/` and open a PR to
+    Commit the package under `hub/agents/<id>/python/` and open a PR to
     [`amd/gaia`](https://github.com/amd/gaia). The **PR route needs no token** —
     maintainers review, and the automated pipeline publishes it to the Hub + PyPI on
     merge. (A direct-publish token route exists too, for maintainers.)

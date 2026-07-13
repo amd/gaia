@@ -7,22 +7,25 @@ Production agents for the GAIA Agent Hub. Each agent is a standalone package tha
 ```
 hub/
 ├── agents/
-│   ├── python/         # Python agents (packaged as wheels)
-│   └── cpp/            # C++ agents (compiled binaries)
+│   ├── <id>/
+│   │   ├── python/     # Python agent (packaged as a wheel)
+│   │   ├── npm/        # JS/TS client (when the agent ships one)
+│   │   └── cpp/        # C++ agent (compiled binary, when present)
+│   └── README.md
 └── README.md
 ```
 
 ## New here? Start with the examples
 
 Minimal, heavily-commented reference agents live under
-[`agents/python/`](agents/python/) and are built to be copy-pasted as the
+[`agents/`](agents/) and are built to be copy-pasted as the
 starting point for your own agent:
 
-- [`hello-world/`](agents/python/hello-world/) — the smallest possible agent (no tools)
-- [`word-count/`](agents/python/word-count/) — registering a tool with `@tool`
-- [`doc-search/`](agents/python/doc-search/) — composing the framework `RAGToolsMixin`
+- [`hello-world/`](agents/hello-world/python/) — the smallest possible agent (no tools)
+- [`word-count/`](agents/word-count/python/) — registering a tool with `@tool`
+- [`doc-search/`](agents/doc-search/python/) — composing the framework `RAGToolsMixin`
 
-See [agents/python/README.md](agents/python/README.md) for the package format and a
+See [agents/README.md](agents/README.md) for the package format and a
 guided reading order.
 
 ## Creating a new agent

@@ -14,7 +14,7 @@
 #         -> publish (tag only: gh-action-pypi-publish per agent, skip-existing)
 #
 # The whole workflow is tag-driven (v*) — it does NOT run on PRs. Building all
-# agent wheels on every PR touching hub/agents/python/** was pure noise; broken
+# agent wheels on every PR touching hub/agents/** was pure noise; broken
 # wheels surface at release time instead. Publishing runs ONLY on a version tag
 # (v*). Agent wheels version independently (each gaia-agent.yaml/pyproject sets
 # its own SemVer), so

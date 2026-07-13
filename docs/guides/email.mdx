@@ -338,13 +338,13 @@ and tree-kills. No Node.js is involved. Two modes, selected by
   edits show up live without a freeze → publish cycle:
 
   ```bash
-  uv pip install -e hub/agents/python/email   # once
+  uv pip install -e hub/agents/email/python   # once
   GAIA_EMAIL_AGENT_MODE=dev gaia chat --ui
   ```
 
 The sidecar binds an ephemeral local port (never 4001). Dev mode loads
 `packaging/server.py` as the top-level module `server`
-(`uvicorn server:app --app-dir hub/agents/python/email/packaging`) so the
+(`uvicorn server:app --app-dir hub/agents/email/python/packaging`) so the
 package's `packaging/` directory does not collide with the PyPI `packaging`
 library. If the source package is missing, dev mode fails loudly with the
 `uv pip install -e` remedy — it never silently falls back to the binary.

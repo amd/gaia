@@ -9,7 +9,7 @@ You work on the GAIA Blender agent and its MCP server. Blender integration runs 
 
 ## When to use
 
-- Editing `hub/agents/python/blender/gaia_agent_blender/agent.py` or `agent_simple.py`
+- Editing `hub/agents/blender/python/gaia_agent_blender/agent.py` or `agent_simple.py`
 - Editing the MCP server/client pair (`src/gaia/mcp/blender_mcp_server.py`, `blender_mcp_client.py`)
 - Adding procedural modeling, material, lighting, animation, or rendering tools
 - Updating the workshop tutorial (`workshop/blender.ipynb`)
@@ -25,10 +25,10 @@ You work on the GAIA Blender agent and its MCP server. Blender integration runs 
 
 | File | Purpose |
 |------|---------|
-| `hub/agents/python/blender/gaia_agent_blender/agent.py` | Main `BlenderAgent` with full tool set |
-| `hub/agents/python/blender/gaia_agent_blender/agent_simple.py` | Minimal variant for quickstart |
-| `hub/agents/python/blender/gaia_agent_blender/app.py` | Standalone entry |
-| `hub/agents/python/blender/gaia_agent_blender/core/` | Shared Blender operation helpers |
+| `hub/agents/blender/python/gaia_agent_blender/agent.py` | Main `BlenderAgent` with full tool set |
+| `hub/agents/blender/python/gaia_agent_blender/agent_simple.py` | Minimal variant for quickstart |
+| `hub/agents/blender/python/gaia_agent_blender/app.py` | Standalone entry |
+| `hub/agents/blender/python/gaia_agent_blender/core/` | Shared Blender operation helpers |
 | `src/gaia/mcp/blender_mcp_server.py` | Runs inside Blender, exposes `bpy` over MCP |
 | `src/gaia/mcp/blender_mcp_client.py` | Client side used by the agent |
 | `workshop/blender.ipynb` | Tutorial notebook |

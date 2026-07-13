@@ -10,20 +10,20 @@ Adopt the release **eval scorecard** ([`docs/reference/eval-scorecard.mdx`](../.
 **Core modules (do not modify; reuse):**
 - `src/gaia/eval/release_scorecard.py` — `ResultPayload`, `compute_aggregate`, `render_scorecard`, `write_scorecard`, `validate_scorecard`, `carry_forward`. Harness-agnostic (stdlib + PyYAML only).
 - `src/gaia/eval/scorecard_gate.py` — the standalone gate (`python -m gaia.eval.scorecard_gate`).
-- Reference adapter: `hub/agents/python/email/packaging/gen_scorecard.py`.
+- Reference adapter: `hub/agents/email/python/packaging/gen_scorecard.py`.
 
 This is a **phased checklist with a hard gate at the real-eval step** — the scorecard MUST come from an actual eval run, never hand-authored numbers.
 
 ## Phase 1 — Locate the agent's surfaces
 
 1. **Version source of truth** = the `version:` field in `<agent>/gaia-agent.yaml`. Never invent a parallel scheme.
-2. **Canonical README** (where the scorecard is linked + surfaced): for an npm-published agent it is the npm client README (e.g. `hub/agents/npm/<id>/README.md`), NOT a `packaging/README.md`. For a Python-only agent it is `hub/agents/python/<id>/README.md`. Confirm which by checking what `release_agent_<id>.yml` publishes (`README:` env) — the published README is the one to link.
+2. **Canonical README** (where the scorecard is linked + surfaced): for an npm-published agent it is the npm client README (e.g. `hub/agents/<id>/npm/README.md`), NOT a `packaging/README.md`. For a Python-only agent it is `hub/agents/<id>/python/README.md`. Confirm which by checking what `release_agent_<id>.yml` publishes (`README:` env) — the published README is the one to link.
 3. **doc-root** = the directory holding that canonical README. The scorecard lives at `<doc-root>/SCORECARD.md` — a **single file updated in place**, versioned via the publish snapshot (same as README.md). **There is no `scorecards/` directory.**
 4. **Eval vehicle**: what existing harness produces this agent's accuracy metric? (email → `gaia eval benchmark` over `tests/fixtures/email/`.) If none exists, STOP and surface that — propose the minimal harness before building; do not invent numbers.
 
 ## Phase 2 — Write the adapter (harness → payload)
 
-Copy `hub/agents/python/email/packaging/gen_scorecard.py` as the template. The adapter:
+Copy `hub/agents/email/python/packaging/gen_scorecard.py` as the template. The adapter:
 - imports ONLY `gaia.eval.release_scorecard` (never the harness or agent package — preserve loose coupling);
 - reads the harness output, builds a `ResultPayload`;
 - populates `reproduction_command` with the **exact shell commands** to reproduce this scorecard, including all required env vars (`PYTHON_KEYRING_BACKEND`, `GAIA_AGENT_TOOL_TIMEOUT`, `PYTHONPATH`);
@@ -53,9 +53,9 @@ PYTHONPATH="$(pwd)" \
     --limit 220 --output-dir <persistent-dir>
 
 PYTHONPATH="$(pwd)" \
-<venv>/bin/python hub/agents/python/email/packaging/gen_scorecard.py \
+<venv>/bin/python hub/agents/email/python/packaging/gen_scorecard.py \
     --benchmark-dir <persistent-dir> --limit 220
-# → writes hub/agents/npm/agent-email/SCORECARD.md in place
+# → writes hub/agents/email/npm/SCORECARD.md in place
 ```
 
 **Headless gotchas (see memory `project-email-benchmark-headless-gotchas`):**

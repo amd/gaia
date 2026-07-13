@@ -208,7 +208,7 @@ jobs:
             - **docs**: a new/changed feature with no `docs/` page or no `docs.json` nav entry;
               `docs/reference/cli.mdx` drift from the real `gaia` flags; any `amd-gaia.ai` URL in
               `src/gaia/` missing the `/docs/` prefix (CI rule, issue #1058); a hub agent under
-              `hub/agents/python/<id>/` whose README/SPEC/SKILL/CHANGELOG contradict each other.
+              `hub/agents/<id>/python/` whose README/SPEC/SKILL/CHANGELOG contradict each other.
             - **tests**: new or changed code paths under `src/gaia/` or `hub/` with no test in
               `tests/`; assertions that only prove a mock was called, not that the outgoing call
               is valid (the CLAUDE.md "#1655" boundary rule).

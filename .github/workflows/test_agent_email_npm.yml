@@ -12,13 +12,13 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'hub/agents/npm/agent-email/**'
+      - 'hub/agents/email/npm/**'
       - '.github/workflows/test_agent_email_npm.yml'
   pull_request:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      - 'hub/agents/npm/agent-email/**'
+      - 'hub/agents/email/npm/**'
       - '.github/workflows/test_agent_email_npm.yml'
   merge_group:
   workflow_dispatch:
@@ -37,7 +37,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     defaults:
       run:
-        working-directory: hub/agents/npm/agent-email
+        working-directory: hub/agents/email/npm
 
     steps:
       - uses: actions/checkout@v7
@@ -47,7 +47,7 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: hub/agents/npm/agent-email/package-lock.json
+          cache-dependency-path: hub/agents/email/npm/package-lock.json
 
       - name: Install dependencies
         run: npm ci

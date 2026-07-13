@@ -44,7 +44,7 @@ from typing import Any
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
-_HUB_EMAIL = _REPO_ROOT / "hub" / "agents" / "python" / "email"
+_HUB_EMAIL = _REPO_ROOT / "hub" / "agents" / "email" / "python"
 if _HUB_EMAIL.is_dir() and str(_HUB_EMAIL) not in sys.path:
     sys.path.insert(0, str(_HUB_EMAIL))
 

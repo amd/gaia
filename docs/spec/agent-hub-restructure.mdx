@@ -11,11 +11,11 @@ icon: "folder-tree"
 ## Migration status
 
 Step 1 (mixin promotion) and the registry's installed-agent discovery are
-landed. Production agents are migrating to `hub/agents/python/<id>/` in batches.
+landed. Production agents are migrating to `hub/agents/<id>/python/` in batches.
 
 | Agent(s) | Status | Package |
 |----------|--------|---------|
-| `summarize`, `sd`, `docker`, `jira`, `fileio`, `blender`, `emr` | ✅ Migrated | `gaia-agent-<id>` under `hub/agents/python/` |
+| `summarize`, `sd`, `docker`, `jira`, `fileio`, `blender`, `emr` | ✅ Migrated | `gaia-agent-<id>` under `hub/agents/<id>/python/` |
 | `chat` (chat/doc/file profiles + lite), `analyst` (data), `browser` (web), `docqa`, `email`, `code`, `routing`, `connectors-demo` | ⏳ Pending | still in `src/gaia/agents/` |
 
 The pending set is deferred because of deeper coupling: `chat`/`doc`/`file`
@@ -25,7 +25,7 @@ surface, `code`↔`routing` are interdependent, and `docqa` depends on
 registry. `gaia-code` stays as a core console script until `code` moves.
 
 Migrated agents install as standalone wheels (`pip install gaia-agent-<id>` or
-`pip install -e hub/agents/python/<id>`) and are discovered via the `gaia.agent`
+`pip install -e hub/agents/<id>/python`) and are discovered via the `gaia.agent`
 entry-point group. The core `amd-gaia` wheel no longer ships them; in-core
 callsites lazy-import each agent and fail loudly when the wheel is absent.
 
@@ -134,7 +134,7 @@ Agents with cross-agent dependencies (e.g. RoutingAgent uses CodeAgent) declare 
 Move RAG, FileIO, Shell, CodeIndex mixins to `src/gaia/agents/tools/`. Update all imports and `KNOWN_TOOLS`. Add deprecated re-exports. Run full test suite — no behavior change.
 </Step>
 <Step title="Create agent package skeletons">
-For each of the 16 agents, create `hub/agents/python/{id}/` with `gaia-agent.yaml`, `pyproject.toml`, `gaia_agent_{id}/` package dir, `tests/`, and `README.md`.
+For each of the 16 agents, create `hub/agents/{id}/python/` with `gaia-agent.yaml`, `pyproject.toml`, `gaia_agent_{id}/` package dir, `tests/`, and `README.md`.
 </Step>
 <Step title="Move first agent (summarize)">
 Start with `summarize` — simplest, fewest dependencies. Proves the pattern end-to-end before bulk migration.
@@ -163,7 +163,7 @@ Replace ~16 direct agent imports in `cli.py`, `ui/_chat_helpers.py`, `ui/agent_l
 immutability). R2 publishing is handled at author time by `gaia agent publish`.
 </Step>
 <Step title="Relocate tests">
-Move agent-specific tests to `hub/agents/python/{id}/tests/`. Framework tests stay in `tests/`.
+Move agent-specific tests to `hub/agents/{id}/python/tests/`. Framework tests stay in `tests/`.
 </Step>
 </Steps>
 
@@ -214,7 +214,7 @@ The exploration found these agent-to-agent couplings that must be resolved:
 |------|-----------|
 | 252 import references across the codebase break | Promote mixins first (Step 1), then migrate one agent at a time |
 | `pip install amd-gaia` no longer ships agents (breaking change) | `amd-gaia[agents]` extras preserves the "everything" install; document migration |
-| Editable dev workflow friction | `pip install -e hub/agents/python/{id}/` registers via entry points |
+| Editable dev workflow friction | `pip install -e hub/agents/{id}/python/` registers via entry points |
 | Registry can't find agents | Entry-point discovery + `~/.gaia/agents/` scan; fail loudly if an agent's `min_gaia_version` is unmet |
 
 ## Verification
@@ -224,9 +224,9 @@ The exploration found these agent-to-agent couplings that must be resolved:
 python -m pytest tests/ -x
 
 # Step 3 — first agent works as standalone package
-pip install -e hub/agents/python/summarize/
+pip install -e hub/agents/summarize/python/
 gaia agent run summarize --prompt "Summarize this text"
-python -m pytest hub/agents/python/summarize/tests/ -xvs
+python -m pytest hub/agents/summarize/python/tests/ -xvs
 
 # Step 5 — core wheel is framework-only
 pip install -e ".[dev]"        # framework

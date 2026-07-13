@@ -22,7 +22,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 # Paths to scan — the agent source and the connectors framework.
 _SCAN_PATHS = [
     _REPO_ROOT / "src" / "gaia",
-    _REPO_ROOT / "hub" / "agents" / "python" / "email",
+    _REPO_ROOT / "hub" / "agents" / "email" / "python",
 ]
 
 # Env var names that would constitute a hidden mailbox-provider override.

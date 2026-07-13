@@ -9,11 +9,11 @@
 
 This spec defines how to ship **22 purpose-built, autonomous agents** through the GAIA Agent Hub. It is the implementation companion to the strategic analysis that identified the agents; this document is concerned only with *how to build and ship them*.
 
-The core thesis: **we are not building 22 agents — we are building 7 shared infrastructure layers, on top of which each agent is a thin package** (a `gaia-agent.yaml` manifest + a system prompt + tool bindings + a memory schema + activation triggers). This is exactly what the Agent Hub packaging model (`hub/agents/python/<name>/`) and the SKILL.md format are designed to enable.
+The core thesis: **we are not building 22 agents — we are building 7 shared infrastructure layers, on top of which each agent is a thin package** (a `gaia-agent.yaml` manifest + a system prompt + tool bindings + a memory schema + activation triggers). This is exactly what the Agent Hub packaging model (`hub/agents/<name>/python/`) and the SKILL.md format are designed to enable.
 
 ### Goals
 
-1. Every agent is a standalone Hub package under `hub/agents/python/<id>/` that `import gaia` from the published `amd-gaia` wheel.
+1. Every agent is a standalone Hub package under `hub/agents/<id>/python/` that `import gaia` from the published `amd-gaia` wheel.
 2. Every agent is **packaged, native, and compiled** into one self-contained artifact exposing **all five interfaces** (TUI, CLI, pipe, API server, MCP server), published to **R2** and surfaced on both the **GAIA website** and the **Agent UI**. Python first; each agent has a C++ supersession path that keeps the same id, manifest, and interfaces.
 3. Every agent follows the **proactive interaction model**: it discovers the user's context, proposes actions, and acts with consent — never a blank text box.
 4. Every agent embodies the north star: **autonomous, personalized, adaptive, local, with memory.**
@@ -21,10 +21,10 @@ The core thesis: **we are not building 22 agents — we are building 7 shared in
 
 ### Build order: Hub first, agents native
 
-**The Hub platform is built first; all 22 agents are implemented directly as Hub packages in `hub/agents/python/<id>/` from inception.** There is no in-tree-then-migrate path for these agents — they are Hub-native from their first commit, importing `gaia` from the published `amd-gaia` wheel exactly like third-party agents will. This means:
+**The Hub platform is built first; all 22 agents are implemented directly as Hub packages in `hub/agents/<id>/python/` from inception.** There is no in-tree-then-migrate path for these agents — they are Hub-native from their first commit, importing `gaia` from the published `amd-gaia` wheel exactly like third-party agents will. This means:
 
 - The Hub restructure (#1102) and manifest/registry/packaging work (Phases 0–2 of `agent-hub-ui.mdx`) are a **hard prerequisite** for agent A1, not a parallel track.
-- Each agent is authored with `gaia agent init <id>` → developed in `hub/agents/python/<id>/` → validated with `gaia agent test` → shipped with `gaia agent publish`. The same workflow we expect external contributors to use — we dogfood it for all 22.
+- Each agent is authored with `gaia agent init <id>` → developed in `hub/agents/<id>/python/` → validated with `gaia agent test` → shipped with `gaia agent publish`. The same workflow we expect external contributors to use — we dogfood it for all 22.
 - No agent code lands in `src/gaia/agents/` (which stays framework-only: base classes, shared mixins, registry).
 
 ### Non-goals
@@ -62,10 +62,10 @@ The core thesis: **we are not building 22 agents — we are building 7 shared in
 
 ### 2.2 Anatomy of an agent package
 
-Each agent is a directory under `hub/agents/python/<id>/`:
+Each agent is a directory under `hub/agents/<id>/python/`:
 
 ```
-hub/agents/python/email/
+hub/agents/email/python/
 ├── gaia-agent.yaml          # manifest (Hub display, requirements, interfaces, permissions)
 ├── pyproject.toml           # dependencies = ["amd-gaia>=0.20.0", "gaia-skill-connectors"]
 ├── gaia_agent_email/
@@ -656,7 +656,7 @@ interfaces:
 Each agent gets **one tracking issue** with a fixed sub-task checklist (manifest, agent class, prompt, tools, memory schema, triggers, tests + eval scenarios, README, Hub publish). Template:
 
 ```
-AH-A<n>: hub/agents/python/<id> — <Agent Name>
+AH-A<n>: hub/agents/<id>/python — <Agent Name>
   [ ] gaia-agent.yaml manifest (+ layers/connectors/proactive/interfaces: all true)
   [ ] pyproject.toml (amd-gaia + skill deps)
   [ ] agent class composing required layer mixins + ApiAgent + MCPAgent

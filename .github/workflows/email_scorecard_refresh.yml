@@ -46,11 +46,11 @@ on:
     branches-ignore:
       - main
     paths:
-      - 'hub/agents/python/email/**'
+      - 'hub/agents/email/python/**'
       # Publishing/upload plumbing is not LLM- or eval-affecting, so a change to
       # it must NOT re-run the 90-min real eval. publish_to_r2.py only POSTs the
       # already-built artifacts + docs to the Hub Worker.
-      - '!hub/agents/python/email/packaging/publish_to_r2.py'
+      - '!hub/agents/email/python/packaging/publish_to_r2.py'
       - 'tests/fixtures/email/**'
       - 'src/gaia/eval/release_scorecard.py'
       - 'src/gaia/eval/scorecard_gate.py'
@@ -65,8 +65,8 @@ permissions:
   contents: write   # auto-commit the refreshed scorecard to the branch
 
 env:
-  SCORECARD: hub/agents/npm/agent-email/SCORECARD.md
-  MANIFEST: hub/agents/python/email/gaia-agent.yaml
+  SCORECARD: hub/agents/email/npm/SCORECARD.md
+  MANIFEST: hub/agents/email/python/gaia-agent.yaml
   LIMIT: ${{ github.event.inputs.limit || '220' }}
   MODEL: ${{ github.event.inputs.model || 'Gemma-4-E4B-it-GGUF' }}
   PYTHONIOENCODING: "utf-8"
@@ -97,7 +97,7 @@ jobs:
           # gaia_agent_email.agent — install the LOCAL editable hub package (this
           # branch's agent code, not the published PyPI wheel) or the benchmark
           # dies with ModuleNotFoundError on a clean venv.
-          install-package: '.[dev,eval,api] -e hub/agents/python/email'
+          install-package: '.[dev,eval,api] -e hub/agents/email/python'
 
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
@@ -178,7 +178,7 @@ jobs:
           # here, so the refresh does not commit a regressed card.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          python hub/agents/python/email/packaging/eval_drafting_report.py
+          python hub/agents/email/python/packaging/eval_drafting_report.py
           if ($LASTEXITCODE -ne 0) { throw "drafting eval failed" }
 
       - name: Regenerate SCORECARD.md from the real run
@@ -187,7 +187,7 @@ jobs:
           # reported metric (weight 0). The drafting eval above hard-fails on a
           # missing key, so a report here is always a real judged run; a missing
           # or unjudged report makes gen_scorecard fail loudly (never omits).
-          python hub/agents/python/email/packaging/gen_scorecard.py --benchmark-dir eval-out --limit "$env:LIMIT" --drafting-report eval-out/drafting_gate_report.json
+          python hub/agents/email/python/packaging/gen_scorecard.py --benchmark-dir eval-out --limit "$env:LIMIT" --drafting-report eval-out/drafting_gate_report.json
           if ($LASTEXITCODE -ne 0) { throw "gen_scorecard failed" }
 
       - name: Same-version regression check (reject a worse re-run)

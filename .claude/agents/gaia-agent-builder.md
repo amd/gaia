@@ -71,7 +71,7 @@ Missing any of these will fail `python util/lint.py --agents` or silently produc
 
 ### 4. CLI (optional)
 - [ ] Add a subparser in `src/gaia/cli.py` and document in `docs/reference/cli.mdx` — see `cli-developer` for the pattern
-- [ ] Standalone binary? Ship the agent as a hub wheel with its own `pyproject.toml` entry point — NOT a core `setup.py` `console_scripts` entry (e.g. `hub/agents/python/code/` declares `gaia-code = gaia_agent_code.cli:main`)
+- [ ] Standalone binary? Ship the agent as a hub wheel with its own `pyproject.toml` entry point — NOT a core `setup.py` `console_scripts` entry (e.g. `hub/agents/code/python/` declares `gaia-code = gaia_agent_code.cli:main`)
 
 ### 5. Tests (required)
 - [ ] `tests/test_<agent>.py` — instantiation + tool registration + mocked-LLM response

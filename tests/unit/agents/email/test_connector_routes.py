@@ -166,7 +166,7 @@ class TestSidecarMount:
         root = pathlib.Path(__file__).resolve()
         while root.name and not (root / "hub").exists():
             root = root.parent
-        srv = root / "hub/agents/python/email/packaging/server.py"
+        srv = root / "hub/agents/email/python/packaging/server.py"
         spec = importlib.util.spec_from_file_location("email_sidecar_server", srv)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)

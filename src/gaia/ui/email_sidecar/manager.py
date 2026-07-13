@@ -80,7 +80,7 @@ def find_free_port(host: str = _HOST) -> int:
 
 def _default_email_src_dir() -> Path:
     # src/gaia/ui/email_sidecar/manager.py -> repo root is parents[4].
-    return Path(__file__).resolve().parents[4] / "hub" / "agents" / "python" / "email"
+    return Path(__file__).resolve().parents[4] / "hub" / "agents" / "email" / "python"
 
 
 def _major(version: str) -> int:
@@ -192,7 +192,7 @@ class EmailSidecarManager:
             raise SidecarSpawnError(
                 f"dev mode needs the email source at {self.email_src_dir} but it is "
                 "missing. Run from a source checkout, or install it: "
-                "`uv pip install -e hub/agents/python/email`."
+                "`uv pip install -e hub/agents/email/python`."
             )
         argv = [
             sys.executable,

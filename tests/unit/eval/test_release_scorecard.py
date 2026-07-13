@@ -463,7 +463,7 @@ class TestSecondAgentGeneralization:
 
 
 class TestEmailAdapter:
-    """Tests for hub/agents/python/email/packaging/gen_scorecard.py adapter."""
+    """Tests for hub/agents/email/python/packaging/gen_scorecard.py adapter."""
 
     def _load_gen_scorecard(self):
         adapter_path = (

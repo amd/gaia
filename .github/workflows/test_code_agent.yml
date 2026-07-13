@@ -11,18 +11,18 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'hub/agents/python/code/**'
+      - 'hub/agents/code/python/**'
       - 'src/gaia/agents/base/**'
-      - 'hub/agents/python/routing/**'
+      - 'hub/agents/routing/python/**'
       - 'setup.py'
       - '.github/workflows/test_code_agent.yml'
   pull_request:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      - 'hub/agents/python/code/**'
+      - 'hub/agents/code/python/**'
       - 'src/gaia/agents/base/**'
-      - 'hub/agents/python/routing/**'
+      - 'hub/agents/routing/python/**'
       - 'setup.py'
       - '.github/workflows/test_code_agent.yml'
   merge_group:
@@ -62,9 +62,9 @@ jobs:
           # gaia-agent-code depends on gaia-agent-routing, which isn't published
           # to PyPI — install the local hub package first so the dependency
           # resolves locally instead of hitting the registry (#1102).
-          uv pip install --system -e hub/agents/python/routing
+          uv pip install --system -e hub/agents/routing/python
           # CodeAgent ships as the standalone gaia-agent-code wheel (#1397, #1102)
-          uv pip install --system -e hub/agents/python/code
+          uv pip install --system -e hub/agents/code/python
           # Install optional dependencies for code agent
           uv pip install --system black pylint
 
@@ -77,7 +77,7 @@ jobs:
           echo ""
 
           # Run mixin tests
-          python -m pytest hub/agents/python/code/tests/test_code_agent_mixins.py -v --tb=short
+          python -m pytest hub/agents/code/python/tests/test_code_agent_mixins.py -v --tb=short
 
           # Store the result
           MIXIN_TEST_EXIT=$?
@@ -99,14 +99,14 @@ jobs:
           echo ""
 
           # Run with pytest for better output formatting
-          python -m pytest hub/agents/python/code/tests/test_code_agent.py::TestCodeAgent -v --tb=short \
+          python -m pytest hub/agents/code/python/tests/test_code_agent.py::TestCodeAgent -v --tb=short \
             -k "not workflow and not integration and not process_query"
 
           # Validators and write-guardrail tests (moved here from tests/unit and
           # tests/ root during the hub migration; keep them gated).
           python -m pytest \
-            hub/agents/python/code/tests/test_code_validators.py \
-            hub/agents/python/code/tests/test_file_io_guardrails.py \
+            hub/agents/code/python/tests/test_code_validators.py \
+            hub/agents/code/python/tests/test_file_io_guardrails.py \
             -v --tb=short
 
       - name: Run Code Agent Integration Tests
@@ -119,7 +119,7 @@ jobs:
           echo ""
 
           # Run integration tests
-          python -m pytest hub/agents/python/code/tests/test_code_agent.py::TestCodeAgentIntegration -v --tb=short
+          python -m pytest hub/agents/code/python/tests/test_code_agent.py::TestCodeAgentIntegration -v --tb=short
 
       - name: Run Code Agent Workflow Tests
         # Workflow tests invoke process_query which requires a running LLM.
@@ -135,7 +135,7 @@ jobs:
           echo ""
 
           # Run workflow tests with timeout
-          timeout 300 python -m pytest hub/agents/python/code/tests/test_code_agent.py -v --tb=short \
+          timeout 300 python -m pytest hub/agents/code/python/tests/test_code_agent.py -v --tb=short \
             -k "workflow or process_query or complete_workflow"
 
       - name: Test Summary

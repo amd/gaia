@@ -23,7 +23,7 @@ A companion workflow at [`.github/workflows/dependabot-automerge.yml`](https://g
 | `/src/gaia/apps/webui` | npm | 5 | `agent-ui-dependencies` | weekly / monday |
 | `/src/gaia/apps/example/webui` | npm | 5 | `example-app-dependencies` | weekly / monday |
 | `/src/gaia/apps/jira/webui` | npm | 5 | `jira-app-dependencies` | weekly / monday |
-| `/hub/agents/python/emr/gaia_agent_emr/dashboard/electron` | npm | 5 | `emr-dashboard-dependencies` | weekly / monday |
+| `/hub/agents/emr/python/gaia_agent_emr/dashboard/electron` | npm | 5 | `emr-dashboard-dependencies` | weekly / monday |
 | `/` | github-actions | 5 | `github-actions` | weekly / monday |
 
 **Why grouping matters.** Each ecosystem uses a wildcard `groups:` stanza so that a week's worth of updates collapse into a single grouped PR per ecosystem. Without grouping, the `limit: 5` would be hit by five individual single-package PRs and the rest would queue — defeating the point of the cap.

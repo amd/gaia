@@ -65,7 +65,7 @@ to PDF via a `@media print` profile (exactly one slide per printed page).
 | Missing metrics | **Ask upfront** for known eval/benchmark results, then fall back to **clearly-labeled placeholders** for anything still missing; report the placeholder list at the end. |
 | Placeholder style | **Loud + watermarked**: tinted `⚠ PLACEHOLDER — provide value` chip on the value AND a deck-level `DRAFT — contains placeholders` banner on any deck that has them. |
 | Output path | `<source-dir>/presentations/<source-stem>.<tier>.html` — deterministic, overwrite-in-place, no timestamps / random IDs (clean re-runs). |
-| First test source | The email agent hub package, `hub/agents/python/email/` (contract/architecture-rich: `openapi.email.json`, `specification.html`, `gaia-agent.yaml`, packaging docs, tests). |
+| First test source | The email agent hub package, `hub/agents/email/python/` (contract/architecture-rich: `openapi.email.json`, `specification.html`, `gaia-agent.yaml`, packaging docs, tests). |
 
 ## Reference template
 
@@ -216,7 +216,7 @@ source file ──read──> real-artifact inventory ──+── user-supplie
 
 Build **one tier end-to-end first**, validate its PDF, then derive the second:
 
-1. Generate the **technical** deck from `hub/agents/python/email/`.
+1. Generate the **technical** deck from `hub/agents/email/python/`.
 2. Export a **real PDF** with headless Chrome (validation only — not part of the shipped
    skill) and confirm **printed-page count == slide count**, nothing clipped or split.
 3. Derive the **executive** deck; confirm it is materially shorter and contains **none** of

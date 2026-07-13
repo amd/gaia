@@ -5,7 +5,7 @@ icon: "chart-line"
 ---
 
 <Info>
-  **Source Code:** [`hub/agents/python/emr/`](https://github.com/amd/gaia/blob/main/hub/agents/python/emr/)
+  **Source Code:** [`hub/agents/emr/python/`](https://github.com/amd/gaia/blob/main/hub/agents/emr/python/)
 </Info>
 
 <Note>
@@ -77,7 +77,7 @@ flowchart TB
 
 ```bash
 # Build frontend (first time only)
-cd hub/agents/python/emr/gaia_agent_emr/dashboard/frontend
+cd hub/agents/emr/python/gaia_agent_emr/dashboard/frontend
 npm install && npm run build
 cd -
 
@@ -513,7 +513,7 @@ gaia-emr dashboard --port 8080
 ### Terminal 2: Vite Dev Server
 
 ```bash
-cd hub/agents/python/emr/gaia_agent_emr/dashboard/frontend
+cd hub/agents/emr/python/gaia_agent_emr/dashboard/frontend
 npm install
 npm run dev
 ```
@@ -523,7 +523,7 @@ Access http://localhost:3000 for the Vite dev server (proxies API to port 8080).
 ### Project Structure
 
 ```
-hub/agents/python/emr/gaia_agent_emr/dashboard/
+hub/agents/emr/python/gaia_agent_emr/dashboard/
 ├── server.py           # FastAPI server with SSE
 ├── electron/           # Electron wrapper
 │   ├── main.js         # Electron entry point

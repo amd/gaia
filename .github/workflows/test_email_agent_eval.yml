@@ -161,7 +161,7 @@ jobs:
           # `gaia eval benchmark` imports gaia_agent_email.agent, so install the
           # LOCAL editable hub package (this branch's code, not the PyPI wheel)
           # or the benchmark dies with ModuleNotFoundError on a clean venv.
-          install-package: '.[dev,eval,api] -e hub/agents/python/email'
+          install-package: '.[dev,eval,api] -e hub/agents/email/python'
 
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
@@ -212,7 +212,7 @@ jobs:
           # (single committed thresholds source), runs the gate machinery, logs
           # the result, writes eval-out/gate_report.json, and exits non-zero ONLY
           # if a gate's should_fail is true (enforce:true AND breached).
-          python hub/agents/python/email/packaging/eval_gate_report.py
+          python hub/agents/email/python/packaging/eval_gate_report.py
           if ($LASTEXITCODE -ne 0) { throw "gate report failed" }
 
       # =================================================================
@@ -238,7 +238,7 @@ jobs:
           # skip), so this step throws rather than shipping an un-judged gate.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          python hub/agents/python/email/packaging/eval_drafting_report.py
+          python hub/agents/email/python/packaging/eval_drafting_report.py
           if ($LASTEXITCODE -ne 0) { throw "drafting eval failed" }
       # =================================================================
       # END voice-drafting quality eval
@@ -273,7 +273,7 @@ jobs:
           # Absent -> the script fails loudly (NO fuzzy-only fallback).
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          python hub/agents/python/email/packaging/eval_action_item_report.py
+          python hub/agents/email/python/packaging/eval_action_item_report.py
           if ($LASTEXITCODE -ne 0) { throw "action-item eval failed" }
       # =================================================================
       # END action-item extraction eval
@@ -310,7 +310,7 @@ jobs:
           # gate has no report-mode fallback: an absent key fails the build.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          python hub/agents/python/email/packaging/eval_briefing_report.py
+          python hub/agents/email/python/packaging/eval_briefing_report.py
           if ($LASTEXITCODE -ne 0) { throw "briefing eval failed" }
       # =================================================================
       # END daily-briefing summary-quality eval

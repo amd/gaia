@@ -908,7 +908,7 @@ following the wrong one builds the wrong thing.
 ### 0.28 The agent manifest — the load-bearing artifact (was undefined)
 
 ~8 sections say "the manifest/lock declares X," but no section defined it — and the
-artifact that exists today (`hub/agents/npm/agent-email/binaries.lock.json`) is a
+artifact that exists today (`hub/agents/email/npm/binaries.lock.json`) is a
 **binary-integrity map only** (`schemaVersion`, `agentVersion`, `baseUrl`, per-platform
 `{filename, executable, sha256, size}`) — it carries **none** of the policy/capability
 fields §0 leans on. So the plan conflated two different artifacts:
@@ -1517,8 +1517,8 @@ Benchmarking v2 against the field both validates the shape and yields concrete a
 | **JiraAgent** | `JiraAgent(Agent)` | `agents/jira/agent.py` | Jira issue management |
 | **DockerAgent** | `DockerAgent(MCPAgent)` | `agents/docker/agent.py` | Docker container management via MCP |
 | **SDAgent** | `SDAgent(Agent, SDToolsMixin, VLMToolsMixin)` | `agents/sd/agent.py` | Image generation + visual analysis |
-| **MedicalIntakeAgent** | `MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin)` | `hub/agents/python/emr/gaia_agent_emr/agent.py` | Medical form processing with VLM |
-| **RoutingAgent** | `RoutingAgent` | `hub/agents/python/routing/gaia_agent_routing/agent.py` | Intelligent agent selection |
+| **MedicalIntakeAgent** | `MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin)` | `hub/agents/emr/python/gaia_agent_emr/agent.py` | Medical form processing with VLM |
+| **RoutingAgent** | `RoutingAgent` | `hub/agents/routing/python/gaia_agent_routing/agent.py` | Intelligent agent selection |
 | **SummarizerAgent** | `SummarizerAgent(Agent)` | `agents/summarize/agent.py` | Document summarization |
 
 ### 1.2 ChatAgent Tools (Current — What the Agent UI Uses)
@@ -1576,7 +1576,7 @@ Benchmarking v2 against the field both validates the shape and yields concrete a
 | **MCP Bridge** | `gaia/mcp/mcp_bridge.py` | External tool integration via MCP |
 | **Database** | `gaia/database/` | `DatabaseMixin` for persistent storage |
 | **Multi-provider LLM** | `gaia/llm/providers/` | Claude, OpenAI, Lemonade backends |
-| **Agent Routing** | `hub/agents/python/routing/gaia_agent_routing/agent.py` | Intelligent multi-agent routing |
+| **Agent Routing** | `hub/agents/routing/python/gaia_agent_routing/agent.py` | Intelligent multi-agent routing |
 
 ---
 

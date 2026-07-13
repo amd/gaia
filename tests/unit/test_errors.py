@@ -77,7 +77,7 @@ class TestFormatUserErrorFiltering:
             "gaia/agents/tools",
             # Hub-migrated agents (#1102): chat ships as the gaia-agent-chat
             # wheel, filtered via gaia_agent_chat / the hub editable path.
-            "hub/agents/python/",
+            "hub/agents/",
             "gaia_agent_chat",
             "site-packages/",
         ]

@@ -30,7 +30,7 @@
 - No Claude/AI attribution in any artifact (commits, files, comments).
 - Commit messages: conventional-commits; no AI attribution trailer.
 
-**First test source:** `hub/agents/python/email/` (real artifacts: `openapi.email.json`, `specification.html`, `gaia-agent.yaml`, packaging docs, tests; **no** committed benchmark tables — so quantitative slides must be user-supplied or labeled placeholders).
+**First test source:** `hub/agents/email/python/` (real artifacts: `openapi.email.json`, `specification.html`, `gaia-agent.yaml`, packaging docs, tests; **no** committed benchmark tables — so quantitative slides must be user-supplied or labeled placeholders).
 
 **Reference template (visual identity, not a runtime):** `/Users/tomasz/Public/gaia-roadmap.html`. Its real markup is JSON inside its `<script type="__bundler/template">` tag; its fonts are base64 `woff2` in its `<script type="__bundler/manifest">` tag. We reuse the look and extract the fonts; we drop its `deck-stage` JS runtime and Google Fonts CDN.
 
@@ -634,7 +634,7 @@ git commit -m "feat(skill): slide-pattern library with tier tags and placeholder
 
 **Files:**
 - Create: `.claude/skills/gaia-presentation-builder/reference/example-technical.html`
-- Read (source): `hub/agents/python/email/openapi.email.json`, `hub/agents/python/email/gaia-agent.yaml`, `hub/agents/python/email/packaging/README.md`, `hub/agents/python/email/specification.html`
+- Read (source): `hub/agents/email/python/openapi.email.json`, `hub/agents/email/python/gaia-agent.yaml`, `hub/agents/email/python/packaging/README.md`, `hub/agents/email/python/specification.html`
 
 **Interfaces:**
 - Consumes: `SKILL.md` pipeline + all `assets/`.
@@ -644,10 +644,10 @@ git commit -m "feat(skill): slide-pattern library with tier tags and placeholder
 
 Run (capture artifacts; do not fabricate):
 ```bash
-echo "== endpoints ==";  python3 -c "import json;d=json.load(open('hub/agents/python/email/openapi.email.json'));print('\n'.join(sorted(d.get('paths',{}))))"
-echo "== title/version =="; python3 -c "import json;d=json.load(open('hub/agents/python/email/openapi.email.json'));print(d['info'].get('title'),d['info'].get('version'))"
-echo "== manifest =="; sed -n '1,40p' hub/agents/python/email/gaia-agent.yaml
-echo "== packaging readme =="; sed -n '1,60p' hub/agents/python/email/packaging/README.md
+echo "== endpoints ==";  python3 -c "import json;d=json.load(open('hub/agents/email/python/openapi.email.json'));print('\n'.join(sorted(d.get('paths',{}))))"
+echo "== title/version =="; python3 -c "import json;d=json.load(open('hub/agents/email/python/openapi.email.json'));print(d['info'].get('title'),d['info'].get('version'))"
+echo "== manifest =="; sed -n '1,40p' hub/agents/email/python/gaia-agent.yaml
+echo "== packaging readme =="; sed -n '1,60p' hub/agents/email/python/packaging/README.md
 ```
 Record each artifact + its source location into an inventory note (in the session, not a repo file). Expected: a list of real endpoints, the API title/version, the manifest's declared capabilities — and the explicit observation that **no accuracy/latency numbers exist** in these sources.
 

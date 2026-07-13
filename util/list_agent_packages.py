@@ -6,7 +6,7 @@ Single source of truth = the ``agents`` entry of ``extras_require`` in
 ``setup.py`` (the same list behind ``pip install "amd-gaia[agents]"``). This
 script reads that list *statically* (``ast``, never executing ``setup.py``),
 maps each ``gaia-agent-<id>`` distribution name to its package directory under
-``hub/agents/python/<id>/``, and verifies the directory exists.
+``hub/agents/<id>/python/``, and verifies the directory exists.
 
 Consumers:
 
@@ -18,7 +18,7 @@ Consumers:
   dependency all agree.
 
 Per ``CLAUDE.md`` (No Silent Fallbacks): a distribution listed in the extra with
-no matching ``hub/agents/python/<id>/`` directory, or a malformed ``setup.py``,
+no matching ``hub/agents/<id>/python/`` directory, or a malformed ``setup.py``,
 raises rather than silently dropping the agent from the publish set.
 """
 
@@ -32,11 +32,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List
 
-# ``gaia-agent-chat`` -> id ``chat`` -> dir ``hub/agents/python/chat``.
+# ``gaia-agent-chat`` -> id ``chat`` -> dir ``hub/agents/chat/python``.
 DIST_PREFIX = "gaia-agent-"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SETUP_PY = REPO_ROOT / "setup.py"
-PYTHON_AGENTS_DIR = REPO_ROOT / "hub" / "agents" / "python"
+AGENTS_DIR = REPO_ROOT / "hub" / "agents"
 
 
 class AgentListError(Exception):
@@ -49,7 +49,7 @@ class AgentPackage:
 
     dist_name: str  # e.g. "gaia-agent-summarize"
     agent_id: str  # e.g. "summarize"
-    path: Path  # e.g. <repo>/hub/agents/python/summarize
+    path: Path  # e.g. <repo>/hub/agents/summarize/python
 
     @property
     def rel_path(self) -> str:
@@ -118,12 +118,12 @@ def list_agent_packages(setup_py: Path = SETUP_PY) -> List[AgentPackage]:
                 f"'{DIST_PREFIX}<id>' naming convention required by issue #1179."
             )
         agent_id = dist[len(DIST_PREFIX) :]
-        path = PYTHON_AGENTS_DIR / agent_id
+        path = AGENTS_DIR / agent_id / "python"
         if not (path / "pyproject.toml").exists():
             raise AgentListError(
                 f"{dist}: no package at {path}/pyproject.toml. Every entry in "
                 f"setup.py[agents] must have a wheel source under "
-                f"hub/agents/python/<id>/ (or remove it from the extra)."
+                f"hub/agents/<id>/python/ (or remove it from the extra)."
             )
         packages.append(AgentPackage(dist_name=dist, agent_id=agent_id, path=path))
     return packages

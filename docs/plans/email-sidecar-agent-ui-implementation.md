@@ -4,7 +4,7 @@
 
 **Goal:** Add a Node-free, out-of-process email-agent sidecar that the Python Agent UI backend fetches (verified download), spawns (user=frozen binary / dev=uvicorn-from-source), health-checks, proxies to, and tree-kills — gated behind `GAIA_EMAIL_AGENT_MODE` so it is additive and non-breaking.
 
-**Architecture:** A new `src/gaia/ui/email_sidecar/` Python package owns four units: `platform` (lock loading + platform-key + placeholder detection, ported from `platform.ts`), `fetch` (verified SHA-256 download, ported from `fetch.ts` — the security boundary), `manager` (`EmailSidecarManager`: mode select, ephemeral port, spawn, health-poll, tree-kill, ported from `lifecycle.ts`), and `proxy` (`EmailSidecarProxy`: forward triage/draft/send to the running sidecar, gate not-yet-existing routes). One small enabler lands in `hub/agents/python/email/packaging/server.py` (`app = build_app()` at module scope) so dev mode can hot-reload. **No Node.js, no npm import** is on the UI runtime path; the npm `fetch.ts`/`lifecycle.ts` are reference-only.
+**Architecture:** A new `src/gaia/ui/email_sidecar/` Python package owns four units: `platform` (lock loading + platform-key + placeholder detection, ported from `platform.ts`), `fetch` (verified SHA-256 download, ported from `fetch.ts` — the security boundary), `manager` (`EmailSidecarManager`: mode select, ephemeral port, spawn, health-poll, tree-kill, ported from `lifecycle.ts`), and `proxy` (`EmailSidecarProxy`: forward triage/draft/send to the running sidecar, gate not-yet-existing routes). One small enabler lands in `hub/agents/email/python/packaging/server.py` (`app = build_app()` at module scope) so dev mode can hot-reload. **No Node.js, no npm import** is on the UI runtime path; the npm `fetch.ts`/`lifecycle.ts` are reference-only.
 
 **Tech Stack:** Python 3.10+, `requests` (already a dep; used for HTTP/health), `subprocess` + `os.killpg`/`taskkill` (process tree management), `hashlib` (SHA-256), `socket` (ephemeral port), pytest + `responses`/monkeypatch for unit tests, FastAPI/uvicorn (email sidecar, already present in the email wheel).
 
@@ -16,7 +16,7 @@
 - **No Claude/AI attribution** in any commit, comment, docstring, or doc.
 - **Additive/gated:** Do NOT remove the in-process `/v1/email` mount (`src/gaia/ui/server.py:592-601`). Do NOT switch `agent_type=email` sessions to the proxy. New path lives behind `GAIA_EMAIL_AGENT_MODE` (`user` default / `dev`).
 - SHA-256 verification is the security boundary — tampered bytes MUST raise `IntegrityError`; there is no "use it anyway" path.
-- Lock file source of truth: `hub/agents/npm/agent-email/binaries.lock.json` (currently has `PENDING-*` placeholder SHAs → fetch must refuse placeholders loudly).
+- Lock file source of truth: `hub/agents/email/npm/binaries.lock.json` (currently has `PENDING-*` placeholder SHAs → fetch must refuse placeholders loudly).
 - Cache dir: `~/.gaia/agents/email/`. Cache-hit (on-disk SHA matches lock) skips re-download.
 - Routes that EXIST today and may be proxied: `POST /v1/email/triage`, `/draft`, `/send`; `GET /health`, `/version`. Routes that do NOT exist yet (gate, don't build): inbox pre-scan, search (#1781), archive/quarantine (#1779), calendar (#1780).
 - **Dev-mode import-string correction (verified during impl):** the email package's `packaging/` dir has no `__init__.py` and collides by name with the PyPI `packaging` library, so `packaging.server:app` resolves to the WRONG `packaging` and fails. Adding `packaging/__init__.py` would shadow PyPI `packaging` for every dependency needing `packaging.version` — unacceptable. Dev mode therefore loads the file as the **top-level module `server`** via `uvicorn server:app --app-dir <email>/packaging`. Task 4's manager uses this form, not `packaging.server:app`.
@@ -27,7 +27,7 @@
 
 | File | Responsibility |
 |------|----------------|
-| `hub/agents/python/email/packaging/server.py` (modify) | Add `app = build_app()` at module scope for uvicorn import-string dev mode |
+| `hub/agents/email/python/packaging/server.py` (modify) | Add `app = build_app()` at module scope for uvicorn import-string dev mode |
 | `src/gaia/ui/email_sidecar/__init__.py` (create) | Package exports: `EmailSidecarManager`, `EmailSidecarProxy`, error types |
 | `src/gaia/ui/email_sidecar/errors.py` (create) | `SidecarError` base + `PlatformError`, `IntegrityError`, `BinaryNotFoundError`, `HealthTimeoutError`, `SidecarSpawnError`, `RouteNotAvailableError` |
 | `src/gaia/ui/email_sidecar/platform.py` (create) | `current_platform_key()`, `load_lock()`, `resolve_entry()`, `is_placeholder_sha()`, `default_lock_path()` (port of `platform.ts`) |
@@ -46,7 +46,7 @@
 ## Task 1: Dev-mode enabler — module-level `app` in the freeze server
 
 **Files:**
-- Modify: `hub/agents/python/email/packaging/server.py`
+- Modify: `hub/agents/email/python/packaging/server.py`
 - Test: `tests/unit/test_email_sidecar_devmode_app.py` (create)
 
 **Interfaces:**
@@ -74,7 +74,7 @@ EMAIL_PKG = (
 
 @pytest.mark.skipif(
     importlib.util.find_spec("gaia_agent_email") is None,
-    reason="email agent wheel not installed (uv pip install -e hub/agents/python/email)",
+    reason="email agent wheel not installed (uv pip install -e hub/agents/email/python)",
 )
 def test_packaging_server_exposes_module_level_app():
     # Import-string resolution mirrors what `uvicorn packaging.server:app` does:
@@ -98,11 +98,11 @@ def test_packaging_server_exposes_module_level_app():
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/unit/test_email_sidecar_devmode_app.py -v`
-Expected: FAIL — `module-level app missing` (or skip if wheel not installed; if skipped, install with `uv pip install -e hub/agents/python/email` then re-run so it actually fails).
+Expected: FAIL — `module-level app missing` (or skip if wheel not installed; if skipped, install with `uv pip install -e hub/agents/email/python` then re-run so it actually fails).
 
 - [ ] **Step 3: Add the module-level app**
 
-In `hub/agents/python/email/packaging/server.py`, after the `build_app()` definition (after line 79, before `def main`), add:
+In `hub/agents/email/python/packaging/server.py`, after the `build_app()` definition (after line 79, before `def main`), add:
 
 ```python
 # Module-level app for uvicorn's import-string form (`packaging.server:app`),
@@ -119,7 +119,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add hub/agents/python/email/packaging/server.py tests/unit/test_email_sidecar_devmode_app.py
+git add hub/agents/email/python/packaging/server.py tests/unit/test_email_sidecar_devmode_app.py
 git commit -m "feat(email): expose module-level app for uvicorn --reload dev mode"
 ```
 
@@ -139,7 +139,7 @@ git commit -m "feat(email): expose module-level app for uvicorn --reload dev mod
   - `platform.current_platform_key() -> str` (e.g. `"darwin-arm64"`).
   - `platform.LockEntry` dataclass `(filename: str, sha256: str, executable: str, size: int | None)`.
   - `platform.BinaryLock` dataclass `(schema_version, agent_version, base_url, binaries: dict[str, LockEntry])`.
-  - `platform.default_lock_path() -> Path` → repo `hub/agents/npm/agent-email/binaries.lock.json`.
+  - `platform.default_lock_path() -> Path` → repo `hub/agents/email/npm/binaries.lock.json`.
   - `platform.load_lock(path: Path) -> BinaryLock`.
   - `platform.resolve_entry(lock, platform_key) -> LockEntry`.
   - `platform.is_placeholder_sha(sha: str) -> bool`.
@@ -953,7 +953,7 @@ class EmailSidecarManager:
             raise SidecarSpawnError(
                 f"dev mode needs the email source at {self.email_src_dir} but it is "
                 "missing. Run from a source checkout, or install it: "
-                "`uv pip install -e hub/agents/python/email`."
+                "`uv pip install -e hub/agents/email/python`."
             )
         argv = [
             sys.executable, "-m", "uvicorn", "packaging.server:app", "--reload",
@@ -1098,7 +1098,7 @@ def test_dev_mode_real_spawn_health_and_treekill(monkeypatch):
 ```
 
 Run: `python -m pytest tests/unit/test_email_sidecar_manager.py -v`
-Expected: PASS (the live test is skipped if the wheel/uvicorn are absent; install with `uv pip install -e hub/agents/python/email` to exercise it).
+Expected: PASS (the live test is skipped if the wheel/uvicorn are absent; install with `uv pip install -e hub/agents/email/python` to exercise it).
 
 - [ ] **Step 6: Commit**
 
@@ -1336,8 +1336,8 @@ git commit -m "feat(ui): EmailSidecarProxy — forward live routes, gate pre-sca
 - [ ] **Step 1: Add the dev-mode doc subsection**
 
 Append to `docs/guides/email.mdx` a subsection documenting:
-- `GAIA_EMAIL_AGENT_MODE=user` (default) runs the published frozen binary; `=dev` runs `uvicorn packaging.server:app --reload` from `hub/agents/python/email`.
-- Dev mode requires `uv pip install -e hub/agents/python/email`.
+- `GAIA_EMAIL_AGENT_MODE=user` (default) runs the published frozen binary; `=dev` runs `uvicorn packaging.server:app --reload` from `hub/agents/email/python`.
+- Dev mode requires `uv pip install -e hub/agents/email/python`.
 - The sidecar binds an ephemeral local port (never 4001); the UI backend proxies to it.
 - This path is additive and gated; the in-process email path is unchanged until the supersede decision (#1767) lands.
 
@@ -1353,7 +1353,7 @@ selected by `GAIA_EMAIL_AGENT_MODE`:
   edits show up live without a freeze → publish cycle:
 
   ```bash
-  uv pip install -e hub/agents/python/email   # once
+  uv pip install -e hub/agents/email/python   # once
   GAIA_EMAIL_AGENT_MODE=dev gaia chat --ui
   ```
 

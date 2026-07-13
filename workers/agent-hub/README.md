@@ -136,10 +136,10 @@ PUBLISH_TOKENS='{"dev-token":{"publisher":"AMD","authors":["AMD"]}}' npm run dev
 # Terminal 2
 curl -X POST http://localhost:8787/publish \
   -H "Authorization: Bearer dev-token" \
-  -F "manifest=@hub/agents/python/chat/gaia-agent.yaml" \
+  -F "manifest=@hub/agents/chat/python/gaia-agent.yaml" \
   -F "artifact=@dist/gaia_agent_chat-0.1.0-py3-none-any.whl" \
-  -F "readme=@hub/agents/python/chat/README.md;type=text/markdown" \
-  -F "changelog=@hub/agents/python/chat/CHANGELOG.md;type=text/markdown"
+  -F "readme=@hub/agents/chat/python/README.md;type=text/markdown" \
+  -F "changelog=@hub/agents/chat/python/CHANGELOG.md;type=text/markdown"
 
 curl http://localhost:8787/index.json
 ```

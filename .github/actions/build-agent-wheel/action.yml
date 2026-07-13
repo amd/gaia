@@ -6,7 +6,7 @@ description: 'Canonical build recipe for a gaia-agent-* wheel + sdist: build, ve
 
 inputs:
   path:
-    description: 'Package directory (e.g. hub/agents/python/email)'
+    description: 'Package directory (e.g. hub/agents/email/python)'
     required: true
   dist:
     description: 'Distribution name (e.g. gaia-agent-email), used in error messages'

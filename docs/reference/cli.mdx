@@ -393,7 +393,7 @@ Author, version, validate, and share GAIA agents.
 
 #### Developer workflow: `init`, `version`, `test`
 
-Scaffold a new agent package, bump its version, and run the quality gates that publishing requires. The scaffold mirrors the canonical hub package layout (`hub/agents/python/summarize/`).
+Scaffold a new agent package, bump its version, and run the quality gates that publishing requires. The scaffold mirrors the canonical hub package layout (`hub/agents/summarize/python/`).
 
 ```bash
 gaia agent init <name> [--language python|cpp] [--output DIR] [--force]
@@ -515,12 +515,12 @@ pip install "amd-gaia[publish]"
 
 <CodeGroup>
 ```bash Build a wheel
-gaia agent pack hub/agents/python/summarize/
+gaia agent pack hub/agents/summarize/python/
 ```
 
 ```bash Store tokens, then dual-publish
 gaia agent login --hub --pypi          # prompts for each token
-gaia agent publish hub/agents/python/summarize/
+gaia agent publish hub/agents/summarize/python/
 ```
 
 ```bash Publish to PyPI only

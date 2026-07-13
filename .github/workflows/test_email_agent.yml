@@ -11,7 +11,7 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'hub/agents/python/email/**'
+      - 'hub/agents/email/python/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
       - 'setup.py'
@@ -29,7 +29,7 @@ on:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      - 'hub/agents/python/email/**'
+      - 'hub/agents/email/python/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
       - 'setup.py'
@@ -76,14 +76,14 @@ jobs:
           # (test_spec_html.py) import the contract's api_routes module.
           uv pip install --system -e .[dev,api]
           # EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102)
-          uv pip install --system -e hub/agents/python/email
+          uv pip install --system -e hub/agents/email/python
 
       - name: Run Email Agent Tests
         run: |
           # Hub package smoke tests + the repo-side email unit suite, which
           # importorskips without the wheel and runs here with it installed.
           python -m pytest \
-            hub/agents/python/email/tests/ \
+            hub/agents/email/python/tests/ \
             tests/test_email_openapi_conformance.py \
             tests/unit/agents/email/ \
             tests/unit/email/ \

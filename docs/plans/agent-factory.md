@@ -32,7 +32,7 @@ It splits into **two halves that already differ sharply in maturity:**
   datasets, implement against the live SDK, eval-and-optimize, open PRs. The factory
   automates this with **agentic coding**.
 - **Ship half (back) — *already exists and is rigorous*.** `release_agent_email.yml` +
-  `hub/agents/python/email/packaging/*` already do multi-platform freeze, cross-OS-version
+  `hub/agents/email/python/packaging/*` already do multi-platform freeze, cross-OS-version
   verification (darwin-x64 leg), a **data-driven** scorecard gate, scorecard generation, Hub
   + npm publishing with OIDC provenance, real-hash lock regeneration, and **post-publish edge
   verification**. (The single whole-package *zip* is the one piece currently disabled — §6.)
@@ -69,7 +69,7 @@ orchestrator plans from and the source the machine `manifest` (§0.28) is derive
 *human-authored* artifact; the factory produces everything else.
 
 **Ground it on the format that already exists: `gaia-agent.yaml`.** Eighteen hub agents
-already carry a per-agent manifest (`hub/agents/python/<id>/gaia-agent.yaml`) with
+already carry a per-agent manifest (`hub/agents/<id>/python/gaia-agent.yaml`) with
 `id/name/version/models/python.entry_module/dependencies/requirements.platforms/interfaces`
 — the recipe **extends that file** with the factory-specific fields (purpose, eval block,
 connectors/scopes, egress, trust tier, gates, freeze targets) rather than inventing a
@@ -226,7 +226,7 @@ from one-agent, human-kicked jobs into a continuous, orchestrated, per-agent lin
 
 ## 4. Docs are a first-class shipped output (not an afterthought)
 
-The shipped product (`hub/agents/npm/agent-email/`) carries **five doc surfaces** —
+The shipped product (`hub/agents/email/npm/`) carries **five doc surfaces** —
 `README.md` (integrator) · `SPEC.md` (technical) · `SKILL.md` (AI-assistant) ·
 `CHANGELOG.md` (version) · `SCORECARD.md` (eval results) — plus `spec_html`/OpenAPI. Per
 CLAUDE.md, *a functional change must update **every** doc*, or the package ships

@@ -62,7 +62,7 @@ jobs:
           uv pip install --system -e .[dev,rag]
           # verify_*.py instantiate ChatAgent, which ships as the standalone
           # gaia-agent-chat wheel (#1102).
-          uv pip install --system -e hub/agents/python/chat
+          uv pip install --system -e hub/agents/chat/python
 
       - name: Run Path Validator Security Tests
         env:
@@ -163,7 +163,7 @@ jobs:
           uv pip install --system -e .[dev,rag]
           # verify_*.py instantiate ChatAgent, which ships as the standalone
           # gaia-agent-chat wheel (#1102).
-          uv pip install --system -e hub/agents/python/chat
+          uv pip install --system -e hub/agents/chat/python
         shell: pwsh
 
       - name: Run Path Validator Security Tests

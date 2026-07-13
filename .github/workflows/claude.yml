@@ -209,7 +209,7 @@ jobs:
             - ✅ Simple bug fixes with clear solutions
 
             **When suggesting patterns from existing code:**
-            - Reference similar code in `src/gaia/` or a hub agent under `hub/agents/python/<id>/`
+            - Reference similar code in `src/gaia/` or a hub agent under `hub/agents/<id>/python/`
             - Show the correct pattern as a concrete ```suggestion block
             - Example: "Other agents handle this using [pattern from file.py:123]"
 
@@ -232,7 +232,7 @@ jobs:
             ## Review Checklist
 
             ### 1. Code Quality & Patterns
-            - **Architecture Consistency:** For new agents, compare with existing agents — in-core ones under `src/gaia/agents/` (chat, docqa, builder, routing) and most others under `hub/agents/python/<id>/gaia_agent_<id>/agent.py`
+            - **Architecture Consistency:** For new agents, compare with existing agents — in-core ones under `src/gaia/agents/` (chat, docqa, builder, routing) and most others under `hub/agents/<id>/python/gaia_agent_<id>/agent.py`
               - Does it extend `src/gaia/agents/base/agent.py` (`class Agent`)?
               - Does it register tools via `@tool` (see `src/gaia/agents/base/tools.py`)?
               - Does error handling use `src/gaia/agents/base/errors.py` formatters?
@@ -249,12 +249,12 @@ jobs:
             - **Standards Compliance:** Reference `CLAUDE.md` and `docs/reference/dev.mdx`
 
             ### 2. GAIA-Specific Architecture Checks
-            - **New agents** must be a Python `agent.py` (subclass of `Agent` with `AGENT_ID` / `AGENT_NAME` class attributes). Legacy agent-definition YAML manifests (tools/prompt-in-YAML) were removed in v0.17.5 (#912) — but do NOT confuse that with the `gaia-agent.yaml` *packaging* manifest every hub agent under `hub/agents/python/` now ships (required; see `src/gaia/hub/manifest.py`).
+            - **New agents** must be a Python `agent.py` (subclass of `Agent` with `AGENT_ID` / `AGENT_NAME` class attributes). Legacy agent-definition YAML manifests (tools/prompt-in-YAML) were removed in v0.17.5 (#912) — but do NOT confuse that with the `gaia-agent.yaml` *packaging* manifest every hub agent under `hub/agents/<id>/python/` now ships (required; see `src/gaia/hub/manifest.py`).
             - **New tool mixins** MUST be added to `KNOWN_TOOLS` in `src/gaia/agents/registry.py` so other agents can compose them by name; the BuilderAgent template uses this map to scaffold imports.
             - **New LLM providers** belong under `src/gaia/llm/providers/` with registration in `src/gaia/llm/factory.py` (`create_client`).
             - **AMD-specific paths** (NPU / Ryzen AI / Lemonade): use existing `src/gaia/llm/lemonade_client.py` — flag direct HTTP calls to the Lemonade server as a pattern violation.
             - **New CLI commands** need both an entry in `src/gaia/cli.py` subparsers AND `docs/reference/cli.mdx`.
-            - **New standalone *agents*** ship as hub packages under `hub/agents/python/<id>/` with their entry point declared in `gaia-agent.yaml` (not a core `setup.py` `console_scripts`). Reserve `setup.py` `console_scripts` for genuinely core CLIs (`gaia`, `gaia-mcp`); UI apps under `src/gaia/apps/` are driven via those.
+            - **New standalone *agents*** ship as hub packages under `hub/agents/<id>/python/` with their entry point declared in `gaia-agent.yaml` (not a core `setup.py` `console_scripts`). Reserve `setup.py` `console_scripts` for genuinely core CLIs (`gaia`, `gaia-mcp`); UI apps under `src/gaia/apps/` are driven via those.
 
             ### 3. Security Review (CRITICAL)
             Review for these vulnerabilities:
@@ -670,7 +670,7 @@ jobs:
             - 🔒 **Security bugs:** Tag @kovtcharov-amd, suggest private security advisory
 
             ### For Feature Requests
-            - Check if similar exists in src/gaia/agents/, hub/agents/python/, or src/gaia/apps/
+            - Check if similar exists in src/gaia/agents/, hub/agents/, or src/gaia/apps/
             - Suggest approaches following existing patterns
             - Consider AMD hardware optimization opportunities
 

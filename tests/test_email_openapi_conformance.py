@@ -10,7 +10,7 @@ schema.  No live mailbox, no live LLM — the LLM-backed triage path is covered 
 patching ``EmailTriageService.triage_request`` to return a valid canned result.
 
 This is distinct from the static-analysis tests in
-``hub/agents/python/email/tests/test_rest_contract.py``:
+``hub/agents/email/python/tests/test_rest_contract.py``:
 
 - ``test_rest_contract.py`` checks that the committed artifact matches a freshly
   generated spec (drift detection) and that ``version.py`` constants agree with

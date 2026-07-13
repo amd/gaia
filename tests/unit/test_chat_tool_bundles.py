@@ -49,7 +49,7 @@ def test_core_and_bundles_cover_doc_registry_exactly():
     assert not uncovered, (
         f"doc-profile tools not covered by CORE or any bundle: {uncovered}. "
         "Add each to a bundle (or CORE) in "
-        "hub/agents/python/chat/gaia_agent_chat/tool_bundles.py "
+        "hub/agents/chat/python/gaia_agent_chat/tool_bundles.py "
         "— an uncovered tool would never be surfaced by the loader."
     )
     assert not dangling, (

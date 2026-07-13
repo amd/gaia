@@ -29,7 +29,7 @@ src/gaia/
 ├── agents/base/       # Agent, MCPAgent, ApiAgent, @tool, AgentConsole, errors
 ├── agents/tools/      # Cross-agent tool mixins (file_tools, screenshot_tools)
 ├── agents/<name>/     # In-core agents (chat, docqa, builder, routing) + per-agent tools/
-│                       # Standalone concrete agents live in hub/agents/python/<id>/gaia_agent_<id>/
+│                       # Standalone concrete agents live in hub/agents/<id>/python/gaia_agent_<id>/
 ├── agents/registry.py # AgentRegistry + KNOWN_TOOLS map
 ├── chat/              # AgentSDK (class `AgentSDK`, formerly `ChatSDK`)
 ├── rag/               # RAGSDK / RAGConfig

@@ -199,7 +199,7 @@ The `doc-root` is the location of the agent's canonical README:
 
 | Agent | doc-root |
 |-------|----------|
-| Email Triage (`@amd-gaia/agent-email`) | `hub/agents/npm/agent-email/` |
+| Email Triage (`@amd-gaia/agent-email`) | `hub/agents/email/npm/` |
 
 The relative link `./SCORECARD.md` resolves both in-repo and when the directory is published as an npm package. The npm `files` array includes `SCORECARD.md` (not a `scorecards/` directory).
 
@@ -214,11 +214,11 @@ from gaia.eval.release_scorecard import carry_forward, write_scorecard
 from pathlib import Path
 
 new_payload = carry_forward(
-    prev_scorecard_path=Path("hub/agents/npm/agent-email/SCORECARD.md"),
+    prev_scorecard_path=Path("hub/agents/email/npm/SCORECARD.md"),
     new_version="0.2.5",
 )
 # new_payload.inherited_from == "0.2.4"  (read from front matter, not filename)
-write_scorecard(new_payload, Path("hub/agents/npm/agent-email/SCORECARD.md"))
+write_scorecard(new_payload, Path("hub/agents/email/npm/SCORECARD.md"))
 ```
 
 The resulting scorecard has `inherited_from: "0.2.4"` and identical `results` and `aggregate` fields. The aggregate score is unchanged, so the release gate's equal-score case passes.
@@ -241,12 +241,12 @@ gaia eval benchmark \
   --output-dir /tmp/email-eval
 
 PYTHONPATH="$(pwd)" \
-python hub/agents/python/email/packaging/gen_scorecard.py \
+python hub/agents/email/python/packaging/gen_scorecard.py \
   --benchmark-dir /tmp/email-eval \
   --limit 220
 ```
 
-This writes `hub/agents/npm/agent-email/SCORECARD.md` in place.
+This writes `hub/agents/email/npm/SCORECARD.md` in place.
 
 ## Release gate
 
@@ -255,16 +255,16 @@ This writes `hub/agents/npm/agent-email/SCORECARD.md` in place.
 ```bash
 # Presence-only check (first adoption or no baseline specified):
 python -m gaia.eval.scorecard_gate \
-  --scorecard hub/agents/npm/agent-email/SCORECARD.md
+  --scorecard hub/agents/email/npm/SCORECARD.md
 
 # Regression check against a specific prior scorecard file (unit tests / local):
 python -m gaia.eval.scorecard_gate \
-  --scorecard hub/agents/npm/agent-email/SCORECARD.md \
+  --scorecard hub/agents/email/npm/SCORECARD.md \
   --baseline-file /tmp/prev-SCORECARD.md
 
 # Regression check against a prior release tag (CI):
 python -m gaia.eval.scorecard_gate \
-  --scorecard hub/agents/npm/agent-email/SCORECARD.md \
+  --scorecard hub/agents/email/npm/SCORECARD.md \
   --baseline-ref agent-pkg-email-v0.2.3
 ```
 
@@ -329,7 +329,7 @@ So a PR that changes the agent gets its scorecard refreshed (better) or rejected
   **Use the [`adding-eval-scorecard` skill](https://github.com/amd/gaia/tree/main/.claude/skills/adding-eval-scorecard/SKILL.md).** In Claude Code, invoke it instead of following these steps by hand — it carries the exact commands, the harness→payload→generator flow, the headless-eval gotchas (keyring/PYTHONPATH/tool-timeout), and the verification evidence to capture. The steps below are the reference the skill automates.
 </Tip>
 
-1. Write a `packaging/gen_scorecard.py` adapter (see `hub/agents/python/email/packaging/gen_scorecard.py` for a reference). The adapter should populate `reproduction_command` with the exact commands needed to reproduce the scorecard.
+1. Write a `packaging/gen_scorecard.py` adapter (see `hub/agents/email/python/packaging/gen_scorecard.py` for a reference). The adapter should populate `reproduction_command` with the exact commands needed to reproduce the scorecard.
 2. Run the eval and call the adapter → commit the resulting `SCORECARD.md` to `<doc-root>/SCORECARD.md`.
 3. Link the scorecard from the README: `./SCORECARD.md`.
 4. Add `SCORECARD.md` to the npm `package.json` `files` array (if published on npm); do **not** add a `scorecards/` directory.
