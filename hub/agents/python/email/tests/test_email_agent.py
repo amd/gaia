@@ -199,7 +199,6 @@ def test_thread_newest_first():
 def test_triage_fails_fast_when_lemonade_unreachable(monkeypatch):
     """Unreachable Lemonade → prompt LLMTriageError, not a ~30s hang (#1677)."""
     import requests
-
     from gaia_agent_email.api_routes import EmailTriageService
     from gaia_agent_email.tools.llm_triage import LLMTriageError
 
@@ -240,7 +239,6 @@ def test_llm_chat_respects_lemonade_base_url_override_env(monkeypatch):
     no probe/redirect path to test here — out of scope by design.
     """
     import requests
-
     from gaia_agent_email.api_routes import EmailTriageService, _resolve_email_model_id
 
     monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:9555")
@@ -275,7 +273,6 @@ def test_llm_chat_respects_lemonade_base_url_explicit_param(monkeypatch):
     """_build_llm_chat(base_url=...) probes the explicit URL with the env
     var unset (AC1)."""
     import requests
-
     from gaia_agent_email.api_routes import EmailTriageService, _resolve_email_model_id
 
     monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
@@ -314,7 +311,6 @@ def test_wrong_model_raises_llm_triage_error(monkeypatch):
     fix lands.
     """
     import requests
-
     from gaia_agent_email.api_routes import EmailTriageService, _resolve_email_model_id
     from gaia_agent_email.tools.llm_triage import LLMTriageError
 
@@ -358,7 +354,6 @@ def test_wrong_model_check_transport_failure_is_loud(monkeypatch):
     currently fails with "DID NOT RAISE" instead of LLMTriageError.
     """
     import requests
-
     from gaia_agent_email.api_routes import EmailTriageService
     from gaia_agent_email.tools.llm_triage import LLMTriageError
 
@@ -396,7 +391,6 @@ def test_model_present_check_tolerant_of_user_dot_prefix(monkeypatch):
     lands. Both failure modes are expected and correct for TDD.
     """
     import requests
-
     from gaia_agent_email.api_routes import EmailTriageService, _resolve_email_model_id
 
     monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:9555")
