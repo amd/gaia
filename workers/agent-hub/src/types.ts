@@ -197,6 +197,8 @@ export interface IndexEntry {
   skill: string;
   /** EVALUATION.md (evaluation guide) markdown of the latest version; "" if none was published. */
   evaluation: string;
+  /** CAPABILITY_MATRIX.md markdown of the latest version; "" if none was published. */
+  capability_matrix: string;
   /**
    * Eval-scorecard markdown (SCORECARD.md body, YAML front matter stripped) of the
    * latest version, rendered as its own doc tab on the hub page; "" if none was
