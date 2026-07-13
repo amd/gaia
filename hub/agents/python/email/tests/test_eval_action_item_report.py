@@ -22,11 +22,7 @@ import pytest
 
 # eval_action_item_report.py is a packaging script, not part of the
 # gaia_agent_email package — load it by path (do not insert into sys.modules).
-_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "packaging"
-    / "eval_action_item_report.py"
-)
+_PATH = Path(__file__).resolve().parents[1] / "packaging" / "eval_action_item_report.py"
 _spec = importlib.util.spec_from_file_location(
     "eval_action_item_report_under_test", _PATH
 )
@@ -49,7 +45,7 @@ def _set_model_env(monkeypatch, model="test-model"):
 
 
 def _gate(should_fail, **overrides):
-    # shape from src/gaia/eval/action_item_quality.py:654-660 (evaluate_extraction_gate)
+    # shape from src/gaia/eval/action_item_quality.py:655-666 (evaluate_extraction_gate)
     base = {
         "f1": 0.9,
         "recall": 0.9,
@@ -84,7 +80,9 @@ def _install_fakes(monkeypatch, summary):
     fake_judge = MagicMock(return_value=MagicMock())
     fake_generate = MagicMock(return_value=[{"predicted": ["item1"]}])
     fake_load_corpus = MagicMock(return_value={"case1": {"body": "..."}})
-    fake_score = MagicMock(return_value=[{"action_item_match": {"tp": 1, "fp": 0, "fn": 0}}])
+    fake_score = MagicMock(
+        return_value=[{"action_item_match": {"tp": 1, "fp": 0, "fn": 0}}]
+    )
     fake_summarize = MagicMock(return_value=summary)
     monkeypatch.setattr(mod, "make_claude_judge", fake_judge)
     monkeypatch.setattr(mod, "generate_extractions", fake_generate)

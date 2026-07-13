@@ -39,8 +39,13 @@ def _set_model_env(monkeypatch, model="test-model"):
 
 
 def _gate(should_fail, **overrides):
-    # shape from src/gaia/eval/quality_metrics.py:642-652 (evaluate_gate)
-    base = {"passed": not should_fail, "breaches": [], "enforce": True, "should_fail": should_fail}
+    # shape from src/gaia/eval/quality_metrics.py:645-656 (evaluate_gate)
+    base = {
+        "passed": not should_fail,
+        "breaches": [],
+        "enforce": True,
+        "should_fail": should_fail,
+    }
     base.update(overrides)
     return base
 
@@ -66,7 +71,9 @@ def _install_fakes(monkeypatch, summary):
 
 
 def _report():
-    return json.loads((Path("eval-out") / "gate_report.json").read_text(encoding="utf-8"))
+    return json.loads(
+        (Path("eval-out") / "gate_report.json").read_text(encoding="utf-8")
+    )
 
 
 def test_both_gates_pass_returns_0_and_writes_report(monkeypatch):
@@ -77,7 +84,9 @@ def test_both_gates_pass_returns_0_and_writes_report(monkeypatch):
     assert mod.main() == 0
 
     report = _report()
-    assert set(["model", "quality_gate", "perf_gate", "reported"]).issubset(report.keys())
+    assert set(["model", "quality_gate", "perf_gate", "reported"]).issubset(
+        report.keys()
+    )
     assert fake_gt.called
     assert fake_run.called
     assert fake_summarize.called
