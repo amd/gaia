@@ -481,7 +481,11 @@ def render_markdown(matrix: CapabilityMatrix) -> str:
 
     lines.append("## Capability matrix")
     lines.append("")
-    lines.append("20 exposed ops (16 REST functional + 4 MCP) and their eval coverage:")
+    exposed_ops = matrix.rest_functional_count + len(matrix.mcp_tools)
+    lines.append(
+        f"{exposed_ops} exposed ops ({matrix.rest_functional_count} REST "
+        f"functional + {len(matrix.mcp_tools)} MCP) and their eval coverage:"
+    )
     lines.append("")
     lines.append("| Op | Surface | Eval coverage |")
     lines.append("|---|---|---|")
