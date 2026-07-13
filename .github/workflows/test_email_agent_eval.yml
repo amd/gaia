@@ -147,7 +147,12 @@ env:
 jobs:
   email-eval:
     name: Email Triage Eval (synthetic corpus, report mode)
-    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
+    # Require the WINDOWS stx runners: the bare 'stx' label also matches a
+    # Linux box (xsj-aimlab-stxp-04), and this eval is Windows-only (PowerShell
+    # steps + LemonadeServer.exe) — landing on Linux dies instantly with
+    # 'powershell: command not found'. fromJSON(...) yields a label ARRAY so the
+    # runner must have Windows AND the stx/stx-test label.
+    runs-on: ${{ fromJSON(contains(github.event.pull_request.labels.*.name, 'stx-test') && '["self-hosted","Windows","stx-test"]' || '["self-hosted","Windows","stx"]') }}
     timeout-minutes: 90
     steps:
       - name: Checkout

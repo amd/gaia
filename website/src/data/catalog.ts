@@ -61,6 +61,10 @@ export interface Agent {
   // own doc tab. "" / absent if none was published. Optional for the same
   // older-index.json resilience as `spec`/`skill`.
   evaluation?: string;
+  // CAPABILITY_MATRIX.md markdown of the latest version, rendered as its own doc
+  // tab. "" / absent if none was published. Optional for the same older-index.json
+  // resilience as `spec`/`skill`.
+  capability_matrix?: string;
   // Eval-scorecard markdown (SCORECARD.md body, YAML front matter already stripped
   // by the hub Worker), rendered as its own doc tab. "" / absent if none was
   // published. Same older-index.json resilience as `spec`/`skill`.

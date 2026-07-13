@@ -410,6 +410,42 @@ def test_min_lemonade_version_locksteps_with_manifest():
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# 6b. GET /v1/email/init tracks the LEMONADE_BASE_URL override (#1888 AC3)
+# ---------------------------------------------------------------------------
+
+
+def test_init_endpoint_tracks_lemonade_base_url_override(monkeypatch, client):
+    """Setting LEMONADE_BASE_URL redirects the readiness endpoint's reported
+    base_url + resolved model (AC3). Mocks ``requests.get`` directly (NOT the
+    ``_probe_*`` helpers) so the assertion isn't tautological.
+    """
+    monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:9556")
+    resolved_model_id = _resolve_email_model_id()
+    probe_base = "http://127.0.0.1:9556/api/v1"
+
+    def _fake_get(url, *args, **kwargs):
+        if url == f"{probe_base}/health":
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"version": MIN_LEMONADE_VERSION}
+            return resp
+        if url == f"{probe_base}/models":
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"data": [{"id": resolved_model_id}]}
+            return resp
+        raise AssertionError(f"unexpected probe URL: {url}")
+
+    monkeypatch.setattr(requests, "get", _fake_get)
+
+    resp = client.get("/v1/email/init")
+    body = resp.json()
+
+    assert body["lemonade"]["base_url"] == probe_base
+    assert body["model"]["id"] == resolved_model_id
+    assert resp.status_code == 200
+    assert body["ready"] is True
+
+
 def test_init_route_in_openapi_with_init_response_model(client):
     spec = build_app().openapi()
     assert "/v1/email/init" in spec["paths"]

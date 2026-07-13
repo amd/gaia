@@ -3437,7 +3437,7 @@
     },
     "/v1/email/triage/batch": {
       "post": {
-        "description": "Triage an array of emails or threads in a single request (#1887).\n\nAccepts a ``BatchTriageRequest`` (1..MAX_BATCH_SIZE ``EmailInput`` items)\nand returns a ``BatchTriageResponse`` — one ``BatchItemResult`` per item,\norder-preserved. Per-item failures surface as ``BatchItemResult.error``\n(HTTP 200 with all items errored is valid — inspect each result). A 502\nmeans Lemonade was unreachable before any item was processed. No mail is\nread or sent; this analyzes only the items in the request. Each\nsuccessful item's action items are persisted to the local task store,\nlinked to its source ``message_id`` and de-duplicated per message\n(#1605) — additive, the response shape is unchanged.",
+        "description": "Triage an array of emails or threads in a single request (#1887).\n\nAccepts a ``BatchTriageRequest`` (1..MAX_BATCH_SIZE ``EmailInput`` items)\nand returns a ``BatchTriageResponse`` — one ``BatchItemResult`` per item,\norder-preserved. Per-item failures surface as ``BatchItemResult.error``\n(HTTP 200 with all items errored is valid — inspect each result). A 502\nmeans Lemonade was unreachable or the triage model is unavailable there,\ndetected before any item was processed. No mail is read or sent; this\nanalyzes only the items in the request. Each\nsuccessful item's action items are persisted to the local task store,\nlinked to its source ``message_id`` and de-duplicated per message\n(#1605) — additive, the response shape is unchanged.",
         "operationId": "triage_email_batch_v1_email_triage_batch_post",
         "requestBody": {
           "content": {
