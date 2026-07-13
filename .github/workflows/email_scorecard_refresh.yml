@@ -35,9 +35,9 @@ on:
   workflow_dispatch:
     inputs:
       limit:
-        description: 'Messages to triage (must match the committed scorecard for comparability)'
+        description: 'Messages to triage (smaller = faster; regen a card at this sample size)'
         required: false
-        default: '220'
+        default: '60'
       model:
         description: 'Lemonade model id'
         required: false
@@ -67,7 +67,7 @@ permissions:
 env:
   SCORECARD: hub/agents/npm/agent-email/SCORECARD.md
   MANIFEST: hub/agents/python/email/gaia-agent.yaml
-  LIMIT: ${{ github.event.inputs.limit || '220' }}
+  LIMIT: ${{ github.event.inputs.limit || '60' }}
   MODEL: ${{ github.event.inputs.model || 'Gemma-4-E4B-it-GGUF' }}
   PYTHONIOENCODING: "utf-8"
   # JOB-WIDE so EVERY eval step (benchmark AND the drafting eval) can import the
@@ -95,11 +95,11 @@ jobs:
     # 'powershell: command not found'. fromJSON(...) yields a label ARRAY so the
     # runner must have Windows AND the stx/stx-test label.
     runs-on: ${{ fromJSON(contains(github.event.pull_request.labels.*.name, 'stx-test') && '["self-hosted","Windows","stx-test"]' || '["self-hosted","Windows","stx"]') }}
-    # The refresh triages the full ~220-email corpus in one call (~38s/email
-    # -> ~2.3h) to regenerate a representative card, so the job needs a wide
-    # budget. (Faster triage is tracked separately; until then the refresh is
-    # deliberately long-running.)
-    timeout-minutes: 180
+    # The refresh triages ~60 emails in one call (~38s/email -> ~40min); the
+    # limit was cut from 220 (~2.3h) because that hogged the serial
+    # lemonade-eval slot. Per-email speedups that would let it go back up are
+    # tracked in #2063.
+    timeout-minutes: 90
     steps:
       - name: Checkout (the pushed branch)
         uses: actions/checkout@v7
@@ -170,13 +170,11 @@ jobs:
           # The agent's calendar-connector resolution blocks on the OS keyring in
           # a headless context — disable it so construction doesn't hang.
           PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
-          # Triage of the full ~220-email corpus is ONE tool call at ~38s/email
-          # (measured on the stx pool for Gemma-4-E4B) -> ~2.3h. The old 1800s
-          # (30 min) abandoned it mid-run -> 0 triage results -> Category acc 0.0
-          # and a degenerate scorecard. Pin the tool timeout above the observed
-          # full-corpus time (9000s = 2.5h) so the run completes. (Faster triage
-          # is tracked separately.)
-          GAIA_AGENT_TOOL_TIMEOUT: '9000'
+          # Triage of the ~60-email corpus is ONE tool call at ~38s/email
+          # (measured on the stx pool for Gemma-4-E4B) -> ~40min. A too-low
+          # timeout abandons it mid-run -> 0 triage results -> Category acc 0.0.
+          # 3600s (1h) covers it with margin. Per-email speedups: #2063.
+          GAIA_AGENT_TOOL_TIMEOUT: '3600'
           PYTHONPATH: ${{ github.workspace }}
         run: |
           Remove-Item -Recurse -Force eval-out -ErrorAction SilentlyContinue
