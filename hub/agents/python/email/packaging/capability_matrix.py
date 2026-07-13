@@ -131,12 +131,12 @@ OP_EVAL_COVERAGE: Dict[str, str] = {
     "send_email": _NO_EVAL_SENTINEL,
 }
 
-# AC4: MCP scope is an intentional decision, not an oversight -- pinned so it
-# cannot silently regress. The rationale framing is user-confirmed (2026-07-13,
-# plan §2 Decision 3): MCP exists so a HOST LLM can use the email agent AS a
-# tool, sized to task-level verbs -- explicitly not a REST replica.
+# AC4: the 4-tool MCP scope is a deliberate decision, not an oversight --
+# pinned here so it cannot silently regress.
 MCP_SCOPE_DECISION = {
-    "tools": frozenset({"triage_email", "triage_email_batch", "draft_reply", "send_email"}),
+    "tools": frozenset(
+        {"triage_email", "triage_email_batch", "draft_reply", "send_email"}
+    ),
     "rationale": (
         "MCP exists so a host LLM can invoke the email agent as a tool, not "
         "so an external app can drive the full REST surface over stdio. Its "
@@ -204,18 +204,25 @@ class CapabilityMatrix:
     mcp_tools: FrozenSet[str]
     eval_suites: Dict[str, dict] = field(default_factory=dict)
 
-    def __getitem__(self, name: str):
-        # Dict-style access convenience for callers/tests.
-        return getattr(self, name)
-
 
 # ---------------------------------------------------------------------------
 # Surface 1: internal @tool count (AST, deterministic, no agent instantiation)
 # ---------------------------------------------------------------------------
 
 
+def _is_tool_decorator(dec: ast.expr) -> bool:
+    # The framework supports both bare ``@tool`` and call-form ``@tool(...)``
+    # (see gaia.agents.base.tools) -- count both or a mixin adopting
+    # ``@tool(atomic=True)`` silently vanishes from the drift guard.
+    if isinstance(dec, ast.Name):
+        return dec.id == "tool"
+    if isinstance(dec, ast.Call):
+        return isinstance(dec.func, ast.Name) and dec.func.id == "tool"
+    return False
+
+
 def count_tools_in_source(path: Path) -> int:
-    """AST-count bare ``@tool``-decorated function/async-function defs.
+    """AST-count ``@tool`` / ``@tool(...)``-decorated function defs.
 
     Never instantiates an agent and never reads ``_TOOL_REGISTRY`` (which is
     env-dependent -- 52 vs 57 with ``MemoryMixin`` composed in the same
@@ -225,10 +232,8 @@ def count_tools_in_source(path: Path) -> int:
     count = 0
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            for dec in node.decorator_list:
-                if isinstance(dec, ast.Name) and dec.id == "tool":
-                    count += 1
-                    break
+            if any(_is_tool_decorator(dec) for dec in node.decorator_list):
+                count += 1
     return count
 
 
@@ -288,7 +293,10 @@ def _derive_mcp_tool_names(mcp_server_path: Path) -> List[str]:
     )
     names: List[str] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == "get_mcp_tool_definitions":
+        if (
+            isinstance(node, ast.FunctionDef)
+            and node.name == "get_mcp_tool_definitions"
+        ):
             for stmt in ast.walk(node):
                 if isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.List):
                     for elt in stmt.value.elts:
@@ -354,6 +362,39 @@ def reconcile_tools_count(
     return distinct.pop()
 
 
+def _read_manifest_tools_count(manifest_path: Path = _GAIA_AGENT_YAML) -> int:
+    """Read the ``tools_count`` literal from gaia-agent.yaml (raw-text parse --
+    no yaml dependency in this packaging script). Fails loud when absent."""
+    for line in manifest_path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("tools_count:"):
+            return int(line.split(":", 1)[1].strip())
+    raise ValueError(
+        f"no 'tools_count:' line found in {manifest_path} -- the manifest "
+        "must declare it (see CAPABILITY_MATRIX.md Definitions)"
+    )
+
+
+def _read_registration_tools_count(
+    init_path: Path = _EMAIL_ROOT / "gaia_agent_email" / "__init__.py",
+) -> int:
+    """AST-extract the ``tools_count=<int>`` keyword from ``__init__.py``'s
+    ``AgentRegistration(...)`` call -- static, no package import needed."""
+    tree = ast.parse(init_path.read_text(encoding="utf-8"), filename=str(init_path))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            for kw in node.keywords:
+                if (
+                    kw.arg == "tools_count"
+                    and isinstance(kw.value, ast.Constant)
+                    and isinstance(kw.value.value, int)
+                ):
+                    return kw.value.value
+    raise ValueError(
+        f"no tools_count=<int> keyword found in {init_path} -- "
+        "build_registration() must declare it"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Top-level derivation
 # ---------------------------------------------------------------------------
@@ -368,6 +409,14 @@ def derive_matrix(repo_root: Path | None = None) -> CapabilityMatrix:
     """
     tools_by_mixin = _derive_tools_by_mixin(_TOOLS_DIR)
     tools_total = sum(tools_by_mixin.values())
+
+    # Fail loud at generation/--check time too, not only under pytest: a
+    # tools_count drift must never render a matrix that papers over it.
+    reconcile_tools_count(
+        manifest_count=_read_manifest_tools_count(),
+        registration_count=_read_registration_tools_count(),
+        ast_count=tools_total,
+    )
 
     rest_functional_count, rest_in_contract_count, rest_op_names = _derive_rest()
 
@@ -399,7 +448,9 @@ def derive_matrix(repo_root: Path | None = None) -> CapabilityMatrix:
 
 def render_markdown(matrix: CapabilityMatrix) -> str:
     lines: List[str] = []
-    lines.append("<!-- Generated by packaging/capability_matrix.py -- do not edit by hand. -->")
+    lines.append(
+        "<!-- Generated by packaging/capability_matrix.py -- do not edit by hand. -->"
+    )
     lines.append("# Email Agent Capability Matrix")
     lines.append("")
     lines.append(
@@ -465,7 +516,9 @@ def render_markdown(matrix: CapabilityMatrix) -> str:
 
     lines.append("## MCP Scope Decision")
     lines.append("")
-    lines.append(f"Tools: {', '.join(f'`{t}`' for t in sorted(MCP_SCOPE_DECISION['tools']))}")
+    lines.append(
+        f"Tools: {', '.join(f'`{t}`' for t in sorted(MCP_SCOPE_DECISION['tools']))}"
+    )
     lines.append("")
     lines.append(MCP_SCOPE_DECISION["rationale"])
     lines.append("")

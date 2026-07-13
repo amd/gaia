@@ -130,16 +130,6 @@ _EXPECTED_OP_NAMES = _EXPECTED_REST_OP_NAMES | set(_EXPECTED_MCP_TOOL_NAMES)
 assert len(_EXPECTED_OP_NAMES) == _EXPECTED_REST_FUNCTIONAL_COUNT + _EXPECTED_MCP_COUNT
 
 
-def _field(matrix, name):
-    """Access a field on the derived matrix, tolerating dict- or object-style
-    return values from ``derive_matrix`` (the module author's exact return
-    type is not yet fixed by the plan)."""
-    try:
-        return matrix[name]
-    except TypeError:
-        return getattr(matrix, name)
-
-
 @pytest.fixture(scope="module")
 def matrix():
     return capability_matrix.derive_matrix(_REPO_ROOT)
@@ -176,7 +166,7 @@ def test_tools_count_matches_derived(matrix):
 
     registration_count = gaia_agent_email.build_registration().tools_count
 
-    ast_count = _field(matrix, "tools_total")
+    ast_count = matrix.tools_total
 
     assert manifest_count == _EXPECTED_TOOLS_TOTAL
     assert registration_count == _EXPECTED_TOOLS_TOTAL
@@ -198,9 +188,7 @@ def test_gaia_agent_yaml_carries_definition_comment():
     )
 
     lines = _GAIA_AGENT_YAML.read_text(encoding="utf-8").splitlines()
-    idx = next(
-        i for i, line in enumerate(lines) if line.startswith("tools_count:")
-    )
+    idx = next(i for i, line in enumerate(lines) if line.startswith("tools_count:"))
     comment_block: list[str] = []
     j = idx - 1
     while j >= 0 and lines[j].lstrip().startswith("#"):
@@ -214,15 +202,15 @@ def test_gaia_agent_yaml_carries_definition_comment():
 
 
 def test_internal_tool_counts_per_mixin(matrix):
-    tools_by_mixin = _field(matrix, "tools_by_mixin")
+    tools_by_mixin = matrix.tools_by_mixin
     assert dict(tools_by_mixin) == _EXPECTED_TOOLS_BY_MIXIN
 
 
 def test_surface_counts_match_code(matrix):
-    mcp_tools = _field(matrix, "mcp_tools")
-    eval_suites = _field(matrix, "eval_suites")
-    rest_functional = _field(matrix, "rest_functional_count")
-    rest_in_contract = _field(matrix, "rest_in_contract_count")
+    mcp_tools = matrix.mcp_tools
+    eval_suites = matrix.eval_suites
+    rest_functional = matrix.rest_functional_count
+    rest_in_contract = matrix.rest_in_contract_count
 
     assert len(mcp_tools) == _EXPECTED_MCP_COUNT
     assert len(eval_suites) == _EXPECTED_EVAL_SUITE_COUNT
@@ -314,6 +302,13 @@ def tool_three(x: int) -> int:
     return x
 
 
+@tool(atomic=True)
+def tool_four(x: int) -> int:
+    """Call-form @tool(...) — the framework supports both forms; the counter
+    must too, or the first mixin adopting it is silently uncounted."""
+    return x
+
+
 def not_a_tool(x: int) -> int:
     """Deliberately undecorated — must NOT be counted."""
     return x
@@ -322,7 +317,7 @@ def not_a_tool(x: int) -> int:
     )
 
     result = capability_matrix.count_tools_in_source(synthetic)
-    assert result == 3
+    assert result == 4
 
 
 # ---------------------------------------------------------------------------
@@ -372,11 +367,4 @@ def test_eval_followup_plan_current(matrix):
             len(text) > 10
         ), f"EVAL_FOLLOWUP_PLAN[{suite!r}] looks like a lazy placeholder: {text!r}"
 
-    eval_suites = _field(matrix, "eval_suites")
-    followups_entry = eval_suites["followups"]
-    wired = (
-        followups_entry["wired"]
-        if isinstance(followups_entry, dict)
-        else followups_entry.wired
-    )
-    assert wired is False
+    assert matrix.eval_suites["followups"]["wired"] is False
