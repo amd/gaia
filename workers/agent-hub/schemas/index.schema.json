@@ -150,6 +150,10 @@
           "type": "string",
           "description": "EVALUATION.md (evaluation guide) markdown of the latest version; empty string if none was published."
         },
+        "capability_matrix": {
+          "type": "string",
+          "description": "CAPABILITY_MATRIX.md markdown of the latest version; empty string if none was published."
+        },
         "scorecard": {
           "type": "string",
           "description": "Eval-scorecard markdown (SCORECARD.md body, YAML front matter stripped) of the latest version, rendered as its own doc tab; empty string if none was published."

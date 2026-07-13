@@ -45,6 +45,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+from gaia.eval.fixture_paths import resolve_repo_fixture
 from gaia.eval.quality_metrics import Confusion
 
 # ---------------------------------------------------------------------------
@@ -603,21 +604,13 @@ def load_extraction_thresholds(path: str | Path) -> ExtractionThresholds:
     )
 
 
-# Canonical location of the committed extraction-gate thresholds manifest. The
-# single entry point CI consumes — flip 'enforce' in this file (data, not code)
-# to make CI gate on the #1949 precision/recall/F1 bars.
-_EXTRACTION_THRESHOLDS_MANIFEST = (
-    Path(__file__).resolve().parents[3]
-    / "tests"
-    / "fixtures"
-    / "email"
-    / "action_items_gate_thresholds.json"
-)
-
-
 def default_extraction_thresholds_path() -> Path:
-    """Path to the committed extraction-gate thresholds manifest (#1949)."""
-    return _EXTRACTION_THRESHOLDS_MANIFEST
+    """Path to the committed extraction-gate thresholds manifest (#1949).
+
+    The single entry point CI consumes — flip 'enforce' in that file (data, not
+    code) to make CI gate on the #1949 precision/recall/F1 bars.
+    """
+    return resolve_repo_fixture("email", "action_items_gate_thresholds.json")
 
 
 def load_default_extraction_thresholds() -> ExtractionThresholds:

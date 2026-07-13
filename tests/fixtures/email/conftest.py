@@ -32,16 +32,18 @@ def stub_inbox_path() -> Path:
 
 @pytest.fixture
 def corpus_inbox_path() -> Path:
-    """Return the path to the committed 249-message vendor-derived corpus."""
+    """Return the path to the generated vendor-derived corpus mbox
+    (``generate_mbox.TOTAL_MESSAGES`` messages — derive counts from that
+    constant, never hardcode them)."""
     assert CORPUS_INBOX_MBOX.exists(), CORPUS_INBOX_MBOX
     return CORPUS_INBOX_MBOX
 
 
 @pytest.fixture
 def synthetic_inbox(corpus_inbox_path):
-    """A pre-loaded ``FakeGmailBackend`` over the 249-message vendor-derived
-    corpus. Its ground_truth is keyed by the Gmail-derived id, so it
-    aligns 1:1 with this backend.
+    """A pre-loaded ``FakeGmailBackend`` over the full vendor-derived corpus.
+    Its ground_truth is keyed by the Gmail-derived id, so it aligns 1:1 with
+    this backend.
     """
     from tests.fixtures.email.fake_gmail import FakeGmailBackend
 

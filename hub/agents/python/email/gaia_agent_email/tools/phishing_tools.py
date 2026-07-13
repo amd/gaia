@@ -28,9 +28,9 @@ path can call ``unquarantine_impl``.
 
 from __future__ import annotations
 
-import json
 from typing import Any, Dict, Optional
 
+from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email import action_store
 from gaia_agent_email.verbose import log_tool_call
 
@@ -44,14 +44,6 @@ log = get_logger(__name__)
 # The Gmail label name used to quarantine phishing messages.  This is the
 # human-readable display name; the tool resolves it to a label_id at runtime.
 QUARANTINE_LABEL_NAME = "GAIA_PHISHING_QUARANTINE"
-
-
-def _envelope_ok(data: Any) -> str:
-    return json.dumps({"ok": True, "data": data}, default=str)
-
-
-def _envelope_err(message: str) -> str:
-    return json.dumps({"ok": False, "error": message})
 
 
 def _resolve_quarantine_label_id(gmail) -> str:

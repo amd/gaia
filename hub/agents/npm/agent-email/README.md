@@ -411,6 +411,7 @@ Set `DEBUG=agent-email` for verbose spawn/fetch/health logs (on stderr).
 ## Reference
 
 - [`SPEC.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md) — full API, lifecycle helpers, connectors, module format, and platforms.
+- [`CAPABILITY_MATRIX.md`](https://github.com/amd/gaia/blob/main/hub/agents/python/email/CAPABILITY_MATRIX.md) — code-derived, CI-guarded inventory of every capability surface (internal tools, REST, MCP, eval coverage).
 - [`SKILL.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SKILL.md) — load into Claude Code (or similar) for a step-by-step integration playbook.
 - [`SCORECARD.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SCORECARD.md) — latest eval results (score, metrics, per-category breakdown, run environment).
 - [`EVALUATION.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/EVALUATION.md) — evaluation guide: what's measured, the dataset, a worked example, and how to reproduce the scorecard.

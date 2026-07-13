@@ -35,20 +35,22 @@
 # A synthesis job collects the five structured outputs, dedupes against already-open
 # `weekly-audit` issues via a stable per-finding key, ranks by severity, and files output.
 #
-# MODEL: claude-fable-5 (Claude Fable 5) — Anthropic's most capable model, chosen for
-# the deep-review quality this proactive lens needs. NOTE: Fable is premium-priced
-# ($10/$50 per MTok) and its safety classifiers auto-route ~<5% of sessions to Opus
-# 4.8; both are expected. If Fable is not selectable on the CLAUDE_CODE_OAUTH_TOKEN
-# subscription tier, the action errors and the per-job verify step surfaces it — change
-# AUDIT_MODEL below to claude-opus-4-8 in that case.
+# MODEL: claude-opus-4-8 (Claude Opus 4.8) — excellent for static review at half the
+# token burn of Fable ($5/$25 vs $10/$50 per MTok). A measured deep run on Fable cost
+# ~$45 of API-equivalent subscription usage; Opus roughly halves that. Swap AUDIT_MODEL
+# below to claude-fable-5 for maximum depth if you accept ~2x the cost (Fable also
+# auto-routes ~<5% of sessions to Opus 4.8 via its safety classifiers).
 #
 # AUTH: same OAuth-preferred / API-key-fallback wiring as every claude.yml job
 # (CLAUDE_CODE_OAUTH_TOKEN, covered by the monthly claude-auth-canary.yml). Runs on the
 # Claude Max subscription pool, so there is no per-run dollar cost — only shared quota.
 #
 # COST CEILING: 5 dimension jobs (--max-turns 30) + 1 synthesis job (--max-turns 25) =
-# a known per-run ceiling. skip-if-empty exits before any Claude call on a no-change
-# week. The concurrency group prevents two scheduled runs from overlapping.
+# a known per-run ceiling. The dimension matrix runs `max-parallel: 1` (serialized) so
+# the run is a steady drip rather than a 5-job burst — this keeps it under the Max
+# subscription's rolling (5-hour) rate limit, at the cost of a longer wall-clock.
+# skip-if-empty exits before any Claude call on a no-change week. The concurrency group
+# prevents two scheduled runs from overlapping.
 #
 # NO REPO-CODE EXECUTION: the jobs read and report only (--allowedTools Read,Grep,Glob,Bash
 # with no Edit/Write) — they never `pip install` / run GAIA / execute checked-out code,
@@ -83,9 +85,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Single source of truth for the model. Swap to claude-opus-4-8 if Fable is
-  # unavailable on the subscription tier (see the MODEL note in the file header).
-  AUDIT_MODEL: claude-fable-5
+  # Single source of truth for the model. Opus 4.8 by default — half the token burn of
+  # Fable for comparable static-review quality (see the MODEL note in the file header).
+  AUDIT_MODEL: claude-opus-4-8
 
 jobs:
   # Resolve mode (auto → deep/normal) and short-circuit a no-change week.
@@ -142,6 +144,10 @@ jobs:
       contents: read
     strategy:
       fail-fast: false
+      # Serialize the dimensions so the run is a steady drip, not a 5-job burst —
+      # keeps it under the Max subscription's rolling (5-hour) rate limit. Trades
+      # wall-clock (~5 sequential Claude jobs) for a smoother token profile.
+      max-parallel: 1
       matrix:
         dimension: [security, correctness, docs, tests, features]
     steps:
@@ -177,7 +183,7 @@ jobs:
       - name: Run Claude (${{ matrix.dimension }} lens)
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a  # v1.0.165
+        uses: anthropics/claude-code-action@e90deca47693f9457b72f2b53c17d7c445a87342  # v1.0.171
         with:
           # Prefer subscription OAuth, fall back to API key — see claude.yml "Authentication".
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -256,7 +262,7 @@ jobs:
 
       - name: Upload findings
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: findings-${{ matrix.dimension }}
           path: findings-${{ matrix.dimension }}.json
@@ -281,7 +287,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download all findings
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: audit-findings
 
@@ -297,7 +303,7 @@ jobs:
       - name: Synthesize and file the triage issue
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a  # v1.0.165
+        uses: anthropics/claude-code-action@e90deca47693f9457b72f2b53c17d7c445a87342  # v1.0.171
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

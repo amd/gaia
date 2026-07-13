@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from gaia.eval import performance, quality_metrics
+from gaia.eval.fixture_paths import resolve_repo_fixture
 
 # Metrics whose run-to-run spread is recorded for trustworthiness (#1894). The
 # first is the gated aggregate (within-one-bucket); the rest are reported.
@@ -639,21 +640,13 @@ def load_ground_truth(path: str | Path) -> dict[str, dict]:
         return json.load(f)
 
 
-# Canonical location of the committed quality-gate thresholds manifest for the
-# #1230 corpus. The single entry point #1112 (CI) and #1266 consume — flip
-# 'enforce' in this file (data, not code) to make CI gate on FP/FN.
-_THRESHOLDS_MANIFEST = (
-    Path(__file__).resolve().parents[3]
-    / "tests"
-    / "fixtures"
-    / "email"
-    / "quality_gate_thresholds.json"
-)
-
-
 def default_quality_thresholds_path() -> Path:
-    """Path to the committed quality-gate thresholds manifest (#1230 corpus)."""
-    return _THRESHOLDS_MANIFEST
+    """Path to the committed quality-gate thresholds manifest (#1230 corpus).
+
+    The single entry point #1112 (CI) and #1266 consume — flip 'enforce' in that
+    file (data, not code) to make CI gate on FP/FN.
+    """
+    return resolve_repo_fixture("email", "quality_gate_thresholds.json")
 
 
 def load_default_quality_thresholds() -> "quality_metrics.QualityThresholds":
@@ -665,21 +658,14 @@ def load_default_quality_thresholds() -> "quality_metrics.QualityThresholds":
     return quality_metrics.load_quality_thresholds(default_quality_thresholds_path())
 
 
-# Canonical location of the committed perf-gate thresholds manifest (#1277). The
-# single entry point #1112 (CI) consumes — flip 'enforce' in this file (data, not
-# code) to make CI gate on the Strix Halo bars once confirmed on hardware.
-_PERF_THRESHOLDS_MANIFEST = (
-    Path(__file__).resolve().parents[3]
-    / "tests"
-    / "fixtures"
-    / "email"
-    / "perf_gate_thresholds.json"
-)
-
-
 def default_perf_thresholds_path() -> Path:
-    """Path to the committed perf-gate thresholds manifest (#1277)."""
-    return _PERF_THRESHOLDS_MANIFEST
+    """Path to the committed perf-gate thresholds manifest (#1277).
+
+    The single entry point #1112 (CI) consumes — flip 'enforce' in that file
+    (data, not code) to make CI gate on the Strix Halo bars once confirmed on
+    hardware.
+    """
+    return resolve_repo_fixture("email", "perf_gate_thresholds.json")
 
 
 def load_default_perf_thresholds() -> "performance.PerfThresholds":

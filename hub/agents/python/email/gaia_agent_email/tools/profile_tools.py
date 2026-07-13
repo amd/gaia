@@ -39,6 +39,7 @@ import statistics
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
+from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia.agents.base.tools import tool
 from gaia.logger import get_logger
 
@@ -86,14 +87,6 @@ _MAX_REPLY_RECORDS: int = 50000
 # rule) and the ceiling can be raised deliberately. 50k senders is far beyond
 # any realistic single mailbox, so in practice it is never hit.
 _MAX_INTERACTION_RECORDS = 50000
-
-
-def _envelope_ok(data: Any) -> str:
-    return json.dumps({"ok": True, "data": data}, default=str)
-
-
-def _envelope_err(message: str) -> str:
-    return json.dumps({"ok": False, "error": message})
 
 
 def _now_iso() -> str:
