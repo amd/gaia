@@ -4,9 +4,10 @@
 
 Forwards the full schema-2.1 ``/v1/email/*`` contract (triage, batch triage,
 search, inbox pre-scan, draft/send + confirm, archive/unarchive,
-quarantine/unquarantine, calendar view/preview/create/respond, health, version)
-and returns the sidecar's envelopes **unchanged** so the existing SSE card
-pipeline (``pre_scan_inbox`` → ``email_pre_scan``) keeps working byte-for-byte.
+quarantine/unquarantine, calendar view/preview/create/respond, health, version,
+readiness init) and returns the sidecar's envelopes **unchanged** so the
+existing SSE card pipeline (``pre_scan_inbox`` → ``email_pre_scan``) keeps
+working byte-for-byte.
 
 A non-2xx is translated loudly into :class:`SidecarHTTPError`, which carries the
 sidecar's own actionable ``detail`` (e.g. ``502 local LLM triage failed: …``)
@@ -149,9 +150,23 @@ class EmailSidecarProxy:
     def calendar_respond(self, payload: dict) -> dict:
         return self._post("/v1/email/calendar/events/respond", payload)
 
-    # -- Health / version ---------------------------------------------------
+    # -- Health / version / readiness ----------------------------------------
     def health(self) -> dict:
         return self._get("/health")
 
     def version(self) -> dict:
         return self._get("/version")
+
+    def init(self) -> tuple:
+        """Readiness preflight — returns ``(status_code, body)``, never raises on 503.
+
+        ``GET /v1/email/init`` answers 200 (ready) or 503 (not ready) with the
+        same ``InitResponse`` body either way — the 503 is contract, not a
+        transport failure, so both must pass through verbatim instead of being
+        flattened into a ``SidecarHTTPError`` detail string.
+        """
+        path = "/v1/email/init"
+        resp = self._session.get(f"{self.base_url}{path}", timeout=self.timeout)
+        if resp.status_code not in (200, 503):
+            self._raise_for_status(resp, path)
+        return resp.status_code, resp.json()

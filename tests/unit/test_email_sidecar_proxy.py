@@ -129,6 +129,36 @@ def test_health_and_version_get_routes():
     ]
 
 
+def test_init_get_route_returns_status_and_body_on_200():
+    # #1888: init returns (status, body) — never raises on the contract statuses.
+    body = {"ready": True, "lemonade": {"base_url": "http://127.0.0.1:8555/api/v1"}}
+    sess = _Session(body)
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    assert proxy.init() == (200, body)
+    assert sess.gets == [("http://127.0.0.1:9100/v1/email/init", None)]
+
+
+def test_init_503_not_ready_passes_body_through_without_raising():
+    # 503 from /init is contract (full InitResponse + hint), not a transport
+    # failure — it must NOT be flattened into a SidecarHTTPError.
+    body = {"ready": False, "hint": "Lemonade Server not reachable"}
+    sess = _Session(None, resp=_Resp(body, status=503))
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    assert proxy.init() == (503, body)
+
+
+def test_init_unexpected_status_still_raises_loudly():
+    # Anything outside the 200/503 contract (401 bad token, 404 old sidecar)
+    # keeps the loud SidecarHTTPError boundary.
+    err = _Resp({"detail": "Missing bearer token"}, status=401)
+    sess = _Session(None, resp=err)
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    with pytest.raises(SidecarHTTPError) as ei:
+        proxy.init()
+    assert ei.value.status_code == 401
+    assert "bearer token" in ei.value.detail.lower()
+
+
 def test_non_2xx_with_json_detail_raises_actionable_error():
     # The sidecar's actionable detail (e.g. Lemonade down) must survive, not be
     # flattened into a generic HTTPError.
