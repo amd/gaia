@@ -13,6 +13,7 @@
  *   agents/<id>/<version>/SPEC.md           spec/reference markdown, per version (optional)
  *   agents/<id>/<version>/SKILL.md          AI-integration playbook markdown (optional)
  *   agents/<id>/<version>/EVALUATION.md     evaluation guide markdown, per version (optional)
+ *   agents/<id>/<version>/CAPABILITY_MATRIX.md  capability matrix markdown, per version (optional)
  *   agents/<id>/<version>/<filename>        the artifact (wheel or binary)
  */
 
@@ -55,6 +56,10 @@ export function skillKey(id: string, version: string): string {
 
 export function evaluationKey(id: string, version: string): string {
   return `${versionDir(id, version)}EVALUATION.md`;
+}
+
+export function capabilityMatrixKey(id: string, version: string): string {
+  return `${versionDir(id, version)}CAPABILITY_MATRIX.md`;
 }
 
 export function evalScorecardKey(id: string, version: string): string {
@@ -133,6 +138,20 @@ export async function readEvaluation(
   version: string
 ): Promise<string> {
   const obj = await bucket.get(evaluationKey(id, version));
+  if (!obj) return "";
+  return obj.text();
+}
+
+/**
+ * Read the CAPABILITY_MATRIX.md markdown for one version. Returns "" when none
+ * was published — the `capability_matrix` form part on POST /publish is optional.
+ */
+export async function readCapabilityMatrix(
+  bucket: R2Bucket,
+  id: string,
+  version: string
+): Promise<string> {
+  const obj = await bucket.get(capabilityMatrixKey(id, version));
   if (!obj) return "";
   return obj.text();
 }
