@@ -319,6 +319,25 @@ def not_a_tool(x: int) -> int:
     assert result == 4
 
 
+def test_mcp_name_parser_handles_async_def(tmp_path):
+    """The MCP name extractor must match get_mcp_tool_definitions whether it
+    is a plain or async def — symmetry with count_tools_in_source, so a
+    future async migration of the MCP server can't silently zero the count."""
+    synthetic = tmp_path / "synthetic_mcp.py"
+    synthetic.write_text(
+        """
+class FakeMCPAgent:
+    async def get_mcp_tool_definitions(self):
+        return [
+            {"name": "alpha", "inputSchema": {}},
+            {"name": "beta", "inputSchema": {}},
+        ]
+""",
+        encoding="utf-8",
+    )
+    assert capability_matrix._derive_mcp_tool_names(synthetic) == ["alpha", "beta"]
+
+
 # ---------------------------------------------------------------------------
 # AC3 — eval coverage per exposed op (20 ops, closed-set + bidirectional)
 # ---------------------------------------------------------------------------

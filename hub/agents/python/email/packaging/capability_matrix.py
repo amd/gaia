@@ -298,7 +298,7 @@ def _derive_mcp_tool_names(mcp_server_path: Path) -> List[str]:
     names: List[str] = []
     for node in ast.walk(tree):
         if (
-            isinstance(node, ast.FunctionDef)
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
             and node.name == "get_mcp_tool_definitions"
         ):
             for stmt in ast.walk(node):
