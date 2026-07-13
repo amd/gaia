@@ -1,6 +1,9 @@
 # Agent UI v2 — Thin-Host Implementation Breakdown
 
 > **Date:** 2026-07-01 · **Grounded at:** `main` @ `080e7259` (post-#1910 email cutover)
+> · **Refreshed 2026-07-13** for merged email work: contract **2.3**, per-session sidecar
+> auth (#1706 closed by #1980), two in-sidecar clocks (#1918/#1919) + durable stores
+> (#1917/#1919), and the merged `gaia schedule` CLI (#1371).
 > **Design:** [`agent-ui-agent-capabilities-plan.md`](agent-ui-agent-capabilities-plan.md) §0.0–§0.42 +
 > [`agent-ui.mdx`](agent-ui.mdx) "Architecture (v2 — sidecar-first)" (merged in #1913).
 >
@@ -14,23 +17,29 @@
 Verified deviations an implementer must know before trusting the design text:
 
 1. **`gaia api` still runs email in-process.** §0.33 is right that
-   `src/gaia/api/openai_server.py:135-143` mounts `gaia_agent_email.api_routes`
-   in-process — #1910 removed that pattern from the **UI backend only**. The API
+   `src/gaia/api/openai_server.py:135-147` mounts `gaia_agent_email.api_routes`
+   (plus the `/v1/email/agent/*` surface) in-process — #1910 removed that pattern
+   from the **UI backend only**. The API
    server was explicitly out of #1910's scope, so today the repo ships *both*
    models simultaneously: sidecar-backed `/v1/email/*` on the UI, in-process
    `/v1/email/*` on `gaia api`. Tracked as V2-17 below.
-2. **There is no `gaia schedule` CLI.** PR #1371 (`gaia schedule` + cron dispatch)
-   is **open, unmerged**. The only scheduler on `main` is inside the UI backend
-   (`src/gaia/ui/scheduler.py`, 1231 LoC + `routers/schedules.py`, 239 LoC —
-   landed via PR #1566; tracking issue #550). §0.22's "relocate the clock" means migrating the
-   *UI* scheduler into the daemon; there is no CLI scheduler to reconcile. If
-   #1371 merges first, it becomes a third clock that must also fold into V2-15.
-3. **The schema-2.1 contract has no `/query`, no auth, no `/shutdown`.**
-   `hub/agents/python/email/openapi.email.json` (v2.1) declares 16 deterministic
-   `/v1/email/*` routes with `securitySchemes: []`. The agent loop, the per-spawn
-   secret (§0.11), and graceful shutdown are all **additive contract surface**
-   (the manager reaps via process-tree signals today). Issue #1706 (sidecar API
-   auth) already tracks the auth gap — V2-3 builds on it rather than duplicating.
+2. **Multiple clocks now exist and must be reconciled.** `gaia schedule` + cron
+   dispatch **merged** (#1371), so there is now a CLI scheduler alongside the UI
+   backend's (`src/gaia/ui/scheduler.py`, 1231 LoC + `routers/schedules.py`, 239
+   LoC — landed via PR #1566; tracking issue #550). On top of those, the email
+   agent now runs **two in-sidecar clocks** (§0.22): `BriefingScheduler`
+   (`briefing.py`, #1918) and `EmailJobScheduler` (`scheduler.py`, #1919). §0.22's
+   "relocate the clock" is therefore a multi-clock reconciliation, all folding into
+   V2-15 — see its widened scope.
+3. **The schema-2.3 contract still has no `/query` and no `/shutdown`; per-session
+   auth already landed.** `hub/agents/email/python/openapi.email.json` (v2.3)
+   declares 16 deterministic `/v1/email/*` routes and still declares no
+   `securitySchemes` — but the sidecar now enforces per-session bearer auth at
+   runtime (#1980, closing #1706). The agent loop (`/query`, targeting contract
+   **2.4** — #2016) and graceful shutdown remain **additive contract surface**
+   (the manager reaps via process-tree signals today). Because auth already merged,
+   V2-3 no longer builds it — it narrows to secure secret *delivery* + manager
+   generalization.
 4. **`EmailProxyAgent` (merged in #1910) is design-superseded but load-bearing.**
    `src/gaia/ui/email_sidecar/proxy_agent.py` (330 LoC) is the *working* email
    chat path today. It is retired by V2-10 only after `/query` + the render map
@@ -41,9 +50,9 @@ Verified deviations an implementer must know before trusting the design text:
    a banner to `email-sidecar-agent-ui.md` only. V2-4 closes this (also flagged
    in #1913's review).
 
-Existing open issues to link (not duplicate): #1706 (sidecar auth), #1653 (UI
-consumes the npm sidecar — dogfood), #1896 (email-in-UI epic), #1717 (hub catalog
-schema v2).
+Existing issues to link (not duplicate): #1980 (sidecar per-session auth, MERGED —
+closed #1706), #1653 (UI consumes the npm sidecar — dogfood), #1896 (email-in-UI
+epic), #1717 (hub catalog schema v2).
 
 ---
 
@@ -53,14 +62,14 @@ schema v2).
 |---|---|---|---|---|
 | 1 | **Headless custody daemon** + `/host/v1/*` (§0.0, §0.25, §0.31) | **Net-new** | No daemon anywhere. The closest thing is the UI backend process (`src/gaia/ui/server.py`, 909 LoC), which dies with the browser session and owns everything in-process. No `instance.json`, no client-auth token, no `gaia daemon` CLI. | new `src/gaia/daemon/` (or `src/gaia/host/`); `src/gaia/cli.py` |
 | 2 | **Sidecar supervisor** — `AgentSidecarManager` registry (§0.3, §0.13, §0.14) | **Partial** | `EmailSidecarManager` (`src/gaia/ui/email_sidecar/manager.py`, 498 LoC) does spawn/health/`/version`-gate/tree-kill/singleton for **one hard-coded agent** (`_SERVICE_ID = "gaia-agent-email"`, `_EXPECTED_API_MAJOR = "2"`). Verified fetch (`fetch.py`, 147 LoC, SHA-256, atomic rename) and lock/platform loading (`platform.py`, 131 LoC) are agent-agnostic in shape, email-pinned in constants. No registry, no idle reaper, no live-cap. | `email_sidecar/manager.py` → generalized + relocated into the daemon; new registry module |
-| 3 | **`/query` SSE contract** — fixed event vocabulary (§0.1, §0.2) | **Partial** (seam exists; contract + endpoint net-new) | The loop→SSE seam exists: `src/gaia/ui/sse_handler.py` (1307 LoC) turns agent-loop output into typed queue events — but in its **own vocabulary** (`status`/`step`/`thinking`/`plan`/`tool_start`/`tool_args`/`tool_result`/`tool_end`/`chunk`/`answer`/`permission_request`/…), not §0.2's (`status`/`token`/`tool_call`/`tool_result`/`needs_confirmation`/`final`/`error`). The sidecar has **no `/query` endpoint** (contract 2.1 is fixed-function only). | `hub/agents/python/email/` (new `/query` route + translation layer); a spec doc freezing the mapping |
+| 3 | **`/query` SSE contract** — fixed event vocabulary (§0.1, §0.2) | **Partial** (seam exists; contract + endpoint net-new) | The loop→SSE seam exists: `src/gaia/ui/sse_handler.py` (1307 LoC) turns agent-loop output into typed queue events — but in its **own vocabulary** (`status`/`step`/`thinking`/`plan`/`tool_start`/`tool_args`/`tool_result`/`tool_end`/`chunk`/`answer`/`permission_request`/…), not §0.2's (`status`/`token`/`tool_call`/`tool_result`/`needs_confirmation`/`final`/`error`). The sidecar has **no `/query` endpoint** (contract 2.3 is fixed-function only). | `hub/agents/email/python/` (new `/query` route + translation layer); a spec doc freezing the mapping |
 | 4 | **Render→component frontend map** (§0.2, §0.15, §0.35.6) | **Partial** | Cards render by **fence-parsing**: `MessageBubble.tsx` (818 LoC) `STRUCTURED_PAYLOAD_LANGS`/`promoteStructuredPayloads` handle exactly **one** card type (`email_pre_scan`); the backend injects the fence via `_capture_render_payload` in `sse_handler.py:475-534`. No `render`-keyed map, no generic primitives (table/key-value/list/image/diff), no unsupported-card fallback. | `src/gaia/apps/webui/src/components/MessageBubble.tsx`, new card-registry + primitives components |
 | 5 | **Dispatch / multi-agent orchestration** (§0.18, §0.32) | **Net-new** (v1 picker ≈ partial) | Per-session `agent_type` dispatch exists in-process (`_chat_helpers.py`, 2651 LoC, builds the agent per session; `agent_type == "email"` → `EmailProxyAgent`). No agent picker UI concept beyond that, no orchestrator, no `/host/v1/agents/{id}/invoke`, no taint. | webui session UI; daemon proxy router; (orchestrator = later, own agent package) |
-| 6 | **Scheduler clock in the daemon** (§0.22) | **Partial** | A real scheduler exists — inside the UI backend: `src/gaia/ui/scheduler.py` (1231 LoC, asyncio, NL parsing, DB-persisted) + `routers/schedules.py` (239) + `routers/goals.py` (283). It fires **in-process agents**, dies with the UI process, and there is **no CLI scheduler** (see correction 2). | `ui/scheduler.py` → daemon; `routers/schedules.py`/`goals.py` become thin daemon clients |
+| 6 | **Scheduler clock in the daemon** (§0.22) | **Partial** | Several clocks exist, none in a daemon: the UI backend's `src/gaia/ui/scheduler.py` (1231 LoC, asyncio, NL parsing, DB-persisted) + `routers/schedules.py` (239) + `routers/goals.py` (283); the merged `gaia schedule`/cron CLI (#1371); and the email sidecar's own `BriefingScheduler`/`EmailJobScheduler` (#1918/#1919). Each dies with its owning process (see correction 2). | `ui/scheduler.py` + the in-sidecar clocks → reconciled into the daemon; `routers/schedules.py`/`goals.py` become thin daemon clients |
 | 7 | **Mid-workflow confirmation** (§0.4) | **Partial** | The pause/approve primitive ships **in-process**: `permission_request` events + confirm/deny plumbing (`sse_handler.py`, `routers/chat.py` `/api/chat/confirm-tool`). The email sidecar separately has the single-use confirmation-token gate on `/send`. Nothing crosses a process boundary; no `needs_confirmation` SSE event; model (stateless vs. resume) **unsigned-off**. | email sidecar `/query` loop; daemon relay; webui approve/deny; decision D1 below |
-| 8 | **OAuth forward** (§0.6) | **Partial — direction inverted** | The primitive exists pointing **the wrong way**: `POST /v1/connections/{provider}` is host-side **intake** (`src/gaia/ui/routers/connectors.py:94` `forwarded_router` → `src/gaia/connectors/api.py:266` `import_forwarded_connection`, `X-Gaia-UI: 1`-gated, scope-checked, metadata-only response). v2 needs the **sidecar** to expose the intake and the host to forward *out* + own refresh, sending short-lived access tokens. Refresh engine (`get_access_token`) is client-neutral and reusable. | `hub/agents/python/email/` (intake route); `src/gaia/connectors/`; daemon forward-on-spawn logic |
+| 8 | **OAuth forward** (§0.6) | **Partial — direction inverted** | The primitive exists pointing **the wrong way**: `POST /v1/connections/{provider}` is host-side **intake** (`src/gaia/ui/routers/connectors.py:94` `forwarded_router` → `src/gaia/connectors/api.py:266` `import_forwarded_connection`, `X-Gaia-UI: 1`-gated, scope-checked, metadata-only response). v2 needs the **sidecar** to expose the intake and the host to forward *out* + own refresh, sending short-lived access tokens. Refresh engine (`get_access_token`) is client-neutral and reusable. | `hub/agents/email/python/` (intake route); `src/gaia/connectors/`; daemon forward-on-spawn logic |
 | 9 | **Shared-custody stores** (§0.9, §0.29, §0.37–§0.41) | **Partial** | The stores exist as fat in-process UI routers — LoC verified exact: `memory.py` 1634, `documents.py` 739, `sessions.py` 368, `connectors.py` 977, `files.py` 665, `mcp.py` 349 (SQLite via `database.py`, 1139). No `/host/v1/*` surface, no per-agent scoping, no audit sink, no single-writer enforcement beyond one process. | routers → daemon custody modules behind `/host/v1/*`; `database.py` |
-| 10 | **Three auth legs** (§0.11) | **Net-new** | Zero auth on every leg today: contract 2.1 declares `securitySchemes: []`; the manager health-probes an unauthenticated loopback port; UI↔backend has no client token. #1706 already tracks leg 2 (daemon→sidecar). | sidecar server (bearer check); manager (secret mint + injection); daemon (client token in `instance.json`) |
+| 10 | **Three auth legs** (§0.11) | **Partial** | Leg 2 (daemon→sidecar) landed: the sidecar enforces per-session bearer auth (#1980, closing #1706), though contract 2.3 still declares no `securitySchemes`. Still open: the manager health-probes a loopback port and UI↔backend has no client token. | manager (secret *delivery* via fd/`0600` file + injection); daemon (client token in `instance.json`) |
 | 11 | **Install / model provisioning** (§0.5, §0.28) | **Partial** | Verified binary install exists for email: `binaries.lock.json` + SHA-256 fetch + cache under `~/.gaia/agents/email/`. Frontend hub surfaces exist (`agentHub.ts`, `AgentInstallDialog.tsx`, `AgentHubGrid.tsx`). **No manifest** (the lock is integrity-only — §0.28's capability/policy fields don't exist), **no model provisioning** (install never pulls the agent's LLM — the #1655 cold-start class), no uninstall data policy. 17/18 python hub agents have `gaia-agent.yaml`, but only email has an OpenAPI contract + frozen sidecar entry (`packaging/server.py`). | `hub/agents/*/manifest.json` (new schema); daemon install path; webui hub |
 | 12 | **Model-slot broker** (§0.12) | **Net-new** | Only an *in-process* `_downloads_lock` in `lemonade_client.py`. Nothing arbitrates cross-process model loads — the race-evict failure CLAUDE.md documents for concurrent evals would hit production the moment two sidecars run. | new daemon broker module; `lemonade_client.py` callers route through it |
 | 13 | **`/query` on `gaia api`** (§0.33) | **Net-new + contradiction** | `src/gaia/api/` (1756 LoC) is a separate FastAPI app: `/v1/chat/completions`, `/v1/models`, `/health` — no `/query`, and it still mounts email **in-process** (correction 1). | `openai_server.py` (add proxy route, drop in-process mount) |
@@ -93,33 +102,35 @@ or folded. Contract-versioning rules (§0.15: unknown `type` → visible
 *Acceptance:* spec merged; both vocabularies tabulated; email agent's SPEC/openapi
 regeneration plan named. *Deps:* none.
 
-**V2-2 · `feat(email): add POST /v1/email/query — the SSE agent loop on the sidecar`** — **L**
+**V2-2 · `feat(email): add POST /v1/email/query — the SSE agent loop on the sidecar (#2016)`** — **L**
 *Why:* this is the v2 keystone — the sidecar becomes a complete agent product
 (reasoning included), not a bag of fixed functions; every front-door then relays
 to one loop.
 *Scope:* new route in the email agent package running its agent loop with an
 SSE output handler + the V2-1 translation layer; per-`run_id` state namespacing
-(§0.13); `POST /v1/email/query/{run_id}/cancel`; contract bump to 2.2 (additive
-MINOR); openapi/`specification.html`/SPEC/SKILL/CHANGELOG updated **together**
+(§0.13); `POST /v1/email/query/{run_id}/cancel`; contract bump to **2.4** (additive
+MINOR — #2016; the sidecar is already at 2.3);
+openapi/`specification.html`/SPEC/SKILL/CHANGELOG updated **together**
 (the #1841 rule). Confirmation events per decision D1.
 *Acceptance:* `curl -N` against a dev-mode sidecar streams the §0.2 vocabulary
 end-to-end for a triage query; cancel stops tool execution between steps; eval
 harness scenario asserting the event *sequence* (§0.17) added to the agent
 package. *Deps:* V2-1. *Blocks:* V2-7, V2-8, V2-10, V2-17.
 
-**V2-3 · `feat(email): per-spawn secret auth on the sidecar API (closes #1706)`** — **M**
-*Why:* an unauthenticated loopback port that can send mail is the design's named
-threat (§0.11); it must close before any second client (daemon, CLI) exists.
-*Scope:* sidecar requires a bearer secret on every route when
-`GAIA_AGENT_LAUNCH_SECRET` (delivered via inherited fd or `0600` file, not bare
-env — §0.11) is set at spawn; `EmailSidecarManager` mints + injects it and adds
-it to proxy calls; bare-integrator mode (no secret configured) documented as the
-integrator's own responsibility.
-*Acceptance:* with a secret set, requests without/with-wrong bearer → 401 with
-actionable detail (tested as a boundary, not a mock); all existing proxy tests
-pass with auth on. *Deps:* none (parallel with V2-2).
+**V2-3 · `feat(email): fd/file secret delivery + manager generalization for sidecar auth`** — **S**
+*Why:* per-session bearer auth already merged (#1980, closing #1706), so the
+remaining §0.11 gap is *how the secret reaches the sidecar* — a bare env var is the
+named threat. This shrank from net-new auth to secret delivery + manager plumbing.
+*Scope:* deliver `GAIA_AGENT_LAUNCH_SECRET` via inherited fd or `0600` file (not
+bare env — §0.11); `EmailSidecarManager` mints + injects it and adds it to proxy
+calls; bare-integrator mode (no secret configured) documented as the integrator's
+own responsibility. No new auth-enforcement code — #1980 already checks the bearer.
+*Acceptance:* the secret never appears in `/proc/<pid>/environ` or `ps` output;
+requests without/with-wrong bearer → 401 with actionable detail (tested as a
+boundary, not a mock); all existing proxy tests pass with auth on. *Deps:* none
+(parallel with V2-2).
 
-**V2-4 · `docs(plans): superseded-model banners on security-model, connectors, autonomy-engine, email-sidecar-implementation`** — **S**
+**V2-4 · `docs(plans): superseded-model banners on security-model, connectors, autonomy-engine, email-sidecar-implementation`** — **S** (filed as #2017)
 *Why:* #1913's §0.27 names these docs as actively misleading ("a reader following
 the wrong one builds the wrong thing"); its own review flagged the banners as the
 one unfinished follow-up.
@@ -153,9 +164,11 @@ end state.
 *Scope:* parametrize service-id / expected-major / lock-path / cache-dir; keyed
 registry (one shared instance per agent id); relocate into the daemon; the UI
 backend's email router becomes a client of the daemon (or is bypassed once V2-7
-lands); idle-timeout reaper + concurrent-live-sidecar cap (§0.13); dev-mode
-source-dir registration for unpublished agents (§0.16) can ride along or split
-out.
+lands); concurrent-live-sidecar cap (§0.13); dev-mode source-dir registration for
+unpublished agents (§0.16) can ride along or split out. **The idle-timeout reaper
+must NOT land before V2-15's clock reconciliation** — the email sidecar now runs
+its own `BriefingScheduler`/`EmailJobScheduler` (#1918/#1919) in-process, so reaping
+an idle sidecar would silently kill its 8am brief and scheduled sends.
 *Acceptance:* email runs supervised by the daemon in both `user` and `dev` modes;
 existing `test_email_sidecar_*` suites pass against the generalized class; a
 second toy agent (fixture) registers and spawns without touching manager code.
@@ -261,16 +274,22 @@ expiry; sidecar never receives the refresh token; uninstall revokes the forward
 file access; expiry mid-session re-forwards transparently; revocation test.
 *Deps:* V2-3, V2-5 (daemon as forwarder).
 
-**V2-15 · `refactor(daemon): scheduler clock moves to the daemon; jobs fire into the owning sidecar`** — **M**
+**V2-15 · `refactor(daemon): reconcile all clocks into the daemon; jobs fire into the owning sidecar`** — **L**
 *Why:* §0.22 — a reaped sidecar (V2-6's reaper) can't fire its own 8am brief, and
-today's clock dies with the UI process, so "always-on" is currently false.
-*Scope:* relocate `ui/scheduler.py`'s engine into the daemon; schedule metadata
-becomes daemon custody; fire-time = spawn owning sidecar (if not resident) +
-`/query`; `routers/schedules.py`/`goals.py` become thin daemon clients; reconcile
-with PR #1371 if it merges first (correction 2).
-*Acceptance:* a schedule fires with the web UI closed; results land in host
-custody; existing ScheduleManager panel keeps working. *Deps:* V2-5, V2-6
-(+V2-12 for result custody).
+today's clocks die with the process that owns them, so "always-on" is currently
+false. This is now a **multi-clock** reconciliation, not a single relocation.
+*Scope:* fold **four clocks** into one daemon-owned scheduler: (1) `ui/scheduler.py`'s
+engine, (2) the merged `gaia schedule`/cron CLI (#1371), and (3+4) the email
+sidecar's in-process `BriefingScheduler` (#1918) and `EmailJobScheduler` (#1919).
+Their durable stores must move to host custody too — the email `task_store` (#1917)
+and `schedule_store` (#1919). Schedule metadata becomes daemon custody; fire-time =
+spawn owning sidecar (if not resident) + `/query`; `routers/schedules.py`/`goals.py`
+become thin daemon clients. Until this lands, V2-6's idle reaper must stay off (a
+reaped sidecar can't fire its own clocks).
+*Acceptance:* a briefing/scheduled-send fires with both the web UI and the CLI
+closed; results and task/schedule state land in host custody; existing
+ScheduleManager panel keeps working; the email agent's own scheduler tests still
+pass. *Deps:* V2-5, V2-6 (+V2-12 for result/store custody).
 
 ### Phase 3 — Fleet-readiness and remaining front-doors
 
