@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  cmdDev,
   DEFAULT_PLAYGROUND_CACHE,
   resolveDevCommand,
   resolvePlaygroundPort,
@@ -71,6 +72,21 @@ describe("dev launcher command resolution", () => {
       8131,
     );
     expect(cmd).toBe("/venv/bin/python");
+  });
+});
+
+describe("dev fails fast on a bad launcher", () => {
+  it("returns 1 quickly (does not hang on the health timeout) when spawn fails", async () => {
+    // A launcher that can't be spawned (ENOENT) must fail via the early-exit race,
+    // not wait out connectSidecar's 60s health poll. If the abort wiring regressed,
+    // this test would hang until the suite timeout.
+    const start = Date.now();
+    const rc = await cmdDev({
+      _: ["dev"],
+      flags: { cmd: "amd-gaia-nonexistent-launcher-xyz", port: "8923" },
+    });
+    expect(rc).toBe(1);
+    expect(Date.now() - start).toBeLessThan(10_000);
   });
 });
 

@@ -214,9 +214,19 @@ def main(argv=None) -> int:
     if args.port == 4001:
         parser.error("port 4001 is reserved and must never be used")
 
+    reload = bool(args.reload or args.dev)
+    if reload and getattr(sys, "frozen", False):
+        # The frozen binary has no source tree to watch, and uvicorn's reloader
+        # would re-exec the frozen exe. Fail loud — reload is a source-checkout
+        # feature.
+        parser.error(
+            "--reload/--dev is not supported in the frozen binary (no source to "
+            "watch). Run it from a source checkout instead: "
+            "`gaia-agent-email serve --reload`."
+        )
+
     import uvicorn
 
-    reload = bool(args.reload or args.dev)
     if args.dev:
         log.warning(
             "Email sidecar: --dev — auto-reload ON, caller token off unless "

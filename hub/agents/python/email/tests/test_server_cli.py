@@ -115,3 +115,25 @@ def test_dev_implies_reload(monkeypatch):
     assert rc == 0
     assert captured["app"] == "gaia_agent_email.server:app"
     assert captured["kw"]["reload"] is True
+
+
+def test_frozen_binary_argv_shape_boots_without_serve_token(monkeypatch):
+    # The frozen binary is spawned as `email-agent --host H --port P` (no `serve`
+    # token) — see spawnSidecar (npm) and packaging/smoke_test.py. main() must
+    # normalize that into a serve run of the pre-built app object.
+    captured = {}
+    monkeypatch.setattr(
+        "uvicorn.run", lambda app_arg, **kw: captured.update(app=app_arg, kw=kw)
+    )
+    rc = server.main(["--host", "127.0.0.1", "--port", "8199"])
+    assert rc == 0
+    assert captured["app"] is server.app
+    assert captured["kw"]["host"] == "127.0.0.1"
+    assert captured["kw"]["port"] == 8199
+
+
+def test_reload_is_refused_in_a_frozen_binary(monkeypatch):
+    # No source tree to watch when frozen — fail loud instead of re-exec'ing the exe.
+    monkeypatch.setattr(server.sys, "frozen", True, raising=False)
+    with pytest.raises(SystemExit):
+        server.main(["serve", "--reload"])

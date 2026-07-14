@@ -267,7 +267,7 @@ export function resolveDevCommand(
   return { cmd, args: serveArgs };
 }
 
-async function cmdDev(args: ParsedArgs): Promise<number> {
+export async function cmdDev(args: ParsedArgs): Promise<number> {
   const parsed = resolvePlaygroundPort(args.flags.port); // same validation (rejects 4001)
   if ("error" in parsed) {
     process.stderr.write(`error: ${parsed.error}\n`);
@@ -300,12 +300,19 @@ async function cmdDev(args: ParsedArgs): Promise<number> {
   });
 
   const baseUrl = `http://${host}:${port}`;
+  // When the early-fail branch wins, abort the health poll so it doesn't keep
+  // probing in the background (a leak for programmatic callers; masked only by
+  // process.exit in the CLI). Pre-attach a catch so the losing branch's rejection
+  // is never unhandled.
+  const abort = new AbortController();
+  const connecting = connectSidecar({
+    baseUrl,
+    healthTimeoutMs: 60_000, // reload startup re-imports the app graph — headroom
+    signal: abort.signal,
+  });
+  connecting.catch(() => undefined);
   try {
-    // Reload startup re-imports the app graph, so allow generous headroom.
-    const dev = await Promise.race([
-      connectSidecar({ baseUrl, healthTimeoutMs: 60_000 }),
-      earlyFail,
-    ]);
+    const dev = await Promise.race([connecting, earlyFail]);
     process.stdout.write(`\n  ▸ Email agent (source): ${dev.baseUrl}\n`);
     process.stdout.write(`    Playground: ${dev.baseUrl}/v1/email/playground\n`);
     process.stdout.write(
@@ -315,6 +322,7 @@ async function cmdDev(args: ParsedArgs): Promise<number> {
       "    Edit the Python under gaia_agent_email/ and it auto-reloads. Ctrl+C to stop.\n\n",
     );
   } catch (e) {
+    abort.abort(); // stop the health poll if it was still running
     killDevTree(child);
     const err = e as NodeJS.ErrnoException;
     const notFound = err.code === "ENOENT";

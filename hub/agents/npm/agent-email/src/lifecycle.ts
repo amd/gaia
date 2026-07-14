@@ -264,13 +264,16 @@ export interface WaitForHealthOptions {
   intervalMs?: number;
   /** A client to probe with (defaults to a new one bound to baseUrl). */
   client?: EmailClient;
+  /** Abort the wait early (e.g. the process being probed died). */
+  signal?: AbortSignal;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Poll GET /health until the sidecar reports ok, or throw `HealthTimeoutError`.
- * Never silently assumes ready.
+ * Never silently assumes ready. Pass `signal` to abort the poll early (e.g. when
+ * the process you're waiting on has exited) instead of running out the timeout.
  */
 export async function waitForHealth(
   baseUrl: string,
@@ -283,6 +286,12 @@ export async function waitForHealth(
   let lastErr = "";
   let attempts = 0;
   while (Date.now() < deadline) {
+    if (opts.signal?.aborted) {
+      throw new HealthTimeoutError(
+        `health wait for ${baseUrl} was aborted after ${attempts} probe(s) ` +
+          "(the process being probed exited).",
+      );
+    }
     attempts++;
     try {
       const h = await client.health();
@@ -463,6 +472,8 @@ export interface ConnectOptions {
   verifyVersion?: boolean;
   /** apiVersion the client expects (default SCHEMA_VERSION). */
   expectedApiVersion?: string;
+  /** Abort the health wait early (e.g. the server process died). */
+  signal?: AbortSignal;
 }
 
 /**
@@ -492,9 +503,11 @@ export async function connectSidecar(
     authToken: opts.authToken,
     timeoutMs: opts.timeoutMs,
   });
+  // `/health` is auth-exempt, so let waitForHealth use its own short-timeout probe
+  // client — don't hand it the bound client (whose 30s timeout would slow polling).
   await waitForHealth(opts.baseUrl, {
     timeoutMs: opts.healthTimeoutMs,
-    client,
+    signal: opts.signal,
   });
   if (opts.verifyVersion ?? true) {
     await checkVersion(client, { expectedApiVersion: opts.expectedApiVersion });
