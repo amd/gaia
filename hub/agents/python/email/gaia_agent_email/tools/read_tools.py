@@ -20,8 +20,8 @@ from __future__ import annotations
 import os
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
-from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email.gmail_backend import decode_message_body
+from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 
 # Re-exported so the pre-scan tests can monkeypatch ``read_tools.make_llm_classifier``
 # to prove pre-scan never wires the LLM (test_pre_scan_counts.py).
@@ -182,10 +182,38 @@ def get_message_impl(
 
 
 def get_thread_impl(gmail, *, thread_id: str, debug: bool = False) -> Dict[str, Any]:
+    """Fetch every message in a thread, backend order preserved (no sort).
+
+    The combined body budget mirrors ``_format_thread_for_summary``'s
+    soft-target semantics (#2073): under ``DEFAULT_THREAD_TRANSCRIPT_CHARS``
+    the per-message default limit applies untouched; over budget, every
+    message is re-formatted at a shared fair-share limit (floored at
+    ``THREAD_MIN_PER_MESSAGE_CHARS``) so long threads stay bounded without
+    ever dropping a message.
+    """
     with log_tool_call("get_thread", {"thread_id": thread_id}, debug=debug) as st:
         thread = gmail.get_thread(thread_id)
-        out = [_format_message_for_llm(m) for m in thread.get("messages", [])]
-        st["result_summary"] = {"thread_id": thread_id, "count": len(out)}
+        messages = thread.get("messages", [])
+        out = [_format_message_for_llm(m) for m in messages]
+        total = sum(len(f["body"]) for f in out)
+        if messages and total > DEFAULT_THREAD_TRANSCRIPT_CHARS:
+            # Duplicated (not shared with) _format_thread_for_summary's
+            # fair-share formula on purpose: that helper's limit<=0
+            # unlimited-mode semantics don't belong on a read tool.
+            fair_share = max(
+                THREAD_MIN_PER_MESSAGE_CHARS,
+                DEFAULT_THREAD_TRANSCRIPT_CHARS // len(messages),
+            )
+            if fair_share < DEFAULT_BODY_LIMIT_CHARS:
+                out = [
+                    _format_message_for_llm(m, body_limit=fair_share) for m in messages
+                ]
+        bodies_clipped = sum(1 for f in out if f["body_truncated"])
+        st["result_summary"] = {
+            "thread_id": thread_id,
+            "count": len(out),
+            "bodies_clipped": bodies_clipped,
+        }
         return {"thread_id": thread_id, "messages": out}
 
 
@@ -864,7 +892,10 @@ class ReadToolsMixin:
         def get_thread(thread_id: str, mailbox: str = "") -> str:
             """Fetch every message in a thread (conversation view).
 
-            ``mailbox`` (optional) routes when multiple mailboxes are connected.
+            Long threads share a combined body budget: over-budget message
+            bodies are clipped with a ``...[truncated]`` marker; messages are
+            never dropped. ``mailbox`` (optional) routes when multiple
+            mailboxes are connected.
             """
             try:
                 backend = agent._backend_for_message(thread_id, mailbox or None)
