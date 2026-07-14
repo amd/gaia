@@ -73,18 +73,15 @@ def _build_tree(root: Path, version: str, *, include_optional: bool = True) -> N
             f"![play](https://hub.amd-gaia.ai/agents/email/{version}/playground.webp)\n",
             encoding="utf-8",
         )
+        base = f"https://github.com/amd/gaia/blob/agent-pkg-email-v{version}/hub/agents/npm/agent-email"
         (npm / "README.md").write_text(
             f"![arch](https://hub.amd-gaia.ai/agents/email/{version}/architecture.webp)\n"
-            f"[SPEC](https://hub.amd-gaia.ai/agents/email/{version}/SPEC.md)\n",
+            f"[SPEC]({base}/SPEC.md)\n",
             encoding="utf-8",
         )
-        (npm / "CHANGELOG.md").write_text(
-            f"[SPEC](https://hub.amd-gaia.ai/agents/email/{version}/SPEC.md)\n",
-            encoding="utf-8",
-        )
+        (npm / "CHANGELOG.md").write_text(f"[SPEC]({base}/SPEC.md)\n", encoding="utf-8")
         (npm / "EVALUATION.md").write_text(
-            f"[Scorecard](https://hub.amd-gaia.ai/agents/email/{version}/SCORECARD.md#reproduction)\n",
-            encoding="utf-8",
+            f"[Scorecard]({base}/SCORECARD.md#reproduction)\n", encoding="utf-8"
         )
         (npm / "assets").mkdir()
         (npm / "assets" / "architecture.html").write_text(
@@ -155,13 +152,13 @@ def test_check_passes_on_consistent_tree(tree):
         ),
         (
             "hub/agents/npm/agent-email/README.md",
-            "/agents/email/1.2.3/SPEC.md",
-            "/agents/email/9.9.9/SPEC.md",
+            "blob/agent-pkg-email-v1.2.3/",
+            "blob/agent-pkg-email-v9.9.9/",
         ),
         (
             "hub/agents/npm/agent-email/EVALUATION.md",
-            "/agents/email/1.2.3/SCORECARD.md",
-            "/agents/email/9.9.9/SCORECARD.md",
+            "blob/agent-pkg-email-v1.2.3/",
+            "blob/agent-pkg-email-v9.9.9/",
         ),
     ],
 )

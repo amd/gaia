@@ -139,15 +139,17 @@ def build_rules() -> list[Rule]:
             re.compile(r'(<span[^>]*id="ver"[^>]*>v)([^<]+)(</span>)'),
             'id="ver" badge',
         ),
-        # Versioned hub doc links (https://hub.amd-gaia.ai/agents/email/<v>/<file>)
-        # in the npm markdown docs — they pin cross-references to the R2 copy of
-        # the shipping version instead of the mutable GitHub main blob.
+        # Version-pinned doc links (github.com/amd/gaia/blob/agent-pkg-email-v<v>/…)
+        # in the npm markdown docs — they pin cross-references to the release tag's
+        # rendered copy instead of the mutable GitHub main blob. The tag is created
+        # at release time on the stamped commit, so the links resolve once the
+        # release that ships them is published.
         *(
             Rule(
-                f"npm {name} hub doc links",
+                f"npm {name} pinned doc links",
                 NPM_ROOT / name,
-                re.compile(r"(https://hub\.amd-gaia\.ai/agents/email/)([^\"/\s)]+)(/)"),
-                "hub doc link version",
+                re.compile(r"(/amd/gaia/blob/agent-pkg-email-v)([^\"/\s)]+)(/)"),
+                "pinned doc link version",
             )
             for name in ("README.md", "CHANGELOG.md", "EVALUATION.md")
         ),
