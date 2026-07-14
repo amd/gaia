@@ -1104,6 +1104,41 @@ def _show_interactive_menu(log=None):
         print("  Run 'gaia --help' for all commands.")
 
 
+def _compare_benchmark_ctx(current_ctx, baseline, baseline_path):
+    """Guard ``gaia eval benchmark --compare`` against cross-ctx comparisons (#1892).
+
+    A throughput/quality baseline measured at one context window is not
+    comparable to a run measured at another. Raises ``SystemExit`` when both
+    sides record a ``ctx_size`` and they differ; prints a single loud legacy
+    warning (and proceeds) when either side lacks the field.
+    """
+    baseline_ctx = baseline.get("ctx_size")
+    if baseline_ctx is None:
+        print(
+            f"[COMPARE] WARNING: baseline {baseline_path} records no ctx_size "
+            "(legacy pre-#1892 card, measured at an unpinned window — "
+            "implicitly the model's 64K registry floor). The comparison "
+            "proceeds but is NOT ctx-verified; re-record the baseline with "
+            "--ctx-size to make it comparable."
+        )
+        return
+    if current_ctx is None:
+        print(
+            f"[COMPARE] WARNING: this run records no ctx_size but baseline "
+            f"{baseline_path} was measured at ctx={baseline_ctx}; the "
+            "comparison proceeds but is NOT ctx-verified."
+        )
+        return
+    if int(baseline_ctx) != int(current_ctx):
+        raise SystemExit(
+            f"[ERROR] ctx mismatch: this run measured ctx_size={current_ctx} "
+            f"but the baseline at {baseline_path} records "
+            f"ctx_size={baseline_ctx}. Comparing runs across different "
+            f"context windows is invalid — rerun with --ctx-size "
+            f"{baseline_ctx}, or record a new baseline at {current_ctx}."
+        )
+
+
 def _print_reliability_summary(scorecards, pass_threshold=0.90):
     """Print a reliability summary table from multiple eval iteration scorecards.
 
@@ -2536,6 +2571,16 @@ Examples:
         action="store_true",
         help="Save this run's scorecard as the throughput baseline.",
     )
+    benchmark_eval_parser.add_argument(
+        "--ctx-size",
+        type=int,
+        default=None,
+        help="Exact ctx window to pin the model load to (#1892 envelope: "
+        "16384 target / 32768 max; default: the target). The run verifies "
+        "the pin by readback and stamps it into scorecard.json/quality.json. "
+        "Values above the envelope max are allowed for deliberate sweeps "
+        "but warned loudly.",
+    )
 
     # Add new subparser for generating summary reports from evaluation directories
     report_parser = subparsers.add_parser(
@@ -2756,6 +2801,40 @@ Examples:
         "test-client", help="Test MCP client connection"
     )
     mcp_test_client_parser.add_argument("name", help="Name of the MCP server to test")
+
+    # Daemon command (headless custody daemon lifecycle)
+    daemon_parser = subparsers.add_parser(
+        "daemon",
+        help="Manage the headless GAIA daemon (single machine-wide custody process)",
+    )
+    daemon_subparsers = daemon_parser.add_subparsers(
+        dest="daemon_action", help="Daemon action to perform"
+    )
+    daemon_subparsers.add_parser(
+        "start", help="Start the daemon (or attach if one is already running)"
+    )
+    daemon_subparsers.add_parser("status", help="Show daemon pid / port / uptime")
+    daemon_subparsers.add_parser("stop", help="Stop the running daemon")
+    daemon_subparsers.add_parser(
+        "restart", help="Restart the daemon (stop if running, then start)"
+    )
+    daemon_logs_parser = daemon_subparsers.add_parser(
+        "logs", help="Show the daemon log"
+    )
+    daemon_logs_parser.add_argument(
+        "-n",
+        "--lines",
+        type=int,
+        default=100,
+        help="Number of trailing log lines to show (default: 100)",
+    )
+    daemon_logs_parser.add_argument(
+        "-f",
+        "--follow",
+        action="store_true",
+        help="Follow the log (like tail -f); Ctrl-C to stop",
+    )
+    daemon_parser.set_defaults(action="daemon")
 
     # Cache command (for Context7 cache management)
     cache_parser = subparsers.add_parser(
@@ -4358,6 +4437,14 @@ Let me know your answer!
                     "quality scoring skipped"
                 )
 
+            if args.ctx_size is not None and args.ctx_size <= 0:
+                print(
+                    f"[ERROR] --ctx-size must be a positive token count, got "
+                    f"{args.ctx_size}. Use e.g. 16384 (the #1892 envelope "
+                    "target) or omit the flag for the default."
+                )
+                sys.exit(1)
+
             # ignore_cleanup_errors: the benchmark's per-email SQLite state.db can
             # still hold a Windows file lock when the block exits (WinError 32 on
             # rmtree). `results` is already captured, and the temp dir is a
@@ -4374,6 +4461,7 @@ Let me know your answer!
                     base_url=args.backend,
                     ground_truth=ground_truth,
                     db_path=str(Path(tmp) / "state.db"),
+                    ctx_size=args.ctx_size,
                 )
 
             run_id = f"bench-{args.model.replace('/', '-').lower()}"
@@ -4394,6 +4482,10 @@ Let me know your answer!
                 f"(bar ≥{THROUGHPUT_BAR_TPS}, stretch {THROUGHPUT_STRETCH_TPS})"
             )
             print(f"  TTFT:         {ttft} s")
+            print(
+                f"  Ctx window:   "
+                f"{summary['scorecard'].get('ctx_size', 'unpinned (legacy)')}"
+            )
             if results and isinstance(results[0].get("quality"), dict):
                 print(f"  Category acc: {results[0]['quality']['category_accuracy']}")
             print(
@@ -4458,6 +4550,13 @@ Let me know your answer!
                     print(f"[ERROR] baseline not found: {cmp_path}")
                     sys.exit(1)
                 base = json.loads(cmp_path.read_text(encoding="utf-8"))
+                # Ctx envelope guard (#1892): a baseline measured at a
+                # different window is not comparable — hard error.
+                _compare_benchmark_ctx(
+                    current_ctx=summary["scorecard"].get("ctx_size"),
+                    baseline=base,
+                    baseline_path=str(cmp_path),
+                )
                 base_tps = base.get("performance", {}).get("avg_tokens_per_second")
                 if isinstance(base_tps, (int, float)) and isinstance(tps, (int, float)):
                     print(
@@ -4477,6 +4576,10 @@ Let me know your answer!
     # Handle MCP command
     if args.action == "mcp":
         handle_mcp_command(args)
+        return
+
+    if args.action == "daemon":
+        handle_daemon_command(args)
         return
 
     # Handle Config command
@@ -6796,6 +6899,180 @@ def handle_agent_import(args):
     if result.errors:
         print(f"Errors: {', '.join(result.errors)}", file=sys.stderr)
         sys.exit(1)
+
+
+def _check_daemon_deps():
+    """Fail loud if the daemon's runtime deps (extras-only) are missing.
+
+    ``gaia daemon`` is a base console command but the daemon process needs
+    ``fastapi``/``uvicorn``/``psutil``, which live in the ``[ui]``/``[api]``/
+    ``[dev]`` extras. On a base install the spawned daemon would die on
+    ``ModuleNotFoundError`` and surface a cryptic "process exited early"; name
+    the real cause and the fix instead.
+    """
+    import importlib.util
+
+    missing = [
+        pkg
+        for mod, pkg in (
+            ("fastapi", "fastapi"),
+            ("uvicorn", "uvicorn"),
+            ("psutil", "psutil"),
+        )
+        if importlib.util.find_spec(mod) is None
+    ]
+    if missing:
+        print(
+            "❌ `gaia daemon` needs packages not in the base install: "
+            + ", ".join(missing)
+            + '.\n   Install the daemon extras:  pip install "amd-gaia[ui]"'
+            "  (or [api]/[dev])."
+        )
+        sys.exit(1)
+
+
+def handle_daemon_command(args):
+    """Handle `gaia daemon status|stop|restart|logs|start`."""
+    action = getattr(args, "daemon_action", None)
+    if action is None:
+        print(
+            "❌ No daemon action specified. Use 'gaia daemon --help' to see "
+            "available actions (start, status, stop, restart, logs)."
+        )
+        return
+    _check_daemon_deps()
+    if action == "start":
+        _handle_daemon_start()
+    elif action == "status":
+        _handle_daemon_status()
+    elif action == "stop":
+        _handle_daemon_stop()
+    elif action == "restart":
+        _handle_daemon_restart()
+    elif action == "logs":
+        _handle_daemon_logs(args)
+    else:
+        print(f"❌ Unknown daemon action: {action}")
+
+
+def _fmt_uptime(seconds: float) -> str:
+    seconds = int(max(0, seconds))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h {m}m {s}s"
+    if m:
+        return f"{m}m {s}s"
+    return f"{s}s"
+
+
+def _handle_daemon_start():
+    from gaia.daemon import client
+    from gaia.daemon.errors import DaemonError
+
+    try:
+        inst = client.start_or_attach()
+    except DaemonError as e:
+        print(f"❌ {e}")
+        sys.exit(1)
+    print(f"✅ GAIA daemon running (pid {inst.pid}, port {inst.port})")
+
+
+def _handle_daemon_status():
+    from gaia.daemon import client, paths
+
+    report = client.status_report()
+    state = report["state"]
+    if state == "not_running":
+        print("GAIA daemon: not running")
+        print("  Start it with `gaia daemon start`.")
+        return
+    inst = report["instance"]
+    if state == "stale":
+        reason = {
+            "pid_dead": "recorded pid is not alive",
+            "unresponsive": "process is alive but not answering the client API",
+        }.get(report.get("reason"), report.get("reason"))
+        print(f"GAIA daemon: stale ({reason})")
+        print(f"  Registry: {paths.instance_path()} (pid {inst.pid}, port {inst.port})")
+        print("  Reclaim it with `gaia daemon restart`.")
+        return
+    body = report["status"]
+    print("GAIA daemon: running")
+    print(f"  pid:        {inst.pid}")
+    print(f"  port:       {inst.port}")
+    print(f"  uptime:     {_fmt_uptime(body.get('uptime_seconds', 0))}")
+    print(f"  api:        v{body.get('api_version')}")
+    print(f"  url:        {inst.base_url}")
+
+
+def _handle_daemon_stop():
+    from gaia.daemon import client
+    from gaia.daemon.errors import DaemonError
+    from gaia.daemon.instance import (
+        pid_alive,
+        read_instance,
+        remove_instance,
+        terminate_instance,
+    )
+
+    inst = read_instance()
+    if inst is None:
+        print("GAIA daemon: not running (nothing to stop)")
+        return
+    if not pid_alive(inst.pid):
+        remove_instance(only_pid=inst.pid)
+        print(f"GAIA daemon: cleared stale registry (pid {inst.pid} was already dead)")
+        return
+    # Prefer a graceful, authed shutdown; escalate to terminate if it won't answer.
+    try:
+        client.request_shutdown(inst)
+    except DaemonError as e:
+        print(f"⚠️  graceful shutdown failed ({e}); terminating pid {inst.pid}")
+        terminate_instance(inst)
+    if client.wait_until_gone(inst, timeout=10.0):
+        remove_instance(only_pid=inst.pid)
+        print(f"✅ GAIA daemon stopped (pid {inst.pid})")
+    else:
+        print(f"⚠️  daemon pid {inst.pid} did not exit; terminating")
+        terminate_instance(inst)
+        remove_instance(only_pid=inst.pid)
+        print(f"✅ GAIA daemon terminated (pid {inst.pid})")
+
+
+def _handle_daemon_restart():
+    _handle_daemon_stop()
+    _handle_daemon_start()
+
+
+def _handle_daemon_logs(args):
+    from gaia.daemon import paths
+
+    log_file = paths.log_path()
+    if not log_file.exists():
+        print(f"No daemon log at {log_file} (the daemon has not started yet).")
+        return
+    lines = getattr(args, "lines", 100)
+    if getattr(args, "follow", False):
+        # Simple follow loop: print the tail, then stream appended bytes.
+        with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+            existing = f.readlines()
+            for line in existing[-lines:]:
+                print(line, end="")
+            try:
+                while True:
+                    chunk = f.readline()
+                    if chunk:
+                        print(chunk, end="")
+                    else:
+                        time.sleep(0.3)
+            except KeyboardInterrupt:
+                return
+        return
+    with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+        tail = f.readlines()[-lines:]
+    for line in tail:
+        print(line, end="")
 
 
 def handle_mcp_command(args):

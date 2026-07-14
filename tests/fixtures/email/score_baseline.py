@@ -86,7 +86,9 @@ GROUND_TRUTH = FIXTURES_DIR / "ground_truth.json"
 BASELINE_OUT = FIXTURES_DIR / "baseline_accuracy.json"
 
 
-def score(model: str, max_messages: int = 1000) -> Dict[str, Any]:
+def score(
+    model: str, ctx_size: int | None = None, max_messages: int = 1000
+) -> Dict[str, Any]:
     # mbox + ground_truth are generated artifacts; build them from the committed
     # seed if this checkout doesn't have them yet (raises loudly if the seed is
     # missing).
@@ -105,8 +107,12 @@ def score(model: str, max_messages: int = 1000) -> Dict[str, Any]:
                 gmail_backend=backend,
                 db_path=str(Path(td) / "state.db"),
                 silent_mode=True,
+                ctx_size=ctx_size,
             )
         )
+        # Record the ctx pin READ BACK off the constructed agent's client —
+        # never echo the requested argument (#1892). None = not pinned.
+        recorded_ctx = agent.chat.llm_client._backend.ctx_size_override
         classifier = make_llm_classifier(agent.chat)
         triage = triage_inbox_impl(
             backend, max_messages=max_messages, classifier=classifier
@@ -183,6 +189,7 @@ def score(model: str, max_messages: int = 1000) -> Dict[str, Any]:
     )
     return {
         "model": model,
+        "ctx_size": recorded_ctx,
         "fixture": CORPUS_MBOX.name,
         "category_accuracy": category_accuracy,
         "category_breakdown": breakdown,
@@ -216,6 +223,14 @@ def main() -> int:
         "--max-messages", type=int, default=1000, help="Cap messages scored"
     )
     parser.add_argument(
+        "--ctx-size",
+        type=int,
+        default=None,
+        help="Exact ctx window to pin the model load to (#1892 envelope: "
+        "16384 target / 32768 max). Omitted = Lemonade's registry floor; "
+        "the recorded baseline stamps whichever was used.",
+    )
+    parser.add_argument(
         "--write",
         action="store_true",
         help="Write the result to the baseline file (see --out)",
@@ -229,7 +244,9 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    scorecard = score(args.model, max_messages=args.max_messages)
+    scorecard = score(
+        args.model, ctx_size=args.ctx_size, max_messages=args.max_messages
+    )
     print(json.dumps({k: v for k, v in scorecard.items() if k != "_misses"}, indent=2))
     print(f"\nMisses: {len(scorecard['_misses'])}")
 

@@ -29,6 +29,7 @@ setup(
         "gaia.audio",
         "gaia.chat",
         "gaia.schedule",
+        "gaia.daemon",
         "gaia.ui",
         "gaia.ui.routers",
         "gaia.ui.email_sidecar",

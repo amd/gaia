@@ -12,6 +12,7 @@
  *   GET  /health                               liveness probe
  */
 
+import { rebuildIndex } from "./catalog";
 import { errorResponse, HttpError, json } from "./http";
 import { handlePublish } from "./publish";
 import { AGENTS_PREFIX, INDEX_KEY } from "./storage";
@@ -42,6 +43,30 @@ async function route(request: Request, env: Env): Promise<Response> {
       throw new HttpError(405, "method_not_allowed", "Use POST to /publish.");
     }
     return handlePublish(request, env);
+  }
+
+  if (path === "/reindex") {
+    if (method !== "POST") {
+      throw new HttpError(405, "method_not_allowed", "Use POST to /reindex.");
+    }
+    // Maintainer-only rebuild of index.json from the immutable R2 objects.
+    // rebuildIndex is idempotent + non-destructive — it re-derives the catalog
+    // from the stored artifacts, so a Worker schema change (e.g. the scorecard /
+    // evaluation fields) can be backfilled without re-publishing a version.
+    // Guarded by REINDEX_TOKEN, a secret separate from the CI PUBLISH_TOKENS.
+    if (!env.REINDEX_TOKEN) {
+      throw new HttpError(
+        500,
+        "config_error",
+        "REINDEX_TOKEN is not set. Run `wrangler secret put REINDEX_TOKEN`."
+      );
+    }
+    if (request.headers.get("Authorization") !== `Bearer ${env.REINDEX_TOKEN}`) {
+      throw new HttpError(401, "unauthorized", "Missing or invalid reindex token.");
+    }
+    const baseUrl = new URL(request.url).origin;
+    const index = await rebuildIndex(env.BUCKET, new Date(), baseUrl);
+    return json({ status: "reindexed", agents: index.agents.length });
   }
 
   if (method === "GET" || method === "HEAD") {

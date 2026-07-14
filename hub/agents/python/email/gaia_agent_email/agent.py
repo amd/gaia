@@ -38,11 +38,15 @@ from typing import Any, ClassVar, List, Optional
 
 from gaia_agent_email import action_store, schedule_store
 from gaia_agent_email.config import ConfigurationError, EmailAgentConfig
-from gaia_agent_email.scheduler import EmailJobScheduler
+from gaia_agent_email.model_select import (
+    NPU_EMAIL_MODEL_ID,
+    resolve_default_email_model,
+)
 from gaia_agent_email.outlook_scopes import (
     OUTLOOK_CALENDAR_SCOPES,
     OUTLOOK_MAIL_SCOPES,
 )
+from gaia_agent_email.scheduler import EmailJobScheduler
 from gaia_agent_email.scopes import (
     AGENT_NAMESPACED_ID,
     ALL_SCOPES,
@@ -71,11 +75,11 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.registry import get_embedding_model_for_device
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.formatting import format_connector_error
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.database.mixin import DatabaseMixin
-from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -346,13 +350,43 @@ class EmailTriageAgent(
         action_store.init_schema(self)
         schedule_store.init_schema(self)
 
+        # LLM connection. Default to Lemonade — the config's base_url
+        # allowlist guarantees the host is local. Resolved BEFORE init_memory()
+        # (below) so the memory embedder can be threaded to match an
+        # NPU auto-select (#1439) — see the embedder note there.
+        effective_base_url = (
+            config.base_url
+            if config.base_url is not None
+            else os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
+        )
+        effective_model_id = config.model_id or resolve_default_email_model(
+            effective_base_url
+        )
+
         # Memory subsystem. Must be called BEFORE super().__init__() because
         # Agent.__init__() calls _register_tools(), and register_memory_tools()
         # needs _memory_store to be set. Default path: ~/.gaia/email/memory.db
         # (namespaced so it coexists with state.db without conflict).
+        #
+        # Embedder thrash guard (#1439, #1744/#1676/#1746 pattern): triaging
+        # on the FLM-native NPU model while the memory embedder stays on the
+        # GGUF/Vulkan default makes Lemonade evict and reload the chat model
+        # on every turn (NPU <-> Vulkan). When the resolved model is the NPU
+        # candidate, thread the device-appropriate embedder into init_memory
+        # the same way ChatAgent does (hub/agents/python/chat/gaia_agent_chat/
+        # agent.py, get_embedding_model_for_device) so chat + embeddings stay
+        # co-resident on the NPU backend. Any other resolved model keeps the
+        # unchanged default (embedding_model=None -> GGUF nomic).
+        embedding_model = (
+            get_embedding_model_for_device("npu")
+            if effective_model_id == NPU_EMAIL_MODEL_ID
+            else None
+        )
         memory_db = Path(config.resolved_memory_db_path())
         memory_db.parent.mkdir(parents=True, exist_ok=True)
-        self.init_memory(db_path=memory_db, context="email")
+        self.init_memory(
+            db_path=memory_db, context="email", embedding_model=embedding_model
+        )
 
         # Runtime memory toggle (#1666). init_memory() sets _incognito=False when
         # the store is live; honor an explicit memory_enabled=False by starting in
@@ -366,15 +400,6 @@ class EmailTriageAgent(
         # _session_preferences is set (done above).
         self._load_persisted_preferences()
 
-        # LLM connection. Default to Lemonade — the config's base_url
-        # allowlist guarantees the host is local.
-        effective_model_id = config.model_id or DEFAULT_MODEL_NAME
-        effective_base_url = (
-            config.base_url
-            if config.base_url is not None
-            else os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
-        )
-
         self.response_mode = "conversational"
         super().__init__(
             base_url=effective_base_url,
@@ -385,7 +410,30 @@ class EmailTriageAgent(
             silent_mode=config.silent_mode,
             debug=config.debug,
             output_dir=config.output_dir,
+            # Floor == pin (#1892): ensure_ready owns its own construction-time
+            # load paths (idle preload, singleton-recheck reload) at
+            # min_context_size — left at the 32K default they fight an exact
+            # 16K pin in this same process. Unpinned keeps the default.
+            min_context_size=(
+                config.ctx_size if config.ctx_size is not None else 32768
+            ),
         )
+
+        # Exact ctx pin (#1892): set the instance-scoped override on the
+        # concrete LemonadeClient this agent chats through. Post-super(),
+        # the client lives at self.chat.llm_client._backend (AgentSDK →
+        # LemonadeProvider → LemonadeClient) — no SDK signature change.
+        if config.ctx_size is not None:
+            backend = getattr(self.chat.llm_client, "_backend", None)
+            if backend is None:
+                raise ConfigurationError(
+                    f"EmailAgentConfig.ctx_size={config.ctx_size} needs the "
+                    "Lemonade provider, but this agent's LLM client "
+                    f"({type(self.chat.llm_client).__name__}) exposes no "
+                    "Lemonade backend to pin. Remove ctx_size or use the "
+                    "default local Lemonade backend."
+                )
+            backend.ctx_size_override = config.ctx_size
 
         # One-shot scheduler (#1609): fires persisted scheduled-send / snooze
         # jobs. Jobs live in the same SQLite as the action log, so past-due
@@ -729,12 +777,23 @@ class EmailTriageAgent(
             triage_inbox_impl,
         )
         from gaia_agent_email.tools.triage_heuristics import group_by_category
+        from gaia_agent_email.tools.usage import aggregate_usage_stats
 
         # Reference the factory via the read_tools module so the existing
         # ``read_tools.make_llm_classifier`` test seam (the pre-scan canary)
         # keeps intercepting the expensive triage path.
+        #
+        # One shared list across ALL backends (#1891) — the classifier is
+        # built ONCE here and reused across the per-backend loop below, so
+        # every classify call across every mailbox lands in the same list
+        # for a single post-loop aggregation.
         chat = getattr(self, "chat", None)
-        classifier = read_tools.make_llm_classifier(chat) if chat is not None else None
+        call_stats: list[dict] = []
+        classifier = (
+            read_tools.make_llm_classifier(chat, collect_stats=call_stats)
+            if chat is not None
+            else None
+        )
         prefs = getattr(self, "_session_preferences", None)
         force_llm = bool(getattr(self.config, "force_llm", False))
         debug_flag = bool(getattr(self.config, "debug", False))
@@ -792,6 +851,17 @@ class EmailTriageAgent(
         result: dict = {"results": merged, "grouped": group_by_category(merged)}
         if mailbox_errors:
             result["mailbox_errors"] = mailbox_errors
+        # #1891: fix the bulk-triage token undercount — nested classify calls
+        # previously discarded their stats entirely (no collect_stats threaded
+        # through). usage is a PLAIN DICT (never a pydantic object) since this
+        # result is serialized via ``json.dumps(..., default=str)``, which
+        # would silently stringify a pydantic model instead of erroring.
+        # Absent (never zeroed) on the heuristic-only path — no LLM call means
+        # no usage to report.
+        usage = aggregate_usage_stats(call_stats)
+        if usage is not None:
+            result["usage"] = usage
+            result["llm_classified_count"] = len(call_stats)
         return result
 
     def _apply_behavioral_promotions(self) -> None:

@@ -167,6 +167,163 @@ def _mean_scenario_metric(judged: list, key: str) -> Optional[float]:
     return round(sum(vals) / len(vals), 4) if vals else None
 
 
+def _compute_performance(judged: list) -> Optional[dict]:
+    """Mean of the key perf metrics across judged scenarios' performance_summary.
+
+    Each judged scenario is one run over the same corpus, so the cross-run mean is
+    the representative figure (same convention as the quality metrics). These are
+    surfaced on the versioned scorecard (and thus the hub) so the perf numbers are
+    visible per release, not just buried in a CI artifact. Returns ``None`` when no
+    scenario carries a ``performance_summary`` (older benchmark output).
+    """
+    summaries = [
+        s["performance_summary"]
+        for s in judged
+        if isinstance(s.get("performance_summary"), dict)
+    ]
+    if not summaries:
+        return None
+
+    def _mean(key: str) -> Optional[float]:
+        vals = [
+            float(ps[key])
+            for ps in summaries
+            if isinstance(ps.get(key), (int, float)) and not isinstance(ps[key], bool)
+        ]
+        return round(sum(vals) / len(vals), 3) if vals else None
+
+    perf = {
+        "ttft_s": _mean("avg_time_to_first_token"),
+        "throughput_tps": _mean("avg_tokens_per_second"),
+        "pipeline_s": _mean("pipeline_latency_s"),
+        "peak_memory_gb": _mean("peak_memory_gb"),
+        # Token accounting (#1891). REPORTED only — do NOT gate
+        # tokens_per_triage without a committed baseline (#1894 trust model);
+        # see _tokens_per_triage_comment in quality_gate_thresholds.json.
+        # tokens_per_triage = triage classify-call tokens / LLM-classified
+        # emails ONLY (pinned in gaia.eval.benchmark.build_result), so
+        # cross-release comparisons must hold the corpus fixed.
+        "total_input_tokens": _mean("total_input_tokens"),
+        "total_output_tokens": _mean("total_output_tokens"),
+        "tokens_per_triage": _mean("tokens_per_triage"),
+        "llm_classified_count": _mean("llm_classified_count"),
+    }
+    emails = [
+        int(ps["total_emails"])
+        for ps in summaries
+        if isinstance(ps.get("total_emails"), (int, float))
+        and not isinstance(ps["total_emails"], bool)
+    ]
+    if emails:
+        # Same corpus per run; record the sample size so the numbers are read in
+        # context (TTFT/throughput are per-token, but pipeline scales with it).
+        perf["emails_per_run"] = max(emails)
+    # Drop absent (None) AND zero values: peak_memory_gb is 0.0 when the runner's
+    # /stats omits memory (see performance.py), and a 0 for any of these means
+    # "not measured", not a real reading — showing "0.0" on the hub is misleading.
+    perf = {k: v for k, v in perf.items() if v}
+    return perf or None
+
+
+def _mean_nested_metric(judged: list, group: str, key: str) -> Optional[float]:
+    """Mean of ``quality[group][key]`` across judged runs (None if absent).
+
+    Unlike :func:`_mean_scenario_metric`, this reads a nested confusion sub-dict
+    such as ``quality.spam.{precision,recall,f1}`` (from
+    ``confusion_for_flag(...).to_dict()`` in the benchmark quality block).
+    """
+    vals = [
+        float(s["quality"][group][key])
+        for s in judged
+        if isinstance(s.get("quality"), dict)
+        and isinstance(s["quality"].get(group), dict)
+        and isinstance(s["quality"][group].get(key), (int, float))
+        and not isinstance(s["quality"][group][key], bool)
+    ]
+    return round(sum(vals) / len(vals), 4) if vals else None
+
+
+def _load_report_metrics(report_path, group: str, mapping: dict) -> dict:
+    """Read ``summary.<group>.<src_key>`` from a judged gate report → ``{dst: value}``.
+
+    ``mapping`` is ``{dst_key: src_key}``. Fails loud on a report marked skipped or
+    any missing source key — a judged run always yields real values, so a gap means
+    the report was not a real judged run (CLAUDE.md: No Silent Fallbacks). Never
+    silently omits a metric.
+    """
+    data = json.loads(Path(report_path).read_text(encoding="utf-8"))
+    if data.get("skipped"):
+        raise ValueError(
+            f"Report {report_path} is marked skipped, but a judged eval must not "
+            f"skip (ANTHROPIC_API_KEY is required). Re-run it with the key set."
+        )
+    section = data.get("summary", {}).get(group, {})
+    out: dict = {}
+    for dst, src in mapping.items():
+        val = section.get(src)
+        if val is None:
+            raise ValueError(
+                f"No summary.{group}.{src} in {report_path} (judged run expected). "
+                f"Re-run the eval with ANTHROPIC_API_KEY set."
+            )
+        out[dst] = round(float(val), 4)
+    return out
+
+
+def _compute_capability_quality(
+    judged: list, action_item_report=None, briefing_report=None
+) -> Optional[dict]:
+    """Fold the agent's non-triage capability evals onto the versioned scorecard.
+
+    Beyond the headline triage accuracy, the email agent has three other evaluated
+    capabilities whose scores otherwise live only in transient CI artifacts:
+
+    * **spam** — is_spam precision/recall/F1 from the benchmark quality block
+      (already in the benchmark output; no extra report needed).
+    * **action_items** — precision/recall/F1 from a judged action-item report.
+    * **briefing** — approval / must-include recall / faithfulness /
+      hallucination-free rates from a judged briefing report.
+
+    Report-only: these never feed the aggregate (blocking on a regression is each
+    capability's own gate's job, ``enforce:true`` under ``tests/fixtures/email/``).
+    Returns ``None`` when no capability has data.
+    """
+    capq: dict = {}
+
+    spam = {
+        k: v
+        for k, v in (
+            ("precision", _mean_nested_metric(judged, "spam", "precision")),
+            ("recall", _mean_nested_metric(judged, "spam", "recall")),
+            ("f1", _mean_nested_metric(judged, "spam", "f1")),
+        )
+        if v is not None
+    }
+    if spam:
+        capq["spam"] = spam
+
+    if action_item_report is not None:
+        capq["action_items"] = _load_report_metrics(
+            action_item_report,
+            "extraction",
+            {"precision": "precision", "recall": "recall", "f1": "f1"},
+        )
+
+    if briefing_report is not None:
+        capq["briefing"] = _load_report_metrics(
+            briefing_report,
+            "briefing",
+            {
+                "approval": "briefing_approval_rate",
+                "must_include_recall": "must_include_recall_mean",
+                "faithful": "faithful_rate",
+                "hallucination_free": "hallucination_free_rate",
+            },
+        )
+
+    return capq or None
+
+
 def _compute_breakdown(judged: list) -> Optional[dict]:
     """Aggregate per-category accuracy and top confusion pairs across judged scenarios.
 
@@ -302,6 +459,8 @@ def build_payload(
     limit=None,
     environment=None,
     drafting_report=None,
+    action_item_report=None,
+    briefing_report=None,
 ):
     """Build a :class:`~gaia.eval.release_scorecard.ResultPayload` from benchmark output.
 
@@ -477,6 +636,12 @@ def build_payload(
     reproduction_command = _build_reproduction_command(model, ground_truth_rel, limit)
 
     breakdown = _compute_breakdown(judged)
+    performance = _compute_performance(judged)
+    capability_quality = _compute_capability_quality(
+        judged,
+        action_item_report=action_item_report,
+        briefing_report=briefing_report,
+    )
 
     return ResultPayload(
         agent_name="Email Triage",
@@ -525,6 +690,8 @@ def build_payload(
         reproduction_command=reproduction_command,
         breakdown=breakdown,
         environment=environment,
+        performance=performance,
+        capability_quality=capability_quality,
     )
 
 
@@ -664,6 +831,27 @@ def main(argv=None) -> int:
             "the aggregate's."
         ),
     )
+    parser.add_argument(
+        "--action-item-report",
+        default=None,
+        help=(
+            "Path to the judged action-item extraction report (from "
+            "eval_action_item_report.py). Folds precision/recall/F1 into the "
+            "scorecard's Capability quality section (report-only). A skipped or "
+            "incomplete report fails loudly, never silently omits."
+        ),
+    )
+    parser.add_argument(
+        "--briefing-report",
+        default=None,
+        help=(
+            "Path to the judged briefing-quality report (from "
+            "eval_briefing_report.py). Folds approval / must-include recall / "
+            "faithfulness / hallucination-free rates into the scorecard's "
+            "Capability quality section (report-only). A skipped or incomplete "
+            "report fails loudly, never silently omits."
+        ),
+    )
 
     args = parser.parse_args(argv)
 
@@ -680,6 +868,25 @@ def main(argv=None) -> int:
         _model = _scenarios[0].get("category") if _scenarios else None
     except (FileNotFoundError, ValueError, json.JSONDecodeError):
         _model = None
+
+    # Ctx envelope (#1892): REQUIRED, unlike the soft _model pre-read above.
+    # The benchmark stamps the readback ctx into quality.json; a release card
+    # that cannot state the window it was measured under must not be built.
+    try:
+        _quality = _load_quality_aggregate(benchmark_dir)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    _ctx_size = _quality.get("ctx_size") if isinstance(_quality, dict) else None
+    if not isinstance(_ctx_size, int) or isinstance(_ctx_size, bool):
+        print(
+            f"ERROR: quality.json in {benchmark_dir} is missing or lacks an "
+            "integer 'ctx_size'. Re-run the benchmark with the #1892-aware "
+            "harness ('gaia eval benchmark --ctx-size ... --output-dir ...') "
+            "so the scorecard records the ctx window it was measured under.",
+            file=sys.stderr,
+        )
+        return 1
 
     # Resolve lemonade_version: flag wins, then live query.
     lemonade_version: Optional[str] = args.lemonade_version
@@ -702,6 +909,7 @@ def main(argv=None) -> int:
         "gaia_commit": gaia_commit,
         "lemonade_version": lemonade_version,
         **({"model": _model} if _model else {}),
+        "ctx_size": _ctx_size,
         "hardware": args.hardware,
     }
     if args.temperature is not None:
@@ -714,6 +922,8 @@ def main(argv=None) -> int:
             limit=args.limit,
             environment=environment,
             drafting_report=args.drafting_report,
+            action_item_report=args.action_item_report,
+            briefing_report=args.briefing_report,
         )
     except (ValueError, FileNotFoundError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

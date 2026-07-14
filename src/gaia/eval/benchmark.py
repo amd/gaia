@@ -33,6 +33,7 @@ from typing import Any, Callable
 
 from gaia.eval import performance, quality_metrics
 from gaia.eval.fixture_paths import resolve_repo_fixture
+from gaia.llm.lemonade_client import _model_ids_match
 
 # Metrics whose run-to-run spread is recorded for trustworthiness (#1894). The
 # first is the gated aggregate (within-one-bucket); the rest are reported.
@@ -127,6 +128,30 @@ def _extract_triage_results(conversation: list) -> tuple[list[dict], str]:
     return [], ""
 
 
+def _extract_triage_usage(conversation: list) -> tuple[dict | None, int]:
+    """Find the triage tool result's LLM usage block (#1891).
+
+    Sibling of :func:`_extract_triage_results`: walks the same tool messages
+    and reads ``data.usage`` / ``data.llm_classified_count`` off the first ok
+    triage envelope. Returns ``(usage_dict, llm_classified_count)``, or
+    ``(None, 0)`` when the envelope carries no usage block (a heuristic-only
+    run, or a pre-#1891 agent) — absence is the normal, non-error shape.
+    """
+    for msg in conversation:
+        if msg.get("role") != "tool" or not msg.get("content"):
+            continue
+        envelope = _maybe_parse_tool_envelope(msg["content"])
+        if not isinstance(envelope, dict):
+            continue
+        data = envelope.get("data")
+        if envelope.get("ok") and isinstance(data, dict) and "results" in data:
+            usage = data.get("usage")
+            if isinstance(usage, dict):
+                return usage, int(data.get("llm_classified_count") or 0)
+            return None, 0
+    return None, 0
+
+
 def _extract_tools_called(agent_result: dict) -> list[str]:
     """Ordered, de-duplicated list of tool names used in the conversation."""
     seen: set[str] = set()
@@ -158,6 +183,7 @@ def build_result(
     total_duration_ms: int,
     ground_truth: dict[str, dict] | None = None,
     is_cold_start: bool = False,
+    ctx_size: int | None = None,
 ) -> dict[str, Any]:
     """Assemble a single benchmark result dict from a ``process_query`` return.
 
@@ -165,6 +191,8 @@ def build_result(
     The output is ``build_scorecard``-compatible (``status`` / ``category`` /
     ``performance_summary`` / ``cost_estimate``) and carries the perf RunResult
     plus an optional ``quality`` block when ``ground_truth`` is provided.
+    ``ctx_size`` (the READBACK ctx the run was measured under, #1892) is
+    stamped top-level when given; the key is absent when omitted.
     """
     result_dict = _normalize_agent_result(agent_result)
     conversation = result_dict.get("conversation", [])
@@ -190,9 +218,38 @@ def build_result(
         is_cold_start=is_cold_start,
     )
 
+    # #1891: merge the triage tool's nested classify-call usage into the run
+    # totals BEFORE serialization / cost — the outer-turn stats above never
+    # saw those calls, so totals (and cost_estimate) were undercounting.
+    # avg_tokens_per_second / TTFT stay outer-turn-derived on purpose (the
+    # usage block has no per-call TTFT and its decode rate is already the
+    # aggregate the tool computed). Bounded caveat: when the outer turn's own
+    # stats dict is falsy, the base agent falls back to a GET /stats that can
+    # capture the LAST nested classify call as the outer turn — merging then
+    # double-counts that one call (~0.3% worst case); tokens_per_triage below
+    # is immune (classify tokens over classify count only).
+    triage_usage, llm_classified_count = _extract_triage_usage(conversation)
+    triage_llm_tokens = 0
+    if triage_usage is not None:
+        t_in = int(triage_usage.get("prompt_tokens") or 0)
+        t_out = int(triage_usage.get("completion_tokens") or 0)
+        triage_llm_tokens = int(triage_usage.get("total_tokens") or 0) or (t_in + t_out)
+        perf_run.total_input_tokens += t_in
+        perf_run.total_output_tokens += t_out
+        perf_run.total_tokens += t_in + t_out
+
     out = performance.run_to_dict(perf_run)
     out["tools_called"] = _extract_tools_called(result_dict)
     out["performance_summary"] = performance.to_performance_summary(perf_run)
+    if triage_usage is not None:
+        # Pinned metric (#1891): tokens_per_triage = classify-call tokens over
+        # LLM-classified emails ONLY — invariant to the heuristic/batch mix
+        # and to the outer-turn fallback race noted above.
+        ps = out["performance_summary"]
+        ps["triage_llm_tokens"] = triage_llm_tokens
+        ps["llm_classified_count"] = llm_classified_count
+        if llm_classified_count > 0:
+            ps["tokens_per_triage"] = round(triage_llm_tokens / llm_classified_count, 1)
     out["cost_estimate"] = {
         "estimated_usd": quality_metrics.compute_cost(
             perf_run.total_input_tokens,
@@ -201,6 +258,8 @@ def build_result(
         )
     }
     out["meets_throughput_bar"] = perf_run.avg_tokens_per_second >= THROUGHPUT_BAR_TPS
+    if ctx_size is not None:
+        out["ctx_size"] = ctx_size
 
     # build_scorecard-compatible fields. category groups the scorecard by model.
     out["category"] = model_id
@@ -460,6 +519,20 @@ def summarize_benchmark(
     }
     summary: dict[str, Any] = {"scorecard": scorecard, "variance": variance}
 
+    # Ctx envelope stamp (#1892): one run measures ONE window. Propagate the
+    # per-row readback to the top level of both artifacts (`--compare` reads
+    # scorecard.json; the release-scorecard adapter reads quality.json).
+    ctx_values = {r["ctx_size"] for r in results if "ctx_size" in r}
+    if len(ctx_values) > 1:
+        raise ValueError(
+            f"results carry conflicting ctx_size values {sorted(ctx_values)} — "
+            "a single benchmark run must be measured at one ctx window; "
+            "separate runs per ctx point."
+        )
+    run_ctx = next(iter(ctx_values), None)
+    if run_ctx is not None:
+        summary["scorecard"]["ctx_size"] = run_ctx
+
     aggregate_quality = _aggregate_quality(results)
     if aggregate_quality is not None:
         # Multi-run variance/CI on the acceptance metrics (#1894). Additive — the
@@ -468,6 +541,8 @@ def summarize_benchmark(
         aggregate_quality["acceptance_variance"] = _acceptance_variance(
             aggregate_quality
         )
+        if run_ctx is not None:
+            aggregate_quality["ctx_size"] = run_ctx
         summary["quality"] = aggregate_quality
 
     if thresholds is not None:
@@ -520,6 +595,71 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _verify_ctx_readback(client: Any, model_id: str, requested_ctx: int) -> int:
+    """Load ``model_id`` at the exact pin and verify the ctx Lemonade reports.
+
+    Returns the READBACK value (what ``/health`` says is loaded — the number
+    every artifact records, never the request). The client's pinned path
+    already settles the async /unload+/load cycle against /health before
+    returning (#1892 hardware finding), so the read here is single-shot: by
+    the time ``_ensure_model_loaded`` returns, /health is settled, and a
+    fresh divergence can only mean an external process — which the one
+    corrective re-pin below handles. Fails loud on:
+
+    - readback 0 → the probe could not see the model's ctx at all (a health
+      / enrichment problem, NOT "loaded at 0");
+    - readback != requested after ONE corrective re-pin (through the same
+      async-safe settle path, never a raw /load — a plain reload can no-op
+      on Lemonade 10.7) → the server will not hold the pin (likely a model
+      ctx ceiling clamping the request, or another process fighting over
+      the slot).
+    """
+    client._ensure_model_loaded(model_id)  # async-safe pin via ctx_size_override
+
+    def _read() -> int:
+        status = client.get_status()
+        for entry in status.loaded_models:
+            if _model_ids_match(entry.get("id"), model_id) or _model_ids_match(
+                entry.get("model_name"), model_id
+            ):
+                return int(entry.get("recipe_options", {}).get("ctx_size", 0) or 0)
+        return 0
+
+    readback = _read()
+    if readback == 0:
+        raise RuntimeError(
+            f"could not verify loaded ctx via /health for '{model_id}': the "
+            f"probe returned no ctx_size (requested {requested_ctx}). The "
+            "server may be down, the model not loaded, or an older Lemonade "
+            "without recipe_options — fix the probe before trusting any "
+            "measurement."
+        )
+    if readback != requested_ctx:
+        client._ensure_model_loaded(model_id)
+        readback = _read()
+        if readback != requested_ctx:
+            raise RuntimeError(
+                f"ctx readback mismatch for '{model_id}': requested="
+                f"{requested_ctx} actual={readback} even after a corrective "
+                "re-pin. The model may clamp ctx to its own ceiling, or "
+                "another process keeps reloading it — the run would measure "
+                "the wrong window, aborting."
+            )
+    return readback
+
+
+def _close_agent_db(agent: Any) -> None:
+    """Release ``agent``'s SQLite state.db, tolerating agents with none.
+
+    A stub agent injected via ``agent_factory`` in tests has no ``close_db``
+    — that is a capability gap, not an error, so it is skipped rather than
+    caught-and-swallowed. A real ``close_db()`` failure still propagates.
+    """
+    close_db = getattr(agent, "close_db", None)
+    if close_db is not None:
+        close_db()
+
+
 def run_benchmark(
     model_id: str,
     *,
@@ -531,6 +671,7 @@ def run_benchmark(
     db_path: str | None = None,
     agent_factory: Callable[[], Any] | None = None,
     run_id_prefix: str = "bench",
+    ctx_size: int | None = None,
 ) -> list[dict[str, Any]]:
     """Run the throughput benchmark ``experiments`` times and return result dicts.
 
@@ -538,6 +679,13 @@ def run_benchmark(
     loaded from ``mbox_path``. ``agent_factory`` overrides agent construction
     (used by tests to inject a stub — keeps the unit path Lemonade-free); when
     omitted a real agent is built lazily so importing this module stays cheap.
+
+    ``ctx_size`` (#1892): the exact ctx window to pin the model to. On the
+    real-agent path ``None`` resolves to the committed envelope target
+    (``context_budget.CONTEXT_TARGET_TOKENS``), the pin is verified by
+    readback per experiment, and the READBACK value is stamped into every
+    result row. On the ``agent_factory`` (test) path the value is stamped
+    as passed — no resolution or server probe.
     """
     model_slug = model_id.replace("/", "-").lower()
     # The benchmark scores a fixed labelled corpus and must cover all of it for
@@ -562,6 +710,9 @@ def run_benchmark(
             "then give me a short summary."
         )
         results: list[dict[str, Any]] = []
+        # On the agent_factory (test) path the stamp is the value as passed;
+        # the real-agent path replaces it with the per-experiment READBACK.
+        stamp_ctx: int | None = ctx_size
 
         for exp in range(1, experiments + 1):
             if agent_factory is not None:
@@ -573,6 +724,10 @@ def run_benchmark(
                 try:
                     from gaia_agent_email.agent import EmailTriageAgent
                     from gaia_agent_email.config import EmailAgentConfig
+                    from gaia_agent_email.context_budget import (
+                        CONTEXT_MAX_TOKENS,
+                        CONTEXT_TARGET_TOKENS,
+                    )
                 except ImportError as exc:
                     raise RuntimeError(
                         "The email throughput benchmark needs the email agent. "
@@ -591,6 +746,24 @@ def run_benchmark(
                         f"install. Original import error: {exc}"
                     ) from exc
 
+                resolved_ctx = (
+                    ctx_size if ctx_size is not None else CONTEXT_TARGET_TOKENS
+                )
+                if exp == 1:
+                    print(
+                        f"[CTX] pinning '{model_id}' to ctx_size={resolved_ctx} "
+                        f"(#1892 envelope: target {CONTEXT_TARGET_TOKENS}, "
+                        f"max {CONTEXT_MAX_TOKENS}"
+                        f"{'' if resolved_ctx <= CONTEXT_MAX_TOKENS else ' — ABOVE-ENVELOPE run'})"
+                    )
+                    if resolved_ctx > CONTEXT_MAX_TOKENS:
+                        print(
+                            f"[CTX] WARNING: ctx_size={resolved_ctx} exceeds the "
+                            f"committed envelope max ({CONTEXT_MAX_TOKENS}). "
+                            "Legitimate for a deliberate sweep point, but the "
+                            "result is NOT comparable to envelope baselines."
+                        )
+
                 config = EmailAgentConfig(
                     model_id=model_id,
                     base_url=base_url,
@@ -598,12 +771,41 @@ def run_benchmark(
                     db_path=db_path,
                     show_stats=True,
                     silent_mode=True,
+                    ctx_size=resolved_ctx,
                 )
                 agent = EmailTriageAgent(config=config)
+                # Fresh agent → fresh client each experiment: re-verify the
+                # pin and record what the server ACTUALLY loaded (#1892).
+                stamp_ctx = _verify_ctx_readback(
+                    agent.chat.llm_client._backend, model_id, resolved_ctx
+                )
 
             run_id = f"{run_id_prefix}-{model_slug}-exp{exp}"
             start = time.monotonic()
-            agent_result = agent.process_query(prompt)
+            try:
+                agent_result = agent.process_query(prompt)
+            except Exception as exc:  # pylint: disable=broad-except
+                # Boundary translation, not a silent fallback (#1892): a
+                # per-experiment failure (e.g. the base agent's wrong-ctx
+                # re-raise on a 4K sweep leg) becomes an honest ERRORED row
+                # and the remaining experiments still run.
+                total_duration_ms = int((time.monotonic() - start) * 1000)
+                row = build_result(
+                    {},
+                    run_id=run_id,
+                    timestamp=_utc_now_iso(),
+                    model_id=model_id,
+                    total_duration_ms=total_duration_ms,
+                    ground_truth=None,
+                    is_cold_start=(exp == 1),
+                    ctx_size=stamp_ctx,
+                )
+                row["status"] = "ERRORED"
+                row["error"] = f"{type(exc).__name__}: {exc}"
+                print(f"[ERRORED] experiment {exp}/{experiments}: {row['error']}")
+                results.append(row)
+                _close_agent_db(agent)
+                continue
             total_duration_ms = int((time.monotonic() - start) * 1000)
 
             results.append(
@@ -615,16 +817,14 @@ def run_benchmark(
                     total_duration_ms=total_duration_ms,
                     ground_truth=ground_truth,
                     is_cold_start=(exp == 1),
+                    ctx_size=stamp_ctx,
                 )
             )
 
             # Release the agent's SQLite state.db before the next experiment and
             # the caller's temp-dir cleanup — an open connection locks the file on
-            # Windows. Best-effort: a stub agent_factory agent may lack close_db.
-            try:
-                agent.close_db()
-            except Exception:
-                pass
+            # Windows.
+            _close_agent_db(agent)
 
         return results
     finally:

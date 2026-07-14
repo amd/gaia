@@ -21,6 +21,14 @@ export interface Env {
    * An author entry of "*" grants publishing for any author value.
    */
   PUBLISH_TOKENS?: string;
+
+  /**
+   * Bearer token for the maintainer-only `POST /reindex` endpoint, which
+   * rebuilds index.json from the immutable R2 objects (idempotent). Separate
+   * from PUBLISH_TOKENS so a reindex never needs a publish credential.
+   * Set with `wrangler secret put REINDEX_TOKEN`.
+   */
+  REINDEX_TOKEN?: string;
   /** Max artifact size in bytes (string in wrangler vars). */
   MAX_ARTIFACT_BYTES?: string;
 }
