@@ -182,5 +182,49 @@ def test_ctx_size_none_when_recipe_options_missing_ctx(monkeypatch):
     assert resp.model.ctx_size is None
 
 
+def test_ctx_size_reported_when_models_list_unreadable(monkeypatch):
+    """The /models catalog probe failing is a deliberate contract, not a
+    contradiction: ``present`` comes from the /models catalog probe (so a
+    failed probe reports ``present=False`` — presence not confirmed), while
+    ``ctx_size`` comes from /health's loaded state (still server-reported
+    even when the catalog probe fails). /health succeeds with the model
+    loaded at ctx=16384; only /models raises."""
+    import requests
+    from gaia_agent_email.api_routes import (
+        _compute_init_status,
+        _resolve_email_model_id,
+    )
+
+    model_id = _resolve_email_model_id()
+    health_body = {
+        "version": "10.10.0",
+        "all_models_loaded": [
+            {
+                "model_name": model_id,
+                "checkpoint": "x",
+                "recipe_options": {"ctx_size": 16384},
+            }
+        ],
+    }
+
+    def _fake_get(url, *args, **kwargs):
+        if url.endswith("/health"):
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = health_body
+            return resp
+        if url.endswith("/models"):
+            raise requests.exceptions.ConnectionError("boom")
+        raise AssertionError(f"unexpected probe URL: {url}")
+
+    monkeypatch.setattr(requests, "get", _fake_get)
+
+    resp = _compute_init_status()
+
+    assert resp.ready is False
+    assert resp.model.present is False
+    assert resp.model.ctx_size == 16384
+    assert "could not be read" in (resp.hint or "")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
