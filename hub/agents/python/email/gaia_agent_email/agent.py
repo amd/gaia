@@ -38,11 +38,15 @@ from typing import Any, ClassVar, List, Optional
 
 from gaia_agent_email import action_store, schedule_store
 from gaia_agent_email.config import ConfigurationError, EmailAgentConfig
-from gaia_agent_email.scheduler import EmailJobScheduler
+from gaia_agent_email.model_select import (
+    NPU_EMAIL_MODEL_ID,
+    resolve_default_email_model,
+)
 from gaia_agent_email.outlook_scopes import (
     OUTLOOK_CALENDAR_SCOPES,
     OUTLOOK_MAIL_SCOPES,
 )
+from gaia_agent_email.scheduler import EmailJobScheduler
 from gaia_agent_email.scopes import (
     AGENT_NAMESPACED_ID,
     ALL_SCOPES,
@@ -71,11 +75,11 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.registry import get_embedding_model_for_device
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.formatting import format_connector_error
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.database.mixin import DatabaseMixin
-from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -346,13 +350,43 @@ class EmailTriageAgent(
         action_store.init_schema(self)
         schedule_store.init_schema(self)
 
+        # LLM connection. Default to Lemonade — the config's base_url
+        # allowlist guarantees the host is local. Resolved BEFORE init_memory()
+        # (below) so the memory embedder can be threaded to match an
+        # NPU auto-select (#1439) — see the embedder note there.
+        effective_base_url = (
+            config.base_url
+            if config.base_url is not None
+            else os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
+        )
+        effective_model_id = config.model_id or resolve_default_email_model(
+            effective_base_url
+        )
+
         # Memory subsystem. Must be called BEFORE super().__init__() because
         # Agent.__init__() calls _register_tools(), and register_memory_tools()
         # needs _memory_store to be set. Default path: ~/.gaia/email/memory.db
         # (namespaced so it coexists with state.db without conflict).
+        #
+        # Embedder thrash guard (#1439, #1744/#1676/#1746 pattern): triaging
+        # on the FLM-native NPU model while the memory embedder stays on the
+        # GGUF/Vulkan default makes Lemonade evict and reload the chat model
+        # on every turn (NPU <-> Vulkan). When the resolved model is the NPU
+        # candidate, thread the device-appropriate embedder into init_memory
+        # the same way ChatAgent does (hub/agents/python/chat/gaia_agent_chat/
+        # agent.py, get_embedding_model_for_device) so chat + embeddings stay
+        # co-resident on the NPU backend. Any other resolved model keeps the
+        # unchanged default (embedding_model=None -> GGUF nomic).
+        embedding_model = (
+            get_embedding_model_for_device("npu")
+            if effective_model_id == NPU_EMAIL_MODEL_ID
+            else None
+        )
         memory_db = Path(config.resolved_memory_db_path())
         memory_db.parent.mkdir(parents=True, exist_ok=True)
-        self.init_memory(db_path=memory_db, context="email")
+        self.init_memory(
+            db_path=memory_db, context="email", embedding_model=embedding_model
+        )
 
         # Runtime memory toggle (#1666). init_memory() sets _incognito=False when
         # the store is live; honor an explicit memory_enabled=False by starting in
@@ -365,15 +399,6 @@ class EmailTriageAgent(
         # init_memory() (so _memory_store is set) and after
         # _session_preferences is set (done above).
         self._load_persisted_preferences()
-
-        # LLM connection. Default to Lemonade — the config's base_url
-        # allowlist guarantees the host is local.
-        effective_model_id = config.model_id or DEFAULT_MODEL_NAME
-        effective_base_url = (
-            config.base_url
-            if config.base_url is not None
-            else os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
-        )
 
         self.response_mode = "conversational"
         super().__init__(

@@ -187,11 +187,10 @@ def test_agent_explicit_model_id_skips_resolver(tmp_path, monkeypatch):
     monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
     cfg = _make_config(tmp_path, model_id="SomeExplicitModel-GGUF")
 
-    with patch.object(
-        LemonadeManager, "ensure_ready", return_value=True
-    ), patch(
-        "gaia_agent_email.agent.resolve_default_email_model"
-    ) as mock_resolve:
+    with (
+        patch.object(LemonadeManager, "ensure_ready", return_value=True),
+        patch("gaia_agent_email.agent.resolve_default_email_model") as mock_resolve,
+    ):
         agent = EmailTriageAgent(config=cfg)
     try:
         mock_resolve.assert_not_called()
@@ -202,16 +201,15 @@ def test_agent_explicit_model_id_skips_resolver(tmp_path, monkeypatch):
 
 def test_agent_resolver_called_with_explicit_base_url(tmp_path, monkeypatch):
     monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
-    cfg = _make_config(
-        tmp_path, base_url="http://127.0.0.1:9640", model_id=None
-    )
+    cfg = _make_config(tmp_path, base_url="http://127.0.0.1:9640", model_id=None)
 
-    with patch.object(
-        LemonadeManager, "ensure_ready", return_value=True
-    ), patch(
-        "gaia_agent_email.agent.resolve_default_email_model",
-        return_value="sentinel-model",
-    ) as mock_resolve:
+    with (
+        patch.object(LemonadeManager, "ensure_ready", return_value=True),
+        patch(
+            "gaia_agent_email.agent.resolve_default_email_model",
+            return_value="sentinel-model",
+        ) as mock_resolve,
+    ):
         agent = EmailTriageAgent(config=cfg)
     try:
         mock_resolve.assert_called_once_with("http://127.0.0.1:9640")
@@ -225,12 +223,13 @@ def test_agent_resolver_called_with_env_default_base_url(tmp_path, monkeypatch):
     monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
     cfg = _make_config(tmp_path, base_url=None, model_id=None)
 
-    with patch.object(
-        LemonadeManager, "ensure_ready", return_value=True
-    ), patch(
-        "gaia_agent_email.agent.resolve_default_email_model",
-        return_value="sentinel-model",
-    ) as mock_resolve:
+    with (
+        patch.object(LemonadeManager, "ensure_ready", return_value=True),
+        patch(
+            "gaia_agent_email.agent.resolve_default_email_model",
+            return_value="sentinel-model",
+        ) as mock_resolve,
+    ):
         agent = EmailTriageAgent(config=cfg)
     try:
         mock_resolve.assert_called_once_with("http://localhost:13305/api/v1")
@@ -246,12 +245,14 @@ def test_agent_threads_npu_embedder_when_flm_resolved(tmp_path, monkeypatch):
     expected_embedder = get_embedding_model_for_device("npu")
     cfg = _make_config(tmp_path, model_id=None)
 
-    with patch.object(
-        LemonadeManager, "ensure_ready", return_value=True
-    ), patch(
-        "gaia_agent_email.agent.resolve_default_email_model",
-        return_value=NPU_EMAIL_MODEL_ID,
-    ), patch.object(EmailTriageAgent, "init_memory") as mock_init_memory:
+    with (
+        patch.object(LemonadeManager, "ensure_ready", return_value=True),
+        patch(
+            "gaia_agent_email.agent.resolve_default_email_model",
+            return_value=NPU_EMAIL_MODEL_ID,
+        ),
+        patch.object(EmailTriageAgent, "init_memory") as mock_init_memory,
+    ):
         agent = EmailTriageAgent(config=cfg)
     try:
         mock_init_memory.assert_called_once()
@@ -269,12 +270,14 @@ def test_agent_leaves_default_embedder_when_e4b_resolved(tmp_path, monkeypatch):
     (None -> GGUF nomic embedder)."""
     cfg = _make_config(tmp_path, model_id=None)
 
-    with patch.object(
-        LemonadeManager, "ensure_ready", return_value=True
-    ), patch(
-        "gaia_agent_email.agent.resolve_default_email_model",
-        return_value=DEFAULT_MODEL_NAME,
-    ), patch.object(EmailTriageAgent, "init_memory") as mock_init_memory:
+    with (
+        patch.object(LemonadeManager, "ensure_ready", return_value=True),
+        patch(
+            "gaia_agent_email.agent.resolve_default_email_model",
+            return_value=DEFAULT_MODEL_NAME,
+        ),
+        patch.object(EmailTriageAgent, "init_memory") as mock_init_memory,
+    ):
         agent = EmailTriageAgent(config=cfg)
     try:
         mock_init_memory.assert_called_once()
@@ -290,9 +293,10 @@ def test_agent_leaves_default_embedder_with_explicit_non_flm_model(
     consulted) also must not thread the NPU embedder."""
     cfg = _make_config(tmp_path, model_id="SomeExplicitModel-GGUF")
 
-    with patch.object(
-        LemonadeManager, "ensure_ready", return_value=True
-    ), patch.object(EmailTriageAgent, "init_memory") as mock_init_memory:
+    with (
+        patch.object(LemonadeManager, "ensure_ready", return_value=True),
+        patch.object(EmailTriageAgent, "init_memory") as mock_init_memory,
+    ):
         agent = EmailTriageAgent(config=cfg)
     try:
         mock_init_memory.assert_called_once()

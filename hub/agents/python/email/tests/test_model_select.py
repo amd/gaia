@@ -31,9 +31,9 @@ pytest.importorskip("gaia_agent_email")
 
 import requests  # noqa: E402
 from gaia_agent_email.model_select import (  # noqa: E402
-    NPU_EMAIL_MODEL_ID,
     _LEMONADE_PROBE_CONNECT_TIMEOUT,
     _LEMONADE_PROBE_READ_TIMEOUT,
+    NPU_EMAIL_MODEL_ID,
     _reset_model_select_cache,
     resolve_default_email_model,
 )
