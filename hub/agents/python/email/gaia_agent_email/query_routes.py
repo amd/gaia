@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import queue
 import threading
 import uuid
 from typing import Any, Dict, List, Optional
@@ -358,7 +359,7 @@ async def query(request: QueryRequest) -> StreamingResponse:
             while True:
                 try:
                     event = handler.event_queue.get_nowait()
-                except Exception:
+                except queue.Empty:
                     if not thread.is_alive() and handler.event_queue.empty():
                         break
                     await asyncio.sleep(0.03)
