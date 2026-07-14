@@ -1418,6 +1418,110 @@ class TestBreakdownAdapter:
         assert "peak_memory_gb" not in payload.performance
         assert payload.performance["throughput_tps"] == 12.1
 
+    def test_performance_folds_triage_token_metrics(self, tmp_path):
+        """Increment 2: tokens_per_triage / llm_classified_count / token totals
+        are meaned into payload.performance alongside the existing perf keys."""
+        mod = self._load_gen_scorecard()
+        scorecard = {
+            "run_id": "tokens",
+            "scenarios": [
+                {
+                    "category": "Gemma-4-E4B-it-GGUF",
+                    "status": "PASS",
+                    "total_emails": 20,
+                    "quality": {
+                        "category_accuracy": 0.5,
+                        "within_one_bucket_accuracy": 0.8,
+                    },
+                    "performance_summary": {
+                        "avg_time_to_first_token": 8.5,
+                        "avg_tokens_per_second": 12.1,
+                        "pipeline_latency_s": 760.0,
+                        "peak_memory_gb": 6.2,
+                        "total_emails": 20,
+                        "tokens_per_triage": 1450.0,
+                        "llm_classified_count": 4,
+                        "total_input_tokens": 6000,
+                        "total_output_tokens": 1000,
+                    },
+                }
+            ],
+        }
+        bd = self._make_benchmark_dir(tmp_path, scorecard)
+        payload = mod.build_payload(bd, self._make_gt(tmp_path))
+        assert payload.performance is not None
+        assert payload.performance["tokens_per_triage"] == 1450.0
+        assert payload.performance["llm_classified_count"] == 4
+        assert payload.performance["total_input_tokens"] == 6000.0
+        assert payload.performance["total_output_tokens"] == 1000.0
+
+    def test_performance_drops_unmeasured_triage_token_metrics(self, tmp_path):
+        """No triage-token keys in performance_summary -> none of the four new
+        keys appear in payload.performance (drop-if-absent, mirrors the
+        existing peak_memory_gb=0.0 drop test)."""
+        mod = self._load_gen_scorecard()
+        scorecard = {
+            "run_id": "no-tokens",
+            "scenarios": [
+                {
+                    "category": "m",
+                    "status": "PASS",
+                    "total_emails": 20,
+                    "quality": {
+                        "category_accuracy": 0.5,
+                        "within_one_bucket_accuracy": 0.8,
+                    },
+                    "performance_summary": {
+                        "avg_time_to_first_token": 8.5,
+                        "avg_tokens_per_second": 12.1,
+                        "pipeline_latency_s": 760.0,
+                        "peak_memory_gb": 6.2,
+                        "total_emails": 20,
+                    },
+                }
+            ],
+        }
+        bd = self._make_benchmark_dir(tmp_path, scorecard)
+        payload = mod.build_payload(bd, self._make_gt(tmp_path))
+        assert payload.performance is not None
+        assert "tokens_per_triage" not in payload.performance
+        assert "llm_classified_count" not in payload.performance
+        assert "total_input_tokens" not in payload.performance
+        assert "total_output_tokens" not in payload.performance
+        assert payload.performance["throughput_tps"] == 12.1
+
+    def test_performance_means_tokens_per_triage_across_scenarios(self, tmp_path):
+        """Two judged scenarios with different tokens_per_triage -> the mean."""
+        mod = self._load_gen_scorecard()
+
+        def _scenario(tpt):
+            return {
+                "category": "Gemma-4-E4B-it-GGUF",
+                "status": "PASS",
+                "total_emails": 20,
+                "quality": {
+                    "category_accuracy": 0.5,
+                    "within_one_bucket_accuracy": 0.8,
+                },
+                "performance_summary": {
+                    "avg_time_to_first_token": 8.5,
+                    "avg_tokens_per_second": 12.1,
+                    "pipeline_latency_s": 760.0,
+                    "peak_memory_gb": 6.2,
+                    "total_emails": 20,
+                    "tokens_per_triage": tpt,
+                    "llm_classified_count": 4,
+                },
+            }
+
+        scorecard = {
+            "run_id": "tokens-mean",
+            "scenarios": [_scenario(1400.0), _scenario(1500.0)],
+        }
+        bd = self._make_benchmark_dir(tmp_path, scorecard)
+        payload = mod.build_payload(bd, self._make_gt(tmp_path))
+        assert payload.performance["tokens_per_triage"] == 1450.0
+
     def test_performance_none_when_no_summary(self, tmp_path):
         """No performance_summary in any scenario -> perf block omitted."""
         mod = self._load_gen_scorecard()
