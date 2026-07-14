@@ -60,6 +60,7 @@ class _CapturingChat:
         *,
         text: str = "CONDENSED_DIGEST_MARKER",
         stats: Optional[dict] = None,
+        usage: Optional[dict] = None,
         raise_exc: Optional[BaseException] = None,
         echo: bool = False,
         as_raw_string: bool = False,
@@ -67,6 +68,7 @@ class _CapturingChat:
         self.calls: List[Dict[str, Any]] = []
         self._text = text
         self._stats = stats
+        self._usage = usage
         self._raise_exc = raise_exc
         self._echo = echo
         self._as_raw_string = as_raw_string
@@ -90,6 +92,8 @@ class _CapturingChat:
         resp = SimpleNamespace(text=text)
         if self._stats is not None:
             resp.stats = dict(self._stats)
+        if self._usage is not None:
+            resp.usage = dict(self._usage)
         return resp
 
 
@@ -194,6 +198,20 @@ def test_fold_older_blocks_appends_stats_when_present():
         ["a: 1"], chat=chat, subject="s", collect_stats=collected
     )
     assert collected == [stats]
+
+
+def test_fold_older_blocks_appends_usage_when_stats_absent():
+    """usage-first collection (#1891): on the REST path show_stats=False makes
+    ``response.stats`` None while ``response.usage`` still carries the token
+    counts — the fold call's tokens must land in collect_stats via usage, not
+    silently drop (mirrors llm_triage's usage-then-stats pattern)."""
+    usage = {"input_tokens": 55, "output_tokens": 9, "total_tokens": 64}
+    chat = _CapturingChat(text="digest", usage=usage, stats=None)
+    collected: List[dict] = []
+    thread_fold.fold_older_blocks(
+        ["a: 1"], chat=chat, subject="s", collect_stats=collected
+    )
+    assert collected == [usage]
 
 
 # ---------------------------------------------------------------------------

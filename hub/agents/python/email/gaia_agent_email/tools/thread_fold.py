@@ -144,9 +144,13 @@ def fold_older_blocks(
         ) from exc
 
     if collect_stats is not None:
-        stats = getattr(response, "stats", None)
-        if stats:
-            collect_stats.append(stats)
+        usage = getattr(response, "usage", None)
+        if isinstance(usage, dict) and usage:
+            collect_stats.append(usage)
+        else:
+            stats = getattr(response, "stats", None)
+            if isinstance(stats, dict) and stats:
+                collect_stats.append(stats)
 
     text = getattr(response, "text", None)
     if text is None:
