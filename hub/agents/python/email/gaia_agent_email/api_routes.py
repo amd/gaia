@@ -720,7 +720,17 @@ class EmailTriageService:
         self, payload: ThreadInput, chat: Any, context: Any = None
     ) -> EmailTriageResult:
         messages: List[EmailMessage] = payload.messages
+        total_count = len(messages)
         last = messages[-1]
+
+        # Message-count ceiling BEFORE any per-message string work — a cheap
+        # slice keeping the most recent messages, so an absurdly long thread
+        # never pays the O(N) join just to be folded anyway.
+        ceiling_dropped = 0
+        if total_count > DEFAULT_THREAD_FOLD_MESSAGE_CEILING:
+            ceiling_dropped = total_count - DEFAULT_THREAD_FOLD_MESSAGE_CEILING
+            messages = messages[ceiling_dropped:]
+
         # Join newest-first so the model sees the most recent context first.
         combined_body = "\n\n".join(
             f"{_format_address(m.from_)}: {m.body}" for m in reversed(messages)
@@ -729,13 +739,8 @@ class EmailTriageService:
         fold_stats: List[dict] = []
         if estimate_tokens(combined_body) > thread_budget_tokens():
             # Over budget: keep the latest message verbatim; fold everything
-            # older into ONE digest call (#1889). Ceiling applied BEFORE any
-            # per-message rendering work.
+            # older into ONE digest call (#1889).
             older = messages[:-1]
-            ceiling_dropped = 0
-            if len(older) > DEFAULT_THREAD_FOLD_MESSAGE_CEILING:
-                ceiling_dropped = len(older) - DEFAULT_THREAD_FOLD_MESSAGE_CEILING
-                older = older[ceiling_dropped:]
             older_blocks = [f"{_format_address(m.from_)}: {m.body}" for m in older]
             digest = fold_older_blocks(
                 older_blocks,
@@ -749,6 +754,13 @@ class EmailTriageService:
                 f"[Condensed summary of {len(older) + ceiling_dropped} "
                 f"earlier messages]\n{digest}"
             )
+        elif ceiling_dropped:
+            # Bounded and visible, never a silent clip (same marker as the
+            # fold input's) — newest-first join, so the marker trails where
+            # the omitted oldest messages would have been.
+            combined_body = (
+                f"{combined_body}\n\n[omitted {ceiling_dropped} older messages]"
+            )
 
         return self._build_result_llm(
             subject=last.subject,
@@ -757,12 +769,14 @@ class EmailTriageService:
             label_ids=[],
             principal=payload.principal,
             reply_to=last.from_,
-            summary_prefix=f"Thread of {len(messages)} messages. ",
+            summary_prefix=f"Thread of {total_count} messages. ",
             chat=chat,
             message_id=payload.thread_id,
             context=context,
-            # Oldest-first, matching the request's message order.
-            attachments=[a for m in messages for a in m.attachments],
+            # Oldest-first, matching the request's message order (echoed for
+            # the FULL thread — attachment metadata is cheap and downstream
+            # consumers must not silently lose items to the analysis ceiling).
+            attachments=[a for m in payload.messages for a in m.attachments],
             extra_call_stats=fold_stats,
         )
 

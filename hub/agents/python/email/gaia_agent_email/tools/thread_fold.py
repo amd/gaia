@@ -28,11 +28,13 @@ from typing import Any, List, Optional
 from gaia_agent_email.context_budget import estimate_tokens, thread_budget_tokens
 from gaia_agent_email.tools.summarize_tools import EmailSummarizeError
 
-# Hard cap on how many OLDER messages get bucketed into the fold call, applied
-# BEFORE any per-message rendering/decode work — mirrors
-# ``read_tools.DEFAULT_INBOX_SCAN_CEILING``'s role for inbox scans. Without
-# it, a thread with an absurd message count still pays full per-message
-# formatting cost before the fold call is ever built.
+# Hard cap on how many thread messages the triage surfaces consider at all,
+# applied as a cheap keep-the-most-recent slice BEFORE any per-message
+# decode/render/join work — mirrors ``read_tools.DEFAULT_INBOX_SCAN_CEILING``'s
+# role for inbox scans. Without it, a thread with an absurd message count
+# pays full O(N) MIME-decode/formatting cost just to be folded anyway.
+# Messages dropped by the ceiling surface as an explicit
+# ``[omitted N older messages]`` marker (via ``pre_omitted``), never silently.
 DEFAULT_THREAD_FOLD_MESSAGE_CEILING = 500
 
 # The fold call's own input must itself fit comfortably under budget — this

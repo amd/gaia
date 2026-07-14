@@ -167,19 +167,24 @@ combined thread body against the thread token budget derived from
   message is condensed into one digest via a **single extra LLM call** before
   triage (never a multi-pass loop). Expect one additional model call's worth
   of latency on such requests; the fold call's tokens are included in the
-  response's `usage` block. In the extreme (hundreds of messages), the oldest
-  messages are dropped from the fold input with an explicit
-  `[omitted N older messages]` marker — bounded and visible, never a silent
-  clip of recent context.
+  response's `usage` block.
 - **Fold failure** — a failed condense call is a loud error (HTTP 502 /
   `BatchItemResult.error` on the batch endpoint), never a silent fallback to
   the over-budget raw prompt.
 
-The agent-loop `summarize_thread` tool applies the same token gate: it
-replaced the tool's previous fixed 24,000-character transcript cap, so
-mid-size threads that used to be proportionally clipped now go through
-unclipped whenever they fit the token budget, and only genuinely over-budget
-threads get the latest-verbatim + condensed-older treatment.
+Independently of the token gate, threads beyond a **500-message ceiling**
+are bounded first: only the most recent 500 messages are analyzed, and the
+dropped remainder always surfaces as an explicit
+`[omitted N older messages]` marker in what reaches the model — bounded and
+visible, never a silent clip of recent context.
+
+The agent-loop `summarize_thread` tool applies the same token gate and
+ceiling: the gate replaced the tool's previous fixed 24,000-character
+transcript cap, so mid-size threads that used to be proportionally clipped
+now go through unclipped whenever they fit the token budget, and only
+genuinely over-budget threads get the latest-verbatim + condensed-older
+treatment. When the condense call ran, the tool's result `data` carries a
+`usage` block with that call's tokens (same fields as `TriageUsage`).
 
 ---
 
