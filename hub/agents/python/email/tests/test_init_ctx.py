@@ -223,6 +223,12 @@ def test_ctx_size_reported_when_models_list_unreadable(monkeypatch):
             resp = MagicMock(status_code=200)
             resp.json.return_value = health_body
             return resp
+        if url.endswith("/system-info"):
+            # #1439's resolver probes this during model resolution; NPU
+            # unavailable is the honest fixture (no auto-select implied here).
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"devices": {"amd_npu": {"available": False}}}
+            return resp
         if url.endswith("/models"):
             raise requests.exceptions.ConnectionError("boom")
         raise AssertionError(f"unexpected probe URL: {url}")
