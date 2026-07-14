@@ -6,6 +6,14 @@ icon: "clock"
 
 # Autonomy Engine -- Background Service, Heartbeat Scheduler & Event Hooks
 
+> **⚠️ Reconcile with Agent UI v2** ([agent-ui.mdx](/plans/agent-ui) +
+> [agent-ui-agent-capabilities-plan.md](/plans/agent-ui-agent-capabilities-plan) §0).
+> This doc's "always-on background service" **is** the v2 **headless custody daemon**
+> — don't build a second one. The daemon (§0.0, §0.25) owns the single scheduler
+> clock (§0.22) that this engine describes; jobs fire into the owning agent sidecar
+> via `/query`, not into an in-process loop. Read v2 §0 and treat the heartbeat/event
+> hooks below as capabilities *of the daemon*, not a separate service.
+
 > **Date:** 2026-04-01
 >
 > **Status:** Planning (0% implemented)
