@@ -225,32 +225,24 @@ _MAX_SUMMARY_CHARS = 300
 # it also governs the TCP connect, so an unreachable server blocks on the OS
 # SYN timeout (~30s) before erroring. A short connect timeout turns "server
 # down" into a prompt 502 instead of a 30s hang.
-_LEMONADE_PROBE_CONNECT_TIMEOUT = 2.0
-_LEMONADE_PROBE_READ_TIMEOUT = 3.0
+#
+# _resolve_probe_base / _probe_model_present / the two timeout constants live
+# in gaia_agent_email.model_select (#1439) — that module is the NPU-aware
+# default-model resolver's home and must stay import-light (never pulls in
+# this FastAPI router), so the shared probe helpers moved there and are
+# re-imported here rather than duplicated.
+from gaia_agent_email.model_select import (  # noqa: E402
+    _LEMONADE_PROBE_CONNECT_TIMEOUT,
+    _LEMONADE_PROBE_READ_TIMEOUT,
+    _probe_model_present,
+    _resolve_probe_base,
+    resolve_default_email_model,
+)
 
 # A model pull is a first-download of multi-GB weights — minutes, not seconds.
 # Generous ceiling so a slow link doesn't abort a real download; the connect
 # leg stays short so an unreachable server still fails fast.
 _LEMONADE_PULL_TIMEOUT = (5.0, 1800.0)
-
-
-def _resolve_probe_base(base_url: Optional[str]) -> str:
-    """Resolve the Lemonade ``/api/v1`` base URL for a health/model probe.
-
-    An explicit ``base_url`` is normalised to end in ``/api/v1`` (callers often
-    omit it); ``None`` falls back to the env-derived default via
-    ``_get_lemonade_config``. Shared by the reachability probe and the
-    model-presence probe so both target the exact same server.
-    """
-    from gaia.llm.lemonade_client import _get_lemonade_config
-
-    if base_url:
-        probe_base = base_url.rstrip("/")
-        if not probe_base.endswith("/api/v1"):
-            probe_base = f"{probe_base}/api/v1"
-        return probe_base
-    _, _, probe_base = _get_lemonade_config()
-    return probe_base
 
 
 def _probe_lemonade_health(
@@ -330,43 +322,6 @@ def _probe_lemonade_reachable(base_url: Optional[str] = None) -> Tuple[bool, str
     return reachable, probe_base
 
 
-def _probe_model_present(probe_base: str, model_id: str) -> bool:
-    """Cheaply check whether ``model_id`` is downloaded on the Lemonade server.
-
-    Queries the model list (downloaded models only) with the same short
-    timeout as the reachability probe and matches on the ``id`` field using
-    the core tolerant comparison (``user.``-prefixed registrations are listed
-    under the stripped id). Sends the resolved Lemonade auth header so an
-    authenticated server answers instead of 401-ing. Raises
-    ``requests.RequestException`` on a transport failure — the caller turns
-    that into an actionable readiness hint rather than silently reporting
-    "absent".
-
-    "Present" is intentionally cheap (a list lookup, no model load). Whether
-    the model actually *loads* (``loadable``) is not probed in v1 — forcing a
-    load is heavy, so the readiness response reports ``loadable=null``.
-    """
-    import requests
-
-    from gaia.llm.lemonade_client import (
-        _model_ids_match,
-        lemonade_auth_headers,
-        resolve_lemonade_api_key,
-    )
-
-    resp = requests.get(
-        f"{probe_base}/models",
-        headers=lemonade_auth_headers(resolve_lemonade_api_key()),
-        timeout=(_LEMONADE_PROBE_CONNECT_TIMEOUT, _LEMONADE_PROBE_READ_TIMEOUT),
-    )
-    resp.raise_for_status()
-    payload = resp.json()
-    data = payload.get("data", []) if isinstance(payload, dict) else []
-    return any(
-        isinstance(m, dict) and _model_ids_match(m.get("id"), model_id) for m in data
-    )
-
-
 def _pull_model(probe_base: str, model_id: str) -> None:
     """Tell a RUNNING Lemonade Server to download ``model_id``.
 
@@ -397,18 +352,19 @@ def _pull_model(probe_base: str, model_id: str) -> None:
     resp.raise_for_status()
 
 
-def _resolve_email_model_id() -> str:
+def _resolve_email_model_id(base_url: Optional[str] = None) -> str:
     """Resolve the Lemonade model id the email agent triages with.
 
     Mirrors the agent's own resolution (``config.model_id or
-    DEFAULT_MODEL_NAME``) so the readiness probe reports the exact model the
-    triage path will load.
+    resolve_default_email_model(base_url)``, #1439) so the readiness probe
+    reports the exact model the triage path will load — including the
+    NPU-aware auto-select, and against the SAME ``base_url`` the caller is
+    probing (a caller with an explicit non-default ``base_url`` must not
+    silently fall back to resolving against the default server).
     """
     from gaia_agent_email.config import EmailAgentConfig
 
-    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
-
-    return EmailAgentConfig().model_id or DEFAULT_MODEL_NAME
+    return EmailAgentConfig().model_id or resolve_default_email_model(base_url)
 
 
 def _parse_version(version: Optional[str]) -> Optional[Tuple[int, ...]]:
@@ -577,8 +533,18 @@ class EmailTriageService:
         # with the fix beats a generic chat-time failure with no URL/model.
         self._assert_model_present(base_url)
 
+        # #1439: the resolved model id (explicit config.model_id, or the
+        # NPU-aware auto-select) MUST reach the chat client. Omitting `model=`
+        # here would make the resolution cosmetic — /v1/email/init could
+        # report the FLM model while the real triage call silently ran the
+        # SDK's own default instead. resolve_default_email_model() is cached
+        # per probe_base, so this second resolution (the first happened
+        # inside _assert_model_present above) is not a second network probe.
+        model_id = _resolve_email_model_id(base_url)
+
         sdk_cfg = AgentConfig(
             base_url=base_url,
+            model=model_id,
             use_local_llm=True,
             use_claude=False,
             use_chatgpt=False,
@@ -636,7 +602,7 @@ class EmailTriageService:
         import requests
 
         probe_base = _resolve_probe_base(base_url)
-        model_id = _resolve_email_model_id()
+        model_id = _resolve_email_model_id(base_url)
 
         try:
             present = _probe_model_present(probe_base, model_id)
@@ -2668,7 +2634,10 @@ def _compute_init_status(base_url: Optional[str] = None) -> InitResponse:
     import requests
     from gaia_agent_email.version import MIN_LEMONADE_VERSION
 
-    model_id = _resolve_email_model_id()
+    # #1439: pass base_url through — this used to call _resolve_email_model_id()
+    # with no argument, silently resolving against the DEFAULT server even when
+    # this readiness probe targets a different one.
+    model_id = _resolve_email_model_id(base_url)
     reachable, probe_base, version, loaded_models = _probe_lemonade_health(base_url)
     compatible = (
         _version_meets_min(version, MIN_LEMONADE_VERSION) if reachable else None

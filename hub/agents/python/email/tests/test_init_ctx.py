@@ -38,10 +38,17 @@ pytest.importorskip("gaia_agent_email")
 
 
 def _fake_get_factory(*, health_body, models_present):
-    """Build a ``requests.get`` stub serving ``/health`` and ``/models``.
+    """Build a ``requests.get`` stub serving ``/health``, ``/system-info``,
+    and ``/models``.
 
     ``models_present`` controls whether ``/models`` lists the resolved model
     id (mirrors the existing pattern in test_email_agent.py:197-263).
+
+    ``/system-info`` reports the NPU as unavailable (#1439's auto-select
+    resolver short-circuits to the GGUF default on that answer) so every
+    test in this file keeps resolving to its existing implicit
+    ``model_id == DEFAULT_MODEL_NAME`` expectation -- this file is about
+    ``ctx_size`` reporting, not NPU model selection.
     """
 
     def _fake_get(url, *args, **kwargs):
@@ -50,6 +57,10 @@ def _fake_get_factory(*, health_body, models_present):
         if url.endswith("/health"):
             resp = MagicMock(status_code=200)
             resp.json.return_value = health_body
+            return resp
+        if url.endswith("/system-info"):
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"devices": {"amd_npu": {"available": False}}}
             return resp
         if url.endswith("/models"):
             model_id = _resolve_email_model_id()

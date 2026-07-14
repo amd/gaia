@@ -439,6 +439,12 @@ def test_init_endpoint_tracks_lemonade_base_url_override(monkeypatch, client):
             resp = MagicMock(status_code=200)
             resp.json.return_value = {"version": MIN_LEMONADE_VERSION}
             return resp
+        if url == f"{probe_base}/system-info":
+            # No NPU — this test is about base_url tracking (AC3), not
+            # NPU auto-select (#1439); keep the resolved model unchanged.
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"devices": {"amd_npu": {"available": False}}}
+            return resp
         if url == f"{probe_base}/models":
             resp = MagicMock(status_code=200)
             resp.json.return_value = {"data": [{"id": resolved_model_id}]}

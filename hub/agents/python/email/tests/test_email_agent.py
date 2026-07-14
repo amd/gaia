@@ -568,6 +568,12 @@ def test_llm_chat_respects_lemonade_base_url_override_env(monkeypatch):
             resp = MagicMock(status_code=200)
             resp.json.return_value = {"version": "10.2.0"}
             return resp
+        if url == "http://127.0.0.1:9555/api/v1/system-info":
+            # No NPU here — this test is about base_url redirection, not
+            # NPU auto-select (#1439); keep the resolved model unchanged.
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"devices": {"amd_npu": {"available": False}}}
+            return resp
         if url == "http://127.0.0.1:9555/api/v1/models":
             resp = MagicMock(status_code=200)
             resp.json.return_value = {"data": [{"id": resolved_model_id}]}
@@ -601,6 +607,12 @@ def test_llm_chat_respects_lemonade_base_url_explicit_param(monkeypatch):
         if url == "http://127.0.0.1:9555/api/v1/health":
             resp = MagicMock(status_code=200)
             resp.json.return_value = {"version": "10.2.0"}
+            return resp
+        if url == "http://127.0.0.1:9555/api/v1/system-info":
+            # No NPU here — this test is about base_url redirection, not
+            # NPU auto-select (#1439); keep the resolved model unchanged.
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"devices": {"amd_npu": {"available": False}}}
             return resp
         if url == "http://127.0.0.1:9555/api/v1/models":
             resp = MagicMock(status_code=200)
@@ -639,6 +651,12 @@ def test_wrong_model_raises_llm_triage_error(monkeypatch):
         if url == f"{probe_base}/health":
             resp = MagicMock(status_code=200)
             resp.json.return_value = {"version": "10.2.0"}
+            return resp
+        if url == f"{probe_base}/system-info":
+            # No NPU — this test is about the model-absent path (AC2), not
+            # NPU auto-select (#1439); keep the resolved model unchanged.
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"devices": {"amd_npu": {"available": False}}}
             return resp
         if url == f"{probe_base}/models":
             resp = MagicMock(status_code=200)
@@ -682,6 +700,12 @@ def test_wrong_model_check_transport_failure_is_loud(monkeypatch):
             resp = MagicMock(status_code=200)
             resp.json.return_value = {"version": "10.2.0"}
             return resp
+        if url == f"{probe_base}/system-info":
+            # No NPU — this test is about a /models transport failure, not
+            # NPU auto-select (#1439); keep the resolved model unchanged.
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"devices": {"amd_npu": {"available": False}}}
+            return resp
         if url == f"{probe_base}/models":
             raise requests.ConnectionError("reset by peer")
         raise AssertionError(f"unexpected probe URL: {url}")
@@ -724,6 +748,12 @@ def test_model_present_check_tolerant_of_user_dot_prefix(monkeypatch):
         if url == f"{probe_base}/health":
             resp = MagicMock(status_code=200)
             resp.json.return_value = {"version": "10.2.0"}
+            return resp
+        if url == f"{probe_base}/system-info":
+            # No NPU — this test is about the user.-prefix tolerant match,
+            # not NPU auto-select (#1439); keep the resolved model unchanged.
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"devices": {"amd_npu": {"available": False}}}
             return resp
         if url == f"{probe_base}/models":
             resp = MagicMock(status_code=200)
