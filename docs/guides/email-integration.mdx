@@ -179,41 +179,57 @@ the endpoint returns **503** with a `hint` naming exactly what to fix.
 
 ## Fast local iteration (dev mode)
 
-The frozen sidecar is ideal for production but opaque to debug: if you hit a
-triage/draft bug, there's no source to edit — you'd file an issue and wait for a
-new binary. To iterate on the agent, run its **Python source** and drive it with
-the **same npm client**. The frozen binary is that source frozen (PyInstaller
-freezes a thin re-export of `gaia_agent_email.server`), so the `/v1/email/*`
-contract is identical — **only the base URL differs from production.**
+The frozen sidecar ships for production — but it's opaque, so when you hit a
+triage or draft bug there's nothing to edit. To iterate on the agent, run its
+**Python source** instead and drive it with the **same client**. The frozen
+binary is that source frozen, so the contract is identical — **only the base URL
+changes.**
+
+**Set up once** — install the Python package editable so your edits take effect live:
 
 ```bash
-# One-time: install the Python package editable so your edits take effect live.
 pip install -e hub/agents/python/email
-
-# Run the SOURCE agent with auto-reload (caller token off for local dev):
-gaia-agent-email serve --reload            # http://127.0.0.1:8131
-#   add your core checkout so edits there reload too:
-#   gaia-agent-email serve --reload --reload-dir path/to/gaia/src
 ```
 
-Attach with `connectSidecar` — it health- and version-checks the running server,
-spawns nothing, and returns a bound client (no `child`, nothing to `shutdown()` —
-you own the `serve` process):
+**The loop:**
 
-```ts
-import { connectSidecar } from "@amd-gaia/agent-email";
+1. Start the source agent with auto-reload (caller token off for local dev):
 
-const dev = await connectSidecar({ baseUrl: "http://127.0.0.1:8131" });
-const res = await dev.client.triage({ payload: { /* … */ } });
-// Edit the Python under gaia_agent_email/, save → it auto-reloads → re-run. Seconds.
-```
+   ```bash
+   gaia-agent-email serve --reload            # http://127.0.0.1:8131
+   # editing core too? watch it as well:
+   # gaia-agent-email serve --reload --reload-dir path/to/gaia/src
+   ```
 
-`npx @amd-gaia/agent-email dev` launches the `serve` process for you
-(`--python <path>` to use a specific venv). Auto-reload restarts the server, so
-in-process `/v1/email/agent/*` sessions reset on each reload — irrelevant to the
-stateless `triage`/`draft`/`send` calls (each request is self-contained). Switch
-back to production by pointing at `startSidecar` (frozen binary) instead of
-`connectSidecar`; the client calls are unchanged.
+2. Attach your app. `connectSidecar` health- and version-checks the running
+   server, spawns nothing, and returns a bound client — same API as production:
+
+   ```ts
+   import { connectSidecar } from "@amd-gaia/agent-email";
+
+   const dev = await connectSidecar({ baseUrl: "http://127.0.0.1:8131" });
+   const res = await dev.client.triage({ payload: { /* … */ } });
+   ```
+
+3. Edit the Python under `gaia_agent_email/`, save — it reloads in ~a second — and
+   re-run your call. That's the whole loop.
+
+Prefer one command? `npx @amd-gaia/agent-email dev` starts the source server for
+you (`--python <path>` to pick a venv, `--port <n>` to rebind).
+
+**Going to production** changes one line: swap `connectSidecar` for `startSidecar`
+(which fetches + spawns the frozen binary). The calls are identical.
+
+<Note>
+  - You own the `serve` process — there's no `child` on the returned handle and
+    nothing to `shutdown()`; Ctrl+C the terminal running `serve`.
+  - Auto-reload restarts the server, so conversational `/v1/email/agent/*`
+    sessions reset on reload. The stateless `triage`/`draft`/`send` calls are
+    unaffected (each request is self-contained).
+  - Running `serve` without `GAIA_EMAIL_SIDECAR_TOKEN` disables the caller token
+    (dev only, logged loudly). Set it — and pass `authToken` to `connectSidecar` —
+    to exercise the authenticated path.
+</Note>
 
 ## Authentication
 

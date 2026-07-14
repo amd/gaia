@@ -517,8 +517,8 @@ def render_markdown(matrix: CapabilityMatrix) -> str:
     lines.append(
         "- Additionally served but **out of the frozen contract** (footnote "
         "context, not guarded machinery): `agent_routes.py` 8 session routes, "
-        "`connector_routes.py` 4 OAuth routes, `packaging/server.py` 2 inline "
-        "probes -- ~36 total routes served by the sidecar."
+        "`connector_routes.py` 4 OAuth routes, `server.py` 2 inline probes "
+        "-- ~36 total routes served by the sidecar."
     )
     lines.append("")
 

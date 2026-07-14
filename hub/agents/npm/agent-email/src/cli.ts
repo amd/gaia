@@ -287,20 +287,25 @@ async function cmdDev(args: ParsedArgs): Promise<number> {
     detached: process.platform !== "win32",
   });
 
-  let launchError: Error | undefined;
-  child.on("error", (e) => {
-    launchError = e;
-    process.stderr.write(
-      `[agent-email] failed to launch '${cmd}': ${e.message}\n` +
-        "  Is the Python package installed? `pip install -e hub/agents/python/email`\n" +
-        "  Or point at your venv: `agent-email dev --python /path/to/venv/bin/python`\n",
-    );
+  // Race readiness against an early child failure so a bad launcher (typo, missing
+  // package) fails immediately instead of waiting out the full health timeout.
+  let onErr!: (e: Error) => void;
+  let onExit!: (code: number | null, signal: NodeJS.Signals | null) => void;
+  const earlyFail = new Promise<never>((_resolve, reject) => {
+    onErr = (e) => reject(e);
+    onExit = (code, signal) =>
+      reject(new Error(`dev server exited before it was ready (code=${code} signal=${signal})`));
+    child.once("error", onErr);
+    child.once("exit", onExit);
   });
 
   const baseUrl = `http://${host}:${port}`;
   try {
     // Reload startup re-imports the app graph, so allow generous headroom.
-    const dev = await connectSidecar({ baseUrl, healthTimeoutMs: 60_000 });
+    const dev = await Promise.race([
+      connectSidecar({ baseUrl, healthTimeoutMs: 60_000 }),
+      earlyFail,
+    ]);
     process.stdout.write(`\n  ▸ Email agent (source): ${dev.baseUrl}\n`);
     process.stdout.write(`    Playground: ${dev.baseUrl}/v1/email/playground\n`);
     process.stdout.write(
@@ -311,8 +316,19 @@ async function cmdDev(args: ParsedArgs): Promise<number> {
     );
   } catch (e) {
     killDevTree(child);
-    if (launchError) return 1; // the spawn error already printed an actionable hint
-    throw e;
+    const err = e as NodeJS.ErrnoException;
+    const notFound = err.code === "ENOENT";
+    process.stderr.write(
+      `[agent-email] could not start the dev server: ${err.message}\n` +
+        (notFound
+          ? `  '${cmd}' was not found. Install the Python package (\`pip install -e hub/agents/python/email\`)\n` +
+            "  or point at your venv: `agent-email dev --python /path/to/venv/bin/python`\n"
+          : "  Check the server log above (Lemonade need not be running yet — /health is liveness-only).\n"),
+    );
+    return 1;
+  } finally {
+    child.removeListener("error", onErr);
+    child.removeListener("exit", onExit);
   }
 
   await new Promise<void>((resolve) => {
