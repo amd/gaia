@@ -99,7 +99,7 @@ def test_load_lock_bad_json_raises(tmp_path):
 def test_default_lock_path_points_at_repo_lock():
     p = plat.default_lock_path()
     assert p.name == "binaries.lock.json"
-    assert p.parts[-3:] == ("npm", "agent-email", "binaries.lock.json")
+    assert p.parts[-3:] == ("email", "npm", "binaries.lock.json")
 
 
 def test_default_lock_path_exists_and_loads():
