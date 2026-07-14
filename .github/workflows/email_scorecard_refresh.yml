@@ -197,13 +197,33 @@ jobs:
           python hub/agents/python/email/packaging/eval_drafting_report.py
           if ($LASTEXITCODE -ne 0) { throw "drafting eval failed" }
 
+      - name: Action-item extraction eval (judge-scored) — for the scorecard metric
+        env:
+          EMAIL_EVAL_MODEL: ${{ env.MODEL }}
+          # Judge credential — REQUIRED (fail-loudly, no silent skip), same as
+          # drafting. Runs the small committed action-item corpus, not the mbox.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python hub/agents/python/email/packaging/eval_action_item_report.py
+          if ($LASTEXITCODE -ne 0) { throw "action-item eval failed" }
+
+      - name: Briefing quality eval (judge-scored) — for the scorecard metric
+        env:
+          EMAIL_EVAL_MODEL: ${{ env.MODEL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python hub/agents/python/email/packaging/eval_briefing_report.py
+          if ($LASTEXITCODE -ne 0) { throw "briefing eval failed" }
+
       - name: Regenerate SCORECARD.md from the real run
         run: |
-          # --drafting-report folds draft_approval_rate into the card as a
-          # reported metric (weight 0). The drafting eval above hard-fails on a
+          # Fold every capability's judged result into the card as report-only
+          # metrics: drafting -> draft_approval_rate (weight-0 metric); spam (from
+          # the benchmark quality block, no flag needed) + action-item + briefing
+          # -> the Capability quality section. Each eval above hard-fails on a
           # missing key, so a report here is always a real judged run; a missing
           # or unjudged report makes gen_scorecard fail loudly (never omits).
-          python hub/agents/python/email/packaging/gen_scorecard.py --benchmark-dir eval-out --limit "$env:LIMIT" --drafting-report eval-out/drafting_gate_report.json
+          python hub/agents/python/email/packaging/gen_scorecard.py --benchmark-dir eval-out --limit "$env:LIMIT" --drafting-report eval-out/drafting_gate_report.json --action-item-report eval-out/action_items_report.json --briefing-report eval-out/briefing_gate_report.json
           if ($LASTEXITCODE -ne 0) { throw "gen_scorecard failed" }
 
       - name: Same-version regression check (reject a worse re-run)
