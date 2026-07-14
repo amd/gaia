@@ -3,7 +3,7 @@
 Short version: we measure how reliably the agent sorts email into the right
 priority, using a fixed set of labeled emails and comparing its answer to the
 correct one. The current result is on the
-[**Scorecard**](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SCORECARD.md)
+[**Scorecard**](https://hub.amd-gaia.ai/agents/email/0.4.0/SCORECARD.md)
 tab. This page explains what that number means and how it's measured — in plain
 terms first, with the technical recipe at the end.
 
@@ -57,7 +57,7 @@ changes.
 You need a source checkout of [amd/gaia](https://github.com/amd/gaia) and **AMD
 Ryzen AI hardware** (the npm package ships neither the test corpus nor the eval
 harness). The exact, version-stamped command lives in the
-[Scorecard's *Reproduction* section](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SCORECARD.md#reproduction)
+[Scorecard's *Reproduction* section](https://hub.amd-gaia.ai/agents/email/0.4.0/SCORECARD.md#reproduction)
 — it's auto-generated so it always matches the published number. Run that block;
 it installs the eval tools, starts a local model server, rebuilds the test emails
 from the committed seed, and runs the benchmark (~17 minutes on a 4B model).

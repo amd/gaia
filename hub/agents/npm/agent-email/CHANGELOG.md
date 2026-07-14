@@ -2,7 +2,7 @@
 
 What's new in `@amd-gaia/agent-email`, in plain language. For the technical detail
 behind any entry — API shapes, endpoints, and version semantics — see
-[`SPEC.md`](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md).
+[`SPEC.md`](https://hub.amd-gaia.ai/agents/email/0.4.0/SPEC.md).
 
 ## 0.4.0
 

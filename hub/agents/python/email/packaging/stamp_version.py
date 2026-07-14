@@ -139,6 +139,18 @@ def build_rules() -> list[Rule]:
             re.compile(r'(<span[^>]*id="ver"[^>]*>v)([^<]+)(</span>)'),
             'id="ver" badge',
         ),
+        # Versioned hub doc links (https://hub.amd-gaia.ai/agents/email/<v>/<file>)
+        # in the npm markdown docs — they pin cross-references to the R2 copy of
+        # the shipping version instead of the mutable GitHub main blob.
+        *(
+            Rule(
+                f"npm {name} hub doc links",
+                NPM_ROOT / name,
+                re.compile(r"(https://hub\.amd-gaia\.ai/agents/email/)([^\"/\s)]+)(/)"),
+                "hub doc link version",
+            )
+            for name in ("README.md", "CHANGELOG.md", "EVALUATION.md")
+        ),
     ]
 
 
