@@ -320,9 +320,11 @@ def _make_acceptance_card(
     within_one: float,
     urgent_recall: float = 0.85,
     stdev: float | None = None,
+    environment: dict | None = None,
 ) -> Path:
     """Write a SCORECARD.md whose gated aggregate is within-one-bucket, with an
-    urgent_recall secondary and (optionally) a recorded within-one stdev."""
+    urgent_recall secondary and (optionally) a recorded within-one stdev and/or
+    a run environment (e.g. {"ctx_size": 16384})."""
     metrics = [
         {"name": "within_one_bucket_accuracy", "value": within_one, "weight": 1.0},
         {"name": "urgent_recall", "value": urgent_recall, "weight": 0.0},
@@ -348,6 +350,8 @@ def _make_acceptance_card(
         generated_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
         inherited_from=None,
     )
+    if environment is not None:
+        payload.environment = environment
     path.write_text(render_scorecard(payload))
     return path
 
@@ -463,3 +467,124 @@ class TestVarianceAwareRegression:
             tmp_path / "SCORECARD.md", version="0.3.1", within_one=0.84, stdev=0.02
         )
         assert main(["--scorecard", str(cand), "--baseline-file", str(base)]) == 0
+
+
+# ---------------------------------------------------------------------------
+# Ctx-size mismatch 4-state matrix (#1892): --require-ctx-match / --allow-ctx-mismatch
+# ---------------------------------------------------------------------------
+
+
+class TestCtxSizeMismatch:
+    def test_ctx_match_passes_normally(self, tmp_path):
+        # Same ctx_size on both sides → normal regression check runs, unaffected.
+        base = _make_acceptance_card(
+            tmp_path / "base.md",
+            version="0.3.0",
+            within_one=0.84,
+            environment={"ctx_size": 16384},
+        )
+        cand = _make_acceptance_card(
+            tmp_path / "SCORECARD.md",
+            version="0.3.1",
+            within_one=0.85,
+            environment={"ctx_size": 16384},
+        )
+        assert main(["--scorecard", str(cand), "--baseline-file", str(base)]) == 0
+
+    def test_ctx_mismatch_without_flag_fails(self, tmp_path):
+        # Differing ctx_size, no override flag → not apples-to-apples: block.
+        base = _make_acceptance_card(
+            tmp_path / "base.md",
+            version="0.3.0",
+            within_one=0.84,
+            environment={"ctx_size": 32768},
+        )
+        cand = _make_acceptance_card(
+            tmp_path / "SCORECARD.md",
+            version="0.3.1",
+            within_one=0.85,
+            environment={"ctx_size": 16384},
+        )
+        assert main(["--scorecard", str(cand), "--baseline-file", str(base)]) == 1
+
+    def test_ctx_mismatch_with_allow_flag_skips_and_warns(self, tmp_path, capsys):
+        # Differing ctx_size + --allow-ctx-mismatch → regression check skipped,
+        # a warning is printed, gate exits 0 (candidate clears its own bars).
+        base = _make_acceptance_card(
+            tmp_path / "base.md",
+            version="0.3.0",
+            within_one=0.84,
+            environment={"ctx_size": 32768},
+        )
+        cand = _make_acceptance_card(
+            tmp_path / "SCORECARD.md",
+            version="0.3.1",
+            within_one=0.85,
+            environment={"ctx_size": 16384},
+        )
+        result = main(
+            [
+                "--scorecard",
+                str(cand),
+                "--baseline-file",
+                str(base),
+                "--allow-ctx-mismatch",
+            ]
+        )
+        assert result == 0
+        captured = capsys.readouterr()
+        assert "::warning::" in captured.out
+
+    def test_allow_ctx_mismatch_does_not_bypass_absolute_bars(self, tmp_path):
+        # --allow-ctx-mismatch only waives the ctx-comparison invalidity; the
+        # absolute acceptance bar must still independently apply and can still
+        # fail the gate even with the flag set.
+        base = _make_acceptance_card(
+            tmp_path / "base.md",
+            version="0.3.0",
+            within_one=0.84,
+            environment={"ctx_size": 32768},
+        )
+        cand = _make_acceptance_card(
+            tmp_path / "SCORECARD.md",
+            version="0.3.1",
+            within_one=0.85,
+            environment={"ctx_size": 16384},
+        )
+        result = main(
+            [
+                "--scorecard",
+                str(cand),
+                "--baseline-file",
+                str(base),
+                "--allow-ctx-mismatch",
+                "--min-aggregate",
+                "95",
+            ]
+        )
+        assert result == 1
+
+    def test_baseline_lacks_ctx_transitional_pass(self, tmp_path):
+        # Baseline predates ctx stamping (no environment at all); candidate has
+        # ctx_size. Comparing an implicit-old card against an explicit-ctx
+        # candidate is invalid, so the regression comparison is skipped — this
+        # is the one-time transitional grace state and passes WITHOUT the
+        # --allow-ctx-mismatch flag (distinct from the deliberate-mismatch case).
+        base = _make_acceptance_card(
+            tmp_path / "base.md", version="0.3.0", within_one=0.84
+        )
+        cand = _make_acceptance_card(
+            tmp_path / "SCORECARD.md",
+            version="0.3.1",
+            within_one=0.60,
+            environment={"ctx_size": 16384},
+        )
+        assert main(["--scorecard", str(cand), "--baseline-file", str(base)]) == 0
+
+    def test_candidate_lacks_ctx_with_require_flag_fails(self, tmp_path):
+        # --require-ctx-match demands the candidate carry an explicit ctx_size;
+        # a candidate with no environment.ctx_size at all fails hard.
+        cand = _make_acceptance_card(
+            tmp_path / "SCORECARD.md", version="0.3.1", within_one=0.85
+        )
+        assert main(["--scorecard", str(cand), "--require-ctx-match"]) == 1

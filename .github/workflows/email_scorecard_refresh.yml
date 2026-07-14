@@ -183,11 +183,15 @@ jobs:
           # them from the committed seed before the eval reads them.
           python tests/fixtures/email/generate_mbox.py
           if ($LASTEXITCODE -ne 0) { throw "generate_mbox failed" }
+          # --ctx-size 16384: pin the run to the #1892 envelope target so the
+          # refreshed card records the window it was measured under
+          # (gen_scorecard.py refuses to build an unstamped card).
           gaia eval benchmark `
             --model "$env:MODEL" `
             --mbox-path tests/fixtures/email/synthetic_inbox.mbox `
             --ground-truth tests/fixtures/email/ground_truth.json `
             --limit "$env:LIMIT" `
+            --ctx-size 16384 `
             --output-dir eval-out
           if ($LASTEXITCODE -ne 0) { throw "gaia eval benchmark failed" }
 

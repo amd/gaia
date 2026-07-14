@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Unit tests for gaia.eval.benchmark (offline — no Lemonade)."""
 
+import copy
 import json
 import os
 
@@ -10,6 +11,7 @@ import pytest
 from gaia.eval.benchmark import (
     _extract_tools_called,
     _extract_triage_results,
+    _extract_triage_usage,
     _maybe_parse_tool_envelope,
     _normalize_agent_result,
     build_result,
@@ -21,7 +23,7 @@ from gaia.eval.benchmark import (
     summarize_benchmark,
 )
 from gaia.eval.performance import PerfThresholds
-from gaia.eval.quality_metrics import QualityThresholds
+from gaia.eval.quality_metrics import QualityThresholds, compute_cost
 
 GT = {
     "_meta": {"note": "skip me"},
@@ -85,6 +87,28 @@ def _agent_result():
     }
 
 
+def _agent_result_with_usage(
+    usage=None,
+    llm_classified_count=4,
+):
+    """Deep-copied variant of ``_agent_result()`` whose triage envelope's
+    ``data`` also carries ``usage`` + ``llm_classified_count`` (Increment 1
+    shape). Never mutates the shared ``TRIAGE_ENVELOPE`` constant."""
+    if usage is None:
+        usage = {
+            "prompt_tokens": 5000,
+            "completion_tokens": 800,
+            "total_tokens": 5800,
+            "tokens_per_second": 40.0,
+        }
+    ar = _agent_result()
+    envelope = copy.deepcopy(TRIAGE_ENVELOPE)
+    envelope["data"]["usage"] = usage
+    envelope["data"]["llm_classified_count"] = llm_classified_count
+    ar["conversation"][2]["content"] = json.dumps(envelope)
+    return ar
+
+
 class TestFailLoud:
     """The upstream fork swallowed malformed tool JSON; we must raise."""
 
@@ -135,6 +159,45 @@ class TestExtractToolsCalled:
         assert _extract_tools_called(_agent_result()) == ["triage_inbox"]
 
 
+class TestExtractTriageUsage:
+    """``_extract_triage_usage`` (Increment 2): sibling walk of
+    ``_extract_triage_results`` that reads ``data.usage`` /
+    ``data.llm_classified_count`` off the first ok triage envelope."""
+
+    def test_extracts_usage_and_count_from_envelope(self):
+        ar = _agent_result_with_usage(
+            usage={
+                "prompt_tokens": 5000,
+                "completion_tokens": 800,
+                "total_tokens": 5800,
+                "tokens_per_second": 40.0,
+            },
+            llm_classified_count=4,
+        )
+        usage, count = _extract_triage_usage(ar["conversation"])
+        assert usage == {
+            "prompt_tokens": 5000,
+            "completion_tokens": 800,
+            "total_tokens": 5800,
+            "tokens_per_second": 40.0,
+        }
+        assert count == 4
+
+    def test_plain_envelope_without_usage_returns_none_zero(self):
+        # TRIAGE_ENVELOPE (the existing/absence-tolerant shape) carries no
+        # usage or llm_classified_count at all.
+        ar = _agent_result()
+        usage, count = _extract_triage_usage(ar["conversation"])
+        assert usage is None
+        assert count == 0
+
+    def test_no_triage_envelope_returns_none_zero(self):
+        convo = [{"role": "assistant", "content": "I refuse."}]
+        usage, count = _extract_triage_usage(convo)
+        assert usage is None
+        assert count == 0
+
+
 class TestBuildResult:
     def test_scorecard_compatible_and_perf(self):
         out = build_result(
@@ -180,6 +243,106 @@ class TestBuildResult:
         )
         assert out["status"] == "ERRORED"
         assert out["error"] == "backend down"
+
+
+class TestBuildResultUsageMerge:
+    """Increment 2: ``build_result`` merges the triage-classify ``usage`` block
+    into the run's token totals + adds ``tokens_per_triage`` to
+    ``performance_summary``. Absence-tolerant — a plain (no-usage) envelope
+    must leave every existing number exactly as today."""
+
+    _USAGE = {
+        "prompt_tokens": 5000,
+        "completion_tokens": 800,
+        "total_tokens": 5800,
+        "tokens_per_second": 40.0,
+    }
+
+    def _build_with_usage(self, model_id="Gemma-4-E4B-it-GGUF"):
+        return build_result(
+            _agent_result_with_usage(usage=self._USAGE, llm_classified_count=4),
+            run_id="r1",
+            timestamp="t",
+            model_id=model_id,
+            total_duration_ms=2000,
+            ground_truth=GT,
+        )
+
+    def test_merged_totals_in_performance_summary_and_top_level(self):
+        # Fixture note: _agent_result()'s top-level aggregates are
+        # input=1000/output=200/total=1200 (preferred over step sums by
+        # performance.extract_from_agent_result). Merged with the usage block
+        # (prompt=5000/completion=800/total=5800):
+        #   total_input_tokens  = 1000 + 5000 = 6000
+        #   total_output_tokens =  200 +  800 = 1000
+        #   total_tokens        = 1200 + 5800 = 7000... but per the spec the
+        #   merge adds (prompt + completion) to total_tokens, i.e. 1200 + 5800
+        #   = 7000. However total input+output alone would be 7000 too
+        #   (6000+1000); both derivations agree.
+        out = self._build_with_usage()
+        ps = out["performance_summary"]
+        assert ps["total_input_tokens"] == 6000
+        assert ps["total_output_tokens"] == 1000
+        assert ps["total_tokens"] == 7000
+        # run_to_dict output (top-level keys) reflects the same merge.
+        assert out["total_input_tokens"] == 6000
+        assert out["total_output_tokens"] == 1000
+        assert out["total_tokens"] == 7000
+
+    def test_new_performance_summary_fields_exact_values(self):
+        out = self._build_with_usage()
+        ps = out["performance_summary"]
+        assert ps["triage_llm_tokens"] == 5800
+        assert ps["llm_classified_count"] == 4
+        assert ps["tokens_per_triage"] == 1450.0
+
+    def test_avg_tps_and_ttft_unchanged_by_merge(self):
+        # avg_tokens_per_second / avg_time_to_first_token stay outer-turn
+        # derived (same values as the no-usage baseline).
+        out = self._build_with_usage()
+        ps = out["performance_summary"]
+        assert ps["avg_tokens_per_second"] == 50.0
+        assert ps["avg_time_to_first_token"] == 0.1
+
+    def test_cost_estimate_rises_with_merged_totals(self):
+        # Use a priced model so compute_cost isn't 0.0-clamped for local ids.
+        out_no_usage = build_result(
+            _agent_result(),
+            run_id="r0",
+            timestamp="t",
+            model_id="claude-sonnet-4",
+            total_duration_ms=2000,
+            ground_truth=GT,
+        )
+        out_with_usage = self._build_with_usage(model_id="claude-sonnet-4")
+
+        baseline_cost = compute_cost(1000, 200, model="claude-sonnet-4")
+        merged_cost = compute_cost(6000, 1000, model="claude-sonnet-4")
+
+        assert out_no_usage["cost_estimate"]["estimated_usd"] == baseline_cost
+        assert out_with_usage["cost_estimate"]["estimated_usd"] == merged_cost
+        assert merged_cost > baseline_cost
+
+    def test_no_usage_envelope_leaves_new_keys_absent_and_totals_unchanged(self):
+        # Plain TRIAGE_ENVELOPE (today's shape, no usage/llm_classified_count).
+        out = build_result(
+            _agent_result(),
+            run_id="r1",
+            timestamp="t",
+            model_id="Gemma-4-E4B-it-GGUF",
+            total_duration_ms=2000,
+            ground_truth=GT,
+        )
+        ps = out["performance_summary"]
+        assert "triage_llm_tokens" not in ps
+        assert "llm_classified_count" not in ps
+        assert "tokens_per_triage" not in ps
+        assert ps["total_input_tokens"] == 1000
+        assert ps["total_output_tokens"] == 200
+        assert ps["total_tokens"] == 1200
+        assert out["total_input_tokens"] == 1000
+        assert out["total_output_tokens"] == 200
+        assert out["total_tokens"] == 1200
 
 
 class TestRunBenchmarkOffline:
@@ -232,6 +395,64 @@ class TestRunBenchmarkOffline:
             agent_factory=_StubAgent,
         )
         assert os.environ["GAIA_EMAIL_TRIAGE_MAX_MESSAGES"] == "100"
+
+    def test_errored_row_still_closes_agent_db(self):
+        """A ``process_query`` failure must still release the agent's DB —
+        the ERRORED-row path (``_close_agent_db``) must run before the
+        experiment loop continues (#1892 regression pin)."""
+
+        class _StubAgentWithDb:
+            def __init__(self):
+                self.close_db_called = False
+
+            def process_query(self, prompt):
+                raise RuntimeError("boom")
+
+            def close_db(self):
+                self.close_db_called = True
+
+        created = {}
+
+        def _factory():
+            agent = _StubAgentWithDb()
+            created["agent"] = agent
+            return agent
+
+        results = run_benchmark(
+            "Gemma-4-E4B-it-GGUF",
+            mbox_path="ignored-when-factory-injected",
+            limit=2,
+            experiments=1,
+            ground_truth=GT,
+            agent_factory=_factory,
+        )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "ERRORED"
+        assert created["agent"].close_db_called is True
+
+    def test_errored_row_tolerates_agent_with_no_close_db(self):
+        """A stub agent with NO ``close_db`` attribute at all must not make
+        ``run_benchmark`` raise — the ERRORED row is still returned normally
+        (#1892 regression pin)."""
+
+        class _StubAgentNoDb:
+            def process_query(self, prompt):
+                raise RuntimeError("boom")
+
+        assert not hasattr(_StubAgentNoDb(), "close_db")
+
+        results = run_benchmark(
+            "Gemma-4-E4B-it-GGUF",
+            mbox_path="ignored-when-factory-injected",
+            limit=2,
+            experiments=1,
+            ground_truth=GT,
+            agent_factory=_StubAgentNoDb,
+        )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "ERRORED"
 
 
 class TestCategorizationExportInResult:
@@ -552,6 +773,146 @@ class TestPerfGateInBenchmark:
         assert pth.pipeline_max_s == 2700.0
         assert pth.peak_memory_max_gb == 16.0
         assert pth.enforce is False
+
+
+class TestCtxSizeEnvelope:
+    """16K-target/32K-max ctx-window envelope for the email benchmark (#1892).
+
+    RED-first: none of these kwargs/behaviors exist yet in benchmark.py.
+    """
+
+    def test_build_result_stamps_ctx_size(self):
+        # TARGET: build_result accepts a ctx_size kwarg and stamps it at the top
+        # level of the returned dict. Fails RED today with TypeError (ctx_size
+        # isn't a build_result param yet); goes green when the kwarg lands.
+        result = build_result(
+            _agent_result(),
+            run_id="x",
+            timestamp="t",
+            model_id="m",
+            total_duration_ms=100,
+            ctx_size=16384,
+        )
+        assert result["ctx_size"] == 16384
+
+    def test_build_result_omits_ctx_size_when_not_given(self):
+        # TARGET: when ctx_size is omitted the key is simply absent (cleanest for
+        # downstream JSON — never a null to special-case). Passes today already,
+        # and must keep passing once the kwarg is added with a None default.
+        result = build_result(
+            _agent_result(),
+            run_id="x",
+            timestamp="t",
+            model_id="m",
+            total_duration_ms=100,
+        )
+        assert "ctx_size" not in result
+
+    def test_run_benchmark_accepts_ctx_size_kwarg(self):
+        # TARGET: run_benchmark accepts a ctx_size kwarg and stamps the resolved
+        # ctx into every returned result (including the agent_factory path, which
+        # bypasses EmailAgentConfig construction). Fails RED today with TypeError
+        # (no such kwarg); goes green when run_benchmark threads ctx_size into
+        # build_result for each experiment.
+        class _StubAgent:
+            def process_query(self, prompt):
+                return _agent_result()
+
+        results = run_benchmark(
+            "m",
+            mbox_path="ignored",
+            ctx_size=16384,
+            experiments=1,
+            agent_factory=_StubAgent,
+        )
+        assert results
+        assert all(r["ctx_size"] == 16384 for r in results)
+
+    def test_run_benchmark_records_overflow_as_errored_row(self):
+        # TARGET (fixed) behavior: a single experiment's process_query raising
+        # (e.g. a context-overflow error) must be caught and recorded as one
+        # ERRORED row, not abort the whole run. Today there is no try/except
+        # around `agent.process_query(prompt)` in run_benchmark, so this test
+        # currently fails RED — not with a clean assertion failure, but with the
+        # injected RuntimeError propagating out of run_benchmark uncaught. That
+        # is the correct (if noisy) red state per the TDD brief for this test.
+        calls = {"n": 0}
+
+        class _StubAgent:
+            def process_query(self, prompt):
+                calls["n"] += 1
+                if calls["n"] == 2:
+                    raise RuntimeError("context size (4096")
+                return _agent_result()
+
+        results = run_benchmark(
+            "m",
+            mbox_path="ignored",
+            experiments=3,
+            agent_factory=_StubAgent,
+        )
+        assert len(results) == 3
+        assert results[1]["status"] == "ERRORED"
+        assert "error" in results[1]
+        assert results[0]["status"] != "ERRORED"
+        assert results[2]["status"] != "ERRORED"
+
+    def test_run_benchmark_propagates_ctx_readback_errors(self):
+        # ASSUMED SEAM: real ctx readback-verification is performed inside
+        # EmailTriageAgent.__init__ (owned by a different file/agent in this
+        # parallel work split). This test only pins that run_benchmark must NOT
+        # swallow that exception — it must propagate it loudly, never silently
+        # continue with a mismatched ctx. We simulate the real wiring's failure
+        # mode by having the injected agent_factory itself raise, since we
+        # cannot drive real EmailTriageAgent construction from this offline
+        # slice.
+        # Today this fails RED with TypeError (ctx_size isn't a run_benchmark
+        # kwarg yet) rather than the intended RuntimeError match — still the
+        # correct red state; once ctx_size is wired this assertion pins that
+        # the readback RuntimeError propagates through run_benchmark unchanged.
+        def _agent_factory():
+            raise RuntimeError("ctx readback mismatch: requested=4096 actual=16384")
+
+        with pytest.raises(RuntimeError, match="ctx readback mismatch"):
+            run_benchmark(
+                "m",
+                mbox_path="ignored",
+                ctx_size=4096,
+                agent_factory=_agent_factory,
+            )
+
+
+class TestCtxSizeOutputStamping:
+    """quality.json / scorecard.json ctx_size stamping contract (#1892)."""
+
+    def test_benchmark_outputs_stamp_ctx(self):
+        # DESIGN CHOICE (flagged for the implementer): asserting top-level
+        # placement of ctx_size on both summary["quality"] and
+        # summary["scorecard"] — not nested under "performance". If a nested
+        # placement (summary["scorecard"]["performance"]["ctx_size"]) is chosen
+        # instead, this assertion needs updating; top-level is preferred because
+        # it's the simplest, most-discoverable place for a comparison tool to
+        # read the run's ctx envelope from.
+        results = [
+            build_result(
+                _agent_result(),
+                run_id=f"r{i}",
+                timestamp="t",
+                model_id="Gemma-4-E4B-it-GGUF",
+                total_duration_ms=2000,
+                ground_truth=GT,
+            )
+            for i in range(2)
+        ]
+        # Stamp ctx_size onto the canned result dicts directly (build_result
+        # doesn't support ctx_size yet — see TestCtxSizeEnvelope above), so this
+        # test isolates the summarize_benchmark stamping contract on its own.
+        for r in results:
+            r["ctx_size"] = 16384
+
+        summary = summarize_benchmark(results, run_id="x")
+        assert summary["quality"]["ctx_size"] == 16384
+        assert summary["scorecard"]["ctx_size"] == 16384
 
 
 if __name__ == "__main__":

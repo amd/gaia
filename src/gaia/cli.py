@@ -1104,6 +1104,41 @@ def _show_interactive_menu(log=None):
         print("  Run 'gaia --help' for all commands.")
 
 
+def _compare_benchmark_ctx(current_ctx, baseline, baseline_path):
+    """Guard ``gaia eval benchmark --compare`` against cross-ctx comparisons (#1892).
+
+    A throughput/quality baseline measured at one context window is not
+    comparable to a run measured at another. Raises ``SystemExit`` when both
+    sides record a ``ctx_size`` and they differ; prints a single loud legacy
+    warning (and proceeds) when either side lacks the field.
+    """
+    baseline_ctx = baseline.get("ctx_size")
+    if baseline_ctx is None:
+        print(
+            f"[COMPARE] WARNING: baseline {baseline_path} records no ctx_size "
+            "(legacy pre-#1892 card, measured at an unpinned window — "
+            "implicitly the model's 64K registry floor). The comparison "
+            "proceeds but is NOT ctx-verified; re-record the baseline with "
+            "--ctx-size to make it comparable."
+        )
+        return
+    if current_ctx is None:
+        print(
+            f"[COMPARE] WARNING: this run records no ctx_size but baseline "
+            f"{baseline_path} was measured at ctx={baseline_ctx}; the "
+            "comparison proceeds but is NOT ctx-verified."
+        )
+        return
+    if int(baseline_ctx) != int(current_ctx):
+        raise SystemExit(
+            f"[ERROR] ctx mismatch: this run measured ctx_size={current_ctx} "
+            f"but the baseline at {baseline_path} records "
+            f"ctx_size={baseline_ctx}. Comparing runs across different "
+            f"context windows is invalid — rerun with --ctx-size "
+            f"{baseline_ctx}, or record a new baseline at {current_ctx}."
+        )
+
+
 def _print_reliability_summary(scorecards, pass_threshold=0.90):
     """Print a reliability summary table from multiple eval iteration scorecards.
 
@@ -2535,6 +2570,16 @@ Examples:
         "--save-baseline",
         action="store_true",
         help="Save this run's scorecard as the throughput baseline.",
+    )
+    benchmark_eval_parser.add_argument(
+        "--ctx-size",
+        type=int,
+        default=None,
+        help="Exact ctx window to pin the model load to (#1892 envelope: "
+        "16384 target / 32768 max; default: the target). The run verifies "
+        "the pin by readback and stamps it into scorecard.json/quality.json. "
+        "Values above the envelope max are allowed for deliberate sweeps "
+        "but warned loudly.",
     )
 
     # Add new subparser for generating summary reports from evaluation directories
@@ -4392,6 +4437,14 @@ Let me know your answer!
                     "quality scoring skipped"
                 )
 
+            if args.ctx_size is not None and args.ctx_size <= 0:
+                print(
+                    f"[ERROR] --ctx-size must be a positive token count, got "
+                    f"{args.ctx_size}. Use e.g. 16384 (the #1892 envelope "
+                    "target) or omit the flag for the default."
+                )
+                sys.exit(1)
+
             # ignore_cleanup_errors: the benchmark's per-email SQLite state.db can
             # still hold a Windows file lock when the block exits (WinError 32 on
             # rmtree). `results` is already captured, and the temp dir is a
@@ -4408,6 +4461,7 @@ Let me know your answer!
                     base_url=args.backend,
                     ground_truth=ground_truth,
                     db_path=str(Path(tmp) / "state.db"),
+                    ctx_size=args.ctx_size,
                 )
 
             run_id = f"bench-{args.model.replace('/', '-').lower()}"
@@ -4428,6 +4482,10 @@ Let me know your answer!
                 f"(bar ≥{THROUGHPUT_BAR_TPS}, stretch {THROUGHPUT_STRETCH_TPS})"
             )
             print(f"  TTFT:         {ttft} s")
+            print(
+                f"  Ctx window:   "
+                f"{summary['scorecard'].get('ctx_size', 'unpinned (legacy)')}"
+            )
             if results and isinstance(results[0].get("quality"), dict):
                 print(f"  Category acc: {results[0]['quality']['category_accuracy']}")
             print(
@@ -4492,6 +4550,13 @@ Let me know your answer!
                     print(f"[ERROR] baseline not found: {cmp_path}")
                     sys.exit(1)
                 base = json.loads(cmp_path.read_text(encoding="utf-8"))
+                # Ctx envelope guard (#1892): a baseline measured at a
+                # different window is not comparable — hard error.
+                _compare_benchmark_ctx(
+                    current_ctx=summary["scorecard"].get("ctx_size"),
+                    baseline=base,
+                    baseline_path=str(cmp_path),
+                )
                 base_tps = base.get("performance", {}).get("avg_tokens_per_second")
                 if isinstance(base_tps, (int, float)) and isinstance(tps, (int, float)):
                     print(

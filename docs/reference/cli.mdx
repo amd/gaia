@@ -1798,8 +1798,9 @@ gaia eval benchmark [OPTIONS]
 | `--ground-truth` | str | fixture's | Ground-truth JSON for quality scoring |
 | `--backend` | str | agent default | Lemonade base URL |
 | `--output-dir` | str | — | Write `scorecard.json` / `summary.md` / `variance.json` |
-| `--compare` | path | — | Compare throughput against a saved baseline (non-gating) |
+| `--compare` | path | — | Compare throughput against a saved baseline (non-gating for throughput; a ctx-window mismatch vs the baseline is a hard error) |
 | `--save-baseline` | flag | off | Save this run's scorecard as the throughput baseline |
+| `--ctx-size` | int | `16384` | Exact ctx window to pin the model load to (#1892 envelope: 16384 target / 32768 max). Verified by readback and stamped into `scorecard.json` / `quality.json`; values above the envelope max are allowed but warned loudly |
 
 <CodeGroup>
 ```bash Benchmark the primary model
@@ -1812,6 +1813,10 @@ gaia eval benchmark --experiments 3 --save-baseline
 
 ```bash Compare against a saved baseline
 gaia eval benchmark --compare eval/results/bench_baseline.json
+```
+
+```bash Measure a non-default ctx sweep point
+gaia eval benchmark --ctx-size 4096 --experiments 1
 ```
 </CodeGroup>
 

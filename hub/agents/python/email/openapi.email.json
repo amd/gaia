@@ -1776,7 +1776,7 @@
                 "type": "null"
               }
             ],
-            "description": "LLM usage metrics (tokens + aggregate TPS) for this triage. Null on the heuristic-only path where no LLM call was made."
+            "description": "LLM usage metrics (tokens + aggregate TPS) for this triage. Null on the heuristic-only path where no LLM call was made. Compare prompt_tokens against the agent's context-window envelope (16K target / 32K max, #1892) to see how much of the window a payload consumed."
           }
         },
         "required": [
@@ -2017,6 +2017,18 @@
         "additionalProperties": false,
         "description": "Presence (and, when cheap, loadability) of the triage model.",
         "properties": {
+          "ctx_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The context window the model is CURRENTLY loaded at, as reported by the server's /health (recipe_options.ctx_size). Null whenever the model is not loaded right now or the server does not report a ctx — never a config echo or a guess (#1892). Compare against the envelope (16384 target / 32768 max) to see what window a run would actually measure.",
+            "title": "Ctx Size"
+          },
           "id": {
             "description": "Resolved Lemonade model id for triage.",
             "title": "Id",

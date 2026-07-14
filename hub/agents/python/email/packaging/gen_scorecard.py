@@ -197,6 +197,16 @@ def _compute_performance(judged: list) -> Optional[dict]:
         "throughput_tps": _mean("avg_tokens_per_second"),
         "pipeline_s": _mean("pipeline_latency_s"),
         "peak_memory_gb": _mean("peak_memory_gb"),
+        # Token accounting (#1891). REPORTED only — do NOT gate
+        # tokens_per_triage without a committed baseline (#1894 trust model);
+        # see _tokens_per_triage_comment in quality_gate_thresholds.json.
+        # tokens_per_triage = triage classify-call tokens / LLM-classified
+        # emails ONLY (pinned in gaia.eval.benchmark.build_result), so
+        # cross-release comparisons must hold the corpus fixed.
+        "total_input_tokens": _mean("total_input_tokens"),
+        "total_output_tokens": _mean("total_output_tokens"),
+        "tokens_per_triage": _mean("tokens_per_triage"),
+        "llm_classified_count": _mean("llm_classified_count"),
     }
     emails = [
         int(ps["total_emails"])
@@ -859,6 +869,25 @@ def main(argv=None) -> int:
     except (FileNotFoundError, ValueError, json.JSONDecodeError):
         _model = None
 
+    # Ctx envelope (#1892): REQUIRED, unlike the soft _model pre-read above.
+    # The benchmark stamps the readback ctx into quality.json; a release card
+    # that cannot state the window it was measured under must not be built.
+    try:
+        _quality = _load_quality_aggregate(benchmark_dir)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    _ctx_size = _quality.get("ctx_size") if isinstance(_quality, dict) else None
+    if not isinstance(_ctx_size, int) or isinstance(_ctx_size, bool):
+        print(
+            f"ERROR: quality.json in {benchmark_dir} is missing or lacks an "
+            "integer 'ctx_size'. Re-run the benchmark with the #1892-aware "
+            "harness ('gaia eval benchmark --ctx-size ... --output-dir ...') "
+            "so the scorecard records the ctx window it was measured under.",
+            file=sys.stderr,
+        )
+        return 1
+
     # Resolve lemonade_version: flag wins, then live query.
     lemonade_version: Optional[str] = args.lemonade_version
     if not lemonade_version:
@@ -880,6 +909,7 @@ def main(argv=None) -> int:
         "gaia_commit": gaia_commit,
         "lemonade_version": lemonade_version,
         **({"model": _model} if _model else {}),
+        "ctx_size": _ctx_size,
         "hardware": args.hardware,
     }
     if args.temperature is not None:

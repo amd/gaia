@@ -1418,6 +1418,110 @@ class TestBreakdownAdapter:
         assert "peak_memory_gb" not in payload.performance
         assert payload.performance["throughput_tps"] == 12.1
 
+    def test_performance_folds_triage_token_metrics(self, tmp_path):
+        """Increment 2: tokens_per_triage / llm_classified_count / token totals
+        are meaned into payload.performance alongside the existing perf keys."""
+        mod = self._load_gen_scorecard()
+        scorecard = {
+            "run_id": "tokens",
+            "scenarios": [
+                {
+                    "category": "Gemma-4-E4B-it-GGUF",
+                    "status": "PASS",
+                    "total_emails": 20,
+                    "quality": {
+                        "category_accuracy": 0.5,
+                        "within_one_bucket_accuracy": 0.8,
+                    },
+                    "performance_summary": {
+                        "avg_time_to_first_token": 8.5,
+                        "avg_tokens_per_second": 12.1,
+                        "pipeline_latency_s": 760.0,
+                        "peak_memory_gb": 6.2,
+                        "total_emails": 20,
+                        "tokens_per_triage": 1450.0,
+                        "llm_classified_count": 4,
+                        "total_input_tokens": 6000,
+                        "total_output_tokens": 1000,
+                    },
+                }
+            ],
+        }
+        bd = self._make_benchmark_dir(tmp_path, scorecard)
+        payload = mod.build_payload(bd, self._make_gt(tmp_path))
+        assert payload.performance is not None
+        assert payload.performance["tokens_per_triage"] == 1450.0
+        assert payload.performance["llm_classified_count"] == 4
+        assert payload.performance["total_input_tokens"] == 6000.0
+        assert payload.performance["total_output_tokens"] == 1000.0
+
+    def test_performance_drops_unmeasured_triage_token_metrics(self, tmp_path):
+        """No triage-token keys in performance_summary -> none of the four new
+        keys appear in payload.performance (drop-if-absent, mirrors the
+        existing peak_memory_gb=0.0 drop test)."""
+        mod = self._load_gen_scorecard()
+        scorecard = {
+            "run_id": "no-tokens",
+            "scenarios": [
+                {
+                    "category": "m",
+                    "status": "PASS",
+                    "total_emails": 20,
+                    "quality": {
+                        "category_accuracy": 0.5,
+                        "within_one_bucket_accuracy": 0.8,
+                    },
+                    "performance_summary": {
+                        "avg_time_to_first_token": 8.5,
+                        "avg_tokens_per_second": 12.1,
+                        "pipeline_latency_s": 760.0,
+                        "peak_memory_gb": 6.2,
+                        "total_emails": 20,
+                    },
+                }
+            ],
+        }
+        bd = self._make_benchmark_dir(tmp_path, scorecard)
+        payload = mod.build_payload(bd, self._make_gt(tmp_path))
+        assert payload.performance is not None
+        assert "tokens_per_triage" not in payload.performance
+        assert "llm_classified_count" not in payload.performance
+        assert "total_input_tokens" not in payload.performance
+        assert "total_output_tokens" not in payload.performance
+        assert payload.performance["throughput_tps"] == 12.1
+
+    def test_performance_means_tokens_per_triage_across_scenarios(self, tmp_path):
+        """Two judged scenarios with different tokens_per_triage -> the mean."""
+        mod = self._load_gen_scorecard()
+
+        def _scenario(tpt):
+            return {
+                "category": "Gemma-4-E4B-it-GGUF",
+                "status": "PASS",
+                "total_emails": 20,
+                "quality": {
+                    "category_accuracy": 0.5,
+                    "within_one_bucket_accuracy": 0.8,
+                },
+                "performance_summary": {
+                    "avg_time_to_first_token": 8.5,
+                    "avg_tokens_per_second": 12.1,
+                    "pipeline_latency_s": 760.0,
+                    "peak_memory_gb": 6.2,
+                    "total_emails": 20,
+                    "tokens_per_triage": tpt,
+                    "llm_classified_count": 4,
+                },
+            }
+
+        scorecard = {
+            "run_id": "tokens-mean",
+            "scenarios": [_scenario(1400.0), _scenario(1500.0)],
+        }
+        bd = self._make_benchmark_dir(tmp_path, scorecard)
+        payload = mod.build_payload(bd, self._make_gt(tmp_path))
+        assert payload.performance["tokens_per_triage"] == 1450.0
+
     def test_performance_none_when_no_summary(self, tmp_path):
         """No performance_summary in any scenario -> perf block omitted."""
         mod = self._load_gen_scorecard()
@@ -1769,3 +1873,146 @@ class TestEnvironmentAdapter:
         recovered = parsed["recipe"]["environment"]
         assert recovered["gaia_commit"] == "abc1234"
         assert recovered["temperature"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# 15. Task: ctx_size pre-read (main() reads quality.json, fails loud if absent)
+# ---------------------------------------------------------------------------
+
+
+class TestGenScorecardCtxSizePreRead:
+    """main() must pre-read ctx_size from quality.json (via the existing
+    _load_quality_aggregate helper) and fail loud when it is unavailable —
+    unlike the soft/optional `_model` pre-read from scorecard.json.
+    """
+
+    def _load_gen_scorecard(self):
+        adapter_path = (
+            Path(__file__).parents[3]
+            / "hub"
+            / "agents"
+            / "python"
+            / "email"
+            / "packaging"
+            / "gen_scorecard.py"
+        )
+        spec = importlib.util.spec_from_file_location("gen_scorecard", adapter_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def _make_benchmark_dir(self, tmp_path):
+        benchmark_dir = tmp_path / "benchmark"
+        benchmark_dir.mkdir()
+        scorecard = {
+            "run_id": "ctx-fixture",
+            "scenarios": [
+                {
+                    "category": "Gemma-4-E4B-it-GGUF",
+                    "status": "PASS",
+                    "total_emails": 10,
+                    "quality": {
+                        "category_accuracy": 0.5,
+                        "within_one_bucket_accuracy": 0.8,
+                    },
+                }
+            ],
+        }
+        (benchmark_dir / "scorecard.json").write_text(json.dumps(scorecard))
+        gt = {"a": {"label": "x"}}
+        gt_path = tmp_path / "gt.json"
+        gt_path.write_text(json.dumps(gt))
+        return benchmark_dir, gt_path
+
+    def _main_argv(self, benchmark_dir, gt_path, output_dir):
+        # --lemonade-version is passed explicitly so main() never attempts a
+        # live health-endpoint query in this unit test.
+        return [
+            "--benchmark-dir",
+            str(benchmark_dir),
+            "--ground-truth",
+            str(gt_path),
+            "--output-dir",
+            str(output_dir),
+            "--lemonade-version",
+            "10.9.0",
+        ]
+
+    def test_main_emits_ctx_size_in_environment_from_quality_json(self, tmp_path):
+        mod = self._load_gen_scorecard()
+        benchmark_dir, gt_path = self._make_benchmark_dir(tmp_path)
+        (benchmark_dir / "quality.json").write_text(
+            json.dumps(
+                {
+                    "ctx_size": 16384,
+                    "within_one_bucket_accuracy": 0.8,
+                }
+            )
+        )
+        output_dir = tmp_path / "out"
+
+        rc = mod.main(self._main_argv(benchmark_dir, gt_path, output_dir))
+
+        assert rc == 0
+        card_path = output_dir / "SCORECARD.md"
+        parsed = parse_scorecard(card_path.read_text(encoding="utf-8"))
+        assert parsed["recipe"]["environment"]["ctx_size"] == 16384
+
+    def test_main_fails_loud_when_quality_json_missing(self, tmp_path):
+        mod = self._load_gen_scorecard()
+        benchmark_dir, gt_path = self._make_benchmark_dir(tmp_path)
+        # No quality.json written at all.
+        output_dir = tmp_path / "out"
+
+        rc = mod.main(self._main_argv(benchmark_dir, gt_path, output_dir))
+
+        assert rc != 0
+
+    def test_main_fails_loud_when_quality_json_lacks_ctx_size(self, tmp_path):
+        mod = self._load_gen_scorecard()
+        benchmark_dir, gt_path = self._make_benchmark_dir(tmp_path)
+        (benchmark_dir / "quality.json").write_text(
+            json.dumps({"within_one_bucket_accuracy": 0.8})
+        )
+        output_dir = tmp_path / "out"
+
+        rc = mod.main(self._main_argv(benchmark_dir, gt_path, output_dir))
+
+        assert rc != 0
+
+    def test_build_payload_still_gains_no_new_file_reading_for_ctx_size(self, tmp_path):
+        # Regression guard -- should already pass; proves build_payload never
+        # gains ctx-file-reading. environment is embedded verbatim regardless
+        # of what main() does to assemble it.
+        mod = self._load_gen_scorecard()
+        benchmark_dir = tmp_path / "benchmark"
+        benchmark_dir.mkdir()
+        scorecard = {
+            "run_id": "ctx-verbatim",
+            "scenarios": [
+                {
+                    "category": "Gemma-4-E4B-it-GGUF",
+                    "status": "PASS",
+                    "total_emails": 10,
+                    "quality": {
+                        "category_accuracy": 0.5,
+                        "within_one_bucket_accuracy": 0.8,
+                    },
+                }
+            ],
+        }
+        (benchmark_dir / "scorecard.json").write_text(json.dumps(scorecard))
+        gt = {"a": {"label": "x"}}
+        gt_path = tmp_path / "gt.json"
+        gt_path.write_text(json.dumps(gt))
+
+        env = {
+            "gaia_commit": "deadbeef",
+            "lemonade_version": "10.9.0",
+            "model": "Gemma-4-E4B-it-GGUF",
+            "hardware": "AMD Ryzen AI MAX+ (Strix Halo)",
+            "ctx_size": 16384,
+        }
+        payload = mod.build_payload(benchmark_dir, gt_path, environment=env)
+
+        assert payload.environment["ctx_size"] == 16384

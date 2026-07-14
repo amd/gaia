@@ -34,6 +34,7 @@ from gaia_agent_email.tools.triage_heuristics import (
     classify_category_heuristic,
     group_by_category,
 )
+from gaia_agent_email.tools.usage import aggregate_usage_stats
 from gaia_agent_email.verbose import (
     log_tool_call,
     log_triage_decision,
@@ -230,6 +231,42 @@ def _thread_message_sort_key(msg: Dict[str, Any]) -> int:
         return 0
 
 
+def _thread_message_blocks(
+    messages: List[Dict[str, Any]],
+    *,
+    per_message_body_limit: int,
+    start_index: int = 1,
+    total_count: Optional[int] = None,
+) -> List[str]:
+    """Render each message (already sorted) as one numbered, wrapped block.
+
+    Shared by :func:`_format_thread_for_summary` (the full-thread join) and
+    the #1889 over-budget fold path (message-boundary bucketing) so there is
+    exactly one place that defines what a message block looks like — no
+    duplicate formatting to drift.
+    """
+    total = total_count if total_count is not None else len(messages)
+    blocks: List[str] = []
+    for offset, msg in enumerate(messages):
+        idx = start_index + offset
+        payload = msg.get("payload") or {}
+        headers = {
+            (h.get("name") or "").lower(): h.get("value", "")
+            for h in payload.get("headers", [])
+        }
+        body, _attachments = decode_message_body(payload)
+        body = (body or "").strip()
+        if per_message_body_limit > 0 and len(body) > per_message_body_limit:
+            body = body[:per_message_body_limit] + "\n...[truncated]"
+        blocks.append(
+            f"--- Message {idx} of {total} ---\n"
+            f"From: {headers.get('from', '')}\n"
+            f"Date: {headers.get('date', '')}\n"
+            f"{wrap_untrusted_body(body)}"
+        )
+    return blocks
+
+
 def _format_thread_for_summary(
     messages: List[Dict[str, Any]],
     *,
@@ -252,7 +289,8 @@ def _format_thread_for_summary(
     target, not a hard ceiling: ``THREAD_MIN_PER_MESSAGE_CHARS`` is a per-message
     floor, so a thread with very many messages can still exceed the target
     (floor × count) rather than starve each message below readability.
-    ``None`` disables the cap entirely.
+    ``None`` disables the cap entirely — used by the #1889 token-budget gate,
+    which replaces this char cap as the fits criterion.
     """
     ordered = sorted(messages, key=_thread_message_sort_key)
     effective_body_limit = per_message_body_limit
@@ -264,23 +302,9 @@ def _format_thread_for_summary(
         )
         if effective_body_limit <= 0 or fair_share < effective_body_limit:
             effective_body_limit = fair_share
-    blocks: List[str] = []
-    for idx, msg in enumerate(ordered, start=1):
-        payload = msg.get("payload") or {}
-        headers = {
-            (h.get("name") or "").lower(): h.get("value", "")
-            for h in payload.get("headers", [])
-        }
-        body, _attachments = decode_message_body(payload)
-        body = (body or "").strip()
-        if effective_body_limit > 0 and len(body) > effective_body_limit:
-            body = body[:effective_body_limit] + "\n...[truncated]"
-        blocks.append(
-            f"--- Message {idx} of {len(ordered)} ---\n"
-            f"From: {headers.get('from', '')}\n"
-            f"Date: {headers.get('date', '')}\n"
-            f"{wrap_untrusted_body(body)}"
-        )
+    blocks = _thread_message_blocks(
+        ordered, per_message_body_limit=effective_body_limit
+    )
     return "\n\n".join(blocks)
 
 
@@ -309,7 +333,6 @@ def summarize_thread_impl(
     thread_id: str,
     max_chars: Optional[int] = None,
     per_message_body_limit: int = DEFAULT_BODY_LIMIT_CHARS,
-    max_total_transcript_chars: Optional[int] = DEFAULT_THREAD_TRANSCRIPT_CHARS,
     debug: bool = False,
 ) -> Dict[str, Any]:
     """Summarize a whole email thread, comprehending the FULL conversation.
@@ -325,14 +348,34 @@ def summarize_thread_impl(
     collapsing to a latest-only summary (repo "No Silent Fallbacks" rule). The
     user-turn prompt is thread-shaped (no single-email body clip) so the whole
     conversation reaches the model.
+
+    The token-budget gate (#1889) REPLACES the legacy
+    ``max_total_transcript_chars`` fair-share char cap as the fits criterion:
+    the full, uncapped transcript is tried first and used unchanged whenever
+    it fits ``context_budget.thread_budget_tokens()`` — a thread between the
+    old 24K-char cap and the token budget is no longer clipped. Only when the
+    full transcript doesn't fit does the thread get folded: the latest
+    message stays verbatim and every older message is condensed into ONE
+    digest via a single LLM call (``tools.thread_fold``). Threads beyond the
+    message-count ceiling are pre-sliced to the most recent
+    ``DEFAULT_THREAD_FOLD_MESSAGE_CEILING`` messages BEFORE any per-message
+    decode (explicit ``[omitted N older messages]`` marker, never silent).
+    When the fold ran, the result carries its LLM usage under ``usage`` (a
+    plain dict via ``aggregate_usage_stats``, #1891); the fits path has no
+    extra call, so no ``usage`` key.
     """
-    # Deferred import: ``summarize_tools`` imports from this module, so a
-    # top-level import would create a cycle.
+    # Deferred imports: these modules import from this one, so a top-level
+    # import would create a cycle.
+    from gaia_agent_email.context_budget import estimate_tokens, thread_budget_tokens
     from gaia_agent_email.tools.summarize_tools import (
         _THREAD_SYSTEM_PROMPT,
         DEFAULT_SUMMARY_CHAR_LIMIT,
         EmailSummarizeError,
         _bound_to_length,
+    )
+    from gaia_agent_email.tools.thread_fold import (
+        DEFAULT_THREAD_FOLD_MESSAGE_CEILING,
+        fold_older_blocks,
     )
 
     if max_chars is None:
@@ -355,16 +398,54 @@ def summarize_thread_impl(
             )
 
         ordered = sorted(messages, key=_thread_message_sort_key)
+        total_count = len(ordered)
         first_headers = {
             (h.get("name") or "").lower(): h.get("value", "")
             for h in (ordered[0].get("payload") or {}).get("headers", [])
         }
         subject = first_headers.get("subject", "")
-        transcript = _format_thread_for_summary(
-            ordered,
-            per_message_body_limit=per_message_body_limit,
-            max_total_transcript_chars=max_total_transcript_chars,
+
+        # Message-count ceiling BEFORE any per-message decode/render work — a
+        # cheap slice keeping the most recent messages, so an absurdly long
+        # thread never pays O(N) MIME decoding just to be folded anyway.
+        ceiling_dropped = 0
+        if total_count > DEFAULT_THREAD_FOLD_MESSAGE_CEILING:
+            ceiling_dropped = total_count - DEFAULT_THREAD_FOLD_MESSAGE_CEILING
+            ordered = ordered[ceiling_dropped:]
+
+        # Render each message exactly ONCE (one decode per message — both the
+        # fits check and the fold reuse these blocks). The joined blocks are
+        # byte-identical to the pre-existing uncapped renderer's output
+        # (``_format_thread_for_summary(..., max_total_transcript_chars=None)``),
+        # which delegates to the same ``_thread_message_blocks``.
+        blocks = _thread_message_blocks(
+            ordered, per_message_body_limit=per_message_body_limit
         )
+        full_transcript = "\n\n".join(blocks)
+        fold_stats: List[dict] = []
+        if estimate_tokens(full_transcript) <= thread_budget_tokens():
+            transcript = full_transcript
+            if ceiling_dropped:
+                # Bounded and visible, never a silent clip (same marker as the
+                # fold input's) — oldest-first transcript, so it leads.
+                transcript = (
+                    f"[omitted {ceiling_dropped} older messages]\n\n{transcript}"
+                )
+        else:
+            # Over budget: keep the latest message's block verbatim; fold
+            # every older block into ONE digest call.
+            digest = fold_older_blocks(
+                blocks[:-1],
+                chat=chat,
+                subject=subject,
+                collect_stats=fold_stats,
+                pre_omitted=ceiling_dropped,
+            )
+            condensed_block = (
+                f"--- Condensed summary of {len(blocks) - 1 + ceiling_dropped} "
+                f"earlier messages ---\n{wrap_untrusted_body(digest)}"
+            )
+            transcript = "\n\n".join([condensed_block, blocks[-1]])
 
         prompt = _build_thread_user_prompt(subject, transcript)
         try:
@@ -394,15 +475,22 @@ def summarize_thread_impl(
 
         st["result_summary"] = {
             "thread_id": thread_id,
-            "message_count": len(ordered),
+            "message_count": total_count,
             "chars": len(summary),
         }
-        return {
+        result = {
             "thread_id": thread_id,
             "subject": subject,
-            "message_count": len(ordered),
+            "message_count": total_count,
             "summary": summary,
         }
+        # Fold-call usage mirrors the REST path's accounting (#1891): a plain
+        # dict, present only when the fold actually ran — absent on the fits
+        # path (no extra LLM call to account for).
+        usage = aggregate_usage_stats(fold_stats)
+        if usage is not None:
+            result["usage"] = usage
+        return result
 
 
 def search_messages_impl(
@@ -926,7 +1014,9 @@ class ReadToolsMixin:
             Returns:
                 JSON envelope ``{"ok": true, "data": {"thread_id", "subject",
                 "message_count", "summary"}}`` — ``summary`` is a short,
-                length-bounded string covering the full thread.
+                length-bounded string covering the full thread. When an
+                over-budget thread was condensed to fit (#1889), ``data``
+                also carries ``usage`` with the condense call's LLM tokens.
             """
             try:
                 # Deferred import avoids a module-load cycle with summarize_tools.

@@ -521,7 +521,10 @@ class EmailTriageResult(_Strict):
         default=None,
         description=(
             "LLM usage metrics (tokens + aggregate TPS) for this triage. Null on "
-            "the heuristic-only path where no LLM call was made."
+            "the heuristic-only path where no LLM call was made. Compare "
+            "prompt_tokens against the agent's context-window envelope "
+            "(16K target / 32K max, #1892) to see how much of the window a "
+            "payload consumed."
         ),
     )
     attachments: List[AttachmentMeta] = Field(

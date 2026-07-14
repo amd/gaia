@@ -255,9 +255,13 @@ def classify_email_llm(
     ``send_messages(messages, system_prompt=...) -> response`` with a ``.text``
     attribute).
 
-    When ``collect_stats`` is a list, the response's ``.stats`` dict (the reused
-    ``AgentResponse.stats`` measurement, #1277/#1278) is appended to it so a
-    caller can aggregate usage across calls — no new measurement path.
+    When ``collect_stats`` is a list, one usage/stats entry is appended to it
+    so a caller can aggregate usage across calls (``aggregate_usage_stats``,
+    #1891). The response's ``.usage`` dict (the Lemonade chat-completion
+    response's ``usage`` field, surfaced as an additive ``AgentResponse``
+    field — exact per-call token counts, no extra HTTP round-trip) is
+    preferred when present; falls back to the polled ``.stats`` dict
+    (#1277/#1278) for providers that don't expose ``.usage``.
 
     ``context`` is an optional ``TriageContext`` (#1541): when supplied, a short
     context block is prepended to the user prompt so the model factors in the
@@ -281,9 +285,13 @@ def classify_email_llm(
         ) from exc
 
     if collect_stats is not None:
-        stats = getattr(response, "stats", None)
-        if stats:
-            collect_stats.append(stats)
+        usage = getattr(response, "usage", None)
+        if isinstance(usage, dict) and usage:
+            collect_stats.append(usage)
+        else:
+            stats = getattr(response, "stats", None)
+            if isinstance(stats, dict) and stats:
+                collect_stats.append(stats)
 
     text = getattr(response, "text", None)
     if text is None:
@@ -298,12 +306,19 @@ def classify_email_llm(
     return result
 
 
-def make_llm_classifier(chat: Any) -> Callable[..., Mapping[str, Any]]:
+def make_llm_classifier(
+    chat: Any, collect_stats: Optional[List[dict]] = None
+) -> Callable[..., Mapping[str, Any]]:
     """Build a classifier callable bound to ``chat`` for ``triage_inbox_impl``.
 
     The returned callable has signature
     ``(*, subject, sender, body, message_id="") -> Mapping`` and raises
-    ``LLMTriageError`` on failure.
+    ``LLMTriageError`` on failure — unchanged by ``collect_stats``.
+
+    ``collect_stats`` (#1891), when provided, is threaded through to every
+    ``classify_email_llm`` call this classifier makes, so a caller can build
+    it ONCE, reuse the classifier across a whole triage run, and aggregate
+    the accumulated list afterwards via ``aggregate_usage_stats``.
     """
 
     def _classifier(
@@ -315,6 +330,7 @@ def make_llm_classifier(chat: Any) -> Callable[..., Mapping[str, Any]]:
             sender=sender,
             body=body,
             message_id=message_id,
+            collect_stats=collect_stats,
         )
 
     return _classifier

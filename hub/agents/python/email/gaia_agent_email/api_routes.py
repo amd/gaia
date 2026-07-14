@@ -100,13 +100,19 @@ from gaia_agent_email.contract import (
     UnarchivedMessage,
     UnarchiveFailure,
 )
+from gaia_agent_email.context_budget import estimate_tokens, thread_budget_tokens
 from gaia_agent_email.outlook_backend import AttachmentTooLargeError
 from gaia_agent_email.tools.llm_triage import LLMTriageError
 from gaia_agent_email.tools.summarize_tools import EmailSummarizeError
+from gaia_agent_email.tools.thread_fold import (
+    DEFAULT_THREAD_FOLD_MESSAGE_CEILING,
+    fold_older_blocks,
+)
 from gaia_agent_email.tools.triage_heuristics import (
     classify_category_heuristic,
     default_action_for,
 )
+from gaia_agent_email.tools.usage import aggregate_usage_stats
 from gaia_agent_email.version import AGENT_VERSION, API_VERSION
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import iterate_in_threadpool
@@ -219,8 +225,19 @@ _MAX_SUMMARY_CHARS = 300
 # it also governs the TCP connect, so an unreachable server blocks on the OS
 # SYN timeout (~30s) before erroring. A short connect timeout turns "server
 # down" into a prompt 502 instead of a 30s hang.
-_LEMONADE_PROBE_CONNECT_TIMEOUT = 2.0
-_LEMONADE_PROBE_READ_TIMEOUT = 3.0
+#
+# _resolve_probe_base / _probe_model_present / the two timeout constants live
+# in gaia_agent_email.model_select (#1439) — that module is the NPU-aware
+# default-model resolver's home and must stay import-light (never pulls in
+# this FastAPI router), so the shared probe helpers moved there and are
+# re-imported here rather than duplicated.
+from gaia_agent_email.model_select import (  # noqa: E402
+    _LEMONADE_PROBE_CONNECT_TIMEOUT,
+    _LEMONADE_PROBE_READ_TIMEOUT,
+    _probe_model_present,
+    _resolve_probe_base,
+    resolve_default_email_model,
+)
 
 # A model pull is a first-download of multi-GB weights — minutes, not seconds.
 # Generous ceiling so a slow link doesn't abort a real download; the connect
@@ -228,37 +245,22 @@ _LEMONADE_PROBE_READ_TIMEOUT = 3.0
 _LEMONADE_PULL_TIMEOUT = (5.0, 1800.0)
 
 
-def _resolve_probe_base(base_url: Optional[str]) -> str:
-    """Resolve the Lemonade ``/api/v1`` base URL for a health/model probe.
-
-    An explicit ``base_url`` is normalised to end in ``/api/v1`` (callers often
-    omit it); ``None`` falls back to the env-derived default via
-    ``_get_lemonade_config``. Shared by the reachability probe and the
-    model-presence probe so both target the exact same server.
-    """
-    from gaia.llm.lemonade_client import _get_lemonade_config
-
-    if base_url:
-        probe_base = base_url.rstrip("/")
-        if not probe_base.endswith("/api/v1"):
-            probe_base = f"{probe_base}/api/v1"
-        return probe_base
-    _, _, probe_base = _get_lemonade_config()
-    return probe_base
-
-
 def _probe_lemonade_health(
     base_url: Optional[str] = None,
-) -> Tuple[bool, str, Optional[str]]:
+) -> Tuple[bool, str, Optional[str], List[dict]]:
     """Probe Lemonade's ``/health`` with a short connect timeout (#1677).
 
-    Returns ``(reachable, probe_base, version)``. Any HTTP response — even an
-    error status — means the server is up; only a connection/timeout failure
-    counts as unreachable (auth/model errors surface later on the real chat
-    call, where their messages are specific). ``version`` is Lemonade's
-    self-reported server version from the ``/health`` body (``None`` when the
-    server doesn't advertise one or the body isn't JSON). Never raises: the
-    readiness endpoint reports the values rather than failing.
+    Returns ``(reachable, probe_base, version, loaded_models)``. Any HTTP
+    response — even an error status — means the server is up; only a
+    connection/timeout failure counts as unreachable (auth/model errors
+    surface later on the real chat call, where their messages are specific).
+    ``version`` is Lemonade's self-reported server version from the
+    ``/health`` body (``None`` when the server doesn't advertise one or the
+    body isn't JSON). ``loaded_models`` is the raw ``all_models_loaded`` list
+    from the same body (``[]`` when unreachable or unparseable) — note raw
+    /health entries carry ``model_name``/``checkpoint`` keys, NOT the ``id``
+    key ``get_status()`` enrichment adds. Never raises: the readiness
+    endpoint reports the values rather than failing.
     """
     import requests
 
@@ -269,16 +271,45 @@ def _probe_lemonade_health(
             timeout=(_LEMONADE_PROBE_CONNECT_TIMEOUT, _LEMONADE_PROBE_READ_TIMEOUT),
         )
     except requests.exceptions.RequestException:
-        return False, probe_base, None
+        return False, probe_base, None, []
 
     version: Optional[str] = None
+    loaded_models: List[dict] = []
     try:
         body = resp.json()
         if isinstance(body, dict):
             version = body.get("version")
+            raw_loaded = body.get("all_models_loaded", [])
+            if isinstance(raw_loaded, list):
+                loaded_models = [m for m in raw_loaded if isinstance(m, dict)]
     except ValueError:
         version = None
-    return True, probe_base, version
+    return True, probe_base, version, loaded_models
+
+
+def _extract_loaded_ctx(loaded_models: List[dict], model_id: str) -> Optional[int]:
+    """The ctx_size the server reports ``model_id`` loaded at, or None.
+
+    Reads raw /health entries (``model_name``/``checkpoint`` keys — no ``id``
+    at this layer) and matches tolerantly via ``_model_ids_match`` (#1952:
+    ``user.`` prefix, case-insensitive). Reports only what the server says:
+    missing entry, missing ``recipe_options``, or a non-positive/non-int
+    value all yield None — never a config echo or a guess.
+    """
+    from gaia.llm.lemonade_client import _model_ids_match
+
+    for entry in loaded_models:
+        if _model_ids_match(entry.get("model_name"), model_id) or _model_ids_match(
+            entry.get("checkpoint"), model_id
+        ):
+            recipe_options = entry.get("recipe_options")
+            if not isinstance(recipe_options, dict):
+                return None
+            ctx = recipe_options.get("ctx_size")
+            if isinstance(ctx, int) and not isinstance(ctx, bool) and ctx > 0:
+                return ctx
+            return None
+    return None
 
 
 def _probe_lemonade_reachable(base_url: Optional[str] = None) -> Tuple[bool, str]:
@@ -287,45 +318,8 @@ def _probe_lemonade_reachable(base_url: Optional[str] = None) -> Tuple[bool, str
     Kept for callers (the POST provisioning verb) that need only "is it up?",
     not the version — so they share the single ``/health`` probe logic.
     """
-    reachable, probe_base, _version = _probe_lemonade_health(base_url)
+    reachable, probe_base, _version, _loaded = _probe_lemonade_health(base_url)
     return reachable, probe_base
-
-
-def _probe_model_present(probe_base: str, model_id: str) -> bool:
-    """Cheaply check whether ``model_id`` is downloaded on the Lemonade server.
-
-    Queries the model list (downloaded models only) with the same short
-    timeout as the reachability probe and matches on the ``id`` field using
-    the core tolerant comparison (``user.``-prefixed registrations are listed
-    under the stripped id). Sends the resolved Lemonade auth header so an
-    authenticated server answers instead of 401-ing. Raises
-    ``requests.RequestException`` on a transport failure — the caller turns
-    that into an actionable readiness hint rather than silently reporting
-    "absent".
-
-    "Present" is intentionally cheap (a list lookup, no model load). Whether
-    the model actually *loads* (``loadable``) is not probed in v1 — forcing a
-    load is heavy, so the readiness response reports ``loadable=null``.
-    """
-    import requests
-
-    from gaia.llm.lemonade_client import (
-        _model_ids_match,
-        lemonade_auth_headers,
-        resolve_lemonade_api_key,
-    )
-
-    resp = requests.get(
-        f"{probe_base}/models",
-        headers=lemonade_auth_headers(resolve_lemonade_api_key()),
-        timeout=(_LEMONADE_PROBE_CONNECT_TIMEOUT, _LEMONADE_PROBE_READ_TIMEOUT),
-    )
-    resp.raise_for_status()
-    payload = resp.json()
-    data = payload.get("data", []) if isinstance(payload, dict) else []
-    return any(
-        isinstance(m, dict) and _model_ids_match(m.get("id"), model_id) for m in data
-    )
 
 
 def _pull_model(probe_base: str, model_id: str) -> None:
@@ -358,18 +352,19 @@ def _pull_model(probe_base: str, model_id: str) -> None:
     resp.raise_for_status()
 
 
-def _resolve_email_model_id() -> str:
+def _resolve_email_model_id(base_url: Optional[str] = None) -> str:
     """Resolve the Lemonade model id the email agent triages with.
 
     Mirrors the agent's own resolution (``config.model_id or
-    DEFAULT_MODEL_NAME``) so the readiness probe reports the exact model the
-    triage path will load.
+    resolve_default_email_model(base_url)``, #1439) so the readiness probe
+    reports the exact model the triage path will load — including the
+    NPU-aware auto-select, and against the SAME ``base_url`` the caller is
+    probing (a caller with an explicit non-default ``base_url`` must not
+    silently fall back to resolving against the default server).
     """
     from gaia_agent_email.config import EmailAgentConfig
 
-    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
-
-    return EmailAgentConfig().model_id or DEFAULT_MODEL_NAME
+    return EmailAgentConfig().model_id or resolve_default_email_model(base_url)
 
 
 def _parse_version(version: Optional[str]) -> Optional[Tuple[int, ...]]:
@@ -414,39 +409,19 @@ def _split_sentences(text: str) -> List[str]:
 
 
 def _aggregate_usage(call_stats: List[dict]) -> Optional[TriageUsage]:
-    """Sum the per-call ``AgentResponse.stats`` (#1277/#1278) across the
-    classify + summarize LLM calls into a single :class:`TriageUsage`.
+    """Sum the per-call usage/stats entries across the classify + summarize
+    LLM calls into a single :class:`TriageUsage`.
 
-    prompt_tokens = Σ input_tokens; total_tokens = Σ(input + output);
-    tokens_per_second = Σ output / Σ decode_time, where each call's decode time
-    is output_tokens / tokens_per_second (so the aggregate is total output
-    tokens over total decode time, not a naive TPS average). Returns ``None``
-    when no LLM call produced stats (the heuristic-only path).
+    Thin wrapper around :func:`gaia_agent_email.tools.usage.aggregate_usage_stats`
+    (#1891) — the pure aggregation logic is shared with the tool-call triage
+    path (``EmailTriageAgent._triage_all_backends``) so both surfaces report
+    the same numbers from the same math. Returns ``None`` when no LLM call
+    produced usage/stats (the heuristic-only path).
     """
-    if not call_stats:
+    agg = aggregate_usage_stats(call_stats)
+    if agg is None:
         return None
-    total_input = 0
-    total_output = 0
-    decode_output = 0  # output only from calls with a usable TPS (>0)
-    total_decode_time = 0.0
-    for s in call_stats:
-        inp = int(s.get("input_tokens") or 0)
-        out = int(s.get("output_tokens") or 0)
-        tps = float(s.get("tokens_per_second") or 0.0)
-        total_input += inp
-        total_output += out
-        if out and tps > 0:
-            decode_output += out
-            total_decode_time += out / tps
-    # Numerator excludes output from tps==0 calls so they can't inflate the
-    # aggregate (they add nothing to the decode-time denominator).
-    agg_tps = decode_output / total_decode_time if total_decode_time > 0 else 0.0
-    return TriageUsage(
-        prompt_tokens=total_input,
-        completion_tokens=total_output,
-        total_tokens=total_input + total_output,
-        tokens_per_second=agg_tps,
-    )
+    return TriageUsage(**agg)
 
 
 class EmailTriageService:
@@ -558,8 +533,18 @@ class EmailTriageService:
         # with the fix beats a generic chat-time failure with no URL/model.
         self._assert_model_present(base_url)
 
+        # #1439: the resolved model id (explicit config.model_id, or the
+        # NPU-aware auto-select) MUST reach the chat client. Omitting `model=`
+        # here would make the resolution cosmetic — /v1/email/init could
+        # report the FLM model while the real triage call silently ran the
+        # SDK's own default instead. resolve_default_email_model() is cached
+        # per probe_base, so this second resolution (the first happened
+        # inside _assert_model_present above) is not a second network probe.
+        model_id = _resolve_email_model_id(base_url)
+
         sdk_cfg = AgentConfig(
             base_url=base_url,
+            model=model_id,
             use_local_llm=True,
             use_claude=False,
             use_chatgpt=False,
@@ -617,7 +602,7 @@ class EmailTriageService:
         import requests
 
         probe_base = _resolve_probe_base(base_url)
-        model_id = _resolve_email_model_id()
+        model_id = _resolve_email_model_id(base_url)
 
         try:
             present = _probe_model_present(probe_base, model_id)
@@ -701,11 +686,48 @@ class EmailTriageService:
         self, payload: ThreadInput, chat: Any, context: Any = None
     ) -> EmailTriageResult:
         messages: List[EmailMessage] = payload.messages
+        total_count = len(messages)
         last = messages[-1]
+
+        # Message-count ceiling BEFORE any per-message string work — a cheap
+        # slice keeping the most recent messages, so an absurdly long thread
+        # never pays the O(N) join just to be folded anyway.
+        ceiling_dropped = 0
+        if total_count > DEFAULT_THREAD_FOLD_MESSAGE_CEILING:
+            ceiling_dropped = total_count - DEFAULT_THREAD_FOLD_MESSAGE_CEILING
+            messages = messages[ceiling_dropped:]
+
         # Join newest-first so the model sees the most recent context first.
         combined_body = "\n\n".join(
             f"{_format_address(m.from_)}: {m.body}" for m in reversed(messages)
         )
+
+        fold_stats: List[dict] = []
+        if estimate_tokens(combined_body) > thread_budget_tokens():
+            # Over budget: keep the latest message verbatim; fold everything
+            # older into ONE digest call (#1889).
+            older = messages[:-1]
+            older_blocks = [f"{_format_address(m.from_)}: {m.body}" for m in older]
+            digest = fold_older_blocks(
+                older_blocks,
+                chat=chat,
+                subject=last.subject,
+                collect_stats=fold_stats,
+                pre_omitted=ceiling_dropped,
+            )
+            combined_body = (
+                f"{_format_address(last.from_)}: {last.body}\n\n"
+                f"[Condensed summary of {len(older) + ceiling_dropped} "
+                f"earlier messages]\n{digest}"
+            )
+        elif ceiling_dropped:
+            # Bounded and visible, never a silent clip (same marker as the
+            # fold input's) — newest-first join, so the marker trails where
+            # the omitted oldest messages would have been.
+            combined_body = (
+                f"{combined_body}\n\n[omitted {ceiling_dropped} older messages]"
+            )
+
         return self._build_result_llm(
             subject=last.subject,
             sender_raw=_format_address(last.from_),
@@ -713,12 +735,15 @@ class EmailTriageService:
             label_ids=[],
             principal=payload.principal,
             reply_to=last.from_,
-            summary_prefix=f"Thread of {len(messages)} messages. ",
+            summary_prefix=f"Thread of {total_count} messages. ",
             chat=chat,
             message_id=payload.thread_id,
             context=context,
-            # Oldest-first, matching the request's message order.
-            attachments=[a for m in messages for a in m.attachments],
+            # Oldest-first, matching the request's message order (echoed for
+            # the FULL thread — attachment metadata is cheap and downstream
+            # consumers must not silently lose items to the analysis ceiling).
+            attachments=[a for m in payload.messages for a in m.attachments],
+            extra_call_stats=fold_stats,
         )
 
     def _build_result_llm(
@@ -735,8 +760,15 @@ class EmailTriageService:
         message_id: Optional[str] = None,
         context: Any = None,
         attachments: Optional[List[AttachmentMeta]] = None,
+        extra_call_stats: Optional[List[dict]] = None,
     ) -> EmailTriageResult:
-        """Build a result using LLM escalation when heuristic confidence is low."""
+        """Build a result using LLM escalation when heuristic confidence is low.
+
+        ``extra_call_stats`` seeds the usage accumulator with stats from a
+        call made before this method runs (e.g. #1889's thread-fold digest
+        call) so the reported ``usage`` covers every LLM call the request
+        actually made, not just the classify/summarize pair.
+        """
         from gaia_agent_email.tools.llm_triage import classify_email_llm
         from gaia_agent_email.tools.summarize_tools import summarize_email_llm
 
@@ -746,7 +778,7 @@ class EmailTriageService:
 
         # Per-call LLM stats accumulate here so the result can report aggregate
         # usage (#1540). Reuses AgentResponse.stats — no new measurement.
-        call_stats: List[dict] = []
+        call_stats: List[dict] = list(extra_call_stats) if extra_call_stats else []
 
         if heuristic.confident:
             category = EmailCategory(heuristic.category)
@@ -1703,6 +1735,17 @@ class InitModelStatus(_Strict):
             "signal. Reserved for an opt-in deeper check."
         ),
     )
+    ctx_size: Optional[int] = Field(
+        default=None,
+        description=(
+            "The context window the model is CURRENTLY loaded at, as reported "
+            "by the server's /health (recipe_options.ctx_size). Null whenever "
+            "the model is not loaded right now or the server does not report "
+            "a ctx — never a config echo or a guess (#1892). Compare against "
+            "the envelope (16384 target / 32768 max) to see what window a "
+            "run would actually measure."
+        ),
+    )
 
 
 class InitResponse(_Strict):
@@ -2591,11 +2634,15 @@ def _compute_init_status(base_url: Optional[str] = None) -> InitResponse:
     import requests
     from gaia_agent_email.version import MIN_LEMONADE_VERSION
 
-    model_id = _resolve_email_model_id()
-    reachable, probe_base, version = _probe_lemonade_health(base_url)
+    # #1439: pass base_url through — this used to call _resolve_email_model_id()
+    # with no argument, silently resolving against the DEFAULT server even when
+    # this readiness probe targets a different one.
+    model_id = _resolve_email_model_id(base_url)
+    reachable, probe_base, version, loaded_models = _probe_lemonade_health(base_url)
     compatible = (
         _version_meets_min(version, MIN_LEMONADE_VERSION) if reachable else None
     )
+    loaded_ctx = _extract_loaded_ctx(loaded_models, model_id)
     lemonade = InitLemonadeStatus(
         reachable=reachable,
         base_url=probe_base,
@@ -2623,7 +2670,11 @@ def _compute_init_status(base_url: Optional[str] = None) -> InitResponse:
         return InitResponse(
             ready=False,
             lemonade=lemonade,
-            model=InitModelStatus(id=model_id, present=False, loadable=None),
+            # /health succeeded, so a server-reported loaded ctx is still honest
+            # here even though the /models presence read failed.
+            model=InitModelStatus(
+                id=model_id, present=False, loadable=None, ctx_size=loaded_ctx
+            ),
             hint=(
                 f"Lemonade is reachable but its model list at {probe_base}/models "
                 f"could not be read ({type(exc).__name__}: {exc}). Make sure the "
@@ -2631,7 +2682,9 @@ def _compute_init_status(base_url: Optional[str] = None) -> InitResponse:
             ),
         )
 
-    model = InitModelStatus(id=model_id, present=present, loadable=None)
+    model = InitModelStatus(
+        id=model_id, present=present, loadable=None, ctx_size=loaded_ctx
+    )
 
     # Version too old is the most fundamental blocker — surface it before the
     # model hint (upgrading Lemonade comes first even if the model is missing).
