@@ -65,7 +65,7 @@ python hub/agents/email/python/packaging/capability_matrix.py
   - `briefing`: enforce=False, acceptance_enforce=None, wired=True
   - `drafting`: enforce=False, acceptance_enforce=None, wired=True
   - `followups`: enforce=False, acceptance_enforce=None, wired=False
-  - `perf`: enforce=True, acceptance_enforce=None, wired=True
+  - `perf`: enforce=False, acceptance_enforce=None, wired=True
   - `quality`: enforce=False, acceptance_enforce=True, wired=True
 - Additionally served but **out of the frozen contract** (footnote context, not guarded machinery): `agent_routes.py` 8 session routes, `connector_routes.py` 4 OAuth routes, `packaging/server.py` 2 inline probes -- ~36 total routes served by the sidecar.
 
@@ -93,7 +93,7 @@ Judge-scored draft-approval gate (#1269 metric, approval_min 0.70) run by releas
 
 Detection-quality bars, CI-unwired: no eval_followup_report.py exists, unlike the other five suites. Follow-up: #2040 tracks wiring an eval_followup_report.py plus a workflow step and, separately, establishing a judged baseline (the #1950 eval's documented follow-up) before flipping enforce to true.
 
-### `perf` (enforce=True, wired=True)
+### `perf` (enforce=False, wired=True)
 
 Strix Halo perf bars (ttft / throughput / pipeline / memory) run by release_agent_email.yml. Follow-up: keep the bars in the fixture calibrated to observed hardware runs -- re-tighten as the agent gets faster, widen only with measured evidence.
 
