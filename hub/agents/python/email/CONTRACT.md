@@ -153,6 +153,34 @@ test asserts byte-for-byte equality, so drift in either place fails CI.
 The principal is the account owner — distinct from a message's `to`: in a thread
 the principal is not necessarily a recipient of every message.
 
+#### Long-thread handling ([#1889](https://github.com/amd/gaia/issues/1889))
+
+`ThreadInput.messages` has no declared size limit, and the request shape is
+unchanged — but what reaches the local model is bounded by the
+[context-window envelope](#context-window-envelope). The service estimates the
+combined thread body against the thread token budget derived from
+`context_budget.py`:
+
+- **Fits** — the thread is analyzed exactly as before (newest-first, every
+  message verbatim). No behavior change.
+- **Over budget** — the LATEST message is kept verbatim and every older
+  message is condensed into one digest via a **single extra LLM call** before
+  triage (never a multi-pass loop). Expect one additional model call's worth
+  of latency on such requests; the fold call's tokens are included in the
+  response's `usage` block. In the extreme (hundreds of messages), the oldest
+  messages are dropped from the fold input with an explicit
+  `[omitted N older messages]` marker — bounded and visible, never a silent
+  clip of recent context.
+- **Fold failure** — a failed condense call is a loud error (HTTP 502 /
+  `BatchItemResult.error` on the batch endpoint), never a silent fallback to
+  the over-budget raw prompt.
+
+The agent-loop `summarize_thread` tool applies the same token gate: it
+replaced the tool's previous fixed 24,000-character transcript cap, so
+mid-size threads that used to be proportionally clipped now go through
+unclipped whenever they fit the token budget, and only genuinely over-budget
+threads get the latest-verbatim + condensed-older treatment.
+
 ---
 
 ## Response schema (output)
@@ -541,13 +569,15 @@ ships to, and numbers measured there do not transfer.
   construction bounds body content with documented character limits (marked
   `...[truncated]`, never silent), and a genuine context overflow on the
   LLM call **raises** per the agent's fail-loud contract — a result is
-  never fabricated from an over-budget prompt.
-- Future budget work is meant to derive from the same constants: the
-  long-thread transcript budget
-  ([#1889](https://github.com/amd/gaia/issues/1889)) and the per-email body
-  limit ([#1318](https://github.com/amd/gaia/issues/1318)) are both designed
-  to import `context_budget.py` rather than invent their own numbers — as of
-  this writing neither one consumes it yet.
+  never fabricated from an over-budget prompt. Over-budget *threads* no
+  longer overflow at all: they are condensed to fit first (see
+  [Long-thread handling](#long-thread-handling-1889)).
+- Budget work derives from the same constants: the long-thread budget
+  ([#1889](https://github.com/amd/gaia/issues/1889)) is the first consumer —
+  `thread_budget_tokens()` and `estimate_tokens()` in `context_budget.py`
+  gate both thread-triage surfaces. The per-email body limit
+  ([#1318](https://github.com/amd/gaia/issues/1318)) is designed to derive
+  from the same file and does not consume it yet.
 
 **How to verify what a live triage actually used:** the triage response's
 `usage` block reports `prompt_tokens` / `completion_tokens` /

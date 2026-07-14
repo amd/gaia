@@ -100,9 +100,14 @@ from gaia_agent_email.contract import (
     UnarchivedMessage,
     UnarchiveFailure,
 )
+from gaia_agent_email.context_budget import estimate_tokens, thread_budget_tokens
 from gaia_agent_email.outlook_backend import AttachmentTooLargeError
 from gaia_agent_email.tools.llm_triage import LLMTriageError
 from gaia_agent_email.tools.summarize_tools import EmailSummarizeError
+from gaia_agent_email.tools.thread_fold import (
+    DEFAULT_THREAD_FOLD_MESSAGE_CEILING,
+    fold_older_blocks,
+)
 from gaia_agent_email.tools.triage_heuristics import (
     classify_category_heuristic,
     default_action_for,
@@ -720,6 +725,31 @@ class EmailTriageService:
         combined_body = "\n\n".join(
             f"{_format_address(m.from_)}: {m.body}" for m in reversed(messages)
         )
+
+        fold_stats: List[dict] = []
+        if estimate_tokens(combined_body) > thread_budget_tokens():
+            # Over budget: keep the latest message verbatim; fold everything
+            # older into ONE digest call (#1889). Ceiling applied BEFORE any
+            # per-message rendering work.
+            older = messages[:-1]
+            ceiling_dropped = 0
+            if len(older) > DEFAULT_THREAD_FOLD_MESSAGE_CEILING:
+                ceiling_dropped = len(older) - DEFAULT_THREAD_FOLD_MESSAGE_CEILING
+                older = older[ceiling_dropped:]
+            older_blocks = [f"{_format_address(m.from_)}: {m.body}" for m in older]
+            digest = fold_older_blocks(
+                older_blocks,
+                chat=chat,
+                subject=last.subject,
+                collect_stats=fold_stats,
+                pre_omitted=ceiling_dropped,
+            )
+            combined_body = (
+                f"{_format_address(last.from_)}: {last.body}\n\n"
+                f"[Condensed summary of {len(older) + ceiling_dropped} "
+                f"earlier messages]\n{digest}"
+            )
+
         return self._build_result_llm(
             subject=last.subject,
             sender_raw=_format_address(last.from_),
@@ -733,6 +763,7 @@ class EmailTriageService:
             context=context,
             # Oldest-first, matching the request's message order.
             attachments=[a for m in messages for a in m.attachments],
+            extra_call_stats=fold_stats,
         )
 
     def _build_result_llm(
@@ -749,8 +780,15 @@ class EmailTriageService:
         message_id: Optional[str] = None,
         context: Any = None,
         attachments: Optional[List[AttachmentMeta]] = None,
+        extra_call_stats: Optional[List[dict]] = None,
     ) -> EmailTriageResult:
-        """Build a result using LLM escalation when heuristic confidence is low."""
+        """Build a result using LLM escalation when heuristic confidence is low.
+
+        ``extra_call_stats`` seeds the usage accumulator with stats from a
+        call made before this method runs (e.g. #1889's thread-fold digest
+        call) so the reported ``usage`` covers every LLM call the request
+        actually made, not just the classify/summarize pair.
+        """
         from gaia_agent_email.tools.llm_triage import classify_email_llm
         from gaia_agent_email.tools.summarize_tools import summarize_email_llm
 
@@ -760,7 +798,7 @@ class EmailTriageService:
 
         # Per-call LLM stats accumulate here so the result can report aggregate
         # usage (#1540). Reuses AgentResponse.stats — no new measurement.
-        call_stats: List[dict] = []
+        call_stats: List[dict] = list(extra_call_stats) if extra_call_stats else []
 
         if heuristic.confident:
             category = EmailCategory(heuristic.category)
