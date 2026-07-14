@@ -128,6 +128,65 @@ def test_triage_service_uses_llm():
     assert response.result.message_id == "msg-001"
 
 
+def _fake_chat_with_usage(
+    category="NEEDS_RESPONSE",
+    summary="Alice invites Bob to lunch.",
+    usage=None,
+):
+    """Like ``_fake_chat`` but the classify call's response also carries a
+    Lemonade chat-completion-shaped ``.usage`` dict -- exercises the REST
+    path's real ``_aggregate_usage`` -> ``aggregate_usage_stats`` delegation
+    (#1891). The summarize call's response deliberately carries NO usage/stats
+    (plain ``.text`` only, like the original ``_fake_chat``) so the expected
+    aggregate is deterministic regardless of whether ``summarize_email_llm``
+    itself is ever updated to also prefer ``.usage``.
+    """
+    import json
+    import types
+
+    usage = usage or {
+        "prompt_tokens": 120,
+        "completion_tokens": 30,
+        "total_tokens": 150,
+        "tokens_per_second": 25.0,
+    }
+
+    class _FakeChat:
+        def send_messages(self, messages, system_prompt="", **kwargs):
+            resp = types.SimpleNamespace()
+            content = messages[0].get("content", "") if messages else ""
+            if "Classify" in content:
+                resp.text = json.dumps(
+                    {"category": category, "confidence": 0.9, "reasoning": "test"}
+                )
+                resp.usage = dict(usage)
+            else:
+                resp.text = summary
+            return resp
+
+    return _FakeChat()
+
+
+def test_triage_service_usage_uses_response_usage_shape():
+    """REST path: the classify call's ``response.usage`` (Lemonade
+    chat-completion shape) must be aggregated into a correct, non-None
+    ``EmailTriageResult.usage`` after ``_aggregate_usage`` is refactored to
+    delegate to ``aggregate_usage_stats`` (#1891)."""
+    from gaia_agent_email.api_routes import EmailTriageService
+
+    service = EmailTriageService()
+    request = _make_single_request()
+    chat = _fake_chat_with_usage()
+
+    response = service.triage_request(request, chat=chat)
+
+    assert response.result.usage is not None
+    assert response.result.usage.prompt_tokens == 120
+    assert response.result.usage.completion_tokens == 30
+    assert response.result.usage.total_tokens == 150
+    assert response.result.usage.tokens_per_second == pytest.approx(25.0)
+
+
 def test_body_not_clipped_by_llm_triage():
     """_build_user_prompt must pass the FULL body to the model (no 4 000-char cap)."""
     from gaia_agent_email.tools.llm_triage import _build_user_prompt

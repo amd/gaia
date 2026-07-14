@@ -197,6 +197,16 @@ def _compute_performance(judged: list) -> Optional[dict]:
         "throughput_tps": _mean("avg_tokens_per_second"),
         "pipeline_s": _mean("pipeline_latency_s"),
         "peak_memory_gb": _mean("peak_memory_gb"),
+        # Token accounting (#1891). REPORTED only — do NOT gate
+        # tokens_per_triage without a committed baseline (#1894 trust model);
+        # see _tokens_per_triage_comment in quality_gate_thresholds.json.
+        # tokens_per_triage = triage classify-call tokens / LLM-classified
+        # emails ONLY (pinned in gaia.eval.benchmark.build_result), so
+        # cross-release comparisons must hold the corpus fixed.
+        "total_input_tokens": _mean("total_input_tokens"),
+        "total_output_tokens": _mean("total_output_tokens"),
+        "tokens_per_triage": _mean("tokens_per_triage"),
+        "llm_classified_count": _mean("llm_classified_count"),
     }
     emails = [
         int(ps["total_emails"])

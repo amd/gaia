@@ -752,12 +752,23 @@ class EmailTriageAgent(
             triage_inbox_impl,
         )
         from gaia_agent_email.tools.triage_heuristics import group_by_category
+        from gaia_agent_email.tools.usage import aggregate_usage_stats
 
         # Reference the factory via the read_tools module so the existing
         # ``read_tools.make_llm_classifier`` test seam (the pre-scan canary)
         # keeps intercepting the expensive triage path.
+        #
+        # One shared list across ALL backends (#1891) — the classifier is
+        # built ONCE here and reused across the per-backend loop below, so
+        # every classify call across every mailbox lands in the same list
+        # for a single post-loop aggregation.
         chat = getattr(self, "chat", None)
-        classifier = read_tools.make_llm_classifier(chat) if chat is not None else None
+        call_stats: list[dict] = []
+        classifier = (
+            read_tools.make_llm_classifier(chat, collect_stats=call_stats)
+            if chat is not None
+            else None
+        )
         prefs = getattr(self, "_session_preferences", None)
         force_llm = bool(getattr(self.config, "force_llm", False))
         debug_flag = bool(getattr(self.config, "debug", False))
@@ -815,6 +826,17 @@ class EmailTriageAgent(
         result: dict = {"results": merged, "grouped": group_by_category(merged)}
         if mailbox_errors:
             result["mailbox_errors"] = mailbox_errors
+        # #1891: fix the bulk-triage token undercount — nested classify calls
+        # previously discarded their stats entirely (no collect_stats threaded
+        # through). usage is a PLAIN DICT (never a pydantic object) since this
+        # result is serialized via ``json.dumps(..., default=str)``, which
+        # would silently stringify a pydantic model instead of erroring.
+        # Absent (never zeroed) on the heuristic-only path — no LLM call means
+        # no usage to report.
+        usage = aggregate_usage_stats(call_stats)
+        if usage is not None:
+            result["usage"] = usage
+            result["llm_classified_count"] = len(call_stats)
         return result
 
     def _apply_behavioral_promotions(self) -> None:

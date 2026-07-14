@@ -49,6 +49,11 @@ class AgentResponse:
     history: Optional[List[str]] = None
     stats: Optional[Dict[str, Any]] = None
     is_complete: bool = True
+    # Token usage from the provider's completion response, when it carried
+    # one (#1891) — additive field alongside ``stats``, which stays exactly
+    # as it was (the polled ``/stats`` measurement). ``None`` for providers/
+    # calls that don't expose per-call usage.
+    usage: Optional[Dict[str, Any]] = None
 
 
 class AgentSDK:
@@ -243,7 +248,12 @@ class AgentSDK:
             if self.config.show_stats:
                 stats = self.get_stats()
 
-            return AgentResponse(text=response, stats=stats, is_complete=True)
+            # Additive (#1891) — no extra call, just an attribute read.
+            usage = self.llm_client.get_last_usage()
+
+            return AgentResponse(
+                text=response, stats=stats, usage=usage, is_complete=True
+            )
 
         except ConnectionError as e:
             # Re-raise connection errors with additional context

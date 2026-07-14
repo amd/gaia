@@ -107,6 +107,7 @@ from gaia_agent_email.tools.triage_heuristics import (
     classify_category_heuristic,
     default_action_for,
 )
+from gaia_agent_email.tools.usage import aggregate_usage_stats
 from gaia_agent_email.version import AGENT_VERSION, API_VERSION
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import iterate_in_threadpool
@@ -447,39 +448,19 @@ def _split_sentences(text: str) -> List[str]:
 
 
 def _aggregate_usage(call_stats: List[dict]) -> Optional[TriageUsage]:
-    """Sum the per-call ``AgentResponse.stats`` (#1277/#1278) across the
-    classify + summarize LLM calls into a single :class:`TriageUsage`.
+    """Sum the per-call usage/stats entries across the classify + summarize
+    LLM calls into a single :class:`TriageUsage`.
 
-    prompt_tokens = Σ input_tokens; total_tokens = Σ(input + output);
-    tokens_per_second = Σ output / Σ decode_time, where each call's decode time
-    is output_tokens / tokens_per_second (so the aggregate is total output
-    tokens over total decode time, not a naive TPS average). Returns ``None``
-    when no LLM call produced stats (the heuristic-only path).
+    Thin wrapper around :func:`gaia_agent_email.tools.usage.aggregate_usage_stats`
+    (#1891) — the pure aggregation logic is shared with the tool-call triage
+    path (``EmailTriageAgent._triage_all_backends``) so both surfaces report
+    the same numbers from the same math. Returns ``None`` when no LLM call
+    produced usage/stats (the heuristic-only path).
     """
-    if not call_stats:
+    agg = aggregate_usage_stats(call_stats)
+    if agg is None:
         return None
-    total_input = 0
-    total_output = 0
-    decode_output = 0  # output only from calls with a usable TPS (>0)
-    total_decode_time = 0.0
-    for s in call_stats:
-        inp = int(s.get("input_tokens") or 0)
-        out = int(s.get("output_tokens") or 0)
-        tps = float(s.get("tokens_per_second") or 0.0)
-        total_input += inp
-        total_output += out
-        if out and tps > 0:
-            decode_output += out
-            total_decode_time += out / tps
-    # Numerator excludes output from tps==0 calls so they can't inflate the
-    # aggregate (they add nothing to the decode-time denominator).
-    agg_tps = decode_output / total_decode_time if total_decode_time > 0 else 0.0
-    return TriageUsage(
-        prompt_tokens=total_input,
-        completion_tokens=total_output,
-        total_tokens=total_input + total_output,
-        tokens_per_second=agg_tps,
-    )
+    return TriageUsage(**agg)
 
 
 class EmailTriageService:
