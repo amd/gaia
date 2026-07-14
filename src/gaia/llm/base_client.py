@@ -53,6 +53,14 @@ class LLMClient(ABC):
     def get_performance_stats(self) -> dict:
         raise NotSupportedError(self.provider_name, "get_performance_stats")
 
+    def get_last_usage(self) -> Optional[dict]:
+        """Token-usage dict from the most recent ``chat()`` call, when the
+        provider's response carried one (#1891). ``None`` by default —
+        unlike ``get_performance_stats``, absence is a normal, silent case
+        (most providers/streaming calls simply don't have one) rather than
+        an unsupported-operation error."""
+        return None
+
     def load_model(self, model_name: str, **kwargs) -> None:
         raise NotSupportedError(self.provider_name, "load_model")
 
