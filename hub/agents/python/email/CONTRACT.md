@@ -553,7 +553,17 @@ ships to, and numbers measured there do not transfer.
 `usage` block reports `prompt_tokens` / `completion_tokens` /
 `total_tokens` for the LLM calls behind the result — compare
 `prompt_tokens` against the envelope to see how much of the window a
-payload consumed. `GET /v1/email/init` additionally reports the *currently
+payload consumed. The agent-loop bulk triage (the `triage_inbox` tool
+behind natural-language requests like "triage my inbox", including
+`POST /v1/email/query`) reports the same accounting at the result level
+([#1891](https://github.com/amd/gaia/issues/1891)): the tool's result
+data carries a `usage` object (same four fields as `TriageUsage`,
+aggregated across every LLM classify call in the run, all mailboxes)
+plus `llm_classified_count` — the number of emails that were classified
+by the LLM rather than the heuristic fast path. Both keys are **absent**
+(never zeroed) on a heuristic-only run where no LLM call was made; a
+present-but-zero `usage` means classify calls happened but their
+per-call measurements were unavailable. `GET /v1/email/init` additionally reports the *currently
 loaded* `ctx_size` on `model` when the triage model is loaded and the
 server exposes it — null otherwise (no config echo, no guessing).
 `ctx_size` reflects `/health`'s loaded state specifically, so it can be set
