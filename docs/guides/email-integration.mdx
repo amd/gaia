@@ -177,6 +177,44 @@ the endpoint returns **503** with a `hint` naming exactly what to fix.
   reports as `model.id` (`user.`-prefixed registrations match tolerantly).
 </Note>
 
+## Fast local iteration (dev mode)
+
+The frozen sidecar is ideal for production but opaque to debug: if you hit a
+triage/draft bug, there's no source to edit — you'd file an issue and wait for a
+new binary. To iterate on the agent, run its **Python source** and drive it with
+the **same npm client**. The frozen binary is that source frozen (PyInstaller
+freezes a thin re-export of `gaia_agent_email.server`), so the `/v1/email/*`
+contract is identical — **only the base URL differs from production.**
+
+```bash
+# One-time: install the Python package editable so your edits take effect live.
+pip install -e hub/agents/python/email
+
+# Run the SOURCE agent with auto-reload (caller token off for local dev):
+gaia-agent-email serve --reload            # http://127.0.0.1:8131
+#   add your core checkout so edits there reload too:
+#   gaia-agent-email serve --reload --reload-dir path/to/gaia/src
+```
+
+Attach with `connectSidecar` — it health- and version-checks the running server,
+spawns nothing, and returns a bound client (no `child`, nothing to `shutdown()` —
+you own the `serve` process):
+
+```ts
+import { connectSidecar } from "@amd-gaia/agent-email";
+
+const dev = await connectSidecar({ baseUrl: "http://127.0.0.1:8131" });
+const res = await dev.client.triage({ payload: { /* … */ } });
+// Edit the Python under gaia_agent_email/, save → it auto-reloads → re-run. Seconds.
+```
+
+`npx @amd-gaia/agent-email dev` launches the `serve` process for you
+(`--python <path>` to use a specific venv). Auto-reload restarts the server, so
+in-process `/v1/email/agent/*` sessions reset on each reload — irrelevant to the
+stateless `triage`/`draft`/`send` calls (each request is self-contained). Switch
+back to production by pointing at `startSidecar` (frozen binary) instead of
+`connectSidecar`; the client calls are unchanged.
+
 ## Authentication
 
 The frozen sidecar binds `127.0.0.1` and can **send mail as the user**, so it

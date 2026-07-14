@@ -20,7 +20,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { fetchBinary } from "./fetch.js";
-import { shutdown, startSidecar } from "./lifecycle.js";
+import { connectSidecar, shutdown, startSidecar } from "./lifecycle.js";
 import { currentPlatformKey, loadLock } from "./platform.js";
 import { AgentEmailError } from "./errors.js";
 
@@ -32,7 +32,7 @@ interface ParsedArgs {
 // Flags that take a value (`--out <dir>`); everything else is a boolean switch.
 // Being explicit avoids the footgun where `--base-url --force` silently swallows
 // the next flag as a value (or drops the value).
-const VALUE_FLAGS = new Set(["out", "base-url", "platform", "port"]);
+const VALUE_FLAGS = new Set(["out", "base-url", "platform", "port", "python", "cmd"]);
 
 function parseArgs(argv: string[]): ParsedArgs {
   const out: ParsedArgs = { _: [], flags: {} };
@@ -62,6 +62,7 @@ const HELP = `@amd-gaia/agent-email — GAIA email agent binary fetcher + client
 
 Usage:
   agent-email playground [options]          Fetch + run the sidecar and open the playground
+  agent-email dev [options]                 Run the SOURCE agent with auto-reload (fast dev loop)
   agent-email fetch --out <dir> [options]   Download + SHA-256 verify the binary
   agent-email version                       Print package + lock manifest info
   agent-email help                          Show this help
@@ -71,6 +72,15 @@ playground options:
   --out <dir>         Where to cache the binary (default: a temp dir)
   --base-url <url>    Override the download base URL from binaries.lock.json
   --no-open           Don't auto-open the browser; just print the URL
+
+dev options (runs the Python source, NOT the frozen binary — for iterating on the agent):
+  --port <n>          Bind port (default 8131)
+  --python <path>     Python interpreter to run \`-m gaia_agent_email.server\` with
+                      (use your venv's python where the package is \`pip install -e\`'d)
+  --cmd <path>        Override the launcher executable (default: \`gaia-agent-email\`)
+  Requires \`pip install -e hub/agents/python/email\` (or the wheel) so the
+  \`gaia-agent-email\` console script / module is importable. Edit the Python and
+  it auto-reloads; attach your app with \`connectSidecar({ baseUrl })\`.
 
 fetch options:
   --out <dir>         Resources dir to write the verified binary into (required)
@@ -222,6 +232,106 @@ async function cmdPlayground(args: ParsedArgs): Promise<number> {
   }
 }
 
+/** SIGKILL the launched dev-server process tree (uvicorn --reload forks a child). */
+function killDevTree(child: ReturnType<typeof spawn>): void {
+  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+  try {
+    if (process.platform === "win32") {
+      spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+    } else {
+      process.kill(-child.pid, "SIGTERM");
+    }
+  } catch {
+    /* already gone */
+  }
+}
+
+/**
+ * Resolve the launcher command for `dev`. Prefers `--python -m
+ * gaia_agent_email.server` when a Python path is given (venv-friendly), else the
+ * `gaia-agent-email` console script (or a `--cmd` override), always with the
+ * `serve --reload` args.
+ */
+export function resolveDevCommand(
+  flags: Record<string, string | boolean>,
+  host: string,
+  port: number,
+): { cmd: string; args: string[] } {
+  const serveArgs = ["serve", "--reload", "--host", host, "--port", String(port)];
+  if (typeof flags.python === "string") {
+    return { cmd: flags.python, args: ["-m", "gaia_agent_email.server", ...serveArgs] };
+  }
+  const cmd = typeof flags.cmd === "string" ? flags.cmd : "gaia-agent-email";
+  return { cmd, args: serveArgs };
+}
+
+async function cmdDev(args: ParsedArgs): Promise<number> {
+  const parsed = resolvePlaygroundPort(args.flags.port); // same validation (rejects 4001)
+  if ("error" in parsed) {
+    process.stderr.write(`error: ${parsed.error}\n`);
+    return 2;
+  }
+  const { port } = parsed;
+  const host = "127.0.0.1";
+  const { cmd, args: cmdArgs } = resolveDevCommand(args.flags, host, port);
+
+  process.stdout.write(
+    `[agent-email] starting the SOURCE agent (auto-reload): ${cmd} ${cmdArgs.join(" ")}\n`,
+  );
+  // Inherit stdio so uvicorn's reload logs show live. Detached on POSIX so we can
+  // tree-kill the reloader's child on the way out.
+  const child = spawn(cmd, cmdArgs, {
+    stdio: "inherit",
+    detached: process.platform !== "win32",
+  });
+
+  let launchError: Error | undefined;
+  child.on("error", (e) => {
+    launchError = e;
+    process.stderr.write(
+      `[agent-email] failed to launch '${cmd}': ${e.message}\n` +
+        "  Is the Python package installed? `pip install -e hub/agents/python/email`\n" +
+        "  Or point at your venv: `agent-email dev --python /path/to/venv/bin/python`\n",
+    );
+  });
+
+  const baseUrl = `http://${host}:${port}`;
+  try {
+    // Reload startup re-imports the app graph, so allow generous headroom.
+    const dev = await connectSidecar({ baseUrl, healthTimeoutMs: 60_000 });
+    process.stdout.write(`\n  ▸ Email agent (source): ${dev.baseUrl}\n`);
+    process.stdout.write(`    Playground: ${dev.baseUrl}/v1/email/playground\n`);
+    process.stdout.write(
+      `    Attach your app with: connectSidecar({ baseUrl: "${dev.baseUrl}" })\n`,
+    );
+    process.stdout.write(
+      "    Edit the Python under gaia_agent_email/ and it auto-reloads. Ctrl+C to stop.\n\n",
+    );
+  } catch (e) {
+    killDevTree(child);
+    if (launchError) return 1; // the spawn error already printed an actionable hint
+    throw e;
+  }
+
+  await new Promise<void>((resolve) => {
+    let stopping = false;
+    const stop = (): void => {
+      if (stopping) return;
+      stopping = true;
+      process.stdout.write("\n[agent-email] stopping the dev server ...\n");
+      killDevTree(child);
+      resolve();
+    };
+    child.once("exit", stop);
+    for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+      process.once(sig, stop);
+    }
+  });
+  return 0;
+}
+
 function cmdVersion(): number {
   const lock = loadLock();
   process.stdout.write(
@@ -246,6 +356,8 @@ async function main(): Promise<number> {
   switch (cmd) {
     case "playground":
       return cmdPlayground(args);
+    case "dev":
+      return cmdDev(args);
     case "fetch":
       return cmdFetch(args);
     case "version":

@@ -5,6 +5,31 @@ follows [SemVer](https://semver.org/): the **MAJOR** of the on-the-wire
 `SCHEMA_VERSION` is what `checkVersion` enforces at startup, so a contract MAJOR
 bump is always at least a package MINOR bump with a migration note.
 
+## 0.5.0
+
+No contract change — `SCHEMA_VERSION` stays **2.3** and existing integrations are
+unaffected. This release is about **fast local iteration on the agent**: run the
+agent's Python source (which serves an identical contract to the frozen binary)
+and drive it with this same client, so a developer who finds a bug can fix it and
+re-test in seconds instead of waiting for a new binary release.
+
+### Added
+
+- **`connectSidecar({ baseUrl, authToken? })` — attach mode.** The counterpart to
+  `startSidecar` for a server you already run: it waits for `/health` and (by
+  default) version-checks the running server, then returns an `AttachedSidecar`
+  (`{ host, port, baseUrl, client, authToken? }`) with a bound client. It spawns
+  nothing and there is no `child` to `shutdown()` — you own the server's
+  lifecycle. Point it at the Python source dev server (`gaia-agent-email serve
+  --reload`) and your app code is unchanged from production; only the base URL
+  differs. Exported alongside the new `ConnectOptions` / `AttachedSidecar` types.
+- **`agent-email dev` CLI.** One command to launch the **source** agent with
+  auto-reload (not the frozen binary), wait for readiness, and print the base URL
+  to attach with `connectSidecar`. Runs the `gaia-agent-email` console script by
+  default; `--python <path>` runs `-m gaia_agent_email.server` from your venv,
+  `--cmd <path>` overrides the launcher, `--port <n>` sets the bind port.
+  Requires the Python package (`pip install -e hub/agents/python/email`).
+
 ## 0.4.0
 
 Contract bumped to `SCHEMA_VERSION` **2.3**. `checkVersion` is MAJOR-only, so the

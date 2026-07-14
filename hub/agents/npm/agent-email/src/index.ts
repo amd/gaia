@@ -35,6 +35,7 @@ export {
   checkVersion,
   shutdown,
   startSidecar,
+  connectSidecar,
   executableName,
   generateSessionToken,
 } from "./lifecycle.js";
@@ -45,6 +46,8 @@ export type {
   WaitForHealthOptions,
   VersionCheckOptions,
   StartOptions,
+  ConnectOptions,
+  AttachedSidecar,
 } from "./lifecycle.js";
 
 export {

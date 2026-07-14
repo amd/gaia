@@ -430,3 +430,83 @@ export async function startSidecar(opts: StartOptions): Promise<Sidecar> {
     throw e;
   }
 }
+
+/**
+ * A handle to a sidecar this package did NOT spawn (attach mode). Unlike
+ * `Sidecar` it has no `child` — the server's lifecycle is owned elsewhere, so
+ * there is nothing for us to reap or `shutdown()`.
+ */
+export interface AttachedSidecar {
+  host: string;
+  port: number;
+  baseUrl: string;
+  /** A client bound to the server's baseUrl (carries `authToken` if given). */
+  client: EmailClient;
+  /** The caller-auth token, if one was supplied (dev servers usually run token-off). */
+  authToken?: string;
+}
+
+export interface ConnectOptions {
+  /** Base URL of an already-running server, e.g. "http://127.0.0.1:8131". */
+  baseUrl: string;
+  /**
+   * Caller-auth bearer token (#1706), if the server was started with one. A
+   * source dev server started without `GAIA_EMAIL_SIDECAR_TOKEN` runs token-off,
+   * so this is usually omitted in development.
+   */
+  authToken?: string;
+  /** Per-request timeout for the bound client, in ms. Default 30000. */
+  timeoutMs?: number;
+  /** Health-wait timeout. Default 30000ms. */
+  healthTimeoutMs?: number;
+  /** Verify the contract apiVersion after health (default true). */
+  verifyVersion?: boolean;
+  /** apiVersion the client expects (default SCHEMA_VERSION). */
+  expectedApiVersion?: string;
+}
+
+/**
+ * Attach to an already-running email server — the counterpart to `startSidecar`
+ * for the fast dev loop. It spawns nothing: it waits for `/health` and (by
+ * default) version-checks the running server, then returns a client bound to it.
+ *
+ * Pair it with the Python package's source dev server —
+ * `gaia-agent-email serve --reload` — so you edit the agent's Python, it
+ * auto-reloads, and the next call through this client hits the new code. Because
+ * the frozen binary and the source server serve an identical contract, your app
+ * code is unchanged: only the base URL differs from production.
+ *
+ * There is no `child` and nothing to `shutdown()` here — you own the server's
+ * lifecycle (e.g. the `serve` process in another terminal).
+ */
+export async function connectSidecar(
+  opts: ConnectOptions,
+): Promise<AttachedSidecar> {
+  if (!opts?.baseUrl) {
+    throw new TypeError(
+      "connectSidecar requires a baseUrl, e.g. { baseUrl: 'http://127.0.0.1:8131' }",
+    );
+  }
+  const client = new EmailClient({
+    baseUrl: opts.baseUrl,
+    authToken: opts.authToken,
+    timeoutMs: opts.timeoutMs,
+  });
+  await waitForHealth(opts.baseUrl, {
+    timeoutMs: opts.healthTimeoutMs,
+    client,
+  });
+  if (opts.verifyVersion ?? true) {
+    await checkVersion(client, { expectedApiVersion: opts.expectedApiVersion });
+  }
+  const url = new URL(opts.baseUrl);
+  const host = url.hostname;
+  const port = url.port
+    ? Number(url.port)
+    : url.protocol === "https:"
+      ? 443
+      : 80;
+  const baseUrl = `${url.protocol}//${url.host}`;
+  log.info(`connected to email server at ${baseUrl}`);
+  return { host, port, baseUrl, client, authToken: opts.authToken };
+}
