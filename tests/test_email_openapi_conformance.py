@@ -295,7 +295,7 @@ def test_init_conforms_to_spec_when_not_ready(client, committed_spec):
     """
     with patch(
         "gaia_agent_email.api_routes._probe_lemonade_health",
-        return_value=(False, "http://localhost:8000/api/v1", None),
+        return_value=(False, "http://localhost:8000/api/v1", None, []),
     ):
         resp = client.get("/v1/email/init")
 
@@ -315,7 +315,7 @@ def test_init_conforms_to_spec_when_ready(client, committed_spec):
     with (
         patch(
             "gaia_agent_email.api_routes._probe_lemonade_health",
-            return_value=(True, "http://localhost:8000/api/v1", "10.2.0"),
+            return_value=(True, "http://localhost:8000/api/v1", "10.2.0", []),
         ),
         patch(
             "gaia_agent_email.api_routes._probe_model_present",
