@@ -221,6 +221,10 @@ you (`--python <path>` to pick a venv, `--port <n>` to rebind).
 (which fetches + spawns the frozen binary). The calls are identical.
 
 <Note>
+  - The server starts (and `connectSidecar` succeeds) **before** Lemonade is up —
+    `/health` is liveness-only. Live `triage` returns **502** until a local
+    Lemonade Server is running with the model pulled (`lemonade-server serve`;
+    `gaia init` to provision). You can still iterate on non-LLM code paths first.
   - You own the `serve` process — there's no `child` on the returned handle and
     nothing to `shutdown()`; Ctrl+C the terminal running `serve`.
   - Auto-reload restarts the server, so conversational `/v1/email/agent/*`
