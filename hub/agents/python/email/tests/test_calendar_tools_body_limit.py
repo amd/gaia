@@ -25,9 +25,10 @@ class TestCalendarToolsBodyLimitDedup:
         import gaia_agent_email.tools.calendar_tools as calendar_tools
         from gaia_agent_email.tools.read_tools import DEFAULT_BODY_LIMIT_CHARS
 
-        assert getattr(
-            calendar_tools, "DEFAULT_BODY_LIMIT_CHARS", None
-        ) == DEFAULT_BODY_LIMIT_CHARS, (
+        assert (
+            getattr(calendar_tools, "DEFAULT_BODY_LIMIT_CHARS", None)
+            == DEFAULT_BODY_LIMIT_CHARS
+        ), (
             "calendar_tools must import DEFAULT_BODY_LIMIT_CHARS from "
             "read_tools so there is a single source of truth for the body "
             "truncation limit"

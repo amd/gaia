@@ -126,9 +126,7 @@ class TestEnsureReadyFloorMatchesPin:
     keeps the historical default (32768).
     """
 
-    def test_pinned_agent_passes_pin_as_ensure_ready_floor(
-        self, tmp_path, monkeypatch
-    ):
+    def test_pinned_agent_passes_pin_as_ensure_ready_floor(self, tmp_path, monkeypatch):
         """ctx_size=16384 -> EVERY ensure_ready call carries
         min_context_size=16384 so the floor equals the pin. RED at HEAD:
         EmailTriageAgent passes no min_context_size today, so the base
