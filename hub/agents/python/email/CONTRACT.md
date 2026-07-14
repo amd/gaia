@@ -529,12 +529,14 @@ ships to, and numbers measured there do not transfer.
 - Published scorecards and baselines are designed to state the window they
   were measured under (`recipe.environment.ctx_size` on the scorecard;
   `ctx_size` in `baseline_accuracy.json` and the benchmark's `quality.json` /
-  `scorecard.json`). This stamp is not on any committed artifact yet — it
-  lands when the baseline is next re-recorded (the consolidated eval pass,
-  [#1319](https://github.com/amd/gaia/issues/1319) /
-  [#1892](https://github.com/amd/gaia/issues/1892)). Until then, treat every
-  existing number as measured at the unpinned 64K window and do not compare
-  it against a future pinned run.
+  `scorecard.json`). None of the email agent's committed artifacts carry
+  that stamp yet — it lands when the baseline is next re-recorded (the
+  consolidated eval pass, [#1319](https://github.com/amd/gaia/issues/1319) /
+  [#1892](https://github.com/amd/gaia/issues/1892)); the repo's `gaia eval
+  agent` baseline `meta.json` files already record their historic 64K
+  window. Until then, treat every existing email-agent number as measured
+  at the unpinned 64K window and do not compare it against a future pinned
+  run.
 - Payloads that fit the 16K target are the supported case. Prompt
   construction bounds body content with documented character limits (marked
   `...[truncated]`, never silent), and a genuine context overflow on the
@@ -554,6 +556,9 @@ ships to, and numbers measured there do not transfer.
 payload consumed. `GET /v1/email/init` additionally reports the *currently
 loaded* `ctx_size` on `model` when the triage model is loaded and the
 server exposes it — null otherwise (no config echo, no guessing).
+`ctx_size` reflects `/health`'s loaded state specifically, so it can be set
+even when the model-catalog probe fails and `present` reports `false` —
+the two fields answer different questions from different probes.
 
 > **Note:** the **interactive `gaia email` CLI path currently loads the model
 > at 32K** (the `agent_context_sizes` registry in `src/gaia/cli.py`) — the
