@@ -27,6 +27,8 @@ on:
       - 'tests/unit/eval/**'
       - 'tests/fixtures/email/**'
       - 'tests/test_email_openapi_conformance.py'
+      - 'tests/unit/test_email_sidecar_devmode_app.py'
+      - 'tests/unit/test_email_sidecar_server_wiring.py'
       - 'setup.py'
       - 'pyproject.toml'
       - '.github/workflows/test_email_agent_unit.yml'
@@ -45,6 +47,8 @@ on:
       - 'tests/unit/eval/**'
       - 'tests/fixtures/email/**'
       - 'tests/test_email_openapi_conformance.py'
+      - 'tests/unit/test_email_sidecar_devmode_app.py'
+      - 'tests/unit/test_email_sidecar_server_wiring.py'
       - 'setup.py'
       - 'pyproject.toml'
       - '.github/workflows/test_email_agent_unit.yml'
@@ -119,6 +123,8 @@ jobs:
           echo "  - tests/unit/eval/                 benchmark / quality + perf gate machinery"
           echo "  - hub/agents/python/email/tests/   REST sidecar contract"
           echo "  - tests/test_email_openapi_conformance.py  OpenAPI spec conformance"
+          echo "  - tests/unit/test_email_sidecar_devmode_app.py + _server_wiring.py"
+          echo "      Agent UI dev-mode contract (packaging/server.py shim + build_app)"
           echo ""
           python -m pytest \
             tests/unit/agents/email/ \
@@ -127,6 +133,8 @@ jobs:
             tests/unit/eval/ \
             hub/agents/python/email/tests/ \
             tests/test_email_openapi_conformance.py \
+            tests/unit/test_email_sidecar_devmode_app.py \
+            tests/unit/test_email_sidecar_server_wiring.py \
             -v --tb=short
 
       - name: Test summary
