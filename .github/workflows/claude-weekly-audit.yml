@@ -45,7 +45,7 @@
 # (CLAUDE_CODE_OAUTH_TOKEN, covered by the monthly claude-auth-canary.yml). Runs on the
 # Claude Max subscription pool, so there is no per-run dollar cost — only shared quota.
 #
-# COST CEILING: 5 dimension jobs (--max-turns 30) + 1 synthesis job (--max-turns 25) =
+# COST CEILING: 5 dimension jobs (--max-turns 30) + 1 synthesis job (--max-turns 32) =
 # a known per-run ceiling. The dimension matrix runs `max-parallel: 1` (serialized) so
 # the run is a steady drip rather than a 5-job burst — this keeps it under the Max
 # subscription's rolling (5-hour) rate limit, at the cost of a longer wall-clock.
@@ -203,23 +203,78 @@ jobs:
                changed files to focus on. In deep mode, review beyond the diff.
             3. Investigate with Grep/Glob/Read/Bash (read-only — do NOT edit, install, or run repo code).
 
-            ## Your lens
+            ## Your lens — the five are mutually exclusive; claim ONLY yours
+            The lenses overlap unless you respect these boundaries. The decisive question for a
+            broken thing is: **is the code wired but misbehaving (correctness), never written
+            (features), or contradicted by its docs (docs)?**
             - **security**: injection (SQL/command), unsafe subprocess/eval, `pickle`/`yaml.load`
               without SafeLoader, secrets in code or logs, path traversal, fork-PR surface.
-            - **correctness**: real logic bugs, AND every CLAUDE.md "No Silent Fallbacks — Fail
-              Loudly" violation: `except Exception: pass`, `try/except` that returns
-              None/""/a placeholder and swallows the error, retry loops that hide the final
-              failure, config loaders that default a missing required value. This lens OWNS
-              the silent-fallback check.
+            - **correctness**: code that IS wired and runs but silently does the wrong thing or
+              nothing — a handler that flips a success flag without doing the work (a rollback
+              that never rolls back), a poller that always returns a placeholder/null, a mode
+              that no-ops, a flag the parser accepts but whose handler raises NotImplementedError.
+              PLUS real logic bugs and every CLAUDE.md "No Silent Fallbacks — Fail Loudly"
+              violation (`except Exception: pass`, `try/except` returning None/""/a placeholder
+              and swallowing the error, retry loops hiding the final failure, config defaulting a
+              missing required value). **This lens OWNS wired-but-broken behavior and the
+              silent-fallback check — do NOT leave these to `features`.**
+            - **features**: a genuinely MISSING or half-shipped capability where nothing is wired
+              yet — a `TODO` standing in for code never written, a capability a recent feature
+              clearly implies but didn't ship. If the code IS wired but behaves wrongly or does
+              nothing, that is **correctness**, not features. Don't claim it here.
             - **docs**: a new/changed feature with no `docs/` page or no `docs.json` nav entry;
               `docs/reference/cli.mdx` drift from the real `gaia` flags; any `amd-gaia.ai` URL in
               `src/gaia/` missing the `/docs/` prefix (CI rule, issue #1058); a hub agent under
               `hub/agents/python/<id>/` whose README/SPEC/SKILL/CHANGELOG contradict each other.
-            - **tests**: new or changed code paths under `src/gaia/` or `hub/` with no test in
-              `tests/`; assertions that only prove a mock was called, not that the outgoing call
-              is valid (the CLAUDE.md "#1655" boundary rule).
-            - **features**: obvious half-finished follow-ups, a `TODO` standing in for missing
-              logic, a capability a recent feature clearly implies but didn't ship.
+              A feature **documented as working whose implementation is a stub/NotImplementedError
+              is a DOCS finding** (doc-vs-code drift) — claim it here, not under features.
+            - **tests**: code paths with no test, or assertions that only prove a mock was called,
+              not that the outgoing call is valid (CLAUDE.md "#1655" boundary rule). **In DEEP
+              mode, do NOT file a separate finding for every large module that merely lacks tests
+              — that floods the tracker.** File separate findings only for untested RISK-BEARING
+              logic: auth/token handling, a release or trust gate, flag/precedence dispatch,
+              error-to-exit mapping, or the #1655 mock-only pattern. Roll all the plain
+              "module X has no coverage" cases into ONE aggregate finding titled
+              "Untested modules (deep sweep)", listing them in `why`, with
+              `dedup_key` = `tests:aggregate:untested-modules`. In NORMAL mode, focus on
+              new/changed code paths from the scope file.
+
+            ## Published hub agents — HOLD TO THE HIGHEST BAR (explicit double-check)
+            Published agents are the project's shop window — an integrator installs them and
+            judges GAIA by them, so they must be bulletproof. **In BOTH modes, if your lens
+            touches a published hub agent, review it against this bar explicitly and bump any
+            gap up one severity level** (a gap here is never 🟡; a user-facing break on the
+            default path is 🔴).
+            - **Which agents are published:** currently the **email agent** — code at
+              `hub/agents/python/email/`, npm client at `hub/agents/npm/agent-email/`. Detect
+              any *other* published agent generally: it has a `.github/workflows/release_agent_<id>.yml`
+              OR a shipped `hub/agents/**/SCORECARD.md` OR a released `version:` in its
+              `hub/agents/**/<id>/gaia-agent.yaml`. Apply this bar to every one you find.
+            - **What each lens checks on a published agent** (apply only YOUR lens):
+              - **docs**: the canonical README (the npm client README for npm agents, e.g.
+                `hub/agents/npm/agent-email/README.md`) is high-quality and integrator-facing;
+                `SPEC.md` is a complete technical reference; `SKILL.md` is a real AI-integration
+                playbook; `CHANGELOG.md` accurately names each version's change; any shipped
+                contract spec (`spec_html.py` / `specification.html` / `openapi.*.json`) matches
+                the code; and a `SCORECARD.md` exists and is LINKED from the README. All of these
+                must be mutually consistent and genuinely written — flag placeholder/stub prose,
+                a missing surface, or one doc contradicting another.
+              - **tests**: solid unit + integration coverage of the agent's real request/response
+                contract (not mock-only — apply #1655 strictly); the `SCORECARD.md` must come from
+                a REAL eval and pass its release gate (`python -m gaia.eval.scorecard_gate`) — flag
+                a missing, stale, hand-authored, or gate-failing scorecard.
+              - **correctness**: the agent's runtime code is bulletproof — NO stubs, NO silent
+                fallbacks, NO half-finished paths, actionable errors at every boundary.
+              - **security**: hold agent code to the strictest reading (it runs on integrators' machines).
+
+            ## Severity — calibrate consistently (🔴 high · 🟠 medium · 🟡 low)
+            - **🔴 high**: a security issue, data loss, or a break that hits users on the default path.
+            - **🟠 medium**: broken or incorrect user-facing behavior (a feature that silently does
+              nothing or the wrong thing), a doc that tells users something false, or a missing
+              test that guards auth / a release-or-trust gate / destructive or precedence logic.
+            - **🟡 low**: a missing test on non-risk logic, a cosmetic gap, a minor nit.
+            **Broken behavior ALWAYS outranks a missing test** — never rate "module X has no tests"
+            above a feature that is actually broken.
 
             ## Output — write findings to `findings-${{ matrix.dimension }}.json`
             Write a JSON file at the repo root named exactly `findings-${{ matrix.dimension }}.json`
@@ -228,11 +283,13 @@ jobs:
             ```json
             {"findings": [
               {
-                "severity": "🔴" | "🟡" | "🟢",
+                "severity": "🔴" | "🟠" | "🟡",
                 "path": "src/gaia/....py",
                 "symbol": "function_name or ClassName or a doc heading — NOT a line number",
                 "title": "one-line statement of the problem",
                 "why": "one sentence: the concrete impact / what breaks",
+                "evidence": "a direct quote or `path:line` you READ that proves the claim — enough for a reviewer to verify without re-deriving. e.g. \"auditStore.ts:88 sets `rolledBack = true` with a `// TODO: call IPC` and no IPC call\"",
+                "auto_fixable": true | false,
                 "dedup_key": "${{ matrix.dimension }}:<repo-relative-path>:<symbol-or-section>"
               }
             ]}
@@ -241,8 +298,24 @@ jobs:
             The `dedup_key` MUST be `${{ matrix.dimension }}:<path>:<symbol>` — a stable
             function/class name or doc heading, NEVER a line number (line numbers move and
             would re-file the same finding every week). Line numbers may appear in `title`/`why`,
-            never in the key. Report only findings you are confident are real; skip anything
-            CI's `python util/lint.py --all` already enforces (black/isort/whitespace).
+            never in the key. **`title`, `path`/`symbol`, and `dedup_key` must all point at the
+            SAME file and symbol** — don't let the title name one file and the key another.
+            `auto_fixable` = true only if the fix is locatable and small (~1-3 files, targeted,
+            no design decision) so the `bug`→auto-fix path can land it; false if it needs a human
+            (writing a test suite, a refactor, a design call).
+
+            ## Verify before you report — precision beats recall
+            One false finding erodes trust in the whole audit. Before you write a finding:
+            1. **Open the cited file and confirm the problem is actually present** — don't report
+               from a filename or a grep hit alone.
+            2. **Rule out that it's already handled** — the error re-raised two lines down, a test
+               in a different directory, the "missing" doc living under another path. A finding
+               that's already covered is a false positive; drop it.
+            3. Fill `evidence` with what you actually read. If you cannot produce concrete
+               evidence, you have not verified it — **omit the finding.**
+            Skip anything CI's `python util/lint.py --all` already enforces (black/isort/whitespace),
+            and skip anything you are not confident is real. A shorter, fully-substantiated list is
+            the goal — never pad.
 
             ## Security lens — details stay PRIVATE (this overrides the output rule above)
             If YOUR LENS IS security: a GitHub Actions run has no private DM channel and this
@@ -291,14 +364,17 @@ jobs:
         with:
           path: audit-findings
 
-      - name: Ensure weekly-audit label exists
+      - name: Ensure labels exist
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh label create weekly-audit \
-            --color 5319e7 \
+          gh label create weekly-audit --color 5319e7 \
             --description "Proactive weekly Claude audit finding" \
             2>/dev/null && echo "created weekly-audit label" || echo "weekly-audit label already exists"
+          # audit-wontfix permanently suppresses a finding — synthesis skips its key forever.
+          gh label create audit-wontfix --color cccccc \
+            --description "Accepted debt — weekly audit will never re-file this finding" \
+            2>/dev/null && echo "created audit-wontfix label" || echo "audit-wontfix label already exists"
 
       - name: Synthesize and file the triage issue
         id: claude
@@ -322,60 +398,94 @@ jobs:
                subdir, e.g. `audit-findings/findings-docs/findings-docs.json`). Missing or empty
                files are fine — a dimension may have found nothing or crashed.
             2. Read `CLAUDE.md` → "Issue Response Guidelines" for the tone/format to write in.
-            3. List already-open audit findings so you don't re-file them:
+            3. Build the **already-filed** key set (findings not to re-file):
                `gh issue list --repo ${{ github.repository }} --label weekly-audit --state open --json number,title,body --limit 200`
-               Each open child issue body carries a hidden `<!-- audit-key: KEY -->` marker.
-               Collect those KEYs into the "already filed" set.
+               Each body carries a hidden `<!-- audit-key: KEY -->` marker — collect those KEYs.
+            4. Build the **suppressed-forever** key set (accepted debt):
+               `gh issue list --repo ${{ github.repository }} --label weekly-audit --label audit-wontfix --state all --json body --limit 200`
+               Collect their `audit-key` KEYs too. These are permanently dismissed.
+            5. Find the **previous parent** to supersede: the currently-open issue whose title
+               starts `Weekly audit —` (there should be at most one). Note its number.
 
-            ## Dedup (the single biggest correctness risk)
-            A finding is a duplicate iff its `dedup_key` already appears in an open
-            `weekly-audit` issue's `<!-- audit-key: ... -->` marker. Skip duplicates entirely.
-            Match on the exact key string — never on line numbers or prose similarity.
-            If, after dedup, there are ZERO new findings, post NOTHING and exit cleanly.
+            ## Dedup + verify (the single biggest quality risk)
+            Reduce the raw findings to the NEW, real set, in this order:
+            1. **Suppress + skip** any finding whose `dedup_key` is in the already-filed OR the
+               suppressed-forever set. Match the exact key string — never line numbers or prose.
+            2. **Cross-dimension dedup within THIS run:** if two findings from different dimensions
+               describe the same root cause (same file + symbol/area), keep the single most-severe
+               one, mention the other lens in its body, and file just ONE child. (A stubbed command
+               is often flagged by both `docs` and `correctness` — that's one issue, not two.)
+            3. **Evidence gate:** drop any 🔴/🟠 finding whose `evidence` is missing or does not
+               actually substantiate its `title`. If evidence looks thin, spot-check by reading the
+               cited `path`/`symbol` yourself before filing — a false issue erodes the whole audit.
+            If, after all of the above, there are ZERO new findings, post NOTHING, still run the
+            "supersede" step below to close the stale parent, and exit cleanly.
 
-            ## File per-finding CHILD issues (non-security only)
-            For each NEW, confirmed, non-security finding, open a child issue — WITHOUT any
-            auto-fix trigger label (do NOT add `bug`). Write the body to a temp file first, then
+            ## File per-finding CHILD issues — 🔴 high / 🟠 medium ONLY (non-security)
+            Open a child issue only for NEW, verified, non-security findings whose severity is
+            🔴 or 🟠. **🟡 (low) findings get NO child issue** — they are listed in the parent
+            only (they are nits and don't warrant tracker churn or one-click promotion). Open the
+            child WITHOUT any auto-fix trigger label (do NOT add `bug`). Write the body to a temp
+            file first, then
             `gh issue create --repo ${{ github.repository }} --label weekly-audit --title "<title>" --body-file <file>`.
             Body format (the audit-key marker is REQUIRED and drives next week's dedup):
             ```
             <one-paragraph why-this-matters: what's wrong + the concrete impact>
 
             **Where:** `path` · `symbol`
-            **Dimension:** <dimension>   **Severity:** 🔴/🟡/🟢
+            **Evidence:** <the finding's `evidence` — the concrete proof a reviewer can check>
+            **Dimension:** <the finding's own dimension>   **Severity:** 🔴 high / 🟠 medium
+            **Auto-fixable:** yes — apply `bug` to let auto-fix open the PR  |  no — needs a human
 
-            To turn this into a PR: a maintainer applies the `bug` label and the existing
-            auto-fix job opens the fix PR. This issue is intentionally not auto-triggered.
+            Not acting on this? Close it with the `audit-wontfix` label and the audit will never
+            re-file it. Applying `bug` instead hands it to the existing auto-fix job.
 
             <!-- audit-key: <the finding's dedup_key> -->
             ```
-            Capture each child issue number to reference from the parent.
+            Set the Auto-fixable line from the finding's `auto_fixable` field. Capture each child
+            issue number to reference from the parent.
 
             ## File ONE parent TRIAGE issue
             Title: `Weekly audit — ${{ needs.preflight.outputs.mode }} — ${{ github.run_id }}`.
-            Label it `weekly-audit`. A ranked checklist grouped by dimension, most-severe first,
-            each line linking its child issue (`· #<n>`). Example:
+            Label it `weekly-audit`. **Emit a section for EVERY dimension that has at least one
+            finding, in this fixed order: 🔒 Security, Correctness, Features, Docs, Tests.** Group
+            each finding under the dimension IT declares in its JSON — NEVER re-bucket a
+            correctness finding under features (the `dimension` field is authoritative). Within a
+            section, order 🔴 → 🟠 → 🟡 and prefix each line with its severity emoji. 🔴/🟠 lines
+            link their child issue (`· #<n>`); 🟡 lines have no child (they live only here). Example:
             ```
             Proactive weekly audit (${{ needs.preflight.outputs.mode }} mode). Promote a finding
-            to a PR by applying the `bug` label to its child issue.
+            to a PR by applying the `bug` label to its child issue. Severity: 🔴 high · 🟠 medium · 🟡 low.
 
-            ## 🔴 Correctness (1)
-            - [ ] `except Exception: pass` swallows the Lemonade timeout in `foo.py` · #<n>
-            ## 📄 Docs (2)
-            - [ ] `gaia email` flags missing from cli.mdx · #<n>
+            ## Correctness (2)
+            - [ ] 🔴 `rollbackAction` flips rolledBack=true but never calls the IPC — a fake success · #<n>
+            - [ ] 🟠 `except Exception: pass` swallows the Lemonade timeout in `foo.py` · #<n>
+            ## Docs (1)
+            - [ ] 🟠 `gaia api status` documented in cli.mdx but the impl is a stub · #<n>
+            ## Tests (1)
+            - [ ] 🟡 `perf_analysis.py` has no coverage
             ```
+            Start the parent body with a one-line tally so trend is visible at a glance, e.g.
+            `New this run: 4 (🔴 1 · 🟠 3) · low (in-parent only): 2 · suppressed as dup/wontfix: 9`.
             **Security section — count + pointer ONLY.** If there were any security findings,
-            render exactly one line and NOTHING else about them (no file, no symbol, no detail):
+            render exactly one line at the top and NOTHING else about them (no file, no symbol,
+            no detail):
             `## 🔒 Security (<count>) — details in the run log, cc @kovtcharov-amd`
             with the run-log link: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}.
             NEVER put a security `file:line`, exploit, or payload in this issue.
+
+            ## Supersede the previous parent (tracker hygiene — always run this)
+            After filing the new parent (or, on a zero-new-findings run, instead of filing one),
+            close the previous parent you found in First-actions step 5 so triage issues don't
+            pile up: `gh issue close <prev-parent-#> --repo ${{ github.repository }} --comment "Superseded by #<new-parent-# or 'this week — no new findings'>."`
+            Child issues stay OPEN — they are the actionable units; only the parent rolls over.
 
             ## Rules
             - No Claude attribution anywhere (no "Generated with", no Co-Authored-By).
             - Do not open any PR and do not apply the `bug` label — humans gate every code change.
             - Lead with the finding; keep each line to one sentence (CLAUDE.md issue style).
           claude_args: |
-            --max-turns 25
+            --max-turns 32
             --model ${{ env.AUDIT_MODEL }}
             --allowedTools Read,Grep,Glob,Bash
 
