@@ -559,8 +559,10 @@ behind natural-language requests like "triage my inbox", including
 ([#1891](https://github.com/amd/gaia/issues/1891)): the tool's result
 data carries a `usage` object (same four fields as `TriageUsage`,
 aggregated across every LLM classify call in the run, all mailboxes)
-plus `llm_classified_count` — the number of emails that were classified
-by the LLM rather than the heuristic fast path. Both keys are **absent**
+plus `llm_classified_count` — the number of classify calls whose usage
+was measurable (on the shipped Lemonade path this equals the number of
+emails classified by the LLM rather than the heuristic fast path; a
+provider exposing no per-call usage/stats undercounts). Both keys are **absent**
 (never zeroed) on a heuristic-only run where no LLM call was made; a
 present-but-zero `usage` means classify calls happened but their
 per-call measurements were unavailable. `GET /v1/email/init` additionally reports the *currently

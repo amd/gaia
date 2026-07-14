@@ -140,7 +140,7 @@ These blocks are **optional and additive** — a scorecard is valid with or with
 | Row | Definition |
 |-----|------------|
 | `total_input_tokens` / `total_output_tokens` | Run totals: outer agent-loop turns **plus** the triage tool's per-email classify calls. |
-| `llm_classified_count` | How many emails were classified by the LLM (the rest took the heuristic fast path). |
+| `llm_classified_count` | Classify calls whose usage was measurable — on the shipped Lemonade path this equals the number of emails classified by the LLM (the rest took the heuristic fast path). |
 | `tokens_per_triage` | **Pinned definition:** triage classify-call tokens ÷ `llm_classified_count` — classify tokens over *LLM-classified emails only*, so the figure is invariant to the heuristic/LLM mix and to outer-turn measurement races. Comparisons across releases are only meaningful with the corpus held fixed. |
 
 <Note>
