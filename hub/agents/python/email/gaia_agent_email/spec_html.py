@@ -718,6 +718,45 @@ def render_endpoint_spec_html() -> str:
     # Stateful agent surface (/v1/email/agent/*). Hand-authored (not model
     # tables) because the request/response shapes live in agent_routes.py — not
     # the frozen contract — and /query returns an SSE stream, not a JSON body.
+    query_block = """
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/query</span>
+  <p class="desc">Run the email agent loop for one natural-language request and
+    stream the result as <b>Server-Sent Events</b> (<code>text/event-stream</code>)
+    using the <b>frozen canonical /query wire contract</b> (#2015). Request body:
+    <code>{ "query": str, "run_id": uuid, "context": [{role, content}],
+    "model"?: str, "provider"?: str, "max_steps"?: int }</code>. The host mints
+    <code>run_id</code> so the run is cancellable from the instant the request is
+    sent; the transcript slice is <b>pushed</b> in <code>context</code> (the sidecar
+    stays stateless).</p>
+  <p class="desc">Each SSE frame is <code>data: {json}</code> discriminated on
+    <code>type</code>, one of the <b>seven canonical event types</b>:
+    <code>status</code> {message} &middot; <code>token</code> {delta} &middot;
+    <code>tool_call</code> {tool, args} &middot; <code>tool_result</code>
+    {tool, render?, data} &middot; <code>needs_confirmation</code>
+    {run_id, action, summary} &middot; <code>final</code> {answer, usage?} &middot;
+    <code>error</code> {detail, status}. The stream is terminated by <b>exactly one
+    <code>final</code> or <code>error</code></b>.</p>
+  <p class="desc"><b>Confirmation (stateless stub, epic decision D1):</b> a step
+    that needs approval (a destructive/external tool such as <code>send_now</code>)
+    emits <code>needs_confirmation</code> and then the run ends with a
+    <code>final</code> refusal pointing at the deterministic fixed-function route
+    (<code>POST /v1/email/draft</code> to mint a single-use token, then
+    <code>POST /v1/email/send</code>). Server-side resume is not wired yet;
+    <code>confirm_url</code> is omitted.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/query/{run_id}/cancel</span>
+  <p class="desc">Cancel an in-flight <code>/query</code> run — stops tool execution
+    between steps (cooperative, not a kill). Returns
+    <code>{ run_id, cancelled, status }</code>. 404 if no run with that id is in
+    flight.</p>
+</div>
+"""
+
     agent_block = """
 <div class="endpoint-block">
   <span class="method-badge">POST</span>
@@ -889,6 +928,19 @@ def render_endpoint_spec_html() -> str:
 {calendar_create_block}
 
 {calendar_respond_block}
+
+<h2>Canonical agent-loop query (v2)</h2>
+<p class="subtitle">
+  The v2 keystone (#2016): a natural-language request in, the agent reasons and
+  chains its tools into a multi-step workflow, and the seven canonical Server-Sent
+  Event types out (the frozen #2015 <code>/query</code> wire contract). This is the
+  one loop every v2 front-door (Agent UI, <code>gaia email</code> CLI,
+  <code>gaia api</code>) relays to. Unlike the stateful surface below, the host
+  mints <code>run_id</code> and pushes the transcript slice, so the sidecar stays
+  stateless.
+</p>
+
+{query_block}
 
 <h2>Stateful agent surface</h2>
 <p class="subtitle">

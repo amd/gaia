@@ -2757,6 +2757,40 @@ Examples:
     )
     mcp_test_client_parser.add_argument("name", help="Name of the MCP server to test")
 
+    # Daemon command (headless custody daemon lifecycle)
+    daemon_parser = subparsers.add_parser(
+        "daemon",
+        help="Manage the headless GAIA daemon (single machine-wide custody process)",
+    )
+    daemon_subparsers = daemon_parser.add_subparsers(
+        dest="daemon_action", help="Daemon action to perform"
+    )
+    daemon_subparsers.add_parser(
+        "start", help="Start the daemon (or attach if one is already running)"
+    )
+    daemon_subparsers.add_parser("status", help="Show daemon pid / port / uptime")
+    daemon_subparsers.add_parser("stop", help="Stop the running daemon")
+    daemon_subparsers.add_parser(
+        "restart", help="Restart the daemon (stop if running, then start)"
+    )
+    daemon_logs_parser = daemon_subparsers.add_parser(
+        "logs", help="Show the daemon log"
+    )
+    daemon_logs_parser.add_argument(
+        "-n",
+        "--lines",
+        type=int,
+        default=100,
+        help="Number of trailing log lines to show (default: 100)",
+    )
+    daemon_logs_parser.add_argument(
+        "-f",
+        "--follow",
+        action="store_true",
+        help="Follow the log (like tail -f); Ctrl-C to stop",
+    )
+    daemon_parser.set_defaults(action="daemon")
+
     # Cache command (for Context7 cache management)
     cache_parser = subparsers.add_parser(
         "cache", help="Manage Context7 API cache and rate limiting"
@@ -4477,6 +4511,10 @@ Let me know your answer!
     # Handle MCP command
     if args.action == "mcp":
         handle_mcp_command(args)
+        return
+
+    if args.action == "daemon":
+        handle_daemon_command(args)
         return
 
     # Handle Config command
@@ -6796,6 +6834,180 @@ def handle_agent_import(args):
     if result.errors:
         print(f"Errors: {', '.join(result.errors)}", file=sys.stderr)
         sys.exit(1)
+
+
+def _check_daemon_deps():
+    """Fail loud if the daemon's runtime deps (extras-only) are missing.
+
+    ``gaia daemon`` is a base console command but the daemon process needs
+    ``fastapi``/``uvicorn``/``psutil``, which live in the ``[ui]``/``[api]``/
+    ``[dev]`` extras. On a base install the spawned daemon would die on
+    ``ModuleNotFoundError`` and surface a cryptic "process exited early"; name
+    the real cause and the fix instead.
+    """
+    import importlib.util
+
+    missing = [
+        pkg
+        for mod, pkg in (
+            ("fastapi", "fastapi"),
+            ("uvicorn", "uvicorn"),
+            ("psutil", "psutil"),
+        )
+        if importlib.util.find_spec(mod) is None
+    ]
+    if missing:
+        print(
+            "❌ `gaia daemon` needs packages not in the base install: "
+            + ", ".join(missing)
+            + '.\n   Install the daemon extras:  pip install "amd-gaia[ui]"'
+            "  (or [api]/[dev])."
+        )
+        sys.exit(1)
+
+
+def handle_daemon_command(args):
+    """Handle `gaia daemon status|stop|restart|logs|start`."""
+    action = getattr(args, "daemon_action", None)
+    if action is None:
+        print(
+            "❌ No daemon action specified. Use 'gaia daemon --help' to see "
+            "available actions (start, status, stop, restart, logs)."
+        )
+        return
+    _check_daemon_deps()
+    if action == "start":
+        _handle_daemon_start()
+    elif action == "status":
+        _handle_daemon_status()
+    elif action == "stop":
+        _handle_daemon_stop()
+    elif action == "restart":
+        _handle_daemon_restart()
+    elif action == "logs":
+        _handle_daemon_logs(args)
+    else:
+        print(f"❌ Unknown daemon action: {action}")
+
+
+def _fmt_uptime(seconds: float) -> str:
+    seconds = int(max(0, seconds))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h {m}m {s}s"
+    if m:
+        return f"{m}m {s}s"
+    return f"{s}s"
+
+
+def _handle_daemon_start():
+    from gaia.daemon import client
+    from gaia.daemon.errors import DaemonError
+
+    try:
+        inst = client.start_or_attach()
+    except DaemonError as e:
+        print(f"❌ {e}")
+        sys.exit(1)
+    print(f"✅ GAIA daemon running (pid {inst.pid}, port {inst.port})")
+
+
+def _handle_daemon_status():
+    from gaia.daemon import client, paths
+
+    report = client.status_report()
+    state = report["state"]
+    if state == "not_running":
+        print("GAIA daemon: not running")
+        print("  Start it with `gaia daemon start`.")
+        return
+    inst = report["instance"]
+    if state == "stale":
+        reason = {
+            "pid_dead": "recorded pid is not alive",
+            "unresponsive": "process is alive but not answering the client API",
+        }.get(report.get("reason"), report.get("reason"))
+        print(f"GAIA daemon: stale ({reason})")
+        print(f"  Registry: {paths.instance_path()} (pid {inst.pid}, port {inst.port})")
+        print("  Reclaim it with `gaia daemon restart`.")
+        return
+    body = report["status"]
+    print("GAIA daemon: running")
+    print(f"  pid:        {inst.pid}")
+    print(f"  port:       {inst.port}")
+    print(f"  uptime:     {_fmt_uptime(body.get('uptime_seconds', 0))}")
+    print(f"  api:        v{body.get('api_version')}")
+    print(f"  url:        {inst.base_url}")
+
+
+def _handle_daemon_stop():
+    from gaia.daemon import client
+    from gaia.daemon.errors import DaemonError
+    from gaia.daemon.instance import (
+        pid_alive,
+        read_instance,
+        remove_instance,
+        terminate_instance,
+    )
+
+    inst = read_instance()
+    if inst is None:
+        print("GAIA daemon: not running (nothing to stop)")
+        return
+    if not pid_alive(inst.pid):
+        remove_instance(only_pid=inst.pid)
+        print(f"GAIA daemon: cleared stale registry (pid {inst.pid} was already dead)")
+        return
+    # Prefer a graceful, authed shutdown; escalate to terminate if it won't answer.
+    try:
+        client.request_shutdown(inst)
+    except DaemonError as e:
+        print(f"⚠️  graceful shutdown failed ({e}); terminating pid {inst.pid}")
+        terminate_instance(inst)
+    if client.wait_until_gone(inst, timeout=10.0):
+        remove_instance(only_pid=inst.pid)
+        print(f"✅ GAIA daemon stopped (pid {inst.pid})")
+    else:
+        print(f"⚠️  daemon pid {inst.pid} did not exit; terminating")
+        terminate_instance(inst)
+        remove_instance(only_pid=inst.pid)
+        print(f"✅ GAIA daemon terminated (pid {inst.pid})")
+
+
+def _handle_daemon_restart():
+    _handle_daemon_stop()
+    _handle_daemon_start()
+
+
+def _handle_daemon_logs(args):
+    from gaia.daemon import paths
+
+    log_file = paths.log_path()
+    if not log_file.exists():
+        print(f"No daemon log at {log_file} (the daemon has not started yet).")
+        return
+    lines = getattr(args, "lines", 100)
+    if getattr(args, "follow", False):
+        # Simple follow loop: print the tail, then stream appended bytes.
+        with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+            existing = f.readlines()
+            for line in existing[-lines:]:
+                print(line, end="")
+            try:
+                while True:
+                    chunk = f.readline()
+                    if chunk:
+                        print(chunk, end="")
+                    else:
+                        time.sleep(0.3)
+            except KeyboardInterrupt:
+                return
+        return
+    with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+        tail = f.readlines()[-lines:]
+    for line in tail:
+        print(line, end="")
 
 
 def handle_mcp_command(args):

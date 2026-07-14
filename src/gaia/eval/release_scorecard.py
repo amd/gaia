@@ -90,6 +90,8 @@ class ResultPayload:
     reproduction_command: Optional[str] = None
     breakdown: Optional[dict] = None
     environment: Optional[dict] = None
+    performance: Optional[dict] = None
+    capability_quality: Optional[dict] = None
 
 
 def _md_cell(value) -> str:
@@ -185,6 +187,12 @@ def render_scorecard(payload: ResultPayload) -> str:
                 for m in payload.metrics
             ],
             **({"breakdown": payload.breakdown} if payload.breakdown else {}),
+            **({"performance": payload.performance} if payload.performance else {}),
+            **(
+                {"capability_quality": payload.capability_quality}
+                if payload.capability_quality
+                else {}
+            ),
         },
         "aggregate": {
             "name": payload.aggregate_name,
@@ -307,6 +315,38 @@ matter alone — no eval-harness access needed.
             )
             breakdown_section += f"\n**Top confusions:**\n\n{conf_lines}\n"
         body += breakdown_section
+
+    if payload.performance:
+        perf_rows = "\n".join(
+            f"| {_md_cell(k)} | {_md_cell(v)} |" for k, v in payload.performance.items()
+        )
+        body += (
+            "\n## Performance\n\n"
+            "_Measured on the run environment above (model / hardware / gaia_commit / "
+            "corpus size); the perf gate is report-only, so these are observed values, "
+            "not pass/fail bars (see `tests/fixtures/email/perf_gate_thresholds.json`)._\n\n"
+            f"| Metric | Value |\n|--------|-------|\n{perf_rows}\n"
+        )
+
+    if payload.capability_quality:
+        capq_rows = "\n".join(
+            f"| {_md_cell(cap)} | {_md_cell(metric)} | {value:.4f} |"
+            for cap, metrics in payload.capability_quality.items()
+            if isinstance(metrics, dict)
+            for metric, value in metrics.items()
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        )
+        if capq_rows:
+            body += (
+                "\n## Capability quality\n\n"
+                "_Beyond the headline triage accuracy, these are the agent's other "
+                "capabilities scored by their own evals (spam detection, action-item "
+                "extraction, briefing quality). Report-only — they don't feed the "
+                "aggregate above; see the per-capability gate thresholds under "
+                "`tests/fixtures/email/`._\n\n"
+                f"| Capability | Metric | Value |\n|------------|--------|-------|\n"
+                f"{capq_rows}\n"
+            )
 
     if payload.inherited_from:
         body += f"\n> **Inherited from {payload.inherited_from}** — results carried forward verbatim (patch release).\n"
@@ -537,6 +577,8 @@ def carry_forward(prev_scorecard_path: Path, new_version: str) -> ResultPayload:
     # promise "carried forward verbatim").
     breakdown = results.get("breakdown")
     environment = recipe.get("environment")
+    performance = results.get("performance")
+    capability_quality = results.get("capability_quality")
 
     import datetime
 
@@ -555,4 +597,6 @@ def carry_forward(prev_scorecard_path: Path, new_version: str) -> ResultPayload:
         inherited_from=prev_version,
         breakdown=breakdown,
         environment=environment,
+        performance=performance,
+        capability_quality=capability_quality,
     )

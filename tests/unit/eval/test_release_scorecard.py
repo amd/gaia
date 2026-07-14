@@ -894,6 +894,130 @@ class TestBreakdownRoundTrip:
 # ---------------------------------------------------------------------------
 
 
+class TestPerformanceRoundTrip:
+    """performance field: render→parse round-trip, absence, validate invariant."""
+
+    def _make_perf(self):
+        return {
+            "ttft_s": 8.541,
+            "throughput_tps": 12.1,
+            "pipeline_s": 1894.0,
+            "peak_memory_gb": 6.2,
+            "emails_per_run": 20,
+        }
+
+    def test_performance_present_in_front_matter(self):
+        payload = _make_payload()
+        payload.performance = self._make_perf()
+        parsed = parse_scorecard(render_scorecard(payload))
+        assert "performance" in parsed.get(
+            "results", {}
+        ), "'performance' must appear under results in front matter when set"
+        assert parsed["results"]["performance"]["throughput_tps"] == 12.1
+
+    def test_performance_absent_when_none(self):
+        parsed = parse_scorecard(render_scorecard(_make_payload()))
+        assert "performance" not in parsed.get("results", {})
+
+    def test_performance_body_section_rendered_when_present(self):
+        payload = _make_payload()
+        payload.performance = self._make_perf()
+        text = render_scorecard(payload)
+        assert "## Performance" in text
+        assert "throughput_tps" in text and "8.541" in text
+
+    def test_performance_body_section_absent_when_none(self):
+        assert "## Performance" not in render_scorecard(_make_payload())
+
+    def test_performance_not_in_required_fields(self):
+        assert "performance" not in REQUIRED_FIELDS
+
+    def test_performance_validate_still_passes(self):
+        payload = _make_payload()
+        payload.performance = self._make_perf()
+        parsed = parse_scorecard(render_scorecard(payload))
+        assert validate_scorecard(parsed) == []
+
+    def test_performance_does_not_affect_aggregate(self):
+        base = parse_scorecard(render_scorecard(_make_payload(accuracy=0.46)))
+        withp = _make_payload(accuracy=0.46)
+        withp.performance = self._make_perf()
+        withp_parsed = parse_scorecard(render_scorecard(withp))
+        assert base["aggregate"]["value"] == withp_parsed["aggregate"]["value"]
+
+    def test_carry_forward_preserves_performance(self, tmp_path):
+        src = _make_payload(version="0.2.3", accuracy=0.75)
+        src.performance = self._make_perf()
+        card = tmp_path / "SCORECARD.md"
+        card.write_text(render_scorecard(src))
+        result = carry_forward(card, "0.2.4")
+        assert result.performance is not None
+        assert result.performance["throughput_tps"] == 12.1
+
+
+class TestCapabilityQualityRoundTrip:
+    """capability_quality: render→parse round-trip, absence, validate invariant."""
+
+    def _make_capq(self):
+        return {
+            "spam": {"precision": 0.92, "recall": 0.88, "f1": 0.9},
+            "action_items": {"precision": 0.8, "recall": 0.75, "f1": 0.77},
+            "briefing": {
+                "approval": 0.95,
+                "must_include_recall": 0.9,
+                "faithful": 1.0,
+                "hallucination_free": 1.0,
+            },
+        }
+
+    def test_capq_present_in_front_matter(self):
+        payload = _make_payload()
+        payload.capability_quality = self._make_capq()
+        parsed = parse_scorecard(render_scorecard(payload))
+        assert "capability_quality" in parsed.get("results", {})
+        assert parsed["results"]["capability_quality"]["spam"]["f1"] == 0.9
+
+    def test_capq_absent_when_none(self):
+        parsed = parse_scorecard(render_scorecard(_make_payload()))
+        assert "capability_quality" not in parsed.get("results", {})
+
+    def test_capq_body_section_rendered_when_present(self):
+        payload = _make_payload()
+        payload.capability_quality = self._make_capq()
+        text = render_scorecard(payload)
+        assert "## Capability quality" in text
+        assert "spam" in text and "action_items" in text and "briefing" in text
+        assert "0.9200" in text  # spam precision rendered with 4dp
+
+    def test_capq_body_section_absent_when_none(self):
+        assert "## Capability quality" not in render_scorecard(_make_payload())
+
+    def test_capq_not_in_required_fields(self):
+        assert "capability_quality" not in REQUIRED_FIELDS
+
+    def test_capq_validate_still_passes(self):
+        payload = _make_payload()
+        payload.capability_quality = self._make_capq()
+        parsed = parse_scorecard(render_scorecard(payload))
+        assert validate_scorecard(parsed) == []
+
+    def test_capq_does_not_affect_aggregate(self):
+        base = parse_scorecard(render_scorecard(_make_payload(accuracy=0.46)))
+        withq = _make_payload(accuracy=0.46)
+        withq.capability_quality = self._make_capq()
+        withq_parsed = parse_scorecard(render_scorecard(withq))
+        assert base["aggregate"]["value"] == withq_parsed["aggregate"]["value"]
+
+    def test_carry_forward_preserves_capq(self, tmp_path):
+        src = _make_payload(version="0.2.3", accuracy=0.75)
+        src.capability_quality = self._make_capq()
+        card = tmp_path / "SCORECARD.md"
+        card.write_text(render_scorecard(src))
+        result = carry_forward(card, "0.2.4")
+        assert result.capability_quality is not None
+        assert result.capability_quality["briefing"]["approval"] == 0.95
+
+
 class TestEnvironmentRoundTrip:
     """environment field: render→parse round-trip, absence, validate invariant."""
 
@@ -1228,6 +1352,207 @@ class TestBreakdownAdapter:
         gt_path = tmp_path / "ground_truth.json"
         gt_path.write_text(json.dumps(gt))
         return gt_path
+
+    def test_performance_extracted_from_summary(self, tmp_path):
+        """build_payload folds performance_summary into a versioned perf block."""
+        mod = self._load_gen_scorecard()
+        scorecard = {
+            "run_id": "perf",
+            "scenarios": [
+                {
+                    "category": "Gemma-4-E4B-it-GGUF",
+                    "status": "PASS",
+                    "total_emails": 20,
+                    "quality": {
+                        "category_accuracy": 0.5,
+                        "within_one_bucket_accuracy": 0.8,
+                    },
+                    "performance_summary": {
+                        "avg_time_to_first_token": 8.5,
+                        "avg_tokens_per_second": 12.1,
+                        "pipeline_latency_s": 760.0,
+                        "peak_memory_gb": 6.2,
+                        "total_emails": 20,
+                    },
+                }
+            ],
+        }
+        bd = self._make_benchmark_dir(tmp_path, scorecard)
+        payload = mod.build_payload(bd, self._make_gt(tmp_path))
+        assert payload.performance is not None
+        assert payload.performance["ttft_s"] == 8.5
+        assert payload.performance["throughput_tps"] == 12.1
+        assert payload.performance["pipeline_s"] == 760.0
+        assert payload.performance["peak_memory_gb"] == 6.2
+        assert payload.performance["emails_per_run"] == 20
+        # It reaches the rendered card so it shows on the hub.
+        assert "## Performance" in render_scorecard(payload)
+
+    def test_performance_drops_unmeasured_memory(self, tmp_path):
+        """peak_memory_gb=0.0 (runner /stats omits it) is dropped, not shown as 0."""
+        mod = self._load_gen_scorecard()
+        scorecard = {
+            "run_id": "nomem",
+            "scenarios": [
+                {
+                    "category": "m",
+                    "status": "PASS",
+                    "total_emails": 20,
+                    "quality": {
+                        "category_accuracy": 0.5,
+                        "within_one_bucket_accuracy": 0.8,
+                    },
+                    "performance_summary": {
+                        "avg_time_to_first_token": 8.5,
+                        "avg_tokens_per_second": 12.1,
+                        "pipeline_latency_s": 760.0,
+                        "peak_memory_gb": 0.0,
+                        "total_emails": 20,
+                    },
+                }
+            ],
+        }
+        bd = self._make_benchmark_dir(tmp_path, scorecard)
+        payload = mod.build_payload(bd, self._make_gt(tmp_path))
+        assert payload.performance is not None
+        assert "peak_memory_gb" not in payload.performance
+        assert payload.performance["throughput_tps"] == 12.1
+
+    def test_performance_none_when_no_summary(self, tmp_path):
+        """No performance_summary in any scenario -> perf block omitted."""
+        mod = self._load_gen_scorecard()
+        scorecard = {
+            "run_id": "noperf",
+            "scenarios": [
+                {
+                    "category": "m",
+                    "status": "PASS",
+                    "total_emails": 10,
+                    "quality": {
+                        "category_accuracy": 0.5,
+                        "within_one_bucket_accuracy": 0.8,
+                    },
+                }
+            ],
+        }
+        bd = self._make_benchmark_dir(tmp_path, scorecard)
+        payload = mod.build_payload(bd, self._make_gt(tmp_path))
+        assert payload.performance is None
+
+    def _scorecard_with_spam(self, precision, recall, f1):
+        return {
+            "run_id": "spam",
+            "scenarios": [
+                {
+                    "category": "Gemma-4-E4B-it-GGUF",
+                    "status": "PASS",
+                    "total_emails": 20,
+                    "quality": {
+                        "category_accuracy": 0.5,
+                        "within_one_bucket_accuracy": 0.8,
+                        "spam": {
+                            "precision": precision,
+                            "recall": recall,
+                            "f1": f1,
+                        },
+                    },
+                }
+            ],
+        }
+
+    def test_spam_folded_into_capability_quality(self, tmp_path):
+        """is_spam P/R/F1 from the benchmark quality block reaches the card."""
+        mod = self._load_gen_scorecard()
+        bd = self._make_benchmark_dir(
+            tmp_path, self._scorecard_with_spam(0.9, 0.8, 0.85)
+        )
+        payload = mod.build_payload(bd, self._make_gt(tmp_path))
+        assert payload.capability_quality is not None
+        assert payload.capability_quality["spam"] == {
+            "precision": 0.9,
+            "recall": 0.8,
+            "f1": 0.85,
+        }
+        assert "## Capability quality" in render_scorecard(payload)
+
+    def test_capability_quality_none_without_spam_or_reports(self, tmp_path):
+        """No spam block and no report args -> capability_quality omitted."""
+        mod = self._load_gen_scorecard()
+        scorecard = {
+            "run_id": "nocapq",
+            "scenarios": [
+                {
+                    "category": "m",
+                    "status": "PASS",
+                    "total_emails": 10,
+                    "quality": {
+                        "category_accuracy": 0.5,
+                        "within_one_bucket_accuracy": 0.8,
+                    },
+                }
+            ],
+        }
+        bd = self._make_benchmark_dir(tmp_path, scorecard)
+        payload = mod.build_payload(bd, self._make_gt(tmp_path))
+        assert payload.capability_quality is None
+
+    def test_action_item_and_briefing_reports_folded(self, tmp_path):
+        """--action-item-report and --briefing-report metrics reach the card."""
+        mod = self._load_gen_scorecard()
+        ai = tmp_path / "ai.json"
+        ai.write_text(
+            json.dumps(
+                {
+                    "summary": {
+                        "extraction": {"precision": 0.8, "recall": 0.7, "f1": 0.75}
+                    }
+                }
+            )
+        )
+        br = tmp_path / "br.json"
+        br.write_text(
+            json.dumps(
+                {
+                    "summary": {
+                        "briefing": {
+                            "briefing_approval_rate": 0.95,
+                            "must_include_recall_mean": 0.9,
+                            "faithful_rate": 1.0,
+                            "hallucination_free_rate": 1.0,
+                        }
+                    }
+                }
+            )
+        )
+        bd = self._make_benchmark_dir(
+            tmp_path, self._scorecard_with_spam(0.9, 0.8, 0.85)
+        )
+        payload = mod.build_payload(
+            bd,
+            self._make_gt(tmp_path),
+            action_item_report=str(ai),
+            briefing_report=str(br),
+        )
+        capq = payload.capability_quality
+        assert capq["action_items"] == {"precision": 0.8, "recall": 0.7, "f1": 0.75}
+        assert capq["briefing"]["approval"] == 0.95
+        assert capq["briefing"]["hallucination_free"] == 1.0
+
+    def test_report_fails_loud_on_skipped(self, tmp_path):
+        """A report marked skipped raises rather than silently omitting the metric."""
+        mod = self._load_gen_scorecard()
+        rep = tmp_path / "skipped.json"
+        rep.write_text(json.dumps({"skipped": True}))
+        with pytest.raises(ValueError, match="skipped"):
+            mod._load_report_metrics(rep, "extraction", {"f1": "f1"})
+
+    def test_report_fails_loud_on_missing_key(self, tmp_path):
+        """A judged report missing a mapped source key raises (no silent omit)."""
+        mod = self._load_gen_scorecard()
+        rep = tmp_path / "partial.json"
+        rep.write_text(json.dumps({"summary": {"extraction": {"precision": 0.8}}}))
+        with pytest.raises(ValueError, match="summary.extraction.f1"):
+            mod._load_report_metrics(rep, "extraction", {"f1": "f1"})
 
     def test_per_category_accuracy_fyi(self, tmp_path):
         """fyi: 6+10=16 total, 6+10=16 correct in scenario1+2 combined."""

@@ -74,7 +74,14 @@ CATEGORY_PERSONAL = "PERSONAL"
 # triage never composed a body, so the always-empty ``draft.body`` it used to
 # return is dropped rather than left as a confusing "". ``DraftReply`` (with
 # ``body``) is unchanged and still the /v1/email/draft + MCP draft_reply shape.
-SCHEMA_VERSION = "2.3"
+# 2.4 is additive over 2.3 (#2016): a new streaming agent-loop surface
+#   - POST /v1/email/query  — NL request in, the agent reasons and chains tools,
+#     the seven canonical SSE event types out (the frozen #2015 /query contract:
+#     status / token / tool_call / tool_result / needs_confirmation / final /
+#     error, terminated by a single final or error).
+#   - POST /v1/email/query/{run_id}/cancel — stop tool execution between steps.
+# No existing shape changed, so 2.3 consumers keep working (additive MINOR).
+SCHEMA_VERSION = "2.4"
 
 # Maximum number of items in a single batch request. Protects the single-tenant
 # local model slot from runaway batches. Enforced via Pydantic max_length.

@@ -187,7 +187,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.3",
+            "default": "2.4",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -212,7 +212,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.3",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -289,7 +289,7 @@
             "title": "Provider"
           },
           "schema_version": {
-            "default": "2.3",
+            "default": "2.4",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -476,7 +476,7 @@
             "title": "Location"
           },
           "schema_version": {
-            "default": "2.3",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -516,7 +516,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.3",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -547,7 +547,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.3",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -583,7 +583,7 @@
             "title": "Provider"
           },
           "schema_version": {
-            "default": "2.3",
+            "default": "2.4",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -623,7 +623,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.3",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -774,7 +774,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.3",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -887,7 +887,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.3",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -922,7 +922,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.3",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1122,7 +1122,7 @@
             "type": "integer"
           },
           "schema_version": {
-            "default": "2.3",
+            "default": "2.4",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1140,7 +1140,7 @@
             "description": "The pre-scan envelope."
           },
           "schema_version": {
-            "default": "2.3",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1305,7 +1305,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.3",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1377,7 +1377,7 @@
             "title": "Query"
           },
           "schema_version": {
-            "default": "2.3",
+            "default": "2.4",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1428,7 +1428,7 @@
             "title": "Query"
           },
           "schema_version": {
-            "default": "2.3",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1649,7 +1649,7 @@
             "title": "Payload"
           },
           "schema_version": {
-            "default": "2.3",
+            "default": "2.4",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1679,7 +1679,7 @@
             "description": "The structured analysis."
           },
           "schema_version": {
-            "default": "2.3",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1845,7 +1845,7 @@
             "type": "integer"
           },
           "schema_version": {
-            "default": "2.3",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1913,7 +1913,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.3",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -2241,6 +2241,125 @@
         "title": "PreScanTotals",
         "type": "object"
       },
+      "QueryCancelResponse": {
+        "additionalProperties": false,
+        "description": "Result of ``POST /v1/email/query/{run_id}/cancel``.",
+        "properties": {
+          "cancelled": {
+            "default": true,
+            "description": "True once the cancel was delivered to the run.",
+            "title": "Cancelled",
+            "type": "boolean"
+          },
+          "run_id": {
+            "description": "The run that was signalled to cancel.",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "status": {
+            "default": "ok",
+            "description": "Always 'ok' on success.",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "title": "QueryCancelResponse",
+        "type": "object"
+      },
+      "QueryContextItem": {
+        "additionalProperties": false,
+        "description": "One prior turn pushed in the request body (spec §2.4).",
+        "properties": {
+          "content": {
+            "description": "The message text for this turn.",
+            "title": "Content",
+            "type": "string"
+          },
+          "role": {
+            "description": "Transcript role: 'user', 'assistant', 'system', or 'tool'.",
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "title": "QueryContextItem",
+        "type": "object"
+      },
+      "QueryRequest": {
+        "additionalProperties": false,
+        "description": "``POST /v1/email/query`` request body (frozen #2015 contract, spec §2.2).",
+        "properties": {
+          "context": {
+            "description": "The relevant transcript slice, pushed in the body. May be an empty array for a fresh conversation, but the field must be present.",
+            "items": {
+              "$ref": "#/components/schemas/QueryContextItem"
+            },
+            "title": "Context",
+            "type": "array"
+          },
+          "max_steps": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Agent-loop step ceiling. Omitted → the agent's configured default.",
+            "title": "Max Steps"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Model id override. Omitted → the sidecar's default.",
+            "title": "Model"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "LLM provider override. The email agent runs local inference only, so only 'lemonade' is accepted; any other value is rejected (400).",
+            "title": "Provider"
+          },
+          "query": {
+            "description": "The natural-language request driving the agent loop.",
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "run_id": {
+            "description": "Host-minted streaming-run handle (UUIDv4). Cancellation (POST /v1/email/query/{run_id}/cancel) keys off it, so the run is cancellable from the instant the request is sent.",
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query",
+          "run_id",
+          "context"
+        ],
+        "title": "QueryRequest",
+        "type": "object"
+      },
       "SingleEmailInput": {
         "additionalProperties": false,
         "description": "A single email to triage (AC3 — single-email path).",
@@ -2495,7 +2614,7 @@
   "info": {
     "description": "REST surface for the GAIA Email Triage agent (/v1/email/*). Cross-implementation contract for the npm client and native builds.",
     "title": "GAIA Email Agent API",
-    "version": "2.3"
+    "version": "2.4"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -3066,6 +3185,97 @@
         "summary": "Quarantine Email",
         "tags": [
           "email"
+        ]
+      }
+    },
+    "/v1/email/query": {
+      "post": {
+        "description": "Run the email agent loop for one request and stream canonical SSE events.\n\nBuilds an agent, injects the pushed ``context`` as conversation history, runs\n``process_query(query)`` on a worker thread with an ``SSEOutputHandler``, and\nrelays the loop as the seven canonical event types (spec §4). The stream ends\nwith exactly one ``final`` or ``error``. A confirmation-requiring step ends the\nstream with a ``needs_confirmation`` followed by a ``final`` refusal (the\nstateless D1 stub — see module docstring).",
+        "operationId": "query_v1_email_query_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "text/event-stream": {
+                "schema": {
+                  "example": "data: {\"type\": \"status\", \"message\": \"Processing...\"}\n\ndata: {\"type\": \"tool_call\", \"tool\": \"triage_inbox\", \"args\": {}}\n\ndata: {\"type\": \"tool_result\", \"tool\": \"triage_inbox\", \"data\": {}}\n\ndata: {\"type\": \"final\", \"answer\": \"Triaged 5 emails.\"}\n\n",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Server-Sent Events stream (text/event-stream). Each `data:` line is one canonical event discriminated on `type`, one of: status {message} | token {delta} | tool_call {tool, args} | tool_result {tool, render?, data} | needs_confirmation {run_id, action, summary} | final {answer, usage?} | error {detail, status}. The stream is terminated by exactly one `final` or one `error`."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Query",
+        "tags": [
+          "email",
+          "email-query"
+        ]
+      }
+    },
+    "/v1/email/query/{run_id}/cancel": {
+      "post": {
+        "description": "Cancel an in-flight ``/query`` run — stops tool execution between steps.\n\nCooperative, not a kill: it sets the run's cancel flag, which the agent loop\nobserves at its next step boundary (per-tool timeouts keep each step bounded,\nso that point is always reached in finite time) and the handler observes while\nwaiting on any confirmation. 404 if no run with that id is in flight.",
+        "operationId": "cancel_query_v1_email_query__run_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryCancelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Query",
+        "tags": [
+          "email",
+          "email-query"
         ]
       }
     },

@@ -29,6 +29,9 @@ a cloud service, and that's enforced when the agent starts up.
   choose (it points them out; it never nudges anyone for you).
 - **Daily briefing** — generate a morning inbox summary on a schedule, no prompt
   needed.
+- **Plain-language requests** — describe what you want done ("find today's
+  urgent mail and archive the promotions") and the agent chains the steps
+  itself, streaming progress; runs are cancellable mid-way.
 
 ## Prerequisites
 

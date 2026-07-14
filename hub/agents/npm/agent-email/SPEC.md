@@ -2,7 +2,7 @@
 
 Detailed reference for `@amd-gaia/agent-email`. For a quick start, see
 [`README.md`](./README.md); for an AI-assisted integration walkthrough, see
-[`SKILL.md`](./SKILL.md). The contract version is `SCHEMA_VERSION` **2.3**.
+[`SKILL.md`](./SKILL.md). The contract version is `SCHEMA_VERSION` **2.4**.
 
 ## Architecture
 
@@ -95,6 +95,8 @@ result.
 | `POST /v1/email/calendar/events/preview` | `previewCalendarEvent()` | **Standalone** | Nothing external — mints a single-use confirmation token bound to the event (calendar analogue of `draft`). |
 | `POST /v1/email/calendar/events` | `createCalendarEvent()` | **Connector** | A valid `preview` token **and** a connected calendar. Token gate fires first: no/invalid token → `403`; then the calendar-scope / account checks. |
 | `POST /v1/email/calendar/events/respond` | `respondToCalendarEvent()` | **Connector** | A connected calendar. RSVPs `accepted`/`declined`/`tentative` to an existing invite. |
+| `POST /v1/email/query` | — (SSE; no wrapper yet) | **Connector** | Canonical agent-loop query (schema 2.4, #2016). NL request in, seven canonical SSE event types out (`status`/`token`/`tool_call`/`tool_result`/`needs_confirmation`/`final`/`error`), terminated by one `final`/`error`. Host mints `run_id`; context is pushed. See "Canonical agent-loop query" below. |
+| `POST /v1/email/query/{run_id}/cancel` | — (no wrapper yet) | **Standalone** | Cancel an in-flight `/query` run — stops tool execution between steps. `404` if no run with that id is in flight. |
 | `GET /v1/email/init` | `init()` | **Standalone** | **Readiness preflight** (#1795): probes the whole triage stack — Lemonade reachable **and** version-compatible **and** the triage model downloaded. Returns `200` when ready, `503` when not, with an actionable `hint` either way (same `InitResponse` envelope). Read-only — no model pull. Unlike `/health` (liveness only), this verifies "ready to triage," not just "process up." |
 | `POST /v1/email/init` | — (streaming; no wrapper yet) | **Standalone** | **Provisioning** (#1795): tells the *running* local Lemonade to download the configured triage model, streaming `text/plain` progress line-by-line. Lemonade unreachable → real `503` (pulls nothing); once a pull starts the `200` is committed, so the trailing `✓`/`✗` line carries the true outcome. Not in the OpenAPI JSON — a streaming operational verb (like `GET /spec`), so `include_in_schema=False`. |
 | `GET /health` | `health()` | **Standalone** | Liveness only — does **not** check Lemonade/model. |
@@ -112,6 +114,48 @@ connected mailbox, but no token); the mutating calls (`send`, `archive`, `quaran
 `createCalendarEvent`) and the reversals/calendar views need a connected mailbox whose
 relevant scope was granted.
 
+### Canonical agent-loop query (`POST /v1/email/query`, schema 2.4)
+
+The v2 keystone (#2016): a natural-language request in, the agent reasons and chains its
+tools into a multi-step workflow, and the **seven canonical Server-Sent Event types** out
+(the frozen `/query` wire contract). Every v2 front-door (the Agent UI relay, the
+`gaia email` CLI, `gaia api`) relays to **this one loop**. Request body:
+
+```jsonc
+{
+  "query": "Triage my inbox and draft replies to anything urgent.",
+  "run_id": "0f9c2b6e-2c4a-4b1e-9d6a-1e2f3a4b5c6d", // host-minted UUIDv4
+  "context": [ { "role": "user", "content": "earlier turn" } ], // pushed slice
+  "model": "Gemma-4-E4B-it-GGUF",   // optional
+  "provider": "lemonade",           // optional; only 'lemonade' (local-only agent)
+  "max_steps": 20                    // optional
+}
+```
+
+The **host mints `run_id`**, so the run is cancellable from the instant the request is
+sent (`POST /v1/email/query/{run_id}/cancel`, which stops tool execution between steps).
+Context is **pushed** in the body — the sidecar stays stateless. The response is
+`text/event-stream`; each `data:` line is one canonical event discriminated on `type`:
+
+| `type` | Payload | Meaning |
+|---|---|---|
+| `status` | `{ message }` | progress narration (also folds `step`/`thinking`/`plan`) |
+| `token` | `{ delta }` | an incremental chunk of assistant text |
+| `tool_call` | `{ tool, args }` | the agent is invoking a tool |
+| `tool_result` | `{ tool, render?, data }` | a tool returned; `render` names a typed card |
+| `needs_confirmation` | `{ run_id, action, summary }` | a gated step is awaiting approval |
+| `final` | `{ answer, usage? }` | terminal — the assistant's answer |
+| `error` | `{ detail, status }` | terminal — an actionable failure, surfaced verbatim |
+
+The stream ends with **exactly one `final` or `error`**.
+
+**Confirmation (stateless stub, epic decision D1):** a step that needs approval (a
+destructive/external tool such as `send_now`) emits `needs_confirmation` and then the run
+ends with a `final` refusal pointing at the deterministic fixed-function route — mint a
+token via `draft()`/`POST /v1/email/draft`, then `send()`/`POST /v1/email/send`.
+Server-side resume is not wired yet, so `confirm_url` is omitted. Not wrapped by the typed
+npm client yet — call it directly (e.g. `fetch` with `Accept: text/event-stream`).
+
 ### Stateful agent surface (`/v1/email/agent/*`, 0.4.0)
 
 Everything above is **stateless** — each call analyzes the payload you send, with no
@@ -120,6 +164,9 @@ agent** so a host can drive the full `EmailTriageAgent` (memory, personalization
 every agent tool) over HTTP instead of importing it in-process. This is the surface the
 Agent UI uses to back its email experience with the packaged sidecar. It is **not wrapped
 by the typed npm client yet** — call it directly (e.g. `fetch`) or via the Agent UI.
+Distinct from `/v1/email/query` above: `/agent/*` is session-scoped (server-held memory +
+history), while `/query` is stateless with a host-minted `run_id` and pushed `context` and
+emits the canonical seven-event vocabulary.
 
 | Endpoint | Notes |
 |---|---|

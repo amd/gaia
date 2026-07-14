@@ -162,7 +162,7 @@ td:nth-child(3) {
 </head>
 <body>
 <h1>Email Triage Agent
-  <span class="version-badge">Contract schema_version: 2.3</span>
+  <span class="version-badge">Contract schema_version: 2.4</span>
 </h1>
 <p class="subtitle">
   REST endpoint specification derived from the frozen #1262 contract
@@ -248,6 +248,56 @@ td:nth-child(3) {
 <div class="endpoint-block"><span class="method-badge">POST</span><span class="path">/v1/email/calendar/events</span><p class="desc">Create a calendar event — gated on explicit confirmation (#1780). Like /send, the gate fires FIRST: a request without a valid, payload-bound confirmation token (from .../preview) is rejected with HTTP 403 before any backend call. Events are externally visible to attendees, so they are never created without confirmation.</p><h3>Request body</h3><div class="model-section"><h3>CalendarCreateEventRequest</h3><table><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td>schema_version<span class="optional-badge">optional</span></td><td>str</td><td>Contract version. Mismatch lets a consumer fail loudly.</td></tr><tr><td>summary<span class="required-badge">required</span></td><td>str</td><td>Event title / summary (non-empty).</td></tr><tr><td>start<span class="required-badge">required</span></td><td>CalendarEventDateTime</td><td>Event start.</td></tr><tr><td>end<span class="required-badge">required</span></td><td>CalendarEventDateTime</td><td>Event end (after start).</td></tr><tr><td>attendees<span class="optional-badge">optional</span></td><td>list[str]</td><td>Attendee email addresses to invite (may be empty).</td></tr><tr><td>location<span class="optional-badge">optional</span></td><td>str</td><td>Optional free-text location.</td></tr><tr><td>description<span class="optional-badge">optional</span></td><td>str</td><td>Optional event description / body.</td></tr><tr><td>provider<span class="optional-badge">optional</span></td><td>str</td><td>Optional provider binding (&#x27;google&#x27; or &#x27;microsoft&#x27;). When set on preview, the confirmation token binds to this provider so the create routes to the right calendar even with multiple accounts connected.</td></tr><tr><td>confirmation_token<span class="optional-badge">optional</span></td><td>str</td><td>Confirmation token from POST /v1/email/calendar/events/preview. Ignored by preview; required by create — a create without a valid token bound to this exact event is rejected (403).</td></tr></tbody></table></div><h3>Response body</h3><div class="model-section"><h3>CalendarEventResponse</h3><table><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td>schema_version<span class="optional-badge">optional</span></td><td>str</td><td>Echoes the contract version.</td></tr><tr><td>event_id<span class="required-badge">required</span></td><td>str</td><td>Provider id of the created event.</td></tr><tr><td>summary<span class="required-badge">required</span></td><td>str</td><td>Title of the created event.</td></tr><tr><td>created<span class="optional-badge">optional</span></td><td>bool</td><td>Always true on success.</td></tr></tbody></table></div></div>
 
 <div class="endpoint-block"><span class="method-badge">POST</span><span class="path">/v1/email/calendar/events/respond</span><p class="desc">RSVP accept / decline / tentative to an existing invite. An explicit, user-initiated action (the UI&#x27;s accept/decline controls), so it is not separately token-gated. attendee_email is the principal&#x27;s own address (used by Google; ignored by Outlook, which RSVPs on /me).</p><h3>Request body</h3><div class="model-section"><h3>CalendarRespondRequest</h3><table><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td>schema_version<span class="optional-badge">optional</span></td><td>str</td><td>Contract version. Mismatch lets a consumer fail loudly.</td></tr><tr><td>event_id<span class="required-badge">required</span></td><td>str</td><td>Provider event id to RSVP to.</td></tr><tr><td>status<span class="required-badge">required</span></td><td>Literal[accepted, declined, tentative]</td><td>RSVP response: accept, decline, or tentatively accept.</td></tr><tr><td>attendee_email<span class="required-badge">required</span></td><td>str</td><td>The principal&#x27;s own email (the attendee responding). Used by the Google backend; ignored by Outlook (RSVPs on /me).</td></tr><tr><td>provider<span class="optional-badge">optional</span></td><td>str</td><td>Optional provider binding (&#x27;google&#x27; or &#x27;microsoft&#x27;).</td></tr></tbody></table></div><h3>Response body</h3><div class="model-section"><h3>CalendarRespondResponse</h3><table><thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td>schema_version<span class="optional-badge">optional</span></td><td>str</td><td>Echoes the contract version.</td></tr><tr><td>event_id<span class="required-badge">required</span></td><td>str</td><td>The event that was responded to.</td></tr><tr><td>status<span class="required-badge">required</span></td><td>Literal[accepted, declined, tentative]</td><td>The RSVP response that was recorded.</td></tr><tr><td>responded<span class="optional-badge">optional</span></td><td>bool</td><td>Always true on success.</td></tr></tbody></table></div></div>
+
+<h2>Canonical agent-loop query (v2)</h2>
+<p class="subtitle">
+  The v2 keystone (#2016): a natural-language request in, the agent reasons and
+  chains its tools into a multi-step workflow, and the seven canonical Server-Sent
+  Event types out (the frozen #2015 <code>/query</code> wire contract). This is the
+  one loop every v2 front-door (Agent UI, <code>gaia email</code> CLI,
+  <code>gaia api</code>) relays to. Unlike the stateful surface below, the host
+  mints <code>run_id</code> and pushes the transcript slice, so the sidecar stays
+  stateless.
+</p>
+
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/query</span>
+  <p class="desc">Run the email agent loop for one natural-language request and
+    stream the result as <b>Server-Sent Events</b> (<code>text/event-stream</code>)
+    using the <b>frozen canonical /query wire contract</b> (#2015). Request body:
+    <code>{ "query": str, "run_id": uuid, "context": [{role, content}],
+    "model"?: str, "provider"?: str, "max_steps"?: int }</code>. The host mints
+    <code>run_id</code> so the run is cancellable from the instant the request is
+    sent; the transcript slice is <b>pushed</b> in <code>context</code> (the sidecar
+    stays stateless).</p>
+  <p class="desc">Each SSE frame is <code>data: {json}</code> discriminated on
+    <code>type</code>, one of the <b>seven canonical event types</b>:
+    <code>status</code> {message} &middot; <code>token</code> {delta} &middot;
+    <code>tool_call</code> {tool, args} &middot; <code>tool_result</code>
+    {tool, render?, data} &middot; <code>needs_confirmation</code>
+    {run_id, action, summary} &middot; <code>final</code> {answer, usage?} &middot;
+    <code>error</code> {detail, status}. The stream is terminated by <b>exactly one
+    <code>final</code> or <code>error</code></b>.</p>
+  <p class="desc"><b>Confirmation (stateless stub, epic decision D1):</b> a step
+    that needs approval (a destructive/external tool such as <code>send_now</code>)
+    emits <code>needs_confirmation</code> and then the run ends with a
+    <code>final</code> refusal pointing at the deterministic fixed-function route
+    (<code>POST /v1/email/draft</code> to mint a single-use token, then
+    <code>POST /v1/email/send</code>). Server-side resume is not wired yet;
+    <code>confirm_url</code> is omitted.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/query/{run_id}/cancel</span>
+  <p class="desc">Cancel an in-flight <code>/query</code> run — stops tool execution
+    between steps (cooperative, not a kill). Returns
+    <code>{ run_id, cancelled, status }</code>. 404 if no run with that id is in
+    flight.</p>
+</div>
+
 
 <h2>Stateful agent surface</h2>
 <p class="subtitle">
@@ -352,7 +402,7 @@ td:nth-child(3) {
 </div>
 
 <div class="footer">
-  GAIA Email Triage Agent &mdash; schema_version 2.3 &mdash; amd-gaia.ai
+  GAIA Email Triage Agent &mdash; schema_version 2.4 &mdash; amd-gaia.ai
 </div>
 </body>
 </html>

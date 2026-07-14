@@ -6,6 +6,12 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## 0.4.0
 
+- **Ask the agent in plain language.** Send a free-form request ("find today's
+  urgent mail and archive the promotions") to a new streaming endpoint and the
+  agent works through it step by step with its tools, reporting progress as it
+  goes; a run can be cancelled mid-way. Anything that would actually send mail
+  still stops and routes you to the explicit draft-and-confirm flow. Not yet
+  wrapped by the typed client — call the endpoint directly (see `SPEC.md`).
 - **Reply drafts come back as a ready-to-fill scaffold** (recipient + subject)
   instead of an always-empty body. Triage sorts and summarizes but doesn't write
   the reply text — so compose the body yourself and send it with `draft()` +
@@ -38,9 +44,9 @@ behind any entry — API shapes, endpoints, and version semantics — see
   of hitting an error on the first request.
 - **Runtime memory toggle.** Turn the agent's memory (inbox profiling, learned
   preferences) on or off without restarting it.
-- **Conversational agent surface.** The agent can now be driven as a stateful,
-  streaming conversation over its local API — the same thing the GAIA Agent UI
-  uses to power its email experience.
+- **Hold an ongoing conversation.** Beyond one-shot requests, the agent can be
+  driven as a stateful, streaming chat over its local API — the same thing the
+  GAIA Agent UI uses to power its email experience.
 
 ## 0.3.0
 

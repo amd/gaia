@@ -332,7 +332,7 @@ def test_result_summary_required():
 
 
 def test_schema_version_unchanged_by_multi_inbox():
-    """Schema 2.3 is the current frozen contract version.
+    """Schema 2.4 is the current frozen contract version.
 
     2.1 was additive over the 2.0 5-bucket taxonomy (no triage shape change):
     it added inbox search (#1781), mailbox actions (#1779), the calendar
@@ -340,11 +340,12 @@ def test_schema_version_unchanged_by_multi_inbox():
     attachment handling (#1542) — read/triage exposes attachment metadata,
     draft/send accept attachments. 2.3 is a BREAKING triage-shape change:
     EmailTriageResult.draft is now a DraftScaffold (recipient + subject only,
-    no body) instead of a DraftReply. If this fails, someone changed the
-    version unexpectedly; that requires an explicit version negotiation, not a
-    drive-by edit.
+    no body) instead of a DraftReply. 2.4 is additive over 2.3 (#2016): the
+    streaming agent-loop surface (POST /v1/email/query + cancel) — no existing
+    shape changed. If this fails, someone changed the version unexpectedly;
+    that requires an explicit version negotiation, not a drive-by edit.
     """
-    assert SCHEMA_VERSION == "2.3"
+    assert SCHEMA_VERSION == "2.4"
 
 
 def test_triage_result_gained_no_new_required_field():
