@@ -20,8 +20,8 @@ from __future__ import annotations
 import os
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
-from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email.gmail_backend import decode_message_body
+from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 
 # Re-exported so the pre-scan tests can monkeypatch ``read_tools.make_llm_classifier``
 # to prove pre-scan never wires the LLM (test_pre_scan_counts.py).
@@ -206,8 +206,7 @@ def get_thread_impl(gmail, *, thread_id: str, debug: bool = False) -> Dict[str, 
             )
             if fair_share < DEFAULT_BODY_LIMIT_CHARS:
                 out = [
-                    _format_message_for_llm(m, body_limit=fair_share)
-                    for m in messages
+                    _format_message_for_llm(m, body_limit=fair_share) for m in messages
                 ]
         bodies_clipped = sum(1 for f in out if f["body_truncated"])
         st["result_summary"] = {

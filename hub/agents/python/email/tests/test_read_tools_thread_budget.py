@@ -74,7 +74,6 @@ from gaia_agent_email.tools.read_tools import (  # noqa: E402
 )
 
 from gaia.agents.base.tools import _TOOL_REGISTRY  # noqa: E402
-
 from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
 
 # ---------------------------------------------------------------------------
