@@ -7,6 +7,8 @@ All HTTP and pip work is mocked; no live network, no real ``uv``.
 
 import hashlib
 import json
+import os
+import stat
 
 import pytest
 
@@ -473,4 +475,599 @@ def test_run_setup_rejects_bad_concurrency(tmp_path):
             install_root=tmp_path,
             state_path=tmp_path / "s.json",
             installer_fn=lambda agent_id, **kwargs: None,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Platform-selection binary installs (#2084)
+#
+# The hub installer only read the manifest's legacy singular ``artifact``
+# field (always the first-published macOS binary), so Windows/Linux hosts got
+# fed a macOS executable into ``uv pip install``. These tests exercise the
+# fix: selecting the right per-platform entry from ``versions[v].artifacts[]``
+# via the new ``install(..., platform_key=...)`` DI seam. Manifest shapes
+# mirror the real ``hub.amd-gaia.ai/agents/email/manifest.json``.
+# ---------------------------------------------------------------------------
+
+_PLATFORM_FILENAMES = {
+    "win32-x64": "email-agent-win32-x64.exe",
+    "darwin-arm64": "email-agent-darwin-arm64",
+    "darwin-x64": "email-agent-darwin-x64",
+    "linux-x64": "email-agent-linux-x64",
+}
+
+_FILENAME_BYTES = {
+    "email-agent-win32-x64.exe": b"win32-x64-binary-bytes",
+    "email-agent-darwin-arm64": b"darwin-arm64-binary-bytes",
+    "email-agent-darwin-x64": b"darwin-x64-binary-bytes",
+    "email-agent-linux-x64": b"linux-x64-binary-bytes",
+}
+
+
+def _artifact_entry(filename, data, path_prefix):
+    return {
+        "filename": filename,
+        "path": f"{path_prefix}/{filename}",
+        "size_bytes": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "content_type": "application/octet-stream",
+    }
+
+
+def _binary_manifest(
+    agent_id="email",
+    version="0.1.0",
+    platform_keys=("win32-x64", "darwin-arm64", "darwin-x64", "linux-x64"),
+    filename_bytes=None,
+    singular_key="darwin-arm64",
+    extra_wheel=False,
+):
+    """Live-shape manifest: singular ``artifact`` is the macOS-first entry the
+    pre-fix installer always used, plus a full ``artifacts[]`` array."""
+    merged_bytes = {**_FILENAME_BYTES, **(filename_bytes or {})}
+    prefix = f"agents/{agent_id}/{version}"
+    artifacts = [
+        _artifact_entry(
+            _PLATFORM_FILENAMES[k], merged_bytes[_PLATFORM_FILENAMES[k]], prefix
+        )
+        for k in platform_keys
+    ]
+    if extra_wheel:
+        wheel_filename = f"{agent_id}-{version}-py3-none-any.whl"
+        artifacts.append(
+            _artifact_entry(wheel_filename, b"wheel-bytes-in-artifacts", prefix)
+        )
+    singular_filename = _PLATFORM_FILENAMES[singular_key]
+    singular = next(a for a in artifacts if a["filename"] == singular_filename)
+    return {
+        "id": agent_id,
+        "language": "python",
+        "latest_version": version,
+        "requirements": {"platforms": []},
+        "versions": {
+            version: {
+                "version": version,
+                "artifact": singular,
+                "artifacts": artifacts,
+            }
+        },
+    }
+
+
+def _legacy_binary_manifest(
+    agent_id="email",
+    version="0.1.0",
+    filename="email-agent-darwin-arm64",
+    data=b"legacy-binary-bytes",
+):
+    """Old manifest shape: a bare-executable singular ``artifact``, no
+    ``artifacts[]`` array at all (pre-#1648 published versions)."""
+    sha = hashlib.sha256(data).hexdigest()
+    path = f"agents/{agent_id}/{version}/{filename}"
+    return {
+        "id": agent_id,
+        "language": "python",
+        "latest_version": version,
+        "requirements": {"platforms": []},
+        "versions": {
+            version: {
+                "version": version,
+                "artifact": {
+                    "filename": filename,
+                    "path": path,
+                    "size_bytes": len(data),
+                    "sha256": sha,
+                    "content_type": "application/octet-stream",
+                },
+            }
+        },
+    }
+
+
+def _binary_fetcher(manifest, filename_bytes=None):
+    merged_bytes = {**_FILENAME_BYTES, **(filename_bytes or {})}
+    version = manifest["latest_version"]
+    entry = manifest["versions"][version]
+    by_path = {
+        a["path"]: merged_bytes.get(a["filename"], b"")
+        for a in entry.get("artifacts") or []
+    }
+    singular = entry["artifact"]
+    by_path.setdefault(singular["path"], merged_bytes.get(singular["filename"], b""))
+
+    def fetcher(url):
+        if url.endswith("/gaia-agent.yaml"):
+            return b"id: email\nname: Email\n"
+        for path, data in by_path.items():
+            if url == f"{BASE}/{path}":
+                return data
+        raise AssertionError(f"unexpected fetch url: {url}")
+
+    return fetcher
+
+
+def _refuse_pip(args):
+    raise AssertionError(f"run_pip must not be called for a binary install: {args}")
+
+
+# --- T1: platform_key picks the matching per-platform binary, never pip ----
+
+
+def test_install_binary_selects_win32_and_skips_pip(tmp_path):
+    manifest = _binary_manifest()
+    downloaded_urls = []
+    inner_fetcher = _binary_fetcher(manifest)
+
+    def tracking_fetcher(url):
+        downloaded_urls.append(url)
+        return inner_fetcher(url)
+
+    result = install(
+        "email",
+        manifest=manifest,
+        base_url=BASE,
+        fetcher=tracking_fetcher,
+        run_pip=_refuse_pip,
+        install_root=tmp_path,
+        platform_key="win32-x64",
+    )
+
+    assert any(u.endswith("email-agent-win32-x64.exe") for u in downloaded_urls)
+    exe_path = tmp_path / "email" / "email-agent.exe"
+    assert exe_path.exists()
+    sentinel = read_sentinel("email", tmp_path)
+    assert sentinel is not None
+    assert sentinel.artifact_kind == "binary"
+    assert result.hot_registered is False
+
+
+# --- T2: correct artifact + generic name per platform; +x bit on POSIX -----
+
+
+@pytest.mark.parametrize(
+    "platform_key,expected_filename,expected_generic",
+    [
+        ("win32-x64", "email-agent-win32-x64.exe", "email-agent.exe"),
+        ("darwin-arm64", "email-agent-darwin-arm64", "email-agent"),
+        ("linux-x64", "email-agent-linux-x64", "email-agent"),
+    ],
+)
+def test_install_binary_platform_selection(
+    tmp_path, platform_key, expected_filename, expected_generic
+):
+    manifest = _binary_manifest()
+    downloaded_urls = []
+    inner_fetcher = _binary_fetcher(manifest)
+
+    def tracking_fetcher(url):
+        downloaded_urls.append(url)
+        return inner_fetcher(url)
+
+    install(
+        "email",
+        manifest=manifest,
+        base_url=BASE,
+        fetcher=tracking_fetcher,
+        run_pip=_refuse_pip,
+        install_root=tmp_path,
+        platform_key=platform_key,
+    )
+    assert any(u.endswith(expected_filename) for u in downloaded_urls)
+    installed_path = tmp_path / "email" / expected_generic
+    assert installed_path.exists()
+    if platform_key != "win32-x64" and os.name == "posix":
+        mode = installed_path.stat().st_mode
+        assert mode & stat.S_IXUSR
+
+
+# --- T3: artifacts[] with both a wheel and binaries; never falls back ------
+
+
+def test_install_binary_prefers_binary_over_wheel_in_artifacts(tmp_path):
+    manifest = _binary_manifest(extra_wheel=True)
+    pip_calls = []
+    install(
+        "email",
+        manifest=manifest,
+        base_url=BASE,
+        fetcher=_binary_fetcher(manifest),
+        run_pip=lambda args: pip_calls.append(args),
+        install_root=tmp_path,
+        platform_key="linux-x64",
+    )
+    assert pip_calls == []
+    assert (tmp_path / "email" / "email-agent").exists()
+
+
+def test_install_binary_no_match_never_falls_back_to_wheel(tmp_path):
+    manifest = _binary_manifest(extra_wheel=True)
+    pip_calls = []
+    with pytest.raises(InstallError):
+        install(
+            "email",
+            manifest=manifest,
+            base_url=BASE,
+            fetcher=_binary_fetcher(manifest),
+            run_pip=lambda args: pip_calls.append(args),
+            install_root=tmp_path,
+            platform_key="freebsd-riscv64",
+        )
+    assert pip_calls == []
+
+
+# --- T4: wheel-only manifest is unaffected (regression guard) --------------
+
+
+def test_install_wheel_only_manifest_unaffected_by_platform_selection(tmp_path):
+    manifest = _manifest()
+    pip_calls = []
+    install(
+        "demo",
+        manifest=manifest,
+        base_url=BASE,
+        fetcher=_make_fetcher(manifest),
+        run_pip=lambda args: pip_calls.append(args),
+        install_root=tmp_path,
+        platform_key="linux-x64",
+    )
+    # Byte-identical to test_install_happy_path's pip-args assertion.
+    assert pip_calls and "--target" in pip_calls[0]
+    sentinel = read_sentinel("demo", tmp_path)
+    assert sentinel.artifact_kind == "wheel"
+
+
+# --- T5: binaries-only manifest, no artifact for platform_key --------------
+
+
+def test_install_binary_missing_platform_raises_loud_error(tmp_path):
+    manifest = _binary_manifest(
+        platform_keys=("win32-x64", "linux-x64"), singular_key="win32-x64"
+    )
+
+    with pytest.raises(InstallError) as excinfo:
+        install(
+            "email",
+            manifest=manifest,
+            base_url=BASE,
+            fetcher=_binary_fetcher(manifest),
+            run_pip=_refuse_pip,
+            install_root=tmp_path,
+            platform_key="darwin-x64",
+        )
+    message = str(excinfo.value)
+    assert "email" in message
+    assert "darwin-x64" in message
+    assert "email-agent-win32-x64.exe" in message
+    assert "email-agent-linux-x64" in message
+    assert installer.get_install_status("email")["status"] == "failed"
+    install_dir = tmp_path / "email"
+    assert not install_dir.exists() or list(install_dir.iterdir()) == []
+
+
+# --- T6: old-manifest shape (singular artifact IS a binary, no artifacts[]) -
+
+
+def test_install_legacy_singular_binary_matches_platform(tmp_path):
+    manifest = _legacy_binary_manifest(
+        filename="email-agent-darwin-arm64", data=b"legacy-bytes"
+    )
+
+    def fetcher(url):
+        if url.endswith("/gaia-agent.yaml"):
+            return b"id: email\n"
+        if url.endswith("email-agent-darwin-arm64"):
+            return b"legacy-bytes"
+        raise AssertionError(url)
+
+    pip_calls = []
+    install(
+        "email",
+        manifest=manifest,
+        base_url=BASE,
+        fetcher=fetcher,
+        run_pip=lambda args: pip_calls.append(args),
+        install_root=tmp_path,
+        platform_key="darwin-arm64",
+    )
+    assert pip_calls == []
+    assert (tmp_path / "email" / "email-agent").exists()
+    sentinel = read_sentinel("email", tmp_path)
+    assert sentinel.artifact_kind == "binary"
+
+
+def test_install_legacy_singular_binary_mismatch_raises(tmp_path):
+    manifest = _legacy_binary_manifest(
+        filename="email-agent-darwin-arm64", data=b"legacy-bytes"
+    )
+
+    def fetcher(url):
+        if url.endswith("/gaia-agent.yaml"):
+            return b"id: email\n"
+        if url.endswith("email-agent-darwin-arm64"):
+            return b"legacy-bytes"
+        raise AssertionError(url)
+
+    pip_calls = []
+    with pytest.raises(InstallError):
+        install(
+            "email",
+            manifest=manifest,
+            base_url=BASE,
+            fetcher=fetcher,
+            run_pip=lambda args: pip_calls.append(args),
+            install_root=tmp_path,
+            platform_key="win32-x64",
+        )
+    assert pip_calls == []
+
+
+# --- T7: checksum mismatch on the platform-matched binary -------------------
+
+
+def test_install_binary_checksum_mismatch(tmp_path):
+    manifest = _binary_manifest()
+    good_fetcher = _binary_fetcher(manifest)
+
+    def tampered_fetcher(url):
+        if url.endswith("email-agent-linux-x64"):
+            return b"tampered-bytes"
+        return good_fetcher(url)
+
+    with pytest.raises(ChecksumError):
+        install(
+            "email",
+            manifest=manifest,
+            base_url=BASE,
+            fetcher=tampered_fetcher,
+            run_pip=lambda args: None,
+            install_root=tmp_path,
+            platform_key="linux-x64",
+        )
+    assert read_sentinel("email", tmp_path) is None
+
+
+# --- T8: update-in-place, locked-file errors, rollback/uninstall on binary --
+
+
+def test_install_binary_update_replaces_without_backup_dir(tmp_path):
+    manifest_v1 = _binary_manifest(version="0.1.0")
+    install(
+        "email",
+        manifest=manifest_v1,
+        base_url=BASE,
+        fetcher=_binary_fetcher(manifest_v1),
+        run_pip=lambda args: None,
+        install_root=tmp_path,
+        platform_key="linux-x64",
+    )
+    v2_bytes = {fn: data + b"-v2" for fn, data in _FILENAME_BYTES.items()}
+    manifest_v2 = _binary_manifest(version="0.2.0", filename_bytes=v2_bytes)
+    result = install(
+        "email",
+        manifest=manifest_v2,
+        base_url=BASE,
+        fetcher=_binary_fetcher(manifest_v2, filename_bytes=v2_bytes),
+        run_pip=lambda args: None,
+        install_root=tmp_path,
+        platform_key="linux-x64",
+    )
+    assert result.updated is True
+    assert not (tmp_path / installer.BACKUP_DIRNAME / "email").exists()
+    assert read_sentinel("email", tmp_path).version == "0.2.0"
+
+
+def test_install_binary_locked_file_raises_actionable_error(tmp_path, monkeypatch):
+    manifest = _binary_manifest()
+
+    def boom(*_a, **_k):
+        raise PermissionError("file in use")
+
+    monkeypatch.setattr("os.replace", boom)
+    with pytest.raises(InstallError) as excinfo:
+        install(
+            "email",
+            manifest=manifest,
+            base_url=BASE,
+            fetcher=_binary_fetcher(manifest),
+            run_pip=lambda args: None,
+            install_root=tmp_path,
+            platform_key="linux-x64",
+        )
+    message = str(excinfo.value).lower()
+    assert "running" in message or "close" in message
+
+
+def test_rollback_binary_kind_raises_clean_error(tmp_path):
+    manifest = _binary_manifest()
+    install(
+        "email",
+        manifest=manifest,
+        base_url=BASE,
+        fetcher=_binary_fetcher(manifest),
+        run_pip=lambda args: None,
+        install_root=tmp_path,
+        platform_key="linux-x64",
+    )
+    with pytest.raises(InstallError) as excinfo:
+        rollback("email", install_root=tmp_path)
+    message = str(excinfo.value).lower()
+    assert "rollback" in message or "backup" in message
+
+
+def test_uninstall_binary_locked_raises_actionable_error(tmp_path, monkeypatch):
+    manifest = _binary_manifest()
+    install(
+        "email",
+        manifest=manifest,
+        base_url=BASE,
+        fetcher=_binary_fetcher(manifest),
+        run_pip=lambda args: None,
+        install_root=tmp_path,
+        platform_key="linux-x64",
+    )
+
+    def boom(*_a, **_k):
+        raise PermissionError("in use")
+
+    monkeypatch.setattr(installer.shutil, "rmtree", boom)
+    with pytest.raises(InstallError):
+        uninstall("email", install_root=tmp_path)
+
+
+# --- T9: sentinel back-compat + filename sanitization -----------------------
+
+
+def test_read_sentinel_missing_artifact_kind_defaults_to_wheel(tmp_path):
+    install_dir = installer.agent_install_dir("legacy", tmp_path)
+    install_dir.mkdir(parents=True, exist_ok=True)
+    sentinel_data = {
+        "id": "legacy",
+        "version": "1.0.0",
+        "language": "python",
+        "installed_at": "2026-01-01T00:00:00+00:00",
+        "artifact_sha256": "deadbeef",
+        # No "artifact_kind" key at all — simulates a pre-fix install.
+    }
+    (install_dir / installer.SENTINEL_NAME).write_text(
+        json.dumps(sentinel_data), encoding="utf-8"
+    )
+    sentinel = read_sentinel("legacy", tmp_path)
+    assert sentinel.artifact_kind == "wheel"
+
+
+@pytest.mark.parametrize(
+    "bad_filename",
+    ["../evil-binary", "sub/email-agent-win32-x64.exe", "sub\\evil.exe"],
+)
+def test_install_rejects_path_traversal_filename_in_singular_artifact(
+    tmp_path, bad_filename
+):
+    manifest = _legacy_binary_manifest(filename=bad_filename, data=b"evil-bytes")
+
+    def fetcher(url):
+        if url.endswith("/gaia-agent.yaml"):
+            return b"id: email\n"
+        return b"evil-bytes"
+
+    with pytest.raises(InstallError):
+        install(
+            "email",
+            manifest=manifest,
+            base_url=BASE,
+            fetcher=fetcher,
+            run_pip=lambda args: None,
+            install_root=tmp_path,
+            platform_key="win32-x64",
+        )
+    install_dir = tmp_path / "email"
+    assert not install_dir.exists() or list(install_dir.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "bad_filename", ["../evil-win32-x64.exe", "sub/email-agent-win32-x64.exe"]
+)
+def test_install_rejects_path_traversal_filename_in_artifacts_array(
+    tmp_path, bad_filename
+):
+    manifest = _binary_manifest()
+    version = manifest["latest_version"]
+    manifest["versions"][version]["artifacts"][0]["filename"] = bad_filename
+    manifest["versions"][version]["artifacts"][0][
+        "path"
+    ] = f"agents/email/{version}/{bad_filename}"
+
+    def fetcher(url):
+        if url.endswith("/gaia-agent.yaml"):
+            return b"id: email\n"
+        return b"evil-bytes"
+
+    with pytest.raises(InstallError):
+        install(
+            "email",
+            manifest=manifest,
+            base_url=BASE,
+            fetcher=fetcher,
+            run_pip=lambda args: None,
+            install_root=tmp_path,
+            platform_key="win32-x64",
+        )
+    install_dir = tmp_path / "email"
+    assert not install_dir.exists() or list(install_dir.iterdir()) == []
+
+
+# --- T10: parity + drift guards ---------------------------------------------
+
+
+def test_generic_executable_names_match_binaries_lock(tmp_path):
+    from gaia.ui.email_sidecar import platform as sidecar_platform
+
+    lock = sidecar_platform.load_lock()
+    for platform_key in sidecar_platform.SUPPORTED_PLATFORMS:
+        root = tmp_path / platform_key
+        manifest = _binary_manifest(singular_key=platform_key)
+        install(
+            "email",
+            manifest=manifest,
+            base_url=BASE,
+            fetcher=_binary_fetcher(manifest),
+            run_pip=_refuse_pip,
+            install_root=root,
+            platform_key=platform_key,
+        )
+        expected = lock.binaries[platform_key].executable
+        assert (root / "email" / expected).exists()
+
+
+@pytest.mark.parametrize(
+    "plat,arch",
+    [
+        ("win32", "AMD64"),
+        ("win32", "x86_64"),
+        ("darwin", "arm64"),
+        ("darwin", "x86_64"),
+        ("linux", "x86_64"),
+        ("linux2", "aarch64"),
+        ("freebsd", "riscv64"),
+    ],
+)
+def test_current_platform_key_parity_with_email_sidecar(plat, arch):
+    from gaia.hub import compatibility
+    from gaia.ui.email_sidecar import platform as sidecar_platform
+
+    assert compatibility.current_platform_key(plat, arch) == (
+        sidecar_platform.current_platform_key(plat, arch)
+    )
+
+
+def test_install_unsupported_platform_key_hits_loud_error_not_crash(tmp_path):
+    manifest = _binary_manifest()
+    with pytest.raises(InstallError):
+        install(
+            "email",
+            manifest=manifest,
+            base_url=BASE,
+            fetcher=_binary_fetcher(manifest),
+            run_pip=lambda args: None,
+            install_root=tmp_path,
+            platform_key="freebsd-riscv64",
         )
