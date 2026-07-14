@@ -4,6 +4,17 @@ What's new in `@amd-gaia/agent-email`, in plain language. For the technical deta
 behind any entry — API shapes, endpoints, and version semantics — see
 [`SPEC.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.5.0/hub/agents/npm/agent-email/SPEC.md).
 
+## 0.6.0
+
+- **On NPU-capable machines, triage now runs on the NPU by default.** When
+  you haven't pinned a specific model, the agent checks whether the
+  Lemonade Server it's talking to has an AMD NPU and the NPU-optimized
+  model ready — if so, it uses that automatically for lower power draw;
+  otherwise it keeps using the existing GPU/CPU model, exactly as before.
+  `GET /v1/email/init` reports which one was picked. Accuracy/throughput
+  numbers for the NPU model aren't published yet — that measurement lands
+  in a follow-up release.
+
 ## 0.5.0
 
 - **Ask the agent in plain language.** Send a free-form request ("find today's
