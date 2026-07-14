@@ -139,9 +139,9 @@ def test_decisive_phrase_only_in_last_message(corpus):
         last_body = messages[-1]["body"]
         assert decisive in last_body, case_id
         for msg in messages[:-1]:
-            assert decisive not in msg["body"], (
-                f"{case_id}: decisive phrase leaked into an older message"
-            )
+            assert (
+                decisive not in msg["body"]
+            ), f"{case_id}: decisive phrase leaked into an older message"
 
 
 def test_stale_phrase_only_in_older_messages(corpus):
@@ -152,9 +152,9 @@ def test_stale_phrase_only_in_older_messages(corpus):
         stale = case["stale_phrase"]
         last_body = messages[-1]["body"]
         assert stale not in last_body, case_id
-        assert any(stale in m["body"] for m in messages[:-1]), (
-            f"{case_id}: stale phrase absent from every older message"
-        )
+        assert any(
+            stale in m["body"] for m in messages[:-1]
+        ), f"{case_id}: stale phrase absent from every older message"
 
 
 def test_must_mention_and_must_not_mention_against_last_message(corpus):
@@ -277,7 +277,9 @@ def test_empty_must_mention_rejected(tmp_path):
 def test_score_case_correct_summary_passes(corpus):
     case = lq.corpus_cases(corpus)["lt-001"]
     row = lq.score_case(
-        "lt-001", case, "The venue has moved to Madrid for the offsite.",
+        "lt-001",
+        case,
+        "The venue has moved to Madrid for the offsite.",
         model_id="stub",
     )
     assert row["status"] == "PASS"
@@ -473,9 +475,7 @@ def test_score_case_rejects_the_stale_answer_for_every_case(corpus):
     latest-dropping clip would have produced) must FAIL for every case —
     proves the scorer genuinely distinguishes folding from clipping."""
     for case_id, case in lq.corpus_cases(corpus).items():
-        row = lq.score_case(
-            case_id, case, case["must_not_mention"][0], model_id="stub"
-        )
+        row = lq.score_case(case_id, case, case["must_not_mention"][0], model_id="stub")
         assert row["status"] == "FAIL", case_id
 
 
