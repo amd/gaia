@@ -593,8 +593,8 @@ class TestStampBuiltinChatIdentity:
             _Path(__file__).parents[4]
             / "hub"
             / "agents"
-            / "python"
             / "chat"
+            / "python"
             / "gaia_agent_chat"
             / "agent.py"
         ).read_text(encoding="utf-8")
