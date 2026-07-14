@@ -233,6 +233,64 @@ class TestRunBenchmarkOffline:
         )
         assert os.environ["GAIA_EMAIL_TRIAGE_MAX_MESSAGES"] == "100"
 
+    def test_errored_row_still_closes_agent_db(self):
+        """A ``process_query`` failure must still release the agent's DB —
+        the ERRORED-row path (``_close_agent_db``) must run before the
+        experiment loop continues (#1892 regression pin)."""
+
+        class _StubAgentWithDb:
+            def __init__(self):
+                self.close_db_called = False
+
+            def process_query(self, prompt):
+                raise RuntimeError("boom")
+
+            def close_db(self):
+                self.close_db_called = True
+
+        created = {}
+
+        def _factory():
+            agent = _StubAgentWithDb()
+            created["agent"] = agent
+            return agent
+
+        results = run_benchmark(
+            "Gemma-4-E4B-it-GGUF",
+            mbox_path="ignored-when-factory-injected",
+            limit=2,
+            experiments=1,
+            ground_truth=GT,
+            agent_factory=_factory,
+        )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "ERRORED"
+        assert created["agent"].close_db_called is True
+
+    def test_errored_row_tolerates_agent_with_no_close_db(self):
+        """A stub agent with NO ``close_db`` attribute at all must not make
+        ``run_benchmark`` raise — the ERRORED row is still returned normally
+        (#1892 regression pin)."""
+
+        class _StubAgentNoDb:
+            def process_query(self, prompt):
+                raise RuntimeError("boom")
+
+        assert not hasattr(_StubAgentNoDb(), "close_db")
+
+        results = run_benchmark(
+            "Gemma-4-E4B-it-GGUF",
+            mbox_path="ignored-when-factory-injected",
+            limit=2,
+            experiments=1,
+            ground_truth=GT,
+            agent_factory=_StubAgentNoDb,
+        )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "ERRORED"
+
 
 class TestCategorizationExportInResult:
     def test_quality_block_carries_categorization_export(self):

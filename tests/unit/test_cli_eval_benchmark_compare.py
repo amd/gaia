@@ -51,5 +51,24 @@ def test_benchmark_compare_ctx_match_passes():
     )
 
 
+def test_ctx_size_zero_or_negative_rejected():
+    """``gaia eval benchmark --ctx-size 0`` (and negative) must be rejected
+    with a non-zero exit BEFORE any benchmark work runs (src/gaia/cli.py,
+    the ``--ctx-size`` guard just before ``run_benchmark`` is invoked)."""
+    import sys
+
+    from gaia import cli
+
+    old_argv = sys.argv
+    for bad_ctx in ("0", "-5"):
+        sys.argv = ["gaia", "eval", "benchmark", "--ctx-size", bad_ctx]
+        try:
+            with pytest.raises(SystemExit) as exc:
+                cli.main()
+            assert exc.value.code != 0
+        finally:
+            sys.argv = old_argv
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

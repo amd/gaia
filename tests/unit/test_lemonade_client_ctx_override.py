@@ -355,5 +355,50 @@ class TestNonOverridePathKeepsFloorSemantics:
         mock_load.assert_not_called()
 
 
+class TestFindLoadedEntryTolerantMatch:
+    """Regression pin (#1952/#1892): ``_find_loaded_entry`` must tolerate the
+    ``user.`` namespace prefix in EITHER direction — a ``/health`` entry
+    reported back with the prefix must still be found when queried by the
+    stripped id, and vice versa."""
+
+    def test_finds_prefixed_entry_when_queried_with_stripped_id(self):
+        status = _status([("user.Gemma-4-E4B-it-GGUF", 16384)])
+
+        entry = LemonadeClient._find_loaded_entry(status, "Gemma-4-E4B-it-GGUF")
+
+        assert entry is not None
+        assert entry["recipe_options"]["ctx_size"] == 16384
+
+    def test_finds_stripped_entry_when_queried_with_prefixed_id(self):
+        status = _status([("Gemma-4-E4B-it-GGUF", 16384)])
+
+        entry = LemonadeClient._find_loaded_entry(status, "user.Gemma-4-E4B-it-GGUF")
+
+        assert entry is not None
+        assert entry["recipe_options"]["ctx_size"] == 16384
+
+
+class TestWaitModelStateTreatsFailedProbeAsUnknown:
+    """Regression pin (#1892): a FAILED probe (running=False) must not be
+    treated as "confirmed absent" — ``_wait_model_state`` must poll again
+    rather than settling on the first failed probe."""
+
+    @patch("gaia.llm.lemonade_client.time.sleep")
+    @patch.object(LemonadeClient, "get_status")
+    def test_failed_probe_does_not_settle_absence(self, mock_status, mock_sleep):
+        model = "Gemma-4-E4B-it-GGUF"
+        client = LemonadeClient(host="localhost", port=13305)
+        mock_status.side_effect = [
+            LemonadeStatus(running=False, loaded_models=[]),  # failed probe
+            LemonadeStatus(running=True, loaded_models=[]),  # genuinely absent
+        ]
+
+        result = client._wait_model_state(model, present=False, deadline_s=600.0)
+
+        assert result is None
+        assert mock_status.call_count == 2
+        mock_sleep.assert_called_once()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
