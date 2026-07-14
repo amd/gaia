@@ -41,8 +41,8 @@ _READ_TOOLS_SRC = (
     _REPO_ROOT
     / "hub"
     / "agents"
-    / "python"
     / "email"
+    / "python"
     / "gaia_agent_email"
     / "tools"
     / "read_tools.py"

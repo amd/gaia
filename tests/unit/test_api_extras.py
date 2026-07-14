@@ -27,8 +27,8 @@ EMAIL_PYPROJECT = (
     Path(__file__).resolve().parents[2]
     / "hub"
     / "agents"
-    / "python"
     / "email"
+    / "python"
     / "pyproject.toml"
 )
 

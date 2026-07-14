@@ -470,8 +470,8 @@ class TestEmailAdapter:
             Path(__file__).parents[3]
             / "hub"
             / "agents"
-            / "python"
             / "email"
+            / "python"
             / "packaging"
             / "gen_scorecard.py"
         )
@@ -755,8 +755,8 @@ class TestEmailAdapter:
             Path(__file__).parents[3]
             / "hub"
             / "agents"
-            / "python"
             / "email"
+            / "python"
             / "packaging"
             / "eval_drafting_report.py"
         )
@@ -1207,8 +1207,8 @@ class TestBreakdownAdapter:
             Path(__file__).parents[3]
             / "hub"
             / "agents"
-            / "python"
             / "email"
+            / "python"
             / "packaging"
             / "gen_scorecard.py"
         )
@@ -1377,8 +1377,8 @@ class TestEnvironmentAdapter:
             Path(__file__).parents[3]
             / "hub"
             / "agents"
-            / "python"
             / "email"
+            / "python"
             / "packaging"
             / "gen_scorecard.py"
         )
