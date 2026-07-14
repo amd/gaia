@@ -125,6 +125,15 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/v1/email", tags=["email"])
 
+# Canonical streaming agent-loop surface (#2016): POST /v1/email/query and
+# /v1/email/query/{run_id}/cancel. Included into THIS router (prefix /v1/email)
+# so the routes are part of the frozen OpenAPI contract and the export picks them
+# up. The query module keeps its heavy imports (agent, gaia.ui.sse_handler) lazy,
+# so importing it here does not weigh down the dependency-light export.
+from gaia_agent_email.query_routes import router as _query_router  # noqa: E402
+
+router.include_router(_query_router)
+
 
 # ---------------------------------------------------------------------------
 # Caller authentication (#1706)
