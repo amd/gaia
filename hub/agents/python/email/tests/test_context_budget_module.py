@@ -52,5 +52,85 @@ class TestContextBudgetConstants:
         )
 
 
+class TestEstimateTokens:
+    """The dual char/word token estimator (#1889).
+
+    ``estimate_tokens(text) == max(len(text) // 4, int(len(text.split()) * 1.3))``,
+    with the empty string mapping to 0. These do not exist on the current tip —
+    the import is EXPECTED to raise ImportError until #1889's implementation
+    lands (red half of red-green TDD).
+    """
+
+    def test_empty_string_is_zero(self):
+        from gaia_agent_email.context_budget import estimate_tokens
+
+        assert estimate_tokens("") == 0
+
+    def test_char_estimate_dominates_for_dense_text(self):
+        from gaia_agent_email.context_budget import estimate_tokens
+
+        # No spaces -> one "word"; chars//4 must win.
+        text = "x" * 4000
+        assert estimate_tokens(text) == max(4000 // 4, int(1 * 1.3))
+        assert estimate_tokens(text) == 1000
+
+    def test_word_estimate_dominates_for_spacey_text(self):
+        from gaia_agent_email.context_budget import estimate_tokens
+
+        # Many short words -> words*1.3 must win over chars//4.
+        text = " ".join(["a"] * 1000)  # 1000 words, 1999 chars
+        expected = max(len(text) // 4, int(1000 * 1.3))
+        assert estimate_tokens(text) == expected
+        assert estimate_tokens(text) == 1300
+
+    def test_matches_the_exact_formula(self):
+        from gaia_agent_email.context_budget import estimate_tokens
+
+        for text in ("hello world", "one", "a b c d e", "z" * 137, ""):
+            expected = (
+                0 if not text else max(len(text) // 4, int(len(text.split()) * 1.3))
+            )
+            assert estimate_tokens(text) == expected
+
+
+class TestThreadBudgetTokens:
+    """The usable thread-transcript token budget (#1889).
+
+    ``thread_budget_tokens() == CONTEXT_TARGET_TOKENS - 1536 - 1024 == 13824``.
+    """
+
+    def test_concrete_value_is_13824(self):
+        from gaia_agent_email.context_budget import thread_budget_tokens
+
+        assert thread_budget_tokens() == 13824
+
+    def test_is_a_positive_int_below_context_target(self):
+        from gaia_agent_email.context_budget import (
+            CONTEXT_TARGET_TOKENS,
+            thread_budget_tokens,
+        )
+
+        budget = thread_budget_tokens()
+        assert isinstance(budget, int)
+        assert budget > 0
+        assert budget < CONTEXT_TARGET_TOKENS
+
+    def test_equals_target_minus_the_two_named_reserves(self):
+        from gaia_agent_email.context_budget import (
+            _RESPONSE_RESERVE_TOKENS,
+            _SYSTEM_PROMPT_ALLOWANCE_TOKENS,
+            CONTEXT_TARGET_TOKENS,
+            thread_budget_tokens,
+        )
+
+        assert _SYSTEM_PROMPT_ALLOWANCE_TOKENS == 1536
+        assert _RESPONSE_RESERVE_TOKENS == 1024
+        assert thread_budget_tokens() == (
+            CONTEXT_TARGET_TOKENS
+            - _SYSTEM_PROMPT_ALLOWANCE_TOKENS
+            - _RESPONSE_RESERVE_TOKENS
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
