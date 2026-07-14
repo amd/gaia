@@ -2,9 +2,9 @@
 
 What's new in `@amd-gaia/agent-email`, in plain language. For the technical detail
 behind any entry — API shapes, endpoints, and version semantics — see
-[`SPEC.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.4.0/hub/agents/npm/agent-email/SPEC.md).
+[`SPEC.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.5.0/hub/agents/npm/agent-email/SPEC.md).
 
-## 0.4.0
+## 0.5.0
 
 - **Ask the agent in plain language.** Send a free-form request ("find today's
   urgent mail and archive the promotions") to a new streaming endpoint and the
@@ -12,6 +12,12 @@ behind any entry — API shapes, endpoints, and version semantics — see
   goes; a run can be cancelled mid-way. Anything that would actually send mail
   still stops and routes you to the explicit draft-and-confirm flow. Not yet
   wrapped by the typed client — call the endpoint directly (see `SPEC.md`).
+- **Docs rewritten for humans.** The README, this changelog, and the evaluation
+  guide now lead with what the agent does in plain language; the deep technical
+  reference lives in `SPEC.md`.
+
+## 0.4.0
+
 - **Reply drafts come back as a ready-to-fill scaffold** (recipient + subject)
   instead of an always-empty body. Triage sorts and summarizes but doesn't write
   the reply text — so compose the body yourself and send it with `draft()` +

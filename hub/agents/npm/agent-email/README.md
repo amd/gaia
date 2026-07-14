@@ -11,7 +11,7 @@ by a local AI model (via AMD's Lemonade runtime); message content is never sent 
 a cloud service, and that's enforced when the agent starts up.
 
 > Using an AI coding assistant? This package ships a
-> [`SKILL.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.4.0/hub/agents/npm/agent-email/SKILL.md)
+> [`SKILL.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.5.0/hub/agents/npm/agent-email/SKILL.md)
 > — load it into Claude Code (or similar) for a copy-paste integration playbook.
 
 ## What it can do
@@ -105,20 +105,20 @@ Three pieces, all on your own machine — no cloud, no separate GAIA install:
   machine's local network only.
 
 Full architecture, the complete API, authentication, and every endpoint are in
-[`SPEC.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.4.0/hub/agents/npm/agent-email/SPEC.md).
+[`SPEC.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.5.0/hub/agents/npm/agent-email/SPEC.md).
 
 ## How good is the triage?
 
 Scores **83.4 / 100** on a labeled benchmark inbox — see the **Scorecard** tab (or
-[`SCORECARD.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.4.0/hub/agents/npm/agent-email/SCORECARD.md))
+[`SCORECARD.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.5.0/hub/agents/npm/agent-email/SCORECARD.md))
 for the full breakdown, and the **Evaluation** tab for how it's measured.
 
 ## Reference
 
-- [`SPEC.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.4.0/hub/agents/npm/agent-email/SPEC.md) — full API, authentication, lifecycle, connectors, and platforms.
-- [`SKILL.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.4.0/hub/agents/npm/agent-email/SKILL.md) — integration playbook for AI coding assistants.
-- [`SCORECARD.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.4.0/hub/agents/npm/agent-email/SCORECARD.md) / [`EVALUATION.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.4.0/hub/agents/npm/agent-email/EVALUATION.md) — eval results and how they're measured.
-- [`CHANGELOG.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.4.0/hub/agents/npm/agent-email/CHANGELOG.md) — what's new in each version.
+- [`SPEC.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.5.0/hub/agents/npm/agent-email/SPEC.md) — full API, authentication, lifecycle, connectors, and platforms.
+- [`SKILL.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.5.0/hub/agents/npm/agent-email/SKILL.md) — integration playbook for AI coding assistants.
+- [`SCORECARD.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.5.0/hub/agents/npm/agent-email/SCORECARD.md) / [`EVALUATION.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.5.0/hub/agents/npm/agent-email/EVALUATION.md) — eval results and how they're measured.
+- [`CHANGELOG.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.5.0/hub/agents/npm/agent-email/CHANGELOG.md) — what's new in each version.
 
 ## License
 
