@@ -584,3 +584,50 @@ slot. An agent instance with an exact ctx pin (`EmailAgentConfig.ctx_size` /
 same model will fight over the loaded ctx — visible as the reported ctx
 flapping between values across successive `GET /v1/email/init` calls. Do not
 enable `ctx_size` against a Lemonade instance shared with other traffic.
+
+---
+
+## Default model selection
+
+When `EmailAgentConfig.model_id` is unset, the agent no longer defaults
+unconditionally to the GGUF model — it resolves against the Lemonade Server
+it will actually talk to
+([#1439](https://github.com/amd/gaia/issues/1439),
+[`gaia_agent_email/model_select.py`](gaia_agent_email/model_select.py)):
+
+1. Probe that server's `/system-info` for `devices.amd_npu.available`
+   (a short-timeout raw probe — never the SDK's `get_system_info()`, which
+   has no timeout knob and would hang the whole resolution on an
+   unreachable server).
+2. If an AMD NPU is available **and** the NPU-native triage model
+   (`gemma4-it-e2b-FLM`) is already downloaded on that server, resolve to
+   it.
+3. Otherwise — no NPU, NPU present but the model not downloaded, or either
+   probe failing/timing out — resolve to the GGUF default
+   (`Gemma-4-E4B-it-GGUF`).
+
+The resolved id is always exactly one of those two literals; nothing from
+the server response is ever interpolated into it. A successful resolution
+is cached per Lemonade base URL for the life of the process (so a hot REST
+path doesn't re-probe on every request); a failed/timeout probe is never
+cached, so a server that comes up later is picked up on the next call
+rather than being stuck on a cold-start failure.
+
+An explicit `model_id` (`EmailAgentConfig.model_id`, or a caller-supplied
+value) always wins — auto-select only fills in when no preference was
+given. `GET /v1/email/init`'s `model.id` and the model actually used by
+`POST /v1/email/triage` are guaranteed to be the resolved model for the
+same request's `base_url` (both read through the same resolver).
+
+**Auto-selecting the NPU model also switches the agent's memory embedder**
+(`gaia.agents.registry.get_embedding_model_for_device`) to the FLM-native
+embedder when the resolver picks `gemma4-it-e2b-FLM`, so the chat model and
+the embedder stay co-resident on the NPU backend — mixing an NPU chat model
+with the default GGUF/Vulkan embedder would otherwise evict and reload the
+chat model on every turn on shared-memory hardware. Any other resolved
+model keeps the unchanged GGUF embedder default.
+
+**Merge-gate note:** this auto-select is not yet backed by an FLM-variant
+triage-accuracy baseline (`baseline_accuracy_e2b.json` was recorded on the
+GGUF build) — the measurement lands with the consolidated eval pass
+([#1319](https://github.com/amd/gaia/issues/1319)).
