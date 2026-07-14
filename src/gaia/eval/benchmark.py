@@ -33,6 +33,7 @@ from typing import Any, Callable
 
 from gaia.eval import performance, quality_metrics
 from gaia.eval.fixture_paths import resolve_repo_fixture
+from gaia.llm.lemonade_client import _model_ids_match
 
 # Metrics whose run-to-run spread is recorded for trustworthiness (#1894). The
 # first is the gated aggregate (within-one-bucket); the rest are reported.
@@ -565,7 +566,9 @@ def _verify_ctx_readback(client: Any, model_id: str, requested_ctx: int) -> int:
     def _read() -> int:
         status = client.get_status()
         for entry in status.loaded_models:
-            if model_id in (entry.get("id"), entry.get("model_name")):
+            if _model_ids_match(entry.get("id"), model_id) or _model_ids_match(
+                entry.get("model_name"), model_id
+            ):
                 return int(entry.get("recipe_options", {}).get("ctx_size", 0) or 0)
         return 0
 
@@ -590,6 +593,18 @@ def _verify_ctx_readback(client: Any, model_id: str, requested_ctx: int) -> int:
                 "the wrong window, aborting."
             )
     return readback
+
+
+def _close_agent_db(agent: Any) -> None:
+    """Release ``agent``'s SQLite state.db, tolerating agents with none.
+
+    A stub agent injected via ``agent_factory`` in tests has no ``close_db``
+    — that is a capability gap, not an error, so it is skipped rather than
+    caught-and-swallowed. A real ``close_db()`` failure still propagates.
+    """
+    close_db = getattr(agent, "close_db", None)
+    if close_db is not None:
+        close_db()
 
 
 def run_benchmark(
@@ -736,6 +751,7 @@ def run_benchmark(
                 row["error"] = f"{type(exc).__name__}: {exc}"
                 print(f"[ERRORED] experiment {exp}/{experiments}: {row['error']}")
                 results.append(row)
+                _close_agent_db(agent)
                 continue
             total_duration_ms = int((time.monotonic() - start) * 1000)
 
@@ -754,11 +770,8 @@ def run_benchmark(
 
             # Release the agent's SQLite state.db before the next experiment and
             # the caller's temp-dir cleanup — an open connection locks the file on
-            # Windows. Best-effort: a stub agent_factory agent may lack close_db.
-            try:
-                agent.close_db()
-            except Exception:
-                pass
+            # Windows.
+            _close_agent_db(agent)
 
         return results
     finally:

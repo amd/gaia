@@ -58,16 +58,22 @@ def _make_config(tmp_path, *, ctx_size=None):
     )
 
 
-def _build_agent(tmp_path, *, ctx_size=None):
+def _build_agent(tmp_path, monkeypatch, *, ctx_size=None):
+    # AgentSDK is left real (unlike the mocked-SDK tests elsewhere in this
+    # suite) so the LemonadeProvider -> LemonadeClient chain actually
+    # builds and the ctx_size_override wiring is testable end-to-end. That
+    # means memory init would otherwise touch a live embedder — disable it.
+    monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
     cfg = _make_config(tmp_path, ctx_size=ctx_size)
     with patch.object(LemonadeManager, "ensure_ready", return_value=True):
         return EmailTriageAgent(config=cfg)
 
 
-def _build_agent_capturing_ensure_ready(tmp_path, *, ctx_size=None):
+def _build_agent_capturing_ensure_ready(tmp_path, monkeypatch, *, ctx_size=None):
     """Construct the agent and return (agent, ensure_ready_mock) so a test
     can assert the ``min_context_size`` floor every ``ensure_ready`` call
     was made with during construction."""
+    monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
     cfg = _make_config(tmp_path, ctx_size=ctx_size)
     with patch.object(LemonadeManager, "ensure_ready", return_value=True) as mock:
         agent = EmailTriageAgent(config=cfg)
@@ -85,21 +91,29 @@ class TestEmailAgentConfigCtxSize:
 
 
 class TestEmailAgentWiresCtxSizeOverride:
-    def test_email_agent_wires_ctx_size_override(self, tmp_path):
-        agent = _build_agent(tmp_path, ctx_size=16384)
-
-        backend = agent.chat.llm_client._backend
-        assert backend.ctx_size_override == 16384
+    def test_email_agent_wires_ctx_size_override(self, tmp_path, monkeypatch):
+        agent = _build_agent(tmp_path, monkeypatch, ctx_size=16384)
+        try:
+            backend = agent.chat.llm_client._backend
+            assert backend.ctx_size_override == 16384
+        finally:
+            close = getattr(agent, "close_db", None)
+            if callable(close):
+                close()
 
     def test_email_agent_leaves_override_unset_when_ctx_size_not_configured(
-        self, tmp_path
+        self, tmp_path, monkeypatch
     ):
         """No ctx_size configured -> no override wired (None), so the
         client keeps LemonadeClient's default floor semantics."""
-        agent = _build_agent(tmp_path, ctx_size=None)
-
-        backend = agent.chat.llm_client._backend
-        assert backend.ctx_size_override is None
+        agent = _build_agent(tmp_path, monkeypatch, ctx_size=None)
+        try:
+            backend = agent.chat.llm_client._backend
+            assert backend.ctx_size_override is None
+        finally:
+            close = getattr(agent, "close_db", None)
+            if callable(close):
+                close()
 
 
 class TestEnsureReadyFloorMatchesPin:
@@ -112,27 +126,43 @@ class TestEnsureReadyFloorMatchesPin:
     keeps the historical default (32768).
     """
 
-    def test_pinned_agent_passes_pin_as_ensure_ready_floor(self, tmp_path):
+    def test_pinned_agent_passes_pin_as_ensure_ready_floor(
+        self, tmp_path, monkeypatch
+    ):
         """ctx_size=16384 -> EVERY ensure_ready call carries
         min_context_size=16384 so the floor equals the pin. RED at HEAD:
         EmailTriageAgent passes no min_context_size today, so the base
         default (32768) reaches ensure_ready, not 16384."""
-        _agent, mock = _build_agent_capturing_ensure_ready(tmp_path, ctx_size=16384)
+        agent, mock = _build_agent_capturing_ensure_ready(
+            tmp_path, monkeypatch, ctx_size=16384
+        )
+        try:
+            assert mock.call_count >= 1
+            for call in mock.call_args_list:
+                assert call.kwargs.get("min_context_size") == 16384
+        finally:
+            close = getattr(agent, "close_db", None)
+            if callable(close):
+                close()
 
-        assert mock.call_count >= 1
-        for call in mock.call_args_list:
-            assert call.kwargs.get("min_context_size") == 16384
-
-    def test_unpinned_agent_keeps_default_ensure_ready_floor(self, tmp_path):
+    def test_unpinned_agent_keeps_default_ensure_ready_floor(
+        self, tmp_path, monkeypatch
+    ):
         """ctx_size=None -> EVERY ensure_ready call keeps the historical
         default floor (32768). Regression guard for the unpinned path: the
         base ``Agent.__init__`` default is 32768 and EmailTriageAgent must
         not disturb it when no pin is configured."""
-        _agent, mock = _build_agent_capturing_ensure_ready(tmp_path, ctx_size=None)
-
-        assert mock.call_count >= 1
-        for call in mock.call_args_list:
-            assert call.kwargs.get("min_context_size") == 32768
+        agent, mock = _build_agent_capturing_ensure_ready(
+            tmp_path, monkeypatch, ctx_size=None
+        )
+        try:
+            assert mock.call_count >= 1
+            for call in mock.call_args_list:
+                assert call.kwargs.get("min_context_size") == 32768
+        finally:
+            close = getattr(agent, "close_db", None)
+            if callable(close):
+                close()
 
 
 if __name__ == "__main__":

@@ -2865,6 +2865,14 @@ class LemonadeClient:
         phase completed is to watch /health settle. Returns the loaded entry
         when waiting for presence, None when waiting for absence.
 
+        A failed probe (``get_status().running is False``) is UNKNOWN, not
+        "confirmed absent": ``get_status()`` swallows probe exceptions into
+        ``running=False`` / ``loaded_models=[]``, so treating that as absence
+        would let ``present=False`` settle on a server that's merely mid-
+        teardown and unresponsive right now — re-enabling the stale-ctx no-op
+        this state machine exists to prevent. Only a successful probe that
+        actually shows the model gone satisfies ``present=False``.
+
         Raises:
             LemonadeClientError: if the state does not settle within
                 ``deadline_s`` — the message names the deadline and the
@@ -2873,10 +2881,10 @@ class LemonadeClient:
         start = time.monotonic()
         while True:
             status = self.get_status()
-            entry = self._find_loaded_entry(status, model)
+            entry = self._find_loaded_entry(status, model) if status.running else None
             if present and entry is not None:
                 return entry
-            if not present and entry is None:
+            if not present and status.running and entry is None:
                 return None
             if time.monotonic() - start > deadline_s:
                 observed = [
