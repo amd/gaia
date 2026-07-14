@@ -565,5 +565,5 @@ server exposes it — null otherwise (no config echo, no guessing).
 slot. An agent instance with an exact ctx pin (`EmailAgentConfig.ctx_size` /
 `LemonadeClient(ctx_size_override=...)`) and any other client sharing the
 same model will fight over the loaded ctx — visible as the reported ctx
-flapping between values across successive `GET /v1/init` calls. Do not
+flapping between values across successive `GET /v1/email/init` calls. Do not
 enable `ctx_size` against a Lemonade instance shared with other traffic.

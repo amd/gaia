@@ -249,16 +249,20 @@ def _resolve_probe_base(base_url: Optional[str]) -> str:
 
 def _probe_lemonade_health(
     base_url: Optional[str] = None,
-) -> Tuple[bool, str, Optional[str]]:
+) -> Tuple[bool, str, Optional[str], List[dict]]:
     """Probe Lemonade's ``/health`` with a short connect timeout (#1677).
 
-    Returns ``(reachable, probe_base, version)``. Any HTTP response — even an
-    error status — means the server is up; only a connection/timeout failure
-    counts as unreachable (auth/model errors surface later on the real chat
-    call, where their messages are specific). ``version`` is Lemonade's
-    self-reported server version from the ``/health`` body (``None`` when the
-    server doesn't advertise one or the body isn't JSON). Never raises: the
-    readiness endpoint reports the values rather than failing.
+    Returns ``(reachable, probe_base, version, loaded_models)``. Any HTTP
+    response — even an error status — means the server is up; only a
+    connection/timeout failure counts as unreachable (auth/model errors
+    surface later on the real chat call, where their messages are specific).
+    ``version`` is Lemonade's self-reported server version from the
+    ``/health`` body (``None`` when the server doesn't advertise one or the
+    body isn't JSON). ``loaded_models`` is the raw ``all_models_loaded`` list
+    from the same body (``[]`` when unreachable or unparseable) — note raw
+    /health entries carry ``model_name``/``checkpoint`` keys, NOT the ``id``
+    key ``get_status()`` enrichment adds. Never raises: the readiness
+    endpoint reports the values rather than failing.
     """
     import requests
 
@@ -269,16 +273,45 @@ def _probe_lemonade_health(
             timeout=(_LEMONADE_PROBE_CONNECT_TIMEOUT, _LEMONADE_PROBE_READ_TIMEOUT),
         )
     except requests.exceptions.RequestException:
-        return False, probe_base, None
+        return False, probe_base, None, []
 
     version: Optional[str] = None
+    loaded_models: List[dict] = []
     try:
         body = resp.json()
         if isinstance(body, dict):
             version = body.get("version")
+            raw_loaded = body.get("all_models_loaded", [])
+            if isinstance(raw_loaded, list):
+                loaded_models = [m for m in raw_loaded if isinstance(m, dict)]
     except ValueError:
         version = None
-    return True, probe_base, version
+    return True, probe_base, version, loaded_models
+
+
+def _extract_loaded_ctx(loaded_models: List[dict], model_id: str) -> Optional[int]:
+    """The ctx_size the server reports ``model_id`` loaded at, or None.
+
+    Reads raw /health entries (``model_name``/``checkpoint`` keys — no ``id``
+    at this layer) and matches tolerantly via ``_model_ids_match`` (#1952:
+    ``user.`` prefix, case-insensitive). Reports only what the server says:
+    missing entry, missing ``recipe_options``, or a non-positive/non-int
+    value all yield None — never a config echo or a guess.
+    """
+    from gaia.llm.lemonade_client import _model_ids_match
+
+    for entry in loaded_models:
+        if _model_ids_match(entry.get("model_name"), model_id) or _model_ids_match(
+            entry.get("checkpoint"), model_id
+        ):
+            recipe_options = entry.get("recipe_options")
+            if not isinstance(recipe_options, dict):
+                return None
+            ctx = recipe_options.get("ctx_size")
+            if isinstance(ctx, int) and not isinstance(ctx, bool) and ctx > 0:
+                return ctx
+            return None
+    return None
 
 
 def _probe_lemonade_reachable(base_url: Optional[str] = None) -> Tuple[bool, str]:
@@ -287,7 +320,7 @@ def _probe_lemonade_reachable(base_url: Optional[str] = None) -> Tuple[bool, str
     Kept for callers (the POST provisioning verb) that need only "is it up?",
     not the version — so they share the single ``/health`` probe logic.
     """
-    reachable, probe_base, _version = _probe_lemonade_health(base_url)
+    reachable, probe_base, _version, _loaded = _probe_lemonade_health(base_url)
     return reachable, probe_base
 
 
@@ -1703,6 +1736,17 @@ class InitModelStatus(_Strict):
             "signal. Reserved for an opt-in deeper check."
         ),
     )
+    ctx_size: Optional[int] = Field(
+        default=None,
+        description=(
+            "The context window the model is CURRENTLY loaded at, as reported "
+            "by the server's /health (recipe_options.ctx_size). Null whenever "
+            "the model is not loaded right now or the server does not report "
+            "a ctx — never a config echo or a guess (#1892). Compare against "
+            "the envelope (16384 target / 32768 max) to see what window a "
+            "run would actually measure."
+        ),
+    )
 
 
 class InitResponse(_Strict):
@@ -2592,10 +2636,11 @@ def _compute_init_status(base_url: Optional[str] = None) -> InitResponse:
     from gaia_agent_email.version import MIN_LEMONADE_VERSION
 
     model_id = _resolve_email_model_id()
-    reachable, probe_base, version = _probe_lemonade_health(base_url)
+    reachable, probe_base, version, loaded_models = _probe_lemonade_health(base_url)
     compatible = (
         _version_meets_min(version, MIN_LEMONADE_VERSION) if reachable else None
     )
+    loaded_ctx = _extract_loaded_ctx(loaded_models, model_id)
     lemonade = InitLemonadeStatus(
         reachable=reachable,
         base_url=probe_base,
@@ -2623,7 +2668,11 @@ def _compute_init_status(base_url: Optional[str] = None) -> InitResponse:
         return InitResponse(
             ready=False,
             lemonade=lemonade,
-            model=InitModelStatus(id=model_id, present=False, loadable=None),
+            # /health succeeded, so a server-reported loaded ctx is still honest
+            # here even though the /models presence read failed.
+            model=InitModelStatus(
+                id=model_id, present=False, loadable=None, ctx_size=loaded_ctx
+            ),
             hint=(
                 f"Lemonade is reachable but its model list at {probe_base}/models "
                 f"could not be read ({type(exc).__name__}: {exc}). Make sure the "
@@ -2631,7 +2680,9 @@ def _compute_init_status(base_url: Optional[str] = None) -> InitResponse:
             ),
         )
 
-    model = InitModelStatus(id=model_id, present=present, loadable=None)
+    model = InitModelStatus(
+        id=model_id, present=present, loadable=None, ctx_size=loaded_ctx
+    )
 
     # Version too old is the most fundamental blocker — surface it before the
     # model hint (upgrading Lemonade comes first even if the model is missing).

@@ -691,6 +691,14 @@ export interface InitModelStatus {
   present: boolean;
   /** Whether it actually loads — not probed in v1 (heavy), so null; `present` is the signal. */
   loadable?: boolean | null;
+  /**
+   * The context window the model is CURRENTLY loaded at, as reported by the
+   * server's /health (recipe_options.ctx_size). Null whenever the model is
+   * not loaded right now or the server does not report a ctx — never a
+   * config echo or a guess (#1892). Compare against the envelope (16384
+   * target / 32768 max) to see what window a run would actually measure.
+   */
+  ctx_size?: number | null;
 }
 
 /**
