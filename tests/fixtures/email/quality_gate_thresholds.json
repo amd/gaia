@@ -9,5 +9,6 @@
   "urgent_recall_floor": 0.90,
   "acceptance_enforce": true,
   "_ctx_comment": "Ctx-window envelope (#1892): when require_ctx_match is true, release_agent_email.yml passes --require-ctx-match to the scorecard gate so a candidate SCORECARD.md that does not record recipe.environment.ctx_size (the window it was measured under) hard-fails. Same data-not-code switch pattern as acceptance_enforce. Ships FALSE for now: no committed SCORECARD carries a ctx stamp yet, so enforcing would break CI on merge. Flip to true when the consolidated eval pass (#1319/#1892) commits the first ctx-stamped SCORECARD — email_scorecard_refresh.yml already pins --ctx-size 16384, so the next organic refresh produces a stamped card.",
-  "require_ctx_match": false
+  "require_ctx_match": false,
+  "_tokens_per_triage_comment": "Token accounting (#1891): the scorecard's tokens_per_triage / total_input_tokens / total_output_tokens / llm_classified_count rows (gen_scorecard._compute_performance) are REPORTED only. Do NOT add a gate (bar/floor) for tokens_per_triage without a committed, ctx-stamped baseline SCORECARD to compare against (#1894 trust model) — and comparisons are only meaningful with the corpus held fixed, since the metric is classify-call tokens over LLM-classified emails only (pinned in gaia.eval.benchmark.build_result). No enforce switch exists for it yet on purpose; add one here (data, not code) when a baseline lands."
 }

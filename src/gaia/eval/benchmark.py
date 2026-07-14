@@ -128,6 +128,30 @@ def _extract_triage_results(conversation: list) -> tuple[list[dict], str]:
     return [], ""
 
 
+def _extract_triage_usage(conversation: list) -> tuple[dict | None, int]:
+    """Find the triage tool result's LLM usage block (#1891).
+
+    Sibling of :func:`_extract_triage_results`: walks the same tool messages
+    and reads ``data.usage`` / ``data.llm_classified_count`` off the first ok
+    triage envelope. Returns ``(usage_dict, llm_classified_count)``, or
+    ``(None, 0)`` when the envelope carries no usage block (a heuristic-only
+    run, or a pre-#1891 agent) — absence is the normal, non-error shape.
+    """
+    for msg in conversation:
+        if msg.get("role") != "tool" or not msg.get("content"):
+            continue
+        envelope = _maybe_parse_tool_envelope(msg["content"])
+        if not isinstance(envelope, dict):
+            continue
+        data = envelope.get("data")
+        if envelope.get("ok") and isinstance(data, dict) and "results" in data:
+            usage = data.get("usage")
+            if isinstance(usage, dict):
+                return usage, int(data.get("llm_classified_count") or 0)
+            return None, 0
+    return None, 0
+
+
 def _extract_tools_called(agent_result: dict) -> list[str]:
     """Ordered, de-duplicated list of tool names used in the conversation."""
     seen: set[str] = set()
@@ -194,9 +218,38 @@ def build_result(
         is_cold_start=is_cold_start,
     )
 
+    # #1891: merge the triage tool's nested classify-call usage into the run
+    # totals BEFORE serialization / cost — the outer-turn stats above never
+    # saw those calls, so totals (and cost_estimate) were undercounting.
+    # avg_tokens_per_second / TTFT stay outer-turn-derived on purpose (the
+    # usage block has no per-call TTFT and its decode rate is already the
+    # aggregate the tool computed). Bounded caveat: when the outer turn's own
+    # stats dict is falsy, the base agent falls back to a GET /stats that can
+    # capture the LAST nested classify call as the outer turn — merging then
+    # double-counts that one call (~0.3% worst case); tokens_per_triage below
+    # is immune (classify tokens over classify count only).
+    triage_usage, llm_classified_count = _extract_triage_usage(conversation)
+    triage_llm_tokens = 0
+    if triage_usage is not None:
+        t_in = int(triage_usage.get("prompt_tokens") or 0)
+        t_out = int(triage_usage.get("completion_tokens") or 0)
+        triage_llm_tokens = int(triage_usage.get("total_tokens") or 0) or (t_in + t_out)
+        perf_run.total_input_tokens += t_in
+        perf_run.total_output_tokens += t_out
+        perf_run.total_tokens += t_in + t_out
+
     out = performance.run_to_dict(perf_run)
     out["tools_called"] = _extract_tools_called(result_dict)
     out["performance_summary"] = performance.to_performance_summary(perf_run)
+    if triage_usage is not None:
+        # Pinned metric (#1891): tokens_per_triage = classify-call tokens over
+        # LLM-classified emails ONLY — invariant to the heuristic/batch mix
+        # and to the outer-turn fallback race noted above.
+        ps = out["performance_summary"]
+        ps["triage_llm_tokens"] = triage_llm_tokens
+        ps["llm_classified_count"] = llm_classified_count
+        if llm_classified_count > 0:
+            ps["tokens_per_triage"] = round(triage_llm_tokens / llm_classified_count, 1)
     out["cost_estimate"] = {
         "estimated_usd": quality_metrics.compute_cost(
             perf_run.total_input_tokens,
