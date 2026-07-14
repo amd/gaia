@@ -39,9 +39,22 @@ import json
 import pytest
 
 from tests.fixtures.email import score_baseline
+from tests.fixtures.email.generate_mbox import ensure_corpus
 
 _FIXTURES = score_baseline.FIXTURES_DIR
 _GROUND_TRUTH = score_baseline.GROUND_TRUTH
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _corpus_on_disk():
+    """Materialise the generated corpus before any test in this module.
+
+    ``ground_truth.json`` / ``synthetic_inbox.mbox`` are gitignored generated
+    artifacts (derived from the committed seed). The root tests/conftest.py
+    session fixture builds them for repo-side runs, but this hub-package test
+    tree runs WITHOUT that conftest in CI — reading ``_GROUND_TRUTH`` cold
+    would FileNotFoundError. No-op when already present."""
+    ensure_corpus()
 
 
 def test_score_accepts_ctx_size_kwarg():
