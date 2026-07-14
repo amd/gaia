@@ -10,6 +10,9 @@
   "dependencies": {
     "electron": "^43.1.0"
   },
+  "overrides": {
+    "undici": "^7.28.0"
+  },
   "devDependencies": {},
   "author": "AMD",
   "license": "MIT"
