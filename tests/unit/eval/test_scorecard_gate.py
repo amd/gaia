@@ -10,9 +10,10 @@ import yaml
 from gaia.eval.release_scorecard import (
     ResultPayload,
     compute_aggregate,
+    parse_scorecard,
     render_scorecard,
 )
-from gaia.eval.scorecard_gate import main
+from gaia.eval.scorecard_gate import env_ctx_size, main
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -588,3 +589,42 @@ class TestCtxSizeMismatch:
             tmp_path / "SCORECARD.md", version="0.3.1", within_one=0.85
         )
         assert main(["--scorecard", str(cand), "--require-ctx-match"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# env_ctx_size — public helper (#2094): email_scorecard_refresh.yml's `pre`
+# step imports this directly to read the committed card's ctx stamp before
+# any eval spend, so it must be importable without the leading underscore.
+# ---------------------------------------------------------------------------
+
+
+class TestEnvCtxSizePublicHelper:
+    def test_stamped_card_returns_ctx_size(self, tmp_path):
+        cand = _make_acceptance_card(
+            tmp_path / "SCORECARD.md",
+            version="0.3.1",
+            within_one=0.85,
+            environment={"ctx_size": 16384},
+        )
+        parsed = parse_scorecard(cand)
+        assert env_ctx_size(parsed) == 16384
+
+    def test_legacy_unstamped_card_returns_none(self, tmp_path):
+        # The current real state of hub/agents/npm/agent-email/SCORECARD.md
+        # (#2094): committed before #1892's ctx envelope landed, so it carries
+        # no recipe.environment.ctx_size at all.
+        cand = _make_acceptance_card(
+            tmp_path / "SCORECARD.md", version="0.3.0", within_one=0.834
+        )
+        parsed = parse_scorecard(cand)
+        assert env_ctx_size(parsed) is None
+
+    def test_environment_present_without_ctx_size_key_returns_none(self):
+        # Defensive: an environment block that carries other keys but not
+        # ctx_size must not be mistaken for a stamped card.
+        parsed = {"recipe": {"environment": {"gpu": "stx-halo"}}}
+        assert env_ctx_size(parsed) is None
+
+    def test_non_dict_environment_returns_none(self):
+        parsed = {"recipe": {"environment": None}}
+        assert env_ctx_size(parsed) is None
