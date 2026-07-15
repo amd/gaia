@@ -30,6 +30,7 @@ export {
   HealthTimeoutError,
   VersionMismatchError,
   BinaryNotFoundError,
+  QueryStreamError,
 } from "./errors.js";
 
 export { SCHEMA_VERSION } from "./types.js";

@@ -39,3 +39,10 @@ export class VersionMismatchError extends AgentEmailError {}
 
 /** A binary could not be located on disk for spawning. */
 export class BinaryNotFoundError extends AgentEmailError {}
+
+/**
+ * The `/query` SSE stream violated the frozen contract — a malformed event
+ * payload, a non-SSE response, or a stream that closed without the mandated
+ * terminal `final`/`error` event.
+ */
+export class QueryStreamError extends AgentEmailError {}
