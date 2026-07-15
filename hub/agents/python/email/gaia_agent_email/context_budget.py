@@ -33,12 +33,13 @@ _SYSTEM_PROMPT_ALLOWANCE_TOKENS = 1536
 _RESPONSE_RESERVE_TOKENS = 1024
 
 # Fixed prompt cost of the agent loop's post-tool turn: the system prompt PLUS
-# the full JSON tool schema the agent re-reads on every turn. Measured at ~8K on
-# the bulk-triage path in #2087 — larger than the thread-triage path's
+# the full JSON tool schema the agent re-reads on every turn. Measured at ~8.4K
+# on the bulk-triage path (#2087 CI run: 19,815-token request minus the ~11.4K
+# verbatim 60-email envelope) — larger than the thread-triage path's
 # ``_SYSTEM_PROMPT_ALLOWANCE_TOKENS`` because the agent loop carries every tool's
 # schema, not just the classify prompt. The bulk-triage RESULT envelope
 # re-read on the next turn must fit in what remains of CONTEXT_TARGET_TOKENS.
-_AGENT_LOOP_FIXED_TOKENS = 8192
+_AGENT_LOOP_FIXED_TOKENS = 9216
 
 
 def thread_budget_tokens() -> int:
@@ -85,3 +86,19 @@ def estimate_tokens(text: str) -> int:
     chars_estimate = len(text) // 4
     words_estimate = int(len(text.split()) * 1.3)
     return max(chars_estimate, words_estimate)
+
+
+def estimate_tokens_json(text: str) -> int:
+    """Token estimate calibrated for compact serialized JSON (#2087).
+
+    ``chars // 4`` is a prose ratio — real tokenizers spend ~1 token per
+    ~2.1 chars on serialized JSON (measured: a 23,965-char 60-email triage
+    envelope tokenized to ~11.4K, and the uncondensed post-tool turn 400'd at
+    19,815 tokens against a 16,384 window). The prose estimate made the
+    condenser no-op exactly where it had to fire. ``chars // 2`` deliberately
+    over-counts a little — for a budget gate the safe error direction is
+    assuming MORE tokens, never fewer.
+    """
+    if not text:
+        return 0
+    return max(len(text) // 2, int(len(text.split()) * 1.3))

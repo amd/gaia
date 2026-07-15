@@ -36,7 +36,7 @@ pytest.importorskip("gaia_agent_email")
 from gaia_agent_email.context_budget import (  # noqa: E402
     CONTEXT_TARGET_TOKENS,
     envelope_budget_tokens,
-    estimate_tokens,
+    estimate_tokens_json,
     _AGENT_LOOP_FIXED_TOKENS,
     _RESPONSE_RESERVE_TOKENS,
 )
@@ -91,11 +91,11 @@ def _make_result(n: int) -> dict:
 
 class TestEnvelopeBudget:
     def test_concrete_value(self):
-        assert envelope_budget_tokens() == 16384 - 8192 - 1024
-        assert envelope_budget_tokens() == 7168
+        assert envelope_budget_tokens() == 16384 - 9216 - 1024
+        assert envelope_budget_tokens() == 6144
 
     def test_equals_target_minus_named_reserves(self):
-        assert _AGENT_LOOP_FIXED_TOKENS == 8192
+        assert _AGENT_LOOP_FIXED_TOKENS == 9216
         assert _RESPONSE_RESERVE_TOKENS == 1024
         assert envelope_budget_tokens() == (
             CONTEXT_TARGET_TOKENS - _AGENT_LOOP_FIXED_TOKENS - _RESPONSE_RESERVE_TOKENS
@@ -105,6 +105,28 @@ class TestEnvelopeBudget:
         budget = envelope_budget_tokens()
         assert isinstance(budget, int)
         assert 0 < budget < CONTEXT_TARGET_TOKENS
+
+
+class TestJsonCalibrationPin:
+    """Pins the #2087 CI failure: at limit 60 the post-tool turn 400'd at
+    19,815 tokens vs 16,384 because the prose estimator (chars//4) said the
+    ~11.4K-real-token envelope fit the budget, so the condenser no-op'd. The
+    JSON-calibrated estimator must put that same envelope over budget."""
+
+    def test_sixty_email_envelope_must_condense(self):
+        result = _make_result(60)
+        # A no-op here re-creates the real-hardware 400.
+        assert _estimate_envelope_tokens(result) > envelope_budget_tokens()
+        out = condense_triage_result(result)
+        assert out is not result
+        assert out["results_condensed"] is True
+        assert _estimate_envelope_tokens(out) <= envelope_budget_tokens()
+
+    def test_json_estimator_assumes_at_most_two_chars_per_token(self):
+        # Measured 2.1 chars/token on the real envelope; the estimator must
+        # assume <= 2.0 so it over-counts (the safe direction for a gate).
+        s = json.dumps(_make_result(60), default=str)
+        assert estimate_tokens_json(s) >= len(s) // 2
 
 
 class TestNoOpBelowBudget:
@@ -195,12 +217,12 @@ class TestOverflowGuardDifferential:
         budget = envelope_budget_tokens()
 
         # Before: verbatim envelope overflows.
-        assert estimate_tokens(json.dumps(result, default=str)) > budget
+        assert estimate_tokens_json(json.dumps(result, default=str)) > budget
 
         out = condense_triage_result(result)
 
         # After: condensed envelope fits.
-        assert estimate_tokens(json.dumps(out, default=str)) <= budget
+        assert estimate_tokens_json(json.dumps(out, default=str)) <= budget
 
         # Differential: every kept verdict is identical to the source verdict at
         # the same index — condensing never mutates a verdict, only drops the

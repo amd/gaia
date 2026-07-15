@@ -28,7 +28,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List
 
-from gaia_agent_email.context_budget import envelope_budget_tokens, estimate_tokens
+from gaia_agent_email.context_budget import envelope_budget_tokens, estimate_tokens_json
 
 
 def _estimate_envelope_tokens(envelope: Dict[str, Any]) -> int:
@@ -36,9 +36,11 @@ def _estimate_envelope_tokens(envelope: Dict[str, Any]) -> int:
 
     ``json.dumps(..., default=str)`` matches ``_triage_all_backends``'s own
     serialization contract, so the estimate reflects what the agent actually
-    re-reads rather than an idealized shape.
+    re-reads rather than an idealized shape. Uses the JSON-calibrated
+    estimator — the prose ratio under-counts serialized JSON ~2x, which made
+    the condenser no-op on batches that then 400'd (#2087 CI run).
     """
-    return estimate_tokens(json.dumps(envelope, default=str))
+    return estimate_tokens_json(json.dumps(envelope, default=str))
 
 
 def condense_triage_result(
@@ -65,29 +67,32 @@ def condense_triage_result(
     full_results: List[Dict[str, Any]] = list(result.get("results", []))
 
     # Base carries everything except the verbatim verdict list; ``grouped`` stays.
-    condensed: Dict[str, Any] = {k: v for k, v in result.items() if k != "results"}
-    condensed["results_condensed"] = True
-    condensed["results_total"] = len(full_results)
+    base: Dict[str, Any] = {k: v for k, v in result.items() if k != "results"}
+    base["results_condensed"] = True
+    base["results_total"] = len(full_results)
 
-    # Greedily keep exemplars (original order) while the SERIALIZED envelope —
-    # including the growing omission count — stays under budget. Measuring the
-    # full envelope each step keeps ``grouped``/``usage`` overhead in the math so
-    # we never claim to fit while actually overflowing.
+    def _build(kept: List[Dict[str, Any]]) -> Dict[str, Any]:
+        # The candidate envelope EXACTLY as it would be returned — note
+        # included — so the budget check measures what the agent re-reads,
+        # never a lighter draft of it.
+        omitted = len(full_results) - len(kept)
+        out = dict(base)
+        out["results"] = kept
+        out["results_omitted"] = omitted
+        out["note"] = (
+            f"[omitted {omitted} verbatim verdicts to fit the {budget_tokens}-token "
+            f"context budget — {len(kept)} of {len(full_results)} shown; see 'grouped' "
+            f"for the full id-to-category map]"
+        )
+        return out
+
+    # Greedily keep exemplars (original order) while the fully-built envelope
+    # — grouped/usage overhead, omission count, and note all included — stays
+    # under budget.
     kept: List[Dict[str, Any]] = []
     for item in full_results:
-        trial = dict(condensed)
-        trial["results"] = kept + [item]
-        trial["results_omitted"] = len(full_results) - len(kept) - 1
-        if _estimate_envelope_tokens(trial) > budget_tokens:
+        if _estimate_envelope_tokens(_build(kept + [item])) > budget_tokens:
             break
         kept.append(item)
 
-    omitted = len(full_results) - len(kept)
-    condensed["results"] = kept
-    condensed["results_omitted"] = omitted
-    condensed["note"] = (
-        f"[omitted {omitted} verbatim verdicts to fit the {budget_tokens}-token "
-        f"context budget — {len(kept)} of {len(full_results)} shown; see 'grouped' "
-        f"for the full id-to-category map]"
-    )
-    return condensed
+    return _build(kept)
