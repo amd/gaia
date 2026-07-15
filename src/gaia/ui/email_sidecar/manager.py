@@ -4,7 +4,8 @@
 lifecycle.ts), Node-free.
 
 Modes (``GAIA_EMAIL_AGENT_MODE``):
-  user (default) — spawn the cached frozen binary (lazy-fetched on first use).
+  user (default) — spawn the verified frozen binary: a Hub-installed one when
+                   present (#2095), else lazy-fetched via binaries.lock.json.
   dev            — spawn ``uvicorn server:app --reload --app-dir <email>/packaging``
                    from source. The file is loaded as the TOP-LEVEL module
                    ``server`` (NOT ``packaging.server:app``, which would resolve
