@@ -30,6 +30,7 @@ from typing import (
     get_origin,
 )
 
+from gaia_agent_email.context_budget import CONTEXT_MAX_TOKENS, CONTEXT_TARGET_TOKENS
 from gaia_agent_email.contract import (
     SCHEMA_VERSION,
     ActionItem,
@@ -961,6 +962,28 @@ def render_endpoint_spec_html() -> str:
 </p>
 
 {agent_block}
+
+<h2>Context-window envelope</h2>
+<p class="body-t">The agent is designed, measured, and released against a pinned
+  context-window envelope (<a class="iss" href="https://github.com/amd/gaia/issues/1892"
+  target="_blank" rel="noopener">#1892</a>; constants in
+  <code class="inl">gaia_agent_email/context_budget.py</code>). Published scorecards
+  and baselines state the window they were measured under
+  (<code class="inl">ctx_size</code> in the scorecard's environment block and in the
+  committed accuracy baseline).</p>
+<table>
+  <thead><tr><th>Bound</th><th>Tokens</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><b>Target</b></td><td><b>{CONTEXT_TARGET_TOKENS:,}</b></td><td>The window published numbers are measured at — fits everyday triage/draft prompts on consumer NPU/GPU KV-cache budgets</td></tr>
+    <tr><td><b>Acceptable max</b></td><td><b>{CONTEXT_MAX_TOKENS:,}</b></td><td>Ceiling for deliberately larger runs (long-thread stress); above it the measurement stops representing a real device</td></tr>
+  </tbody>
+</table>
+<p class="body-t">To see what a live triage actually consumed, read the
+  <code class="inl">usage</code> block in the triage response
+  (<code class="inl">prompt_tokens</code> / <code class="inl">completion_tokens</code>).
+  <code class="inl">GET /v1/email/init</code> additionally reports the currently
+  loaded <code class="inl">ctx_size</code> on <code class="inl">model</code> when the
+  triage model is loaded and the server exposes it — null otherwise.</p>
 
 <h2>Convenience pages</h2>
 
