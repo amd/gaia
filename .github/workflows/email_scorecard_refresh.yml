@@ -263,7 +263,7 @@ jobs:
               exit 1
             }
           }
-          Write-Host "No same-version regression — fresh score is >= committed."
+          Write-Host "No same-version regression -- fresh score is >= committed."
 
       - name: Cross-version gate (fresh SCORECARD.md vs prior version tag, best-effort)
         run: |
@@ -279,7 +279,7 @@ jobs:
         run: |
           git diff --quiet -- "$env:SCORECARD"
           if ($LASTEXITCODE -eq 0) {
-            Write-Host "SCORECARD.md unchanged — nothing to commit."
+            Write-Host "SCORECARD.md unchanged -- nothing to commit."
             exit 0
           }
           git config user.name  "${{ github.actor }}"
