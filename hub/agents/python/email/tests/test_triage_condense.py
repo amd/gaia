@@ -122,11 +122,13 @@ class TestJsonCalibrationPin:
         assert out["results_condensed"] is True
         assert _estimate_envelope_tokens(out) <= envelope_budget_tokens()
 
-    def test_json_estimator_assumes_at_most_two_chars_per_token(self):
-        # Measured 2.1 chars/token on the real envelope; the estimator must
-        # assume <= 2.0 so it over-counts (the safe direction for a gate).
+    def test_json_estimator_assumes_at_most_1_3_chars_per_token(self):
+        # Hardware round 2: the hex-id-heavy grouped map tokenizes at
+        # ~1.4 chars/token (a chars//2 estimate still overflowed by 672 at
+        # limit 300). The estimator must assume <= 1.3 so it over-counts —
+        # the safe direction for a gate.
         s = json.dumps(_make_result(60), default=str)
-        assert estimate_tokens_json(s) >= len(s) // 2
+        assert estimate_tokens_json(s) * 13 >= len(s) * 10
 
 
 class TestNoOpBelowBudget:

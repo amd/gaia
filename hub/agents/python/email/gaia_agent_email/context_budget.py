@@ -91,14 +91,21 @@ def estimate_tokens(text: str) -> int:
 def estimate_tokens_json(text: str) -> int:
     """Token estimate calibrated for compact serialized JSON (#2087).
 
-    ``chars // 4`` is a prose ratio — real tokenizers spend ~1 token per
-    ~2.1 chars on serialized JSON (measured: a 23,965-char 60-email triage
-    envelope tokenized to ~11.4K, and the uncondensed post-tool turn 400'd at
-    19,815 tokens against a 16,384 window). The prose estimate made the
-    condenser no-op exactly where it had to fire. ``chars // 2`` deliberately
-    over-counts a little — for a budget gate the safe error direction is
-    assuming MORE tokens, never fewer.
+    ``chars // 4`` is a prose ratio; real tokenizers are far denser on JSON,
+    and the density depends on the content mix — both measured on hardware:
+
+    - verbatim 60-email envelope (prose-heavy subjects/rationales):
+      23,965 chars → ~11.4K tokens ≈ **2.1 chars/token** (the uncondensed
+      post-tool turn 400'd at 19,815 vs a 16,384 window);
+    - condensed 300-email envelope (dominated by the hex-id ``grouped`` map):
+      still overflowed by 672 tokens under a chars//2 estimate ≈
+      **~1.4 chars/token** — hex ids fragment into near-per-character tokens.
+
+    Assume the densest plausible mix: **1.3 chars/token**, the practical floor
+    for ASCII JSON. Over-counting prose-heavy envelopes wastes only exemplar
+    slots (``grouped`` keeps the complete verdict map either way); an
+    under-count is a 400 on real hardware. Always round pessimistically.
     """
     if not text:
         return 0
-    return max(len(text) // 2, int(len(text.split()) * 1.3))
+    return (len(text) * 10 + 12) // 13
