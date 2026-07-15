@@ -13,7 +13,9 @@ No external assets — inline CSS only. No LLM, no network calls.
 
 from __future__ import annotations
 
+import argparse
 import html as _html_lib
+import sys
 import webbrowser
 from pathlib import Path
 from typing import (
@@ -990,6 +992,30 @@ def render_endpoint_spec_html() -> str:
 # Default location for the generated spec when no explicit path is given.
 DEFAULT_SPEC_PATH = Path.home() / ".gaia" / "email" / "endpoint-spec.html"
 
+# Committed artifact lives at the email package root (next to pyproject.toml and
+# openapi.email.json). It is a pure render of ``render_endpoint_spec_html()`` —
+# a drift guard (see tests/test_spec_html_artifact.py) keeps it from silently
+# diverging so a regeneration can never drop hand-maintained sections.
+ARTIFACT_PATH = Path(__file__).resolve().parents[1] / "specification.html"
+
+
+def write_artifact(path: Path = ARTIFACT_PATH) -> Path:
+    """Generate the spec HTML and write it to ``path``. Returns the path written."""
+    path.write_text(render_endpoint_spec_html(), encoding="utf-8")
+    return path
+
+
+def check_artifact(path: Path = ARTIFACT_PATH) -> bool:
+    """Return True iff the committed artifact matches a freshly rendered spec.
+
+    Used by CI and the drift test to detect divergence between
+    ``specification.html`` and its generator. Reads the committed file and
+    compares against the current render — never rewrites it.
+    """
+    if not path.exists():
+        return False
+    return path.read_text(encoding="utf-8") == render_endpoint_spec_html()
+
 
 def write_and_open_spec(output_path: Optional[str] = None) -> Path:
     """Render the spec, write it to disk, and open it in a browser.
@@ -1009,8 +1035,59 @@ def write_and_open_spec(output_path: Optional[str] = None) -> Path:
     return dest
 
 
+def main(argv=None) -> int:
+    """Regenerate or verify the committed ``specification.html`` artifact.
+
+    Mirrors ``gaia_agent_email.export_openapi`` so the HTML spec is a
+    generator-guarded artifact just like ``openapi.email.json``::
+
+        # Regenerate after changing spec_html.py or the contract models:
+        python -m gaia_agent_email.spec_html
+
+        # CI drift check — non-zero exit if the committed file is stale:
+        python -m gaia_agent_email.spec_html --check
+    """
+    parser = argparse.ArgumentParser(
+        description="Export or verify the committed email specification.html artifact."
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Exit non-zero if the committed artifact is stale (no write).",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=ARTIFACT_PATH,
+        help=f"Artifact path (default: {ARTIFACT_PATH}).",
+    )
+    args = parser.parse_args(argv)
+
+    if args.check:
+        if check_artifact(args.output):
+            print(f"specification.html up to date: {args.output}")
+            return 0
+        print(
+            f"specification.html is STALE or missing: {args.output}\n"
+            "Regenerate it with:  python -m gaia_agent_email.spec_html",
+            file=sys.stderr,
+        )
+        return 1
+
+    written = write_artifact(args.output)
+    print(f"Wrote specification.html artifact: {written}")
+    return 0
+
+
 __all__ = [
     "render_endpoint_spec_html",
     "write_and_open_spec",
+    "write_artifact",
+    "check_artifact",
     "DEFAULT_SPEC_PATH",
+    "ARTIFACT_PATH",
 ]
+
+
+if __name__ == "__main__":
+    sys.exit(main())
