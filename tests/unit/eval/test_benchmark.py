@@ -14,6 +14,7 @@ from gaia.eval.benchmark import (
     _extract_triage_usage,
     _maybe_parse_tool_envelope,
     _normalize_agent_result,
+    _reconstruct_condensed_results,
     build_result,
     default_perf_thresholds_path,
     default_quality_thresholds_path,
@@ -196,6 +197,193 @@ class TestExtractTriageUsage:
         usage, count = _extract_triage_usage(convo)
         assert usage is None
         assert count == 0
+
+
+class TestCondensedTriageReconstruction:
+    """Condensed envelopes (#2087's ctx-budget trim) must still score the
+    whole batch: ``_extract_triage_results`` reconstructs the omitted
+    verdicts from the verbatim ``grouped`` map rather than scoring only the
+    kept exemplars."""
+
+    EXEMPLARS = [
+        {
+            "id": "a0",
+            "category": "URGENT",
+            "confident": True,
+            "is_spam": False,
+            "is_phishing": False,
+        },
+        {
+            "id": "a1",
+            "category": "URGENT",
+            "confident": True,
+            "is_spam": False,
+            "is_phishing": False,
+        },
+        {
+            "id": "a2",
+            "category": "URGENT",
+            "confident": True,
+            "is_spam": False,
+            "is_phishing": False,
+        },
+    ]
+
+    GROUPED = {
+        "groups": {
+            "URGENT": ["a0", "a1", "a2", "a3", "a4"],
+            "NEEDS_RESPONSE": ["a5", "a6", "a7"],
+            "FYI": ["a8", "a9"],
+        },
+        "spam": ["a8"],
+        "phishing": ["a9"],
+        "total": 10,
+    }
+
+    def _condensed_data(self, exemplars=None, grouped=None):
+        return {
+            "results": self.EXEMPLARS if exemplars is None else exemplars,
+            "results_condensed": True,
+            "results_total": 10,
+            "results_omitted": 7,
+            "note": "[omitted 7 verbatim verdicts ...]",
+            "grouped": self.GROUPED if grouped is None else grouped,
+        }
+
+    def test_reconstructs_all_ids_from_grouped(self):
+        reconstructed = _reconstruct_condensed_results(self._condensed_data())
+        assert len(reconstructed) == self.GROUPED["total"]
+        assert {r["id"] for r in reconstructed} == {f"a{i}" for i in range(10)}
+
+    def test_exemplar_dicts_pass_through_identically_and_first(self):
+        reconstructed = _reconstruct_condensed_results(self._condensed_data())
+        assert reconstructed[:3] == self.EXEMPLARS
+
+    def test_reconstructed_entries_carry_category_and_flags(self):
+        reconstructed = _reconstruct_condensed_results(self._condensed_data())
+        by_id = {r["id"]: r for r in reconstructed}
+
+        assert by_id["a4"]["category"] == "URGENT"
+        assert by_id["a4"]["is_spam"] is False
+        assert by_id["a4"]["is_phishing"] is False
+        assert by_id["a4"]["source"] == "condensed"
+
+        assert by_id["a7"]["category"] == "NEEDS_RESPONSE"
+        assert by_id["a7"]["source"] == "condensed"
+
+        assert by_id["a8"]["category"] == "FYI"
+        assert by_id["a8"]["is_spam"] is True
+        assert by_id["a8"]["source"] == "condensed"
+
+        assert by_id["a9"]["category"] == "FYI"
+        assert by_id["a9"]["is_phishing"] is True
+
+        # exemplars themselves are untouched -- no injected "source" key
+        assert "source" not in by_id["a0"]
+
+    def test_extract_triage_results_reconstructs_via_envelope(self):
+        envelope = {"ok": True, "data": self._condensed_data()}
+        convo = [
+            {
+                "role": "tool",
+                "name": "triage_inbox",
+                "content": json.dumps(envelope),
+            }
+        ]
+        results, error = _extract_triage_results(convo)
+        assert error == ""
+        assert len(results) == 10
+
+    def test_missing_grouped_raises_value_error(self):
+        data = self._condensed_data()
+        del data["grouped"]
+        with pytest.raises(ValueError, match="grouped"):
+            _reconstruct_condensed_results(data)
+
+    def test_grouped_without_groups_key_raises_value_error(self):
+        data = self._condensed_data(grouped={"spam": [], "phishing": [], "total": 0})
+        with pytest.raises(ValueError, match="grouped"):
+            _reconstruct_condensed_results(data)
+
+    def test_grouped_groups_not_a_dict_raises_value_error(self):
+        data = self._condensed_data(grouped={"groups": ["not", "a", "dict"]})
+        with pytest.raises(ValueError, match="grouped"):
+            _reconstruct_condensed_results(data)
+
+    def test_grouped_bucket_not_a_list_raises_value_error(self):
+        data = self._condensed_data(
+            grouped={
+                "groups": {"URGENT": "a0"},
+                "spam": [],
+                "phishing": [],
+                "total": 1,
+            }
+        )
+        with pytest.raises(ValueError, match="not a list of ids"):
+            _reconstruct_condensed_results(data)
+
+    def test_non_condensed_envelope_behavior_unchanged(self):
+        # Regression pin: a plain (non-condensed) envelope must still return
+        # data["results"] verbatim, untouched by the reconstruction path.
+        ar = _agent_result()
+        results, error = _extract_triage_results(ar["conversation"])
+        assert error == ""
+        assert results == TRIAGE_ENVELOPE["data"]["results"]
+
+    def test_build_result_scores_full_batch_from_condensed_envelope(self):
+        # End-to-end: quality metrics must be computed over all 10 ids, not
+        # just the 3 kept exemplars.
+        ground_truth = {
+            "_meta": {"note": "skip me"},
+            "a0": {"category": "URGENT", "is_spam": False, "is_phishing": False},
+            "a1": {"category": "URGENT", "is_spam": False, "is_phishing": False},
+            "a2": {"category": "URGENT", "is_spam": False, "is_phishing": False},
+            "a3": {"category": "URGENT", "is_spam": False, "is_phishing": False},
+            "a4": {"category": "URGENT", "is_spam": False, "is_phishing": False},
+            "a5": {
+                "category": "NEEDS_RESPONSE",
+                "is_spam": False,
+                "is_phishing": False,
+            },
+            "a6": {
+                "category": "NEEDS_RESPONSE",
+                "is_spam": False,
+                "is_phishing": False,
+            },
+            "a7": {
+                "category": "NEEDS_RESPONSE",
+                "is_spam": False,
+                "is_phishing": False,
+            },
+            "a8": {"category": "FYI", "is_spam": True, "is_phishing": False},
+            "a9": {"category": "FYI", "is_spam": False, "is_phishing": True},
+        }
+        envelope = {"ok": True, "data": self._condensed_data()}
+        ar = {
+            "input_tokens": 1000,
+            "output_tokens": 200,
+            "conversation": [
+                {"role": "user", "content": "Triage my inbox (10 emails)"},
+                {
+                    "role": "tool",
+                    "name": "triage_inbox",
+                    "content": json.dumps(envelope),
+                },
+            ],
+        }
+        out = build_result(
+            ar,
+            run_id="r0",
+            timestamp="t",
+            model_id="Gemma-4-E4B-it-GGUF",
+            total_duration_ms=2000,
+            ground_truth=ground_truth,
+        )
+        assert out["total_emails"] == 10
+        assert out["quality"]["category_accuracy"] == 1.0
+        assert out["quality"]["spam"]["tp"] + out["quality"]["spam"]["fn"] == 1
+        assert out["quality"]["phishing"]["tp"] + out["quality"]["phishing"]["fn"] == 1
+        assert len(out["quality"]["categorization"]["rows"]) == 10
 
 
 class TestBuildResult:

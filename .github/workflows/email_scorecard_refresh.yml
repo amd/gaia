@@ -37,9 +37,13 @@ on:
       limit:
         description: 'Messages to triage (smaller = faster; regen a card at this sample size)'
         required: false
-        # 25 (~12.8K tokens: ~8K fixed aggregation turn + ~190/email) fits the
-        # #1892 16384 ctx window; 60 guarantees context_length_exceeded (#2087).
-        # Restore a larger limit once #2087's chunking lands.
+        # Stays at 25 even though #2087's ctx overflow is fixed: the 60-email
+        # limit had TWO independent blockers and this PR only removes one.
+        # The ctx one is gone (condense_triage_result keeps the envelope in
+        # budget at any batch size — measured at 300). The other is this job's
+        # 90-minute budget: at 60 the benchmark + judge evals overrun it (run
+        # 29433392568 was killed mid-action-item eval at exactly 90:00). Raise
+        # the limit when #2063's per-email speedups land, not before.
         default: '25'
       model:
         description: 'Lemonade model id'
@@ -70,7 +74,8 @@ permissions:
 env:
   SCORECARD: hub/agents/npm/agent-email/SCORECARD.md
   MANIFEST: hub/agents/python/email/gaia-agent.yaml
-  # 25 fits the pinned 16384 ctx window; 60 overflows it (#2087).
+  # 25, not 60 — bounded by this job's 90-min budget, not by ctx (#2087 fixed
+  # that). See the workflow_dispatch input above.
   LIMIT: ${{ github.event.inputs.limit || '25' }}
   MODEL: ${{ github.event.inputs.model || 'Gemma-4-E4B-it-GGUF' }}
   PYTHONIOENCODING: "utf-8"
@@ -99,10 +104,12 @@ jobs:
     # 'powershell: command not found'. fromJSON(...) yields a label ARRAY so the
     # runner must have Windows AND the stx/stx-test label.
     runs-on: ${{ fromJSON(contains(github.event.pull_request.labels.*.name, 'stx-test') && '["self-hosted","Windows","stx-test"]' || '["self-hosted","Windows","stx"]') }}
-    # The refresh triages ~25 emails in one call (~38s/email -> ~16min); the
-    # limit was cut from 220 (~2.3h), then from 60 to 25 because 60 overflows
-    # the pinned 16384 ctx window (#2087). Per-email speedups that would let
-    # it go back up are tracked in #2063.
+    # The refresh triages ~25 emails in one call (~38s/email -> ~16min), then
+    # runs three judge evals; that whole chain has to fit the budget below.
+    # History: 220 (~2.3h) hogged the serial lemonade-eval slot -> 60 -> 25
+    # (#2089) when 60 overflowed the pinned 16384 ctx window. #2087 fixed the
+    # ctx half, but 60 still overruns this budget (run 29433392568 died at
+    # 90:00 mid-judge-eval), so 25 stands. Per-email speedups: #2063.
     timeout-minutes: 90
     steps:
       - name: Checkout (the pushed branch)
@@ -259,7 +266,7 @@ jobs:
               exit 1
             }
           }
-          Write-Host "No same-version regression — fresh score is >= committed."
+          Write-Host "No same-version regression -- fresh score is >= committed."
 
       - name: Cross-version gate (fresh SCORECARD.md vs prior version tag, best-effort)
         run: |
@@ -275,7 +282,7 @@ jobs:
         run: |
           git diff --quiet -- "$env:SCORECARD"
           if ($LASTEXITCODE -eq 0) {
-            Write-Host "SCORECARD.md unchanged — nothing to commit."
+            Write-Host "SCORECARD.md unchanged -- nothing to commit."
             exit 0
           }
           git config user.name  "${{ github.actor }}"

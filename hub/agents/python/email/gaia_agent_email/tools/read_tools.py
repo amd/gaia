@@ -22,6 +22,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from gaia_agent_email.gmail_backend import decode_message_body
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
+from gaia_agent_email.tools.triage_condense import condense_triage_result
 
 # Re-exported so the pre-scan tests can monkeypatch ``read_tools.make_llm_classifier``
 # to prove pre-scan never wires the LLM (test_pre_scan_counts.py).
@@ -1101,6 +1102,13 @@ class ReadToolsMixin:
             ``set_low_priority_sender`` are honored — those senders
             bypass the heuristic and are recorded with
             ``preference_applied`` for downstream inspection.
+
+            For a large batch the per-message ``results`` list may be
+            condensed to fit the context budget: ``results_condensed`` is
+            True, ``results_omitted`` counts the verdicts dropped from
+            ``results``, and the ``grouped`` map still carries every
+            message's id-to-category assignment. Use ``grouped`` (not
+            ``results``) as the complete view when results are condensed.
             """
             try:
                 max_messages = max(
@@ -1110,8 +1118,15 @@ class ReadToolsMixin:
                 # with its source mailbox, split the budget across mailboxes,
                 # and merge. LLM follow-up (#1107) is wired inside the agent
                 # orchestration so agent.chat is initialized at call time.
+                #
+                # Condense the result envelope to the agent-loop ctx budget
+                # (#2087): a large batch's verbatim verdict list overflows
+                # CONTEXT_TARGET_TOKENS when the agent re-reads it next turn.
+                # No-op below budget; verdicts themselves are unchanged.
                 return _envelope_ok(
-                    agent._triage_all_backends(max_messages=max_messages)
+                    condense_triage_result(
+                        agent._triage_all_backends(max_messages=max_messages)
+                    )
                 )
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
