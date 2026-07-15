@@ -30,6 +30,10 @@ from typing import (
     get_origin,
 )
 
+from gaia_agent_email.context_budget import (
+    CONTEXT_MAX_TOKENS,
+    CONTEXT_TARGET_TOKENS,
+)
 from gaia_agent_email.contract import (
     SCHEMA_VERSION,
     ActionItem,
@@ -355,6 +359,50 @@ def _endpoint_block(
         f"{req_block}"
         f"<h3>Response body</h3>{resp_html}"
         f"</div>"
+    )
+
+
+def _context_envelope_section() -> str:
+    """Render the context-window envelope section (#1892).
+
+    Bounds are read from ``context_budget`` so the published numbers track
+    ``CONTEXT_TARGET_TOKENS`` / ``CONTEXT_MAX_TOKENS`` instead of being
+    hardcoded in the artifact.
+    """
+    target = f"{CONTEXT_TARGET_TOKENS:,}"
+    ceiling = f"{CONTEXT_MAX_TOKENS:,}"
+    return (
+        "<h2>Context-window envelope</h2>"
+        '<p class="subtitle">'
+        "The agent is designed, measured, and released against a pinned "
+        "context-window envelope (#1892; constants in "
+        "<code>gaia_agent_email/context_budget.py</code>). Published scorecards "
+        "and baselines state the window they were measured under "
+        "(<code>ctx_size</code> in the scorecard's environment block); the "
+        "committed <code>baseline_accuracy.json</code> is stamped at the target "
+        "window (#2089)."
+        "</p>"
+        '<div class="model-section">'
+        "<table>"
+        "<thead><tr><th>Bound</th><th>Tokens</th><th>Meaning</th></tr></thead>"
+        "<tbody>"
+        f"<tr><td>Target</td><td>{_esc(target)}</td>"
+        "<td>The window published numbers are measured at — fits everyday "
+        "triage/draft prompts on consumer NPU/GPU KV-cache budgets</td></tr>"
+        f"<tr><td>Acceptable max</td><td>{_esc(ceiling)}</td>"
+        "<td>Ceiling for deliberately larger runs (long-thread stress); above "
+        "it the measurement stops representing a real device</td></tr>"
+        "</tbody>"
+        "</table>"
+        "</div>"
+        '<p class="subtitle">'
+        "To see what a live triage actually consumed, read the "
+        "<code>usage</code> block in the triage response "
+        "(<code>prompt_tokens</code> / <code>completion_tokens</code>). "
+        "<code>GET /v1/email/init</code> additionally reports the currently "
+        "loaded <code>ctx_size</code> on <code>model</code> when the triage "
+        "model is loaded and the server exposes it — null otherwise."
+        "</p>"
     )
 
 
@@ -961,6 +1009,8 @@ def render_endpoint_spec_html() -> str:
 </p>
 
 {agent_block}
+
+{_context_envelope_section()}
 
 <h2>Convenience pages</h2>
 
