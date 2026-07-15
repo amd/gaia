@@ -418,11 +418,12 @@ def _install_binary_artifact(
 
 
 def _filename_matches_platform(filename: str, platform_key: str) -> bool:
-    """Whether *filename* is the artifact published for *platform_key*."""
-    if filename.endswith(platform_key):
-        return True
-    # win32-x64 binaries carry a .exe suffix after the platform key.
-    return platform_key == "win32-x64" and filename.endswith(platform_key + ".exe")
+    """Whether *filename* is the artifact published for *platform_key*.
+
+    Windows binaries carry a ``.exe`` after the platform key; accept it for
+    any key (win32-arm64 binaries are planned, #1898).
+    """
+    return filename.endswith(platform_key) or filename.endswith(platform_key + ".exe")
 
 
 def _generic_binary_name(filename: str, platform_key: str) -> str:
@@ -432,10 +433,9 @@ def _generic_binary_name(filename: str, platform_key: str) -> str:
     (``gaia.ui.email_sidecar.platform`` / ``binaries.lock.json``) so a
     same-version install primes it.
     """
-    if platform_key == "win32-x64":
-        suffix = f"-{platform_key}.exe"
-        if filename.endswith(suffix):
-            return filename[: -len(suffix)] + ".exe"
+    suffix = f"-{platform_key}.exe"
+    if filename.endswith(suffix):
+        return filename[: -len(suffix)] + ".exe"
     suffix = f"-{platform_key}"
     if filename.endswith(suffix):
         return filename[: -len(suffix)]
@@ -483,14 +483,18 @@ def _resolve_version(
     working. *artifact* is a copy of the manifest entry with an added
     ``artifact_kind`` key (``"wheel"`` | ``"binary"`` | ``"cpp"``):
 
-    * ``versions[v].artifacts[]`` present (non-empty): select the entry whose
-      filename matches *platform_key*; no match is a loud error — a wheel
-      elsewhere in the same list is never substituted.
+    * ``language: cpp`` — classified first: the singular ``artifact`` is used
+      exactly as before this fix, regardless of any ``artifacts[]``.
+    * ``versions[v].artifacts[]`` present: classify the SET. The hub worker
+      writes ``artifacts: [artifact]`` on every publish, so its mere presence
+      must not imply binaries — only entries whose filenames don't look like a
+      wheel/sdist do. Any binary-like entries → platform-match among those
+      only; no match is a loud error (a wheel elsewhere in the same list is
+      never substituted). Wheel/sdist-only → the wheel, pip route.
     * No ``artifacts[]`` (legacy shape): the singular ``artifact`` is used.
-      For a Python-language agent whose filename doesn't look like a wheel
-      (e.g. a bare platform executable, pre-#1648 published shape), it must
-      match *platform_key* or raise; a genuine wheel/sdist filename is
-      unaffected (pip route, unchanged from before this fix).
+      A bare platform executable (pre-#1648 published shape) must match
+      *platform_key* or raise; a genuine wheel/sdist filename is unaffected
+      (pip route, unchanged from before this fix).
     """
     versions = manifest.get("versions") or {}
     if not versions:
@@ -512,29 +516,41 @@ def _resolve_version(
     effective_key = platform_key or current_platform_key()
 
     artifacts = entry.get("artifacts") or []
-    if artifacts:
-        match = _select_platform_artifact(artifacts, effective_key)
+    binary_like = [a for a in artifacts if not _looks_like_wheel(a.get("filename", ""))]
+    if language == "cpp":
+        artifact = dict(entry.get("artifact") or {})
+        artifact["artifact_kind"] = ARTIFACT_KIND_CPP
+    elif binary_like:
+        match = _select_platform_artifact(binary_like, effective_key)
         if match is None:
-            available = ", ".join(sorted(a.get("filename", "?") for a in artifacts))
+            available = ", ".join(sorted(a.get("filename", "?") for a in binary_like))
             raise InstallError(
-                f"No published artifact for '{agent_id}' matches this "
-                f"platform ('{effective_key}'). Available: {available}."
+                f"No published artifact for version '{version}' of "
+                f"'{agent_id}' matches this platform ('{effective_key}'). "
+                f"Available: {available}."
             )
         artifact = dict(match)
         artifact["artifact_kind"] = ARTIFACT_KIND_BINARY
+    elif artifacts:
+        # Wheel/sdist-only artifacts[] (the hub worker writes artifacts:
+        # [artifact] on every publish) — pip route, platform-independent.
+        wheels = sorted(
+            artifacts,
+            key=lambda a: not a.get("filename", "").lower().endswith(".whl"),
+        )
+        artifact = dict(wheels[0])
+        artifact["artifact_kind"] = ARTIFACT_KIND_WHEEL
     else:
         artifact = dict(entry.get("artifact") or {})
         filename = artifact.get("filename", "")
-        if language == "cpp":
-            artifact["artifact_kind"] = ARTIFACT_KIND_CPP
-        elif _looks_like_wheel(filename):
+        if _looks_like_wheel(filename):
             artifact["artifact_kind"] = ARTIFACT_KIND_WHEEL
         else:
             if not _filename_matches_platform(filename, effective_key):
                 raise InstallError(
-                    f"'{agent_id}' has no binary for this platform "
-                    f"('{effective_key}'); the published artifact is "
-                    f"'{filename}'."
+                    f"Version '{version}' of '{agent_id}' has no binary for "
+                    f"this platform ('{effective_key}'); the published "
+                    f"artifact is '{filename}'."
                 )
             artifact["artifact_kind"] = ARTIFACT_KIND_BINARY
 
