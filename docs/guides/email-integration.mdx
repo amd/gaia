@@ -169,10 +169,10 @@ the endpoint returns **503** with a `hint` naming exactly what to fix.
 
 <Note>
   **Migration note:** triage no longer auto-downloads the model on its first call.
-  On a fresh server, provision once — `POST /v1/email/init` directly on the
-  sidecar (the GAIA backend proxies only the readiness `GET /v1/email/init`, not
-  the provisioning `POST`), or pull the model on your Lemonade — before the first
-  triage request; until then triage returns **502** with the fix in the error.
+  On a fresh server, provision once — `POST /v1/email/init` (the GAIA backend
+  streams the sidecar's provisioning progress through), or pull the model on
+  your Lemonade — before the first triage request; until then triage returns
+  **502** with the fix in the error.
   The target server's catalog must list the model that `GET /v1/email/init`
   reports as `model.id` (`user.`-prefixed registrations match tolerantly).
 </Note>
@@ -475,6 +475,10 @@ Tools exposed: `triage_email`, `triage_email_batch`, `draft_reply`, `send_email`
   `model.id`, and a **503** with an actionable `hint` when not ready. This is how you
   confirm a [`LEMONADE_BASE_URL` override](#pointing-the-sidecar-at-an-existing-embedded-lemonade)
   took effect.
+- **`POST /v1/email/init`** — provisioning: tells a running Lemonade to download the
+  triage model, streaming newline-delimited `text/plain` progress (`curl -N`). Once the
+  stream commits **200**, the final `✓`/`✗` line is the authoritative outcome; a **503**
+  means Lemonade itself is unreachable.
 - **`GET /v1/email/health`** — liveness only (`{"status":"ok"}`). A green health check means
   the REST surface is up, **not** that Lemonade is reachable — the readiness signal is
   `GET /v1/email/init`.
