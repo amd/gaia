@@ -491,6 +491,52 @@ class TestSummarizeBenchmark:
         assert perf["scenarios_with_data"] == 3
         assert "Gemma-4-E4B-it-GGUF" in summary["variance"]
 
+    def test_scorecard_perf_section_carries_triage_usage(self):
+        """#1891 gap: build_scorecard's generic performance block has no notion
+        of email's triage-usage fields — they must be merged in from each run's
+        performance_summary, not silently dropped (live-shape regression pin;
+        was found None on real, fully-passing hardware runs)."""
+        results = [
+            build_result(
+                _agent_result_with_usage(),
+                run_id=f"r{i}",
+                timestamp="t",
+                model_id="Gemma-4-E4B-it-GGUF",
+                total_duration_ms=2000,
+            )
+            for i in range(3)
+        ]
+        # Precondition: the per-run performance_summary DOES carry the fields
+        # (build_result's own extraction, tested separately) — this test is
+        # about the AGGREGATE scorecard block, not the per-run one.
+        assert results[0]["performance_summary"]["triage_llm_tokens"] == 5800
+        assert results[0]["performance_summary"]["llm_classified_count"] == 4
+
+        summary = summarize_benchmark(results, run_id="bench-run")
+        perf = summary["scorecard"]["performance"]
+        assert perf["triage_llm_tokens"] == 5800
+        assert perf["llm_classified_count"] == 4
+        assert perf["tokens_per_triage"] == 1450.0
+
+    def test_scorecard_perf_section_omits_triage_usage_when_absent(self):
+        # Plain TRIAGE_ENVELOPE (no usage/llm_classified_count) must not
+        # fabricate the keys — absence is the normal, non-error shape.
+        results = [
+            build_result(
+                _agent_result(),
+                run_id=f"r{i}",
+                timestamp="t",
+                model_id="Gemma-4-E4B-it-GGUF",
+                total_duration_ms=2000,
+            )
+            for i in range(3)
+        ]
+        summary = summarize_benchmark(results, run_id="bench-run")
+        perf = summary["scorecard"]["performance"]
+        assert "triage_llm_tokens" not in perf
+        assert "llm_classified_count" not in perf
+        assert "tokens_per_triage" not in perf
+
     def test_quality_gate_block_present_with_thresholds(self):
         results = [
             build_result(

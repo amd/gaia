@@ -430,6 +430,49 @@ def _acceptance_variance(aggregate_quality: dict) -> dict[str, Any]:
     return block
 
 
+def _aggregate_triage_usage(results: list[dict]) -> dict[str, Any] | None:
+    """Mean triage-usage token accounting across runs (#1891 gap fix).
+
+    ``build_scorecard`` (``gaia.eval.scorecard``) is shared by every eval
+    category (RAG quality, tool selection, drafting, briefing, …) and has no
+    notion of email's ``triage_llm_tokens`` / ``llm_classified_count`` /
+    ``tokens_per_triage`` — those live only in each run's
+    ``performance_summary`` (stamped by :func:`build_result`), so the
+    scorecard's aggregate ``performance`` block silently omitted them even on
+    a fully-passing run. Mean-of-runs mirrors gen_scorecard.py's
+    ``_compute_performance`` convention (each run scores the same corpus, so
+    the cross-run mean is the representative figure). Returns ``None`` when no
+    run carries these fields (a heuristic-only run, or a pre-#1891 agent).
+    """
+    llm_tokens_vals: list[float] = []
+    classified_vals: list[float] = []
+    per_triage_vals: list[float] = []
+    for r in results:
+        ps = r.get("performance_summary")
+        if not isinstance(ps, dict):
+            continue
+        if isinstance(ps.get("triage_llm_tokens"), (int, float)):
+            llm_tokens_vals.append(float(ps["triage_llm_tokens"]))
+        if isinstance(ps.get("llm_classified_count"), (int, float)):
+            classified_vals.append(float(ps["llm_classified_count"]))
+        if isinstance(ps.get("tokens_per_triage"), (int, float)):
+            per_triage_vals.append(float(ps["tokens_per_triage"]))
+
+    if not (llm_tokens_vals or classified_vals or per_triage_vals):
+        return None
+
+    out: dict[str, Any] = {}
+    if llm_tokens_vals:
+        out["triage_llm_tokens"] = round(sum(llm_tokens_vals) / len(llm_tokens_vals), 1)
+    if classified_vals:
+        out["llm_classified_count"] = round(
+            sum(classified_vals) / len(classified_vals), 1
+        )
+    if per_triage_vals:
+        out["tokens_per_triage"] = round(sum(per_triage_vals) / len(per_triage_vals), 1)
+    return out
+
+
 def _aggregate_perf(results: list[dict]) -> dict[str, Any] | None:
     """Roll per-run ``performance_summary`` blocks into one perf block for the gate.
 
@@ -532,6 +575,13 @@ def summarize_benchmark(
     run_ctx = next(iter(ctx_values), None)
     if run_ctx is not None:
         summary["scorecard"]["ctx_size"] = run_ctx
+
+    # #1891 gap fix: build_scorecard's generic performance block (shared across
+    # every eval category) has no notion of email's triage-usage fields — merge
+    # them in here, same post-build_scorecard enrichment pattern as ctx_size above.
+    triage_usage_agg = _aggregate_triage_usage(results)
+    if triage_usage_agg is not None:
+        summary["scorecard"]["performance"].update(triage_usage_agg)
 
     aggregate_quality = _aggregate_quality(results)
     if aggregate_quality is not None:
