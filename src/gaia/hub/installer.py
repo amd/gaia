@@ -155,6 +155,9 @@ class InstalledAgent:
     artifact_sha256: str = ""
     path: Optional[Path] = None
     artifact_kind: str = ARTIFACT_KIND_WHEEL
+    # Generic executable filename for binary-kind installs (health checks
+    # probe it); empty for wheel/cpp kinds.
+    executable: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -165,6 +168,7 @@ class InstalledAgent:
             "artifact_sha256": self.artifact_sha256,
             "path": str(self.path) if self.path else None,
             "artifact_kind": self.artifact_kind,
+            "executable": self.executable,
         }
 
 
@@ -190,6 +194,7 @@ def read_sentinel(
         # Missing key = a pre-#2084 sentinel; every kind installed back then
         # was a wheel.
         artifact_kind=data.get("artifact_kind", ARTIFACT_KIND_WHEEL),
+        executable=data.get("executable", ""),
     )
 
 
@@ -803,6 +808,7 @@ def install(
                 _snapshot_backup(agent_id, root)
 
             install_dir = agent_install_dir(agent_id, root)
+            generic_name = ""
             try:
                 install_dir.mkdir(parents=True, exist_ok=True)
                 if artifact_kind == ARTIFACT_KIND_BINARY:
@@ -828,6 +834,7 @@ def install(
                     artifact["sha256"],
                     install_dir,
                     artifact_kind=artifact_kind,
+                    executable=generic_name,
                 )
             except Exception:
                 # Install failed mid-write — restore the backup if we made one so
@@ -893,6 +900,7 @@ def _write_sentinel(
     install_dir: Path,
     *,
     artifact_kind: str = ARTIFACT_KIND_WHEEL,
+    executable: str = "",
 ) -> None:
     sentinel = InstalledAgent(
         id=agent_id,
@@ -902,6 +910,7 @@ def _write_sentinel(
         artifact_sha256=sha256,
         path=install_dir,
         artifact_kind=artifact_kind,
+        executable=executable,
     )
     (install_dir / SENTINEL_NAME).write_text(
         json.dumps(sentinel.to_dict(), indent=2), encoding="utf-8"
