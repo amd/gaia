@@ -37,6 +37,10 @@ on:
       limit:
         description: 'Messages to triage (smaller = faster; regen a card at this sample size)'
         required: false
+        # 60 fits the pinned #1892 16384 ctx window: #2087's
+        # condense_triage_result trims the bulk-triage envelope before the
+        # agent re-reads it, so the window no longer scales with batch size.
+        # Restored from the interim 25 cut (#2089) now that #2087 has landed.
         default: '60'
       model:
         description: 'Lemonade model id'
@@ -67,6 +71,8 @@ permissions:
 env:
   SCORECARD: hub/agents/npm/agent-email/SCORECARD.md
   MANIFEST: hub/agents/python/email/gaia-agent.yaml
+  # 60 fits the pinned 16384 ctx window: #2087's condense step keeps the
+  # envelope in budget regardless of batch size.
   LIMIT: ${{ github.event.inputs.limit || '60' }}
   MODEL: ${{ github.event.inputs.model || 'Gemma-4-E4B-it-GGUF' }}
   PYTHONIOENCODING: "utf-8"
@@ -97,8 +103,10 @@ jobs:
     runs-on: ${{ fromJSON(contains(github.event.pull_request.labels.*.name, 'stx-test') && '["self-hosted","Windows","stx-test"]' || '["self-hosted","Windows","stx"]') }}
     # The refresh triages ~60 emails in one call (~38s/email -> ~40min); the
     # limit was cut from 220 (~2.3h) because that hogged the serial
-    # lemonade-eval slot. Per-email speedups that would let it go back up are
-    # tracked in #2063.
+    # lemonade-eval slot, then briefly to 25 (#2089) because 60 overflowed the
+    # pinned 16384 ctx window — #2087's condense_triage_result now keeps the
+    # envelope in budget at any batch size, so 60 is restored. Per-email
+    # speedups that would let it go back up further are tracked in #2063.
     timeout-minutes: 90
     steps:
       - name: Checkout (the pushed branch)
