@@ -5,7 +5,8 @@
 Forwards the full schema-2.1 ``/v1/email/*`` contract (triage, batch triage,
 search, inbox pre-scan, draft/send + confirm, archive/unarchive,
 quarantine/unquarantine, calendar view/preview/create/respond, health, version,
-readiness init) and returns the sidecar's envelopes **unchanged** so the
+readiness init + streamed provisioning) and returns the sidecar's envelopes
+**unchanged** so the
 existing SSE card pipeline (``pre_scan_inbox`` → ``email_pre_scan``) keeps
 working byte-for-byte.
 
@@ -25,6 +26,10 @@ from gaia.logger import get_logger
 from gaia.ui.email_sidecar.errors import SidecarHTTPError
 
 logger = get_logger(__name__)
+
+# POST /init can stay silent for the whole model pull — the read timeout must
+# outlast the sidecar's own 30-min pull read timeout (_LEMONADE_PULL_TIMEOUT).
+_PROVISION_READ_TIMEOUT = 1830.0
 
 
 def _extract_detail(resp) -> str:
@@ -170,3 +175,35 @@ class EmailSidecarProxy:
         if resp.status_code not in (200, 503):
             self._raise_for_status(resp, path)
         return resp.status_code, resp.json()
+
+    def provision(self) -> tuple:
+        """Provisioning verb — ``POST /v1/email/init``, streamed passthrough.
+
+        Returns ``(status_code, media_type, chunk_iterator)``. The sidecar
+        streams newline-delimited ``text/plain`` progress: a committed **200**
+        whose final ``✓``/``✗`` line is the authoritative outcome, or a **503**
+        (Lemonade unreachable) whose actionable lines are equally contract —
+        both pass through verbatim. A model pull can take many minutes, so the
+        body is never buffered; anything outside 200/503 keeps the loud
+        :class:`SidecarHTTPError` boundary, raised before any chunk is yielded.
+        """
+        path = "/v1/email/init"
+        resp = self._session.post(
+            f"{self.base_url}{path}",
+            stream=True,
+            timeout=(self.timeout, max(self.timeout, _PROVISION_READ_TIMEOUT)),
+        )
+        if resp.status_code not in (200, 503):
+            try:
+                self._raise_for_status(resp, path)
+            finally:
+                resp.close()
+        media_type = resp.headers.get("Content-Type", "text/plain; charset=utf-8")
+
+        def _chunks():
+            try:
+                yield from resp.iter_content(chunk_size=None)
+            finally:
+                resp.close()
+
+        return resp.status_code, media_type, _chunks()

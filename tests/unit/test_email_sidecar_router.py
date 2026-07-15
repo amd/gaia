@@ -12,11 +12,16 @@ from gaia.ui.email_sidecar.router import router as email_router
 
 
 class _FakeProxy:
-    def __init__(self, *, error=None, init_result=None):
+    def __init__(self, *, error=None, init_result=None, provision_result=None):
         self._error = error
         self._init_result = init_result or (
             200,
             {"ready": True, "lemonade": {"base_url": "http://127.0.0.1:8000/api/v1"}},
+        )
+        self._provision_result = provision_result or (
+            200,
+            "text/plain; charset=utf-8",
+            iter([b"provisioning\n", b"done\n"]),
         )
 
     def triage(self, body):
@@ -55,14 +60,27 @@ class _FakeProxy:
             raise self._error
         return self._init_result
 
+    def provision(self):
+        if self._error:
+            raise self._error
+        return self._provision_result
+
 
 class _FakeManager:
-    def __init__(self, *, start_error=None, proxy_error=None, init_result=None):
+    def __init__(
+        self,
+        *,
+        start_error=None,
+        proxy_error=None,
+        init_result=None,
+        provision_result=None,
+    ):
         self.started = 0
         self._running = False
         self._start_error = start_error
         self._proxy_error = proxy_error
         self._init_result = init_result
+        self._provision_result = provision_result
 
     @property
     def is_running(self):
@@ -76,7 +94,11 @@ class _FakeManager:
         return "http://127.0.0.1:9999"
 
     def proxy(self, **kwargs):
-        return _FakeProxy(error=self._proxy_error, init_result=self._init_result)
+        return _FakeProxy(
+            error=self._proxy_error,
+            init_result=self._init_result,
+            provision_result=self._provision_result,
+        )
 
 
 def _client(manager) -> TestClient:
@@ -137,6 +159,97 @@ def test_init_not_ready_503_body_passthrough():
     r = client.get("/v1/email/init")
     assert r.status_code == 503
     assert r.json() == not_ready_body
+
+
+def test_init_post_streams_provisioning_output_200():
+    # #2054: POST /v1/email/init forwards the sidecar's streamed provisioning
+    # progress through chunk-by-chunk (not buffered to completion). TestClient
+    # coalesces body chunks, so drive the ASGI app directly and capture the raw
+    # http.response.body messages — one per chunk proves it streamed.
+    import asyncio
+
+    chunks = [
+        "→ Pulling Gemma-4-E4B-it-GGUF via Lemonade…\n".encode(),
+        "✓ Provisioning complete. Re-run GET /v1/email/init to confirm readiness.\n".encode(),
+    ]
+    mgr = _FakeManager(
+        provision_result=(200, "text/plain; charset=utf-8", iter(list(chunks)))
+    )
+    app = FastAPI()
+    app.state.email_sidecar_manager = mgr
+    app.include_router(email_router)
+
+    messages = []
+    body_sent = False
+
+    async def receive():
+        # First call delivers the (empty) request body; later calls block so
+        # starlette's disconnect-listener parks instead of spinning, and gets
+        # cancelled cleanly when the stream finishes.
+        nonlocal body_sent
+        if not body_sent:
+            body_sent = True
+            return {"type": "http.request", "body": b"", "more_body": False}
+        await asyncio.get_running_loop().create_future()
+
+    async def send(message):
+        messages.append(message)
+
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/v1/email/init",
+        "raw_path": b"/v1/email/init",
+        "root_path": "",
+        "query_string": b"",
+        "headers": [],
+        "client": ("127.0.0.1", 12345),
+        "server": ("127.0.0.1", 4200),
+    }
+    asyncio.run(app(scope, receive, send))
+
+    start = messages[0]
+    assert start["type"] == "http.response.start"
+    assert start["status"] == 200
+    headers = {k.decode(): v.decode() for k, v in start["headers"]}
+    assert headers["content-type"].startswith("text/plain")
+    bodies = [
+        m["body"] for m in messages if m["type"] == "http.response.body" and m["body"]
+    ]
+    assert bodies == chunks  # chunk boundaries survive — proof it streamed
+
+
+def test_init_post_503_unreachable_streamed_body_passthrough():
+    # Lemonade-unreachable is a contract 503 with actionable streamed lines —
+    # status and body must pass through unchanged.
+    client = _client(
+        _FakeManager(
+            provision_result=(
+                503,
+                "text/plain; charset=utf-8",
+                iter(["✗ Local Lemonade Server is not reachable\n".encode()]),
+            )
+        )
+    )
+    r = client.post("/v1/email/init")
+    assert r.status_code == 503
+    assert "not reachable" in r.text
+
+
+def test_init_post_sidecar_http_error_passthrough():
+    # Outside the 200/503 contract the loud SidecarHTTPError boundary holds.
+    client = _client(
+        _FakeManager(
+            proxy_error=SidecarHTTPError(
+                401, "Missing bearer token", path="/v1/email/init"
+            )
+        )
+    )
+    r = client.post("/v1/email/init")
+    assert r.status_code == 401
+    assert "bearer token" in r.json()["detail"].lower()
 
 
 def test_prescan_route_forwards_and_preserves_card_envelope():

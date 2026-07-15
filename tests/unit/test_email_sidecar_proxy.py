@@ -159,6 +159,106 @@ def test_init_unexpected_status_still_raises_loudly():
     assert "bearer token" in ei.value.detail.lower()
 
 
+class _StreamResp:
+    """Fake ``requests`` streamed response (``stream=True`` shape)."""
+
+    def __init__(self, chunks, status=200, *, payload=None):
+        self.status_code = status
+        self.headers = {"Content-Type": "text/plain; charset=utf-8"}
+        self._chunks = chunks
+        self._payload = payload
+        self.text = str(payload) if payload is not None else ""
+        self.closed = False
+        self.pulled = 0  # chunks consumed from the source so far
+
+    def iter_content(self, chunk_size=None):
+        for c in self._chunks:
+            self.pulled += 1
+            yield c
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("not json")
+        return self._payload
+
+    def close(self):
+        self.closed = True
+
+
+class _StreamSession:
+    def __init__(self, resp):
+        self._resp = resp
+        self.posts = []  # (url, kwargs)
+
+    def post(self, url, **kwargs):
+        self.posts.append((url, kwargs))
+        return self._resp
+
+
+def test_provision_streams_chunks_incrementally_on_200():
+    # #2054: POST /v1/email/init must stream through — a multi-minute model
+    # pull cannot be buffered to completion in memory.
+    resp = _StreamResp([b"line 1\n", b"line 2\n", b"done\n"])
+    sess = _StreamSession(resp)
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    status, media_type, chunks = proxy.provision()
+    assert status == 200
+    assert media_type == "text/plain; charset=utf-8"
+    # Lazy passthrough: pulling one chunk consumes exactly one from the source.
+    assert next(chunks) == b"line 1\n"
+    assert resp.pulled == 1
+    assert list(chunks) == [b"line 2\n", b"done\n"]
+    assert resp.closed  # underlying response released once the stream ends
+    url, kwargs = sess.posts[0]
+    assert url == "http://127.0.0.1:9100/v1/email/init"
+    assert kwargs["stream"] is True
+
+
+def test_provision_read_timeout_outlasts_model_pull():
+    # The sidecar's stream can stay silent for the whole pull (its own pull
+    # read timeout is 1800s) — the proxy's read timeout must outlast it even
+    # when the general sidecar timeout is short.
+    resp = _StreamResp([b"ok\n"])
+    sess = _StreamSession(resp)
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess, timeout=60.0)
+    proxy.provision()
+    connect, read = sess.posts[0][1]["timeout"]
+    assert connect == 60.0
+    assert read >= 1800.0
+
+
+def test_provision_503_unreachable_streams_body_through():
+    # 503 (Lemonade unreachable) is contract — the actionable streamed lines
+    # must pass through verbatim, not be flattened into a SidecarHTTPError.
+    resp = _StreamResp(
+        [
+            b"Lemonade Server is not reachable\n",
+            b"Start it with lemonade-server serve\n",
+        ],
+        status=503,
+    )
+    sess = _StreamSession(resp)
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    status, _media_type, chunks = proxy.provision()
+    assert status == 503
+    assert b"".join(chunks) == (
+        b"Lemonade Server is not reachable\nStart it with lemonade-server serve\n"
+    )
+
+
+def test_provision_unexpected_status_raises_loudly_and_closes():
+    # Anything outside the 200/503 contract keeps the loud SidecarHTTPError
+    # boundary — raised BEFORE any chunk is handed out.
+    resp = _StreamResp([], status=401, payload={"detail": "Missing bearer token"})
+    sess = _StreamSession(resp)
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    with pytest.raises(SidecarHTTPError) as ei:
+        proxy.provision()
+    assert ei.value.status_code == 401
+    assert "bearer token" in ei.value.detail.lower()
+    assert resp.closed
+
+
 def test_non_2xx_with_json_detail_raises_actionable_error():
     # The sidecar's actionable detail (e.g. Lemonade down) must survive, not be
     # flattened into a generic HTTPError.

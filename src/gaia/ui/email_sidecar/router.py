@@ -6,9 +6,9 @@ This router is the **single** ``/v1/email`` surface: the UI server mounts it
 instead of importing the email wheel in-process (#1768 / design decision 4). It
 forwards the full schema-2.1 data contract (triage, batch triage, search, inbox
 pre-scan, draft/send + confirm, archive/unarchive, quarantine/unquarantine,
-calendar view/preview/create/respond, health, version, readiness init) to the
-out-of-process sidecar, preserving the sidecar's own status codes and
-actionable error detail.
+calendar view/preview/create/respond, health, version, readiness init +
+streamed provisioning) to the out-of-process sidecar, preserving the sidecar's
+own status codes and actionable error detail.
 
 Each request lazily starts the sidecar (off the event loop) and forwards to it.
 
@@ -24,7 +24,7 @@ from typing import Optional
 
 import requests
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from gaia.logger import get_logger
@@ -201,11 +201,20 @@ async def health(request: Request):
 @router.get("/init")
 async def init(request: Request):
     # Readiness (#1795): pass the sidecar's 200/503 + InitResponse body through
-    # verbatim. POST /init (streamed provisioning) is deliberately not proxied
-    # for now — call it on the sidecar directly.
+    # verbatim.
     proxy = await _get_proxy(request)
     status_code, body = await _forward(proxy.init)
     return JSONResponse(status_code=status_code, content=body)
+
+
+@router.post("/init")
+async def init_provision(request: Request):
+    # Provisioning (#2054): stream the sidecar's text/plain progress through
+    # chunk-by-chunk — a multi-minute model pull must never buffer in memory.
+    # StreamingResponse iterates the sync chunk iterator in a threadpool.
+    proxy = await _get_proxy(request)
+    status_code, media_type, chunks = await _forward(proxy.provision)
+    return StreamingResponse(chunks, media_type=media_type, status_code=status_code)
 
 
 @router.get("/version")
