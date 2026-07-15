@@ -32,6 +32,14 @@ _SYSTEM_PROMPT_ALLOWANCE_TOKENS = 1536
 # or the fold digest) so the response isn't squeezed against the ctx ceiling.
 _RESPONSE_RESERVE_TOKENS = 1024
 
+# Fixed prompt cost of the agent loop's post-tool turn: the system prompt PLUS
+# the full JSON tool schema the agent re-reads on every turn. Measured at ~8K on
+# the bulk-triage path in #2087 — larger than the thread-triage path's
+# ``_SYSTEM_PROMPT_ALLOWANCE_TOKENS`` because the agent loop carries every tool's
+# schema, not just the classify prompt. The bulk-triage RESULT envelope
+# re-read on the next turn must fit in what remains of CONTEXT_TARGET_TOKENS.
+_AGENT_LOOP_FIXED_TOKENS = 8192
+
 
 def thread_budget_tokens() -> int:
     """Usable prompt-token budget for a thread transcript (#1889).
@@ -44,6 +52,23 @@ def thread_budget_tokens() -> int:
     return (
         CONTEXT_TARGET_TOKENS
         - _SYSTEM_PROMPT_ALLOWANCE_TOKENS
+        - _RESPONSE_RESERVE_TOKENS
+    )
+
+
+def envelope_budget_tokens() -> int:
+    """Usable token budget for a tool-result envelope re-read on the agent
+    loop's next turn (#2087).
+
+    ``CONTEXT_TARGET_TOKENS`` minus the agent-loop fixed prompt cost (system
+    prompt + full tool schema) and the response reserve — the slice actually
+    available for a tool result once the surrounding scaffolding and the model's
+    own output are accounted for. Bulk triage condenses its result envelope to
+    fit this so the post-tool turn stays under ``CONTEXT_TARGET_TOKENS``.
+    """
+    return (
+        CONTEXT_TARGET_TOKENS
+        - _AGENT_LOOP_FIXED_TOKENS
         - _RESPONSE_RESERVE_TOKENS
     )
 
