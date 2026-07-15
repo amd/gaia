@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: MIT
 """Unit tests for gaia.hub.compatibility — the system-requirements checker."""
 
+import pytest
+
 from gaia.hub import compatibility
 from gaia.hub.compatibility import check_compatibility
 
@@ -82,3 +84,39 @@ def test_report_to_dict_round_trips(monkeypatch):
     assert set(
         ["compatible", "platform_ok", "memory_ok", "disk_ok", "warnings", "blockers"]
     ).issubset(d)
+
+
+# ---------------------------------------------------------------------------
+# current_platform_key: npm/artifact-filename style keys (#2084)
+#
+# Distinct from detect_platform()/current_platform()'s hub-triple vocabulary
+# ("win-x64", "darwin-arm64") used for requirements.platforms gates — this is
+# the npm-namespace vocabulary ("win32-x64", "darwin-arm64") used to select an
+# entry from a manifest's versions[v].artifacts[] by filename suffix.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "plat,arch,expected",
+    [
+        ("win32", "AMD64", "win32-x64"),
+        ("win32", "amd64", "win32-x64"),
+        ("win32", "x86_64", "win32-x64"),
+        ("win64", "x64", "win32-x64"),
+        ("darwin", "arm64", "darwin-arm64"),
+        ("darwin", "aarch64", "darwin-arm64"),
+        ("darwin", "x86_64", "darwin-x64"),
+        ("darwin", "amd64", "darwin-x64"),
+        ("linux", "x86_64", "linux-x64"),
+        ("linux2", "amd64", "linux-x64"),
+        ("linux", "aarch64", "linux-arm64"),
+    ],
+)
+def test_current_platform_key_mapping(plat, arch, expected):
+    assert compatibility.current_platform_key(plat, arch) == expected
+
+
+def test_current_platform_key_no_override_returns_nonempty_string():
+    key = compatibility.current_platform_key()
+    assert isinstance(key, str)
+    assert key

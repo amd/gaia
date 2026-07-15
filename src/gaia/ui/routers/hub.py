@@ -55,6 +55,23 @@ def _require_ui_header(request: Request) -> None:
         raise HTTPException(status_code=403, detail="missing X-Gaia-UI header")
 
 
+def _shutdown_email_sidecar(request: Request, agent_id: str) -> None:
+    """Stop a running email sidecar before mutating its install directory.
+
+    The email agent's install dir doubles as the sidecar's own binary cache,
+    and the warm manager holds the executable open — install/uninstall/rollback
+    would hit a locked file (Windows) or mutate a live process's dir. Only the
+    router may bridge the two layers (``gaia.hub`` never imports ``gaia.ui``).
+    """
+    if agent_id != "email":
+        return
+    manager = getattr(request.app.state, "email_sidecar_manager", None)
+    if manager is None or not manager.is_running:
+        return
+    logger.info("hub: stopping the running email sidecar before mutating its dir")
+    manager.shutdown()
+
+
 class InstallRequest(BaseModel):
     """Body for ``POST /api/agents/install``."""
 
@@ -170,6 +187,8 @@ async def install_agent(
     except installer_mod.TrustRequiredError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
+    _shutdown_email_sidecar(request, body.id)
+
     installer_mod.clear_progress(body.id)
     installer_mod._set_progress(  # noqa: SLF001 - seed state for the poller
         body.id, status="queued", phase="queued", percent=0, version=body.version
@@ -208,6 +227,7 @@ async def install_status(agent_id: str):
 async def uninstall_agent(agent_id: str, request: Request):
     """Uninstall a hub-installed agent. Refuses builtins (400)."""
     registry = _registry(request)
+    _shutdown_email_sidecar(request, agent_id)
     try:
         installer_mod.uninstall(agent_id, registry=registry)
     except installer_mod.NotInstalledError as exc:
@@ -229,6 +249,7 @@ async def uninstall_agent(agent_id: str, request: Request):
 async def rollback_agent(agent_id: str, request: Request):
     """Roll an agent back to its pre-update snapshot in ``.backup/``."""
     registry = _registry(request)
+    _shutdown_email_sidecar(request, agent_id)
     try:
         restored = installer_mod.rollback(agent_id, registry=registry)
     except installer_mod.InstallError as exc:

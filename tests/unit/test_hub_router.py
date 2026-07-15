@@ -372,3 +372,157 @@ def test_setup_status_not_swallowed_by_agents_route(client, monkeypatch):
     resp = client.get("/api/agents/setup-status")
     assert resp.status_code == 200
     assert resp.json()["status"] == "completed"
+
+
+# ---------------------------------------------------------------------------
+# Platform-selection binary installs (#2084)
+# ---------------------------------------------------------------------------
+
+
+def test_install_error_surfaces_via_install_status(client, monkeypatch):
+    # Real InstallError from the platform-selection path (no artifact on this
+    # host's platform) must flow through the existing progress-tracking
+    # machinery unmodified — this drives the REAL installer.install(), not a
+    # mock, so it also proves the new error path wires into _set_progress.
+    bad_artifact = {
+        "filename": "email-agent-nonexistent-plat",
+        "path": "agents/email/0.1.0/email-agent-nonexistent-plat",
+        "size_bytes": 4,
+        "sha256": "0" * 64,
+        "content_type": "application/octet-stream",
+    }
+    manifest = {
+        "id": "email",
+        "language": "python",
+        "latest_version": "0.1.0",
+        "requirements": {"platforms": []},
+        "versions": {
+            "0.1.0": {
+                "version": "0.1.0",
+                "artifact": bad_artifact,
+                "artifacts": [bad_artifact],
+            }
+        },
+    }
+    monkeypatch.setattr(catalog_mod, "fetch_manifest", lambda *a, **k: manifest)
+
+    resp = client.post("/api/agents/install", json={"id": "email"}, headers=UI)
+    assert resp.status_code == 202
+
+    status_resp = client.get("/api/agents/email/install-status")
+    assert status_resp.status_code == 200
+    body = status_resp.json()
+    assert body["status"] == "failed"
+    assert body["error"]
+    assert "email" in body["error"]
+
+
+class _FakeSidecarManager:
+    def __init__(self, is_running=True):
+        self.is_running = is_running
+        self.shutdown_calls = 0
+
+    def shutdown(self):
+        self.shutdown_calls += 1
+
+
+def test_email_install_shuts_down_running_sidecar_first(client, app, monkeypatch):
+    fake = _FakeSidecarManager(is_running=True)
+    app.state.email_sidecar_manager = fake
+    monkeypatch.setattr(
+        catalog_mod,
+        "fetch_manifest",
+        lambda *a, **k: {"id": "email", "language": "python"},
+    )
+    monkeypatch.setattr(installer_mod, "install", lambda agent_id, **k: None)
+    resp = client.post("/api/agents/install", json={"id": "email"}, headers=UI)
+    assert resp.status_code == 202
+    assert fake.shutdown_calls == 1
+
+
+def test_email_uninstall_shuts_down_running_sidecar_first(client, app, monkeypatch):
+    fake = _FakeSidecarManager(is_running=True)
+    app.state.email_sidecar_manager = fake
+    monkeypatch.setattr(installer_mod, "uninstall", lambda *a, **k: None)
+    resp = client.delete("/api/agents/email", headers=UI)
+    assert resp.status_code == 200
+    assert fake.shutdown_calls == 1
+
+
+def test_email_rollback_shuts_down_running_sidecar_first(client, app, monkeypatch):
+    fake = _FakeSidecarManager(is_running=True)
+    app.state.email_sidecar_manager = fake
+    restored = InstalledAgent(
+        id="email", version="1.0.0", language="python", installed_at="now"
+    )
+    monkeypatch.setattr(installer_mod, "rollback", lambda *a, **k: restored)
+    resp = client.post("/api/agents/email/rollback", headers=UI)
+    assert resp.status_code == 200
+    assert fake.shutdown_calls == 1
+
+
+def test_email_install_noop_when_sidecar_not_running(client, app, monkeypatch):
+    fake = _FakeSidecarManager(is_running=False)
+    app.state.email_sidecar_manager = fake
+    monkeypatch.setattr(
+        catalog_mod,
+        "fetch_manifest",
+        lambda *a, **k: {"id": "email", "language": "python"},
+    )
+    called = {}
+    monkeypatch.setattr(
+        installer_mod, "install", lambda agent_id, **k: called.update(id=agent_id)
+    )
+    resp = client.post("/api/agents/install", json={"id": "email"}, headers=UI)
+    assert resp.status_code == 202
+    assert fake.shutdown_calls == 0
+    assert called.get("id") == "email"
+
+
+def test_email_install_noop_when_sidecar_manager_none(client, app, monkeypatch):
+    app.state.email_sidecar_manager = None
+    monkeypatch.setattr(
+        catalog_mod,
+        "fetch_manifest",
+        lambda *a, **k: {"id": "email", "language": "python"},
+    )
+    called = {}
+    monkeypatch.setattr(
+        installer_mod, "install", lambda agent_id, **k: called.update(id=agent_id)
+    )
+    resp = client.post("/api/agents/install", json={"id": "email"}, headers=UI)
+    assert resp.status_code == 202
+    assert called.get("id") == "email"
+
+
+def test_email_install_noop_when_sidecar_manager_attribute_absent(
+    client, app, monkeypatch
+):
+    if hasattr(app.state, "email_sidecar_manager"):
+        del app.state.email_sidecar_manager
+    monkeypatch.setattr(
+        catalog_mod,
+        "fetch_manifest",
+        lambda *a, **k: {"id": "email", "language": "python"},
+    )
+    called = {}
+    monkeypatch.setattr(
+        installer_mod, "install", lambda agent_id, **k: called.update(id=agent_id)
+    )
+    resp = client.post("/api/agents/install", json={"id": "email"}, headers=UI)
+    assert resp.status_code == 202
+    assert called.get("id") == "email"
+
+
+def test_non_email_install_does_not_shutdown_sidecar(client, app, monkeypatch):
+    fake = _FakeSidecarManager(is_running=True)
+    app.state.email_sidecar_manager = fake
+    monkeypatch.setattr(
+        catalog_mod,
+        "fetch_manifest",
+        lambda *a, **k: {"id": "demo", "language": "python"},
+    )
+    monkeypatch.setattr(installer_mod, "install", lambda agent_id, **k: None)
+    resp = client.post("/api/agents/install", json={"id": "demo"}, headers=UI)
+    assert resp.status_code == 202
+    assert fake.shutdown_calls == 0
