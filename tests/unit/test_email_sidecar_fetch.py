@@ -152,3 +152,99 @@ def test_fetch_base_url_override(tmp_path):
 def test_default_cache_dir():
     p = fetchmod.default_cache_dir()
     assert p.parts[-3:] == (".gaia", "agents", "email")
+
+
+# ---------------------------------------------------------------------------
+# Hub-installed binary short-circuit (#2095): a checksum-verified install must
+# win over the in-repo placeholder-SHA lock, before the lock is ever consulted.
+# ---------------------------------------------------------------------------
+
+PLACEHOLDER = "PENDING-1648-replace-with-real-sha256"
+
+
+def _install_binary(
+    tmp_path,
+    monkeypatch,
+    *,
+    sha=REAL_SHA,
+    executable="email-agent",
+    content=REAL_BYTES,
+    kind=None,
+) -> Path:
+    """Prime a hub-installed email binary + .installed sentinel under tmp_path."""
+    from gaia.hub import installer
+
+    root = tmp_path / "install_root"
+    monkeypatch.setattr(installer, "default_install_root", lambda: root)
+    install_dir = installer.agent_install_dir("email")
+    install_dir.mkdir(parents=True, exist_ok=True)
+    (install_dir / executable).write_bytes(content)
+    installer._write_sentinel(
+        "email",
+        "0.4.0",
+        "python",
+        sha,
+        install_dir,
+        artifact_kind=kind or installer.ARTIFACT_KIND_BINARY,
+        executable=executable,
+    )
+    return install_dir
+
+
+def test_fetch_hub_installed_binary_short_circuits_placeholder_lock(
+    tmp_path, monkeypatch
+):
+    install_dir = _install_binary(tmp_path, monkeypatch)
+    sess = _FakeSession(b"SHOULD-NOT-BE-USED")
+    res = fetchmod.fetch_binary(
+        out_dir=tmp_path / "cache",
+        platform_key="darwin-arm64",
+        lock_path=_lock(tmp_path, PLACEHOLDER),  # placeholder would else refuse
+        session=sess,
+    )
+    assert res.cached is True
+    assert res.sha256 == REAL_SHA
+    assert Path(res.binary_path) == install_dir / "email-agent"
+    assert sess.calls == []  # never touched the network or the placeholder gate
+
+
+def test_fetch_no_install_placeholder_lock_still_refuses(tmp_path, monkeypatch):
+    from gaia.hub import installer
+
+    # Empty install root -> no sentinel -> the placeholder gate must still fire.
+    monkeypatch.setattr(
+        installer, "default_install_root", lambda: tmp_path / "empty_root"
+    )
+    sess = _FakeSession(REAL_BYTES)
+    with pytest.raises(PlatformError, match="placeholder"):
+        fetchmod.fetch_binary(
+            out_dir=tmp_path / "cache",
+            platform_key="darwin-arm64",
+            lock_path=_lock(tmp_path, PLACEHOLDER),
+            session=sess,
+        )
+    assert sess.calls == []
+
+
+def test_fetch_hub_installed_binary_sha_mismatch_raises(tmp_path, monkeypatch):
+    # On-disk bytes drift from the sentinel SHA -> loud refusal, never spawned.
+    _install_binary(tmp_path, monkeypatch, content=b"tampered-on-disk")
+    with pytest.raises(IntegrityError, match="SHA-256 mismatch"):
+        fetchmod.fetch_binary(
+            out_dir=tmp_path / "cache",
+            platform_key="darwin-arm64",
+            lock_path=_lock(tmp_path, PLACEHOLDER),
+        )
+
+
+def test_fetch_non_binary_install_falls_through_to_lock(tmp_path, monkeypatch):
+    from gaia.hub import installer
+
+    # A wheel-kind sentinel is not a spawnable binary -> the lock still governs.
+    _install_binary(tmp_path, monkeypatch, kind=installer.ARTIFACT_KIND_WHEEL)
+    with pytest.raises(PlatformError, match="placeholder"):
+        fetchmod.fetch_binary(
+            out_dir=tmp_path / "cache",
+            platform_key="darwin-arm64",
+            lock_path=_lock(tmp_path, PLACEHOLDER),
+        )

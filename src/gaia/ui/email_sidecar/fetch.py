@@ -67,6 +67,44 @@ def _join_url(base: str, name: str) -> str:
     return f"{base.rstrip('/')}/{name.lstrip('/')}"
 
 
+def _hub_installed_binary(platform_key: str) -> Optional[FetchResult]:
+    """Return a hub-installed, checksum-verified email binary if one is present.
+
+    Agent Hub install (#2086) writes the email agent as a platform binary into
+    ``agent_install_dir("email")`` and records the hub manifest's server-computed
+    SHA-256 in the ``.installed`` sentinel — the same SHA it verified the download
+    against before writing. That install is authoritative: spawn it instead of
+    re-gating on ``binaries.lock.json``, whose in-repo entry ships a ``PENDING-…``
+    placeholder SHA until the agent is published.
+
+    The no-unverified-binary invariant still holds — the on-disk file is re-hashed
+    against the sentinel SHA and a mismatch raises loudly. Returns ``None`` (fall
+    through to the lock path) when there is no binary-kind install to trust.
+    """
+    from gaia.hub import installer
+
+    sentinel = installer.read_sentinel("email")
+    if sentinel is None or sentinel.artifact_kind != installer.ARTIFACT_KIND_BINARY:
+        return None
+    if not sentinel.executable or not sentinel.artifact_sha256:
+        return None
+    binary_path = installer.agent_install_dir("email") / sentinel.executable
+    actual = file_sha256(binary_path)
+    if actual is None:
+        return None
+    if actual.lower() != sentinel.artifact_sha256.lower():
+        raise IntegrityError(
+            f"SHA-256 mismatch for the hub-installed email binary at {binary_path}:\n"
+            f"  expected {sentinel.artifact_sha256}\n  actual   {actual}\n"
+            "Refusing to spawn a binary that no longer matches its .installed "
+            "sentinel. Reinstall the email agent from the Agent Hub."
+        )
+    logger.info("email sidecar: using hub-installed binary %s", binary_path)
+    return FetchResult(
+        binary_path, platform_key, actual, f"hub-install:{binary_path}", cached=True
+    )
+
+
 def fetch_binary(
     *,
     out_dir: Optional[Path] = None,
@@ -84,8 +122,15 @@ def fetch_binary(
         IntegrityError: SHA-256 mismatch (tampered/truncated download).
         RuntimeError: download/network failure (HTTP status surfaced).
     """
-    lock = plat.load_lock(lock_path)
     key = platform_key or plat.current_platform_key()
+    # A hub-installed, checksum-verified binary is authoritative — spawn it before
+    # touching the lock, whose in-repo entry ships a placeholder SHA until publish.
+    if not force:
+        installed = _hub_installed_binary(key)
+        if installed is not None:
+            return installed
+
+    lock = plat.load_lock(lock_path)
     entry = plat.resolve_entry(lock, key)
     resolved_base = base_url or os.environ.get("ASSETS_BASE_URL") or lock.base_url
     if not resolved_base:
