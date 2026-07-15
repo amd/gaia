@@ -65,6 +65,22 @@ def test_requirement_not_satisfied_cpu_only(monkeypatch):
         LemonadeManager.ensure_ready(required_min_device="amd_igpu")
 
 
+def test_metal_satisfies_gpu_requirement(monkeypatch):
+    # Apple Silicon: Lemonade's system_info reports 'metal' (its health payload
+    # calls the same device 'gpu') — the generic gpu tier must validate, or the
+    # UI's default device='gpu' request fails on every Mac.
+    patch_lemonade(monkeypatch, "metal_mac.json")
+    assert LemonadeManager.ensure_ready(required_min_device="amd_dgpu") is True
+
+
+def test_metal_does_not_satisfy_npu_requirement(monkeypatch):
+    # The normalization maps metal to the GPU tier only — an NPU floor must
+    # still fail loudly on a Mac.
+    patch_lemonade(monkeypatch, "metal_mac.json")
+    with pytest.raises(HardwareRequirementError):
+        LemonadeManager.ensure_ready(required_min_device="amd_npu")
+
+
 def test_list_shaped_devices(monkeypatch):
     # Use the fixture helper so get_status is patched too
     patch_lemonade(monkeypatch, "hardware_list.json")
@@ -132,3 +148,10 @@ def test_agent_init_passes_none_when_no_requirement(monkeypatch):
 
     assert "kwargs" in calls
     assert calls["kwargs"].get("required_min_device") is None
+
+
+def test_ensure_ready_none_min_context_uses_default(monkeypatch):
+    # Callers thread config values through verbatim; an unset (None) ctx floor
+    # must mean "the default", not TypeError at the >= comparison (#2096 E2E).
+    patch_lemonade(monkeypatch, "metal_mac.json")
+    assert LemonadeManager.ensure_ready(min_context_size=None) is True

@@ -106,6 +106,25 @@ def get_agent_registry():
     return _agent_registry
 
 
+# Agent types served by an out-of-process sidecar with a dedicated dispatch
+# branch below. They are never registry-loadable: a binary-only hub install
+# ships no importable wheel, so registry.get() is None even when the agent is
+# installed and healthy.
+_SIDECAR_AGENT_TYPES = frozenset({"email"})
+
+
+def _agent_type_unknown(agent_type: str, registry) -> bool:
+    """True when *agent_type* must be rejected as unknown before dispatch.
+
+    ``chat`` is the built-in default and sidecar types have their own dispatch
+    branch — neither goes through the registry. Everything else must resolve
+    in the registry or the caller returns the unavailable-agent error.
+    """
+    if agent_type == "chat" or agent_type in _SIDECAR_AGENT_TYPES:
+        return False
+    return bool(registry) and not registry.get(agent_type)
+
+
 # ── Per-session agent cache ───────────────────────────────────────────────────
 # Constructing a fresh ChatAgent on every message is expensive: it initialises
 # RAGSDK, MCPClientManager, runs LemonadeManager.ensure_ready() (HTTP calls),
@@ -969,15 +988,20 @@ def _build_email_proxy_agent(
     """
     from gaia.ui.email_sidecar.proxy_agent import EmailProxyAgent
 
+    kwargs = {}
+    # A None device_ctx (device config with no ctx entry) must not clobber
+    # EmailProxyAgent's own 32K minimum — omit and let its default apply.
+    if device_ctx is not None:
+        kwargs["min_context_size"] = device_ctx
     return EmailProxyAgent(
         model_id=model_id,
         mail_provider=mail_provider,
         device=device,
-        min_context_size=device_ctx,
         streaming=streaming,
         # Match the chat agent: a streaming session drives the SSE console; a
         # non-streaming one is silent (JSON-only).
         silent_mode=not streaming,
+        **kwargs,
     )
 
 
@@ -1198,8 +1222,9 @@ async def _get_chat_response(
         agent_type = request.agent_type or stored_agent_type
 
         # Validate requested agent_type exists in the registry before persisting
+        # (chat + sidecar types are exempt — they never live in the registry).
         registry = _agent_registry
-        if agent_type != "chat" and registry and not registry.get(agent_type):
+        if _agent_type_unknown(agent_type, registry):
             logger.warning(
                 "chat: Session %s requested unknown agent_type '%s'; "
                 "returning unavailable-agent error",
@@ -1593,8 +1618,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         agent_type = request.agent_type or stored_agent_type
 
         # Validate requested agent_type exists in the registry before persisting
+        # (chat + sidecar types are exempt — they never live in the registry).
         registry = _agent_registry
-        if agent_type != "chat" and registry and not registry.get(agent_type):
+        if _agent_type_unknown(agent_type, registry):
             logger.warning(
                 "chat: Session %s requested unknown agent_type '%s' (streaming); "
                 "returning unavailable-agent error",
