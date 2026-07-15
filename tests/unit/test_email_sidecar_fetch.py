@@ -152,3 +152,125 @@ def test_fetch_base_url_override(tmp_path):
 def test_default_cache_dir():
     p = fetchmod.default_cache_dir()
     assert p.parts[-3:] == (".gaia", "agents", "email")
+
+
+# ---------------------------------------------------------------------------
+# Hub-installed binary short-circuit (#2095)
+# ---------------------------------------------------------------------------
+
+
+def _hub_install(cache: Path, data: bytes = REAL_BYTES, **overrides) -> Path:
+    """Simulate a Hub install (#2086): verified binary + .installed sentinel."""
+    cache.mkdir(parents=True, exist_ok=True)
+    sentinel = {
+        "id": "email",
+        "version": "0.5.0",
+        "language": "python",
+        "installed_at": "2026-07-15T00:00:00+00:00",
+        "artifact_sha256": hashlib.sha256(data).hexdigest(),
+        "artifact_kind": "binary",
+        "executable": "email-agent",
+        **overrides,
+    }
+    binary = cache / (sentinel["executable"] or "email-agent")
+    binary.write_bytes(data)
+    (cache / ".installed").write_text(json.dumps(sentinel))
+    return binary
+
+
+def test_hub_installed_binary_spawns_despite_placeholder_lock(tmp_path):
+    out = tmp_path / "email"
+    binary = _hub_install(out)
+    sess = _FakeSession(b"SHOULD-NOT-BE-USED")
+    res = fetchmod.fetch_binary(
+        out_dir=out,
+        platform_key="darwin-arm64",
+        lock_path=_lock(tmp_path, "PENDING-1648-replace"),
+        session=sess,
+    )
+    assert res.cached is True
+    assert Path(res.binary_path) == binary
+    assert res.sha256 == REAL_SHA
+    assert sess.calls == []
+
+
+def test_hub_installed_short_circuit_precedes_lock(tmp_path):
+    # Pin the ordering: a verified Hub install is returned BEFORE the lock is
+    # consulted at all — an unreadable lock must not block the spawn.
+    out = tmp_path / "email"
+    binary = _hub_install(out)
+    res = fetchmod.fetch_binary(
+        out_dir=out,
+        platform_key="darwin-arm64",
+        lock_path=tmp_path / "does-not-exist.lock.json",
+        session=_FakeSession(b"SHOULD-NOT-BE-USED"),
+    )
+    assert Path(res.binary_path) == binary
+
+
+def test_placeholder_still_refuses_without_hub_install(tmp_path):
+    out = tmp_path / "email"
+    out.mkdir()
+    with pytest.raises(PlatformError, match="binaries.lock.json.*placeholder"):
+        fetchmod.fetch_binary(
+            out_dir=out,
+            platform_key="darwin-arm64",
+            lock_path=_lock(tmp_path, "PENDING-1648-replace"),
+            session=_FakeSession(REAL_BYTES),
+        )
+
+
+def test_hub_installed_binary_tampered_raises(tmp_path):
+    out = tmp_path / "email"
+    _hub_install(out)
+    (out / "email-agent").write_bytes(b"tampered-after-install")
+    with pytest.raises(IntegrityError, match="reinstall"):
+        fetchmod.fetch_binary(
+            out_dir=out,
+            platform_key="darwin-arm64",
+            lock_path=_lock(tmp_path, "PENDING-1648-replace"),
+            session=_FakeSession(REAL_BYTES),
+        )
+
+
+def test_hub_sentinel_without_binary_kind_is_ignored(tmp_path):
+    # A wheel-kind sentinel (pre-#2084 email install) vouches for no binary.
+    out = tmp_path / "email"
+    _hub_install(out, artifact_kind="wheel", executable="")
+    with pytest.raises(PlatformError, match="placeholder"):
+        fetchmod.fetch_binary(
+            out_dir=out,
+            platform_key="darwin-arm64",
+            lock_path=_lock(tmp_path, "PENDING-1648-replace"),
+            session=_FakeSession(REAL_BYTES),
+        )
+
+
+def test_hub_sentinel_missing_binary_file_falls_through(tmp_path):
+    out = tmp_path / "email"
+    _hub_install(out)
+    (out / "email-agent").unlink()
+    with pytest.raises(PlatformError, match="placeholder"):
+        fetchmod.fetch_binary(
+            out_dir=out,
+            platform_key="darwin-arm64",
+            lock_path=_lock(tmp_path, "PENDING-1648-replace"),
+            session=_FakeSession(REAL_BYTES),
+        )
+
+
+def test_force_refetches_past_hub_install(tmp_path):
+    # force=True is an explicit "re-fetch from the lock" — the short-circuit
+    # must not mask it. With real lock SHAs that means a fresh download.
+    out = tmp_path / "email"
+    _hub_install(out, artifact_sha256="0" * 64)
+    sess = _FakeSession(REAL_BYTES)
+    res = fetchmod.fetch_binary(
+        out_dir=out,
+        platform_key="darwin-arm64",
+        lock_path=_lock(tmp_path, REAL_SHA),
+        session=sess,
+        force=True,
+    )
+    assert res.cached is False
+    assert sess.calls == ["https://r2.example/email-agent-darwin-arm64"]

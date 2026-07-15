@@ -61,6 +61,57 @@ def test_user_mode_fetch_failure_raises_with_remedy(monkeypatch):
         m.build_spawn_command(port=9123)
 
 
+def test_user_mode_spawns_hub_installed_binary_despite_placeholder_lock(
+    monkeypatch, tmp_path
+):
+    # #2095: a Hub-installed, checksum-verified binary must spawn even while
+    # binaries.lock.json still ships placeholder SHAs. Real fetch, no mocks.
+    import hashlib
+    import json
+
+    monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "user")
+    cache = tmp_path / "email"
+    cache.mkdir()
+    data = b"hub-verified-binary"
+    binary = cache / "email-agent"
+    binary.write_bytes(data)
+    (cache / ".installed").write_text(
+        json.dumps(
+            {
+                "id": "email",
+                "version": "0.5.0",
+                "language": "python",
+                "installed_at": "2026-07-15T00:00:00+00:00",
+                "artifact_sha256": hashlib.sha256(data).hexdigest(),
+                "artifact_kind": "binary",
+                "executable": "email-agent",
+            }
+        )
+    )
+    lock = tmp_path / "binaries.lock.json"
+    lock.write_text(
+        json.dumps(
+            {
+                "schemaVersion": "1.0",
+                "agentVersion": "0.5.0",
+                "baseUrl": "https://r2.example",
+                "binaries": {
+                    "darwin-arm64": {
+                        "filename": "email-agent-darwin-arm64",
+                        "executable": "email-agent",
+                        "sha256": "PENDING-1648-replace-with-real-sha256",
+                        "size": 0,
+                    }
+                },
+            }
+        )
+    )
+    m = mgr.EmailSidecarManager(cache_dir=cache, lock_path=lock)
+    argv, kwargs = m.build_spawn_command(port=9126)
+    assert argv[0] == str(binary)
+    assert "--port" in argv and "9126" in argv
+
+
 def test_dev_mode_spawn_command_is_uvicorn_app_dir(monkeypatch, tmp_path):
     monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
     src = tmp_path / "email"
