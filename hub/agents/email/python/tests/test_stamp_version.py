@@ -73,9 +73,15 @@ def _build_tree(root: Path, version: str, *, include_optional: bool = True) -> N
             f"![play](https://hub.amd-gaia.ai/agents/email/{version}/playground.webp)\n",
             encoding="utf-8",
         )
+        base = f"https://github.com/amd/gaia/blob/agent-pkg-email-v{version}/hub/agents/email/npm"
         (npm / "README.md").write_text(
-            f"![arch](https://hub.amd-gaia.ai/agents/email/{version}/architecture.webp)\n",
+            f"![arch](https://hub.amd-gaia.ai/agents/email/{version}/architecture.webp)\n"
+            f"[SPEC]({base}/SPEC.md)\n",
             encoding="utf-8",
+        )
+        (npm / "CHANGELOG.md").write_text(f"[SPEC]({base}/SPEC.md)\n", encoding="utf-8")
+        (npm / "EVALUATION.md").write_text(
+            f"[Scorecard]({base}/SCORECARD.md#reproduction)\n", encoding="utf-8"
         )
         (npm / "assets").mkdir()
         (npm / "assets" / "architecture.html").write_text(
@@ -143,6 +149,16 @@ def test_check_passes_on_consistent_tree(tree):
             "hub/agents/email/npm/assets/architecture.html",
             'id="ver">v1.2.3',
             'id="ver">v9.9.9',
+        ),
+        (
+            "hub/agents/email/npm/README.md",
+            "blob/agent-pkg-email-v1.2.3/",
+            "blob/agent-pkg-email-v9.9.9/",
+        ),
+        (
+            "hub/agents/email/npm/EVALUATION.md",
+            "blob/agent-pkg-email-v1.2.3/",
+            "blob/agent-pkg-email-v9.9.9/",
         ),
     ],
 )

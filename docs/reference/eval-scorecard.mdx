@@ -127,12 +127,25 @@ A scorecard missing any of these is **invalid** and will be rejected by the rele
 
 ### Optional fields
 
-Two blocks are **optional and additive** — a scorecard is valid with or without them, and neither ever affects `aggregate.value`. They add reviewer-facing detail about *how* the number was produced and *where* the misses are:
+These blocks are **optional and additive** — a scorecard is valid with or without them, and none of them ever affects `aggregate.value`. They add reviewer-facing detail about *how* the number was produced and *where* the misses are:
 
 | Field | Description |
 |-------|-------------|
 | `recipe.environment` | What produced the numbers: `gaia_commit`, `lemonade_version`, `model`, `hardware` (a class descriptor — never a hostname), and an optional `temperature`. |
 | `results.breakdown` | Where the score comes from: `per_category` (per-label `total` / `correct` / `accuracy`) and `top_confusions` (the most frequent `expected → predicted` mistakes). |
+| `results.performance` | Observed perf figures, mean across the run's scenarios: `ttft_s`, `throughput_tps`, `pipeline_s`, `peak_memory_gb`, `emails_per_run`, and the token-accounting rows below. Rendered as the `## Performance` table. Every row here is **reported, never gated**. |
+
+**Token accounting rows** (`results.performance`, issue #1891) — real LLM token counts including the nested per-email classify calls the outer-turn stats used to miss:
+
+| Row | Definition |
+|-----|------------|
+| `total_input_tokens` / `total_output_tokens` | Run totals: outer agent-loop turns **plus** the triage tool's per-email classify calls. |
+| `llm_classified_count` | Classify calls whose usage was measurable — on the shipped Lemonade path this equals the number of emails classified by the LLM (the rest took the heuristic fast path). |
+| `tokens_per_triage` | **Pinned definition:** triage classify-call tokens ÷ `llm_classified_count` — classify tokens over *LLM-classified emails only*, so the figure is invariant to the heuristic/LLM mix and to outer-turn measurement races. Comparisons across releases are only meaningful with the corpus held fixed. |
+
+<Note>
+  `tokens_per_triage` is **reported, not gated**: do not add a release-gate bar for it without a committed, ctx-stamped baseline scorecard to compare against (see `_tokens_per_triage_comment` in `tests/fixtures/email/quality_gate_thresholds.json`).
+</Note>
 
 ```yaml
 recipe:

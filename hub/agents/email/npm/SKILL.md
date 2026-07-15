@@ -149,6 +149,53 @@ import { EmailClient } from "@amd-gaia/agent-email/client";
 const client = new EmailClient({ baseUrl: "http://127.0.0.1:8131", authToken });
 ```
 
+## Canonical agent-loop query (`POST /v1/email/query`, schema 2.4)
+
+The v2 keystone (#2016): NL request in, the agent reasons and chains its tools, the
+**seven canonical Server-Sent Event types** out — `status` / `token` / `tool_call` /
+`tool_result` / `needs_confirmation` / `final` / `error`, terminated by exactly one
+`final` or `error`. This is the one loop every v2 front-door relays to. The **host
+mints `run_id`** and **pushes** the transcript slice in `context`, so the sidecar
+stays stateless; cancel a run mid-flight with `POST /v1/email/query/{run_id}/cancel`
+(stops tool execution between steps). Not wrapped by the typed client yet — call it
+directly:
+
+```js
+const base = "http://127.0.0.1:8131";
+const run_id = crypto.randomUUID(); // host-minted; also the cancel handle
+const res = await fetch(`${base}/v1/email/query`, {
+  method: "POST",
+  headers: {
+    "content-type": "application/json",
+    accept: "text/event-stream",
+    authorization: `Bearer ${authToken}`, // per-session bearer (#1980)
+  },
+  body: JSON.stringify({ query: "Triage my inbox", run_id, context: [] }),
+});
+const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
+for (;;) {
+  const { value, done } = await reader.read();
+  if (done) break;
+  buf += dec.decode(value, { stream: true });
+  let i;
+  while ((i = buf.indexOf("\n\n")) !== -1) {
+    const frame = buf.slice(0, i); buf = buf.slice(i + 2);
+    const line = frame.split("\n").find((l) => l.startsWith("data:"));
+    if (!line) continue;
+    const ev = JSON.parse(line.slice(5).trim());
+    // ev.type ∈ status|token|tool_call|tool_result|needs_confirmation|final|error
+    if (ev.type === "final" || ev.type === "error") { /* terminal */ }
+  }
+}
+// To cancel: await fetch(`${base}/v1/email/query/${run_id}/cancel`, { method: "POST",
+//   headers: { authorization: `Bearer ${authToken}` } });
+```
+
+A confirmation-requiring step (a destructive tool such as `send_now`) emits
+`needs_confirmation` then ends with a `final` refusal pointing at the fixed-function
+route — mint a token via `draft()`, then `send()` (stateless stub, epic decision D1;
+`confirm_url` omitted).
+
 ## Stateful agent surface (`/v1/email/agent/*`, 0.4.0)
 
 Everything above is **stateless** — you send a payload, the sidecar analyzes it, no

@@ -5,6 +5,7 @@
   "lemonade_url": "http://localhost:13305/api/v1",
   "lemonade_version": "10.3.0",
   "gemma_ctx_size": 65536,
+  "ctx_size": 65536,
   "categories": ["rag_quality"],
   "purpose": "post-#1030 / iter4-v2 baseline. Captures the post-optimization state with all five eval-driven fixes applied (eval/runner.py --bare gating, eval/claude.py auth message, MCP send_message model pin, _chat_helpers.py 5xx classification, rag_tools.py page-key omission) plus the chat-DB custom_model setting reset.",
   "eval_model": "claude-sonnet-4-6",

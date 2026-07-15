@@ -128,6 +128,65 @@ def test_triage_service_uses_llm():
     assert response.result.message_id == "msg-001"
 
 
+def _fake_chat_with_usage(
+    category="NEEDS_RESPONSE",
+    summary="Alice invites Bob to lunch.",
+    usage=None,
+):
+    """Like ``_fake_chat`` but the classify call's response also carries a
+    Lemonade chat-completion-shaped ``.usage`` dict -- exercises the REST
+    path's real ``_aggregate_usage`` -> ``aggregate_usage_stats`` delegation
+    (#1891). The summarize call's response deliberately carries NO usage/stats
+    (plain ``.text`` only, like the original ``_fake_chat``) so the expected
+    aggregate is deterministic regardless of whether ``summarize_email_llm``
+    itself is ever updated to also prefer ``.usage``.
+    """
+    import json
+    import types
+
+    usage = usage or {
+        "prompt_tokens": 120,
+        "completion_tokens": 30,
+        "total_tokens": 150,
+        "tokens_per_second": 25.0,
+    }
+
+    class _FakeChat:
+        def send_messages(self, messages, system_prompt="", **kwargs):
+            resp = types.SimpleNamespace()
+            content = messages[0].get("content", "") if messages else ""
+            if "Classify" in content:
+                resp.text = json.dumps(
+                    {"category": category, "confidence": 0.9, "reasoning": "test"}
+                )
+                resp.usage = dict(usage)
+            else:
+                resp.text = summary
+            return resp
+
+    return _FakeChat()
+
+
+def test_triage_service_usage_uses_response_usage_shape():
+    """REST path: the classify call's ``response.usage`` (Lemonade
+    chat-completion shape) must be aggregated into a correct, non-None
+    ``EmailTriageResult.usage`` after ``_aggregate_usage`` is refactored to
+    delegate to ``aggregate_usage_stats`` (#1891)."""
+    from gaia_agent_email.api_routes import EmailTriageService
+
+    service = EmailTriageService()
+    request = _make_single_request()
+    chat = _fake_chat_with_usage()
+
+    response = service.triage_request(request, chat=chat)
+
+    assert response.result.usage is not None
+    assert response.result.usage.prompt_tokens == 120
+    assert response.result.usage.completion_tokens == 30
+    assert response.result.usage.total_tokens == 150
+    assert response.result.usage.tokens_per_second == pytest.approx(25.0)
+
+
 def test_body_not_clipped_by_llm_triage():
     """_build_user_prompt must pass the FULL body to the model (no 4 000-char cap)."""
     from gaia_agent_email.tools.llm_triage import _build_user_prompt
@@ -196,6 +255,264 @@ def test_thread_newest_first():
     assert new_pos < old_pos, "thread body must be newest-first"
 
 
+# ---------------------------------------------------------------------------
+# #1889 — long-thread summarize-to-fit (surface 1: /v1/email/triage thread path)
+#
+# ``thread_fold`` / the budget-gating helpers do not exist on the current tip,
+# so every test below is EXPECTED to fail with ImportError/AttributeError (the
+# new-symbol imports are kept inside the test bodies / fake methods so the
+# existing tests in this module still collect and pass). The over-budget and
+# schema tests additionally drive the real service so they stay meaningful
+# once the imports resolve.
+# ---------------------------------------------------------------------------
+
+
+def _long_thread_messages(n=40, body_chars=2000):
+    """Build a thread whose newest-first join overflows the token budget.
+
+    Space-free filler bodies so the char estimate dominates: n=40 * ~2050
+    chars => ~20237 estimated tokens, well over thread_budget_tokens()
+    (13824); any single message stays tiny (~505 tokens).
+    """
+    from gaia_agent_email.contract import EmailAddress, EmailMessage
+
+    msgs = []
+    for i in range(n):
+        if i == 0:
+            body = "OLDESTVERBATIM" + "a" * body_chars
+        elif i == n - 1:
+            body = "NEWESTVERBATIM" + "z" * body_chars
+        else:
+            body = f"MID{i}" + "m" * body_chars
+        msgs.append(
+            EmailMessage(
+                message_id=f"m{i}",
+                subject="Project Alpha",
+                from_=EmailAddress(email=f"user{i}@example.com"),
+                body=body,
+            )
+        )
+    return msgs
+
+
+def _thread_request(messages, thread_id="thread-long-001"):
+    from gaia_agent_email.contract import (
+        EmailAddress,
+        EmailTriageRequest,
+        ThreadInput,
+    )
+
+    payload = ThreadInput(
+        thread_id=thread_id,
+        messages=messages,
+        principal=EmailAddress(email="me@example.com"),
+    )
+    return EmailTriageRequest(payload=payload)
+
+
+class _FoldAwareChat:
+    """Fake chat that answers the fold call, the classify call, and the
+    summary call distinctly. Optionally carries per-call usage/stats."""
+
+    def __init__(
+        self,
+        *,
+        stats=None,
+        usage=None,
+        digest="CONDENSED_DIGEST_MARKER",
+        category="NEEDS_RESPONSE",
+        summary="Long thread summary.",
+    ):
+        self.calls = []
+        self._stats = stats
+        self._usage = usage
+        self._digest = digest
+        self._category = category
+        self._summary = summary
+
+    def send_messages(self, messages, system_prompt="", **kwargs):
+        import json as _json
+        from types import SimpleNamespace
+
+        from gaia_agent_email.tools.thread_fold import _FOLD_SYSTEM_PROMPT
+
+        content = messages[0].get("content", "") if messages else ""
+        self.calls.append({"system_prompt": system_prompt, "content": content})
+        if system_prompt == _FOLD_SYSTEM_PROMPT:
+            resp = SimpleNamespace(text=self._digest)
+        elif "Classify" in content:
+            resp = SimpleNamespace(
+                text=_json.dumps(
+                    {
+                        "category": self._category,
+                        "confidence": 0.9,
+                        "reasoning": "t",
+                    }
+                )
+            )
+        else:
+            resp = SimpleNamespace(text=self._summary)
+        if self._stats is not None:
+            resp.stats = dict(self._stats)
+        if self._usage is not None:
+            resp.usage = dict(self._usage)
+        return resp
+
+
+class _ThreadOverflowChat:
+    """Fake that RAISES a Lemonade-style context-overflow error whenever the
+    prompt it receives exceeds ``ceiling`` estimated tokens; otherwise answers
+    like a normal triage chat."""
+
+    def __init__(self, *, ceiling):
+        self.calls = []
+        self.ceiling = ceiling
+
+    def send_messages(self, messages, system_prompt="", **kwargs):
+        import json as _json
+        from types import SimpleNamespace
+
+        from gaia_agent_email.context_budget import estimate_tokens
+        from gaia_agent_email.tools.thread_fold import _FOLD_SYSTEM_PROMPT
+
+        content = messages[0].get("content", "") if messages else ""
+        self.calls.append({"system_prompt": system_prompt, "content": content})
+        if estimate_tokens(content) > self.ceiling:
+            raise RuntimeError(
+                f"the request ({estimate_tokens(content)} tokens) "
+                "exceeds the available context size (16384 tokens)"
+            )
+        if system_prompt == _FOLD_SYSTEM_PROMPT:
+            return SimpleNamespace(text="condensed digest")
+        if "Classify" in content:
+            return SimpleNamespace(
+                text=_json.dumps(
+                    {"category": "NEEDS_RESPONSE", "confidence": 0.9, "reasoning": "t"}
+                )
+            )
+        return SimpleNamespace(text="short summary")
+
+
+def test_thread_fits_path_uses_pre_existing_join_unchanged():
+    """Under budget: the thread path uses the pre-existing newest-first join
+    UNCHANGED — no fold, byte-for-byte the same combined_body."""
+    from gaia_agent_email.api_routes import EmailTriageService, _format_address
+    from gaia_agent_email.context_budget import estimate_tokens, thread_budget_tokens
+    from gaia_agent_email.contract import (
+        EmailAddress,
+        EmailMessage,
+        EmailTriageRequest,
+        ThreadInput,
+    )
+
+    messages = [
+        EmailMessage(
+            message_id="old",
+            subject="Project update",
+            from_=EmailAddress(email="alice@example.com"),
+            body="short old body",
+        ),
+        EmailMessage(
+            message_id="new",
+            subject="Project update",
+            from_=EmailAddress(email="bob@example.com"),
+            body="short new body",
+        ),
+    ]
+    payload = ThreadInput(
+        thread_id="thread-fits-001",
+        messages=messages,
+        principal=EmailAddress(email="carol@example.com"),
+    )
+    request = EmailTriageRequest(payload=payload)
+
+    expected = "\n\n".join(
+        f"{_format_address(m.from_)}: {m.body}" for m in reversed(messages)
+    )
+    assert estimate_tokens(expected) <= thread_budget_tokens()
+
+    captured = {}
+
+    class _CapturingService(EmailTriageService):
+        def _build_result_llm(self, *, body, **kwargs):
+            captured["body"] = body
+            return super()._build_result_llm(body=body, **kwargs)
+
+    chat = _fake_chat(category="NEEDS_RESPONSE", summary="Project update thread.")
+    _CapturingService().triage_request(request, chat=chat)
+
+    assert captured["body"] == expected
+
+
+def test_thread_over_budget_folds_older_keeps_latest_verbatim():
+    """Over budget: latest message kept verbatim, older messages condensed into
+    a single digest via the fold call."""
+    from gaia_agent_email.api_routes import EmailTriageService
+    from gaia_agent_email.tools.thread_fold import _FOLD_SYSTEM_PROMPT
+
+    request = _thread_request(_long_thread_messages())
+    captured = {}
+
+    class _CapturingService(EmailTriageService):
+        def _build_result_llm(self, *, body, **kwargs):
+            captured["body"] = body
+            return super()._build_result_llm(body=body, **kwargs)
+
+    chat = _FoldAwareChat()
+    _CapturingService().triage_request(request, chat=chat)
+
+    body = captured["body"]
+    assert "NEWESTVERBATIM" in body, "latest message must survive verbatim"
+    assert "CONDENSED_DIGEST_MARKER" in body, "the fold digest must appear"
+    assert "OLDESTVERBATIM" not in body, "older bodies must be folded away"
+    assert any(c["system_prompt"] == _FOLD_SYSTEM_PROMPT for c in chat.calls)
+
+
+def test_thread_fold_usage_includes_fold_call():
+    """The fold call's tokens are aggregated into EmailTriageResult.usage
+    alongside the classify/summarize calls."""
+    from gaia_agent_email.api_routes import EmailTriageService
+    from gaia_agent_email.tools.thread_fold import _FOLD_SYSTEM_PROMPT
+
+    request = _thread_request(_long_thread_messages())
+    per_call_usage = {
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "total_tokens": 15,
+        "tokens_per_second": 20.0,
+    }
+    per_call_stats = {"input_tokens": 10, "output_tokens": 5, "tokens_per_second": 20.0}
+    chat = _FoldAwareChat(stats=per_call_stats, usage=per_call_usage)
+
+    response = EmailTriageService().triage_request(request, chat=chat)
+
+    n = len(chat.calls)
+    assert any(c["system_prompt"] == _FOLD_SYSTEM_PROMPT for c in chat.calls)
+    assert n >= 2, "at least the fold + summarize calls must have run"
+    assert response.result.usage is not None
+    # Every call contributes 15 total tokens; the aggregate covers the fold too.
+    assert response.result.usage.total_tokens == 15 * n
+
+
+def test_long_thread_folded_path_is_schema_valid():
+    """The SAME adversarial long thread, run through the real service with the
+    overflow-guard chat, still yields a schema-2.0-valid EmailTriageResponse —
+    proving the folded path prevents the overflow AND stays contract-valid."""
+    from gaia_agent_email.api_routes import EmailTriageService
+    from gaia_agent_email.context_budget import thread_budget_tokens
+    from gaia_agent_email.contract import EmailTriageResponse
+
+    request = _thread_request(_long_thread_messages())
+    chat = _ThreadOverflowChat(ceiling=thread_budget_tokens())
+
+    response = EmailTriageService().triage_request(request, chat=chat)
+
+    assert isinstance(response, EmailTriageResponse)
+    assert response.schema_version  # present + non-empty
+    assert response.request_kind == "thread"
+    assert response.result.message_id == "thread-long-001"
+
+
 def test_triage_fails_fast_when_lemonade_unreachable(monkeypatch):
     """Unreachable Lemonade → prompt LLMTriageError, not a ~30s hang (#1677)."""
     import requests
@@ -251,6 +568,12 @@ def test_llm_chat_respects_lemonade_base_url_override_env(monkeypatch):
             resp = MagicMock(status_code=200)
             resp.json.return_value = {"version": "10.2.0"}
             return resp
+        if url == "http://127.0.0.1:9555/api/v1/system-info":
+            # No NPU here — this test is about base_url redirection, not
+            # NPU auto-select (#1439); keep the resolved model unchanged.
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"devices": {"amd_npu": {"available": False}}}
+            return resp
         if url == "http://127.0.0.1:9555/api/v1/models":
             resp = MagicMock(status_code=200)
             resp.json.return_value = {"data": [{"id": resolved_model_id}]}
@@ -284,6 +607,12 @@ def test_llm_chat_respects_lemonade_base_url_explicit_param(monkeypatch):
         if url == "http://127.0.0.1:9555/api/v1/health":
             resp = MagicMock(status_code=200)
             resp.json.return_value = {"version": "10.2.0"}
+            return resp
+        if url == "http://127.0.0.1:9555/api/v1/system-info":
+            # No NPU here — this test is about base_url redirection, not
+            # NPU auto-select (#1439); keep the resolved model unchanged.
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"devices": {"amd_npu": {"available": False}}}
             return resp
         if url == "http://127.0.0.1:9555/api/v1/models":
             resp = MagicMock(status_code=200)
@@ -322,6 +651,12 @@ def test_wrong_model_raises_llm_triage_error(monkeypatch):
         if url == f"{probe_base}/health":
             resp = MagicMock(status_code=200)
             resp.json.return_value = {"version": "10.2.0"}
+            return resp
+        if url == f"{probe_base}/system-info":
+            # No NPU — this test is about the model-absent path (AC2), not
+            # NPU auto-select (#1439); keep the resolved model unchanged.
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"devices": {"amd_npu": {"available": False}}}
             return resp
         if url == f"{probe_base}/models":
             resp = MagicMock(status_code=200)
@@ -365,6 +700,12 @@ def test_wrong_model_check_transport_failure_is_loud(monkeypatch):
             resp = MagicMock(status_code=200)
             resp.json.return_value = {"version": "10.2.0"}
             return resp
+        if url == f"{probe_base}/system-info":
+            # No NPU — this test is about a /models transport failure, not
+            # NPU auto-select (#1439); keep the resolved model unchanged.
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"devices": {"amd_npu": {"available": False}}}
+            return resp
         if url == f"{probe_base}/models":
             raise requests.ConnectionError("reset by peer")
         raise AssertionError(f"unexpected probe URL: {url}")
@@ -407,6 +748,12 @@ def test_model_present_check_tolerant_of_user_dot_prefix(monkeypatch):
         if url == f"{probe_base}/health":
             resp = MagicMock(status_code=200)
             resp.json.return_value = {"version": "10.2.0"}
+            return resp
+        if url == f"{probe_base}/system-info":
+            # No NPU — this test is about the user.-prefix tolerant match,
+            # not NPU auto-select (#1439); keep the resolved model unchanged.
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"devices": {"amd_npu": {"available": False}}}
             return resp
         if url == f"{probe_base}/models":
             resp = MagicMock(status_code=200)

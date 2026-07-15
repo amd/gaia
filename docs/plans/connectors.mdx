@@ -6,6 +6,15 @@ icon: "plug"
 
 # Connectors Framework
 
+> **⚠️ Partially superseded by Agent UI v2** ([agent-ui.mdx](/plans/agent-ui) +
+> [agent-ui-agent-capabilities-plan.md](/plans/agent-ui-agent-capabilities-plan) §0).
+> The connector-consumption model changes: v2 agents run as out-of-process sidecars
+> that **no longer read `grants.json` directly**. Instead the host stays the single
+> writer/refresher and **forwards short-lived access tokens out** to the sidecar
+> (§0.6 OAuth forward-out); the sidecar never sees the refresh token. The registry,
+> Settings UI, and `oauth_pkce`/`mcp_server` types below still hold — only the
+> grant-delivery path is superseded. Read v2 §0.6 for the current model.
+
 <Note>
 **Target:** v0.18.x | **Status:** Spec approved; implementation underway | **Priority:** High
 </Note>

@@ -10,26 +10,86 @@ lens — a scheduled deep review (not triggered by a PR) that fans out one read-
 Claude job per dimension and files a ranked triage issue. Everything else in
 `claude.yml` is reactive. These are the invariants a future editor will otherwise break.
 
-## The five dimensions (and the one that owns Fail-Loudly)
+## The five dimensions are mutually exclusive
 
-`security`, `correctness`, `docs`, `tests`, `features` — a matrix of one Claude job
-each. **`correctness` owns the CLAUDE.md "No Silent Fallbacks — Fail Loudly" check**
-(`except Exception: pass`, try/except that returns a placeholder, silent degradation).
-It is not a separate dimension and it is not homeless — if you add a `code-quality`
-dimension, move that check explicitly, don't leave it implied. Adding a dimension
-means: add it to the matrix, describe its lens in the shared dimension prompt, and the
-synthesis job picks up its `findings-<dim>.json` automatically.
+`security`, `correctness`, `docs`, `tests`, `features` — a matrix of one Claude job each.
+The lenses **overlap unless the prompt keeps them disjoint**, and the first run proved it:
+correctness findings (a rollback that never rolls back, a poller returning null, a mode
+that no-ops) leaked into `features`, and the priciest job's output vanished from the
+triage issue. The decisive question for a broken thing: **is the code wired but
+misbehaving (`correctness`), never written (`features`), or contradicted by its docs
+(`docs`)?**
 
-## Dedup key — the single biggest usability risk
+- **`correctness` owns wired-but-broken behavior AND the CLAUDE.md "Fail Loudly" check**
+  (`except Exception: pass`, try/except returning a placeholder, silent degradation).
+- **`features`** is only genuinely-missing/half-shipped capability — a TODO for code never
+  written. Wired-but-broken is correctness, not features.
+- **`docs`** owns doc-vs-code drift, including a feature *documented as working but stubbed*.
+- **`tests`** in deep mode rolls plain "module X has no coverage" into ONE aggregate finding
+  (`dedup_key: tests:aggregate:untested-modules`); separate findings only for risk-bearing
+  untested logic (auth/gate/precedence/error-mapping/#1655).
+
+Adding a dimension means: add it to the matrix, describe its disjoint lens in the shared
+prompt, and the synthesis picks up its `findings-<dim>.json` automatically.
+
+## Published hub agents get the highest bar
+
+Published agents are the shop window — the prompt makes every lens double-check them and
+**bump any gap up one severity** (never 🟡; a default-path break is 🔴). Detect them by a
+`release_agent_<id>.yml`, a shipped `SCORECARD.md`, or a released `version:` in
+`gaia-agent.yaml` — currently only the **email agent**. The bar: in-sync high-quality
+README/SPEC.md/SKILL.md/CHANGELOG.md (+ any contract spec) with a **real** eval `SCORECARD.md`
+(gated by `gaia.eval.scorecard_gate`, never hand-authored) linked from the README; bulletproof
+runtime code (no stubs/silent-fallbacks); solid #1655-grade tests. When a new agent publishes,
+the detection generalizes to it automatically — no prompt edit needed.
+
+## Severity: 🔴 high · 🟠 medium · 🟡 low — no green
+
+Green (🟢) reads as "pass/good," so it's banned. **Broken behavior always outranks a
+missing test** — never rate "module X has no tests" above a feature that's actually
+broken. High = security / data loss / default-path break; medium = broken user-facing
+behavior, a false doc, or a missing test guarding auth/a gate/destructive logic; low =
+missing tests on non-risk logic, cosmetic gaps. The synthesis emits a section per
+dimension (fixed order: Security, Correctness, Features, Docs, Tests), grouping each
+finding under the dimension it **declares** — it never re-buckets.
+
+## Child issues are 🔴/🟠 only, and tagged auto-fixable
+
+Only high/medium findings get a child issue (and thus one-click `bug`→auto-fix promotion).
+🟡 (low) findings are listed in the parent triage issue and nowhere else — this caps
+tracker churn (the first deep run filed 19 children, ~13 of them low-value coverage nits).
+Each finding carries an `auto_fixable` boolean; the child body says whether applying `bug`
+will let auto-fix land it (locatable/small) or whether it needs a human (a test suite, a
+refactor) — so maintainers don't promote something auto-fix can't handle.
+
+## Precision gate — a false finding erodes the whole audit
+
+Recall is cheap; trust is not. Each finding must carry `evidence` (a concrete quote or
+`path:line` the dimension actually read), and the dimension prompt requires verifying the
+problem is present AND not already handled elsewhere before reporting. The synthesis
+**drops any 🔴/🟠 finding whose evidence doesn't substantiate its title**, and does an
+**intra-run cross-dimension dedup** (a stubbed command flagged by both `docs` and
+`correctness` is ONE issue, not two — keep the most severe, note the other lens).
+
+## Dedup + suppression — the single biggest usability risk
 
 Each finding carries `dedup_key = <dimension>:<repo-relative-path>:<symbol-or-section>`.
-**The symbol is a function/class name or doc heading — NEVER a line number.** Line
-numbers move every time the file changes, so a line-based key re-files the same finding
-every week and the triage issue is unusable by week 3. The key is embedded in each
-child issue body as `<!-- audit-key: KEY -->`; the synthesis job lists open
-`weekly-audit` issues, parses those markers, and **skips any finding whose key already
-has an open child**. Closing a child (fixed or wontfix) lets it resurface only if still
-present. Line numbers may appear in the human-readable title/why, never in the key.
+**The symbol is a function/class name or doc heading — NEVER a line number** (line numbers
+move, so a line-based key re-files the same finding every week and the issue is unusable by
+week 3). The key is embedded in each child body as `<!-- audit-key: KEY -->`. Synthesis
+skips a finding whose key is in EITHER set:
+- **already-filed** — keys on any *open* `weekly-audit` issue (avoid duplicates).
+- **suppressed-forever** — keys on any `weekly-audit` issue also labeled **`audit-wontfix`**
+  (open or closed). This is how you permanently silence accepted debt: close a child with
+  `audit-wontfix` and it never comes back. Without this, wontfix findings resurface every
+  deep run forever.
+
+## Parent triage issues roll over
+
+Each run files a NEW parent (`Weekly audit — <mode> — <run_id>`) and then **closes the
+previous open parent** with a "Superseded by #N" comment — otherwise ~52 stale parents pile
+up per year. Only the parent rolls over; child issues stay open (they're the actionable
+units). The parent opens with a one-line tally (new/low/suppressed counts) for trend.
 
 ## Security findings stay private
 

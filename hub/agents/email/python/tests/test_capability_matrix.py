@@ -10,7 +10,7 @@ REST verbs, MCP tools, eval-gate coverage), renders a committed
 - AC1: the committed matrix doc is byte-identical to a freshly regenerated one.
 - AC2: ``tools_count`` (52) is identical across ``gaia-agent.yaml``,
   ``gaia_agent_email.__init__.build_registration()``, and an AST-derived count.
-- AC3: every one of the 20 exposed ops (16 REST + 4 MCP) is annotated with an
+- AC3: every one of the 22 exposed ops (18 REST + 4 MCP) is annotated with an
   eval suite name or the "no quality eval" sentinel — closed-set, bidirectional.
 - AC4: the MCP-scope decision (4 tools + rationale) is pinned and current.
 - AC5: every eval suite has a non-trivial follow-up plan, and ``followups`` is
@@ -79,8 +79,8 @@ assert sum(_EXPECTED_TOOLS_BY_MIXIN.values()) == _EXPECTED_TOOLS_TOTAL
 
 _EXPECTED_MCP_COUNT = 4
 _EXPECTED_EVAL_SUITE_COUNT = 6
-_EXPECTED_REST_FUNCTIONAL_COUNT = 16
-_EXPECTED_REST_IN_CONTRACT_COUNT = 19
+_EXPECTED_REST_FUNCTIONAL_COUNT = 18
+_EXPECTED_REST_IN_CONTRACT_COUNT = 21
 
 # The 6 eval suites are the *_gate_thresholds.json fixture stems at the repo
 # root (NOT under hub/agents/email/python/tests/ — this package ships no such
@@ -123,6 +123,9 @@ _EXPECTED_REST_OP_NAMES = {
     "calendar/events/preview",
     "calendar/events (POST)",
     "calendar/events/respond",
+    # #2016 streaming agent-loop surface: POST /v1/email/query and its cancel.
+    "query",
+    "query/{run_id}/cancel",
 }
 assert len(_EXPECTED_REST_OP_NAMES) == _EXPECTED_REST_FUNCTIONAL_COUNT
 _EXPECTED_OP_NAMES = _EXPECTED_REST_OP_NAMES | set(_EXPECTED_MCP_TOOL_NAMES)
@@ -339,7 +342,7 @@ class FakeMCPAgent:
 
 
 # ---------------------------------------------------------------------------
-# AC3 — eval coverage per exposed op (20 ops, closed-set + bidirectional)
+# AC3 — eval coverage per exposed op (22 ops, closed-set + bidirectional)
 # ---------------------------------------------------------------------------
 
 

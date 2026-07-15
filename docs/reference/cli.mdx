@@ -1798,8 +1798,9 @@ gaia eval benchmark [OPTIONS]
 | `--ground-truth` | str | fixture's | Ground-truth JSON for quality scoring |
 | `--backend` | str | agent default | Lemonade base URL |
 | `--output-dir` | str | — | Write `scorecard.json` / `summary.md` / `variance.json` |
-| `--compare` | path | — | Compare throughput against a saved baseline (non-gating) |
+| `--compare` | path | — | Compare throughput against a saved baseline (non-gating for throughput; a ctx-window mismatch vs the baseline is a hard error) |
 | `--save-baseline` | flag | off | Save this run's scorecard as the throughput baseline |
+| `--ctx-size` | int | `16384` | Exact ctx window to pin the model load to (#1892 envelope: 16384 target / 32768 max). Verified by readback and stamped into `scorecard.json` / `quality.json`; values above the envelope max are allowed but warned loudly |
 
 <CodeGroup>
 ```bash Benchmark the primary model
@@ -1812,6 +1813,10 @@ gaia eval benchmark --experiments 3 --save-baseline
 
 ```bash Compare against a saved baseline
 gaia eval benchmark --compare eval/results/bench_baseline.json
+```
+
+```bash Measure a non-default ctx sweep point
+gaia eval benchmark --ctx-size 4096 --experiments 1
 ```
 </CodeGroup>
 
@@ -2112,6 +2117,35 @@ gaia youtube \
   --download-transcript "https://youtube.com/watch?v=..." \
   --output-path transcript.txt
 ```
+
+---
+
+### Daemon Command
+
+Manage the headless custody daemon — the always-on, single-instance background
+process that later Agent UI v2 phases (sidecar supervision, `/host/v1/*` custody,
+the model-slot broker, the scheduler clock) mount into. This Phase-1 skeleton
+provides single-instance identity, client-token auth, and lifecycle control.
+
+Requires the daemon extras (`fastapi`/`uvicorn`/`psutil`) — install with
+`pip install "amd-gaia[ui]"` (or `[api]`/`[dev]`). Running it on a base install
+fails loudly with that instruction.
+
+```bash
+gaia daemon start      # start the daemon, or attach if one is already running
+gaia daemon status     # show pid, port, and uptime
+gaia daemon stop       # graceful shutdown (tree-kills the instance)
+gaia daemon restart    # stop then start
+gaia daemon logs [--lines N] [--follow]   # tail the daemon log
+```
+
+| Action | Options | Description |
+|--------|---------|-------------|
+| `start` | — | Start the daemon or attach to the running one (two callers → one daemon). |
+| `status` | — | Print pid / port / uptime, or report if no daemon is running. |
+| `stop` | — | Shut the daemon down and release `~/.gaia/host/instance.json`. |
+| `restart` | — | `stop` followed by `start`. |
+| `logs` | `--lines`, `--follow` | Print (or stream) the daemon log tail. |
 
 ---
 

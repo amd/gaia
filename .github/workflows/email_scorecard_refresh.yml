@@ -37,7 +37,14 @@ on:
       limit:
         description: 'Messages to triage (smaller = faster; regen a card at this sample size)'
         required: false
-        default: '60'
+        # Stays at 25 even though #2087's ctx overflow is fixed: the 60-email
+        # limit had TWO independent blockers and this PR only removes one.
+        # The ctx one is gone (condense_triage_result keeps the envelope in
+        # budget at any batch size — measured at 300). The other is this job's
+        # 90-minute budget: at 60 the benchmark + judge evals overrun it (run
+        # 29433392568 was killed mid-action-item eval at exactly 90:00). Raise
+        # the limit when #2063's per-email speedups land, not before.
+        default: '25'
       model:
         description: 'Lemonade model id'
         required: false
@@ -67,7 +74,9 @@ permissions:
 env:
   SCORECARD: hub/agents/email/npm/SCORECARD.md
   MANIFEST: hub/agents/email/python/gaia-agent.yaml
-  LIMIT: ${{ github.event.inputs.limit || '60' }}
+  # 25, not 60 — bounded by this job's 90-min budget, not by ctx (#2087 fixed
+  # that). See the workflow_dispatch input above.
+  LIMIT: ${{ github.event.inputs.limit || '25' }}
   MODEL: ${{ github.event.inputs.model || 'Gemma-4-E4B-it-GGUF' }}
   PYTHONIOENCODING: "utf-8"
   # JOB-WIDE so EVERY eval step (benchmark AND the drafting eval) can import the
@@ -95,10 +104,12 @@ jobs:
     # 'powershell: command not found'. fromJSON(...) yields a label ARRAY so the
     # runner must have Windows AND the stx/stx-test label.
     runs-on: ${{ fromJSON(contains(github.event.pull_request.labels.*.name, 'stx-test') && '["self-hosted","Windows","stx-test"]' || '["self-hosted","Windows","stx"]') }}
-    # The refresh triages ~60 emails in one call (~38s/email -> ~40min); the
-    # limit was cut from 220 (~2.3h) because that hogged the serial
-    # lemonade-eval slot. Per-email speedups that would let it go back up are
-    # tracked in #2063.
+    # The refresh triages ~25 emails in one call (~38s/email -> ~16min), then
+    # runs three judge evals; that whole chain has to fit the budget below.
+    # History: 220 (~2.3h) hogged the serial lemonade-eval slot -> 60 -> 25
+    # (#2089) when 60 overflowed the pinned 16384 ctx window. #2087 fixed the
+    # ctx half, but 60 still overruns this budget (run 29433392568 died at
+    # 90:00 mid-judge-eval), so 25 stands. Per-email speedups: #2063.
     timeout-minutes: 90
     steps:
       - name: Checkout (the pushed branch)
@@ -170,8 +181,8 @@ jobs:
           # The agent's calendar-connector resolution blocks on the OS keyring in
           # a headless context — disable it so construction doesn't hang.
           PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
-          # Triage of the ~60-email corpus is ONE tool call at ~38s/email
-          # (measured on the stx pool for Gemma-4-E4B) -> ~40min. A too-low
+          # Triage of the ~25-email corpus is ONE tool call at ~38s/email
+          # (measured on the stx pool for Gemma-4-E4B) -> ~16min. A too-low
           # timeout abandons it mid-run -> 0 triage results -> Category acc 0.0.
           # 3600s (1h) covers it with margin. Per-email speedups: #2063.
           GAIA_AGENT_TOOL_TIMEOUT: '3600'
@@ -183,11 +194,15 @@ jobs:
           # them from the committed seed before the eval reads them.
           python tests/fixtures/email/generate_mbox.py
           if ($LASTEXITCODE -ne 0) { throw "generate_mbox failed" }
+          # --ctx-size 16384: pin the run to the #1892 envelope target so the
+          # refreshed card records the window it was measured under
+          # (gen_scorecard.py refuses to build an unstamped card).
           gaia eval benchmark `
             --model "$env:MODEL" `
             --mbox-path tests/fixtures/email/synthetic_inbox.mbox `
             --ground-truth tests/fixtures/email/ground_truth.json `
             --limit "$env:LIMIT" `
+            --ctx-size 16384 `
             --output-dir eval-out
           if ($LASTEXITCODE -ne 0) { throw "gaia eval benchmark failed" }
 
@@ -205,13 +220,33 @@ jobs:
           python hub/agents/email/python/packaging/eval_drafting_report.py
           if ($LASTEXITCODE -ne 0) { throw "drafting eval failed" }
 
+      - name: Action-item extraction eval (judge-scored) — for the scorecard metric
+        env:
+          EMAIL_EVAL_MODEL: ${{ env.MODEL }}
+          # Judge credential — REQUIRED (fail-loudly, no silent skip), same as
+          # drafting. Runs the small committed action-item corpus, not the mbox.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python hub/agents/email/python/packaging/eval_action_item_report.py
+          if ($LASTEXITCODE -ne 0) { throw "action-item eval failed" }
+
+      - name: Briefing quality eval (judge-scored) — for the scorecard metric
+        env:
+          EMAIL_EVAL_MODEL: ${{ env.MODEL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python hub/agents/email/python/packaging/eval_briefing_report.py
+          if ($LASTEXITCODE -ne 0) { throw "briefing eval failed" }
+
       - name: Regenerate SCORECARD.md from the real run
         run: |
-          # --drafting-report folds draft_approval_rate into the card as a
-          # reported metric (weight 0). The drafting eval above hard-fails on a
+          # Fold every capability's judged result into the card as report-only
+          # metrics: drafting -> draft_approval_rate (weight-0 metric); spam (from
+          # the benchmark quality block, no flag needed) + action-item + briefing
+          # -> the Capability quality section. Each eval above hard-fails on a
           # missing key, so a report here is always a real judged run; a missing
           # or unjudged report makes gen_scorecard fail loudly (never omits).
-          python hub/agents/email/python/packaging/gen_scorecard.py --benchmark-dir eval-out --limit "$env:LIMIT" --drafting-report eval-out/drafting_gate_report.json
+          python hub/agents/email/python/packaging/gen_scorecard.py --benchmark-dir eval-out --limit "$env:LIMIT" --drafting-report eval-out/drafting_gate_report.json --action-item-report eval-out/action_items_report.json --briefing-report eval-out/briefing_gate_report.json
           if ($LASTEXITCODE -ne 0) { throw "gen_scorecard failed" }
 
       - name: Same-version regression check (reject a worse re-run)
@@ -231,7 +266,7 @@ jobs:
               exit 1
             }
           }
-          Write-Host "No same-version regression — fresh score is >= committed."
+          Write-Host "No same-version regression -- fresh score is >= committed."
 
       - name: Cross-version gate (fresh SCORECARD.md vs prior version tag, best-effort)
         run: |
@@ -247,7 +282,7 @@ jobs:
         run: |
           git diff --quiet -- "$env:SCORECARD"
           if ($LASTEXITCODE -eq 0) {
-            Write-Host "SCORECARD.md unchanged — nothing to commit."
+            Write-Host "SCORECARD.md unchanged -- nothing to commit."
             exit 0
           }
           git config user.name  "${{ github.actor }}"

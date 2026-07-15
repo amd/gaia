@@ -295,7 +295,7 @@ def test_init_conforms_to_spec_when_not_ready(client, committed_spec):
     """
     with patch(
         "gaia_agent_email.api_routes._probe_lemonade_health",
-        return_value=(False, "http://localhost:8000/api/v1", None),
+        return_value=(False, "http://localhost:8000/api/v1", None, []),
     ):
         resp = client.get("/v1/email/init")
 
@@ -315,7 +315,7 @@ def test_init_conforms_to_spec_when_ready(client, committed_spec):
     with (
         patch(
             "gaia_agent_email.api_routes._probe_lemonade_health",
-            return_value=(True, "http://localhost:8000/api/v1", "10.2.0"),
+            return_value=(True, "http://localhost:8000/api/v1", "10.2.0", []),
         ),
         patch(
             "gaia_agent_email.api_routes._probe_model_present",
@@ -952,6 +952,13 @@ def test_all_documented_paths_covered(committed_spec):
         ("post", "/v1/email/calendar/events"),
         ("post", "/v1/email/calendar/events/preview"),
         ("post", "/v1/email/calendar/events/respond"),
+        # SSE agent-loop surface (schema 2.4, #2016). /query streams
+        # text/event-stream (not a JSON body schema), so its behavioral
+        # conformance lives in hub/agents/email/python/tests/test_query_route.py
+        # + test_sse_translation.py rather than the body-schema pattern above;
+        # the cancel route is covered there too.
+        ("post", "/v1/email/query"),
+        ("post", "/v1/email/query/{run_id}/cancel"),
     }
     assert documented == expected, (
         f"Spec has routes not covered by conformance tests: "

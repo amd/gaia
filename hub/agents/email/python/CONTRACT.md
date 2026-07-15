@@ -153,6 +153,39 @@ test asserts byte-for-byte equality, so drift in either place fails CI.
 The principal is the account owner — distinct from a message's `to`: in a thread
 the principal is not necessarily a recipient of every message.
 
+#### Long-thread handling ([#1889](https://github.com/amd/gaia/issues/1889))
+
+`ThreadInput.messages` has no declared size limit, and the request shape is
+unchanged — but what reaches the local model is bounded by the
+[context-window envelope](#context-window-envelope). The service estimates the
+combined thread body against the thread token budget derived from
+`context_budget.py`:
+
+- **Fits** — the thread is analyzed exactly as before (newest-first, every
+  message verbatim). No behavior change.
+- **Over budget** — the LATEST message is kept verbatim and every older
+  message is condensed into one digest via a **single extra LLM call** before
+  triage (never a multi-pass loop). Expect one additional model call's worth
+  of latency on such requests; the fold call's tokens are included in the
+  response's `usage` block.
+- **Fold failure** — a failed condense call is a loud error (HTTP 502 /
+  `BatchItemResult.error` on the batch endpoint), never a silent fallback to
+  the over-budget raw prompt.
+
+Independently of the token gate, threads beyond a **500-message ceiling**
+are bounded first: only the most recent 500 messages are analyzed, and the
+dropped remainder always surfaces as an explicit
+`[omitted N older messages]` marker in what reaches the model — bounded and
+visible, never a silent clip of recent context.
+
+The agent-loop `summarize_thread` tool applies the same token gate and
+ceiling: the gate replaced the tool's previous fixed 24,000-character
+transcript cap, so mid-size threads that used to be proportionally clipped
+now go through unclipped whenever they fit the token budget, and only
+genuinely over-budget threads get the latest-verbatim + condensed-older
+treatment. When the condense call ran, the tool's result `data` carries a
+`usage` block with that call's tokens (same fields as `TriageUsage`).
+
 ---
 
 ## Response schema (output)
@@ -505,3 +538,131 @@ response = parse_response(raw_response_dict)  # -> EmailTriageResponse
   equality, so a taxonomy change in either place fails CI.
 - **Unknown fields are errors**, not warnings — there is no silent forward-compat
   drift in either direction.
+
+---
+
+## Context-window envelope
+
+The email agent is designed, measured, and released against a pinned
+context-window envelope
+([#1892](https://github.com/amd/gaia/issues/1892), constants in
+[`gaia_agent_email/context_budget.py`](gaia_agent_email/context_budget.py)):
+
+| Bound | Tokens | Meaning |
+|---|---|---|
+| **Target** | **16,384** | The window every published accuracy/throughput number is measured at. Everyday triage/draft prompts — system prompt, tool schema, and a full thread — fit here on the KV-cache budget of the consumer NPU/GPU hardware GAIA targets. |
+| **Acceptable max** | **32,768** | The ceiling for a deliberately larger run (e.g. a long-thread stress sweep). Above it, KV-cache memory pressure makes the measurement unrepresentative of a real device. |
+
+64K — the model's registry floor that the eval path historically ran at — is
+**not** part of the envelope: it is unrealistic for the machines this agent
+ships to, and numbers measured there do not transfer.
+
+**What a consumer may assume:**
+
+- Published scorecards and baselines are designed to state the window they
+  were measured under (`recipe.environment.ctx_size` on the scorecard;
+  `ctx_size` in `baseline_accuracy.json` and the benchmark's `quality.json` /
+  `scorecard.json`). None of the email agent's committed artifacts carry
+  that stamp yet — it lands when the baseline is next re-recorded (the
+  consolidated eval pass, [#1319](https://github.com/amd/gaia/issues/1319) /
+  [#1892](https://github.com/amd/gaia/issues/1892)); the repo's `gaia eval
+  agent` baseline `meta.json` files already record their historic 64K
+  window. Until then, treat every existing email-agent number as measured
+  at the unpinned 64K window and do not compare it against a future pinned
+  run.
+- Payloads that fit the 16K target are the supported case. Prompt
+  construction bounds body content with documented character limits (marked
+  `...[truncated]`, never silent), and a genuine context overflow on the
+  LLM call **raises** per the agent's fail-loud contract — a result is
+  never fabricated from an over-budget prompt. Over-budget *threads* no
+  longer overflow at all: they are condensed to fit first (see
+  [Long-thread handling](#long-thread-handling-1889)).
+- Budget work derives from the same constants: the long-thread budget
+  ([#1889](https://github.com/amd/gaia/issues/1889)) is the first consumer —
+  `thread_budget_tokens()` and `estimate_tokens()` in `context_budget.py`
+  gate both thread-triage surfaces. The per-email body limit
+  ([#1318](https://github.com/amd/gaia/issues/1318)) is designed to derive
+  from the same file and does not consume it yet.
+
+**How to verify what a live triage actually used:** the triage response's
+`usage` block reports `prompt_tokens` / `completion_tokens` /
+`total_tokens` for the LLM calls behind the result — compare
+`prompt_tokens` against the envelope to see how much of the window a
+payload consumed. The agent-loop bulk triage (the `triage_inbox` tool
+behind natural-language requests like "triage my inbox", including
+`POST /v1/email/query`) reports the same accounting at the result level
+([#1891](https://github.com/amd/gaia/issues/1891)): the tool's result
+data carries a `usage` object (same four fields as `TriageUsage`,
+aggregated across every LLM classify call in the run, all mailboxes)
+plus `llm_classified_count` — the number of classify calls whose usage
+was measurable (on the shipped Lemonade path this equals the number of
+emails classified by the LLM rather than the heuristic fast path; a
+provider exposing no per-call usage/stats undercounts). Both keys are **absent**
+(never zeroed) on a heuristic-only run where no LLM call was made; a
+present-but-zero `usage` means classify calls happened but their
+per-call measurements were unavailable. `GET /v1/email/init` additionally reports the *currently
+loaded* `ctx_size` on `model` when the triage model is loaded and the
+server exposes it — null otherwise (no config echo, no guessing).
+`ctx_size` reflects `/health`'s loaded state specifically, so it can be set
+even when the model-catalog probe fails and `present` reports `false` —
+the two fields answer different questions from different probes.
+
+> **Note:** the **interactive `gaia email` CLI path currently loads the model
+> at 32K** (the `agent_context_sizes` registry in `src/gaia/cli.py`) — the
+> envelope's acceptable max, not the 16K target. Pinning the interactive path
+> to the target is deliberately out of #1892's scope; the envelope above
+> governs the **eval/benchmark/release** path today.
+
+**Shared-server constraint:** Lemonade Server is single-tenant per model
+slot. An agent instance with an exact ctx pin (`EmailAgentConfig.ctx_size` /
+`LemonadeClient(ctx_size_override=...)`) and any other client sharing the
+same model will fight over the loaded ctx — visible as the reported ctx
+flapping between values across successive `GET /v1/email/init` calls. Do not
+enable `ctx_size` against a Lemonade instance shared with other traffic.
+
+---
+
+## Default model selection
+
+When `EmailAgentConfig.model_id` is unset, the agent no longer defaults
+unconditionally to the GGUF model — it resolves against the Lemonade Server
+it will actually talk to
+([#1439](https://github.com/amd/gaia/issues/1439),
+[`gaia_agent_email/model_select.py`](gaia_agent_email/model_select.py)):
+
+1. Probe that server's `/system-info` for `devices.amd_npu.available`
+   (a short-timeout raw probe — never the SDK's `get_system_info()`, which
+   has no timeout knob and would hang the whole resolution on an
+   unreachable server).
+2. If an AMD NPU is available **and** the NPU-native triage model
+   (`gemma4-it-e2b-FLM`) is already downloaded on that server, resolve to
+   it.
+3. Otherwise — no NPU, NPU present but the model not downloaded, or either
+   probe failing/timing out — resolve to the GGUF default
+   (`Gemma-4-E4B-it-GGUF`).
+
+The resolved id is always exactly one of those two literals; nothing from
+the server response is ever interpolated into it. A successful resolution
+is cached per Lemonade base URL for the life of the process (so a hot REST
+path doesn't re-probe on every request); a failed/timeout probe is never
+cached, so a server that comes up later is picked up on the next call
+rather than being stuck on a cold-start failure.
+
+An explicit `model_id` (`EmailAgentConfig.model_id`, or a caller-supplied
+value) always wins — auto-select only fills in when no preference was
+given. `GET /v1/email/init`'s `model.id` and the model actually used by
+`POST /v1/email/triage` are guaranteed to be the resolved model for the
+same request's `base_url` (both read through the same resolver).
+
+**Auto-selecting the NPU model also switches the agent's memory embedder**
+(`gaia.agents.registry.get_embedding_model_for_device`) to the FLM-native
+embedder when the resolver picks `gemma4-it-e2b-FLM`, so the chat model and
+the embedder stay co-resident on the NPU backend — mixing an NPU chat model
+with the default GGUF/Vulkan embedder would otherwise evict and reload the
+chat model on every turn on shared-memory hardware. Any other resolved
+model keeps the unchanged GGUF embedder default.
+
+**Merge-gate note:** this auto-select is not yet backed by an FLM-variant
+triage-accuracy baseline (`baseline_accuracy_e2b.json` was recorded on the
+GGUF build) — the measurement lands with the consolidated eval pass
+([#1319](https://github.com/amd/gaia/issues/1319)).
