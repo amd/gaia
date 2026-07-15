@@ -326,11 +326,13 @@ The scorecard must move with the agent: when LLM-affecting code changes, the eva
 Two enforcement points work together:
 
 1. **Reject-on-worse (always on, GitHub-hosted).** The `scorecard-gate` job in `release_agent_<id>.yml` runs on every release. It only parses committed files (no eval), so it runs on a standard runner and **fails the build** if the committed scorecard regressed below the prior version or is missing. This is the hard gate.
-2. **Run-and-refresh (self-hosted AMD).** `gaia eval benchmark` needs Lemonade on AMD hardware, so it cannot run on GitHub-hosted runners — it runs on the `[self-hosted, lemonade-eval]` pool. The `Email Agent Eval — scorecard refresh` workflow (`.github/workflows/email_scorecard_refresh.yml`) runs on demand (and on pushes touching the email agent), re-runs the eval, regenerates `SCORECARD.md`, then:
-   - **score ≥ committed** → commits the refreshed scorecard back to the branch (the PR carries the improved number);
-   - **score < committed** → fails loudly (the regression must be investigated, or consciously overridden with `--allow-regression`).
+2. **Run-and-refresh (self-hosted AMD, manual dispatch).** `gaia eval benchmark` needs Lemonade on AMD hardware, so it cannot run on GitHub-hosted runners — it runs on the `[self-hosted, Windows, stx]` pool, serialized against the other evals by the shared `lemonade-eval` concurrency group. The `Email Agent Eval — scorecard refresh` workflow (`.github/workflows/email_scorecard_refresh.yml`) is **`workflow_dispatch`-only** (#2094 — it previously also ran on pushes touching the email agent, but a full eval costs ~10.5h and that trigger never once completed a run), and takes two profiles:
+   - **full** (`limit ≥ 249` **and** `experiments ≥` the committed card's `n_runs`) — reproduces the committed card's methodology and is the **only** profile allowed to commit a refreshed card;
+   - **subset** (`limit < 249`) — an end-to-end smoke run that exercises every step and then **never commits** (a small-sample number is not a valid stand-in for the published figure).
 
-So a PR that changes the agent gets its scorecard refreshed (better) or rejected (worse) automatically on the AMD runner, and the release gate is the backstop on hosted CI. Locally, `gen_scorecard.py` + `scorecard_gate.py` reproduce both steps (see the **`adding-eval-scorecard` skill**).
+   A full run then either **commits** the refreshed card (score clears the absolute bar and shows no regression beyond the recorded noise band) or **fails loudly** (regression, or a card below the acceptance bar / urgent-recall floor from `tests/fixtures/email/quality_gate_thresholds.json`). Before any eval spend, the run also fails fast if its basis (`ctx_size`, `experiments`) differs from the committed card's — unless `rebaseline=true` (with a required `rebaseline_reason`) marks the basis change deliberate.
+
+So the published number always traces to a full-corpus run, and the release gate is the backstop on hosted CI. Locally, `gen_scorecard.py` + `scorecard_gate.py` reproduce both steps (see the **`adding-eval-scorecard` skill**).
 
 <Warning>
   The refresh job needs `contents: write` and runs only on the repo's own branches — a fork PR's `GITHUB_TOKEN` is read-only and cannot auto-commit. For a fork PR, run the eval locally/on AMD hardware and commit the scorecard manually; the release gate still enforces no-regression.
