@@ -736,6 +736,98 @@ def test_install_wheel_only_manifest_unaffected_by_platform_selection(tmp_path):
     assert sentinel.artifact_kind == "wheel"
 
 
+# --- T4b: modern worker shape — wheel-only artifacts[] still routes to pip --
+
+
+def test_install_modern_wheel_only_artifacts_routes_to_pip(tmp_path):
+    # The hub worker writes artifacts: [artifact] for EVERY publish, so a modern
+    # wheel-only agent has an artifacts[] containing exactly one .whl entry (the
+    # same dict as the singular artifact). artifacts[] presence must NOT imply
+    # binary: a wheel/sdist-only artifacts[] selects the wheel and takes pip
+    # regardless of platform_key.
+    manifest = _manifest()
+    version = manifest["latest_version"]
+    manifest["versions"][version]["artifacts"] = [
+        manifest["versions"][version]["artifact"]
+    ]
+    pip_calls = []
+    install(
+        "demo",
+        manifest=manifest,
+        base_url=BASE,
+        fetcher=_make_fetcher(manifest),
+        run_pip=lambda args: pip_calls.append(args),
+        install_root=tmp_path,
+        platform_key="win32-x64",
+    )
+    assert pip_calls and "--target" in pip_calls[0]
+    assert any(str(a).endswith(".whl") for a in pip_calls[0])
+    sentinel = read_sentinel("demo", tmp_path)
+    assert sentinel.artifact_kind == "wheel"
+
+
+# --- T4c: cpp agents with an artifacts[] list behave like the legacy route --
+
+
+def test_install_cpp_with_artifacts_list_uses_singular_zip(tmp_path):
+    # cpp is classified FIRST, before any artifacts[] logic — a cpp manifest that
+    # also carries artifacts[] extracts the singular zip exactly like the legacy
+    # cpp route (mirror of test_install_cpp_artifact_extracted).
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("bin/demo", "binary")
+    archive = buf.getvalue()
+    sha = hashlib.sha256(archive).hexdigest()
+    path = "agents/native/1.0.0/native.zip"
+    artifact = {
+        "filename": "native.zip",
+        "path": path,
+        "size_bytes": len(archive),
+        "sha256": sha,
+        "content_type": "application/zip",
+    }
+    manifest = {
+        "id": "native",
+        "language": "cpp",
+        "latest_version": "1.0.0",
+        "requirements": {"platforms": []},
+        "versions": {
+            "1.0.0": {
+                "version": "1.0.0",
+                "artifact": artifact,
+                "artifacts": [artifact],
+            }
+        },
+    }
+
+    def fetcher(url):
+        if url.endswith("/gaia-agent.yaml"):
+            return b"id: native\n"
+        if url == f"{BASE}/{path}":
+            return archive
+        raise AssertionError(url)
+
+    pip_calls = []
+    result = install(
+        "native",
+        manifest=manifest,
+        base_url=BASE,
+        fetcher=fetcher,
+        run_pip=lambda args: pip_calls.append(args),
+        install_root=tmp_path,
+        platform_key="linux-x64",
+        trust_native=True,
+    )
+    assert result.language == "cpp"
+    assert (tmp_path / "native" / "bin" / "demo").exists()
+    assert pip_calls == []
+    sentinel = read_sentinel("native", tmp_path)
+    assert sentinel.artifact_kind == "cpp"
+
+
 # --- T5: binaries-only manifest, no artifact for platform_key --------------
 
 
