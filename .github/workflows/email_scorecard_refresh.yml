@@ -22,9 +22,10 @@
 # never existed in practice, so removing it costs nothing real, and it stops
 # every push to an email branch from silently queueing for the single serial
 # `lemonade-eval` slot. Regression duty on LLM behavior remains with the
-# weekly `test_email_agent_eval.yml` (itself red as of #2093 -- a separate,
-# already-tracked issue) and the release-time `scorecard-gate` job in
-# `release_agent_email.yml` (parses committed files only, no eval).
+# weekly `test_email_agent_eval.yml` (whose own last scheduled run --
+# 2026-07-13, run 29235382831 -- failed; separate and out of scope here) and
+# the release-time `scorecard-gate` job in `release_agent_email.yml` (parses
+# committed files only, no eval).
 #
 # `workflow_dispatch` now supports TWO profiles, selected by `limit` AND
 # `experiments` together:
