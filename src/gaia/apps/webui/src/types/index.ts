@@ -314,6 +314,15 @@ export interface Message {
     agentSteps?: AgentStep[];
     /** Inference performance stats from the LLM backend. */
     stats?: InferenceStats;
+    /** Structured cards emitted via tool_result.render during this turn
+     *  (issue #2108). Rendered by RenderCard above the markdown content. */
+    cards?: RenderCardData[];
+}
+
+/** One card instance transferred onto a finalized Message (issue #2108). */
+export interface RenderCardData {
+    render: string;
+    data: unknown;
 }
 
 export interface SourceInfo {
@@ -703,4 +712,12 @@ export interface StreamEvent {
         files?: Array<Record<string, unknown>>;
         total?: number;
     };
+    /**
+     * Card render key (issue #2108, additive on `tool_result`). Non-empty
+     * string means the frontend should mount a registered card via
+     * RenderCard against `data`. Absent on every other event type.
+     */
+    render?: string;
+    /** Card payload for `render` (issue #2108, additive on `tool_result`). */
+    data?: unknown;
 }

@@ -111,7 +111,7 @@ describe('CardErrorBoundary', () => {
     });
 
     it('catches a throwing child and renders the fallback alert instead of propagating', () => {
-        function ThrowingComponent() {
+        function ThrowingComponent(): never {
             throw new Error('boom');
         }
 
