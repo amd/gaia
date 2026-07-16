@@ -11,6 +11,11 @@
 import type { ComponentType } from 'react';
 import { EmailPreScanCard, isPreScanPayload } from '../email/EmailPreScanCard';
 import { UnsupportedCard } from './UnsupportedCard';
+import { TableCard } from './TableCard';
+import { KeyValueCard } from './KeyValueCard';
+import { ListCard } from './ListCard';
+import { ImageCard } from './ImageCard';
+import { DiffCard } from './DiffCard';
 
 export type CardComponent = ComponentType<{ data: unknown }>;
 
@@ -44,4 +49,9 @@ function EmailPreScanAdapter({ data }: { data: unknown }) {
 
 export const CARD_REGISTRY: Record<string, CardComponent> = {
     email_pre_scan: EmailPreScanAdapter,
+    table: TableCard,
+    key_value: KeyValueCard,
+    list: ListCard,
+    image: ImageCard,
+    diff: DiffCard,
 };
