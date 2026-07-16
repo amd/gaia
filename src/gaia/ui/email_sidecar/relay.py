@@ -21,9 +21,9 @@ wire, one hop further downstream).
 Events are emitted via direct, pinned ``handler._emit(...)`` shapes — NOT via
 ``SSEOutputHandler.print_streaming_text`` / ``print_tool_usage`` /
 ``pretty_print_json``, which add brace-buffering and tool-registry lookups
-meant for the in-process agent loop and would be wrong (and, once
-``proxy_agent.py``'s ``@tool`` registrations are deleted, label-dead) for
-already-clean events relayed from the sidecar.
+meant for the in-process agent loop and would be label-dead here now that the
+prior in-process ``agent_type=email`` tool-calling loop has been fully
+retired in favor of this relay (#2109).
 
 Cancellation: the relay registers the live (still-open) HTTP response on
 ``handler.active_relay_response`` via ``query_stream``'s ``on_response`` hook
@@ -41,7 +41,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from gaia.logger import get_logger
-from gaia.ui.email_sidecar.errors import SidecarError
+from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.sse_handler import (
     SSEOutputHandler,
     _format_tool_args,
@@ -60,6 +60,17 @@ logger = get_logger(__name__)
 STREAM_ENDED_UNEXPECTEDLY = (
     "Email agent stream ended unexpectedly (the sidecar may have crashed). "
     "Check the sidecar log under ~/.gaia/logs/ and retry."
+)
+
+#: Surfaced both by the dispatch layer's pre-flight version gate (a pre-2.4
+#: Hub binary passes the manager's MAJOR-only handshake, see
+#: ``_chat_helpers._email_query_version_supported``) AND here, as the
+#: backstop when a 404 on ``/query`` itself proves the same thing (the
+#: manager's captured ``api_version`` was missing/stale at pre-flight time).
+#: Both call sites must use this exact string.
+EMAIL_QUERY_VERSION_UPGRADE_MESSAGE = (
+    "The installed email agent doesn't support chat queries (needs contract "
+    "2.4+). Update it from the Hub and retry."
 )
 
 #: Canonical event types that end a ``/query`` run (mirrors
@@ -306,6 +317,7 @@ def relay_query(
 
     terminated = False
     crashed = False
+    crash_message = STREAM_ENDED_UNEXPECTEDLY
     try:
         for event in proxy.query_stream(
             body, read_timeout=read_timeout, on_response=_register_response
@@ -315,6 +327,20 @@ def relay_query(
             if _dispatch_one(handler, event):
                 terminated = True
                 break
+    except SidecarHTTPError as exc:
+        if handler.cancelled.is_set():
+            logger.info(
+                "email relay: stream closed for cancel (run_id=%s): %s", rid, exc
+            )
+        else:
+            crashed = True
+            if exc.status_code == 404:
+                # Backstop for the pre-flight version gate (#2109 Design 3):
+                # a pre-2.4 binary that somehow passed pre-flight (a stale or
+                # missing manager.api_version) 404s here instead — same
+                # actionable message either way.
+                crash_message = EMAIL_QUERY_VERSION_UPGRADE_MESSAGE
+            logger.warning("email relay: stream failed for run_id=%s: %s", rid, exc)
     except Exception as exc:  # noqa: BLE001 - boundary: translate, never raise
         if handler.cancelled.is_set():
             logger.info(
@@ -334,9 +360,13 @@ def relay_query(
         if not terminated:
             handler._emit({"type": "status", "message": "Cancelled."})
     elif crashed or not terminated:
-        handler._emit({"type": "agent_error", "content": STREAM_ENDED_UNEXPECTEDLY})
+        handler._emit({"type": "agent_error", "content": crash_message})
 
     handler.signal_done()
 
 
-__all__ = ["relay_query", "STREAM_ENDED_UNEXPECTEDLY"]
+__all__ = [
+    "relay_query",
+    "STREAM_ENDED_UNEXPECTEDLY",
+    "EMAIL_QUERY_VERSION_UPGRADE_MESSAGE",
+]

@@ -386,6 +386,15 @@ class AgentStepResponse(BaseModel):
     fileList: Optional[FileListResponse] = None
     mcpServer: Optional[str] = None
     latencyMs: Optional[float] = None
+    # Render-map card persistence (#2109): populated ONLY when the source
+    # tool_result event carried a ``render`` kind (e.g. "email_pre_scan") —
+    # render-less tool results keep today's summary-only persistence, a
+    # deliberate retention cap since a full tool payload can carry raw email
+    # bodies. Without these fields pydantic's default extra='ignore' would
+    # silently drop them on every read, so a reload could never rehydrate a
+    # card from history.
+    render: Optional[str] = None
+    data: Optional[Any] = None
 
 
 class InferenceStatsResponse(BaseModel):
