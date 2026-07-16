@@ -19,6 +19,13 @@ function isDiffPayload(value: unknown): value is DiffPayload {
  *  line content (content is untrusted). */
 function lineClass(line: string): string {
     if (line.startsWith('@@')) return 'render-diff__line render-diff__line--hunk';
+    if (
+        line.startsWith('+++') ||
+        line.startsWith('---') ||
+        line.startsWith('diff ') ||
+        line.startsWith('index ')
+    )
+        return 'render-diff__line';
     if (line.startsWith('+')) return 'render-diff__line render-diff__line--added';
     if (line.startsWith('-')) return 'render-diff__line render-diff__line--removed';
     return 'render-diff__line';
