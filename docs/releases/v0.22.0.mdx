@@ -35,7 +35,7 @@ If your code reads `result.draft.body` off a triage response, it now gets a miss
 
 ### RoutingAgent and DocumentQAAgent moved to standalone packages
 
-Both now ship as their own wheels (`gaia-agent-routing`, `gaia-agent-docqa`) and are no longer in the core package. There is **no deprecation shim** — `from gaia.agents.routing.agent import RoutingAgent` and `from gaia.agents.docqa.agent import DocumentQAAgent` will fail. Install the wheel and import from its package instead (PR [#1866](https://github.com/amd/gaia/pull/1866)).
+Both now ship as their own wheels (`gaia-agent-routing`, `gaia-agent-docqa`) and are no longer in the core package. There is **no deprecation shim** — `from gaia.agents.routing.agent import RoutingAgent` and `from gaia.agents.docqa.agent import DocumentQAAgent` will fail. Install the wheel and import from its package instead (PR [#1455](https://github.com/amd/gaia/pull/1455)).
 
 ---
 
