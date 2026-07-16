@@ -602,3 +602,54 @@ def test_cancel_query_other_non_2xx_raises_sidecar_http_error():
         proxy.cancel_query("run-xyz")
     assert ei.value.status_code == 500
     assert "cancelling run" in ei.value.detail
+
+
+class _TimeoutRecordingSession(_Session):
+    """Fake session that also records the ``timeout=`` kwarg per POST, and can
+    raise a transport exception instead of answering."""
+
+    def __init__(self, payload, *, post_raises=None, **kwargs):
+        super().__init__(payload, **kwargs)
+        self.post_timeouts = []
+        self._post_raises = post_raises
+
+    def post(self, url, json=None, timeout=None):
+        self.post_timeouts.append(timeout)
+        if self._post_raises is not None:
+            raise self._post_raises
+        return super().post(url, json=json, timeout=timeout)
+
+
+def test_cancel_query_uses_short_dedicated_timeout_not_general_timeout():
+    # A hung sidecar must not make Cancel as slow as not cancelling: the
+    # cancel POST is best-effort cleanup (the forced response close already
+    # unblocked the relay's reader), so it gets its own short timeout instead
+    # of the general 300s sidecar timeout.
+    sess = _TimeoutRecordingSession({"ok": True})
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess, timeout=300.0)
+    proxy.cancel_query("run-1")
+    assert sess.post_timeouts == [10.0]
+
+
+def test_cancel_query_timeout_is_swallowed_not_raised():
+    import requests
+
+    sess = _TimeoutRecordingSession(
+        {"ok": True}, post_raises=requests.exceptions.Timeout("read timed out")
+    )
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    # Must not raise: the reader is already unblocked; a hung sidecar can't
+    # honour the cancel anyway.
+    assert proxy.cancel_query("run-hung") is None
+
+
+def test_cancel_query_connection_error_is_swallowed_not_raised():
+    import requests
+
+    sess = _TimeoutRecordingSession(
+        {"ok": True},
+        post_raises=requests.exceptions.ConnectionError("connection refused"),
+    )
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    # A dead sidecar has nothing left to cancel — best-effort, never fatal.
+    assert proxy.cancel_query("run-dead") is None

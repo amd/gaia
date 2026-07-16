@@ -37,6 +37,10 @@ _PROVISION_READ_TIMEOUT = 1830.0
 # whole agent-loop run.
 _QUERY_CONNECT_TIMEOUT = 10.0
 
+# Cancel POST timeout: best-effort cleanup must never wait out the general
+# sidecar timeout — a hung sidecar would make Cancel as slow as not cancelling.
+_CANCEL_TIMEOUT = 10.0
+
 
 def _extract_detail(resp) -> str:
     """Pull the sidecar's actionable message from a non-2xx response.
@@ -284,13 +288,33 @@ class EmailSidecarProxy:
     def cancel_query(self, run_id: str) -> None:
         """Cancel an in-flight ``/query`` run.
 
+        Best-effort by design: the caller's forced response close has already
+        unblocked the relay's reader, so this POST uses a short dedicated
+        timeout (never the general 300s sidecar timeout) and swallows
+        transport failures with a log — a hung or dead sidecar can't honour
+        a cancel anyway, and surfacing a transport error AFTER the user
+        cancelled would be noise, not signal.
+
         A 404 means the run already finished by the time the cancel landed —
         benign, log and return rather than raise (mirrors the sidecar's own
         ``cancel_query`` route contract). Any other non-2xx keeps the loud
         :class:`SidecarHTTPError` boundary.
         """
+        import requests
+
         path = f"/v1/email/query/{run_id}/cancel"
-        resp = self._session.post(f"{self.base_url}{path}", timeout=self.timeout)
+        try:
+            resp = self._session.post(
+                f"{self.base_url}{path}", timeout=_CANCEL_TIMEOUT
+            )
+        except requests.exceptions.RequestException as exc:
+            logger.warning(
+                "email sidecar: best-effort cancel for run_id=%s failed at "
+                "transport level (reader already unblocked by forced close): %s",
+                run_id,
+                exc,
+            )
+            return
         if resp.status_code == 404:
             logger.info(
                 "email sidecar: cancel for run_id=%s: no longer in flight (404)",
