@@ -203,6 +203,56 @@ class _ScriptedManager(_FakeManager):
         return self._scripted_proxy
 
 
+def test_card_echo_only_answer_never_persists_raw_echoed_json(monkeypatch):
+    """#2109 inherited-defect fix: a ``final`` whose echo-stripped answer is
+    legitimately empty (the model's whole answer was the render-card JSON
+    echo) must OVERRIDE the chunk-accumulated text — the old
+    ``if answer_content:`` guard kept the raw echoed JSON as the persisted
+    assistant message. Empty is a valid answer."""
+    marker = str(uuid.uuid4())
+    echoed_card = (
+        '{"kind": "email_pre_scan", "marker": "' + marker + '", "total": 3}'
+    )
+    events = [
+        # The model streams its card echo as tokens (chunk noise)...
+        {"type": "token", "delta": echoed_card[:20]},
+        {"type": "token", "delta": echoed_card[20:]},
+        # ...and the final answer is the same echo, which the relay's
+        # echo-strip cleans down to the empty string.
+        {"type": "final", "answer": echoed_card},
+    ]
+    monkeypatch.setattr(
+        manager_module, "get_shared_manager", lambda: _ScriptedManager(events)
+    )
+    monkeypatch.setattr(
+        chat_helpers_module, "_maybe_update_session_title", _noop_retitle
+    )
+
+    db = ChatDatabase(":memory:")
+    session = db.create_session(agent_type="email")
+    request = ChatRequest(
+        session_id=session["id"],
+        message="prescan please",
+        stream=True,
+        agent_type="email",
+    )
+    run = SimpleNamespace(handler=None)
+
+    async def _drive():
+        async for _ in _stream_chat_impl(run, db, session, request):
+            pass
+
+    asyncio.run(_drive())
+
+    messages = db.get_messages(session["id"])
+    assistant = [m for m in messages if m["role"] == "assistant"]
+    assert len(assistant) == 1
+    assert marker not in assistant[0]["content"], (
+        "the raw echoed render-card JSON leaked into the persisted assistant "
+        f"message: {assistant[0]['content']!r}"
+    )
+
+
 def test_email_turn_pushes_exactly_one_done_sentinel(monkeypatch):
     """The turn-level exactly-once sentinel contract, driven through the REAL
     ``relay_query`` (#2109 inherited-defect fix: relay_query used to call

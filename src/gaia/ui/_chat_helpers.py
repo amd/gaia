@@ -2245,9 +2245,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     # while chunks include all intermediate streaming text (planning
                     # sentences, tool call noise, etc.).  Using the answer event
                     # ensures DB storage matches what the MCP client receives.
-                    answer_content = event.get("content", "")
-                    if answer_content:
-                        full_response = answer_content
+                    # Unconditionally: an empty cleaned answer (e.g. a card-echo-
+                    # only email response) is a valid answer — keeping the noisy
+                    # chunk accumulation instead would persist raw echoed JSON.
+                    full_response = event.get("content", "")
                 elif event_type == "chunk":
                     full_response += event.get("content", "")
 
