@@ -107,6 +107,23 @@ def test_undersized_inbox_rejected(tmp_path, corpus):
         bq.load_briefing_corpus(path)
 
 
+def test_empty_corpus_is_rejected(tmp_path):
+    """A corpus that resolves to zero scored cases (empty, or only ``_``-metadata)
+    must raise — never load as a silent zero-case eval (#2121)."""
+    for payload in ("{}", '{"_meta": {"note": "only metadata, no cases"}}'):
+        path = tmp_path / "empty.json"
+        path.write_text(payload, encoding="utf-8")
+        with pytest.raises(ValueError, match="no cases"):
+            bq.load_briefing_corpus(path)
+
+
+def test_generate_briefings_zero_cases_is_loud():
+    """``generate_briefings`` must fail loudly when the limit selects no cases,
+    rather than returning an empty (fast, green) generation list (#2121)."""
+    with pytest.raises(ValueError, match="zero cases"):
+        bq.generate_briefings("stub-model", corpus_path=CORPUS_PATH, limit=0)
+
+
 def test_inbox_slice_drives_the_real_briefing_path(corpus):
     """Every case's inbox must survive the REAL scheduled-briefing path —
     otherwise the live generation stage could not produce an envelope from it.

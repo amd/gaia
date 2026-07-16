@@ -727,6 +727,17 @@ def generate_briefings(
     if limit is not None:
         case_items = case_items[:limit]
 
+    if not case_items:
+        # A zero-case run is the exact signature of a silently-broken eval:
+        # fast, green, and a report with nothing judged. Fail loudly instead of
+        # returning an empty generation list (CLAUDE.md: No Silent Fallbacks).
+        raise ValueError(
+            f"briefing eval resolved to zero cases from {corpus_path} "
+            f"(limit={limit}) — there is nothing to generate or judge. A "
+            "zero-case run must fail loudly, never pass as an empty report. "
+            "Check the corpus and the requested limit."
+        )
+
     if briefing_fn is None:
         # Lazy imports: keep `import gaia.eval.briefing_quality` free of the
         # agent stack. The email agent ships as the standalone
