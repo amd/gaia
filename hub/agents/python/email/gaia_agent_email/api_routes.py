@@ -780,9 +780,12 @@ class EmailTriageService:
         # usage (#1540). Reuses AgentResponse.stats — no new measurement.
         call_stats: List[dict] = list(extra_call_stats) if extra_call_stats else []
 
-        if heuristic.confident:
-            category = EmailCategory(heuristic.category)
-        else:
+        # Escalate to the LLM when the heuristic is unsure of the category OR
+        # abstains on spam (spam_confident=False, where content-based spam
+        # exclusively lives). Mirrors read_tools.py so REST and the agent loop
+        # reach the same verdict on identical input (#2124).
+        llm_result: Optional[dict] = None
+        if not heuristic.confident or not heuristic.spam_confident:
             llm_result = classify_email_llm(
                 chat,
                 subject=subject,
@@ -791,7 +794,17 @@ class EmailTriageService:
                 collect_stats=call_stats,
                 context=context,
             )
+
+        if heuristic.confident:
+            category = EmailCategory(heuristic.category)
+        else:
             category = EmailCategory(llm_result["category"])
+
+        # Heuristic wins only when spam-confident; otherwise the LLM decides.
+        if heuristic.spam_confident:
+            is_spam = heuristic.is_spam
+        else:
+            is_spam = bool(llm_result.get("is_spam", heuristic.is_spam))
 
         llm_summary = summarize_email_llm(
             chat,
@@ -808,7 +821,7 @@ class EmailTriageService:
             subject=subject,
             reply_to=reply_to,
             principal=principal,
-            is_spam=heuristic.is_spam,
+            is_spam=is_spam,
             is_phishing=heuristic.is_phishing,
         )
         suggested_action = (
@@ -818,7 +831,7 @@ class EmailTriageService:
         ) or default_action_for(category.value)
         return EmailTriageResult(
             category=category,
-            is_spam=heuristic.is_spam,
+            is_spam=is_spam,
             is_phishing=heuristic.is_phishing,
             summary=summary,
             action_items=action_items,
