@@ -740,9 +740,9 @@ def test_cross_thread_close_unblocks_parked_read_promptly_real_socket():
         worker = threading.Thread(target=_consume, daemon=True)
         worker.start()
 
-        assert first_event_seen.wait(timeout=5.0), (
-            "never received the first SSE event from the real server"
-        )
+        assert first_event_seen.wait(
+            timeout=5.0
+        ), "never received the first SSE event from the real server"
 
         # The PRODUCTION closer, exactly as the /api/chat/cancel route and the
         # streaming generator's orphan cleanup invoke it.
@@ -766,9 +766,9 @@ def test_cross_thread_close_unblocks_parked_read_promptly_real_socket():
             "the relay cancel design's core assumption is broken on this "
             "platform"
         )
-        assert outcome["t_done"] - t_close < 3.0, (
-            f"unblocking took {outcome['t_done'] - t_close:.2f}s — not prompt"
-        )
+        assert (
+            outcome["t_done"] - t_close < 3.0
+        ), f"unblocking took {outcome['t_done'] - t_close:.2f}s — not prompt"
         assert events == [{"type": "status", "message": "started"}]
     finally:
         park.set()

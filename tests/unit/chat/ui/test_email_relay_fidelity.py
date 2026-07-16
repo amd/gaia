@@ -210,9 +210,7 @@ def test_card_echo_only_answer_never_persists_raw_echoed_json(monkeypatch):
     ``if answer_content:`` guard kept the raw echoed JSON as the persisted
     assistant message. Empty is a valid answer."""
     marker = str(uuid.uuid4())
-    echoed_card = (
-        '{"kind": "email_pre_scan", "marker": "' + marker + '", "total": 3}'
-    )
+    echoed_card = '{"kind": "email_pre_scan", "marker": "' + marker + '", "total": 3}'
     events = [
         # The model streams its card echo as tokens (chunk noise)...
         {"type": "token", "delta": echoed_card[:20]},

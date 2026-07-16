@@ -310,9 +310,7 @@ class EmailSidecarProxy:
 
         path = f"/v1/email/query/{run_id}/cancel"
         try:
-            resp = self._session.post(
-                f"{self.base_url}{path}", timeout=_CANCEL_TIMEOUT
-            )
+            resp = self._session.post(f"{self.base_url}{path}", timeout=_CANCEL_TIMEOUT)
         except requests.exceptions.RequestException as exc:
             logger.warning(
                 "email sidecar: best-effort cancel for run_id=%s failed at "

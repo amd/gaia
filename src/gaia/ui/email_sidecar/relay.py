@@ -112,6 +112,7 @@ def _augment_error_detail(detail: str) -> str:
         return detail + LEMONADE_CONNECTION_HINT
     return detail
 
+
 #: Mutating email tools that execute WITHOUT confirmation under ``/query``
 #: (``CONFIRMATION_REQUIRED_TOOLS`` gates only send/RSVP/forward/
 #: permanent-delete/quarantine/calendar-create — see

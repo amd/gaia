@@ -413,9 +413,9 @@ class TestCanonicalEventShapes:
         assert len(handler.events) == 1
         content = handler.events[0]["content"]
         assert handler.events[0]["type"] == "agent_error"
-        assert content.startswith(raw_detail), (
-            "the original error text must be preserved verbatim at the front"
-        )
+        assert content.startswith(
+            raw_detail
+        ), "the original error text must be preserved verbatim at the front"
         assert content != raw_detail, "no hint was appended"
         assert relay.LEMONADE_CONNECTION_HINT in content
 
