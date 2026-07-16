@@ -1013,6 +1013,39 @@ def _find_last_tool_step(steps: list) -> dict | None:
     return None
 
 
+# Remediation copy for a turn that produced no answer at all — reserved for a
+# genuine backend failure, never a deliberate cancel or an intentionally-empty
+# final (see _empty_answer_outcome).
+_EMPTY_ANSWER_LEMONADE_MSG = (
+    "I wasn't able to generate a response. Please make sure Lemonade Server "
+    "is running and try again."
+)
+
+
+def _empty_answer_outcome(
+    turn_cancelled: bool, has_steps: bool
+) -> tuple[str, str, bool]:
+    """Classify a chat turn that ended with no answer text, for the shared
+    persistence tail's empty-``full_response`` branch.
+
+    Returns ``(content, sse_type, keep_steps)``:
+      * cancelled → ``("Cancelled.", "done", True)`` — a user Stop, not a
+        failure; keep the tool steps executed before the cancel and don't
+        blame Lemonade.
+      * no answer but steps/cards were produced → ``("", "done", True)`` — a
+        legitimately-empty final (e.g. the whole final turn was an echoed
+        render card the echo-guard stripped to empty); persist empty content
+        but keep the steps/cards so nothing is lost on rehydration.
+      * genuinely nothing → ``(<lemonade copy>, "error", False)`` — no answer,
+        no cancel, no steps: the only case that warrants the Lemonade copy.
+    """
+    if turn_cancelled:
+        return "Cancelled.", "done", True
+    if has_steps:
+        return "", "done", True
+    return _EMPTY_ANSWER_LEMONADE_MSG, "error", False
+
+
 # Tight timeout for pre-flight load_model. The default Lemonade
 # DEFAULT_MODEL_LOAD_TIMEOUT is 12000 s (200 min) — a hung Lemonade
 # would block the chat thread that long. Cold-load of a 4B GGUF on
@@ -2336,6 +2369,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     yield status_data
                 continue
 
+        # Capture an explicit Stop BEFORE our own cleanup sets the same flag.
+        # Only run_manager.cancel() sets ``cancelled`` before this point, so a
+        # True here means the user hit Stop (not a normal completion).
+        turn_cancelled = sse_handler.cancelled.is_set()
+
         # Signal cancellation (handles client disconnect) then wait for producer.
         _cleanup_stream()
 
@@ -2517,8 +2555,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         else:
             # Log details to help diagnose: cold start, empty LLM response, filtered artifacts
             logger.warning(
-                "Empty response for session %s — result_holder answer=%r error=%r captured_steps=%d",
+                "Empty response for session %s — cancelled=%s result_holder answer=%r error=%r captured_steps=%d",
                 session_id[:8],
+                turn_cancelled,
                 (
                     result_holder.get("answer", "")[:80]
                     if result_holder.get("answer")
@@ -2527,10 +2566,32 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 result_holder.get("error"),
                 len(captured_steps),
             )
-            error_msg = "I wasn't able to generate a response. Please make sure Lemonade Server is running and try again."
-            db.add_message(request.session_id, "assistant", error_msg)
-            error_data = json.dumps({"type": "error", "content": error_msg})
-            yield f"data: {error_data}\n\n"
+            # Distinguish a deliberate cancel and a legitimately-empty final
+            # (e.g. a card-echo the echo-guard stripped) from a genuine backend
+            # failure — only the last warrants the Lemonade copy, and the first
+            # two must keep the steps/cards taken before the empty answer.
+            content, sse_type, keep_steps = _empty_answer_outcome(
+                turn_cancelled, bool(captured_steps)
+            )
+            steps_to_persist = (
+                captured_steps if (keep_steps and captured_steps) else None
+            )
+            if sse_type == "error":
+                db.add_message(request.session_id, "assistant", content)
+                yield f"data: {json.dumps({'type': 'error', 'content': content})}\n\n"
+            else:
+                msg_id = db.add_message(
+                    request.session_id,
+                    "assistant",
+                    content,
+                    agent_steps=steps_to_persist,
+                )
+                done_event = {
+                    "type": "done",
+                    "message_id": msg_id,
+                    "content": content,
+                }
+                yield f"data: {json.dumps(done_event)}\n\n"
 
     except Exception as e:
         logger.error("Chat streaming error: %s", e, exc_info=True)
