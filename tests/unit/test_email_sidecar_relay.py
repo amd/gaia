@@ -381,7 +381,7 @@ class TestCanonicalEventShapes:
         proxy = _ScriptedProxy(_events({"type": "final", "answer": "All done."}))
         relay.relay_query(handler, proxy, query="q", context=[])
         assert handler.events == [{"type": "answer", "content": "All done."}]
-        assert handler.done_calls == 1
+        assert handler.done_calls == 0  # the caller owns the turn-level sentinel
 
     def test_error_event_emits_agent_error_verbatim(self):
         handler = _FakeHandler()
@@ -390,7 +390,7 @@ class TestCanonicalEventShapes:
         )
         relay.relay_query(handler, proxy, query="q", context=[])
         assert handler.events == [{"type": "agent_error", "content": "Lemonade down"}]
-        assert handler.done_calls == 1
+        assert handler.done_calls == 0  # the caller owns the turn-level sentinel
 
     def test_unrecognized_type_emits_status_naming_the_type(self):
         handler = _FakeHandler()
@@ -476,7 +476,7 @@ class TestStreamFailureHandling:
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
         assert agent_errors[0]["content"] == relay.STREAM_ENDED_UNEXPECTEDLY
-        assert handler.done_calls == 1
+        assert handler.done_calls == 0  # the caller owns the turn-level sentinel
         assert handler.active_relay_response is None
 
     def test_crash_with_zero_events_before_raise(self):
@@ -488,7 +488,7 @@ class TestStreamFailureHandling:
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
         assert agent_errors[0]["content"] == relay.STREAM_ENDED_UNEXPECTEDLY
-        assert handler.done_calls == 1
+        assert handler.done_calls == 0  # the caller owns the turn-level sentinel
 
     def test_generator_exhausted_without_terminal_event(self):
         handler = _FakeHandler()
@@ -502,7 +502,7 @@ class TestStreamFailureHandling:
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
         assert agent_errors[0]["content"] == relay.STREAM_ENDED_UNEXPECTEDLY
-        assert handler.done_calls == 1
+        assert handler.done_calls == 0  # the caller owns the turn-level sentinel
 
     def test_exception_never_propagates_out_of_relay_query(self):
         handler = _FakeHandler()
@@ -545,7 +545,7 @@ class TestCancellationMidStream:
         proxy = _ScriptedProxy(_source, cancel_raises=SidecarError("cancel failed"))
         # Must not raise even though proxy.cancel_query raises SidecarError.
         relay.relay_query(handler, proxy, query="q", context=[])
-        assert handler.done_calls == 1
+        assert handler.done_calls == 0  # the caller owns the turn-level sentinel
         assert handler.active_relay_response is None
 
 

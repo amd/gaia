@@ -104,7 +104,8 @@ def test_email_relay_fidelity_end_to_end(monkeypatch):
             }
         )
         handler._emit({"type": "answer", "content": answer_text})
-        handler.signal_done()
+        # NB: no signal_done() here — the real relay_query never signals; the
+        # turn-level sentinel is owned by _run_agent's outer finally.
 
     monkeypatch.setattr(manager_module, "get_shared_manager", lambda: _FakeManager())
     monkeypatch.setattr(relay_module, "relay_query", _fake_relay_query)
@@ -168,6 +169,96 @@ def test_email_relay_fidelity_end_to_end(monkeypatch):
         "A render-less tool_result must not gain a 'data' key at all — "
         f"got {list_inbox_step!r}"
     )
+
+
+class _ScriptedQueryProxy:
+    """Fake sidecar proxy whose /query stream is a fixed canonical script —
+    used with the REAL ``relay_query`` (nothing in the relay is patched)."""
+
+    def __init__(self, events):
+        self._events = list(events)
+
+    def init(self):
+        return 200, {}
+
+    def query_stream(self, body, *, read_timeout=300.0, on_response=None):
+        if on_response is not None:
+            on_response(_ClosableResp())
+        return iter(self._events)
+
+    def cancel_query(self, run_id):  # pragma: no cover - not hit in this test
+        return None
+
+
+class _ClosableResp:
+    def close(self):
+        pass
+
+
+class _ScriptedManager(_FakeManager):
+    def __init__(self, events):
+        self._scripted_proxy = _ScriptedQueryProxy(events)
+
+    def proxy(self):
+        return self._scripted_proxy
+
+
+def test_email_turn_pushes_exactly_one_done_sentinel(monkeypatch):
+    """The turn-level exactly-once sentinel contract, driven through the REAL
+    ``relay_query`` (#2109 inherited-defect fix: relay_query used to call
+    ``signal_done()`` itself AND ``_run_agent``'s outer ``finally`` fired a
+    second one — masked because the consumer breaks on the first ``None``,
+    leaving a stray sentinel in the queue)."""
+    events = [
+        {"type": "token", "delta": "Hi"},
+        {"type": "final", "answer": "Hi there"},
+    ]
+    monkeypatch.setattr(
+        manager_module, "get_shared_manager", lambda: _ScriptedManager(events)
+    )
+    monkeypatch.setattr(
+        chat_helpers_module, "_maybe_update_session_title", _noop_retitle
+    )
+
+    db = ChatDatabase(":memory:")
+    session = db.create_session(agent_type="email")
+    request = ChatRequest(
+        session_id=session["id"],
+        message="hello",
+        stream=True,
+        agent_type="email",
+    )
+    run = SimpleNamespace(handler=None)
+
+    async def _drive():
+        async for _ in _stream_chat_impl(run, db, session, request):
+            pass
+
+    asyncio.run(_drive())
+
+    # The consumer loop already broke on the first None sentinel, and
+    # _cleanup_stream joined the producer — so anything still in the queue is
+    # a stray. A second signal_done would have left a second None here.
+    import queue as _queue
+
+    leftovers = []
+    while True:
+        try:
+            leftovers.append(run.handler.event_queue.get_nowait())
+        except _queue.Empty:
+            break
+    stray_sentinels = [e for e in leftovers if e is None]
+    assert stray_sentinels == [], (
+        f"expected exactly one done sentinel per turn (consumed by the "
+        f"stream loop); found {len(stray_sentinels)} stray sentinel(s) left "
+        f"in the queue — signal_done was called more than once"
+    )
+
+    # Sanity: the turn itself completed normally.
+    messages = db.get_messages(session["id"])
+    assistant = [m for m in messages if m["role"] == "assistant"]
+    assert len(assistant) == 1
+    assert assistant[0]["content"] == "Hi there"
 
 
 if __name__ == "__main__":

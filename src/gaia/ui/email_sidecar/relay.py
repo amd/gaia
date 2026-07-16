@@ -303,7 +303,10 @@ def relay_query(
     retryable Lemonade error, triggering a bogus model reload. Sidecar
     exceptions must never reach it.
 
-    Always calls ``handler.signal_done()`` exactly once, on every path.
+    Never calls ``handler.signal_done()`` — the turn-level done sentinel is
+    owned by the caller (``_run_agent``'s outer ``finally``), exactly as for
+    every other agent branch. Relay-level signalling would push a second
+    ``None`` sentinel per turn, violating the queue's exactly-once contract.
     """
     rid = run_id or str(uuid.uuid4())
     body: Dict[str, Any] = {"query": query, "run_id": rid, "context": context}
@@ -374,8 +377,6 @@ def relay_query(
             handler._emit({"type": "status", "message": "Cancelled."})
     elif crashed or not terminated:
         handler._emit({"type": "agent_error", "content": crash_message})
-
-    handler.signal_done()
 
 
 __all__ = [
