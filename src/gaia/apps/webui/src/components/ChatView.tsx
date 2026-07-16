@@ -850,6 +850,22 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     return;
                 }
 
+                // ── Stateless confirmation card (email /query, #2109 D1) ──
+                // Informational: the sidecar run is already over, so this is
+                // a chat-flow card via the generic #2108 mechanism — NEVER
+                // the blocking PermissionPrompt/confirm_id path above. Only
+                // {action, summary} cross over; no run_id passthrough.
+                if (event.type === 'needs_confirmation') {
+                    appendCard({
+                        render: 'needs_confirmation',
+                        data: {
+                            action: typeof event.action === 'string' ? event.action : '',
+                            summary: typeof event.summary === 'string' ? event.summary : '',
+                        },
+                    });
+                    return;
+                }
+
                 if (event.type === 'policy_alert') {
                     const toolName = event.tool || 'unknown tool';
                     const reason =

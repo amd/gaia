@@ -637,6 +637,7 @@ export type StreamEventType =
     | 'answer'       // Final answer from agent
     | 'agent_error'  // Agent-level error (non-fatal)
     | 'permission_request' // Tool confirmation request
+    | 'needs_confirmation' // Stateless confirmation card (email /query, #2109) — informational, non-blocking
     | 'policy_alert' // Governance policy blocked a tool
     | 'mcp_status'   // MCP server connection status update
     | 'agent_created'; // New agent created — triggers agent list refresh
@@ -679,6 +680,8 @@ export interface StreamEvent {
     agent_id?: string;
     /** Confirmation ID (for tool_confirm events). */
     confirm_id?: string;
+    /** Machine tool name a confirmation is about (for needs_confirmation events). */
+    action?: string;
     /** Timeout in seconds (for tool_confirm events). */
     timeout_seconds?: number;
     /** MCP server name (for tool_start of MCP tools). */
