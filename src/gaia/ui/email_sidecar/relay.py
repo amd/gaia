@@ -77,6 +77,41 @@ EMAIL_QUERY_VERSION_UPGRADE_MESSAGE = (
 #: ``gaia_agent_email.sse_translation.TERMINAL_TYPES``).
 _TERMINAL_TYPES = frozenset({"final", "error"})
 
+#: Appended — never replacing the original text — to a terminal ``error``
+#: detail that looks like a connection/timeout failure. The sidecar emits
+#: ``str(exc)`` verbatim, so its most common failure (Lemonade Server down)
+#: otherwise reaches the user as a raw urllib3 repr with no next step.
+#: Root fix (actionable copy sidecar-side) ships via the agent release
+#: pipeline, not this repo — see the #2109 PR notes.
+LEMONADE_CONNECTION_HINT = (
+    "\n\nThis usually means the local LLM backend (Lemonade Server) is not "
+    "running or unreachable from the email agent. Start Lemonade Server, "
+    "then retry."
+)
+
+#: Connection/timeout-shaped fragments of requests/urllib3 error reprs.
+#: Deliberately narrow: a non-match passes through untouched.
+_CONNECTION_SHAPED_RE = re.compile(
+    r"connection\s+(?:refused|reset|aborted|error)"
+    r"|connectionerror"
+    r"|connectionpool"
+    r"|failed to establish a new connection"
+    r"|max retries exceeded"
+    r"|newconnectionerror"
+    r"|(?:read |connect(?:ion)? )?timed?\s*out"
+    r"|timeout",
+    re.IGNORECASE,
+)
+
+
+def _augment_error_detail(detail: str) -> str:
+    """Append (never substitute) an actionable hint to connection-shaped
+    error text — boundary translation, not a fallback: the original detail
+    is preserved verbatim at the front."""
+    if _CONNECTION_SHAPED_RE.search(detail):
+        return detail + LEMONADE_CONNECTION_HINT
+    return detail
+
 #: Mutating email tools that execute WITHOUT confirmation under ``/query``
 #: (``CONFIRMATION_REQUIRED_TOOLS`` gates only send/RSVP/forward/
 #: permanent-delete/quarantine/calendar-create — see
@@ -263,7 +298,9 @@ def _dispatch_one(handler: Any, event: Dict[str, Any]) -> bool:
 
     elif etype == "error":
         detail = event.get("detail") or "Unknown error from the email agent."
-        handler._emit({"type": "agent_error", "content": str(detail)})
+        handler._emit(
+            {"type": "agent_error", "content": _augment_error_detail(str(detail))}
+        )
         return True
 
     else:
@@ -383,4 +420,5 @@ __all__ = [
     "relay_query",
     "STREAM_ENDED_UNEXPECTEDLY",
     "EMAIL_QUERY_VERSION_UPGRADE_MESSAGE",
+    "LEMONADE_CONNECTION_HINT",
 ]

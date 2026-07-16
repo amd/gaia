@@ -392,6 +392,58 @@ class TestCanonicalEventShapes:
         assert handler.events == [{"type": "agent_error", "content": "Lemonade down"}]
         assert handler.done_calls == 0  # the caller owns the turn-level sentinel
 
+    def test_connection_shaped_error_detail_gains_actionable_hint_appended(self):
+        # The sidecar emits str(exc) verbatim, so the most common consumer
+        # failure (Lemonade Server down) arrives as a raw urllib3/requests
+        # repr. The relay APPENDS an actionable hint — it must never replace
+        # or truncate the original text.
+        raw_detail = (
+            "local LLM query failed: HTTPConnectionPool(host='localhost', "
+            "port=13305): Max retries exceeded with url: "
+            "/api/v1/chat/completions (Caused by NewConnectionError("
+            "'<urllib3.connection.HTTPConnection object at 0x104a4b910>: "
+            "Failed to establish a new connection: [Errno 61] Connection "
+            "refused'))"
+        )
+        handler = _FakeHandler()
+        proxy = _ScriptedProxy(
+            _events({"type": "error", "detail": raw_detail, "status": 500})
+        )
+        relay.relay_query(handler, proxy, query="q", context=[])
+        assert len(handler.events) == 1
+        content = handler.events[0]["content"]
+        assert handler.events[0]["type"] == "agent_error"
+        assert content.startswith(raw_detail), (
+            "the original error text must be preserved verbatim at the front"
+        )
+        assert content != raw_detail, "no hint was appended"
+        assert relay.LEMONADE_CONNECTION_HINT in content
+
+    def test_timeout_shaped_error_detail_gains_actionable_hint_appended(self):
+        raw_detail = (
+            "local LLM query failed: HTTPConnectionPool(host='localhost', "
+            "port=13305): Read timed out. (read timeout=300)"
+        )
+        handler = _FakeHandler()
+        proxy = _ScriptedProxy(
+            _events({"type": "error", "detail": raw_detail, "status": 500})
+        )
+        relay.relay_query(handler, proxy, query="q", context=[])
+        content = handler.events[0]["content"]
+        assert content.startswith(raw_detail)
+        assert relay.LEMONADE_CONNECTION_HINT in content
+
+    def test_non_connection_error_detail_gets_no_hint(self):
+        # A logic/validation error must pass through untouched — the hint is
+        # for connection/timeout-shaped failures only.
+        raw_detail = "tool 'summarize_thread' failed: KeyError: 'thread_id'"
+        handler = _FakeHandler()
+        proxy = _ScriptedProxy(
+            _events({"type": "error", "detail": raw_detail, "status": 500})
+        )
+        relay.relay_query(handler, proxy, query="q", context=[])
+        assert handler.events == [{"type": "agent_error", "content": raw_detail}]
+
     def test_unrecognized_type_emits_status_naming_the_type(self):
         handler = _FakeHandler()
         proxy = _ScriptedProxy(
