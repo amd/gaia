@@ -1122,6 +1122,40 @@ class TestSignalDone:
 
 
 # ===========================================================================
+# close_active_relay_response (#2109 email-relay cancel seam)
+# ===========================================================================
+
+
+class TestCloseActiveRelayResponse:
+    """The forced-close seam prefers socket.shutdown() (real responses) and
+    falls back to a clean close() for anything without a peelable socket —
+    mocked responses, already-released connections."""
+
+    def test_noop_when_no_active_response(self, handler):
+        handler.close_active_relay_response()  # must not raise
+
+    def test_non_socket_response_falls_back_to_close(self, handler):
+        class _MockResp:
+            closed = False
+
+            def close(self):
+                self.closed = True
+
+        resp = _MockResp()
+        handler.active_relay_response = resp
+        handler.close_active_relay_response()
+        assert resp.closed is True
+
+    def test_close_failure_is_swallowed_never_fatal(self, handler):
+        class _ExplodingResp:
+            def close(self):
+                raise RuntimeError("already torn down")
+
+        handler.active_relay_response = _ExplodingResp()
+        handler.close_active_relay_response()  # must not raise
+
+
+# ===========================================================================
 # _format_tool_args
 # ===========================================================================
 
