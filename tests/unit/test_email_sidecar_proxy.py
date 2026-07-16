@@ -6,7 +6,7 @@ import importlib.util
 
 import pytest
 
-from gaia.ui.email_sidecar.errors import SidecarHTTPError
+from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.email_sidecar.proxy import EmailSidecarProxy
 
 
@@ -426,3 +426,179 @@ def test_live_triage_roundtrip_through_manager_proxy(monkeypatch):
                 proxy.triage(body)
             assert ei.value.status_code == 502
             assert "triage failed" in ei.value.detail.lower()
+
+
+# -- query_stream / cancel_query (#2109 query relay, not yet implemented) --------
+
+
+class _SSERespLines:
+    """Fake ``requests`` streamed response exposing ``iter_lines()`` (SSE shape).
+
+    Mirrors ``_StreamResp`` above but yields whole lines (some blank, per SSE
+    double-newline framing) instead of raw content chunks.
+    """
+
+    def __init__(self, lines, status=200, *, payload=None):
+        self.status_code = status
+        self.headers = {"Content-Type": "text/event-stream"}
+        self._lines = lines
+        self._payload = payload
+        self.text = str(payload) if payload is not None else ""
+        self.closed = False
+
+    def iter_lines(self):
+        yield from self._lines
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("not json")
+        return self._payload
+
+    def close(self):
+        self.closed = True
+
+
+def test_query_stream_posts_to_query_route_with_connect_and_read_timeout():
+    # #2109: the connect timeout is fixed at 10s regardless of the general
+    # sidecar timeout; the read timeout is the caller-supplied read_timeout.
+    resp = _SSERespLines([b'data: {"type": "final", "answer": "ok"}'])
+    sess = _StreamSession(resp)
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess, timeout=60.0)
+    list(proxy.query_stream({"question": "hi"}, read_timeout=5.0))
+    url, kwargs = sess.posts[0]
+    assert url == "http://127.0.0.1:9100/v1/email/query"
+    assert kwargs["json"] == {"question": "hi"}
+    assert kwargs["stream"] is True
+    assert kwargs["timeout"] == (10.0, 5.0)
+
+
+def test_query_stream_default_read_timeout_is_300():
+    resp = _SSERespLines([b'data: {"type": "final", "answer": "ok"}'])
+    sess = _StreamSession(resp)
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    list(proxy.query_stream({}))
+    assert sess.posts[0][1]["timeout"] == (10.0, 300.0)
+
+
+def test_query_stream_non_2xx_raises_before_any_event_and_closes():
+    # Mirrors test_provision_unexpected_status_raises_loudly_and_closes: the
+    # sidecar's actionable detail must survive, raised before any event escapes.
+    resp = _SSERespLines(
+        [b'data: {"type": "status", "message": "should not appear"}'],
+        status=502,
+        payload={"detail": "local LLM query failed: Lemonade not reachable"},
+    )
+    sess = _StreamSession(resp)
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    with pytest.raises(SidecarHTTPError) as ei:
+        list(proxy.query_stream({"question": "hi"}))
+    assert ei.value.status_code == 502
+    assert "Lemonade not reachable" in ei.value.detail
+    assert resp.closed
+
+
+def test_query_stream_yields_parsed_events_in_order_skipping_blank_lines():
+    lines = [
+        b'data: {"type": "status", "message": "hi"}',
+        b"",
+        b'data: {"type": "final", "answer": "done"}',
+        b"",
+    ]
+    resp = _SSERespLines(lines)
+    sess = _StreamSession(resp)
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    events = list(proxy.query_stream({"question": "hi"}))
+    assert events == [
+        {"type": "status", "message": "hi"},
+        {"type": "final", "answer": "done"},
+    ]
+    assert resp.closed
+
+
+def test_query_stream_closes_response_when_exhausted():
+    resp = _SSERespLines([b'data: {"type": "final", "answer": "done"}'])
+    sess = _StreamSession(resp)
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    assert list(proxy.query_stream({})) == [{"type": "final", "answer": "done"}]
+    assert resp.closed
+
+
+def test_query_stream_malformed_json_line_raises_loudly_and_stops():
+    # A malformed SSE data line must raise loudly, not be swallowed into a
+    # placeholder event -- and the generator must not yield anything further.
+    lines = [
+        b'data: {"type": "status", "message": "hi"}',
+        b"",
+        b"data: {not json",
+    ]
+    resp = _SSERespLines(lines)
+    sess = _StreamSession(resp)
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    gen = proxy.query_stream({"question": "hi"})
+    first = next(gen)
+    assert first == {"type": "status", "message": "hi"}
+    with pytest.raises((SidecarError, ValueError)):
+        next(gen)
+    # Once the exception has propagated out of the generator it is closed --
+    # no placeholder event, no silent resumption.
+    with pytest.raises(StopIteration):
+        next(gen)
+
+
+def test_query_stream_on_response_called_lazily_before_first_event_exactly_once():
+    # Cross-thread cancel plumbing: on_response hands the live response object
+    # to the caller (so a cancel from another thread can call resp.close())
+    # before the first event is yielded -- but generators are lazy, so nothing
+    # runs until the first next()/iteration.
+    lines = [
+        b'data: {"type": "status", "message": "hi"}',
+        b"",
+        b'data: {"type": "final", "answer": "done"}',
+    ]
+    resp = _SSERespLines(lines)
+    sess = _StreamSession(resp)
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+
+    calls = []
+    gen = proxy.query_stream({"question": "hi"}, on_response=calls.append)
+
+    # Constructing the generator must not execute any body code yet.
+    assert calls == []
+
+    first = next(gen)
+    assert first == {"type": "status", "message": "hi"}
+    assert len(calls) == 1
+    assert calls[0] is resp
+    assert hasattr(calls[0], "close")
+
+    remaining = list(gen)
+    assert remaining == [{"type": "final", "answer": "done"}]
+    # Draining the rest of the stream must not invoke the callback again.
+    assert len(calls) == 1
+
+
+def test_cancel_query_posts_to_correct_url_and_returns_none_on_2xx():
+    sess = _Session({"ok": True})
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    result = proxy.cancel_query("run-123")
+    assert result is None
+    assert sess.posts[0][0] == "http://127.0.0.1:9100/v1/email/query/run-123/cancel"
+
+
+def test_cancel_query_404_is_benign_and_returns_none():
+    # The run already finished by the time the cancel lands -- not an error.
+    err = _Resp({"detail": "run not found"}, status=404)
+    sess = _Session(None, resp=err)
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    result = proxy.cancel_query("run-already-done")
+    assert result is None
+
+
+def test_cancel_query_other_non_2xx_raises_sidecar_http_error():
+    err = _Resp({"detail": "internal error cancelling run"}, status=500)
+    sess = _Session(None, resp=err)
+    proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
+    with pytest.raises(SidecarHTTPError) as ei:
+        proxy.cancel_query("run-xyz")
+    assert ei.value.status_code == 500
+    assert "cancelling run" in ei.value.detail
