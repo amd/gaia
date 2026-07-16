@@ -914,6 +914,26 @@ class SSEOutputHandler(OutputHandler):
             self._confirm_event.set()
         return True
 
+    def close_active_relay_response(self) -> None:
+        """Force-close a live email-relay HTTP response, if any (#2109).
+
+        A between-events ``cancelled`` check alone cannot interrupt a relay
+        worker thread parked in a blocking socket read — this is the other
+        half of that seam: called from the cancel path (both the explicit
+        ``/api/chat/cancel`` endpoint and the streaming generator's orphan
+        cleanup) right after ``cancelled.set()``, closing the response forces
+        the blocked read to error out promptly instead of waiting out its
+        full ``read_timeout``.
+        """
+        resp = self.active_relay_response
+        if resp is not None:
+            try:
+                resp.close()
+            except Exception:  # noqa: BLE001 - best-effort cleanup, never fatal
+                logger.debug(
+                    "email relay: failed to close active response", exc_info=True
+                )
+
     def request_user_input_blocking(
         self,
         message: str,

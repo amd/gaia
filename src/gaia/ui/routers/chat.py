@@ -262,6 +262,9 @@ async def cancel_stream(request: CancelStreamRequest):
             status_code=404, detail="No active chat session found for this session ID"
         )
     handler.cancelled.set()
+    # #2109: an email-relay turn can be parked in a blocking socket read that
+    # the cancelled flag alone can't interrupt — force it to error out now.
+    handler.close_active_relay_response()
     return {"status": "ok", "cancelled": True}
 
 
