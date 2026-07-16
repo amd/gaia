@@ -4,7 +4,7 @@
 /** Zustand store for GAIA Agent UI state. */
 
 import { create } from 'zustand';
-import type { Session, Message, Document, AgentStep, SystemStatus, AgentInfo } from '../types';
+import type { Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData } from '../types';
 
 interface ChatState {
     // Agents
@@ -71,6 +71,14 @@ interface ChatState {
     /** Update the last tool step (not the absolute last step). */
     updateLastToolStep: (updates: Partial<AgentStep>) => void;
     clearAgentSteps: () => void;
+
+    // Structured cards from tool_result.render events (issue #2108).
+    // Accumulated during the stream, transferred onto the finalized
+    // Message by ChatView (onDone/handleStop), then cleared — mirroring
+    // the agentSteps lifecycle exactly.
+    cards: RenderCardData[];
+    appendCard: (card: RenderCardData) => void;
+    clearCards: () => void;
 
     // Documents
     documents: Document[];
@@ -210,7 +218,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set((state) => ({ streamingContent: state.streamingContent + content })),
     setStreamContent: (content) => set({ streamingContent: content }),
     clearStreamContent: () => set({ streamingContent: '' }),
-    resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [] }),
+    resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [], cards: [] }),
 
     // Agent activity
     agentSteps: [],
@@ -257,6 +265,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
             return state;
         }),
     clearAgentSteps: () => set({ agentSteps: [] }),
+
+    // Streaming cards (#2108)
+    cards: [],
+    appendCard: (card) =>
+        set((state) => ({ cards: [...state.cards, card] })),
+    clearCards: () => set({ cards: [] }),
 
     // Documents
     documents: [],

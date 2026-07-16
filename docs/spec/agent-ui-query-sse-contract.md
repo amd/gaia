@@ -234,6 +234,42 @@ injection is deleted. Each `render` type still needs a frontend component; per
 §0.15 a **custom `render` type is first-party / AMD-verified only in v1**, and an
 unknown `render` degrades to the generic result card (see §7).
 
+### 4.3 Generic render primitives (#2108)
+
+Beyond agent-specific keys like `email_pre_scan`, the Agent UI registers five
+**generic primitives** any agent can emit on `tool_result.render` without
+shipping its own frontend component. `data` must match the schema for the key:
+
+| `render` | `data` schema |
+|---|---|
+| `table` | `{ title?: string, columns: string[], rows: Array<Array<string\|number\|boolean\|null>> }` |
+| `key_value` | `{ title?: string, items: Array<{key: string, value: string\|number\|boolean\|null}> }` |
+| `list` | `{ title?: string, ordered?: boolean, items: Array<string\|number> }` |
+| `image` | `{ src: string, alt?: string, caption?: string }` |
+| `diff` | `{ title?: string, unified: string }` — a unified-diff text; lines are styled by their `+` / `-` / `@@` prefix |
+
+Rules every receiver implements and every producer can rely on:
+
+- **Fallback, never nothing.** An unknown `render` key renders an explicit
+  `Unsupported card type: "<render>"` card; a payload that fails its schema
+  renders `Invalid <render> payload`. Both include a collapsible dump of the
+  raw `data` so the turn stays debuggable. A card is never silently dropped
+  and a bad card never blanks the message.
+- **`image.src` accepts only inline base64 raster data** matching
+  `^data:image/(png|jpe?g|gif|webp);base64,` — SVG is deliberately excluded
+  (it can carry script), and remote URLs (`http(s)://`) are rejected. Anything
+  else is an invalid payload.
+- **500-item render cap.** `table` rows, `list` items, and `key_value` items
+  render at most 500 entries; the card shows a visible `+N more (truncated)`
+  row when capped. Producers should pre-trim to what the user actually needs.
+- **Values are rendered as plain text** — markdown/HTML inside cell, item, or
+  key/value strings is NOT interpreted.
+
+**Author guidance:** default to these primitives — they need zero frontend
+work and render consistently. A custom `render` key requires a first-party /
+AMD-verified frontend component in v1 (§0.15); until yours ships, emitting it
+degrades to the unsupported-card fallback.
+
 ---
 
 ## 5. `needs_confirmation` and the confirmation model

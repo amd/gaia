@@ -9,10 +9,11 @@ import remarkGfm from 'remark-gfm';
 import { AgentActivity } from './AgentActivity';
 import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta';
 import { EmailPreScanCard, isPreScanPayload } from './email/EmailPreScanCard';
+import { RenderCard } from './render/RenderCard';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import gaiaRobot from '../assets/gaia-robot.png';
-import type { Message, AgentStep } from '../types';
+import type { Message, AgentStep, RenderCardData } from '../types';
 import './MessageBubble.css';
 
 interface MessageBubbleProps {
@@ -24,6 +25,10 @@ interface MessageBubbleProps {
     agentSteps?: AgentStep[];
     /** Whether agent steps are currently active (streaming). */
     agentStepsActive?: boolean;
+    /** Live-streaming cards (issue #2108). `message.cards` wins when set —
+     *  this prop carries in-flight cards for the synthetic streaming bubble,
+     *  mirroring how `agentSteps` reaches it. */
+    cards?: RenderCardData[];
     /** Called when user clicks the delete button. */
     onDelete?: (messageId: number) => void;
     /** Called when user clicks the resend button (user messages only). */
@@ -354,7 +359,7 @@ function formatLatency(ms: number): string {
     return `${(ms / 1000).toFixed(1)}s`;
 }
 
-export function MessageBubble({ message, isStreaming, showTerminalCursor, agentSteps, agentStepsActive, onDelete, onResend, latencyMs, agentName }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, showTerminalCursor, agentSteps, agentStepsActive, cards, onDelete, onResend, latencyMs, agentName }: MessageBubbleProps) {
     const isError = message.role === 'assistant' && isErrorContent(message.content);
     // Memoize the expensive LLM content cleaning (brace-depth parser) so it
     // doesn't re-run on every render — only when message content changes.
@@ -505,6 +510,12 @@ export function MessageBubble({ message, isStreaming, showTerminalCursor, agentS
                             <span>Something went wrong</span>
                         </div>
                     )}
+                    {/* Structured cards (#2108) — finalized message.cards wins;
+                        the prop is the live-streaming path. Always above the
+                        markdown content. */}
+                    {(message.cards ?? cards)?.map((card, i) => (
+                        <RenderCard key={i} render={card.render} data={card.data} />
+                    ))}
                     <RenderedContent content={cleanedContent} showCursor={(isStreaming || showTerminalCursor) && !!cleanedContent && !agentStepsActive} />
                     {message.role === 'assistant'
                         && !isStreaming

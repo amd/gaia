@@ -1,0 +1,212 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+/* Card registry primitives (issue #2108). Every selector is prefixed
+ * `render-` — this stylesheet is global, so unprefixed names would collide
+ * silently with other components. */
+
+.render-card {
+    margin: 8px 0;
+}
+
+.render-card-error {
+    background: var(--bg-card, #ffffff);
+    border: 1px solid var(--border-error, #e5484d);
+    border-radius: 8px;
+    padding: 10px 12px;
+    color: var(--text-error, #c92a2a);
+    font-size: 13px;
+}
+
+.render-unsupported {
+    background: var(--bg-card, #ffffff);
+    border: 1px solid var(--border-light, #e2e2e2);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 13px;
+    color: var(--text-primary, #1a1a1a);
+}
+
+.render-unsupported__message {
+    margin: 0 0 6px;
+    font-weight: 500;
+}
+
+.render-unsupported__details summary {
+    cursor: pointer;
+    color: var(--text-secondary, #666666);
+    font-size: 12px;
+}
+
+.render-unsupported__json {
+    overflow-x: auto;
+    font-size: 12px;
+    white-space: pre;
+    margin: 6px 0 0;
+}
+
+.render-unsupported__too-large {
+    color: var(--text-secondary, #666666);
+    font-style: italic;
+    margin: 6px 0 0;
+}
+
+/* ── Shared primitive chrome ─────────────────────────────────────────── */
+
+.render-truncation {
+    color: var(--text-secondary, #666666);
+    font-size: 12px;
+    font-style: italic;
+    padding: 4px 0 0;
+}
+
+/* ── table ───────────────────────────────────────────────────────────── */
+
+.render-table-card {
+    background: var(--bg-card, #ffffff);
+    border: 1px solid var(--border-light, #e2e2e2);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 13px;
+}
+
+.render-table-card__title {
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+
+/* Wide tables scroll inside the card, never the page. */
+.render-table {
+    overflow-x: auto;
+}
+
+.render-table table {
+    border-collapse: collapse;
+    width: 100%;
+}
+
+.render-table th,
+.render-table td {
+    text-align: left;
+    padding: 4px 10px 4px 0;
+    border-bottom: 1px solid var(--border-light, #e2e2e2);
+    white-space: nowrap;
+}
+
+.render-table th {
+    font-weight: 600;
+    color: var(--text-secondary, #666666);
+}
+
+/* ── key_value ───────────────────────────────────────────────────────── */
+
+.render-kv {
+    background: var(--bg-card, #ffffff);
+    border: 1px solid var(--border-light, #e2e2e2);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 13px;
+}
+
+.render-kv__title {
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+
+.render-kv__list {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.render-kv__row {
+    display: flex;
+    gap: 12px;
+}
+
+.render-kv__key {
+    color: var(--text-secondary, #666666);
+    min-width: 120px;
+    flex-shrink: 0;
+}
+
+.render-kv__value {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+/* ── list ────────────────────────────────────────────────────────────── */
+
+.render-list {
+    background: var(--bg-card, #ffffff);
+    border: 1px solid var(--border-light, #e2e2e2);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 13px;
+}
+
+.render-list__title {
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+
+.render-list__items {
+    margin: 0;
+    padding-left: 20px;
+}
+
+/* ── image ───────────────────────────────────────────────────────────── */
+
+.render-image {
+    margin: 0;
+}
+
+.render-image__img {
+    max-width: 100%;
+    border-radius: 8px;
+    display: block;
+}
+
+.render-image__caption {
+    color: var(--text-secondary, #666666);
+    font-size: 12px;
+    padding-top: 4px;
+}
+
+/* ── diff ────────────────────────────────────────────────────────────── */
+
+.render-diff {
+    background: var(--bg-card, #ffffff);
+    border: 1px solid var(--border-light, #e2e2e2);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 12px;
+}
+
+.render-diff__title {
+    font-weight: 600;
+    margin-bottom: 6px;
+    font-size: 13px;
+}
+
+.render-diff__body {
+    margin: 0;
+    overflow-x: auto;
+    font-family: var(--font-mono, monospace);
+}
+
+.render-diff__line {
+    white-space: pre;
+}
+
+.render-diff__line--added {
+    background: var(--diff-added-bg, rgba(46, 160, 67, 0.15));
+}
+
+.render-diff__line--removed {
+    background: var(--diff-removed-bg, rgba(248, 81, 73, 0.15));
+}
+
+.render-diff__line--hunk {
+    color: var(--text-secondary, #666666);
+}
