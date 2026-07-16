@@ -1583,40 +1583,8 @@ def _raise_calendar_connector_http(exc: ConnectorsError) -> NoReturn:
 # ---------------------------------------------------------------------------
 
 
-def get_prescan_backend():
-    """Resolve the read-only mailbox backend for an inbox pre-scan.
-
-    Mirrors :func:`get_send_backend`'s fail-loud resolution — the pre-scan reads
-    the single connected mailbox; an absent or ambiguous mailbox is an
-    actionable error, never a silent guess:
-
-      - 0 connected → HTTP 503 (actionable: go connect a mailbox)
-      - 2+ connected → HTTP 400 (actionable: the pre-scan API can't choose)
-      - exactly 1 → build the matching live backend (list/get only)
-
-    Wired as a FastAPI ``Depends`` so tests inject a fake via
-    ``app.dependency_overrides[get_prescan_backend]`` without touching live mail.
-    """
-    providers = connected_mailbox_providers()
-    if not providers:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "No mailbox connected — connect Google or Microsoft in "
-                "Settings → Connectors before running an inbox pre-scan."
-            ),
-        )
-    if len(providers) > 1:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Multiple mailboxes connected ({', '.join(providers)}); the "
-                "pre-scan API can't choose. Disconnect one in Settings → "
-                "Connectors, or run the pre-scan from the agent/UI (which scans "
-                "every connected mailbox)."
-            ),
-        )
-    provider = providers[0]
+def _build_prescan_live_backend(provider: str):
+    """Build the read-only (list/get) live backend for one connected provider."""
     if provider == "google":
         from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
 
@@ -1637,16 +1605,81 @@ def get_prescan_backend():
     )
 
 
-def _run_prescan(backend, *, max_messages: int) -> dict:
-    """Run the agent's ``pre_scan_inbox_impl`` against ``backend``.
+class _MultiMailboxPrescanBackend:
+    """Every connected mailbox's read backend, for a consolidated pre-scan.
 
-    Reuses the agent's exact heuristic classification path (the same call the
-    agent loop makes) — no duplicated categorization — and returns its envelope
-    dict, which maps field-for-field onto :class:`EmailPreScanResult`.
+    Carries the ordered ``provider -> live backend`` map so :func:`_run_prescan`
+    fans the scan across all connected mailboxes and returns one merged envelope
+    — the multi-inbox behaviour the agent loop already ships (#1603/#1614),
+    reached here so the Agent UI's ``pre_scan_inbox`` tool (which routes through
+    ``/prescan``) is no longer dead-ended by a single-mailbox guard. It is NOT a
+    silent pick-one: every connected mailbox is scanned and merged. Send/search
+    stay fail-loud — a write can't target "all".
     """
-    from gaia_agent_email.tools.read_tools import pre_scan_inbox_impl
 
-    return pre_scan_inbox_impl(backend, max_messages=max_messages)
+    def __init__(self, backends: "dict"):
+        self.backends = backends
+
+
+def get_prescan_backend():
+    """Resolve the read-only mailbox backend(s) for an inbox pre-scan.
+
+    Pre-scan is read-only and consolidatable, so an ambiguous mailbox is not an
+    error here (unlike the send/search write-or-target surfaces): scan them all.
+
+      - 0 connected → HTTP 503 (actionable: go connect a mailbox)
+      - 2+ connected → a :class:`_MultiMailboxPrescanBackend` over every mailbox
+      - exactly 1 → the matching live backend (list/get only)
+
+    Never a silent guess-one — 2+ scans every connected mailbox and tags each
+    result with its source. Wired as a FastAPI ``Depends`` so tests inject a
+    fake via ``app.dependency_overrides[get_prescan_backend]`` without touching
+    live mail.
+    """
+    providers = connected_mailbox_providers()
+    if not providers:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No mailbox connected — connect Google or Microsoft in "
+                "Settings → Connectors before running an inbox pre-scan."
+            ),
+        )
+    if len(providers) > 1:
+        return _MultiMailboxPrescanBackend(
+            {provider: _build_prescan_live_backend(provider) for provider in providers}
+        )
+    return _build_prescan_live_backend(providers[0])
+
+
+def _run_prescan(backend, *, max_messages: int) -> dict:
+    """Run the agent's pre-scan classification against ``backend``.
+
+    Reuses the agent's exact heuristic path (no duplicated categorization) and
+    returns its envelope dict, which maps field-for-field onto
+    :class:`EmailPreScanResult`. A :class:`_MultiMailboxPrescanBackend` fans out
+    over every connected mailbox via the shared ``merge_pre_scan_backends`` — the
+    same consolidation the agent loop runs — so the Agent UI sees one result.
+    """
+    from gaia_agent_email.tools.read_tools import (
+        merge_pre_scan_backends,
+        pre_scan_inbox_impl,
+    )
+
+    if not isinstance(backend, _MultiMailboxPrescanBackend):
+        return pre_scan_inbox_impl(backend, max_messages=max_messages)
+
+    merged = merge_pre_scan_backends(backend.backends, max_messages=max_messages)
+    # The frozen pre-scan contract (PreScanItem / EmailPreScanResult, both
+    # extra="forbid") has no per-item ``mailbox`` tag or ``mailbox_errors`` field
+    # — those belong to the agent-loop card's richer shape. Drop them at this
+    # boundary so the consolidated envelope validates; the surfaced items (from
+    # every connected mailbox) are unchanged.
+    merged.pop("mailbox_errors", None)
+    for section in ("urgent", "actionable", "suggested_archives"):
+        for item in merged.get(section, []):
+            item.pop("mailbox", None)
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -2078,7 +2111,7 @@ async def search_inbox(
 @router.post(
     "/prescan",
     response_model=EmailPreScanResponse,
-    responses={**_CONNECTOR_ERROR_RESPONSES, **_AMBIGUOUS_PROVIDER_400},
+    responses={**_CONNECTOR_ERROR_RESPONSES},
 )
 async def prescan_inbox(
     request: EmailPreScanRequest,
@@ -2086,16 +2119,17 @@ async def prescan_inbox(
 ) -> EmailPreScanResponse:
     """Pre-scan the connected inbox into the scannable triage card envelope.
 
-    Lists the ``max_messages`` most-recent inbox messages via the connected
-    mailbox backend and returns the aggregate pre-scan summary the Agent UI's
+    Lists the ``max_messages`` most-recent inbox messages via every connected
+    mailbox and returns the aggregate pre-scan summary the Agent UI's
     ``EmailPreScanCard`` renders — top urgent / actionable rows, an
     informational count, and suggested archives, each with a heuristic reason.
     Read-only: nothing is archived, marked, or sent.
 
     Classification reuses the agent's ``pre_scan_inbox_impl`` (the same
     heuristic path the agent loop runs) — categories are not re-implemented
-    here. The backend is resolved by :func:`get_prescan_backend`, which fails
-    loudly on zero or ambiguous mailboxes.
+    here. The backend is resolved by :func:`get_prescan_backend`: 503 when no
+    mailbox is connected, and with 2+ connected it consolidates every mailbox
+    (each item tagged with its source) rather than failing on ambiguity.
     """
     try:
         out = await asyncio.to_thread(
