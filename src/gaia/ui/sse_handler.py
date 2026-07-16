@@ -12,6 +12,7 @@ import json
 import logging
 import queue
 import re
+import socket
 import threading
 import time
 import uuid
@@ -132,6 +133,30 @@ def _strip_balanced_json_blobs(text: str, needle: "re.Pattern") -> str:
         out.append(blob)
         i = j
     return "".join(out)
+
+
+def _peel_response_socket(resp: Any) -> Optional[socket.socket]:
+    """Dig the live TCP socket out of a ``requests`` streamed response.
+
+    Needed by the email-relay cancel path (#2109): only ``socket.shutdown()``
+    can wake a reader thread parked in a blocking ``recv`` — ``resp.close()``
+    waits on the buffered reader's lock, which that parked read holds.
+
+    Tries the known attribute chains across urllib3 v1/v2; returns ``None``
+    for anything that isn't a real socket-backed response (mocks, already
+    -released connections), letting the caller fall back to ``close()``.
+    """
+    raw = getattr(resp, "raw", None)
+    if raw is None:
+        return None
+    for conn_attr in ("connection", "_connection"):
+        sock = getattr(getattr(raw, conn_attr, None), "sock", None)
+        if isinstance(sock, socket.socket):
+            return sock
+    # http.client.HTTPResponse -> BufferedReader -> SocketIO -> socket
+    rawio = getattr(getattr(getattr(raw, "_fp", None), "fp", None), "raw", None)
+    sock = getattr(rawio, "_sock", None)
+    return sock if isinstance(sock, socket.socket) else None
 
 
 class SSEOutputHandler(OutputHandler):
@@ -921,18 +946,36 @@ class SSEOutputHandler(OutputHandler):
         worker thread parked in a blocking socket read — this is the other
         half of that seam: called from the cancel path (both the explicit
         ``/api/chat/cancel`` endpoint and the streaming generator's orphan
-        cleanup) right after ``cancelled.set()``, closing the response forces
-        the blocked read to error out promptly instead of waiting out its
-        full ``read_timeout``.
+        cleanup) right after ``cancelled.set()``.
+
+        The unblocking MUST go through ``socket.shutdown()``, not
+        ``resp.close()``: CPython's buffered reader holds its internal lock
+        for the whole blocking ``read()``, and ``close()`` waits on that same
+        lock — so a cross-thread ``close()`` blocks until the read returns on
+        its own (proven by the real-socket test in
+        ``tests/unit/test_email_sidecar_proxy.py``). ``shutdown()`` bypasses
+        the file-object layer entirely and wakes the parked ``recv``
+        immediately; the relay's stream generator then closes the response
+        itself on the way out. ``resp.close()`` remains only as the fallback
+        when no underlying socket can be found (e.g. mocked responses).
         """
         resp = self.active_relay_response
-        if resp is not None:
+        if resp is None:
+            return
+        sock = _peel_response_socket(resp)
+        if sock is not None:
             try:
-                resp.close()
-            except Exception:  # noqa: BLE001 - best-effort cleanup, never fatal
+                sock.shutdown(socket.SHUT_RDWR)
+                return  # reader wakes promptly; the stream owner closes resp
+            except OSError:
                 logger.debug(
-                    "email relay: failed to close active response", exc_info=True
+                    "email relay: socket shutdown failed; falling back to close",
+                    exc_info=True,
                 )
+        try:
+            resp.close()
+        except Exception:  # noqa: BLE001 - best-effort cleanup, never fatal
+            logger.debug("email relay: failed to close active response", exc_info=True)
 
     def request_user_input_blocking(
         self,

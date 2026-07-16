@@ -655,3 +655,122 @@ def test_cancel_query_connection_error_is_swallowed_not_raised():
     proxy = EmailSidecarProxy("http://127.0.0.1:9100", session=sess)
     # A dead sidecar has nothing left to cancel — best-effort, never fatal.
     assert proxy.cancel_query("run-dead") is None
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("requests") is None, reason="requests not installed"
+)
+def test_cross_thread_close_unblocks_parked_read_promptly_real_socket():
+    """The cancel design's core mechanism, proven against a REAL socket.
+
+    The relay's cancel path assumes the router-side forced close
+    (``SSEOutputHandler.close_active_relay_response``) wakes a reader thread
+    parked in a blocking socket read promptly. Every other cancel test
+    drives that path through mocks or a heartbeat-emitting server (where the
+    between-events cancelled check fires instead) — this one parks a real
+    HTTP response silently, fires the production closer cross-thread, and
+    bounds both how long the closer takes (it must not block on the parked
+    reader's buffered-IO lock — a bare ``resp.close()`` does) and how long
+    the reader takes to unblock.
+    """
+    import http.server
+    import threading
+    import time
+
+    park = threading.Event()  # set → the server handler stops parking
+
+    class _SilentParkHandler(http.server.BaseHTTPRequestHandler):
+        # HTTP/1.1 + chunked framing — the same wire shape uvicorn streams
+        # for the real sidecar's SSE. (A plain HTTP/1.0 unchunked body would
+        # park the CLIENT in a buffered read waiting to fill its chunk size,
+        # failing the test for the wrong reason.)
+        protocol_version = "HTTP/1.1"
+
+        def _write_chunk(self, data: bytes):
+            self.wfile.write(f"{len(data):X}\r\n".encode("ascii"))
+            self.wfile.write(data + b"\r\n")
+            self.wfile.flush()
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            self.rfile.read(length)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            self._write_chunk(b'data: {"type": "status", "message": "started"}\n\n')
+            # Park SILENTLY — no heartbeats, so the client's only way out
+            # before the 30s read_timeout is the cross-thread forced close.
+            park.wait(timeout=30.0)
+
+        def log_message(self, *args):  # noqa: D102 - silence test output
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _SilentParkHandler)
+    port = server.server_address[1]
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+
+    try:
+        proxy = EmailSidecarProxy(f"http://127.0.0.1:{port}")
+        captured: dict = {}
+        events: list = []
+        outcome: dict = {}
+        first_event_seen = threading.Event()
+
+        gen = proxy.query_stream(
+            {"query": "park"},
+            read_timeout=30.0,
+            on_response=lambda r: captured.setdefault("resp", r),
+        )
+        # Eager registration (the early-cancel-race contract): the live
+        # response is already in hand before any iteration.
+        assert "resp" in captured
+
+        def _consume():
+            try:
+                for ev in gen:
+                    events.append(ev)
+                    first_event_seen.set()
+                outcome["end"] = "exhausted"
+            except Exception as exc:  # noqa: BLE001 - recording, not hiding
+                outcome["end"] = f"raised:{type(exc).__name__}"
+            outcome["t_done"] = time.monotonic()
+
+        worker = threading.Thread(target=_consume, daemon=True)
+        worker.start()
+
+        assert first_event_seen.wait(timeout=5.0), (
+            "never received the first SSE event from the real server"
+        )
+
+        # The PRODUCTION closer, exactly as the /api/chat/cancel route and the
+        # streaming generator's orphan cleanup invoke it.
+        from gaia.ui.sse_handler import SSEOutputHandler
+
+        handler = SSEOutputHandler()
+        handler.active_relay_response = captured["resp"]
+
+        t_close = time.monotonic()
+        handler.close_active_relay_response()
+        t_closer_done = time.monotonic()
+        worker.join(timeout=5.0)
+
+        assert t_closer_done - t_close < 1.0, (
+            f"the forced close itself blocked for {t_closer_done - t_close:.2f}s "
+            "— it must return immediately (the cancel HTTP route calls it on "
+            "the event loop)"
+        )
+        assert not worker.is_alive(), (
+            "the forced close did NOT unblock the parked read within 5s — "
+            "the relay cancel design's core assumption is broken on this "
+            "platform"
+        )
+        assert outcome["t_done"] - t_close < 3.0, (
+            f"unblocking took {outcome['t_done'] - t_close:.2f}s — not prompt"
+        )
+        assert events == [{"type": "status", "message": "started"}]
+    finally:
+        park.set()
+        server.shutdown()
+        server_thread.join(timeout=5.0)
