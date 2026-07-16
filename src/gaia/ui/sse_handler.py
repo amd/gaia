@@ -12,6 +12,7 @@ import json
 import logging
 import queue
 import re
+import socket
 import threading
 import time
 import uuid
@@ -134,6 +135,30 @@ def _strip_balanced_json_blobs(text: str, needle: "re.Pattern") -> str:
     return "".join(out)
 
 
+def _peel_response_socket(resp: Any) -> Optional[socket.socket]:
+    """Dig the live TCP socket out of a ``requests`` streamed response.
+
+    Needed by the email-relay cancel path (#2109): only ``socket.shutdown()``
+    can wake a reader thread parked in a blocking ``recv`` — ``resp.close()``
+    waits on the buffered reader's lock, which that parked read holds.
+
+    Tries the known attribute chains across urllib3 v1/v2; returns ``None``
+    for anything that isn't a real socket-backed response (mocks, already
+    -released connections), letting the caller fall back to ``close()``.
+    """
+    raw = getattr(resp, "raw", None)
+    if raw is None:
+        return None
+    for conn_attr in ("connection", "_connection"):
+        sock = getattr(getattr(raw, conn_attr, None), "sock", None)
+        if isinstance(sock, socket.socket):
+            return sock
+    # http.client.HTTPResponse -> BufferedReader -> SocketIO -> socket
+    rawio = getattr(getattr(getattr(raw, "_fp", None), "fp", None), "raw", None)
+    sock = getattr(rawio, "_sock", None)
+    return sock if isinstance(sock, socket.socket) else None
+
+
 class SSEOutputHandler(OutputHandler):
     """
     OutputHandler that queues agent events as JSON for SSE streaming.
@@ -169,16 +194,10 @@ class SSEOutputHandler(OutputHandler):
         self._user_input_queue: deque = deque()
         self._user_input_events: Dict[str, threading.Event] = {}
         self._user_input_results: Dict[str, str] = {}
-        # HACK — see issue #1000 for the proper fix.
-        # Buffer of structured tool-result payloads we want to inject as fenced
-        # code blocks into the assistant's final answer, keyed by language tag.
-        # Today this is populated only for ``pre_scan_inbox`` → ``email_pre_scan``
-        # because Gemma-4-E4B paraphrases the JSON envelope into prose instead of
-        # echoing it verbatim, so the frontend's structured-payload renderer never
-        # mounts. Removing this buffer cleanly requires multi-model support so a
-        # tool-use-tuned model handles the structured emission while a chat model
-        # handles the prose summary — tracked in #1000.
-        self._pending_render_payloads: list[tuple[str, dict]] = []
+        # Live response for an in-flight email /query relay (#2109), so the
+        # cancel path can force a blocked read to error out by closing it from
+        # another thread. None outside an active email-relay turn.
+        self.active_relay_response: Optional[Any] = None
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
@@ -313,17 +332,13 @@ class SSEOutputHandler(OutputHandler):
             )
             return
 
-        # HACK — see issue #1000 for the proper fix.
-        # Capture structured payloads that the frontend wants to render as
-        # typed cards. Today only ``pre_scan_inbox`` → ``email_pre_scan`` is
-        # supported. The system prompt instructs the LLM to echo this
-        # envelope verbatim inside fenced code blocks, but small chat-tuned
-        # models (Gemma-4-E4B observed) paraphrase the JSON into prose, and
-        # the card never mounts. Detect the envelope here, hold it on
-        # ``self._pending_render_payloads``, and inject a fenced block into
-        # the final answer below — deterministic, model-independent.
-        # Removing this hack requires the multi-model split tracked in #1000.
-        self._capture_render_payload(data)
+        # Render-map fix (#2109): for tools registered in _RENDER_TOOL_TO_LANG,
+        # carry the card payload as result_data — the /query canonical
+        # translator forwards result_data verbatim as tool_result.data, so the
+        # frontend renders the typed card straight from the event instead of
+        # depending on the LLM echoing it into the final answer (the former
+        # fence-injection hack, #1000, removed here).
+        render_card = self._render_card_payload(data)
 
         # For tool results, provide a detailed summary
         summary = _summarize_tool_result(data)
@@ -414,6 +429,11 @@ class SSEOutputHandler(OutputHandler):
                     "chunks": structured_chunks,
                 }
 
+        # The render-map card (if any) is authoritative for a registered tool —
+        # set last so it always wins over the generic result_data shapes above.
+        if render_card is not None:
+            event["result_data"] = render_card
+
         self._emit(event)
 
     # === Status Messages ===
@@ -463,34 +483,31 @@ class SSEOutputHandler(OutputHandler):
     def stop_progress(self):
         pass  # No-op for SSE - frontend manages its own spinners
 
-    # === Structured-render injection (HACK — see issue #1000) ===
+    # === Structured-render map (#2109) ===
 
-    # Mapping from tool name to the language-tag the frontend's ``pre``
-    # override matches (``MessageBubble.tsx`` ``KNOWN_CODE_LANGS`` set).
-    # Keep this in sync with the frontend's structured-payload renderers.
+    # Mapping from tool name to the card "kind" the frontend's render-card
+    # registry draws (spec §4.2). Shared with the sidecar's own canonical
+    # translator (``gaia_agent_email/sse_translation.py`` duplicates this map
+    # to stay dependency-light) — keep both in sync when a render tool is
+    # added.
     _RENDER_TOOL_TO_LANG: ClassVar[Dict[str, str]] = {
         "pre_scan_inbox": "email_pre_scan",
     }
 
-    def _capture_render_payload(self, data: Any) -> None:
-        """Detect a structured tool-result envelope and buffer it for fence injection.
+    def _render_card_payload(self, data: Any) -> Optional[Dict[str, Any]]:
+        """Return the render-map card payload for the last-called tool, if any.
 
-        Today this is the workaround for small chat-tuned models that
-        paraphrase the ``pre_scan_inbox`` envelope into prose instead of
-        echoing it as a fenced code block. When the LLM-relay path is
-        replaced with a tool-use-tuned model under multi-model parallelism
-        (#1000), this method becomes a no-op and the buffer can be removed
-        with the rest of the hack.
+        ``@tool``-decorated functions return JSON strings (the dispatch in
+        ``Agent._execute_tool`` returns them verbatim), so both string and
+        dict envelope shapes are accepted here. Returns ``None`` — never
+        raises — on any non-matching or malformed payload: a foreign tool, a
+        failed (``ok=false``) envelope, or a ``kind`` that doesn't match the
+        registered tool.
         """
         tool = self._last_tool_name or ""
         lang = self._RENDER_TOOL_TO_LANG.get(tool)
         if not lang:
-            return
-        # ``@tool``-decorated functions return JSON strings (the dispatch
-        # in ``Agent._execute_tool`` returns them verbatim), so accept
-        # both string and dict shapes here. Parse-on-demand and silently
-        # drop malformed payloads — the LLM-relay fallback path will
-        # still surface tool failure to the user via prose.
+            return None
         envelope: Dict[str, Any]
         if isinstance(data, dict):
             envelope = data
@@ -498,64 +515,18 @@ class SSEOutputHandler(OutputHandler):
             try:
                 parsed = json.loads(data)
             except (ValueError, TypeError):
-                return
+                return None
             if not isinstance(parsed, dict):
-                return
+                return None
             envelope = parsed
         else:
-            return
+            return None
         if not envelope.get("ok"):
-            return
+            return None
         inner = envelope.get("data")
-        if not isinstance(inner, dict):
-            return
-        if inner.get("kind") != lang:
-            return
-        self._pending_render_payloads.append((lang, inner))
-
-    def _drain_render_payloads(self) -> str:
-        """Return pending payloads as fenced code blocks and clear the buffer.
-
-        Output format matches the frontend's ``pre`` markdown override —
-        each block is ` ```<lang>\\n<json>\\n``` `, blocks separated by a
-        blank line. Empty buffer returns an empty string so callers can
-        unconditionally prepend.
-        """
-        if not self._pending_render_payloads:
-            return ""
-        blocks = [
-            f"```{lang}\n{json.dumps(payload)}\n```"
-            for lang, payload in self._pending_render_payloads
-        ]
-        self._pending_render_payloads = []
-        return "\n\n".join(blocks)
-
-    @classmethod
-    def _strip_echoed_render_cards(cls, answer: str) -> str:
-        """Drop any render-card copy the LLM reproduced in its prose.
-
-        The authoritative card is injected from ``_pending_render_payloads``;
-        small chat-tuned models sometimes also echo it (as a fenced
-        ```<lang>``` block or a bare envelope object), which would render the
-        card twice. Languages are derived from ``_RENDER_TOOL_TO_LANG`` so this
-        stays in sync as render tools are added.
-        """
-        if not answer:
-            return answer
-        langs = sorted(set(cls._RENDER_TOOL_TO_LANG.values()))
-        if not langs:
-            return answer
-        cache = cls.__dict__.get("_RENDER_ECHO_PATTERNS")
-        if cache is None or cache[0] != tuple(langs):
-            alt = "|".join(re.escape(lang) for lang in langs)
-            fence = re.compile(rf"```(?:{alt})\b[\s\S]*?```", re.IGNORECASE)
-            kind = re.compile(rf'"kind"\s*:\s*"(?:{alt})"')
-            cache = (tuple(langs), fence, kind)
-            cls._RENDER_ECHO_PATTERNS = cache
-        _, fence_re, kind_re = cache
-        answer = fence_re.sub("", answer)
-        answer = _strip_balanced_json_blobs(answer, kind_re)
-        return answer
+        if not isinstance(inner, dict) or inner.get("kind") != lang:
+            return None
+        return inner
 
     # === Completion Methods ===
 
@@ -575,18 +546,6 @@ class SSEOutputHandler(OutputHandler):
             answer = _TOOL_CALL_JSON_SUB_RE.sub("", answer)
             answer = _THOUGHT_JSON_SUB_RE.sub("", answer)
             answer = answer.strip()
-        # HACK — see issue #1000 for the proper fix.
-        # Prepend any pending structured-render payloads as fenced code
-        # blocks. Drains the buffer so each pre-scan turn renders exactly
-        # one card. The cleaned LLM prose follows underneath so the user
-        # gets the structured view first, then the natural-language
-        # framing the LLM produced.
-        rendered_fences = self._drain_render_payloads()
-        if rendered_fences:
-            # The buffered card is authoritative — strip any copy the LLM
-            # echoed so the pre-scan card renders exactly once (#1000).
-            answer = self._strip_echoed_render_cards(answer).strip()
-            answer = (rendered_fences + ("\n\n" + answer if answer else "")).strip()
         self._emit(
             {
                 "type": "answer",
@@ -979,6 +938,44 @@ class SSEOutputHandler(OutputHandler):
             self._confirm_result = approved
             self._confirm_event.set()
         return True
+
+    def close_active_relay_response(self) -> None:
+        """Force-close a live email-relay HTTP response, if any (#2109).
+
+        A between-events ``cancelled`` check alone cannot interrupt a relay
+        worker thread parked in a blocking socket read — this is the other
+        half of that seam: called from the cancel path (both the explicit
+        ``/api/chat/cancel`` endpoint and the streaming generator's orphan
+        cleanup) right after ``cancelled.set()``.
+
+        The unblocking MUST go through ``socket.shutdown()``, not
+        ``resp.close()``: CPython's buffered reader holds its internal lock
+        for the whole blocking ``read()``, and ``close()`` waits on that same
+        lock — so a cross-thread ``close()`` blocks until the read returns on
+        its own (proven by the real-socket test in
+        ``tests/unit/test_email_sidecar_proxy.py``). ``shutdown()`` bypasses
+        the file-object layer entirely and wakes the parked ``recv``
+        immediately; the relay's stream generator then closes the response
+        itself on the way out. ``resp.close()`` remains only as the fallback
+        when no underlying socket can be found (e.g. mocked responses).
+        """
+        resp = self.active_relay_response
+        if resp is None:
+            return
+        sock = _peel_response_socket(resp)
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+                return  # reader wakes promptly; the stream owner closes resp
+            except OSError:
+                logger.debug(
+                    "email relay: socket shutdown failed; falling back to close",
+                    exc_info=True,
+                )
+        try:
+            resp.close()
+        except Exception:  # noqa: BLE001 - best-effort cleanup, never fatal
+            logger.debug("email relay: failed to close active response", exc_info=True)
 
     def request_user_input_blocking(
         self,

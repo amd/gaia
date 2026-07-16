@@ -2,17 +2,16 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Characterization tests for MessageBubble's fenced ``email_pre_scan``
- * code-block path: STRUCTURED_FENCE_RE, promoteStructuredPayloads, and the
- * EmailPreScanCard mount.
+ * Post-cutover characterization for the retired fence-parsing path (#2109).
  *
- * These pin TODAY's behavior as a baseline for issue #2109, which is
- * expected to delete/replace this path with the render-registry system
- * (see render-registry.test.tsx). All three tests must pass against the
- * current, unmodified codebase — if this path changes intentionally in the
- * future, update these tests to match the new reality; never edit
- * MessageBubble.tsx to satisfy an assertion written against a stale
- * understanding of it.
+ * The pre-#2109 versions of these tests pinned the fence→card hack
+ * (STRUCTURED_FENCE_RE, promoteStructuredPayloads, the `pre`-override
+ * EmailPreScanCard mount). That path is now DELETED: structured cards
+ * arrive exclusively via `tool_result.render` → the card registry
+ * (render-registry.test.tsx). What remains to pin is the accepted cost of
+ * the cutover — pre-cutover session history containing fenced payloads
+ * must degrade gracefully to a plain code block (fenced JSON text), never
+ * mount a card, and never crash.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -29,11 +28,8 @@ const minimalMessage: Message = {
     rag_sources: null,
 };
 
-// Minimal payload satisfying EmailPreScanCard's isPreScanPayload(). The
-// angle-bracket sender email is deliberate: it is the reason RenderedContent
-// bypasses ReactMarkdown for this fence in the first place (remark-gfm's
-// autolink handling of `<email@domain>` corrupts fence detection), so this
-// fixture exercises the exact shape the bypass exists for.
+// The shape pre-cutover history carries (would have satisfied
+// isPreScanPayload back when the fence→card mount existed).
 const payload = {
     kind: 'email_pre_scan',
     urgent: [{ message_id: 'm1', sender: 'Alice <alice@example.com>', subject: 'Server down' }],
@@ -43,38 +39,36 @@ const payload = {
     suggested_drafts: [],
 };
 
-describe('MessageBubble fenced email_pre_scan characterization', () => {
-    it('renders EmailPreScanCard for a fenced email_pre_scan block', () => {
+describe('retired fence path — pre-cutover history degrades to fenced JSON text (#2109)', () => {
+    it('renders a fenced email_pre_scan block as a plain code block, never a card', () => {
         const content = '```email_pre_scan\n' + JSON.stringify(payload) + '\n```';
 
-        render(<MessageBubble message={{ ...minimalMessage, content }} />);
+        const { container } = render(<MessageBubble message={{ ...minimalMessage, content }} />);
 
-        expect(screen.getByText('Server down')).toBeInTheDocument();
+        // No card mount — the pre-scan card region must not exist.
+        expect(screen.queryByRole('region', { name: 'Inbox pre-scan' })).toBeNull();
+        // The payload stays visible as fenced JSON text (a code block).
+        expect(container.querySelector('.code-block')).not.toBeNull();
+        expect(container.textContent).toContain('"kind"');
     });
 
-    it('renders EmailPreScanCard identically for bare leading JSON (promoteStructuredPayloads)', () => {
-        // No fence markers at all — promoteStructuredPayloads must wrap this
-        // in a fence itself before RenderedContent's STRUCTURED_FENCE_RE runs.
+    it('leaves bare leading payload JSON as text — no promotion to a card', () => {
+        // promoteStructuredPayloads used to wrap this in a fence and mount a
+        // card; post-cutover it is ordinary message text.
         const content = JSON.stringify(payload);
 
-        render(<MessageBubble message={{ ...minimalMessage, content }} />);
-
-        expect(screen.getByText('Server down')).toBeInTheDocument();
-    });
-
-    it('falls through to a plain code block for an invalid payload, without crashing', () => {
-        // Deliberately missing the required array fields (urgent, actionable,
-        // suggested_archives, suggested_drafts, informational_count), so
-        // isPreScanPayload returns false. No sender/email field here — this
-        // case is isolated from the autolink concern above.
-        const invalidPayload = { kind: 'email_pre_scan' };
-        const content = '```email_pre_scan\n' + JSON.stringify(invalidPayload) + '\n```';
-
-        // A successful render() call below (no uncaught exception) is itself
-        // the proof this does not crash.
         const { container } = render(<MessageBubble message={{ ...minimalMessage, content }} />);
 
         expect(screen.queryByRole('region', { name: 'Inbox pre-scan' })).toBeNull();
+        expect(container.textContent).toContain('email_pre_scan');
+    });
+
+    it('does not crash on an ill-formed fenced payload from old history', () => {
+        const content = '```email_pre_scan\n{"kind": "email_pre_scan"\n```';
+
+        // A successful render() (no uncaught exception) is the proof.
+        const { container } = render(<MessageBubble message={{ ...minimalMessage, content }} />);
+
         expect(container.querySelector('.code-block')).not.toBeNull();
     });
 });
