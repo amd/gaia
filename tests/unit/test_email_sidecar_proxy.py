@@ -545,11 +545,14 @@ def test_query_stream_malformed_json_line_raises_loudly_and_stops():
         next(gen)
 
 
-def test_query_stream_on_response_called_lazily_before_first_event_exactly_once():
+def test_query_stream_posts_and_registers_response_eagerly_at_call_time():
     # Cross-thread cancel plumbing: on_response hands the live response object
-    # to the caller (so a cancel from another thread can call resp.close())
-    # before the first event is yielded -- but generators are lazy, so nothing
-    # runs until the first next()/iteration.
+    # to the caller (so a cancel from another thread can call resp.close()).
+    # It must fire EAGERLY at call time — right after the POST returns, before
+    # any line iteration — not lazily on first next(). A lazy registration
+    # widens the early-cancel race: a cancel landing before the first
+    # iteration would find active_relay_response still None, and the forced
+    # close would be a no-op (#2109 inherited-defect fix).
     lines = [
         b'data: {"type": "status", "message": "hi"}',
         b"",
@@ -562,18 +565,17 @@ def test_query_stream_on_response_called_lazily_before_first_event_exactly_once(
     calls = []
     gen = proxy.query_stream({"question": "hi"}, on_response=calls.append)
 
-    # Constructing the generator must not execute any body code yet.
-    assert calls == []
-
-    first = next(gen)
-    assert first == {"type": "status", "message": "hi"}
-    assert len(calls) == 1
-    assert calls[0] is resp
+    # The POST and the registration both happened at call time.
+    assert len(sess.posts) == 1
+    assert calls == [resp]
     assert hasattr(calls[0], "close")
 
-    remaining = list(gen)
-    assert remaining == [{"type": "final", "answer": "done"}]
-    # Draining the rest of the stream must not invoke the callback again.
+    events = list(gen)
+    assert events == [
+        {"type": "status", "message": "hi"},
+        {"type": "final", "answer": "done"},
+    ]
+    # Consuming the stream must not invoke the callback again.
     assert len(calls) == 1
 
 

@@ -314,6 +314,19 @@ def relay_query(
 
     def _register_response(resp: Any) -> None:
         handler.active_relay_response = resp
+        if handler.cancelled.is_set():
+            # A cancel raced ahead of this registration: the router's forced
+            # close was a no-op (active_relay_response was still None), so
+            # close the just-registered response HERE — otherwise the next
+            # socket read parks for the full read_timeout with nothing left
+            # to interrupt it.
+            try:
+                resp.close()
+            except Exception:  # noqa: BLE001 - best-effort, mirrors router close
+                logger.debug(
+                    "email relay: failed to close raced-cancel response",
+                    exc_info=True,
+                )
 
     terminated = False
     crashed = False

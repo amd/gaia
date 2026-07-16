@@ -549,6 +549,56 @@ class TestCancellationMidStream:
         assert handler.active_relay_response is None
 
 
+class _ClosableResp:
+    """Response stand-in whose ``close()`` calls are observable."""
+
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+class TestEarlyCancelRace:
+    """A cancel that lands BEFORE the response is registered must not leave
+    the relay parked in a blocking read for the full read_timeout: the
+    registration hook is the last point that can observe the raced-ahead
+    cancelled flag, so it closes the just-registered response immediately
+    (the router's ``close_active_relay_response`` was a no-op at cancel time
+    — ``active_relay_response`` was still None)."""
+
+    def test_registration_closes_response_when_cancel_raced_ahead(self):
+        handler = _FakeHandler()
+        resp = _ClosableResp()
+
+        def _source():
+            # The cancel raced ahead: by the time the proxy fires on_response
+            # (which _ScriptedProxy does before yielding), the flag is set.
+            yield {"type": "status", "message": "never consumed"}
+            yield {"type": "final", "answer": "done"}
+
+        handler.cancelled.set()
+        proxy = _ScriptedProxy(_source, on_response_obj=resp)
+        relay.relay_query(handler, proxy, query="q", context=[], run_id="rid-race")
+
+        assert resp.closed is True, (
+            "on_response must close the response when handler.cancelled was "
+            "already set at registration time — otherwise the relay blocks "
+            "in the next socket read until read_timeout"
+        )
+        # The normal cancel tail still runs.
+        assert proxy.cancel_calls == ["rid-race"]
+
+    def test_registration_does_not_close_response_when_not_cancelled(self):
+        handler = _FakeHandler()
+        resp = _ClosableResp()
+        proxy = _ScriptedProxy(
+            _events({"type": "final", "answer": "ok"}), on_response_obj=resp
+        )
+        relay.relay_query(handler, proxy, query="q", context=[])
+        assert resp.closed is False
+
+
 # ---------------------------------------------------------------------------
 # Part 3 — integration: REAL uvicorn + REAL SSEOutputHandler + REAL
 # CanonicalTranslator, with a scripted fake agent injected via the

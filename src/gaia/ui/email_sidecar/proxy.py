@@ -236,12 +236,14 @@ class EmailSidecarProxy:
         any event is yielded — the response is closed either way.
 
         ``on_response`` — invoked with the live (still-open) response object
-        right before the first line is consumed, so a caller holding this
-        generator on a worker thread can hand the response to another thread
-        (the cancel path), which forces the blocked read to error out by
-        calling ``resp.close()`` on it. Generators are lazy: nothing in this
-        method runs until the first ``next()``, so ``on_response`` fires on
-        first iteration, not at call time.
+        EAGERLY at call time, right after the POST returns and before any
+        line is consumed, so a caller holding the returned iterator on a
+        worker thread can hand the response to another thread (the cancel
+        path), which forces a blocked read to error out by calling
+        ``resp.close()`` on it. This method is deliberately NOT a generator
+        function: a lazy body would defer both the POST and the registration
+        to the first ``next()``, widening the early-cancel race in which a
+        cancel finds nothing registered to close.
 
         A malformed ``data:`` line (the sidecar emitting non-JSON) raises
         loudly — never silently dropped or swallowed into a placeholder event.
@@ -260,30 +262,34 @@ class EmailSidecarProxy:
                 resp.close()
         if on_response is not None:
             on_response(resp)
-        try:
-            for raw_line in resp.iter_lines():
-                if not raw_line:
-                    continue
-                line = (
-                    raw_line.decode("utf-8", "replace")
-                    if isinstance(raw_line, bytes)
-                    else raw_line
-                )
-                if not line.startswith("data:"):
-                    continue
-                payload = line[len("data:") :].strip()
-                if not payload:
-                    continue
-                try:
-                    event = _json.loads(payload)
-                except (ValueError, TypeError) as e:
-                    raise SidecarError(
-                        f"email sidecar /query sent a malformed SSE event: "
-                        f"{payload!r} ({e})"
-                    ) from e
-                yield event
-        finally:
-            resp.close()
+
+        def _events() -> Iterator[Dict[str, Any]]:
+            try:
+                for raw_line in resp.iter_lines():
+                    if not raw_line:
+                        continue
+                    line = (
+                        raw_line.decode("utf-8", "replace")
+                        if isinstance(raw_line, bytes)
+                        else raw_line
+                    )
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[len("data:") :].strip()
+                    if not payload:
+                        continue
+                    try:
+                        event = _json.loads(payload)
+                    except (ValueError, TypeError) as e:
+                        raise SidecarError(
+                            f"email sidecar /query sent a malformed SSE event: "
+                            f"{payload!r} ({e})"
+                        ) from e
+                    yield event
+            finally:
+                resp.close()
+
+        return _events()
 
     def cancel_query(self, run_id: str) -> None:
         """Cancel an in-flight ``/query`` run.
