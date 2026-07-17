@@ -10,6 +10,7 @@ so a subprocess spawned with a different env resolves its own directory.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -39,8 +40,49 @@ def log_path() -> Path:
     return host_dir() / "daemon.log"
 
 
+def sidecars_ledger_path() -> Path:
+    """The sidecar spawn ledger (pids the daemon must reap after a hard crash)."""
+    return host_dir() / "sidecars.json"
+
+
 def ensure_host_dir() -> Path:
     """Create ``host_dir()`` if missing and return it."""
     d = host_dir()
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def atomic_write_json(path: Path, payload, mode: int = 0o600) -> None:
+    """Atomically persist *payload* as JSON at *path*, default file mode 0600.
+
+    Shared by ``instance.py`` and ``sidecars/ledger.py`` — one copy of a
+    secrets-adjacent write routine, not two that drift. Writes a uniquely-named
+    temp file in the same directory (so ``os.replace`` is a same-filesystem
+    atomic rename), fsyncs it, then renames it over the target. The temp file
+    is created ``O_EXCL`` at *mode* so it is never briefly world-readable.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.parent / f".{path.name}.{os.getpid()}.tmp"
+    # O_EXCL: a leftover temp from a prior crashed writer must not be reused.
+    if tmp.exists():
+        tmp.unlink()
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_TRUNC, mode)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(payload, indent=2))
+            f.flush()
+            os.fsync(f.fileno())
+    except Exception:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+    os.replace(str(tmp), str(path))
+    # os.replace preserves the temp's mode; re-assert defensively for platforms
+    # where the source mode is not carried across the rename.
+    try:
+        os.chmod(str(path), mode)
+    except OSError:
+        pass

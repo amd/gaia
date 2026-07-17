@@ -27,42 +27,11 @@ from gaia.daemon.constants import (
 from gaia.daemon.paths import instance_path
 
 
-def create_app(
-    *,
-    token: str,
-    port: int,
-    pid: int,
-    started_at: float,
-    on_startup: Optional[Callable[[], None]] = None,
-    on_shutdown: Optional[Callable[[], None]] = None,
-):
-    """Build the FastAPI app bound to this daemon's identity.
-
-    *token*, *port*, *pid*, *started_at* are captured in the closure so the status
-    payload and the auth check need no shared global state. *on_startup* /
-    *on_shutdown* run inside the app lifespan — the daemon registers instance.json
-    on startup (once the port is bound) and deregisters on shutdown.
-    """
-    from fastapi import Depends, FastAPI, Header, HTTPException
-
-    @asynccontextmanager
-    async def lifespan(_app):
-        if on_startup is not None:
-            on_startup()
-        try:
-            yield
-        finally:
-            if on_shutdown is not None:
-                on_shutdown()
-
-    app = FastAPI(
-        title="GAIA Daemon",
-        version=DAEMON_API_VERSION,
-        docs_url=None,
-        redoc_url=None,
-        openapi_url=None,
-        lifespan=lifespan,
-    )
+def build_require_token(token: str):
+    """FastAPI dependency enforcing the daemon client token (closure — no
+    shared global state). Shared by the core routes here and the agents
+    router so the 401 contract never forks."""
+    from fastapi import Header, HTTPException
 
     def require_token(authorization: Optional[str] = Header(default=None)) -> None:
         where = f"the client token in {instance_path()}"
@@ -98,6 +67,51 @@ def create_app(
                 headers={"WWW-Authenticate": AUTH_SCHEME},
             )
 
+    return require_token
+
+
+def create_app(
+    *,
+    token: str,
+    port: int,
+    pid: int,
+    started_at: float,
+    on_startup: Optional[Callable[[], None]] = None,
+    on_shutdown: Optional[Callable[[], None]] = None,
+    registry=None,
+):
+    """Build the FastAPI app bound to this daemon's identity.
+
+    *token*, *port*, *pid*, *started_at* are captured in the closure so the status
+    payload and the auth check need no shared global state. *on_startup* /
+    *on_shutdown* run inside the app lifespan — the daemon registers instance.json
+    on startup (once the port is bound) and deregisters on shutdown. *registry*
+    (a :class:`gaia.daemon.sidecars.registry.SidecarRegistry`) mounts the
+    ``/daemon/v1/agents`` control plane; ``None`` leaves it unmounted.
+    """
+    from fastapi import Depends, FastAPI, HTTPException
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        if on_startup is not None:
+            on_startup()
+        try:
+            yield
+        finally:
+            if on_shutdown is not None:
+                on_shutdown()
+
+    app = FastAPI(
+        title="GAIA Daemon",
+        version=DAEMON_API_VERSION,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+        lifespan=lifespan,
+    )
+
+    require_token = build_require_token(token)
+
     @app.get(f"{API_PREFIX}/status")
     def status(_: None = Depends(require_token)) -> dict:
         now = time.time()
@@ -127,5 +141,10 @@ def create_app(
             )
         server.should_exit = True
         return {"service": SERVICE_ID, "status": "stopping", "pid": pid}
+
+    if registry is not None:
+        from gaia.daemon.sidecars.routes import build_agents_router
+
+        app.include_router(build_agents_router(token, registry))
 
     return app

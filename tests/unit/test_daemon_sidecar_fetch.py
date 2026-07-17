@@ -1,6 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Verified binary fetch — the SHA-256 security boundary for the email sidecar."""
+"""Verified binary fetch — the SHA-256 security boundary for daemon-supervised
+sidecar agents (ported from test_email_sidecar_fetch.py, issue #2142 T3)."""
 
 import hashlib
 import json
@@ -8,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from gaia.ui.email_sidecar import fetch as fetchmod
-from gaia.ui.email_sidecar.errors import IntegrityError, PlatformError
+from gaia.daemon.sidecars import fetch as fetchmod
+from gaia.daemon.sidecars.errors import IntegrityError, PlatformError
 
 REAL_BYTES = b"fake-binary-payload"
 REAL_SHA = hashlib.sha256(REAL_BYTES).hexdigest()

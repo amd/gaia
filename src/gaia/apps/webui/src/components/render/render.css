@@ -210,3 +210,93 @@
 .render-diff__line--hunk {
     color: var(--text-secondary, #666666);
 }
+
+/* ── needs_confirmation (#2109, stateless D1) ────────────────────────── */
+
+.render-confirmation {
+    background: var(--bg-card, #ffffff);
+    border: 1px solid var(--confirm-border, #e0a800);
+    border-left-width: 3px;
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 13px;
+    color: var(--text-primary, #1a1a1a);
+}
+
+.render-confirmation__header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+}
+
+.render-confirmation__badge {
+    background: var(--confirm-badge-bg, rgba(224, 168, 0, 0.15));
+    color: var(--confirm-badge-fg, #8a6d00);
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.render-confirmation__label {
+    font-weight: 600;
+    font-size: 14px;
+    text-transform: capitalize;
+}
+
+/* Machine action name — code-derived truth, visually distinct from the
+ * (attacker-influenced) summary block below. */
+.render-confirmation__action {
+    font-family: var(--font-mono, monospace);
+    font-size: 12px;
+    color: var(--text-secondary, #666666);
+    background: var(--bg-secondary, #f4f4f4);
+    border-radius: 4px;
+    padding: 1px 6px;
+}
+
+/* Plain-text summary: <pre> keeps it a literal text node with no markdown
+ * interpretation; wrap so long summaries stay readable. */
+.render-confirmation__summary {
+    margin: 0 0 8px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: inherit;
+    font-size: 13px;
+}
+
+.render-confirmation__footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.render-confirmation__note {
+    color: var(--text-secondary, #666666);
+    font-size: 12px;
+}
+
+.render-confirmation__dismiss {
+    background: transparent;
+    border: 1px solid var(--border-light, #e2e2e2);
+    border-radius: 6px;
+    padding: 3px 10px;
+    font-size: 12px;
+    color: var(--text-secondary, #666666);
+    cursor: pointer;
+}
+
+.render-confirmation__dismiss:hover {
+    background: var(--bg-secondary, #f4f4f4);
+}
+
+.render-confirmation--dismissed {
+    color: var(--text-secondary, #666666);
+    font-size: 12px;
+    border-style: dashed;
+}
