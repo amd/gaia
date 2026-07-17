@@ -258,9 +258,7 @@ def test_dev_mode_spawn_command_is_uvicorn_app_dir(monkeypatch, tmp_path):
 
 def test_dev_mode_missing_src_dir_raises(monkeypatch, tmp_path):
     monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
-    m = mgr.AgentSidecarManager(
-        _email_spec_with_src(tmp_path / "does-not-exist")
-    )
+    m = mgr.AgentSidecarManager(_email_spec_with_src(tmp_path / "does-not-exist"))
     with pytest.raises(SidecarSpawnError, match="uv pip install -e"):
         m.build_spawn_command(port=9125)
 
@@ -321,9 +319,7 @@ def _install_fake_spawn(monkeypatch, tmp_path, *, spec=None, version_payload=Non
     )
     monkeypatch.setattr(mgr.atexit, "unregister", lambda fn: None)
 
-    m = mgr.AgentSidecarManager(
-        spec, cache_dir=tmp_path, log_dir=tmp_path / "logs"
-    )
+    m = mgr.AgentSidecarManager(spec, cache_dir=tmp_path, log_dir=tmp_path / "logs")
 
     vp = version_payload or {"apiVersion": "1.0", "agentVersion": "0.2.2"}
 
