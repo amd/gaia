@@ -9,13 +9,19 @@
 - ``_dispatch_email_query``: the streaming producer's self-contained email
   dispatch branch — every path either relays the sidecar's /query loop to
   completion or emits a terminal SSE error and returns.
+
+After the daemon-client cutover (#2142 T3), ``_dispatch_email_query`` no
+longer owns a spawning ``EmailSidecarManager`` — it acquires a
+``SidecarHandle`` from the daemon via
+``gaia.ui.email_sidecar.daemon_client.acquire_handle()`` and forwards through
+the handle's bound proxy.
 """
 
 import threading
 
 import pytest
 
-import gaia.ui.email_sidecar.manager as manager_module
+import gaia.ui.email_sidecar.daemon_client as daemon_client_module
 import gaia.ui.email_sidecar.relay as relay_module
 from gaia.ui._chat_helpers import (
     _dispatch_email_query,
@@ -140,26 +146,16 @@ class _FakeProxy:
         return self._init_result
 
 
-class _FakeManager:
+class _FakeHandle:
     def __init__(
         self,
-        is_running=True,
         api_version="2.4",
-        start_error=None,
         init_result=(200, {}),
         init_error=None,
     ):
-        self.is_running = is_running
         self.api_version = api_version
-        self._start_error = start_error
-        self.start_called = False
         self.proxy_called = False
         self._proxy = _FakeProxy(init_result=init_result, init_error=init_error)
-
-    def start(self):
-        self.start_called = True
-        if self._start_error is not None:
-            raise self._start_error
 
     def proxy(self):
         self.proxy_called = True
@@ -176,11 +172,11 @@ class TestDispatchEmailQuery:
     an exception escape, and never calls ``relay_query`` once a pre-flight
     check has already failed."""
 
-    def test_manager_start_failure_emits_agent_error_never_calls_relay(
-        self, monkeypatch
-    ):
-        fake_manager = _FakeManager(is_running=False, start_error=SidecarError("boom"))
-        monkeypatch.setattr(manager_module, "get_shared_manager", lambda: fake_manager)
+    def test_acquire_failure_emits_agent_error_never_calls_relay(self, monkeypatch):
+        def _acquire(agent_id="email"):
+            raise SidecarError("boom")
+
+        monkeypatch.setattr(daemon_client_module, "acquire_handle", _acquire)
         relay_calls = []
         monkeypatch.setattr(
             relay_module,
@@ -191,14 +187,15 @@ class TestDispatchEmailQuery:
         handler = _FakeSSEHandler()
         _dispatch_email_query(handler, _make_request(), [], "some-model")
 
-        assert fake_manager.start_called is True
         assert len(handler.events) == 1
         assert handler.events[0] == {"type": "agent_error", "content": "boom"}
         assert relay_calls == []
 
     def test_version_below_floor_short_circuits_before_proxy(self, monkeypatch):
-        fake_manager = _FakeManager(is_running=True, api_version="2.3")
-        monkeypatch.setattr(manager_module, "get_shared_manager", lambda: fake_manager)
+        fake_handle = _FakeHandle(api_version="2.3")
+        monkeypatch.setattr(
+            daemon_client_module, "acquire_handle", lambda agent_id="email": fake_handle
+        )
         relay_calls = []
         monkeypatch.setattr(
             relay_module,
@@ -209,9 +206,8 @@ class TestDispatchEmailQuery:
         handler = _FakeSSEHandler()
         _dispatch_email_query(handler, _make_request(), [], "model")
 
-        assert fake_manager.proxy_called is False, (
-            "Version gate must short-circuit BEFORE any HTTP call via "
-            "manager.proxy()"
+        assert fake_handle.proxy_called is False, (
+            "Version gate must short-circuit BEFORE any HTTP call via " "handle.proxy()"
         )
         assert len(handler.events) == 1
         assert handler.events[0]["type"] == "agent_error"
@@ -219,10 +215,10 @@ class TestDispatchEmailQuery:
         assert relay_calls == []
 
     def test_proxy_init_raises_sidecar_error(self, monkeypatch):
-        fake_manager = _FakeManager(
-            is_running=True, api_version="2.4", init_error=SidecarError("down")
+        fake_handle = _FakeHandle(api_version="2.4", init_error=SidecarError("down"))
+        monkeypatch.setattr(
+            daemon_client_module, "acquire_handle", lambda agent_id="email": fake_handle
         )
-        monkeypatch.setattr(manager_module, "get_shared_manager", lambda: fake_manager)
         relay_calls = []
         monkeypatch.setattr(
             relay_module,
@@ -233,19 +229,20 @@ class TestDispatchEmailQuery:
         handler = _FakeSSEHandler()
         _dispatch_email_query(handler, _make_request(), [], "model")
 
-        assert fake_manager.proxy_called is True
+        assert fake_handle.proxy_called is True
         assert len(handler.events) == 1
         assert handler.events[0]["type"] == "agent_error"
         assert "down" in handler.events[0]["content"]
         assert relay_calls == []
 
     def test_proxy_init_not_ready_emits_hint_never_calls_relay(self, monkeypatch):
-        fake_manager = _FakeManager(
-            is_running=True,
+        fake_handle = _FakeHandle(
             api_version="2.4",
             init_result=(503, {"hint": "Lemonade Server not reachable"}),
         )
-        monkeypatch.setattr(manager_module, "get_shared_manager", lambda: fake_manager)
+        monkeypatch.setattr(
+            daemon_client_module, "acquire_handle", lambda agent_id="email": fake_handle
+        )
         relay_calls = []
         monkeypatch.setattr(
             relay_module,
@@ -263,8 +260,10 @@ class TestDispatchEmailQuery:
         assert relay_calls == []
 
     def test_cancelled_before_relay_short_circuits_no_relay_call(self, monkeypatch):
-        fake_manager = _FakeManager(is_running=True, api_version="2.4")
-        monkeypatch.setattr(manager_module, "get_shared_manager", lambda: fake_manager)
+        fake_handle = _FakeHandle(api_version="2.4")
+        monkeypatch.setattr(
+            daemon_client_module, "acquire_handle", lambda agent_id="email": fake_handle
+        )
         relay_calls = []
         monkeypatch.setattr(
             relay_module,
@@ -281,8 +280,10 @@ class TestDispatchEmailQuery:
         assert handler.events == []
 
     def test_happy_path_calls_relay_query_with_expected_kwargs(self, monkeypatch):
-        fake_manager = _FakeManager(is_running=True, api_version="2.4")
-        monkeypatch.setattr(manager_module, "get_shared_manager", lambda: fake_manager)
+        fake_handle = _FakeHandle(api_version="2.4")
+        monkeypatch.setattr(
+            daemon_client_module, "acquire_handle", lambda agent_id="email": fake_handle
+        )
 
         calls = []
 
@@ -307,7 +308,7 @@ class TestDispatchEmailQuery:
         assert len(calls) == 1
         call = calls[0]
         assert call["handler"] is handler
-        assert call["proxy"] is fake_manager._proxy
+        assert call["proxy"] is fake_handle._proxy
         assert call["query"] == "what's up"
         assert call["context"] == _query_context_from_history(history_pairs)
         assert call["model_id"] == "model-x"

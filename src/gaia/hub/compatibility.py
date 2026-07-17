@@ -125,9 +125,9 @@ def current_platform_key(plat: Optional[str] = None, arch: Optional[str] = None)
     vocabulary (``win-x64``) used for ``requirements.platforms`` gates — this
     is the npm-package namespace (``win32-x64``, ``darwin-arm64``) used to
     select an entry from a manifest's ``versions[v].artifacts[]`` by filename
-    suffix. Mirrors ``gaia.ui.email_sidecar.platform.current_platform_key()``
-    exactly (parity-tested); duplicated rather than imported because
-    ``gaia.hub`` must never import ``gaia.ui.*``. Never raises — an
+    suffix. Mirrors ``gaia.daemon.sidecars.platform.current_platform_key()``
+    exactly (parity-tested); duplicated rather than imported by design (the
+    hub stays free of the daemon package). Never raises — an
     unrecognized OS/arch passes through as-is so the artifact-selection loud
     error can name it, rather than crashing here.
     """

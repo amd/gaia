@@ -27,7 +27,7 @@ from types import SimpleNamespace
 import pytest
 
 import gaia.ui._chat_helpers as chat_helpers_module
-import gaia.ui.email_sidecar.manager as manager_module
+import gaia.ui.email_sidecar.daemon_client as daemon_client_module
 import gaia.ui.email_sidecar.relay as relay_module
 from gaia.ui._chat_helpers import _stream_chat_impl
 from gaia.ui.database import ChatDatabase
@@ -40,15 +40,13 @@ class _FakeProxy:
         return 200, {}
 
 
-class _FakeManager:
-    """Duck-typed stand-in for EmailSidecarManager: already running, at a
-    contract version that passes the /query relay's floor (2.4)."""
+class _FakeHandle:
+    """Duck-typed stand-in for SidecarHandle: at a contract version that
+    passes the /query relay's floor (2.4). Acquisition itself (starting the
+    sidecar, if needed) is the daemon's job now — the handle is simply
+    already resolved by the time ``_dispatch_email_query`` gets it."""
 
-    is_running = True
     api_version = "2.4"
-
-    def start(self):  # pragma: no cover - must not be called when running
-        raise AssertionError("start() must not be called when is_running=True")
 
     def proxy(self):
         return _FakeProxy()
@@ -107,7 +105,9 @@ def test_email_relay_fidelity_end_to_end(monkeypatch):
         # NB: no signal_done() here — the real relay_query never signals; the
         # turn-level sentinel is owned by _run_agent's outer finally.
 
-    monkeypatch.setattr(manager_module, "get_shared_manager", lambda: _FakeManager())
+    monkeypatch.setattr(
+        daemon_client_module, "acquire_handle", lambda agent_id="email": _FakeHandle()
+    )
     monkeypatch.setattr(relay_module, "relay_query", _fake_relay_query)
     monkeypatch.setattr(
         chat_helpers_module, "_maybe_update_session_title", _noop_retitle
@@ -195,7 +195,7 @@ class _ClosableResp:
         pass
 
 
-class _ScriptedManager(_FakeManager):
+class _ScriptedHandle(_FakeHandle):
     def __init__(self, events):
         self._scripted_proxy = _ScriptedQueryProxy(events)
 
@@ -220,7 +220,9 @@ def test_card_echo_only_answer_never_persists_raw_echoed_json(monkeypatch):
         {"type": "final", "answer": echoed_card},
     ]
     monkeypatch.setattr(
-        manager_module, "get_shared_manager", lambda: _ScriptedManager(events)
+        daemon_client_module,
+        "acquire_handle",
+        lambda agent_id="email": _ScriptedHandle(events),
     )
     monkeypatch.setattr(
         chat_helpers_module, "_maybe_update_session_title", _noop_retitle
@@ -262,7 +264,9 @@ def test_email_turn_pushes_exactly_one_done_sentinel(monkeypatch):
         {"type": "final", "answer": "Hi there"},
     ]
     monkeypatch.setattr(
-        manager_module, "get_shared_manager", lambda: _ScriptedManager(events)
+        daemon_client_module,
+        "acquire_handle",
+        lambda agent_id="email": _ScriptedHandle(events),
     )
     monkeypatch.setattr(
         chat_helpers_module, "_maybe_update_session_title", _noop_retitle

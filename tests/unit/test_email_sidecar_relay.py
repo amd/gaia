@@ -671,7 +671,7 @@ pytestmark_integration = pytest.mark.skipif(
 
 
 def _free_port() -> int:
-    from gaia.ui.email_sidecar.manager import find_free_port
+    from gaia.daemon.sidecars.manager import find_free_port
 
     return find_free_port()
 

@@ -8,12 +8,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gaia.agents.registry import AgentRegistry
+from gaia.daemon.sidecars.errors import StopFailedError
 from gaia.hub import catalog as catalog_mod
 from gaia.hub import installer as installer_mod
 from gaia.hub import lifecycle as lifecycle_mod
 from gaia.hub.catalog import UnifiedCatalog
 from gaia.hub.installer import InstalledAgent, InstallError, NotInstalledError
 from gaia.hub.lifecycle import AgentStatus, HealthStatus
+from gaia.ui.email_sidecar import daemon_client as daemon_client_module
 from gaia.ui.routers import hub as hub_router
 from gaia.ui.server import create_app
 
@@ -417,18 +419,23 @@ def test_install_error_surfaces_via_install_status(client, monkeypatch):
     assert "email" in body["error"]
 
 
-class _FakeSidecarManager:
-    def __init__(self, is_running=True):
-        self.is_running = is_running
-        self.shutdown_calls = 0
+class _StopSidecarRecorder:
+    """Fake ``daemon_client.stop_sidecar`` — records every call, optionally
+    raising a scripted error (e.g. ``StopFailedError``)."""
 
-    def shutdown(self):
-        self.shutdown_calls += 1
+    def __init__(self, error=None):
+        self.calls = []
+        self._error = error
+
+    def __call__(self, agent_id):
+        self.calls.append(agent_id)
+        if self._error is not None:
+            raise self._error
 
 
-def test_email_install_shuts_down_running_sidecar_first(client, app, monkeypatch):
-    fake = _FakeSidecarManager(is_running=True)
-    app.state.email_sidecar_manager = fake
+def test_email_install_shuts_down_running_sidecar_first(client, monkeypatch):
+    recorder = _StopSidecarRecorder()
+    monkeypatch.setattr(daemon_client_module, "stop_sidecar", recorder)
     monkeypatch.setattr(
         catalog_mod,
         "fetch_manifest",
@@ -437,50 +444,36 @@ def test_email_install_shuts_down_running_sidecar_first(client, app, monkeypatch
     monkeypatch.setattr(installer_mod, "install", lambda agent_id, **k: None)
     resp = client.post("/api/agents/install", json={"id": "email"}, headers=UI)
     assert resp.status_code == 202
-    assert fake.shutdown_calls == 1
+    assert recorder.calls == ["email"]
 
 
-def test_email_uninstall_shuts_down_running_sidecar_first(client, app, monkeypatch):
-    fake = _FakeSidecarManager(is_running=True)
-    app.state.email_sidecar_manager = fake
+def test_email_uninstall_shuts_down_running_sidecar_first(client, monkeypatch):
+    recorder = _StopSidecarRecorder()
+    monkeypatch.setattr(daemon_client_module, "stop_sidecar", recorder)
     monkeypatch.setattr(installer_mod, "uninstall", lambda *a, **k: None)
     resp = client.delete("/api/agents/email", headers=UI)
     assert resp.status_code == 200
-    assert fake.shutdown_calls == 1
+    assert recorder.calls == ["email"]
 
 
-def test_email_rollback_shuts_down_running_sidecar_first(client, app, monkeypatch):
-    fake = _FakeSidecarManager(is_running=True)
-    app.state.email_sidecar_manager = fake
+def test_email_rollback_shuts_down_running_sidecar_first(client, monkeypatch):
+    recorder = _StopSidecarRecorder()
+    monkeypatch.setattr(daemon_client_module, "stop_sidecar", recorder)
     restored = InstalledAgent(
         id="email", version="1.0.0", language="python", installed_at="now"
     )
     monkeypatch.setattr(installer_mod, "rollback", lambda *a, **k: restored)
     resp = client.post("/api/agents/email/rollback", headers=UI)
     assert resp.status_code == 200
-    assert fake.shutdown_calls == 1
+    assert recorder.calls == ["email"]
 
 
-def test_email_install_noop_when_sidecar_not_running(client, app, monkeypatch):
-    fake = _FakeSidecarManager(is_running=False)
-    app.state.email_sidecar_manager = fake
-    monkeypatch.setattr(
-        catalog_mod,
-        "fetch_manifest",
-        lambda *a, **k: {"id": "email", "language": "python"},
-    )
-    called = {}
-    monkeypatch.setattr(
-        installer_mod, "install", lambda agent_id, **k: called.update(id=agent_id)
-    )
-    resp = client.post("/api/agents/install", json={"id": "email"}, headers=UI)
-    assert resp.status_code == 202
-    assert fake.shutdown_calls == 0
-    assert called.get("id") == "email"
-
-
-def test_email_install_noop_when_sidecar_manager_none(client, app, monkeypatch):
-    app.state.email_sidecar_manager = None
+def test_email_install_proceeds_when_stop_sidecar_noops(client, monkeypatch):
+    # No daemon / no running sidecar is a genuine no-op INSIDE stop_sidecar
+    # itself now (attach-only, per #2142 T3) — the router just calls it and
+    # lets it return normally; install still proceeds.
+    recorder = _StopSidecarRecorder()
+    monkeypatch.setattr(daemon_client_module, "stop_sidecar", recorder)
     monkeypatch.setattr(
         catalog_mod,
         "fetch_manifest",
@@ -495,11 +488,13 @@ def test_email_install_noop_when_sidecar_manager_none(client, app, monkeypatch):
     assert called.get("id") == "email"
 
 
-def test_email_install_noop_when_sidecar_manager_attribute_absent(
-    client, app, monkeypatch
-):
-    if hasattr(app.state, "email_sidecar_manager"):
-        del app.state.email_sidecar_manager
+def test_email_install_aborts_when_stop_fails(client, monkeypatch):
+    # D-4b: a sidecar that survives a tree-kill must abort the install rather
+    # than mutate a directory a still-live process holds open.
+    recorder = _StopSidecarRecorder(
+        error=StopFailedError("pid 4242 survived a tree-kill")
+    )
+    monkeypatch.setattr(daemon_client_module, "stop_sidecar", recorder)
     monkeypatch.setattr(
         catalog_mod,
         "fetch_manifest",
@@ -510,13 +505,14 @@ def test_email_install_noop_when_sidecar_manager_attribute_absent(
         installer_mod, "install", lambda agent_id, **k: called.update(id=agent_id)
     )
     resp = client.post("/api/agents/install", json={"id": "email"}, headers=UI)
-    assert resp.status_code == 202
-    assert called.get("id") == "email"
+    assert resp.status_code == 500
+    assert "4242" in resp.json()["detail"]
+    assert called == {}
 
 
-def test_non_email_install_does_not_shutdown_sidecar(client, app, monkeypatch):
-    fake = _FakeSidecarManager(is_running=True)
-    app.state.email_sidecar_manager = fake
+def test_non_email_install_does_not_shutdown_sidecar(client, monkeypatch):
+    recorder = _StopSidecarRecorder()
+    monkeypatch.setattr(daemon_client_module, "stop_sidecar", recorder)
     monkeypatch.setattr(
         catalog_mod,
         "fetch_manifest",
@@ -525,4 +521,4 @@ def test_non_email_install_does_not_shutdown_sidecar(client, app, monkeypatch):
     monkeypatch.setattr(installer_mod, "install", lambda agent_id, **k: None)
     resp = client.post("/api/agents/install", json={"id": "demo"}, headers=UI)
     assert resp.status_code == 202
-    assert fake.shutdown_calls == 0
+    assert recorder.calls == []

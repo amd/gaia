@@ -1111,7 +1111,7 @@ def test_install_rejects_path_traversal_filename_in_artifacts_array(
 
 
 def test_generic_executable_names_match_binaries_lock(tmp_path):
-    from gaia.ui.email_sidecar import platform as sidecar_platform
+    from gaia.daemon.sidecars import platform as sidecar_platform
 
     lock = sidecar_platform.load_lock()
     for platform_key in sidecar_platform.SUPPORTED_PLATFORMS:
@@ -1143,8 +1143,8 @@ def test_generic_executable_names_match_binaries_lock(tmp_path):
     ],
 )
 def test_current_platform_key_parity_with_email_sidecar(plat, arch):
+    from gaia.daemon.sidecars import platform as sidecar_platform
     from gaia.hub import compatibility
-    from gaia.ui.email_sidecar import platform as sidecar_platform
 
     assert compatibility.current_platform_key(plat, arch) == (
         sidecar_platform.current_platform_key(plat, arch)
