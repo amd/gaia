@@ -1610,11 +1610,11 @@ class _MultiMailboxPrescanBackend:
 
     Carries the ordered ``provider -> live backend`` map so :func:`_run_prescan`
     fans the scan across all connected mailboxes and returns one merged envelope
-    — the multi-inbox behaviour the agent loop already ships (#1603/#1614),
-    reached here so the Agent UI's ``pre_scan_inbox`` tool (which routes through
-    ``/prescan``) is no longer dead-ended by a single-mailbox guard. It is NOT a
-    silent pick-one: every connected mailbox is scanned and merged. Send/search
-    stay fail-loud — a write can't target "all".
+    — the multi-inbox behaviour the agent loop already ships (#1603/#1614), now
+    reachable from the REST ``/prescan`` surface as well instead of dead-ending
+    on a single-mailbox guard. It is NOT a silent pick-one: every connected
+    mailbox is scanned and merged. Send/search stay fail-loud — a write can't
+    target "all".
     """
 
     def __init__(self, backends: "dict"):
@@ -1631,8 +1631,8 @@ def get_prescan_backend():
       - 2+ connected → a :class:`_MultiMailboxPrescanBackend` over every mailbox
       - exactly 1 → the matching live backend (list/get only)
 
-    Never a silent guess-one — 2+ scans every connected mailbox and tags each
-    result with its source. Wired as a FastAPI ``Depends`` so tests inject a
+    Never a silent guess-one — 2+ scans every connected mailbox and returns
+    one merged envelope. Wired as a FastAPI ``Depends`` so tests inject a
     fake via ``app.dependency_overrides[get_prescan_backend]`` without touching
     live mail.
     """
@@ -2129,7 +2129,8 @@ async def prescan_inbox(
     heuristic path the agent loop runs) — categories are not re-implemented
     here. The backend is resolved by :func:`get_prescan_backend`: 503 when no
     mailbox is connected, and with 2+ connected it consolidates every mailbox
-    (each item tagged with its source) rather than failing on ambiguity.
+    into one merged envelope rather than failing on ambiguity (the frozen REST
+    contract carries no per-item mailbox tag).
     """
     try:
         out = await asyncio.to_thread(
