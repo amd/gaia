@@ -18,6 +18,7 @@ import psutil
 from gaia.daemon.sidecars.errors import (
     CapacityError,
     ModeConflictError,
+    SidecarNotRunningError,
     StopFailedError,
     UnknownAgentError,
 )
@@ -143,6 +144,27 @@ class SidecarRegistry:
     @staticmethod
     def _manager_mode(manager) -> str:
         return manager.mode
+
+    def connection(self, agent_id: str) -> "tuple[str, str]":
+        """``(base_url, bearer token)`` for *agent_id*'s RUNNING sidecar.
+
+        The relay's single server-side token source (#2150): the sidecar bearer
+        never has to travel through a client to reach proxied calls. Raises
+        :class:`UnknownAgentError` (unregistered id) or
+        :class:`SidecarNotRunningError` (registered but not running) so the
+        HTTP layer can map them to distinct loud 404/503 responses.
+        """
+        self._spec(agent_id)
+        with self._lock:
+            holder = self._managers.get(agent_id)
+        manager = holder[0] if holder is not None else None
+        if manager is None or not manager.is_running or not manager.base_url:
+            raise SidecarNotRunningError(
+                f"agent '{agent_id}' has no running sidecar to relay to. "
+                f"Start it first (`gaia daemon start-agent {agent_id}` or "
+                f"POST /daemon/v1/agents/{agent_id}/ensure), then retry."
+            )
+        return manager.base_url, manager.auth_token
 
     def list_agents(self) -> "list[dict]":
         """One entry per registered spec, running or not. NEVER includes tokens."""
