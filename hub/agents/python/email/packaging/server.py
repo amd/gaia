@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 
 logging.basicConfig(
@@ -88,25 +89,33 @@ def build_app():
     # Caller authentication (#1706). The sidecar binds 127.0.0.1 and exposes
     # draft/send, so it MUST authenticate its caller — a no-auth localhost API is
     # reachable by any other local process and (via DNS-rebinding) by the user's
-    # browser. The spawning parent passes a per-session bearer token over the
-    # private GAIA_EMAIL_SIDECAR_TOKEN env channel; the Host/Origin middleware
-    # closes rebinding / drive-by-webpage access regardless. This is wired ONLY
-    # here — the product server (gaia.api.openai_server) mounts the same router
+    # browser. The spawning parent hands over a per-session bearer token — via a
+    # 0600 secret file (GAIA_EMAIL_SIDECAR_TOKEN_FILE, preferred #2149) or the
+    # legacy GAIA_EMAIL_SIDECAR_TOKEN env var; the Host/Origin middleware closes
+    # rebinding / drive-by-webpage access regardless. This is wired ONLY here —
+    # the product server (gaia.api.openai_server) mounts the same router
     # unchanged.
     auth_config = caller_auth.config_from_env()
     caller_auth.configure(auth_config)
     app.add_middleware(caller_auth.HostOriginMiddleware)
     if auth_config.token:
+        channel = (
+            f"0600 secret file ({caller_auth.TOKEN_FILE_ENV_VAR})"
+            if os.environ.get(caller_auth.TOKEN_FILE_ENV_VAR)
+            else f"{caller_auth.TOKEN_ENV_VAR} env var (legacy delivery)"
+        )
         log.info(
-            "Email sidecar: caller authentication ENABLED "
-            "(per-session bearer token required on /v1/email/* requests)."
+            "Email sidecar: caller authentication ENABLED via %s "
+            "(per-session bearer token required on /v1/email/* requests).",
+            channel,
         )
     else:
         log.warning(
-            "Email sidecar: caller authentication DISABLED — no %s in the "
-            "environment. This is intended for LOCAL DEVELOPMENT only; the "
-            "shipped product spawns the sidecar with a per-session token. "
-            "Host/Origin protection is still enforced.",
+            "Email sidecar: caller authentication DISABLED — neither %s nor %s "
+            "is in the environment. This is intended for LOCAL DEVELOPMENT "
+            "only; the shipped product spawns the sidecar with a per-session "
+            "token. Host/Origin protection is still enforced.",
+            caller_auth.TOKEN_FILE_ENV_VAR,
             caller_auth.TOKEN_ENV_VAR,
         )
 
