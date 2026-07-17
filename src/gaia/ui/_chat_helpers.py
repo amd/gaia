@@ -972,10 +972,9 @@ def _session_mail_provider(session: dict) -> str | None:
 
 
 # Minimum sidecar contract version the /query relay requires (#2109). The
-# manager's own version gate only pins MAJOR (get_shared_manager's
-# expected_api_version), so a pre-2.4 Hub binary passes that handshake and
-# then 404s every /query call — this finer MAJOR.MINOR check catches it
-# before the first POST.
+# daemon's own version gate only pins MAJOR (the spec's expected_api_major),
+# so a pre-2.4 Hub binary passes that handshake and then 404s every /query
+# call — this finer MAJOR.MINOR check catches it before the first POST.
 _EMAIL_QUERY_MIN_API_VERSION = (2, 4)
 
 
@@ -1036,28 +1035,26 @@ def _dispatch_email_query(
     a sidecar connection error as a retryable Lemonade error and trigger a
     bogus model reload.
     """
+    from gaia.ui.email_sidecar import daemon_client
     from gaia.ui.email_sidecar.errors import SidecarError
-    from gaia.ui.email_sidecar.manager import get_shared_manager
     from gaia.ui.email_sidecar.relay import (
         EMAIL_QUERY_VERSION_UPGRADE_MESSAGE,
         relay_query,
     )
 
-    manager = get_shared_manager()
     try:
-        if not manager.is_running:
-            manager.start()
+        handle = daemon_client.acquire_handle()
     except SidecarError as exc:
         sse_handler._emit({"type": "agent_error", "content": str(exc)})
         return
 
-    if not _email_query_version_supported(manager.api_version):
+    if not _email_query_version_supported(handle.api_version):
         sse_handler._emit(
             {"type": "agent_error", "content": EMAIL_QUERY_VERSION_UPGRADE_MESSAGE}
         )
         return
 
-    proxy = manager.proxy()
+    proxy = handle.proxy()
 
     # First-turn-per-session readiness check (#2101 lesson): a 503 from
     # /v1/email/init is contract ("not ready yet"), not a transport failure.

@@ -10,7 +10,9 @@ calendar view/preview/create/respond, health, version, readiness init +
 streamed provisioning) to the out-of-process sidecar, preserving the sidecar's
 own status codes and actionable error detail.
 
-Each request lazily starts the sidecar (off the event loop) and forwards to it.
+Each request acquires a sidecar handle from the GAIA daemon (off the event
+loop) and forwards to it — the daemon owns spawn/supervision (#2142); this
+data plane still talks straight to the sidecar port until V2-7.
 
 Security: the sidecar's connector OAuth *write* routes are deliberately NOT
 proxied — all connector writes stay on the Python backend's single-writer path
@@ -28,6 +30,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from gaia.logger import get_logger
+from gaia.ui.email_sidecar import daemon_client
 from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
 
 logger = get_logger(__name__)
@@ -36,21 +39,15 @@ router = APIRouter(prefix="/v1/email", tags=["email-sidecar"])
 
 
 async def _get_proxy(request: Request):
-    """Lazily start the sidecar (off the event loop) and return a bound proxy."""
-    manager = getattr(request.app.state, "email_sidecar_manager", None)
-    if manager is None:
-        raise HTTPException(
-            status_code=500,
-            detail="email sidecar manager not configured on app.state",
-        )
+    """Acquire a sidecar handle from the daemon (off the event loop); return
+    its bound proxy. Per-request acquisition — the daemon's fast is_running
+    path makes a warm re-ensure cheap."""
     try:
-        # The RLock inside manager.start() serializes concurrent lazy-start callers and re-checks is_running, so this unlocked pre-check is safe (not a TOCTOU race).
-        if not manager.is_running:
-            await run_in_threadpool(manager.start)
-        return manager.proxy()
+        handle = await run_in_threadpool(daemon_client.acquire_handle)
+        return handle.proxy()
     except SidecarError as e:
-        # Sidecar could not start (binary missing, dev env missing, health
-        # timeout, version mismatch). Surface the actionable message loudly.
+        # Daemon unreachable, spawn failure, health timeout, version mismatch —
+        # surface the actionable message loudly.
         raise HTTPException(status_code=503, detail=str(e)) from e
 
 
