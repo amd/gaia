@@ -919,96 +919,17 @@ class EmailTriageAgent(
         the error is recorded in ``mailbox_errors`` and the loop continues with
         the remaining backends. Non-``ConnectorsError`` exceptions still propagate.
         """
-        from gaia_agent_email.tools.read_tools import (
-            PRE_SCAN_ACTIONABLE_CAP,
-            PRE_SCAN_ARCHIVE_CAP,
-            PRE_SCAN_URGENT_CAP,
-            pre_scan_inbox_impl,
-        )
-
-        prefs = getattr(self, "_session_preferences", None)
-        force_llm = bool(getattr(self.config, "force_llm", False))
-        debug_flag = bool(getattr(self.config, "debug", False))
+        from gaia_agent_email.tools.read_tools import merge_pre_scan_backends
 
         self._refresh_mail_backends()
-        backends = self._backends
-        per_backend = max(1, max_messages // len(backends))
-        urgent: list[dict] = []
-        actionable: list[dict] = []
-        suggested_archives: list[dict] = []
-        informational_count = 0
-        scanned = 0
-        merged_prefs_applied: dict = {}
-        mailbox_errors: list[dict] = []
-        for provider, backend in backends.items():
-            if scanned >= max_messages:
-                break
-            try:
-                out = pre_scan_inbox_impl(
-                    backend,
-                    max_messages=per_backend,
-                    session_preferences=prefs,
-                    force_llm=force_llm,
-                    debug=debug_flag,
-                )
-            except ConnectorsError as exc:
-                msg = format_connector_error(exc)
-                mailbox_errors.append({"mailbox": provider, "error": msg})
-                logger.warning(
-                    "email pre-scan: skipping %s mailbox — %s", provider, msg
-                )
-                continue
-            # Count messages actually returned, not the cap — an under-filled
-            # backend would otherwise trip the budget guard and skip a later one.
-            backend_totals = out.get("totals", {})
-            scanned += (
-                int(backend_totals.get("urgent", 0))
-                + int(backend_totals.get("actionable", 0))
-                + int(backend_totals.get("suggested_archives", 0))
-                + int(out.get("informational_count", 0))
-            )
-            merged_prefs_applied = out.get("preferences_applied", merged_prefs_applied)
-            for item in out.get("urgent", []):
-                item["mailbox"] = provider
-                self._remember_message_mailbox(item.get("message_id"), provider)
-                self._remember_message_mailbox(item.get("thread_id"), provider)
-                urgent.append(item)
-            for item in out.get("actionable", []):
-                item["mailbox"] = provider
-                self._remember_message_mailbox(item.get("message_id"), provider)
-                self._remember_message_mailbox(item.get("thread_id"), provider)
-                actionable.append(item)
-            for item in out.get("suggested_archives", []):
-                item["mailbox"] = provider
-                self._remember_message_mailbox(item.get("message_id"), provider)
-                self._remember_message_mailbox(item.get("thread_id"), provider)
-                suggested_archives.append(item)
-            informational_count += int(out.get("informational_count", 0))
-        result = {
-            "kind": "email_pre_scan",
-            "urgent": urgent[: max(0, PRE_SCAN_URGENT_CAP)],
-            "actionable": actionable[: max(0, PRE_SCAN_ACTIONABLE_CAP)],
-            "informational_count": informational_count,
-            "suggested_archives": suggested_archives[: max(0, PRE_SCAN_ARCHIVE_CAP)],
-            "suggested_drafts": [],
-            "preferences_applied": merged_prefs_applied,
-            "totals": {
-                "urgent": len(urgent),
-                "actionable": len(actionable),
-                "informational": informational_count,
-                "suggested_archives": len(suggested_archives),
-            },
-        }
-        if mailbox_errors and len(mailbox_errors) == len(self._backends):
-            # Every connected mailbox failed — surface it loudly rather than
-            # returning ok with zero results (which reads as "empty inbox").
-            raise ConnectorsError(
-                "All connected mailboxes failed during pre-scan: "
-                + "; ".join(f"{e['mailbox']}: {e['error']}" for e in mailbox_errors)
-            )
-        if mailbox_errors:
-            result["mailbox_errors"] = mailbox_errors
-        return result
+        return merge_pre_scan_backends(
+            self._backends,
+            max_messages=max_messages,
+            session_preferences=getattr(self, "_session_preferences", None),
+            force_llm=bool(getattr(self.config, "force_llm", False)),
+            debug=bool(getattr(self.config, "debug", False)),
+            remember_mailbox=self._remember_message_mailbox,
+        )
 
     # -- Phase I3 batch-organize counter -----------------------------------
 

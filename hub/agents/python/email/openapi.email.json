@@ -3094,7 +3094,7 @@
     },
     "/v1/email/prescan": {
       "post": {
-        "description": "Pre-scan the connected inbox into the scannable triage card envelope.\n\nLists the ``max_messages`` most-recent inbox messages via the connected\nmailbox backend and returns the aggregate pre-scan summary the Agent UI's\n``EmailPreScanCard`` renders — top urgent / actionable rows, an\ninformational count, and suggested archives, each with a heuristic reason.\nRead-only: nothing is archived, marked, or sent.\n\nClassification reuses the agent's ``pre_scan_inbox_impl`` (the same\nheuristic path the agent loop runs) — categories are not re-implemented\nhere. The backend is resolved by :func:`get_prescan_backend`, which fails\nloudly on zero or ambiguous mailboxes.",
+        "description": "Pre-scan the connected inbox into the scannable triage card envelope.\n\nLists the ``max_messages`` most-recent inbox messages via every connected\nmailbox and returns the aggregate pre-scan summary the Agent UI's\n``EmailPreScanCard`` renders — top urgent / actionable rows, an\ninformational count, and suggested archives, each with a heuristic reason.\nRead-only: nothing is archived, marked, or sent.\n\nClassification reuses the agent's ``pre_scan_inbox_impl`` (the same\nheuristic path the agent loop runs) — categories are not re-implemented\nhere. The backend is resolved by :func:`get_prescan_backend`: 503 when no\nmailbox is connected, and with 2+ connected it consolidates every mailbox\ninto one merged envelope rather than failing on ambiguity (the frozen REST\ncontract carries no per-item mailbox tag).",
         "operationId": "prescan_inbox_v1_email_prescan_post",
         "requestBody": {
           "content": {
@@ -3116,9 +3116,6 @@
               }
             },
             "description": "Successful Response"
-          },
-          "400": {
-            "description": "Ambiguous or unknown account: the named provider is not connected, or no provider was given while several accounts are connected."
           },
           "403": {
             "description": "Authorization failed — the account's auth is missing, expired, or revoked (reconnect via Settings → Connectors), or a confirmation gate rejected the request (mint a fresh confirmation token)."
