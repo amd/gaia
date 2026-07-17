@@ -32,6 +32,20 @@ describe("parseManifest", () => {
     expect(parseManifest(yaml).security_tier).toBe("experimental");
   });
 
+  it("defaults type to agent when unspecified", () => {
+    expect(parseManifest(sampleManifest()).type).toBe("agent");
+  });
+
+  it.each(["agent", "app", "component"])("accepts type %s", (pkgType) => {
+    expect(parseManifest(`${sampleManifest()}type: ${pkgType}\n`).type).toBe(pkgType);
+  });
+
+  it("rejects an unknown type with the valid values named", () => {
+    expect(() => parseManifest(`${sampleManifest()}type: plugin\n`)).toThrow(
+      /agent, app, component/
+    );
+  });
+
   it.each([
     ["missing required field", "id: x\nname: y\n"],
     ["invalid id", sampleManifest({ id: "Bad_Id" })],
