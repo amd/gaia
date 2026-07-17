@@ -2984,29 +2984,31 @@ class LemonadeClient:
             self._ensure_pinned_load(model)
             return
 
+        # Determine the ctx_size GAIA expects for this model. This lookup
+        # happens BEFORE the "already loaded" check so we can detect a
+        # model that's loaded at the wrong window and reload it — pre-#1030
+        # follow-up the function returned early on any match, leaving
+        # Gemma 4 loaded at Lemonade's default 32K even after GAIA
+        # bumped MODELS[…].min_ctx_size to 65536. That's why
+        # ``summarize_document`` kept hitting LemonadeContextOverflowError
+        # at 35K-token sections.
+        expected_ctx: Optional[int] = None
+        for _key, _req in MODELS.items():
+            if _req.model_id == model:
+                expected_ctx = _req.min_ctx_size
+                break
+        if expected_ctx is None:
+            expected_ctx = DEFAULT_CONTEXT_SIZE
+
+        # Best-effort pre-flight probe (#2053): skip a redundant /load when the
+        # model is already loaded at a sufficient ctx. A probe failure here is
+        # NOT fatal — fall through to the actual load below, whose failure DOES
+        # propagate. Only the status/ctx check is swallowed; never the load.
         try:
-            # Determine the ctx_size GAIA expects for this model. This lookup
-            # happens BEFORE the "already loaded" check so we can detect a
-            # model that's loaded at the wrong window and reload it — pre-#1030
-            # follow-up the function returned early on any match, leaving
-            # Gemma 4 loaded at Lemonade's default 32K even after GAIA
-            # bumped MODELS[…].min_ctx_size to 65536. That's why
-            # ``summarize_document`` kept hitting LemonadeContextOverflowError
-            # at 35K-token sections.
-            expected_ctx: Optional[int] = None
-            for _key, _req in MODELS.items():
-                if _req.model_id == model:
-                    expected_ctx = _req.min_ctx_size
-                    break
-            if expected_ctx is None:
-                expected_ctx = DEFAULT_CONTEXT_SIZE
-
-            # Check current server state
+            # Check current server state. ``status.loaded_models`` carries
+            # health entries enriched with ``id`` + ``recipe_options`` so we
+            # can read ctx_size.
             status = self.get_status()
-
-            # Look the model up in the actually-loaded set (health-format).
-            # ``status.loaded_models`` now carries health entries enriched
-            # with ``id`` + ``recipe_options`` so we can read ctx_size.
             loaded_entry = self._find_loaded_entry(status, model)
 
             if loaded_entry is not None:
@@ -3027,76 +3029,91 @@ class LemonadeClient:
                 )
             else:
                 self.log.debug(f"Model '{model}' not loaded, loading...")
+        except Exception as e:  # pylint: disable=broad-except
+            self.log.debug(f"Could not pre-check model status: {e}")
 
-            # Distinguish "needs download" from "needs memory-map" so the user
-            # sees an honest expectation. ``list_models`` returns per-model
-            # ``downloaded: bool`` flags. If we can't tell, fall through to
-            # the generic loading message — the load_model call below still
-            # auto-downloads when needed.
-            is_downloaded: Optional[bool] = None
-            try:
-                models_data = self.list_models()
-                for _m in models_data.get("data", []):
-                    if _model_ids_match(_m.get("id"), model):
-                        is_downloaded = bool(_m.get("downloaded", False))
-                        break
-            except Exception as _e:  # pylint: disable=broad-except
-                self.log.debug(f"Could not probe model download state: {_e}")
+        # Distinguish "needs download" from "needs memory-map" so the user
+        # sees an honest expectation. ``list_models`` returns per-model
+        # ``downloaded: bool`` flags. If we can't tell, fall through to
+        # the generic loading message — the load_model call below still
+        # auto-downloads when needed.
+        is_downloaded: Optional[bool] = None
+        try:
+            models_data = self.list_models()
+            for _m in models_data.get("data", []):
+                if _model_ids_match(_m.get("id"), model):
+                    is_downloaded = bool(_m.get("downloaded", False))
+                    break
+        except Exception as _e:  # pylint: disable=broad-except
+            self.log.debug(f"Could not probe model download state: {_e}")
 
-            try:
-                from rich.console import Console
+        try:
+            from rich.console import Console
 
-                console = Console()
-                if is_downloaded is False:
-                    console.print(
-                        f"[bold yellow]📥 Downloading model:[/bold yellow] "
-                        f"[cyan]{model}[/cyan] (first run — this can take "
-                        f"several minutes on a typical connection)..."
-                    )
-                else:
-                    console.print(
-                        f"[bold blue]🔄 Loading model:[/bold blue] [cyan]{model}[/cyan]..."
-                    )
-            except ImportError:
-                console = None
-                if is_downloaded is False:
-                    print(
-                        f"📥 Downloading model: {model} (first run — this can "
-                        f"take several minutes)..."
-                    )
-                else:
-                    print(f"🔄 Loading model: {model}...")
-
-            # ``expected_ctx`` was resolved above (either from MODELS or the
-            # GAIA-wide default). Pass it explicitly to /load so Lemonade
-            # doesn't fall back to its own 4096-token default and silently
-            # truncate GAIA's larger prompts.
-            if expected_ctx == DEFAULT_CONTEXT_SIZE and not any(
-                req.model_id == model for req in MODELS.values()
-            ):
-                self.log.info(
-                    f"Model '{model}' not in MODELS registry; "
-                    f"defaulting to ctx_size={expected_ctx} to fit agent prompts"
+            console = Console()
+            if is_downloaded is False:
+                console.print(
+                    f"[bold yellow]📥 Downloading model:[/bold yellow] "
+                    f"[cyan]{model}[/cyan] (first run — this can take "
+                    f"several minutes on a typical connection)..."
                 )
+            else:
+                console.print(
+                    f"[bold blue]🔄 Loading model:[/bold blue] [cyan]{model}[/cyan]..."
+                )
+        except ImportError:
+            console = None
+            if is_downloaded is False:
+                print(
+                    f"📥 Downloading model: {model} (first run — this can "
+                    f"take several minutes)..."
+                )
+            else:
+                print(f"🔄 Loading model: {model}...")
 
+        # ``expected_ctx`` was resolved above (either from MODELS or the
+        # GAIA-wide default). Pass it explicitly to /load so Lemonade
+        # doesn't fall back to its own 4096-token default and silently
+        # truncate GAIA's larger prompts.
+        if expected_ctx == DEFAULT_CONTEXT_SIZE and not any(
+            req.model_id == model for req in MODELS.values()
+        ):
+            self.log.info(
+                f"Model '{model}' not in MODELS registry; "
+                f"defaulting to ctx_size={expected_ctx} to fit agent prompts"
+            )
+
+        # The actual load failure is the one this method must NOT swallow
+        # (#2053): a model that is present but fails to load (bad recipe, OOM,
+        # corrupt checkpoint) previously got hidden by a blanket
+        # ``except Exception: log.debug(...)``, so the downstream chat call
+        # failed generically with no model id, URL, or fix. Surface it loudly.
+        try:
             self.load_model(
                 model, auto_download=True, prompt=False, ctx_size=expected_ctx
             )
+        except (ModelDownloadCancelledError, InsufficientDiskSpaceError):
+            # Already specific + actionable — propagate unchanged.
+            raise
+        except LemonadeClientError as e:
+            raise LemonadeClientError(
+                f"Failed to load model '{model}' on {self.base_url}: {e} "
+                f"Check that the model is available and the Lemonade server "
+                f"has enough memory; see the server log (typical path: "
+                f"~/.cache/lemonade/server.log), or run `gaia init` to "
+                f"(re)install it."
+            ) from e
 
-            # Print model ready message
-            try:
-                if console:
-                    console.print(
-                        f"[bold green]✅ Model loaded:[/bold green] [cyan]{model}[/cyan]"
-                    )
-                else:
-                    print(f"✅ Model loaded: {model}")
-            except Exception:
-                pass  # Ignore print errors
-
-        except Exception as e:
-            # Log but don't fail - let the actual request fail with proper error
-            self.log.debug(f"Could not pre-check model status: {e}")
+        # Print model ready message
+        try:
+            if console:
+                console.print(
+                    f"[bold green]✅ Model loaded:[/bold green] [cyan]{model}[/cyan]"
+                )
+            else:
+                print(f"✅ Model loaded: {model}")
+        except Exception:
+            pass  # Ignore print errors
 
     def _consume_pull_stream(self, model_name: str, phase: str) -> bool:
         """Drive ``pull_model_stream`` to completion, logging progress at INFO.

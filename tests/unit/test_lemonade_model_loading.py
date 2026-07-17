@@ -115,19 +115,27 @@ class TestEnsureModelLoaded:
         mock_status.assert_not_called()
         mock_load.assert_not_called()
 
+    @patch.object(LemonadeClient, "list_models")
     @patch.object(LemonadeClient, "get_status")
     @patch.object(LemonadeClient, "load_model")
-    def test_handles_status_check_error_gracefully(self, mock_load, mock_status):
-        """Verify errors during status check are logged but don't fail."""
+    def test_status_probe_error_is_best_effort_and_load_still_runs(
+        self, mock_load, mock_status, mock_list
+    ):
+        """A failed status PROBE is best-effort (#2053): it's logged and the
+        load still proceeds — it must NOT abort the load, since that would let
+        a transient /health hiccup silently skip loading the model. Only the
+        load itself is the loud failure point.
+        """
         # Setup
         client = LemonadeClient(host="localhost", port=13305)
         mock_status.side_effect = Exception("Connection failed")
+        mock_list.return_value = {"data": []}
 
-        # Execute - should not raise
+        # Execute - the probe error is swallowed; the load still runs.
         client._ensure_model_loaded("model-a", auto_download=True)
 
-        # Verify - load_model should not be called due to error
-        mock_load.assert_not_called()
+        # Verify - load_model IS called (probe failure doesn't block the load).
+        mock_load.assert_called_once()
 
 
 class TestStreamCompletionsModelLoading:
