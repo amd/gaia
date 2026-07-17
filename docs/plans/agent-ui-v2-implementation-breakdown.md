@@ -40,10 +40,11 @@ Verified deviations an implementer must know before trusting the design text:
    (the manager reaps via process-tree signals today). Because auth already merged,
    V2-3 no longer builds it — it narrows to secure secret *delivery* + manager
    generalization.
-4. **`EmailProxyAgent` (merged in #1910) is design-superseded but load-bearing.**
-   `src/gaia/ui/email_sidecar/proxy_agent.py` (330 LoC) is the *working* email
-   chat path today. It is retired by V2-10 only after `/query` + the render map
-   exist — not deleted up front.
+4. **`EmailProxyAgent` is retired — V2-10 landed.** `/query` + the render map
+   both shipped, so `src/gaia/ui/email_sidecar/proxy_agent.py` (the in-process
+   email chat path merged in #1910) was deleted; the UI backend now dispatches
+   email chat through `POST /v1/email/query` via the relay
+   (`src/gaia/ui/email_sidecar/relay.py`, #2109).
 5. **Sibling plan docs still lack superseded banners.** #1913's own §0.27 names
    `security-model.mdx`, `email-sidecar-agent-ui-implementation.md`,
    `connectors.mdx`, and `autonomy-engine.mdx` as now-misleading; the merge added

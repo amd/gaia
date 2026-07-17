@@ -223,16 +223,18 @@ valid on the wire; a receiver applies the §7 unknown-type rule to anything else
   } }
 ```
 
-### 4.2 `render` replaces the in-process fence-injection hack
+### 4.2 `render` replaced the in-process fence-injection hack
 
-Today `MessageBubble.tsx` renders structured cards by *fence-parsing* the
-assistant text (`STRUCTURED_PAYLOAD_LANGS`), fed by the
-`_capture_render_payload` / `_drain_render_payloads` hack in `sse_handler.py`
-(HACK, issue #1000). In v2 the sidecar declares the card type explicitly via
-`tool_result.render`, so the host needs no per-tool knowledge and the fence
-injection is deleted. Each `render` type still needs a frontend component; per
-§0.15 a **custom `render` type is first-party / AMD-verified only in v1**, and an
-unknown `render` degrades to the generic result card (see §7).
+`MessageBubble.tsx` used to render structured cards by *fence-parsing* the
+assistant text (`STRUCTURED_PAYLOAD_LANGS`), fed by a render-payload
+capture/drain hack in `sse_handler.py` (HACK, issue #1000). That hack is
+deleted (#2109): the sidecar now declares
+the card type explicitly via `tool_result.render`, so the host needs no
+per-tool knowledge — `MessageBubble` mounts a registered card from the render
+map (§4.3) directly against `data`. Each `render` type still needs a frontend
+component; per §0.15 a **custom `render` type is first-party / AMD-verified
+only in v1**, and an unknown `render` degrades to the `UnsupportedCard`
+fallback (§4.3: `Unsupported card type: "<render>"`), never a blank message.
 
 ### 4.3 Generic render primitives (#2108)
 
