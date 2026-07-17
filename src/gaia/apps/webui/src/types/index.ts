@@ -6,6 +6,9 @@
 export interface Session {
     id: string;
     title: string;
+    /** True when the title was explicitly set (rename/API) and is pinned
+     *  against auto-retitling (#2165). */
+    title_is_custom?: boolean;
     created_at: string;
     updated_at: string;
     model: string;
@@ -314,6 +317,15 @@ export interface Message {
     agentSteps?: AgentStep[];
     /** Inference performance stats from the LLM backend. */
     stats?: InferenceStats;
+    /** Structured cards emitted via tool_result.render during this turn
+     *  (issue #2108). Rendered by RenderCard above the markdown content. */
+    cards?: RenderCardData[];
+}
+
+/** One card instance transferred onto a finalized Message (issue #2108). */
+export interface RenderCardData {
+    render: string;
+    data: unknown;
 }
 
 export interface SourceInfo {
@@ -628,6 +640,7 @@ export type StreamEventType =
     | 'answer'       // Final answer from agent
     | 'agent_error'  // Agent-level error (non-fatal)
     | 'permission_request' // Tool confirmation request
+    | 'needs_confirmation' // Stateless confirmation card (email /query, #2109) — informational, non-blocking
     | 'policy_alert' // Governance policy blocked a tool
     | 'mcp_status'   // MCP server connection status update
     | 'agent_created'; // New agent created — triggers agent list refresh
@@ -670,6 +683,8 @@ export interface StreamEvent {
     agent_id?: string;
     /** Confirmation ID (for tool_confirm events). */
     confirm_id?: string;
+    /** Machine tool name a confirmation is about (for needs_confirmation events). */
+    action?: string;
     /** Timeout in seconds (for tool_confirm events). */
     timeout_seconds?: number;
     /** MCP server name (for tool_start of MCP tools). */
@@ -703,4 +718,12 @@ export interface StreamEvent {
         files?: Array<Record<string, unknown>>;
         total?: number;
     };
+    /**
+     * Card render key (issue #2108, additive on `tool_result`). Non-empty
+     * string means the frontend should mount a registered card via
+     * RenderCard against `data`. Absent on every other event type.
+     */
+    render?: string;
+    /** Card payload for `render` (issue #2108, additive on `tool_result`). */
+    data?: unknown;
 }

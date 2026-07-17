@@ -18,6 +18,8 @@ module because every read tool that returns body bytes needs to honor it.
 from __future__ import annotations
 
 import os
+import re
+from datetime import date
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from gaia_agent_email.gmail_backend import decode_message_body
@@ -494,6 +496,114 @@ def summarize_thread_impl(
         return result
 
 
+# Gmail's after:/before:/older:/newer: operators only accept YYYY/MM/DD (or
+# epoch seconds). Anything else — e.g. the model's `after:July 1` — is treated
+# as a free-text content match, silently returning 0 results (#2161).
+_MONTH_NAMES = {
+    "jan": 1, "january": 1,
+    "feb": 2, "february": 2,
+    "mar": 3, "march": 3,
+    "apr": 4, "april": 4,
+    "may": 5,
+    "jun": 6, "june": 6,
+    "jul": 7, "july": 7,
+    "aug": 8, "august": 8,
+    "sep": 9, "sept": 9, "september": 9,
+    "oct": 10, "october": 10,
+    "nov": 11, "november": 11,
+    "dec": 12, "december": 12,
+}  # fmt: skip
+
+_MONTH_ALT = "|".join(sorted(_MONTH_NAMES, key=len, reverse=True))
+
+# Value grammar: quoted string, "July 1[, 2026]", "1 July[, 2026]", or a
+# single token. `older_than:`/`newer_than:` never match — the op name must be
+# followed immediately by a colon.
+_DATE_OP_RE = re.compile(
+    rf"""
+    \b(?P<op>after|before|older|newer):
+    (?P<val>
+        "[^"]*"
+      | (?:{_MONTH_ALT})\s+\d{{1,2}}(?:st|nd|rd|th)?(?:,?\s*\d{{4}}\b)?
+      | \d{{1,2}}\s+(?:{_MONTH_ALT})\b(?:,?\s*\d{{4}}\b)?
+      | \S+
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+_ORDINAL_RE = re.compile(r"^(\d{1,2})(?:st|nd|rd|th)?$", re.IGNORECASE)
+
+
+def _parse_gmail_date_value(raw: str, *, op: str) -> str:
+    """Parse one date-operator value into Gmail's ``YYYY/MM/DD`` form.
+
+    Accepts the formats the model actually produces: ``2026/07/01``,
+    ``2026-07-01``, ``7/1/2026`` (US month-first), ``July 1[, 2026]``,
+    ``1 July [2026]``. Epoch values (all digits, >= 8 chars) pass through —
+    Gmail accepts them natively. Anything else raises ``ValueError``.
+    """
+    value = raw.strip().strip('"').strip()
+    if value.isdigit() and len(value) >= 8:
+        return value
+
+    y = mo = d = None
+    m = re.fullmatch(r"(\d{4})[/-](\d{1,2})[/-](\d{1,2})", value)
+    if m:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    else:
+        m = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{4})", value)
+        if m:
+            mo, d, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        else:
+            tokens = [t for t in re.split(r"[\s,]+", value) if t]
+            if len(tokens) in (2, 3):
+                a, b = tokens[0].lower(), tokens[1].lower()
+                day_tok = None
+                if a in _MONTH_NAMES and _ORDINAL_RE.fullmatch(b):
+                    mo, day_tok = _MONTH_NAMES[a], b
+                elif b in _MONTH_NAMES and _ORDINAL_RE.fullmatch(a):
+                    mo, day_tok = _MONTH_NAMES[b], a
+                if day_tok is not None:
+                    d = int(_ORDINAL_RE.fullmatch(day_tok).group(1))
+                    if len(tokens) == 3:
+                        if not re.fullmatch(r"\d{4}", tokens[2]):
+                            mo = d = None
+                        else:
+                            y = int(tokens[2])
+                    else:
+                        y = date.today().year
+
+    if y is None or mo is None or d is None:
+        raise ValueError(
+            f"search_messages: cannot parse date value {raw!r} for the "
+            f"'{op}:' operator. Use Gmail date format {op}:YYYY/MM/DD "
+            f"(e.g. {op}:2026/07/01)."
+        )
+    try:
+        date(y, mo, d)
+    except ValueError as exc:
+        raise ValueError(
+            f"search_messages: {raw!r} is not a valid calendar date for the "
+            f"'{op}:' operator ({exc}). Use {op}:YYYY/MM/DD "
+            f"(e.g. {op}:2026/07/01)."
+        ) from exc
+    return f"{y:04d}/{mo:02d}/{d:02d}"
+
+
+def normalize_gmail_date_operators(query: str) -> str:
+    """Rewrite date-operator values in ``query`` to Gmail's ``YYYY/MM/DD``.
+
+    Raises ``ValueError`` on an unparseable value — a loud error beats
+    passing it through as free text and returning a false zero-result.
+    """
+    def _sub(m: "re.Match[str]") -> str:
+        op = m.group("op").lower()
+        return f"{op}:{_parse_gmail_date_value(m.group('val'), op=op)}"
+
+    return _DATE_OP_RE.sub(_sub, query)
+
+
 def search_messages_impl(
     gmail,
     *,
@@ -501,6 +611,7 @@ def search_messages_impl(
     max_results: int = 25,
     debug: bool = False,
 ) -> Dict[str, Any]:
+    query = normalize_gmail_date_operators(query)
     with log_tool_call(
         "search_messages",
         {"query": query, "max_results": max_results},
@@ -877,6 +988,105 @@ def pre_scan_inbox_impl(
         return out
 
 
+def merge_pre_scan_backends(
+    backends: "Mapping[str, Any]",
+    *,
+    max_messages: int = 25,
+    session_preferences: Optional[Mapping[str, Any]] = None,
+    force_llm: bool = False,
+    debug: bool = False,
+    remember_mailbox: Optional[Callable[[Optional[str], str], None]] = None,
+) -> Dict[str, Any]:
+    """Pre-scan every connected mailbox, tag each item, merge under budget.
+
+    Single home for the multi-inbox consolidation (#1603/#1614) so both the
+    agent loop (``EmailTriageAgent._pre_scan_all_backends``) and the REST
+    ``/prescan`` path produce the identical envelope. Splits the total
+    ``max_messages`` budget across ``backends`` (an ordered ``provider ->
+    backend`` map); each merged item gains a ``mailbox`` tag. This is NOT a
+    silent pick-one — every connected mailbox is scanned.
+
+    A single backend's ``ConnectorsError`` (e.g. a revoked agent grant) is
+    recorded in ``mailbox_errors`` and the loop continues with the rest; when
+    EVERY backend fails the error is raised rather than returning a misleading
+    empty pre-scan. ``remember_mailbox`` is the agent's optional
+    message-id -> mailbox recorder for action routing; the stateless REST path
+    omits it.
+    """
+    prefs = session_preferences
+    per_backend = max(1, max_messages // len(backends))
+    urgent: List[Dict[str, Any]] = []
+    actionable: List[Dict[str, Any]] = []
+    suggested_archives: List[Dict[str, Any]] = []
+    informational_count = 0
+    scanned = 0
+    merged_prefs_applied: Dict[str, Any] = {}
+    mailbox_errors: List[Dict[str, Any]] = []
+    for provider, backend in backends.items():
+        if scanned >= max_messages:
+            break
+        try:
+            out = pre_scan_inbox_impl(
+                backend,
+                max_messages=per_backend,
+                session_preferences=prefs,
+                force_llm=force_llm,
+                debug=debug,
+            )
+        except ConnectorsError as exc:
+            msg = format_connector_error(exc)
+            mailbox_errors.append({"mailbox": provider, "error": msg})
+            log.warning("email pre-scan: skipping %s mailbox — %s", provider, msg)
+            continue
+        # Count messages actually returned, not the cap — an under-filled
+        # backend would otherwise trip the budget guard and skip a later one.
+        backend_totals = out.get("totals", {})
+        scanned += (
+            int(backend_totals.get("urgent", 0))
+            + int(backend_totals.get("actionable", 0))
+            + int(backend_totals.get("suggested_archives", 0))
+            + int(out.get("informational_count", 0))
+        )
+        merged_prefs_applied = out.get("preferences_applied", merged_prefs_applied)
+        for section, dest in (
+            ("urgent", urgent),
+            ("actionable", actionable),
+            ("suggested_archives", suggested_archives),
+        ):
+            for item in out.get(section, []):
+                item["mailbox"] = provider
+                if remember_mailbox is not None:
+                    remember_mailbox(item.get("message_id"), provider)
+                    remember_mailbox(item.get("thread_id"), provider)
+                dest.append(item)
+        informational_count += int(out.get("informational_count", 0))
+    result = {
+        "kind": "email_pre_scan",
+        "urgent": urgent[: max(0, PRE_SCAN_URGENT_CAP)],
+        "actionable": actionable[: max(0, PRE_SCAN_ACTIONABLE_CAP)],
+        "informational_count": informational_count,
+        "suggested_archives": suggested_archives[: max(0, PRE_SCAN_ARCHIVE_CAP)],
+        "suggested_drafts": [],
+        "preferences_applied": merged_prefs_applied,
+        "totals": {
+            "urgent": len(urgent),
+            "actionable": len(actionable),
+            "informational": informational_count,
+            "suggested_archives": len(suggested_archives),
+        },
+    }
+    if mailbox_errors and len(mailbox_errors) == len(backends):
+        # Every connected mailbox failed — surface it loudly rather than
+        # returning ok with zero results (which reads as "empty inbox").
+        raise ConnectorsError(
+            "All connected mailboxes failed during pre-scan: "
+            + "; ".join(f"{e['mailbox']}: {e['error']}" for e in mailbox_errors)
+        )
+    if mailbox_errors:
+        result["mailbox_errors"] = mailbox_errors
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Mixin
 # ---------------------------------------------------------------------------
@@ -1052,7 +1262,9 @@ class ReadToolsMixin:
             downstream tools route actions without re-asking.
 
             ``query`` uses Gmail search syntax (e.g.
-            ``"from:boss@example.com is:unread newer_than:7d"``).
+            ``"from:boss@example.com is:unread newer_than:7d"``). Date
+            operators require ``YYYY/MM/DD`` — e.g. ``after:2026/07/01
+            before:2026/07/08``, never ``after:July 1``.
             """
             try:
                 max_results = max(1, min(int(max_results or 25), 100))

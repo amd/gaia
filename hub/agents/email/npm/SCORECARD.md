@@ -20,38 +20,38 @@ recipe:
     urgent buried). Reported secondaries (not in the aggregate): urgent-vs-not binary
     accuracy, urgent recall (anti-gaming floor), and exact 4-way category_accuracy.
     The corpus uses the schema-2.0 taxonomy aligned with the agent''s output labels
-    (#1874); averaged over 1 run(s) for run-to-run variance/CI (#1894)'
+    (#1874); averaged over 3 run(s) for run-to-run variance/CI (#1894)'
   config:
     harness: gaia eval benchmark
     model: Gemma-4-E4B-it-GGUF
     corpus: tests/fixtures/email/synthetic_inbox.mbox
     ground_truth: tests\fixtures\email\ground_truth.json
-    limit: 25
-    n_runs: 1
+    limit: 250
+    n_runs: 3
     acceptance_variance:
-      n_runs: 1
+      n_runs: 3
       within_one_bucket_accuracy:
-        n: 1
-        mean: 1.0
-        stdev: 0.0
-        min: 1.0
-        max: 1.0
-        cv_pct: 0.0
-        ci95_half_width: 0.0
-        ci95_low: 1.0
-        ci95_high: 1.0
+        n: 3
+        mean: 0.8453
+        stdev: 0.0023
+        min: 0.844
+        max: 0.848
+        cv_pct: 0.27
+        ci95_half_width: 0.0026
+        ci95_low: 0.8427
+        ci95_high: 0.8479
       urgent_vs_not_accuracy:
-        n: 1
-        mean: 0.84
-        stdev: 0.0
-        min: 0.84
-        max: 0.84
-        cv_pct: 0.0
-        ci95_half_width: 0.0
-        ci95_low: 0.84
-        ci95_high: 0.84
+        n: 3
+        mean: 0.7987
+        stdev: 0.0046
+        min: 0.796
+        max: 0.804
+        cv_pct: 0.58
+        ci95_half_width: 0.0052
+        ci95_low: 0.7934
+        ci95_high: 0.8039
       urgent_recall:
-        n: 1
+        n: 3
         mean: 1.0
         stdev: 0.0
         min: 1.0
@@ -61,87 +61,104 @@ recipe:
         ci95_low: 1.0
         ci95_high: 1.0
       personal_recall:
-        n: 1
-        mean: 0.0
+        n: 3
+        mean: 0.3636
         stdev: 0.0
-        min: 0.0
-        max: 0.0
+        min: 0.3636
+        max: 0.3636
         cv_pct: 0.0
         ci95_half_width: 0.0
-        ci95_low: 0.0
-        ci95_high: 0.0
+        ci95_low: 0.3636
+        ci95_high: 0.3636
       category_accuracy:
-        n: 1
-        mean: 0.8
-        stdev: 0.0
-        min: 0.8
-        max: 0.8
-        cv_pct: 0.0
-        ci95_half_width: 0.0
-        ci95_low: 0.8
-        ci95_high: 0.8
+        n: 3
+        mean: 0.7813
+        stdev: 0.0023
+        min: 0.78
+        max: 0.784
+        cv_pct: 0.3
+        ci95_half_width: 0.0026
+        ci95_low: 0.7787
+        ci95_high: 0.7839
   environment:
-    gaia_commit: 905e954c
+    gaia_commit: eca42a0e
     lemonade_version: 10.10.0
     model: Gemma-4-E4B-it-GGUF
     ctx_size: 16384
     hardware: AMD Ryzen AI MAX+ (Strix Halo)
 results:
-  test_cases_run: 25
+  test_cases_run: 250
   metrics:
   - name: within_one_bucket_accuracy
-    value: 1.0
+    value: 0.8453
     weight: 1.0
   - name: urgent_vs_not_accuracy
-    value: 0.84
+    value: 0.7987
     weight: 0.0
   - name: urgent_recall
     value: 1.0
     weight: 0.0
   - name: personal_recall
-    value: 0.0
+    value: 0.3636
     weight: 0.0
   - name: category_accuracy
-    value: 0.8
+    value: 0.7813
     weight: 0.0
   - name: draft_approval_rate
-    value: 0.5556
+    value: 0.6111
     weight: 0.0
   breakdown:
     per_category:
     - category: fyi
-      total: 15
-      correct: 11
-      accuracy: 0.7333
+      total: 162
+      correct: 124
+      accuracy: 0.7654
     - category: needs_response
-      total: 7
-      correct: 7
+      total: 162
+      correct: 162
       accuracy: 1.0
+    - category: personal
+      total: 99
+      correct: 36
+      accuracy: 0.3636
+    - category: promotional
+      total: 165
+      correct: 112
+      accuracy: 0.6788
     - category: urgent
-      total: 3
-      correct: 2
-      accuracy: 0.6667
+      total: 162
+      correct: 152
+      accuracy: 0.9383
     top_confusions:
+    - expected: personal
+      predicted: needs_response
+      count: 44
+    - expected: promotional
+      predicted: urgent
+      count: 40
     - expected: fyi
       predicted: needs_response
-      count: 4
-    - expected: urgent
+      count: 38
+    - expected: personal
+      predicted: urgent
+      count: 16
+    - expected: promotional
       predicted: needs_response
-      count: 1
+      count: 13
   performance:
-    ttft_s: 26.409
-    throughput_tps: 23.8
-    pipeline_s: 809.531
-    total_input_tokens: 46908.0
-    total_output_tokens: 18111.0
-    tokens_per_triage: 2068.6
-    llm_classified_count: 25.0
-    emails_per_run: 25
+    ttft_s: 24.673
+    throughput_tps: 23.767
+    pipeline_s: 6926.411
+    total_input_tokens: 316983.667
+    total_output_tokens: 169056.667
+    tokens_per_triage: 1906.033
+    llm_classified_count: 250.0
+    emails_per_run: 250
   capability_quality:
     spam:
-      precision: 0.0
-      recall: 0.0
-      f1: 0.0
+      precision: 0.1078
+      recall: 0.3333
+      f1: 0.1629
     action_items:
       precision: 0.0
       recall: 0.0
@@ -156,30 +173,30 @@ aggregate:
   formula: round(100 * sum(weight_i * value_i) / sum(weight_i), 2)
   components:
   - metric: within_one_bucket_accuracy
-    value: 1.0
+    value: 0.8453
     weight: 1.0
   - metric: urgent_vs_not_accuracy
-    value: 0.84
+    value: 0.7987
     weight: 0.0
   - metric: urgent_recall
     value: 1.0
     weight: 0.0
   - metric: personal_recall
-    value: 0.0
+    value: 0.3636
     weight: 0.0
   - metric: category_accuracy
-    value: 0.8
+    value: 0.7813
     weight: 0.0
   - metric: draft_approval_rate
-    value: 0.5556
+    value: 0.6111
     weight: 0.0
-  value: 100.0
-generated_at: '2026-07-15T23:48:55.149673+00:00'
+  value: 84.53
+generated_at: '2026-07-16T07:54:50.556072+00:00'
 inherited_from: null
 ---
 # Email Triage — Eval Scorecard v0.5.0
 
-**Aggregate score: 100.0** (out of 100)
+**Aggregate score: 84.53** (out of 100)
 
 ## Recipe
 
@@ -188,17 +205,17 @@ inherited_from: null
 | Dataset | [tests/fixtures/email/ground_truth.json](tests/fixtures/email/ground_truth.json) |
 | Description | Vendor-derived labelled email corpus for GAIA email-triage evaluation (FakeGmailBackend, schema-2.0 triage taxonomy: urgent / needs_response / fyi / promotional / personal); a deterministic, category-balanced subset of the vendor mailbox dataset |
 | Dataset size | 299 labeled examples |
-| Test cases run | 25 |
-| Methodology | gaia eval benchmark over the vendor-derived labelled corpus via FakeGmailBackend; no LLM judge. The full corpus is scored — see dataset_size (GAIA_EMAIL_TRIAGE_MAX_MESSAGES lifts the interactive per-call scan cap for the eval so the whole corpus is covered). Aggregate = within-one-bucket ACCEPTANCE accuracy (#1437): triage priority is ordinal (URGENT>NEEDS_RESPONSE>FYI>PROMOTIONAL), so a prediction is credited when it is exact or an adjacent bucket (|rank diff|<=1) — what users feel (nothing urgent buried). Reported secondaries (not in the aggregate): urgent-vs-not binary accuracy, urgent recall (anti-gaming floor), and exact 4-way category_accuracy. The corpus uses the schema-2.0 taxonomy aligned with the agent's output labels (#1874); averaged over 1 run(s) for run-to-run variance/CI (#1894) |
+| Test cases run | 250 |
+| Methodology | gaia eval benchmark over the vendor-derived labelled corpus via FakeGmailBackend; no LLM judge. The full corpus is scored — see dataset_size (GAIA_EMAIL_TRIAGE_MAX_MESSAGES lifts the interactive per-call scan cap for the eval so the whole corpus is covered). Aggregate = within-one-bucket ACCEPTANCE accuracy (#1437): triage priority is ordinal (URGENT>NEEDS_RESPONSE>FYI>PROMOTIONAL), so a prediction is credited when it is exact or an adjacent bucket (|rank diff|<=1) — what users feel (nothing urgent buried). Reported secondaries (not in the aggregate): urgent-vs-not binary accuracy, urgent recall (anti-gaming floor), and exact 4-way category_accuracy. The corpus uses the schema-2.0 taxonomy aligned with the agent's output labels (#1874); averaged over 3 run(s) for run-to-run variance/CI (#1894) |
 
 ## Metrics
 
-  - **within_one_bucket_accuracy**: 1.0000 × 1.0
-  - **urgent_vs_not_accuracy**: 0.8400 × 0.0
+  - **within_one_bucket_accuracy**: 0.8453 × 1.0
+  - **urgent_vs_not_accuracy**: 0.7987 × 0.0
   - **urgent_recall**: 1.0000 × 0.0
-  - **personal_recall**: 0.0000 × 0.0
-  - **category_accuracy**: 0.8000 × 0.0
-  - **draft_approval_rate**: 0.5556 × 0.0
+  - **personal_recall**: 0.3636 × 0.0
+  - **category_accuracy**: 0.7813 × 0.0
+  - **draft_approval_rate**: 0.6111 × 0.0
 
 ## Aggregate score recomputation
 
@@ -207,7 +224,7 @@ Formula: `round(100 × Σ(weightᵢ × valueᵢ) / Σ(weightᵢ), 2)`
 Worked example:
 
 ```
-round(100 × ((1.0000 × 1.0) + (0.8400 × 0.0) + (1.0000 × 0.0) + (0.0000 × 0.0) + (0.8000 × 0.0) + (0.5556 × 0.0)) / 1.0, 2) = 100.0
+round(100 × ((0.8453 × 1.0) + (0.7987 × 0.0) + (1.0000 × 0.0) + (0.3636 × 0.0) + (0.7813 × 0.0) + (0.6111 × 0.0)) / 1.0, 2) = 84.53
 ```
 
 A reader can reproduce this value from the `aggregate.components` in the front
@@ -237,7 +254,7 @@ gaia eval benchmark \
     --model Gemma-4-E4B-it-GGUF \
     --mbox-path tests/fixtures/email/synthetic_inbox.mbox \
     --ground-truth tests\fixtures\email\ground_truth.json \
-    --limit 25 \
+    --limit 250 \
     --output-dir /tmp/email-eval
 
 # Step 2: generate this scorecard from the benchmark output
@@ -245,7 +262,7 @@ PYTHONPATH="$(pwd)" \
 python hub/agents/email/python/packaging/gen_scorecard.py \
     --benchmark-dir /tmp/email-eval \
     --ground-truth tests\fixtures\email\ground_truth.json \
-    --limit 25
+    --limit 250
 
 # Background, dataset details, a worked example, and metric
 # definitions: see EVALUATION.md (next to this scorecard).
@@ -257,24 +274,31 @@ See [eval-scorecard docs](https://amd-gaia.ai/docs/reference/eval-scorecard) and
 
 | Field | Value |
 |-------|-------|
-| gaia_commit | 905e954c |
+| gaia_commit | eca42a0e |
 | lemonade_version | 10.10.0 |
 | model | Gemma-4-E4B-it-GGUF |
 | ctx_size | 16384 |
 | hardware | AMD Ryzen AI MAX+ (Strix Halo) |
 
-## Category breakdown
+## Category breakdown (pooled across all 3 runs)
+
+_Each of the 250 test cases is scored once per run, so the totals below sum to test_cases_run × 3._
 
 | Category | Total | Correct | Accuracy |
 |----------|-------|---------|----------|
-| fyi | 15 | 11 | 0.7333 |
-| needs_response | 7 | 7 | 1.0000 |
-| urgent | 3 | 2 | 0.6667 |
+| fyi | 162 | 124 | 0.7654 |
+| needs_response | 162 | 162 | 1.0000 |
+| personal | 99 | 36 | 0.3636 |
+| promotional | 165 | 112 | 0.6788 |
+| urgent | 162 | 152 | 0.9383 |
 
 **Top confusions:**
 
-  - fyi → needs_response: 4
-  - urgent → needs_response: 1
+  - personal → needs_response: 44
+  - promotional → urgent: 40
+  - fyi → needs_response: 38
+  - personal → urgent: 16
+  - promotional → needs_response: 13
 
 ## Performance
 
@@ -282,14 +306,14 @@ _Measured on the run environment above (model / hardware / gaia_commit / corpus 
 
 | Metric | Value |
 |--------|-------|
-| ttft_s | 26.409 |
-| throughput_tps | 23.8 |
-| pipeline_s | 809.531 |
-| total_input_tokens | 46908.0 |
-| total_output_tokens | 18111.0 |
-| tokens_per_triage | 2068.6 |
-| llm_classified_count | 25.0 |
-| emails_per_run | 25 |
+| ttft_s | 24.673 |
+| throughput_tps | 23.767 |
+| pipeline_s | 6926.411 |
+| total_input_tokens | 316983.667 |
+| total_output_tokens | 169056.667 |
+| tokens_per_triage | 1906.033 |
+| llm_classified_count | 250.0 |
+| emails_per_run | 250 |
 
 ## Capability quality
 
@@ -297,9 +321,9 @@ _Beyond the headline triage accuracy, these are the agent's other capabilities s
 
 | Capability | Metric | Value |
 |------------|--------|-------|
-| spam | precision | 0.0000 |
-| spam | recall | 0.0000 |
-| spam | f1 | 0.0000 |
+| spam | precision | 0.1078 |
+| spam | recall | 0.3333 |
+| spam | f1 | 0.1629 |
 | action_items | precision | 0.0000 |
 | action_items | recall | 0.0000 |
 | action_items | f1 | 0.0000 |

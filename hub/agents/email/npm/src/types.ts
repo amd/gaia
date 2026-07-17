@@ -34,10 +34,15 @@
  * DraftScaffold (recipient + subject only) instead of a DraftReply — triage
  * never composed a body, so the always-empty draft.body is dropped. DraftReply
  * (with body) is unchanged and remains the draft()/send() shape.
+ * Schema 2.4 (additive over 2.3, #2016/#2097): the canonical agent-loop query —
+ * POST /v1/email/query (SSE stream of the seven frozen event types, spec
+ * docs/spec/agent-ui-query-sse-contract.md) + POST /v1/email/query/{run_id}/cancel.
+ * Mirrored from `query_routes.py` (QueryRequest / QueryCancelResponse) and the
+ * frozen #2057 event vocabulary.
  */
 
 /** Frozen contract version echoed by the server's `/version` endpoint. */
-export const SCHEMA_VERSION = "2.3" as const;
+export const SCHEMA_VERSION = "2.4" as const;
 
 /**
  * The five-bucket triage taxonomy (schema 2.0 — contract.py: EmailCategory).
@@ -642,6 +647,173 @@ export interface CalendarRespondResponse {
   status: CalendarRsvpStatus;
   /** Always true on success. */
   responded: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Canonical agent-loop query (query_routes.py — schema 2.4, #2016/#2097). A
+// natural-language request in, the seven frozen SSE event types out (the #2057
+// wire contract, docs/spec/agent-ui-query-sse-contract.md), terminated by
+// exactly one `final` or `error`. The HOST mints `run_id` (spec §2.3) so the
+// run is cancellable from the instant the request is sent; the transcript
+// slice is PUSHED in `context` (spec §2.4) so the sidecar stays stateless.
+// ---------------------------------------------------------------------------
+
+/** Transcript role of one pushed context turn (query_routes.py: QueryContextItem). */
+export type QueryRole = "user" | "assistant" | "system" | "tool";
+
+/** One prior turn pushed in the request body (query_routes.py: QueryContextItem). */
+export interface QueryContextItem {
+  /** Transcript role for this turn. */
+  role: QueryRole;
+  /** The message text for this turn. */
+  content: string;
+}
+
+/** `POST /v1/email/query` request body (query_routes.py: QueryRequest, spec §2.2). */
+export interface EmailQueryRequest {
+  /** The natural-language request driving the agent loop. Non-empty. */
+  query: string;
+  /**
+   * Host-minted streaming-run handle (UUIDv4) — mint it yourself (e.g.
+   * `crypto.randomUUID()`) and keep it: cancellation (`cancelQuery(runId)`)
+   * keys off it, so the run is cancellable from the instant the request is sent.
+   */
+  run_id: string;
+  /**
+   * The relevant transcript slice, pushed in the body. May be an empty array
+   * for a fresh conversation, but the field must be present (spec §2.4).
+   */
+  context: QueryContextItem[];
+  /** Model id override. Omitted → the sidecar's default. */
+  model?: string;
+  /**
+   * LLM provider override. The email agent runs local inference only, so only
+   * "lemonade" is accepted; any other value is rejected (400).
+   */
+  provider?: string;
+  /** Agent-loop step ceiling (≥ 1). Omitted → the agent's configured default. */
+  max_steps?: number;
+}
+
+/** Progress narration (also carries folded step/thinking/plan lines). */
+export interface QueryStatusEvent {
+  type: "status";
+  /** The progress line to show. */
+  message: string;
+}
+
+/** An incremental chunk of assistant answer text. */
+export interface QueryTokenEvent {
+  type: "token";
+  /** The next chunk of assistant text to append. */
+  delta: string;
+}
+
+/** The agent is invoking a tool. */
+export interface QueryToolCallEvent {
+  type: "tool_call";
+  /** Tool name, e.g. "triage_inbox". */
+  tool: string;
+  /** Tool arguments; `{}` when the tool takes none. */
+  args: Record<string, unknown>;
+}
+
+/** A tool returned a result. */
+export interface QueryToolResultEvent {
+  type: "tool_result";
+  /** Tool name the result belongs to. */
+  tool: string;
+  /** Optional typed-card key (e.g. "email_pre_scan"); unknown keys degrade to a generic card. */
+  render?: string;
+  /** Structured result; shape is render-specific. */
+  data: unknown;
+}
+
+/**
+ * A gated (destructive/external) step is awaiting approval. Under the current
+ * stateless confirmation model (epic decision D1) the run then ends with a
+ * `final` refusal pointing at the fixed-function route (draft() → send());
+ * `confirm_url` is omitted until server-side resume is wired.
+ */
+export interface QueryNeedsConfirmationEvent {
+  type: "needs_confirmation";
+  /** The run this pause belongs to (correlate with your minted run_id). */
+  run_id: string;
+  /** The gated action, e.g. "send", "archive", "input". */
+  action: string;
+  /** The literal text the user would approve. */
+  summary: string;
+  /** Resume endpoint — only present under the (not yet wired) resume model. */
+  confirm_url?: string;
+}
+
+/** Run usage metrics on the terminal `final` event (all fields optional). */
+export interface QueryUsage {
+  /** Agent-loop steps taken. */
+  steps?: number;
+  /** Tools invoked during the run. */
+  tools_used?: number;
+  /** Wall-clock seconds for the run. */
+  elapsed?: number;
+  /** Token counts, when the backend reports them. */
+  tokens?: number;
+  [key: string]: unknown;
+}
+
+/** Terminal: the assistant's final answer. Exactly one `final` OR `error` ends a run. */
+export interface QueryFinalEvent {
+  type: "final";
+  /** The assistant's answer text. */
+  answer: string;
+  /** Optional usage metrics for the run. */
+  usage?: QueryUsage;
+}
+
+/** Terminal: an actionable failure — surface `detail` verbatim. */
+export interface QueryErrorEvent {
+  type: "error";
+  /** Actionable message, surfaced verbatim. */
+  detail: string;
+  /** HTTP-style status code for the failure class. */
+  status: number;
+}
+
+/**
+ * A wire event whose `type` is outside the frozen seven. Per the contract's
+ * evolution rule (spec §7) a newer sidecar may add event types additively; the
+ * client surfaces them as this placeholder — visibly, never silently dropped.
+ * Render an "unsupported event" affordance (or log it) in your default branch.
+ */
+export interface QueryUnknownEvent {
+  type: "unknown";
+  /** The unrecognized wire `type` value. */
+  eventType: string;
+  /** The full raw event object as received. */
+  raw: Record<string, unknown>;
+}
+
+/**
+ * One canonical `/query` SSE event, discriminated on `type`. The seven frozen
+ * types (spec §4) plus the `unknown` placeholder for additive future types.
+ */
+export type QueryEvent =
+  | QueryStatusEvent
+  | QueryTokenEvent
+  | QueryToolCallEvent
+  | QueryToolResultEvent
+  | QueryNeedsConfirmationEvent
+  | QueryFinalEvent
+  | QueryErrorEvent
+  | QueryUnknownEvent;
+
+/** Result of `POST /v1/email/query/{run_id}/cancel` (query_routes.py: QueryCancelResponse). */
+export interface QueryCancelResponse {
+  /** The run that was signalled to cancel. */
+  run_id: string;
+  /** True once the cancel was delivered to the run. */
+  cancelled: boolean;
+  /** Always "ok" on success. */
+  status: string;
 }
 
 // ---------------------------------------------------------------------------

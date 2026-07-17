@@ -6,10 +6,15 @@ import os
 import subprocess
 from importlib.metadata import version as get_package_version_metadata
 
-__version__ = "0.21.2"
+__version__ = "0.22.0"
 
 # Lemonade version used across CI and installer
-LEMONADE_VERSION = "10.10.0"
+LEMONADE_VERSION = "11.0.0"
+
+# Oldest Lemonade Server GAIA runs against. LEMONADE_VERSION is what we install;
+# this is the floor below which we refuse. Profiles may require newer
+# (INIT_PROFILES[...]["min_lemonade_version"]).
+LEMONADE_MIN_VERSION = "10.2.0"
 
 
 def get_package_version() -> str:

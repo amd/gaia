@@ -6,6 +6,8 @@
 for the current host and what its SHA-256 must be. Platform keys are
 ``{os}-{arch}`` normalized to the npm package's key space
 (``win32``/``darwin``/``linux`` + ``x64``/``arm64``).
+
+Relocated from ``gaia.ui.email_sidecar.platform`` (issue #2142, T1).
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from gaia.ui.email_sidecar.errors import PlatformError
+from gaia.daemon.sidecars.errors import PlatformError
 
 SUPPORTED_PLATFORMS = ("win32-x64", "darwin-arm64", "darwin-x64", "linux-x64")
 
@@ -65,7 +67,7 @@ def current_platform_key(plat: Optional[str] = None, arch: Optional[str] = None)
 
 def default_lock_path() -> Path:
     """Locate the repo's binaries.lock.json (npm package ships the canonical one)."""
-    # src/gaia/ui/email_sidecar/platform.py -> repo root is parents[4].
+    # src/gaia/daemon/sidecars/platform.py -> repo root is parents[4].
     repo_root = Path(__file__).resolve().parents[4]
     return repo_root / "hub" / "agents" / "email" / "npm" / "binaries.lock.json"
 

@@ -1146,18 +1146,69 @@ def test_prescan_no_mailbox_connected_fails_loud(monkeypatch):
     assert exc.value.status_code == 503
 
 
-def test_prescan_ambiguous_mailbox_fails_loud(monkeypatch):
-    # Two connected mailboxes → 400, never a silent guess of which to scan.
-    from fastapi import HTTPException
-    from gaia_agent_email.api_routes import get_prescan_backend
+def test_prescan_two_mailboxes_consolidates_not_400(monkeypatch):
+    # Two connected mailboxes → a multi-mailbox backend spanning BOTH, never a
+    # 400 (pre-scan is read-only and consolidatable) and never a silent pick-one.
+    from gaia_agent_email.api_routes import (
+        _MultiMailboxPrescanBackend,
+        get_prescan_backend,
+    )
 
     monkeypatch.setattr(
         "gaia_agent_email.api_routes.connected_mailbox_providers",
         lambda: ["google", "microsoft"],
     )
-    with pytest.raises(HTTPException) as exc:
-        get_prescan_backend()
-    assert exc.value.status_code == 400
+    backend = get_prescan_backend()
+    assert isinstance(backend, _MultiMailboxPrescanBackend)
+    assert set(backend.backends) == {"google", "microsoft"}
+
+
+def test_prescan_two_mailboxes_end_to_end_consolidated(monkeypatch):
+    # End-to-end through the surface the Agent UI actually calls: a fake
+    # multi-provider backend injected via app.dependency_overrides. Both
+    # mailboxes' promotional messages must land in the consolidated result.
+    from gaia_agent_email.api_routes import (
+        _MultiMailboxPrescanBackend,
+        get_prescan_backend,
+    )
+
+    app = export_openapi.build_app()
+    gmail = _FakePreScanBackend(
+        [
+            _prescan_gmail_message(
+                "g1",
+                subject="50% off this weekend!",
+                sender="deals@shop.example",
+                label_ids=["INBOX", "CATEGORY_PROMOTIONS"],
+            ),
+        ]
+    )
+    outlook = _FakePreScanBackend(
+        [
+            _prescan_gmail_message(
+                "o1",
+                subject="Flash sale — today only!",
+                sender="promo@store.example",
+                label_ids=["INBOX", "CATEGORY_PROMOTIONS"],
+            ),
+        ]
+    )
+    multi = _MultiMailboxPrescanBackend({"google": gmail, "microsoft": outlook})
+    app.dependency_overrides[get_prescan_backend] = lambda: multi
+    try:
+        client = TestClient(app)
+        resp = client.post("/v1/email/prescan", json={"max_messages": 10})
+        assert resp.status_code == 200, resp.text
+        result = resp.json()["result"]
+        # No 400, no "pick one" — both mailboxes' promos are consolidated.
+        archive_ids = {item["message_id"] for item in result["suggested_archives"]}
+        assert {"g1", "o1"} <= archive_ids
+        # The frozen contract has no per-item mailbox tag → boundary stripped it.
+        for section in ("urgent", "actionable", "suggested_archives"):
+            for item in result[section]:
+                assert "mailbox" not in item
+    finally:
+        app.dependency_overrides.clear()
 
 
 # ---------------------------------------------------------------------------

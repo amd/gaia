@@ -33,8 +33,9 @@ Phase I prompt-injection defense:
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
-from typing import Any, ClassVar, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional
 
 from gaia_agent_email import action_store, schedule_store
 from gaia_agent_email.config import ConfigurationError, EmailAgentConfig
@@ -76,7 +77,7 @@ from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.registry import get_embedding_model_for_device
-from gaia.connectors.errors import ConnectorsError
+from gaia.connectors.errors import AuthRequiredError, ConnectorsError
 from gaia.connectors.formatting import format_connector_error
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.database.mixin import DatabaseMixin
@@ -100,6 +101,50 @@ class _UnavailableCalendarBackend:
 
     def __getattr__(self, name: str):
         raise ConfigurationError(self._message)
+
+
+# ---------------------------------------------------------------------------
+# Provider-intent detection (#2164)
+# ---------------------------------------------------------------------------
+
+# Conservative mailbox-targeting detection: a query that explicitly names a
+# provider's MAILBOX ("check my Outlook inbox", "search gmail for ...") must
+# never be silently answered from a different mailbox. Precision over recall —
+# a missed detection falls back to the (prompt-guarded) default scan, while a
+# false positive would block a legitimate query. Deliberately NOT matched:
+# provider words inside email addresses (bob@outlook.com) and sender phrasing
+# ("the email from Microsoft").
+_PROVIDER_TERMS = {
+    "google": r"(?:gmail|google)",
+    "microsoft": r"(?:outlook|hotmail|microsoft)",
+}
+# "in google drive" / "in microsoft teams" name another product, not a mailbox.
+_NON_MAILBOX_PRODUCTS = r"(?!\s+(?:drive|docs|sheets|maps|teams|word|excel|office))"
+_MAILBOX_NOUNS = r"(?:inbox|mail(?:box)?|e-?mails?|messages?|account|folders?)"
+_MAILBOX_VERBS = r"(?:in|via|check|open|scan|triage|search)"
+
+_MAILBOX_TARGET_PATTERNS: Dict[str, "re.Pattern[str]"] = {
+    provider: re.compile(
+        "|".join(
+            (
+                rf"\bmy\s+{term}{_NON_MAILBOX_PRODUCTS}\b",
+                rf"(?<![@.\w-]){term}\s+{_MAILBOX_NOUNS}\b",
+                rf"\b{_MAILBOX_VERBS}\s+{term}{_NON_MAILBOX_PRODUCTS}\b",
+            )
+        ),
+        re.IGNORECASE,
+    )
+    for provider, term in _PROVIDER_TERMS.items()
+}
+
+
+def _detect_targeted_mailboxes(query: str) -> set:
+    """Return the mailbox providers a query explicitly targets (possibly empty)."""
+    return {
+        provider
+        for provider, pattern in _MAILBOX_TARGET_PATTERNS.items()
+        if pattern.search(query)
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +218,14 @@ write ONE short framing sentence (e.g. "Here's your inbox pre-scan — 5
 actionable, 1 suggested archive.") and stop. The user can see the card;
 do not re-state its contents in prose. For follow-up questions about
 specific items, refer to the message_id values from the card.
+
+MAILBOX TARGETING:
+Read/triage tools scan only CONNECTED mailboxes, and every result item is
+tagged with its source mailbox (google or microsoft). If the user asks
+about a specific provider's mailbox and the results carry only a different
+provider's tag, that provider is not connected — say so plainly and stop.
+NEVER present one mailbox's data as if it came from the provider the user
+asked for.
 
 OUTPUT:
 Tool results come back as JSON envelopes ``{"ok": true, "data": ...}``
@@ -582,12 +635,66 @@ class EmailTriageAgent(
             return ""
         return super().get_memory_dynamic_context()
 
-    def process_query(self, *args, **kwargs):
+    def process_query(self, user_input: str, *args, **kwargs):
         # Zero the batch-organize counter per turn so a long-lived instance
         # can't carry a prior turn's count into the batch-confirm threshold.
         # Only the batch counter resets here; session preferences persist.
         self._reset_organize_counter()
-        return super().process_query(*args, **kwargs)
+        guard = self._mailbox_target_guard(user_input)
+        if guard is not None:
+            return guard
+        return super().process_query(user_input, *args, **kwargs)
+
+    def _mailbox_target_guard(self, user_input: str) -> Optional[Dict[str, Any]]:
+        """Reject a request that explicitly targets an unavailable mailbox (#2164).
+
+        With only Google connected, "check my Outlook inbox" used to run the
+        inbox tool against Gmail and present that as the answer. When the query
+        names a provider that is not connected (or is filtered out by the
+        session's mailbox selection), surface the connectors framework's
+        actionable error BEFORE any tool runs — never substitute another
+        mailbox. Queries naming no provider keep the default
+        every-connected-mailbox behavior untouched.
+        """
+        targeted = _detect_targeted_mailboxes(user_input or "")
+        if not targeted:
+            return None
+        available = set(self.config.available_mailbox_providers())
+        selected_filter = (self.config.mail_provider or "").strip().lower()
+        problems: List[str] = []
+        for provider in sorted(targeted):
+            if provider not in available:
+                problems.append(
+                    format_connector_error(
+                        AuthRequiredError(
+                            AuthRequiredError.Reason.NOT_CONNECTED,
+                            provider=provider,
+                        )
+                    )
+                )
+            elif selected_filter and provider != selected_filter:
+                problems.append(
+                    f"This session is pinned to the {selected_filter!r} mailbox, "
+                    f"but the request targets {provider!r}. Clear the mailbox "
+                    f"selection (or switch it to {provider!r}) to use that "
+                    "mailbox."
+                )
+        if not problems:
+            return None
+        message = "\n".join(problems)
+        # The SSE surfaces render console events, not the return value — emit
+        # a terminal error event so the chat stream carries the message too.
+        self.console.print_error(message)
+        result = {
+            "status": "failed",
+            "result": message,
+            "conversation": [{"role": "user", "content": user_input}],
+            "steps_taken": 0,
+            "error_count": len(problems),
+            "error_history": list(problems),
+        }
+        self.last_result = result
+        return result
 
     def _register_tools(self) -> None:
         # Mirror BuilderAgent / ConnectorsDemoAgent: clear the
@@ -919,96 +1026,17 @@ class EmailTriageAgent(
         the error is recorded in ``mailbox_errors`` and the loop continues with
         the remaining backends. Non-``ConnectorsError`` exceptions still propagate.
         """
-        from gaia_agent_email.tools.read_tools import (
-            PRE_SCAN_ACTIONABLE_CAP,
-            PRE_SCAN_ARCHIVE_CAP,
-            PRE_SCAN_URGENT_CAP,
-            pre_scan_inbox_impl,
-        )
-
-        prefs = getattr(self, "_session_preferences", None)
-        force_llm = bool(getattr(self.config, "force_llm", False))
-        debug_flag = bool(getattr(self.config, "debug", False))
+        from gaia_agent_email.tools.read_tools import merge_pre_scan_backends
 
         self._refresh_mail_backends()
-        backends = self._backends
-        per_backend = max(1, max_messages // len(backends))
-        urgent: list[dict] = []
-        actionable: list[dict] = []
-        suggested_archives: list[dict] = []
-        informational_count = 0
-        scanned = 0
-        merged_prefs_applied: dict = {}
-        mailbox_errors: list[dict] = []
-        for provider, backend in backends.items():
-            if scanned >= max_messages:
-                break
-            try:
-                out = pre_scan_inbox_impl(
-                    backend,
-                    max_messages=per_backend,
-                    session_preferences=prefs,
-                    force_llm=force_llm,
-                    debug=debug_flag,
-                )
-            except ConnectorsError as exc:
-                msg = format_connector_error(exc)
-                mailbox_errors.append({"mailbox": provider, "error": msg})
-                logger.warning(
-                    "email pre-scan: skipping %s mailbox — %s", provider, msg
-                )
-                continue
-            # Count messages actually returned, not the cap — an under-filled
-            # backend would otherwise trip the budget guard and skip a later one.
-            backend_totals = out.get("totals", {})
-            scanned += (
-                int(backend_totals.get("urgent", 0))
-                + int(backend_totals.get("actionable", 0))
-                + int(backend_totals.get("suggested_archives", 0))
-                + int(out.get("informational_count", 0))
-            )
-            merged_prefs_applied = out.get("preferences_applied", merged_prefs_applied)
-            for item in out.get("urgent", []):
-                item["mailbox"] = provider
-                self._remember_message_mailbox(item.get("message_id"), provider)
-                self._remember_message_mailbox(item.get("thread_id"), provider)
-                urgent.append(item)
-            for item in out.get("actionable", []):
-                item["mailbox"] = provider
-                self._remember_message_mailbox(item.get("message_id"), provider)
-                self._remember_message_mailbox(item.get("thread_id"), provider)
-                actionable.append(item)
-            for item in out.get("suggested_archives", []):
-                item["mailbox"] = provider
-                self._remember_message_mailbox(item.get("message_id"), provider)
-                self._remember_message_mailbox(item.get("thread_id"), provider)
-                suggested_archives.append(item)
-            informational_count += int(out.get("informational_count", 0))
-        result = {
-            "kind": "email_pre_scan",
-            "urgent": urgent[: max(0, PRE_SCAN_URGENT_CAP)],
-            "actionable": actionable[: max(0, PRE_SCAN_ACTIONABLE_CAP)],
-            "informational_count": informational_count,
-            "suggested_archives": suggested_archives[: max(0, PRE_SCAN_ARCHIVE_CAP)],
-            "suggested_drafts": [],
-            "preferences_applied": merged_prefs_applied,
-            "totals": {
-                "urgent": len(urgent),
-                "actionable": len(actionable),
-                "informational": informational_count,
-                "suggested_archives": len(suggested_archives),
-            },
-        }
-        if mailbox_errors and len(mailbox_errors) == len(self._backends):
-            # Every connected mailbox failed — surface it loudly rather than
-            # returning ok with zero results (which reads as "empty inbox").
-            raise ConnectorsError(
-                "All connected mailboxes failed during pre-scan: "
-                + "; ".join(f"{e['mailbox']}: {e['error']}" for e in mailbox_errors)
-            )
-        if mailbox_errors:
-            result["mailbox_errors"] = mailbox_errors
-        return result
+        return merge_pre_scan_backends(
+            self._backends,
+            max_messages=max_messages,
+            session_preferences=getattr(self, "_session_preferences", None),
+            force_llm=bool(getattr(self.config, "force_llm", False)),
+            debug=bool(getattr(self.config, "debug", False)),
+            remember_mailbox=self._remember_message_mailbox,
+        )
 
     # -- Phase I3 batch-organize counter -----------------------------------
 

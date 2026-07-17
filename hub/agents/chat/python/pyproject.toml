@@ -10,7 +10,10 @@ authors = [{ name = "AMD" }]
 license = { text = "MIT" }
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["amd-gaia>=0.20.0"]
+# Floor: 0.22.0 is the first core release shipping
+# gaia.agents.registry.get_embedding_model_for_device, imported at agent
+# start (#2112).
+dependencies = ["amd-gaia>=0.22.0"]
 
 [project.entry-points."gaia.agent"]
 chat = "gaia_agent_chat:build_chat"

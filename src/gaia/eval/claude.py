@@ -27,7 +27,7 @@ load_dotenv()
 class ClaudeClient:
     log = get_logger(__name__)
 
-    def __init__(self, model=None, max_tokens=1024, max_retries=3):
+    def __init__(self, model=None, max_tokens=1024, max_retries=3, temperature=None):
         """
         Initialize Claude client with retry support.
 
@@ -35,6 +35,10 @@ class ClaudeClient:
             model: Claude model to use (defaults to DEFAULT_CLAUDE_MODEL)
             max_tokens: Maximum tokens in response (default: 1024)
             max_retries: Maximum number of retry attempts for API calls with exponential backoff (default: 3)
+            temperature: Sampling temperature forwarded to every completion call.
+                Left as None (the default), no temperature is sent and the API
+                default applies — generation callers depend on that diversity.
+                Judges pass 0.0 explicitly (#2094).
         """
         # Check for required dependencies
         if anthropic is None:
@@ -86,9 +90,20 @@ class ClaudeClient:
         self.model = model
         self.max_tokens = max_tokens
         self.max_retries = max_retries
+        self.temperature = temperature
         self.log.info(
             f"Initialized ClaudeClient with model: {model}, max_retries: {max_retries}"
         )
+
+    def _sampling_kwargs(self):
+        """Sampling kwargs for a completion call: ``temperature`` only if pinned.
+
+        Omitting the kwarg entirely (rather than passing None) preserves the
+        API default for callers that never asked for a pin.
+        """
+        if self.temperature is None:
+            return {}
+        return {"temperature": self.temperature}
 
     def calculate_cost(self, input_tokens, output_tokens):
         """
@@ -123,6 +138,7 @@ class ClaudeClient:
                 model=self.model,
                 max_tokens=self.max_tokens,
                 messages=[{"role": "user", "content": prompt}],
+                **self._sampling_kwargs(),
             )
             return message.content
         except Exception as e:
@@ -145,6 +161,7 @@ class ClaudeClient:
                 model=self.model,
                 max_tokens=self.max_tokens,
                 messages=[{"role": "user", "content": prompt}],
+                **self._sampling_kwargs(),
             )
 
             # Extract usage information
@@ -252,6 +269,7 @@ class ClaudeClient:
                             "content": f"Document content:\n\n{text_content}\n\n{prompt}",
                         }
                     ],
+                    **self._sampling_kwargs(),
                 )
                 self.log.info("Successfully analyzed HTML content")
                 return message.content[0].text
@@ -293,6 +311,7 @@ class ClaudeClient:
                         ],
                     }
                 ],
+                **self._sampling_kwargs(),
             )
             self.log.info("Successfully analyzed file")
             return message.content[0].text
@@ -348,6 +367,7 @@ class ClaudeClient:
                             "content": f"Document content:\n\n{text_content}\n\n{prompt}",
                         }
                     ],
+                    **self._sampling_kwargs(),
                 )
                 self.log.info(f"Successfully analyzed text content ({ext} file)")
 
@@ -405,6 +425,7 @@ class ClaudeClient:
                         ],
                     }
                 ],
+                **self._sampling_kwargs(),
             )
             self.log.info("Successfully analyzed file")
 

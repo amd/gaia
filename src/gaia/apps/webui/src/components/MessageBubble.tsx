@@ -8,11 +8,11 @@ import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
 import { AgentActivity } from './AgentActivity';
 import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta';
-import { EmailPreScanCard, isPreScanPayload } from './email/EmailPreScanCard';
+import { RenderCard } from './render/RenderCard';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import gaiaRobot from '../assets/gaia-robot.png';
-import type { Message, AgentStep } from '../types';
+import type { Message, AgentStep, RenderCardData } from '../types';
 import './MessageBubble.css';
 
 interface MessageBubbleProps {
@@ -24,6 +24,10 @@ interface MessageBubbleProps {
     agentSteps?: AgentStep[];
     /** Whether agent steps are currently active (streaming). */
     agentStepsActive?: boolean;
+    /** Live-streaming cards (issue #2108). `message.cards` wins when set —
+     *  this prop carries in-flight cards for the synthetic streaming bubble,
+     *  mirroring how `agentSteps` reaches it. */
+    cards?: RenderCardData[];
     /** Called when user clicks the delete button. */
     onDelete?: (messageId: number) => void;
     /** Called when user clicks the resend button (user messages only). */
@@ -189,9 +193,6 @@ function cleanLLMJsonBlocks(text: string): string {
     return result;
 }
 
-/** Structured payload fence tags — preserved verbatim, bypassed in RenderedContent. */
-const STRUCTURED_PAYLOAD_LANGS = new Set(['email_pre_scan', 'email-pre-scan']);
-
 /** Known programming language identifiers that should keep code block rendering. */
 const KNOWN_CODE_LANGS = new Set([
     'python', 'py', 'javascript', 'js', 'typescript', 'ts', 'java', 'c', 'cpp',
@@ -206,7 +207,9 @@ const KNOWN_CODE_LANGS = new Set([
     'matlab', 'octave', 'fortran', 'cobol', 'pascal', 'delphi', 'ada',
     'assembly', 'asm', 'nasm', 'wasm', 'solidity', 'sol', 'verilog', 'vhdl',
     'text', 'txt', 'plaintext', 'diff', 'patch', 'log',
-    // GAIA structured-payload tags — see the ``pre`` override below.
+    // Retired fence-payload tags (#2109 cutover): cards now arrive via
+    // tool_result.render, never fences. Kept ONLY so pre-cutover session
+    // history shows those payloads as fenced JSON code blocks, not bare prose.
     'email_pre_scan', 'email-pre-scan',
 ]);
 
@@ -226,10 +229,6 @@ function stripBogusCodeFences(text: string): string {
         /```(\w*)[ \t]*\n([\s\S]*?)```/g,
         (_match, lang: string, inner: string) => {
             const langLower = lang.toLowerCase();
-            // Keep structured payload fences intact — RenderedContent handles them
-            if (langLower && STRUCTURED_PAYLOAD_LANGS.has(langLower)) {
-                return _match;
-            }
             // Keep fences with known code languages
             if (langLower && KNOWN_CODE_LANGS.has(langLower)) {
                 return _match;
@@ -240,60 +239,9 @@ function stripBogusCodeFences(text: string): string {
     );
 }
 
-/**
- * Promote bare structured-payload JSON to fenced blocks so card components render
- * even when the LLM skips the fenced-block output format instruction.
- * Detects JSON starting with {"kind":"<known-payload>"} using brace-depth tracking
- * to handle nested objects, then wraps it in the appropriate language-tagged fence.
- */
-const STRUCTURED_PAYLOAD_KINDS: Record<string, string> = {
-    'email_pre_scan': 'email_pre_scan',
-    'email-pre-scan': 'email_pre_scan',
-};
-
-function promoteStructuredPayloads(text: string): string {
-    const trimmed = text.trimStart();
-    if (!trimmed.startsWith('{')) return text;
-
-    // Fast-reject: must have "kind" near the start
-    const kindMatch = trimmed.match(/^\{"kind"\s*:\s*"([^"]+)"/);
-    if (!kindMatch) return text;
-    const lang = STRUCTURED_PAYLOAD_KINDS[kindMatch[1]];
-    if (!lang) return text;
-
-    // Find the matching closing brace with string-aware depth tracking so that
-    // `}` characters inside JSON string values don't prematurely end the scan.
-    let depth = 0;
-    let end = -1;
-    let inString = false;
-    let escape = false;
-    for (let i = 0; i < trimmed.length; i++) {
-        const ch = trimmed[i];
-        if (escape) { escape = false; continue; }
-        if (inString) {
-            if (ch === '\\') escape = true;
-            else if (ch === '"') inString = false;
-            continue;
-        }
-        if (ch === '"') inString = true;
-        else if (ch === '{') depth++;
-        else if (ch === '}' && --depth === 0) { end = i; break; }
-    }
-    if (end === -1) return text;
-
-    const jsonPart = trimmed.slice(0, end + 1);
-    const rest = trimmed.slice(end + 1);
-    const leading = text.slice(0, text.length - trimmed.length);
-    return `${leading}\`\`\`${lang}\n${jsonPart}\n\`\`\`\n${rest}`;
-}
-
 function cleanToolCallContent(content: string): string {
     if (!content) return content;
     let cleaned = content;
-
-    // Promote bare structured-payload JSON (e.g. email_pre_scan) to fenced blocks
-    // so card components mount even when the LLM omits the fenced-block wrapper.
-    cleaned = promoteStructuredPayloads(cleaned);
 
     // Remove all tool-call JSON blocks from the content
     cleaned = cleaned.replace(TOOL_CALL_JSON_RE, '');
@@ -354,7 +302,7 @@ function formatLatency(ms: number): string {
     return `${(ms / 1000).toFixed(1)}s`;
 }
 
-export function MessageBubble({ message, isStreaming, showTerminalCursor, agentSteps, agentStepsActive, onDelete, onResend, latencyMs, agentName }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, showTerminalCursor, agentSteps, agentStepsActive, cards, onDelete, onResend, latencyMs, agentName }: MessageBubbleProps) {
     const isError = message.role === 'assistant' && isErrorContent(message.content);
     // Memoize the expensive LLM content cleaning (brace-depth parser) so it
     // doesn't re-run on every render — only when message content changes.
@@ -505,6 +453,12 @@ export function MessageBubble({ message, isStreaming, showTerminalCursor, agentS
                             <span>Something went wrong</span>
                         </div>
                     )}
+                    {/* Structured cards (#2108) — finalized message.cards wins;
+                        the prop is the live-streaming path. Always above the
+                        markdown content. */}
+                    {(message.cards ?? cards)?.map((card, i) => (
+                        <RenderCard key={i} render={card.render} data={card.data} />
+                    ))}
                     <RenderedContent content={cleanedContent} showCursor={(isStreaming || showTerminalCursor) && !!cleanedContent && !agentStepsActive} />
                     {message.role === 'assistant'
                         && !isStreaming
@@ -657,36 +611,9 @@ function linkifyChildren(children: React.ReactNode): React.ReactNode {
     );
 }
 
-const STRUCTURED_FENCE_RE = /```(email[_-]pre[_-]scan)[ \t]*\r?\n([\s\S]*?)\r?\n```/;
-
 function RenderedContent({ content, showCursor }: { content: string; showCursor?: boolean }) {
     if (!content && !showCursor) return null;
     if (!content && showCursor) return <span className="cursor" />;
-
-    // Bypass ReactMarkdown for structured payload blocks.
-    // remark-gfm autolinks (<email@domain>) inside the JSON corrupt the
-    // fence detection, so we extract and render these blocks directly.
-    const fenceMatch = STRUCTURED_FENCE_RE.exec(content);
-    if (fenceMatch) {
-        const before = content.slice(0, fenceMatch.index).trim();
-        const jsonPart = fenceMatch[2];
-        const after = content.slice(fenceMatch.index + fenceMatch[0].length).trim();
-        try {
-            const parsed = JSON.parse(jsonPart);
-            if (isPreScanPayload(parsed)) {
-                return (
-                    <div className="md-content">
-                        {before && <RenderedContent content={before} />}
-                        <EmailPreScanCard payload={parsed} />
-                        {after && <RenderedContent content={after} />}
-                        {showCursor && <span className="cursor" />}
-                    </div>
-                );
-            }
-        } catch {
-            // JSON.parse failed — fall through to normal ReactMarkdown render
-        }
-    }
 
     return (
         <div className="md-content">
@@ -711,10 +638,10 @@ function RenderedContent({ content, showCursor }: { content: string; showCursor?
                         );
                     },
                     // Fenced code blocks: react-markdown wraps them in <pre><code>.
-                    // Extract the language and code text, render as CodeBlock —
-                    // unless the language tag is one of our structured-payload
-                    // contracts (currently: ``email_pre_scan``), in which case
-                    // we mount a typed component instead.
+                    // Extract the language and code text, render as CodeBlock.
+                    // (The fence→card mount for email_pre_scan was retired at the
+                    // #2109 cutover — cards arrive via tool_result.render now;
+                    // pre-cutover history renders those fences as code blocks.)
                     pre({ children }) {
                         // children is <code className="language-xxx">...</code>
                         const codeChild = React.Children.toArray(children)[0];
@@ -724,20 +651,6 @@ function RenderedContent({ content, showCursor }: { content: string; showCursor?
                             const match = /language-([\w-]+)/.exec(className);
                             const codeString = String(codeProps?.children || '').replace(/\n$/, '');
                             const lang = match?.[1] || '';
-                            if (lang === 'email_pre_scan' || lang === 'email-pre-scan') {
-                                try {
-                                    const parsed = JSON.parse(codeString);
-                                    if (isPreScanPayload(parsed)) {
-                                        return <EmailPreScanCard payload={parsed} />;
-                                    }
-                                } catch {
-                                    // Fall through to CodeBlock — the LLM emitted
-                                    // an ill-formed envelope. The user sees the
-                                    // raw JSON instead of a broken card; the
-                                    // system prompt makes the format explicit
-                                    // so this should be rare in practice.
-                                }
-                            }
                             return (
                                 <CodeBlock
                                     lang={lang}

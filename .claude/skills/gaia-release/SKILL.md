@@ -143,6 +143,30 @@ These map to [CLAUDE.md](CLAUDE.md). Re-read them whenever this skill runs.
    Full Changelog: [v<previous>...v<version>](https://github.com/amd/gaia/compare/v<previous>...v<version>)
    ```
 
+   **Generate the changelog by introspecting git, and escape it for MDX.** Do not
+   hand-transcribe subjects, and do not pipe `git log` output in raw — a subject
+   containing `<` or `{` is valid git and invalid MDX, which fails CI's `mintlify
+   validate`. v0.22.0 hit this on `#1791`'s subject (*"fix Mintlify MDX validation
+   (unescaped '<' breaks the docs check)"*) — the one commit whose subject describes
+   the bug it causes.
+
+   ```bash
+   # Generate the `- `<sha>` — <subject>` lines, escaping the two characters MDX
+   # treats as syntax. `\<` and `\{` render as literal `<` / `{` (verified against
+   # `mintlify validate`), and shas never contain them, so escaping the whole line
+   # is safe. Subjects like "AMD <> SpecificAI" survive correctly.
+   git log v<previous>..HEAD --pretty=format:'- `%h` — %s' \
+     | sed -e 's/</\\</g' -e 's/{/\\{/g' > /tmp/changelog.txt
+
+   # Guard: nothing hazardous may survive.
+   grep -nE '(^|[^\\])[<{]' /tmp/changelog.txt && echo "MDX HAZARD — fix before continuing" || echo "changelog MDX-safe"
+   ```
+
+   Sanity-check the count against `git log --oneline | wc -l` **after** writing the file
+   (`wc -l` under-counts by one when the last line has no trailing newline — v0.22.0
+   claimed 197 when the real count was 198). The claimed count, the listed lines, and
+   `git log` must all agree.
+
    **Generation parameters (apply to every entry — this is the point of the skill).**
    GAIA's notes have historically read dry and engineering-first: they say *what
    changed* but not *why a user should care or want to try it*. Generate against these
@@ -193,11 +217,20 @@ These map to [CLAUDE.md](CLAUDE.md). Re-read them whenever this skill runs.
    ```
    The post-prior-release bump usually handles this, but a squash-merge can revert it silently. If it's wrong, edit it. If it's right but reverted later (see Phase 3), the validator will catch it.
 
-7. **Validate.** Run from the repo's activated venv (`source .venv/bin/activate` on Linux/macOS, `.venv\Scripts\activate` on Windows; the bare-`python` Microsoft Store stub will fail). If you're working from a git worktree without its own venv, run from the parent checkout's venv.
+7. **Validate — both checks.** Run from the repo's activated venv (`source .venv/bin/activate` on Linux/macOS, `.venv\Scripts\activate` on Windows; the bare-`python` Microsoft Store stub will fail). If you're working from a git worktree without its own venv, run from the parent checkout's venv.
    ```bash
    python util/validate_release_notes.py docs/releases/v<version>.mdx --tag v<version>
+   (cd docs && npx -y mintlify@latest validate)   # the docs.yml `validate` job — MUST also pass
    ```
-   Must exit 0 — this is the gate the publish workflow runs on tag push. Fix any errors before continuing. If it fails for reasons unrelated to your changes (missing dep, broken import), stop and surface that — do not silently bypass. The validator prints the first failing check (missing/renamed section, absent `compare/` link, tag mismatch) — read that line to localise the fix; it has no `--verbose` flag.
+   Both must exit 0. Fix any errors before continuing. If either fails for reasons unrelated to your changes (missing dep, broken import), stop and surface that — do not silently bypass. `validate_release_notes.py` prints the first failing check (missing/renamed section, absent `compare/` link, tag mismatch) — read that line to localise the fix; it has no `--verbose` flag.
+
+   **`validate_release_notes.py` passing is not sufficient — it is not an MDX parser.** CI's
+   `validate` job additionally runs `mintlify validate` from `docs/`, and v0.22.0 failed it
+   after the notes passed the Python validator (see the escaping rule in step 3). Its error is
+   misleading: an unparseable `.mdx` surfaces as `"releases/v<version>" is referenced in the
+   docs.json navigation but the file does not exist` — the file exists, it just never parsed.
+   Pre-existing parse errors under `docs/plans/` and `docs/superpowers/` are reported but
+   non-fatal; leave them alone.
 
 ### Gate 1 — show the user the draft
 
@@ -214,14 +247,15 @@ Show the diff (`git diff --stat` plus the new `.mdx` file inline). Ask: **"Appro
 1. **Branch and commit.**
    ```bash
    git checkout -b v<version>-release
-   git add docs/releases/v<version>.mdx docs/docs.json src/gaia/version.py src/gaia/apps/webui/package.json
+   git add docs/releases/v<version>.mdx docs/docs.json src/gaia/version.py \
+           src/gaia/apps/webui/package.json src/gaia/apps/webui/package-lock.json
    git status              # confirm scope-clean — no drive-by edits
    git diff --cached --stat
    git commit -m "Release v<version>"
    git push -u origin v<version>-release
    ```
 
-   If `git status` shows anything outside the four expected files, stop and ask. The release PR must be scope-clean.
+   If `git status` shows anything outside those five files, stop and ask (`bump-ui-version.mjs` rewrites `package-lock.json` too — the prior release commit carries all five). The release PR must be scope-clean.
 
 2. **Read the most recent release PR body to match shape.**
    ```bash
@@ -279,7 +313,7 @@ Do not poll, do not auto-merge. Do not push the tag from the un-merged branch.
    git checkout main && git pull
    # Re-derive from the release PR — survives gate pauses across sessions/shells.
    RELEASE_PR=$(gh pr list --repo amd/gaia --state merged --search "Release v<version> in:title" --json number --jq '.[0].number')
-   MERGED_SHA=$(gh pr view "$RELEASE_PR" --repo amd/gaia --json mergeCommitOid -q .mergeCommitOid)
+   MERGED_SHA=$(gh pr view "$RELEASE_PR" --repo amd/gaia --json mergeCommit --jq '.mergeCommit.oid')
    echo "Will tag: $MERGED_SHA (from PR #$RELEASE_PR)"
    test "$(git rev-parse HEAD)" = "$MERGED_SHA" || { echo "Local main ($( git rev-parse HEAD)) does not match merged release PR SHA ($MERGED_SHA) — pull, or main has moved past the release commit"; exit 1; }
    ```
@@ -329,13 +363,16 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
    git checkout main
    git pull
    # Re-derive from the release PR — the PR number was in the Gate 3 question.
-   MERGED_SHA=$(gh pr view <release-pr-number> --repo amd/gaia --json mergeCommitOid -q .mergeCommitOid)
+   MERGED_SHA=$(gh pr view <release-pr-number> --repo amd/gaia --json mergeCommit --jq '.mergeCommit.oid')
    test "$(git rev-parse HEAD)" = "$MERGED_SHA" || { echo "main moved past verified SHA $MERGED_SHA — re-verify (Phase 3) before tagging"; exit 1; }
    ```
 
 2. **Tag and push.**
    ```bash
-   git tag v<version>
+   # Annotated, on the verified SHA — every prior release tag is annotated ("Release vX.Y.Z").
+   # A bare `git tag v<version>` creates a lightweight tag and breaks convention.
+   git tag -a v<version> <merged-sha> -m "Release v<version>"
+   git rev-list -n1 v<version>   # MUST equal <merged-sha> before pushing
    git push origin v<version>
    ```
 
@@ -395,37 +432,47 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
 
 3. **Draft the Discord announcement** using the template below. Read the just-shipped release notes (`docs/releases/v<version>.mdx`) to populate the highlight list — one bullet per "What's New" entry plus any Bug Fix worth surfacing, written in the same voice as the notes — apply the same *Generation parameters* (value-prop first, plain, engaging, no fluff/emoji).
 
-   **Template (copy verbatim, fill the bracketed fields):**
+   **Template (copy verbatim, fill the bracketed fields).** This is the v0.22.0 shape —
+   the format the maintainer actually posts. Reproduce the markdown exactly: the role
+   mention, the backticked version, the fenced install block, and the `- ` bullets are
+   all load-bearing.
+
+   ````
+   @gaia **GAIA v<version> Release**
+
+   Hi all, `v<version>` is <one-clause framing — examples: "a patch release with X and Y", "out — focused on X, Y, and Z", "a hotfix for X">. Upgrade in one command:
 
    ```
-   GAIA v<version> Release
-
-   Hi all, v<version> is <one-clause framing — examples: "a patch release with X and Y", "out — focused on X, Y, and Z", "a hotfix for X">. Upgrade in one command:
    npm install -g @amd-gaia/agent-ui
    gaia-ui
+   ```
 
    Currently tested on Strix Halo w/ 32GB+ or Radeon GPU w/ 24GB+ on Windows and Ubuntu.
 
-   What's new in v<version>:
+   **What's new in v<version>**
 
-   <Highlight title> — <One-sentence what + why, plain English. 1–2 sentences max per bullet.>
-   <Highlight title> — <...>
-   <Highlight title> — <...>
+   - **<Highlight title>** — <One-sentence what + why, plain English. 1–2 sentences max per bullet.>
+   - **<Highlight title>** — <...>
+   - **<Highlight title>** — <...>
 
    The agent can search files, run commands, and use MCP tools — but only after you approve each action.
 
    Agent UI guide: https://amd-gaia.ai/docs/guides/agent-ui
    v<version> release notes: https://amd-gaia.ai/docs/releases/v<version>
 
-   Note this is a beta release of the UI, if you notice any bugs or issues please report them here or create an issue!
-   ```
+   Note this is a beta release of the UI and the Email Agent, if you notice any bugs or issues please report them here or create an issue!
+   ````
 
-   **Format rules** (these match the v0.17.3 / v0.17.4 announcements):
-   - The `npm install` line and `gaia-ui` line are *not* in a fenced code block in the announcement — they're plain lines after the colon. Discord renders them as code due to the channel formatting; do not wrap them in backticks.
-   - Highlight bullets have **no leading bullet marker** — each is its own paragraph with `**Title** — Description` style. The bold formatting carries the visual hierarchy.
+   **Format rules** (these match the v0.22.0 announcement — the current house format):
+   - **Open with the `@gaia` role mention**, then the bold title: `@gaia **GAIA v<version> Release**`.
+   - The version in the "Hi all" line is **backticked** — `` `v0.22.0` ``.
+   - The `npm install` / `gaia-ui` lines **go in a fenced code block**, with a blank line before it.
+   - `**What's new in v<version>**` is **bold with no trailing colon** — it is not a `##` heading.
+   - Highlights **are `- ` bullets**, each `- **Title** — Description`.
    - 3–5 highlights for a patch, 5–7 for a minor. Anything more becomes a wall of text.
-   - The "agent can search files…" sentence and the "Note this is a beta release…" sentence are **fixed boilerplate** — copy them verbatim every release.
+   - The "agent can search files…" and "Note this is a beta release of the UI and the Email Agent…" sentences are **fixed boilerplate** — copy them verbatim every release.
    - First-line framing reflects the release character: patches = "a patch release with X and Y"; minor/major = "out — focused on X, Y, and Z"; hotfixes = "a hotfix for X". Match the actual scope, don't oversell.
+   - Carry the release notes' beta framing into the announcement where it applies — this channel is where users hit the rough edges first, so don't oversell here.
 
 ### Gate 6 — present, do not auto-post
 

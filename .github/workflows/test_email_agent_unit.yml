@@ -21,6 +21,10 @@ on:
       - 'src/gaia/agents/base/**'
       - 'src/gaia/connectors/**'
       - 'src/gaia/eval/**'
+      # Triage runs against Lemonade: the pinned version and the client that
+      # talks to it both gate this agent.
+      - 'src/gaia/version.py'
+      - 'src/gaia/llm/**'
       - 'tests/unit/agents/email/**'
       - 'tests/unit/email/**'
       - 'tests/unit/connectors/**'
@@ -39,6 +43,10 @@ on:
       - 'src/gaia/agents/base/**'
       - 'src/gaia/connectors/**'
       - 'src/gaia/eval/**'
+      # Triage runs against Lemonade: the pinned version and the client that
+      # talks to it both gate this agent.
+      - 'src/gaia/version.py'
+      - 'src/gaia/llm/**'
       - 'tests/unit/agents/email/**'
       - 'tests/unit/email/**'
       - 'tests/unit/connectors/**'

@@ -14,7 +14,7 @@
 - **Why & what** — §0 thesis (SDLC automated) · §1 the live-SDK keystone · §1.5 the *recipe* (the one authored input)
 - **Engine & governance** — §2 agentic-coding engine · §2.5 human approve/deny gates · §2.6 the factory's *own* least-privilege
 - **The pipeline** — §3 the lifecycle stages · §4 docs-as-output · §5/§5.5 eval gate + synthetic-data discipline · §6/§6.5 ship rigor + recovery · §7 multi-component product · §8 runtime seam
-- **Plan & honesty** — §9 exists-vs-net-new · §10 milestones M0→M4 (easiest→hardest) · §11 distinctiveness · §11.5 review record (all findings → resolutions) · §12 open decisions
+- **Plan & honesty** — §9 exists-vs-net-new · §10 milestones M0→M4 (easiest→hardest) · §11 distinctiveness · §11.5 review record (all findings → resolutions) · §11.6 ecosystem gap analysis (OpenClaw/Hermes) · §12 open decisions
 
 ## 0. Thesis — the factory is the SDLC, automated, against a living SDK
 
@@ -278,6 +278,14 @@ draft reinventing the shipped gate in a strictly worse form):
   not URGENT alone).
 - **Runs on the held-out oracle, not the dev/optimize corpus** (§5.5) — gating on the
   tuned-against set measures memorization, not capability.
+- **An injection-resistance floor, alongside the capability floors (§11.6 gap 4).** Every
+  major 2026 skill-ecosystem incident was *content-borne* (instructions the agent itself
+  relays; natural-language malice static scanners admit they miss) — and signing proves
+  *who published*, never *what the text does to the model*. So the oracle carries an
+  **adversarial bucket** (the committed `phishing_fixture.json` pattern, §5.5) whose recall
+  is a **fixed tripwire like #1437's**, and anything the recipe pulls in as prompt-visible
+  text (skills, MCP descriptions) is content-scanned at stages 5–6 — scan for the known
+  patterns, *gate* on the behavioral floor.
 - **Refreshed independently** so the shipped scorecard stays honest as models/SDK move.
 
 The factory's job is to *run this gate on every dev-half output and every SDK-delta
@@ -422,8 +430,13 @@ So "roll the catalog back" is *not* a thing; the workable levers are:
 - **The escape becomes an oracle case:** the failing real scenario is curated into the
   held-out oracle (stage 5b) so it can never re-ship — recovery *feeds* M2.
 
-*True catalog rollback (skip a `yanked[]` version in `latestVersion()`) is **net-new Worker
-work**, not an existing capability — scope it if roll-forward isn't enough.*
+True catalog rollback (skip a `yanked[]` version in `latestVersion()`) is **net-new Worker
+work**, not an existing capability — and it is **scheduled for M1** (§11.6 gap 5).
+Roll-forward answers *quality* escapes, but a ClawHavoc-class **malicious** package needs a
+registry **yank** plus a **daemon-side deny-list check**: a higher semver does not stop
+existing installs, and the runtime's anti-rollback + TOFU pinning otherwise *entrenches* a
+compromised publisher. Revocation is signing's other half; shipping M1's signing without it
+is half a trust story.
 
 **Versioning is a factory decision across TWO independent axes** — `stamp_version.py` today
 only *propagates* a hand-set version, and it deliberately keeps them separate:
@@ -504,7 +517,7 @@ work from M2. Each milestone is independently valuable and shippable.
 | M | Milestone | Automates | Difficulty | Why here / gate |
 |---|---|---|---|---|
 | **M0** | **Generalize the *sidecar* lane** (recipe-driven, per-agent) | the *deterministic packaging spine* — stages **9, 11, 12, 14, 16** — for *any* agent: turn `release_agent_email.yml` + `packaging/*` into a reusable, recipe-parametrized pipeline. **The wheel lane needs no generalizing** — `publish_agents.yml` is already per-agent + gated + OIDC (§6); M0 orchestrates it and generalizes the *sidecar* lane (M1 adds provenance stages 10/15/17; M2 the trustworthy gate 13). The `agent-hub-release` skill is the existing runbook to automate | **Easiest — but not risk-free**: deterministic/no-LLM, yet per-agent OIDC-publisher provisioning is **supply-chain work**, and the ship half exists *only for email* (a 2nd agent may lack `packaging/*` parity) | **Prove on a *second, non-email* agent** (browser/analyst) — the empirical reuse-vs-rewrite *and* parity check; includes per-agent OIDC publisher provisioning, tags, R2 prefixes |
-| **M1** | **Provenance + edge-verified releases** | manifest emit (stage 10) · signing + source-hash + SDK-commit provenance (stage 15) · post-publish edge verify (stage 17) | **Easy** — mechanical (manifest schema landed with #1913) | integrity/traceability (not "reproducibility," §11.5); docs-in-sync becomes a hard gate |
+| **M1** | **Provenance + edge-verified + revocable releases** | manifest emit (stage 10) · signing + source-hash + SDK-commit provenance (stage 15) · post-publish edge verify (stage 17) · **catalog yank + daemon deny-list** (§6.5, §11.6 gap 5 — revocation is signing's other half) | **Easy** — mechanical (manifest schema landed with #1913; yank is small net-new Worker + daemon work) | integrity/traceability (not "reproducibility," §11.5); docs-in-sync becomes a hard gate |
 | **M2** | **Independent eval oracle + noise-aware gate** | the *trustworthy* eval gate: a **human-curated, held-out** ground-truth set per agent + fixed safety floors; gate = **fixed bar + non-inferiority band** `≥ prev − k·stdev` over `n_runs` repetitions (§5 — *not* LCB-vs-moving-baseline, §11.5). **Adoption reality: 1 of 18 agents has a scorecard today** (email) — M2 is 17 harness→payload adapters + oracles; the `adding-eval-scorecard` skill is the per-agent runbook. **M2 also owns stage 5b** (oracle curation/extension) **and its coverage-delta gate** (§5.5) | **Medium** — mostly discipline, but the oracle is **human judgment the factory does NOT automate** | **Prerequisite for everything generative** (M3–M4) — without an independent oracle the gate is self-certification (§11.5 #1) |
 | **M3** | **Assisted dev automation** | the *mechanical* dev stages: scaffold (build on the existing `gaia agent init` starter-package generator + Builder templates), tool/skill/MCP wiring, synthetic-data gen, the eval-optimize (`--fix`) loop, PR authoring | **Harder** — net-new agentic coding (*needs the `src/gaia/coder/` `CoderAgent` ported from `origin/coder` — ~420 commits behind main; the orchestration/validators `CodeAgent` it builds on already ships as `gaia-agent-code`*), human-in-the-loop | human still owns **scope, spec, the oracle (M2, curator ≠ spec author), PR-approve, ship**; the GAIA coder + Claude Code loop assist, they don't decide |
 | **M4** | **SDK-delta maintenance loop** (stage 18 — the keystone) | on an SDK delta that regresses an agent (measured on M2's held-out oracle via the §5 noise-band gate), re-run M3+M0/M1 for that agent | **Hardest** — the differentiator *and* the highest risk | **Last, and only after M2.** Built-in: (a) **serial-eval throughput cap** (one eval/backend — CLAUDE.md), size cadence against it; (b) SDK changes ship via **PR + tag through the existing release process**, gated by the **human approve/deny at the SDK-release checkpoint over a pre-cut all-agent blast-radius dry-run** (§2.5) — approve the radius, not the tag; the all-agent re-eval is the *intended* regression net |
@@ -536,14 +549,19 @@ port *and* M2's oracle work.
 
 ## 11. Distinctiveness (brief, honest)
 
-Not skill-learning (Hermes/OpenClaw) and not ordinary CI/CD — an **automated AI
-software-engineering pipeline that builds *and maintains* agent products against a living
-SDK**, using the same flow a human team uses (issues · specs · reviews · **data-driven
-evals** · PRs · **provenance-verified releases**). The moat is the *maintenance-against-a-
-moving-SDK* loop + the eval-gate + real PRs into the codebase. **Honest caveat:** the ship
-half exists and is rigorous, but the dev-half orchestrator + the SDK-delta loop are
-substantial net-new work; this is a *potential* moat that must be built, and stage 18 is
-the hard part.
+Not skill *distribution* (OpenClaw: near-zero-friction SKILL.md publishing, agent-drafted
+skills behind an operator review, no signing, no eval), not skill *learning* (Hermes: the
+agent self-authors skills from its own runs; rot managed by usage statistics, never by
+execution tests), and not ordinary CI/CD — an **automated AI software-engineering pipeline
+that builds *and maintains* agent products against a living SDK**, using the same flow a
+human team uses (issues · specs · reviews · **data-driven evals** · PRs ·
+**provenance-verified releases**). Both ecosystems lack exactly what the factory builds
+(eval gates, provenance, maintenance-by-contract); the factory lacks what they have
+(velocity, community authorship, a learning loop) — §11.6 turns that comparison into
+scoped amendments. The moat is the *maintenance-against-a-moving-SDK* loop + the eval-gate
++ real PRs into the codebase. **Honest caveat:** the ship half exists and is rigorous, but
+the dev-half orchestrator + the SDK-delta loop are substantial net-new work; this is a
+*potential* moat that must be built, and stage 18 is the hard part.
 
 ## 11.5 Review record — findings, resolutions, and where they live
 
@@ -588,6 +606,52 @@ dry-run, the failing scorecard) rather than reviewing blind, but cannot eliminat
 is the plan's least-built, highest-risk, last-scheduled component. M0–M1 deliver real value
 with **no LLM in the loop**; the research risk is quarantined to M3–M4 behind M2's oracle.
 
+## 11.6 Ecosystem gap analysis — OpenClaw / Hermes (July 2026)
+
+A deep dive on the two systems §11 name-checks, run to pressure-test the factory's
+positioning. The short version of each (sourced July 2026):
+
+- **OpenClaw** (~382K stars, ~2.7M weekly npm downloads, ~52K ClawHub skills in 7 months)
+  proved that **friction removal is the growth engine**: a skill is a markdown folder on the
+  open agentskills.io spec, publishing is one CLI command, the agent drafts its own skills
+  behind an operator-review "Skill Workshop." It is also the cautionary tale: **ClawHavoc**
+  (Feb 2026) put 341→824+ malicious skills (AMOS credential stealers) on the registry before
+  VirusTotal scanning was bolted on reactively — and the project concedes scanning cannot
+  catch natural-language malicious instructions. No author signing, no lockfile, no
+  behavioral evals, sandboxing off by default, a one-click-RCE CVE, 40K+ exposed gateways;
+  skill drift is *managed by a doctor command*, not prevented by contracts.
+- **Hermes Agent** (Nous Research, ~211K stars) is the **learning loop**: the agent
+  self-authors SKILL.md skills after successful multi-step tasks, errors, or user
+  corrections; a **Curator** manages rot *statistically* (30d unused → stale, 90d →
+  archived). Its soft underbelly is quality: **no execution-based validation anywhere in
+  core** — nothing ever runs a learned skill against a test before it enters the library;
+  the injection scanner is regex-only and demonstrably bypassable; outcome-driven skill
+  evolution (GEPA) is bolt-on community work.
+
+Both ride the same portable SKILL.md standard, both scale through thousands of external
+authors, and both lack exactly what this factory builds. That validates the design center —
+and exposes eight gaps, each with a disposition:
+
+| # | Gap | What the ecosystems teach | Disposition |
+|---|---|---|---|
+| 1 | **No skill lane.** The factory's only unit is the heavyweight packaged agent; skills appear once, as a recipe *input* (§1.5). GAIA's own sibling plans (skill-format #691, marketplace #647) make skills a first-class portable unit | The ~50KB markdown skill is the unit that spreads (52K skills vs our 18 agents). Full freeze-matrix treatment for a 2KB procedure is absurd; shipping it ungated is ClawHavoc | **Open decision §12.7** — a proportionate second lane (eval + scan + provenance, no freeze/OIDC) or an explicit scope hand-off |
+| 2 | **No community-producer path.** The factory assumes first-party recipes, oracles, publish tokens; runtime trust tiers (§0.24) imply third-party submissions the factory never defines a pipeline for | Both ecosystems' scale came from external authors; ClawHavoc says a scan-only community lane is not acceptable | **Open decision §12.8** — tier-differentiated pipeline (Verified = full factory; Community = defined, gated subset) |
+| 3 | **No field→factory feedback.** Stage 18 triggers on SDK deltas + CI evals only; a field regression invisible to the oracle never triggers. Skills synthesized on-device (skill-synthesis #887) have no path through the gates | Hermes learns but cannot verify; the factory verifies but does not learn. **Validation of learned skills is the thing neither competitor has** — synthesis → eval gate → signed Hub skill would be a real moat | **Open decision §12.9** (telemetry channel) + the M3/M4 intake note below |
+| 4 | **No adversarial/security bucket in the eval gate.** Stage 13 measures capability; §5.5's phishing bucket is coverage, not a floor. Signing proves *who published*, never *what the text does to the model* | Every major incident in both ecosystems was content-borne: ClickFix instructions the agent itself relays, natural-language malice VirusTotal admits it misses, skill descriptions injected verbatim into prompts | **Inline, non-optional** — injection-resistance floor added to §5; static content-scan of recipe-pulled skills/MCP configs at stages 5–6 |
+| 5 | **No malicious-package recovery.** §6.5 is roll-forward for *quality* escapes; a compromised publisher's installs keep running — and the runtime's anti-rollback + TOFU pinning *entrenches* the compromise | ClawHavoc-class response needs registry yank + client-side deny-list, not a higher semver | **Inline, non-optional** — yank/deny-list promoted from "scope if needed" to **M1** (§6.5, §10), as signing's other half |
+| 6 | **No cycle-time budget.** Throughput is priced only via the serial-eval ceiling (M4) | OpenClaw ships multiple times a week; a skill publishes in seconds. If recipe→published takes days, the ecosystem forms elsewhere regardless of quality | Name a target latency per lane when the recipe schema lands (M0); identify amortizable gate costs (cached freezes, incremental eval) |
+| 7 | **No interop intake.** skill-format #691 already promises agentskills.io + Hermes/OpenClaw compatibility — 50K+ community skills are syntactically ingestible | "Bring an OpenClaw skill, we validate and sign it" converts the competitors' authoring ecosystem into the factory's input stream, with the eval gate as the differentiator | Rides gap 1's lane (§12.7); the intake is the lane's second customer |
+| 8 | **§11 mislabeled the competitors** ("skill-learning" lumped both; OpenClaw is skill *distribution* + self-authoring, Hermes is the *learning* one) | The precise contrast is the positioning: the factory is the missing **trust layer** for the loop those two popularized | **Fixed in §11** (this PR) |
+
+**M3/M4 intake note (gap 3):** when M3's dev stages exist, the skill-synthesis output
+(#887 — procedures distilled from an agent's own successful runs) becomes a factory *input*
+class: a synthesized skill enters at stage 5b-adjacent (a human triages it exactly like an
+oracle candidate), passes the stage-13 gate scoped to the skill lane, and ships signed. That
+turns the factory into the validator Hermes lacks, without importing Hermes's
+unverified-self-modification risk — the write path stays human-gated (§2.5), matching
+OpenClaw's Skill-Workshop lesson that even friction-first ecosystems converged on operator
+review for agent-authored capability.
+
 ## 12. Open decisions (need sign-off)
 
 1. **Orchestrator substrate** — Claude Code (in CI today; skills + memory are local-session
@@ -612,3 +676,19 @@ with **no LLM in the loop**; the research risk is quarantined to M3–M4 behind 
    registration**, shared blast radius). *Rec:* N thin callers — per-agent trusted
    publishers preserve supply-chain isolation (a compromised caller can publish only its
    own agent); the registration cost is one-time per agent.
+7. **A skill lane (§11.6 gaps 1+7)** — does the factory own a second, proportionate lane
+   for SKILL.md artifacts (eval + content-scan + sign, no freeze matrix / no per-skill OIDC
+   publisher), including an intake path for agentskills.io-compatible community skills? Or
+   is the skill SDLC explicitly out of scope and owned by the marketplace track (#647)?
+   *Rec:* own the lane — it reuses stage 13/15 machinery, and "we validate what they only
+   scan" is the differentiator the OpenClaw/Hermes analysis surfaced.
+8. **Community-tier pipeline (§11.6 gap 2)** — what subset of the factory does a
+   *Community*-tier third-party submission get (runtime §0.24 tiers imply submissions the
+   factory never defines)? Who curates a community agent's oracle, given curator ≠ spec
+   author? *Rec:* Verified = full factory; Community = content-scan + injection floor +
+   sandbox smoke-test minimum, and the tier label on the Hub says exactly which gates ran.
+9. **Field telemetry → stage 18/5b (§11.6 gap 3)** — a privacy-preserving, opt-in signal
+   (install success, tool-call error classes; `gaia diagnostics` is the seed) so field
+   regressions the oracle can't see still trigger the maintenance loop, and real failures
+   feed oracle curation. *Rec:* design it with the local-first constraint as a feature —
+   aggregate counters, never content — and treat it as M4's sensory input.

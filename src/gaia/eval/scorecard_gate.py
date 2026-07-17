@@ -88,11 +88,16 @@ def _within_one_stdev(parsed: dict) -> float | None:
     return None
 
 
-def _env_ctx_size(parsed: dict) -> int | None:
+def env_ctx_size(parsed: dict) -> int | None:
     """The ctx window a card was measured under (#1892), or ``None``.
 
     Lives in ``recipe.environment.ctx_size`` — absent on cards produced
     before the envelope landed (implicitly the model's 64K registry floor).
+
+    Public (#2094): the ``email_scorecard_refresh.yml`` ``pre`` step imports
+    this directly to read the committed card's ctx stamp before spending any
+    eval budget, rather than re-deriving the ``recipe.environment.ctx_size``
+    path in ad-hoc PowerShell/Python.
     """
     env = parsed.get("recipe", {}).get("environment")
     if not isinstance(env, dict):
@@ -291,7 +296,7 @@ def main(argv=None) -> int:
         return 1
 
     # --- Step 1a: ctx-stamp requirement (#1892) ---
-    cand_ctx = _env_ctx_size(candidate_parsed)
+    cand_ctx = env_ctx_size(candidate_parsed)
     if args.require_ctx_match and cand_ctx is None:
         print(
             f"ERROR: --require-ctx-match is set but the candidate SCORECARD.md "
@@ -419,7 +424,7 @@ def main(argv=None) -> int:
     # comparable to one measured at another; when the windows differ (or the
     # baseline predates stamping) the regression comparison is SKIPPED, never
     # run-and-annotated. Absolute bars already ran at Step 1b regardless.
-    base_ctx = _env_ctx_size(prev_parsed)
+    base_ctx = env_ctx_size(prev_parsed)
     cand_version_ctx = candidate_parsed.get("agent", {}).get("version", "?")
     prev_version_ctx = prev_parsed.get("agent", {}).get("version", "?")
     if cand_ctx is not None and base_ctx is not None and cand_ctx != base_ctx:

@@ -83,7 +83,8 @@ from the committed seed, and runs the benchmark (~17 minutes on a 4B model).
   Lemonade server race-evict each other's model); use `--experiments 3` for
   run-to-run variance (mean/stdev/95% CI).
 - **CI:** `test_email_agent_eval.yml` (nightly, report-mode on the self-hosted AMD
-  `stx` pool) and `email_scorecard_refresh.yml` (regenerates `SCORECARD.md` on
-  agent/corpus changes). The drafting eval needs `ANTHROPIC_API_KEY`; absent → loud
-  skip, never a pass.
+  `stx` pool) and `email_scorecard_refresh.yml` (manual dispatch only; a full-corpus
+  run regenerates `SCORECARD.md`, a subset run smoke-tests the pipeline without
+  committing). The drafting eval needs `ANTHROPIC_API_KEY`; absent → loud skip,
+  never a pass.
 </details>

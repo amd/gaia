@@ -3946,8 +3946,9 @@ class LemonadeClient:
         """
         Check if the lemonade-server version is compatible.
 
-        Checks major version for hard incompatibility, and warns on
-        minor/patch mismatches.
+        Checks against ``LEMONADE_MIN_VERSION`` (the oldest Lemonade Server
+        GAIA supports) for hard incompatibility, and warns on any mismatch
+        with ``expected_version`` that's still at or above that floor.
 
         Args:
             expected_version: Expected version string (e.g., "10.0.0")
@@ -3956,7 +3957,8 @@ class LemonadeClient:
             quiet: Suppress warning output
 
         Returns:
-            True if compatible (or version check failed), False if incompatible major version
+            True if compatible (or version check failed), False if below
+            the minimum supported version
         """
         if actual_version is None:
             actual_version = self.get_lemonade_version()
@@ -3965,33 +3967,33 @@ class LemonadeClient:
             # Can't determine version, assume compatible (don't block)
             return True
 
+        from gaia.version import LEMONADE_MIN_VERSION
+
         try:
-            # Parse versions
-            expected_parts = expected_version.split(".")
-            actual_parts = actual_version.split(".")
 
-            expected_major = int(expected_parts[0])
-            actual_major = int(actual_parts[0])
+            def _version_tuple(v: str) -> tuple:
+                return tuple(int(p) for p in v.lstrip("v").split(".")[:3])
 
-            if expected_major != actual_major:
+            actual_tuple = _version_tuple(actual_version)
+            min_tuple = _version_tuple(LEMONADE_MIN_VERSION)
+
+            if actual_tuple < min_tuple:
                 if not quiet:
                     print("")
-                    print(
-                        f"{_emoji('⚠️', '[WARN]')}  Lemonade Server version mismatch detected!"
-                    )
-                    print(f"   Expected major version: {expected_major}.x.x")
+                    print(f"{_emoji('⚠️', '[WARN]')}  Lemonade Server version too old!")
                     print(f"   Installed version: {actual_version}")
+                    print(f"   Minimum supported: {LEMONADE_MIN_VERSION}")
                     print("")
                     print(
-                        "   This may cause compatibility issues. "
-                        f"Please install Lemonade Server {expected_version}:"
+                        "   This version is not supported and will cause failures. "
+                        f"Please upgrade Lemonade Server to at least {LEMONADE_MIN_VERSION}:"
                     )
                     print("   https://lemonade-server.ai")
                     print("")
 
                 return False
 
-            # Same major version – warn if minor/patch differs
+            # Above the floor but not the expected pin – low-key note only
             if actual_version != expected_version:
                 if not quiet:
                     print(
