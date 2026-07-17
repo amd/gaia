@@ -12,7 +12,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 # Floor: 0.22.0 is the first core release shipping
 # gaia.agents.registry.get_embedding_model_for_device, imported at agent
-# start (#2112).
+# start (#2112). tests/test_chat_dependency_floor.py guards this floor.
 dependencies = ["amd-gaia>=0.22.0"]
 
 [project.entry-points."gaia.agent"]
