@@ -86,7 +86,7 @@ The working memory tier is bounded by the LLM's context window. The stable prefi
 
 ### Single Database: `~/.gaia/memory.db`
 
-One file, three tables. WAL mode for concurrent reads. Schema version 2.
+One file, six tables. WAL mode for concurrent reads. Schema version 3.
 
 ### Timestamps
 
@@ -102,7 +102,7 @@ Stored via Python: `datetime.now().astimezone().isoformat()` (local time with UT
 
 **Important caveat:** SQLite's built-in `datetime()` function does NOT understand timezone offsets. The temporal queries (`get_upcoming`, etc.) must compare against a Python-generated "now" string passed as a parameter, not `datetime('now')` in SQL. This is handled in the implementation -- all time comparisons use parameterized queries with Python-computed boundaries.
 
-### Complete v2 Schema
+### Complete v3 Schema
 
 ```sql
 -- Schema version tracking (for migrations)
@@ -110,14 +110,14 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version     INTEGER NOT NULL,
     migrated_at TEXT NOT NULL         -- ISO 8601
 );
--- Initialize: INSERT INTO schema_version VALUES (2, <now>);
+-- Initialize: INSERT INTO schema_version VALUES (3, <now>);
 
 
 -- Table 1: knowledge
 -- Persistent facts, preferences, learnings -- the "second brain"
 CREATE TABLE knowledge (
     id          TEXT PRIMARY KEY,     -- UUID
-    category    TEXT NOT NULL,        -- 'fact' | 'preference' | 'error' | 'skill' | 'note' | 'reminder'
+    category    TEXT NOT NULL,        -- 'fact' | 'preference' | 'error' | 'skill' | 'note' | 'reminder' | 'system' | 'profile' | 'permission'
     content     TEXT NOT NULL,        -- Human-readable description
     domain      TEXT,                 -- Optional sub-type (e.g., 'journal', 'meeting:standup', 'deployment')
     source      TEXT NOT NULL DEFAULT 'tool',  -- 'tool' | 'llm_extract' | 'error_auto' | 'user' | 'discovery' | 'consolidation'
@@ -203,14 +203,49 @@ CREATE INDEX idx_tool_name ON tool_history(tool_name);
 CREATE INDEX idx_tool_session ON tool_history(session_id);
 CREATE INDEX idx_tool_success ON tool_history(success);
 CREATE INDEX idx_tool_ts ON tool_history(timestamp DESC);
+
+
+-- Table 4: procedures
+-- Synthesized procedural memory -- learned workflows (#887)
+CREATE TABLE IF NOT EXISTS procedures (
+    id              TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,              -- kebab-case (-> SKILL.md name)
+    when_to_use     TEXT NOT NULL,              -- trigger; embedded for recall (-> description)
+    markdown_body   TEXT NOT NULL,              -- full procedure incl. edge cases inline
+    tools_required  TEXT,                       -- JSON array -- the tool-loader recipe contract
+    tool_sequence   TEXT,                       -- JSON -- the distilled step pattern
+    success_count   INTEGER NOT NULL DEFAULT 0,
+    attempt_count   INTEGER NOT NULL DEFAULT 0, -- success_count / attempt_count = success rate
+    provenance      TEXT,                       -- JSON {source:'synthesized', from_sessions:[...]}
+    version         TEXT NOT NULL DEFAULT '1.0.0',
+    enabled         INTEGER NOT NULL DEFAULT 1, -- disable without delete (blocks recall)
+    embedding       BLOB,                       -- over when_to_use; its OWN FAISS index
+    superseded_by   TEXT,                       -- set on supersede (higher success rate)
+    created_at      TEXT NOT NULL,
+    last_used_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_proc_name ON procedures(name);
+CREATE INDEX IF NOT EXISTS idx_proc_enabled ON procedures(enabled)
+    WHERE enabled = 1;
+CREATE INDEX IF NOT EXISTS idx_proc_superseded ON procedures(superseded_by)
+    WHERE superseded_by IS NOT NULL;
+
+
+-- Table 5: meta
+-- Internal key/value bookkeeping (consolidation cursors, etc.)
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
 ```
 
 ### Schema Migrations
 
-Schema version 2 adds two columns vs. v1. Migrations run automatically in `MemoryStore.__init__()`:
+Migrations run automatically in `MemoryStore.__init__()`. Fresh installs are stamped
+at the current version directly and skip the migration ladder.
 
 ```sql
--- Migration: schema_version 1 -> 2
+-- Migration: schema_version 1 -> 2 (embeddings + consolidation tracking)
 ALTER TABLE knowledge ADD COLUMN embedding BLOB;
 ALTER TABLE conversations ADD COLUMN consolidated_at TEXT;
 
@@ -220,13 +255,20 @@ CREATE INDEX IF NOT EXISTS idx_conv_not_consolidated
     ON conversations(session_id) WHERE consolidated_at IS NULL;
 
 UPDATE schema_version SET version = 2, migrated_at = <now>;
+
+
+-- Migration: schema_version 2 -> 3 (procedures table, #887)
+-- Additive only. The table and its indexes are created by the CREATE TABLE
+-- IF NOT EXISTS above (which runs for fresh and migrating databases alike),
+-- so this step only advances the version marker. No existing row is touched.
+UPDATE schema_version SET version = 3, migrated_at = <now>;
 ```
 
 ---
 
 ## Knowledge Categories & Domain Conventions
 
-### 6 Categories
+### 9 Categories
 
 | Category | What it stores | Example |
 |---|---|---|
@@ -236,6 +278,15 @@ UPDATE schema_version SET version = 2, migrated_at = <now>;
 | `skill` | Learned workflows and patterns | "To deploy: run tests -> build -> push to staging -> verify -> promote" |
 | `note` | Observations, journal entries, meeting notes | "Standup 2026-04-01: API migration complete" |
 | `reminder` | Time-sensitive items with `due_at` | "Q2 report due April 15" |
+| `system` | Discovered machine/environment facts | "Machine has an AMD Ryzen AI 9 HX 370 with NPU" |
+| `profile` | Who the user is (set by bootstrap onboarding) | "User is a software engineer in America/Los_Angeles" |
+| `permission` | Standing approvals for agent-inferred goals | "Always accept routine maintenance tasks" |
+
+**Privileged categories.** `system`, `profile`, and `permission` are writable only by an
+explicit memory tool or the system -- never by the LLM conversation extractor. A chat
+turn must not be able to mint a permission grant or a profile entry by emitting that
+category, so the extraction and consolidation paths validate against
+`EXTRACTABLE_CATEGORIES` (the other six), not `VALID_CATEGORIES`.
 
 ### Recommended Domain Naming
 

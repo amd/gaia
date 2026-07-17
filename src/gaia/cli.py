@@ -768,43 +768,7 @@ async def async_main(action, **kwargs):
 
                 return 0 if result["status"] == "success" else 1
 
-            # First-boot: offer the onboarding intro until the user has either
-            # stored a profile entry or been through the conversation once.
-            # Both signals are needed: the review gate means a user can answer
-            # every question and approve nothing, and being re-asked forever
-            # after declining is worse than not asking.
-            from gaia.agents.base.memory_store import MemoryStore as _BootMS
-
-            _boot_store = _BootMS()
-            try:
-                _has_profile = bool(
-                    _boot_store.get_by_category("profile", context="global", limit=1)
-                )
-            finally:
-                _boot_store.close()
-            if not _has_profile and not _onboarding_completed():
-                print("\n" + "=" * 60)
-                print("  First time with GAIA? Let's set up your profile.")
-                print("=" * 60)
-                try:
-                    run_first_boot = (
-                        input("  Quick intro? Takes ~3 minutes. [Y/n]: ")
-                        .strip()
-                        .lower()
-                    )
-                except (EOFError, KeyboardInterrupt):
-                    run_first_boot = "n"
-                if run_first_boot != "n":
-                    # Onboarding is optional; chat is not. A failure to store
-                    # must not cost the user their chat session.
-                    try:
-                        _bootstrap_chat()
-                    except RuntimeError as e:
-                        print(f"⚠ Onboarding could not finish: {e}")
-                        print(
-                            "  Continuing to chat — run `gaia memory bootstrap` later."
-                        )
-                    print()
+            _offer_first_boot_onboarding()
 
             # Interactive mode
             interactive_mode(agent)
@@ -5820,6 +5784,47 @@ def _mark_onboarding_completed() -> None:
     _save_memory_settings(
         {_ONBOARDING_COMPLETED_KEY: datetime.now().astimezone().isoformat()}
     )
+
+
+def _offer_first_boot_onboarding() -> None:
+    """Offer the onboarding intro on first `gaia chat`, at most once.
+
+    Gated on a stored profile entry OR the completion marker. Both signals are
+    needed: the review gate means a user can answer every question and approve
+    nothing, and being re-asked forever after declining is worse than not asking.
+    """
+    from gaia.agents.base.memory_store import MemoryStore
+
+    store = MemoryStore()
+    try:
+        has_profile = bool(store.get_by_category("profile", context="global", limit=1))
+    finally:
+        store.close()
+
+    if has_profile or _onboarding_completed():
+        return
+
+    print("\n" + "=" * 60)
+    print("  First time with GAIA? Let's set up your profile.")
+    print("=" * 60)
+    try:
+        answer = input("  Quick intro? Takes ~3 minutes. [Y/n]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        answer = "n"
+
+    if answer in ("n", "no"):
+        # Declining is an answer — record it so the intro is not re-offered.
+        _mark_onboarding_completed()
+        return
+
+    # Onboarding is optional; chat is not. A failure to store must not cost
+    # the user their chat session.
+    try:
+        _bootstrap_chat()
+    except RuntimeError as e:
+        print(f"⚠ Onboarding could not finish: {e}")
+        print("  Continuing to chat — run `gaia memory bootstrap` later.")
+    print()
 
 
 def _bootstrap_prompt(question: str) -> str:

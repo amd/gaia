@@ -698,6 +698,127 @@ def test_cli_does_not_mark_onboarding_completed_when_cancelled(monkeypatch, tmp_
     assert cli._onboarding_completed() is False
 
 
+def _first_boot_env(monkeypatch, tmp_path):
+    """Point first-boot at a tmp store + settings file, with no profile row."""
+    import gaia.agents.base.memory as memory_module
+    import gaia.agents.base.memory_store as memory_store_module
+
+    monkeypatch.setattr(
+        memory_store_module,
+        "MemoryStore",
+        lambda *a, **k: MemoryStore(db_path=tmp_path / "memory.db"),
+    )
+    monkeypatch.setattr(
+        memory_module, "_MEMORY_SETTINGS_PATH", tmp_path / "memory_settings.json"
+    )
+
+
+@pytest.mark.parametrize("decline", ["n", "no", "N", "  No  "])
+def test_first_boot_declining_is_remembered_and_not_re_offered(
+    monkeypatch, tmp_path, decline
+):
+    """Declining the intro must not re-offer it on every `gaia chat`.
+
+    Regression: the decline path set neither first-boot signal (no profile row,
+    no marker), so the gate stayed open forever. 'no' must also decline — the
+    review gate accepts ('n', 'no'), so the two prompts must agree.
+    """
+    from gaia import cli
+
+    _first_boot_env(monkeypatch, tmp_path)
+
+    ran: list[str] = []
+    monkeypatch.setattr(cli, "_bootstrap_chat", lambda: ran.append("ran"))
+    monkeypatch.setattr("builtins.input", lambda prompt: decline)
+
+    assert cli._onboarding_completed() is False
+
+    cli._offer_first_boot_onboarding()
+
+    assert ran == []  # declining must not start the conversation
+    assert cli._onboarding_completed() is True
+
+    # Second launch: the intro is not offered again.
+    monkeypatch.setattr("builtins.input", _raise(AssertionError("re-offered")))
+    cli._offer_first_boot_onboarding()
+    assert ran == []
+
+
+@pytest.mark.parametrize("consent", ["", "y", "yes", "Y"])
+def test_first_boot_accepting_runs_the_conversation(monkeypatch, tmp_path, consent):
+    from gaia import cli
+
+    _first_boot_env(monkeypatch, tmp_path)
+
+    ran: list[str] = []
+    monkeypatch.setattr(cli, "_bootstrap_chat", lambda: ran.append("ran"))
+    monkeypatch.setattr("builtins.input", lambda prompt: consent)
+
+    cli._offer_first_boot_onboarding()
+
+    assert ran == ["ran"]
+
+
+def test_first_boot_eof_declines_without_running(monkeypatch, tmp_path):
+    """A non-interactive stdin must decline, not hang or start onboarding."""
+    from gaia import cli
+
+    _first_boot_env(monkeypatch, tmp_path)
+
+    ran: list[str] = []
+    monkeypatch.setattr(cli, "_bootstrap_chat", lambda: ran.append("ran"))
+    monkeypatch.setattr("builtins.input", _raise(EOFError()))
+
+    cli._offer_first_boot_onboarding()
+
+    assert ran == []
+    assert cli._onboarding_completed() is True
+
+
+def test_first_boot_is_skipped_when_a_profile_already_exists(monkeypatch, tmp_path):
+    from gaia import cli
+
+    _first_boot_env(monkeypatch, tmp_path)
+
+    store = MemoryStore(db_path=tmp_path / "memory.db")
+    try:
+        store.store(
+            category="profile",
+            content="User is a software engineer",
+            context="global",
+            source="user",
+        )
+    finally:
+        store.close()
+
+    monkeypatch.setattr("builtins.input", _raise(AssertionError("offered")))
+    monkeypatch.setattr(
+        cli, "_bootstrap_chat", _raise(AssertionError("ran onboarding"))
+    )
+
+    cli._offer_first_boot_onboarding()
+
+
+def test_first_boot_onboarding_failure_does_not_block_chat(
+    monkeypatch, tmp_path, capsys
+):
+    """Onboarding is optional; chat is not. A store failure must not propagate."""
+    from gaia import cli
+
+    _first_boot_env(monkeypatch, tmp_path)
+
+    monkeypatch.setattr("builtins.input", lambda prompt: "y")
+    monkeypatch.setattr(
+        cli, "_bootstrap_chat", _raise(RuntimeError("memory database is locked"))
+    )
+
+    cli._offer_first_boot_onboarding()
+
+    out = capsys.readouterr().out
+    assert "memory database is locked" in out
+    assert "gaia memory bootstrap" in out
+
+
 def test_cli_default_bootstrap_skips_discovery_when_the_chat_is_cancelled(monkeypatch):
     from types import SimpleNamespace
 
