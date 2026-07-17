@@ -7095,7 +7095,9 @@ def _handle_daemon_agents():
         sys.exit(1)
     if inst is None:
         print("GAIA daemon: not running")
-        print("  Start it with `gaia daemon start` (or `gaia daemon start-agent <id>`).")
+        print(
+            "  Start it with `gaia daemon start` (or `gaia daemon start-agent <id>`)."
+        )
         sys.exit(1)
     _print_daemon_agents(inst)
 
