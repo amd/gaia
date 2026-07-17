@@ -2123,9 +2123,12 @@ gaia youtube \
 ### Daemon Command
 
 Manage the headless custody daemon — the always-on, single-instance background
-process that later Agent UI v2 phases (sidecar supervision, `/host/v1/*` custody,
-the model-slot broker, the scheduler clock) mount into. This Phase-1 skeleton
-provides single-instance identity, client-token auth, and lifecycle control.
+process that supervises agent **sidecars** (spawn, health, tree-kill; email is
+the first) and that later Agent UI v2 phases (`/host/v1/*` custody, the
+model-slot broker, the scheduler clock) mount into. The Agent UI backend is a
+daemon *client*: it asks the daemon to ensure a sidecar and talks to the
+sidecar directly, so **closing the UI leaves the sidecar running** — stopping
+is a daemon command.
 
 Requires the daemon extras (`fastapi`/`uvicorn`/`psutil`) — install with
 `pip install "amd-gaia[ui]"` (or `[api]`/`[dev]`). Running it on a base install
@@ -2133,19 +2136,25 @@ fails loudly with that instruction.
 
 ```bash
 gaia daemon start      # start the daemon, or attach if one is already running
-gaia daemon status     # show pid, port, and uptime
-gaia daemon stop       # graceful shutdown (tree-kills the instance)
+gaia daemon status     # pid, port, uptime + the supervised sidecar list
+gaia daemon stop       # graceful shutdown (tree-kills daemon + every sidecar)
 gaia daemon restart    # stop then start
 gaia daemon logs [--lines N] [--follow]   # tail the daemon log
+gaia daemon agents                        # list supervised sidecar agents
+gaia daemon start-agent email [--mode user|dev]  # start/attach one sidecar
+gaia daemon stop-agent email              # stop one sidecar, daemon stays up
 ```
 
 | Action | Options | Description |
 |--------|---------|-------------|
 | `start` | — | Start the daemon or attach to the running one (two callers → one daemon). |
-| `status` | — | Print pid / port / uptime, or report if no daemon is running. |
-| `stop` | — | Shut the daemon down and release `~/.gaia/host/instance.json`. |
+| `status` | — | Print pid / port / uptime and the supervised sidecar list, or report if no daemon is running. |
+| `stop` | — | Shut the daemon down (tree-killing every sidecar) and release `~/.gaia/host/instance.json`. |
 | `restart` | — | `stop` followed by `start`. |
 | `logs` | `--lines`, `--follow` | Print (or stream) the daemon log tail. |
+| `agents` | — | List every registered sidecar agent: id, state, and (when running) mode, pid, port, contract version — never the bearer token. Dev-mode entries also show their source dir. |
+| `start-agent <id>` | `--mode user\|dev` | Start (or attach to) one agent's sidecar, auto-starting the daemon if needed. Requesting a mode different from the running sidecar's is a loud conflict — stop it first. |
+| `stop-agent <id>` | — | Tree-kill one agent's sidecar; the daemon keeps running. Attach-only: no daemon running → clear error, exit 1. A sidecar surviving the kill is a loud failure, never silent. |
 
 ---
 
