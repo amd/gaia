@@ -6,6 +6,9 @@
 export interface Session {
     id: string;
     title: string;
+    /** True when the title was explicitly set (rename/API) and is pinned
+     *  against auto-retitling (#2165). */
+    title_is_custom?: boolean;
     created_at: string;
     updated_at: string;
     model: string;

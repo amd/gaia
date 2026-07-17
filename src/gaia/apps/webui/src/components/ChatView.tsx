@@ -1116,7 +1116,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 // hand and the run's lifecycle already titles server-side, #1580).
                 if (!attach && session && session.title === 'New Task') {
                     const autoTitle = text.slice(0, 50) + (text.length > 50 ? '...' : '');
-                    api.updateSession(sessionId, { title: autoTitle })
+                    // Not a user choice — leave unpinned so the server-side
+                    // LLM titler can still replace it (#2165).
+                    api.updateSession(sessionId, { title: autoTitle, title_is_custom: false })
                         .then(() => updateSessionInList(sessionId, { title: autoTitle }))
                         .catch((err) => log.chat.error('Auto-title failed', err));
                 }
@@ -1321,7 +1323,8 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
 
     const saveTitle = async () => {
         if (titleDraft.trim() && titleDraft !== session?.title) {
-            await api.updateSession(sessionId, { title: titleDraft.trim() });
+            // Explicit rename — pin against the auto-retitler (#2165).
+            await api.updateSession(sessionId, { title: titleDraft.trim(), title_is_custom: true });
             updateSessionInList(sessionId, { title: titleDraft.trim() });
         }
         setEditingTitle(false);

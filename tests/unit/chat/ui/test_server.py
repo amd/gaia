@@ -922,6 +922,34 @@ class TestSessionEndpoints:
         assert resp.status_code == 200
         assert resp.json()["title"] == "Updated"
 
+    def test_create_with_explicit_title_pins_it(self, client):
+        """#2165: a title passed by an API caller is explicit → pinned."""
+        resp = client.post("/api/sessions", json={"title": "My Research Project"})
+        assert resp.json()["title_is_custom"] is True
+
+    def test_create_with_placeholder_title_not_pinned(self, client):
+        """The webui creates sessions titled 'New Task' — still auto-titlable."""
+        resp = client.post("/api/sessions", json={"title": "New Task"})
+        assert resp.json()["title_is_custom"] is False
+
+    def test_rename_pins_title(self, client):
+        """#2165: a PUT rename is explicit → pinned."""
+        sid = client.post("/api/sessions", json={}).json()["id"]
+        resp = client.put(f"/api/sessions/{sid}", json={"title": "Pinned Name"})
+        assert resp.status_code == 200
+        assert resp.json()["title_is_custom"] is True
+
+    def test_put_can_opt_out_of_pinning(self, client):
+        """The webui's client-side auto-title sends title_is_custom=false so
+        the server-side LLM titler can still improve it later."""
+        sid = client.post("/api/sessions", json={}).json()["id"]
+        resp = client.put(
+            f"/api/sessions/{sid}",
+            json={"title": "what is the capital of fr...", "title_is_custom": False},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["title_is_custom"] is False
+
     def test_update_session_system_prompt(self, client):
         create_resp = client.post("/api/sessions", json={})
         session_id = create_resp.json()["id"]

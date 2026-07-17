@@ -25,7 +25,7 @@ from typing import Optional
 
 from fastapi import HTTPException
 
-from .database import SESSION_DEFAULT_MODEL, ChatDatabase
+from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
 from .sse_handler import (
     _ANSWER_JSON_SUB_RE,
@@ -278,19 +278,15 @@ def _classify_chat_exception(exc: BaseException):
 #     (≥ 25 chars) — topic-shift pass
 #
 # Skipped when:
+#   * The session's title_is_custom flag is set — an explicit user/API title
+#     is pinned forever (#2165); only auto-generated titles may be replaced
 #   * Title starts with "Eval:" — those are owned by the eval framework
 #   * Title was last updated < 30 s ago — prevents thrash mid-conversation
 #   * No agent / no Lemonade base URL available
 #
 # Throttled by a per-session timestamp dict so concurrent fire-and-forget
 # tasks don't pile up.
-_AUTO_TITLE_DEFAULTS = {
-    "new chat",
-    "new task",
-    "untitled",
-    "untitled session",
-    "chat",
-}
+_AUTO_TITLE_DEFAULTS = PLACEHOLDER_TITLES
 _AUTO_TITLE_LOCK = threading.Lock()
 _AUTO_TITLE_LAST_AT: dict[str, float] = {}  # session_id -> monotonic ts
 _AUTO_TITLE_THROTTLE_S = 30.0
@@ -304,12 +300,16 @@ def _title_word_set(s: str) -> set[str]:
     return {w for w in cleaned.split() if len(w) > 1}
 
 
-def _should_retitle(current_title: str, last_user_msg: str) -> bool:
+def _should_retitle(
+    current_title: str, last_user_msg: str, title_is_custom: bool = False
+) -> bool:
     """Decide whether the session deserves a fresh title.
 
     See module-level comment for the rule set.  Returns True/False; pure
     function so it's easy to unit-test in isolation.
     """
+    if title_is_custom:
+        return False  # explicit user/API title — pinned (#2165)
     title = (current_title or "").strip()
     title_lower = title.lower()
     if title.startswith("Eval:"):
@@ -413,7 +413,8 @@ async def _maybe_update_session_title(
     if not session:
         return
     current_title = session.get("title") or ""
-    if not _should_retitle(current_title, user_msg):
+    title_is_custom = bool(session.get("title_is_custom"))
+    if not _should_retitle(current_title, user_msg, title_is_custom):
         return
 
     # Throttle: don't re-title if we updated within the last 30 s.

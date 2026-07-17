@@ -12,7 +12,7 @@ Tests the pure helper functions in gaia.ui._chat_helpers:
 
 import asyncio
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -853,3 +853,105 @@ class TestStreamingEmailBranchReturnsBeforeSharedTrunk:
             "agent.process_query on a non-existent in-process agent. "
             f"Last line was: {lines[-1]!r}"
         )
+
+
+# ── Auto-title pinning (#2165) ───────────────────────────────────────────────
+#
+# Explicitly-set session titles (user rename or API caller) must NEVER be
+# replaced by the auto-retitler; placeholder titles ("New Task"/"New Chat"/
+# empty) must still be auto-titled on the first substantive message.
+
+# Long + zero word-overlap with any title used below → would trigger the
+# topic-shift pass if the pin didn't hold.
+_SHIFT_MSG = "please summarize quarterly revenue figures across all the divisions"
+
+
+class TestShouldRetitle:
+    """Tests for _should_retitle() with the title_is_custom pin."""
+
+    @pytest.mark.parametrize(
+        "placeholder", ["New Chat", "New Task", "", "  ", "Untitled", "chat"]
+    )
+    def test_placeholder_titles_are_retitled(self, placeholder):
+        from gaia.ui._chat_helpers import _should_retitle
+
+        assert _should_retitle(placeholder, "hi") is True
+
+    def test_custom_title_never_retitled(self):
+        from gaia.ui._chat_helpers import _should_retitle
+
+        assert (
+            _should_retitle("My Research Project", _SHIFT_MSG, title_is_custom=True)
+            is False
+        )
+
+    def test_custom_flag_pins_across_multiple_turns(self):
+        from gaia.ui._chat_helpers import _should_retitle
+
+        turns = [
+            _SHIFT_MSG,
+            "now write me a haiku about mountains and rivers flowing",
+            "explain the difference between tcp and udp networking protocols",
+        ]
+        for msg in turns:
+            assert (
+                _should_retitle("Weekly Standup Notes", msg, title_is_custom=True)
+                is False
+            )
+
+    def test_custom_flag_pins_even_placeholder_lookalike(self):
+        """A pinned title wins even if its text happens to be a placeholder."""
+        from gaia.ui._chat_helpers import _should_retitle
+
+        assert _should_retitle("New Chat", _SHIFT_MSG, title_is_custom=True) is False
+
+    def test_auto_generated_title_still_topic_shifts(self):
+        """Non-pinned (auto-generated) titles keep the topic-shift pass."""
+        from gaia.ui._chat_helpers import _should_retitle
+
+        assert (
+            _should_retitle("Python Sorting Help", _SHIFT_MSG, title_is_custom=False)
+            is True
+        )
+
+    def test_eval_titles_never_retitled(self):
+        from gaia.ui._chat_helpers import _should_retitle
+
+        assert _should_retitle("Eval: rag_quality run 3", _SHIFT_MSG) is False
+
+
+class TestMaybeUpdateSessionTitleHonorsPin:
+    """_maybe_update_session_title must read the session's title_is_custom
+    flag and skip pinned sessions without calling the LLM or the DB."""
+
+    def _run(self, session, msg=_SHIFT_MSG):
+        from gaia.ui import _chat_helpers as ch
+
+        db = MagicMock()
+        db.get_session.return_value = session
+        gen = AsyncMock(return_value="LLM Title")
+        with (
+            patch.object(ch, "_generate_session_title", gen),
+            patch(
+                "gaia.llm.lemonade_manager.LemonadeManager.get_base_url",
+                return_value="http://localhost:13305/api/v1",
+            ),
+        ):
+            asyncio.run(
+                ch._maybe_update_session_title(
+                    db, session["id"], msg, "assistant reply", "model-x"
+                )
+            )
+        return db, gen
+
+    def test_pinned_session_is_skipped(self):
+        db, gen = self._run(
+            {"id": "pin-1", "title": "My Research Project", "title_is_custom": 1}
+        )
+        gen.assert_not_awaited()
+        db.update_session.assert_not_called()
+
+    def test_placeholder_session_is_retitled(self):
+        db, gen = self._run({"id": "auto-1", "title": "New Task", "title_is_custom": 0})
+        gen.assert_awaited_once()
+        db.update_session.assert_called_once_with("auto-1", title="LLM Title")
