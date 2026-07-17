@@ -20,7 +20,9 @@ silently passes as if the requirement were met.
 
 from __future__ import annotations
 
+import platform as _platform
 import shutil
+import sys as _sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -114,6 +116,38 @@ def detect_free_disk_gb(path: Path) -> Optional[float]:
     except OSError as exc:
         logger.debug("compatibility: could not read disk usage for %s: %s", probe, exc)
         return None
+
+
+def current_platform_key(plat: Optional[str] = None, arch: Optional[str] = None) -> str:
+    """Resolve the host's platform key in the artifact-filename namespace.
+
+    Distinct from :func:`current_platform`'s ``{os}-{arch}`` hub-triple
+    vocabulary (``win-x64``) used for ``requirements.platforms`` gates — this
+    is the npm-package namespace (``win32-x64``, ``darwin-arm64``) used to
+    select an entry from a manifest's ``versions[v].artifacts[]`` by filename
+    suffix. Mirrors ``gaia.daemon.sidecars.platform.current_platform_key()``
+    exactly (parity-tested); duplicated rather than imported by design (the
+    hub stays free of the daemon package). Never raises — an
+    unrecognized OS/arch passes through as-is so the artifact-selection loud
+    error can name it, rather than crashing here.
+    """
+    raw_os = plat if plat is not None else _sys.platform
+    if raw_os.startswith("win"):
+        os_key = "win32"
+    elif raw_os == "darwin":
+        os_key = "darwin"
+    elif raw_os.startswith("linux"):
+        os_key = "linux"
+    else:
+        os_key = raw_os
+    raw_arch = (arch if arch is not None else _platform.machine()).lower()
+    if raw_arch in ("x86_64", "amd64", "x64"):
+        arch_key = "x64"
+    elif raw_arch in ("arm64", "aarch64"):
+        arch_key = "arm64"
+    else:
+        arch_key = raw_arch
+    return f"{os_key}-{arch_key}"
 
 
 def _coerce_requirements(requirements: Any) -> Requirements:

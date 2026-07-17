@@ -26,6 +26,7 @@ message instead of pretending the agent is fine.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -217,6 +218,62 @@ def _default_loader(agent_id: str, registry: Any) -> List[str]:
     )
 
 
+def _binary_health(
+    agent_id: str,
+    sentinel: "installer_mod.InstalledAgent",
+    install_root: Optional[Path],
+    warnings: List[str],
+) -> HealthStatus:
+    """Health for a binary-kind install: the executable exists (+x on POSIX).
+
+    Binary agents ship no site-packages / entry point, so the wheel loader
+    probe would always report them broken; presence of the runnable executable
+    IS the health signal.
+    """
+    install_dir = installer_mod.agent_install_dir(agent_id, install_root)
+    if not sentinel.executable:
+        return HealthStatus(
+            id=agent_id,
+            state=HEALTH_ERROR,
+            detail=(
+                f"'{agent_id}' is a binary install but its sentinel records no "
+                f"executable name; re-install it from the Hub."
+            ),
+            warnings=warnings,
+        )
+    exe = install_dir / sentinel.executable
+    if not exe.is_file():
+        return HealthStatus(
+            id=agent_id,
+            state=HEALTH_ERROR,
+            detail=(
+                f"'{agent_id}' executable is missing at {exe}; "
+                f"re-install it from the Hub."
+            ),
+            warnings=warnings,
+        )
+    if os.name != "nt" and not os.access(exe, os.X_OK):
+        return HealthStatus(
+            id=agent_id,
+            state=HEALTH_ERROR,
+            detail=(
+                f"'{agent_id}' executable at {exe} is not executable "
+                f"(chmod +x it, or re-install from the Hub)."
+            ),
+            warnings=warnings,
+        )
+    if warnings:
+        return HealthStatus(
+            id=agent_id,
+            state=HEALTH_DEGRADED,
+            detail=f"'{agent_id}' loads but has {len(warnings)} warning(s).",
+            warnings=warnings,
+        )
+    return HealthStatus(
+        id=agent_id, state=HEALTH_HEALTHY, detail=f"'{agent_id}' is healthy."
+    )
+
+
 def health_check(
     agent_id: str,
     *,
@@ -233,10 +290,15 @@ def health_check(
     * ``degraded`` — loads, but something optional is off (e.g. a corrupt config
       or an optional warning from the loader probe).
     * ``healthy`` — loads cleanly with no warnings.
+
+    Binary-kind installs (sentinel ``artifact_kind: binary``) are probed by
+    executable presence instead of the entry-point loader — they have no
+    entry point by design.
     """
     loader = loader or _default_loader
 
-    installed = installer_mod.read_sentinel(agent_id, install_root) is not None
+    sentinel = installer_mod.read_sentinel(agent_id, install_root)
+    installed = sentinel is not None
     is_builtin = installer_mod.is_builtin(agent_id)
     registered = registry is not None and registry.get(agent_id) is not None
 
@@ -255,6 +317,12 @@ def health_check(
         read_config(agent_id, install_root)
     except LifecycleError as exc:
         warnings.append(str(exc))
+
+    if (
+        sentinel is not None
+        and sentinel.artifact_kind == installer_mod.ARTIFACT_KIND_BINARY
+    ):
+        return _binary_health(agent_id, sentinel, install_root, warnings)
 
     try:
         warnings.extend(loader(agent_id, registry) or [])

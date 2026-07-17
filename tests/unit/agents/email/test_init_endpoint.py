@@ -415,6 +415,20 @@ def test_min_lemonade_version_locksteps_with_manifest():
     )
 
 
+def test_shipped_lemonade_pin_satisfies_the_agent_floor():
+    # The version `gaia init` installs must clear the floor triage requires, or a
+    # pin bump ships an agent that rejects the server it was just handed.
+    from gaia_agent_email.api_routes import _version_meets_min
+    from gaia_agent_email.version import MIN_LEMONADE_VERSION
+
+    from gaia.version import LEMONADE_VERSION
+
+    assert _version_meets_min(LEMONADE_VERSION, MIN_LEMONADE_VERSION) is True, (
+        f"gaia init installs Lemonade {LEMONADE_VERSION}, but triage requires "
+        f">= {MIN_LEMONADE_VERSION} — /v1/email/init would report incompatible."
+    )
+
+
 # ---------------------------------------------------------------------------
 # 6. OpenAPI + sidecar mount
 # ---------------------------------------------------------------------------

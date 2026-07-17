@@ -112,6 +112,8 @@ The interface:
 | `previewCalendarEvent(req)` | Nothing external | Mints a single-use confirmation token bound to the event (calendar analogue of `draft`). |
 | `createCalendarEvent(req)` | Preview token + connected calendar | Token gate fires first: no/invalid token → 403, then the calendar checks. |
 | `respondToCalendarEvent(req)` | Connected calendar | RSVP `accepted`/`declined`/`tentative` to an existing invite. |
+| `query(req)` | A connected mailbox (for mailbox tools) | The agent loop (schema 2.4): async iterator of the seven typed SSE events. You mint `run_id`; push the transcript slice in `context`. See "Canonical agent-loop query" below. |
+| `cancelQuery(runId)` | Nothing external | Cancel an in-flight `query()` run between steps (pass the `run_id` you minted). Not in flight → 404. |
 
 **Build the standalone surface (`triage`, `draft`, `confirmAction`,
 `previewCalendarEvent`) with zero connector setup.** The read-only `search` and
@@ -156,40 +158,46 @@ The v2 keystone (#2016): NL request in, the agent reasons and chains its tools, 
 `tool_result` / `needs_confirmation` / `final` / `error`, terminated by exactly one
 `final` or `error`. This is the one loop every v2 front-door relays to. The **host
 mints `run_id`** and **pushes** the transcript slice in `context`, so the sidecar
-stays stateless; cancel a run mid-flight with `POST /v1/email/query/{run_id}/cancel`
-(stops tool execution between steps). Not wrapped by the typed client yet — call it
-directly:
+stays stateless. The typed client wraps it (#2097): `query()` returns an async
+iterator of typed `QueryEvent`s; `cancelQuery(runId)` stops the run between steps:
 
-```js
-const base = "http://127.0.0.1:8131";
-const run_id = crypto.randomUUID(); // host-minted; also the cancel handle
-const res = await fetch(`${base}/v1/email/query`, {
-  method: "POST",
-  headers: {
-    "content-type": "application/json",
-    accept: "text/event-stream",
-    authorization: `Bearer ${authToken}`, // per-session bearer (#1980)
-  },
-  body: JSON.stringify({ query: "Triage my inbox", run_id, context: [] }),
-});
-const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
-for (;;) {
-  const { value, done } = await reader.read();
-  if (done) break;
-  buf += dec.decode(value, { stream: true });
-  let i;
-  while ((i = buf.indexOf("\n\n")) !== -1) {
-    const frame = buf.slice(0, i); buf = buf.slice(i + 2);
-    const line = frame.split("\n").find((l) => l.startsWith("data:"));
-    if (!line) continue;
-    const ev = JSON.parse(line.slice(5).trim());
-    // ev.type ∈ status|token|tool_call|tool_result|needs_confirmation|final|error
-    if (ev.type === "final" || ev.type === "error") { /* terminal */ }
+```ts
+const runId = crypto.randomUUID(); // host-minted; also the cancel handle
+for await (const ev of sidecar.client.query({
+  query: "Triage my inbox",
+  run_id: runId,
+  context: [], // pushed transcript slice; [] for a fresh conversation
+})) {
+  switch (ev.type) {
+    case "status":       console.log(ev.message); break;
+    case "token":        process.stdout.write(ev.delta); break;
+    case "tool_call":    console.log(`→ ${ev.tool}`, ev.args); break;
+    case "tool_result":  console.log(`← ${ev.tool}`, ev.data); break;
+    case "needs_confirmation": break; // run then ends with a final refusal (D1)
+    case "final":        console.log(ev.answer); break;   // terminal
+    case "error":        console.error(ev.detail); break; // terminal, verbatim
+    default:             console.warn("unsupported event", ev); // future additive type
   }
 }
-// To cancel: await fetch(`${base}/v1/email/query/${run_id}/cancel`, { method: "POST",
-//   headers: { authorization: `Bearer ${authToken}` } });
+// Mid-run, from anywhere that knows runId:
+// await sidecar.client.cancelQuery(runId);
 ```
+
+Rules an integration must respect:
+
+- **Mint `run_id` yourself** (`crypto.randomUUID()`) and keep it — it is the cancel
+  handle, valid from the instant the request is sent.
+- **Exactly one terminal event.** A terminal `error` is *yielded* (surface `detail`
+  verbatim); transport/contract failures *throw* (`HttpError` non-2xx,
+  `QueryStreamError` for a non-SSE response / malformed event / stream that closes
+  without a terminal). Never treat iterator completion without a `final` as success —
+  the client already throws for you.
+- **Handle the `default` branch.** A `type` outside the frozen seven arrives as
+  `{ type: "unknown", eventType, raw }` — render an "unsupported event" placeholder or
+  log it; it is never silently dropped.
+- **Long runs are normal.** `timeoutMs` bounds time-to-first-response only. To abort
+  from the client side pass `query(req, { signal })` AND call `cancelQuery` so the
+  sidecar stops the loop, not just the socket.
 
 A confirmation-requiring step (a destructive tool such as `send_now`) emits
 `needs_confirmation` then ends with a `final` refusal pointing at the fixed-function

@@ -6,7 +6,10 @@ No live network, no real agent imports: health probes are injected so the tests
 assert state transitions (healthy/degraded/error/not_installed) deterministically.
 """
 
+import hashlib
 import json
+import os
+import stat
 
 import pytest
 
@@ -208,3 +211,103 @@ def test_status_all_covers_installed_and_registered(tmp_path):
     assert set(all_status) == {"demo", "chat"}
     assert all_status["demo"].installed_version is not None
     assert all_status["chat"].installed_version is None  # builtin, no semver
+
+
+# ---------------------------------------------------------------------------
+# health_check: binary-kind agents (#2084 — platform-selection installer fix)
+#
+# Binary-kind agents (e.g. email) have no site-packages / entry point to scan;
+# health is "does the generic executable file exist" instead. These tests
+# drive a real installer.install() binary flow so the on-disk sentinel shape
+# matches whatever the fix actually writes, rather than hand-guessing it.
+# ---------------------------------------------------------------------------
+
+_BASE = "https://hub.test"
+
+
+def _binary_manifest_single(
+    agent_id="email", version="0.1.0", platform_key="linux-x64", data=b"binary-bytes"
+):
+    filename = f"{agent_id}-agent-{platform_key}"
+    sha = hashlib.sha256(data).hexdigest()
+    path = f"agents/{agent_id}/{version}/{filename}"
+    artifact = {
+        "filename": filename,
+        "path": path,
+        "size_bytes": len(data),
+        "sha256": sha,
+        "content_type": "application/octet-stream",
+    }
+    manifest = {
+        "id": agent_id,
+        "language": "python",
+        "latest_version": version,
+        "requirements": {"platforms": []},
+        "versions": {
+            version: {
+                "version": version,
+                "artifact": artifact,
+                "artifacts": [artifact],
+            }
+        },
+    }
+    return manifest, data
+
+
+def _install_binary_agent(tmp_path, agent_id="email", platform_key="linux-x64"):
+    """Install a real binary-kind agent so its sentinel matches the fix's shape."""
+    manifest, data = _binary_manifest_single(
+        agent_id=agent_id, platform_key=platform_key
+    )
+    version = manifest["latest_version"]
+    artifact_path = manifest["versions"][version]["artifact"]["path"]
+
+    def fetcher(url):
+        if url.endswith("/gaia-agent.yaml"):
+            return f"id: {agent_id}\n".encode()
+        if url == f"{_BASE}/{artifact_path}":
+            return data
+        raise AssertionError(url)
+
+    def refuse_pip(args):
+        raise AssertionError(f"run_pip must not be called for a binary install: {args}")
+
+    installer.install(
+        agent_id,
+        manifest=manifest,
+        base_url=_BASE,
+        fetcher=fetcher,
+        run_pip=refuse_pip,
+        install_root=tmp_path,
+        platform_key=platform_key,
+    )
+    return installer.agent_install_dir(agent_id, tmp_path) / f"{agent_id}-agent"
+
+
+def test_health_binary_kind_healthy_without_entrypoint_probe(tmp_path):
+    exe_path = _install_binary_agent(
+        tmp_path, agent_id="email", platform_key="linux-x64"
+    )
+    assert exe_path.exists()  # sanity: the install actually wrote the executable
+    if os.name == "posix":
+        assert exe_path.stat().st_mode & stat.S_IXUSR
+
+    def exploding_loader(agent_id, registry):
+        raise AssertionError("entry-point loader must not run for a binary-kind agent")
+
+    result = health_check("email", install_root=tmp_path, loader=exploding_loader)
+    assert result.state == HEALTH_HEALTHY
+
+
+def test_health_binary_kind_missing_executable_is_not_healthy(tmp_path):
+    exe_path = _install_binary_agent(
+        tmp_path, agent_id="email", platform_key="linux-x64"
+    )
+    exe_path.unlink()
+
+    def exploding_loader(agent_id, registry):
+        raise AssertionError("entry-point loader must not run for a binary-kind agent")
+
+    result = health_check("email", install_root=tmp_path, loader=exploding_loader)
+    assert result.state in (HEALTH_DEGRADED, HEALTH_ERROR)
+    assert result.detail

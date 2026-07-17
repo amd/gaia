@@ -10,15 +10,19 @@ Tests the pure helper functions in gaia.ui._chat_helpers:
 - _find_last_tool_step: backward step search
 """
 
+import asyncio
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from gaia.ui._chat_helpers import (
+    _EMPTY_ANSWER_LEMONADE_MSG,
     _build_history_pairs,
     _canonical_agent_type,
     _compute_allowed_paths,
+    _empty_answer_outcome,
     _find_last_tool_step,
     _resolve_rag_paths,
     set_agent_registry,
@@ -328,6 +332,53 @@ class TestFindLastToolStep:
         ]
         result = _find_last_tool_step(steps)
         assert result["label"] == "has_type"
+
+
+# ── _empty_answer_outcome ────────────────────────────────────────────────
+
+
+class TestEmptyAnswerOutcome:
+    """Tests for ``_empty_answer_outcome`` — how the persistence tail handles a
+    chat turn that produced no answer text (issue #2137)."""
+
+    def test_cancel_persists_marker_and_keeps_steps(self):
+        """A user Stop is persisted as a 'Cancelled.' marker, not a Lemonade
+        error, and keeps the steps taken before the cancel."""
+        content, sse_type, keep_steps = _empty_answer_outcome(
+            turn_cancelled=True, has_steps=True
+        )
+        assert content == "Cancelled."
+        assert sse_type == "done"
+        assert keep_steps is True
+
+    def test_cancel_without_steps_still_marks_cancelled(self):
+        content, sse_type, keep_steps = _empty_answer_outcome(
+            turn_cancelled=True, has_steps=False
+        )
+        assert content == "Cancelled."
+        assert sse_type == "done"
+        assert keep_steps is True
+
+    def test_empty_answer_with_steps_persists_empty_and_keeps_cards(self):
+        """A legitimately-empty final (e.g. an echoed render card stripped to
+        empty) persists empty content but keeps the steps/cards."""
+        content, sse_type, keep_steps = _empty_answer_outcome(
+            turn_cancelled=False, has_steps=True
+        )
+        assert content == ""
+        assert sse_type == "done"
+        assert keep_steps is True
+
+    def test_no_answer_no_cancel_no_steps_uses_lemonade_copy(self):
+        """The Lemonade remediation copy appears ONLY when there is no answer,
+        no cancel, and no steps/cards."""
+        content, sse_type, keep_steps = _empty_answer_outcome(
+            turn_cancelled=False, has_steps=False
+        )
+        assert content == _EMPTY_ANSWER_LEMONADE_MSG
+        assert "Lemonade Server is running" in content
+        assert sse_type == "error"
+        assert keep_steps is False
 
 
 # ── _canonical_agent_type ─────────────────────────────────────────────────
@@ -659,4 +710,146 @@ class TestStampBuiltinChatIdentity:
             "stamping is too late — ChatAgent.__init__ runs "
             "_register_tools immediately and the filter would silently "
             "bypass. Offending sites:\n  - " + "\n  - ".join(offenders)
+        )
+
+
+# ── Non-streaming email chat fails loud (#2109) ──────────────────────────────
+#
+# Email chat is served exclusively by the sidecar's streaming ``/query`` loop
+# (see ``_dispatch_email_query`` in the streaming producer). There is no
+# non-streaming shape to relay, so the non-streaming ``_do_chat()`` closure
+# raises a real HTTP 400 instead of flattening the rejection into a friendly
+# chat-text string.
+
+
+class TestNonStreamingEmailFailsLoud:
+    """``_get_chat_response`` must reject ``agent_type=email`` with a real
+    HTTP 400 when ``stream=False`` — never silently degrade to a chat-text
+    error message."""
+
+    def test_raises_400_with_pinned_detail(self):
+        from gaia.ui._chat_helpers import _get_chat_response
+        from gaia.ui.database import ChatDatabase
+        from gaia.ui.models import ChatRequest
+
+        db = ChatDatabase(":memory:")
+        session = db.create_session(agent_type="email")
+        request = ChatRequest(
+            session_id=session["id"],
+            message="hi",
+            stream=False,
+            agent_type="email",
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(_get_chat_response(db, session, request))
+
+        assert exc_info.value.status_code == 400
+        # Pinned exact string — a future rewording must update this test
+        # deliberately, not slip through unnoticed.
+        assert exc_info.value.detail == (
+            "Email chat requires streaming (stream=true); "
+            "non-streaming email chat is not supported."
+        )
+
+    def test_non_email_agent_type_does_not_hit_email_400(self):
+        """A registered non-email agent_type must never raise the
+        email-only 400 — proves the rejection is scoped to agent_type=email,
+        not a broad regression that swallows every non-streaming request."""
+        from gaia.ui._chat_helpers import _get_chat_response
+        from gaia.ui.database import ChatDatabase
+        from gaia.ui.models import ChatRequest
+
+        registry = MagicMock()
+        registry.get.return_value = True  # "bot" is registered
+        registry.resolve_model.return_value = None
+        fake_agent = MagicMock()
+        fake_agent.model_id = "SomeModel-GGUF"
+        fake_agent.process_query.return_value = "ok"
+        fake_agent.conversation_history = []
+        fake_agent.indexed_files = set()
+        registry.create_agent.return_value = fake_agent
+
+        db = ChatDatabase(":memory:")
+        session = db.create_session(agent_type="bot")
+        request = ChatRequest(
+            session_id=session["id"],
+            message="hi",
+            stream=False,
+            agent_type="bot",
+        )
+
+        with (
+            patch("gaia.ui._chat_helpers._agent_registry", registry),
+            patch("gaia.ui._chat_helpers._maybe_load_expected_model"),
+        ):
+            result = asyncio.run(_get_chat_response(db, session, request))
+
+        assert result == "ok"
+
+
+# ── Source-shape: streaming email branch returns before the shared trunk ────
+
+
+class TestStreamingEmailBranchReturnsBeforeSharedTrunk:
+    """Source-shape regression (#2109): the streaming email branch in
+    ``_run_agent`` (the second ``elif agent_type == "email":`` in this
+    module — the first is the non-streaming ``_do_chat()`` HTTPException
+    branch tested above) must relay via ``_dispatch_email_query`` and then
+    ``return`` immediately.
+
+    It must never fall through into the shared agent trunk that follows the
+    whole cached/chat/email/else chain (MCP status report, incognito flag,
+    conversation-history rebuild, ``agent._cancel_event =``,
+    ``_maybe_load_expected_model``, ``agent.process_query``) — that code
+    assumes a constructed in-process ``agent`` variable, which an email turn
+    never creates.
+    """
+
+    def test_email_streaming_branch_ends_with_bare_return(self):
+        import re
+        from pathlib import Path as _Path
+
+        src = (
+            _Path(__file__).parents[4] / "src" / "gaia" / "ui" / "_chat_helpers.py"
+        ).read_text(encoding="utf-8")
+
+        matches = list(re.finditer(r'elif agent_type == "email":', src))
+        assert len(matches) == 2, (
+            'Expected exactly 2 occurrences of `elif agent_type == "email":` '
+            "in _chat_helpers.py (the non-streaming _do_chat HTTPException "
+            f"branch, and the streaming _run_agent dispatch branch). Found "
+            f"{len(matches)} — did the source structure change? Update this "
+            "test's assumptions."
+        )
+        second_start = matches[1].start()
+
+        # Derive the block's indentation from the matched line itself, then
+        # find the next same-indentation else/elif that closes the chain.
+        line_start = src.rfind("\n", 0, second_start) + 1
+        indent = second_start - line_start
+        next_branch = re.search(rf"\n {{{indent}}}(?:else:|elif )", src[second_start:])
+        assert next_branch, (
+            "Could not find the next same-indentation else/elif after the "
+            "streaming email branch — did the if/elif chain structure change?"
+        )
+        block = src[second_start : second_start + next_branch.start()]
+
+        assert "_dispatch_email_query(" in block, (
+            "Streaming email branch must call _dispatch_email_query(...) — "
+            'see the second `elif agent_type == "email":` in '
+            "src/gaia/ui/_chat_helpers.py (_run_agent)."
+        )
+
+        # Last non-blank line of the block must be a bare `return` — no
+        # fall-through into the shared agent trunk (MCP status report,
+        # conversation history rebuild, agent.process_query) that follows
+        # the whole if/elif chain and assumes a constructed in-process agent.
+        lines = [ln for ln in block.splitlines() if ln.strip()]
+        assert lines[-1].strip() == "return", (
+            "Streaming email branch must end with a bare `return` "
+            "immediately after _dispatch_email_query(...) — falling "
+            "through into the shared agent trunk would call "
+            "agent.process_query on a non-existent in-process agent. "
+            f"Last line was: {lines[-1]!r}"
         )

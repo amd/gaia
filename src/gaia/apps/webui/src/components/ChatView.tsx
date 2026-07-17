@@ -11,7 +11,7 @@ import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { bugReportUrl } from './UnsupportedFeature';
 import { getAgentIcon } from './agentIcons';
-import type { Message, StreamEvent, AgentStep, Attachment, Session, AgentInfo } from '../types';
+import type { Message, StreamEvent, AgentStep, Attachment, Session, AgentInfo, RenderCardData } from '../types';
 
 import './ChatView.css';
 import DashboardProgress from './DashboardProgress';
@@ -171,6 +171,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         sessions, messages, setMessages, addMessage, removeMessage, removeMessagesFrom, updateSessionInList,
         isStreaming, streamingContent, setStreaming, setStreamContent, clearStreamContent,
         agentSteps, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps,
+        cards, appendCard, clearCards,
         documents, setDocuments, setShowDocLibrary, setShowFileBrowser, setShowMemoryDashboard, isLoadingMessages, setLoadingMessages,
         systemStatus,
         agents, activeAgentId, setActiveAgentId,
@@ -251,6 +252,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     const [streamEnding, setStreamEnding] = useState(false);
     const lastStreamContentRef = useRef('');
     const lastAgentStepsRef = useRef<AgentStep[]>([]);
+    const lastCardsRef = useRef<RenderCardData[]>([]);
     const prevStreamingRef = useRef(false);
     // Continuously snapshot the streaming state so we have it when streaming ends
     useEffect(() => {
@@ -260,12 +262,16 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         if (agentSteps.length > 0) lastAgentStepsRef.current = agentSteps.map(s => ({ ...s, active: false }));
     }, [agentSteps]);
     useEffect(() => {
+        if (cards.length > 0) lastCardsRef.current = [...cards];
+    }, [cards]);
+    useEffect(() => {
         if (!isStreaming && prevStreamingRef.current) {
             setStreamEnding(true);
             const timer = setTimeout(() => {
                 setStreamEnding(false);
                 lastStreamContentRef.current = '';
                 lastAgentStepsRef.current = [];
+                lastCardsRef.current = [];
             }, 350);
             return () => clearTimeout(timer);
         }
@@ -492,6 +498,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         if (content) {
             log.stream.info(`Saving partial response (${content.length} chars)`);
             const currentSteps = storeState.agentSteps;
+            const currentCards = storeState.cards;
             const assistantMsg: Message = {
                 id: Date.now() + 1,
                 session_id: sessionId,
@@ -500,6 +507,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 created_at: new Date().toISOString(),
                 rag_sources: null,
                 agentSteps: currentSteps.length > 0 ? [...currentSteps] : undefined,
+                cards: currentCards.length > 0 ? [...currentCards] : undefined,
             };
             addMessage(assistantMsg);
         }
@@ -508,7 +516,8 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         clearStreamContent();
         setCompletedSteps([]);
         clearAgentSteps();
-    }, [sessionId, addMessage, setStreaming, clearStreamContent, clearAgentSteps]);
+        clearCards();
+    }, [sessionId, addMessage, setStreaming, clearStreamContent, clearAgentSteps, clearCards]);
 
     // Global keyboard shortcuts: Escape → stop streaming, Ctrl+K → focus sidebar search
     useEffect(() => {
@@ -711,6 +720,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         setStreaming(true);
         clearStreamContent();
         clearAgentSteps();
+        // Also covers attach-replay dedupe — attachToRun replays all events
+        // from the start, so stale cards would double up without this.
+        clearCards();
         setCompletedSteps([]);
         stepIdRef.current = 0;
         toolOccurredRef.current = false;
@@ -838,6 +850,22 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     return;
                 }
 
+                // ── Stateless confirmation card (email /query, #2109 D1) ──
+                // Informational: the sidecar run is already over, so this is
+                // a chat-flow card via the generic #2108 mechanism — NEVER
+                // the blocking PermissionPrompt/confirm_id path above. Only
+                // {action, summary} cross over; no run_id passthrough.
+                if (event.type === 'needs_confirmation') {
+                    appendCard({
+                        render: 'needs_confirmation',
+                        data: {
+                            action: typeof event.action === 'string' ? event.action : '',
+                            summary: typeof event.summary === 'string' ? event.summary : '',
+                        },
+                    });
+                    return;
+                }
+
                 if (event.type === 'policy_alert') {
                     const toolName = event.tool || 'unknown tool';
                     const reason =
@@ -879,6 +907,11 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     return;
                 }
                 if (event.type === 'tool_result') {
+                    // Structured card (#2108): a non-empty render key mounts a
+                    // registered card component against event.data.
+                    if (typeof event.render === 'string' && event.render.length > 0) {
+                        appendCard({ render: event.render, data: event.data });
+                    }
                     const updates: Partial<AgentStep> = {
                         result: event.summary || event.title || 'Done',
                         active: false,
@@ -1017,6 +1050,8 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 const stepsSnapshot = useChatStore.getState().agentSteps.map((s) => ({
                     ...s, active: false,
                 }));
+                // Snapshot streaming cards (#2108) — same lifecycle as steps.
+                const cardsSnapshot = [...useChatStore.getState().cards];
 
                 const hasPolicyAlert = stepsSnapshot.some((s) => s.type === 'policy_alert');
                 if (content || hasPolicyAlert) {
@@ -1031,6 +1066,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                         rag_sources: null,
                         agentSteps: stepsSnapshot.length > 0 ? stepsSnapshot : undefined,
                         stats: event.stats || undefined,
+                        cards: cardsSnapshot.length > 0 ? cardsSnapshot : undefined,
                     };
                     addMessage(assistantMsg);
                 }
@@ -1039,6 +1075,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 setStreaming(false);
                 clearStreamContent();
                 clearAgentSteps();
+                clearCards();
 
                 // Refocus input so user can immediately type the next message
                 if (inputRef.current) inputRef.current.focus();
@@ -1051,11 +1088,21 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     api.getMessages(sessionId)
                         .then((data) => {
                             if (isStale()) return;
+                            // The backend doesn't persist cards, so this replace
+                            // would drop them — merge from the pre-refetch
+                            // in-memory messages by id, else role+content.
+                            // #2109 replaces this merge with steps-derived hydration.
+                            const prevWithCards = useChatStore.getState().messages
+                                .filter((m) => m.cards && m.cards.length > 0);
                             const msgs: Message[] = (data.messages || []).map((m: any) => {
+                                const prev = prevWithCards.find(
+                                    (p) => p.id === m.id || (p.role === m.role && p.content === m.content),
+                                );
                                 return {
                                     ...m,
                                     agentSteps: m.agentSteps || m.agent_steps || undefined,
                                     stats: m.stats || m.inference_stats || undefined,
+                                    cards: prev?.cards,
                                 };
                             });
                             setMessages(msgs);
@@ -1126,6 +1173,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 setStreaming(false);
                 clearStreamContent();
                 clearAgentSteps();
+                clearCards();
             },
             onAgentCreated: () => {
                 // A new agent was created — refresh the list so it appears
@@ -1141,7 +1189,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
             : api.sendMessageStream(sessionId, messageText, streamCallbacks, undefined, undefined, activeAgentId);
 
         abortRef.current = controller;
-    }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, activeAgentId, addNotification, isStale]);
+    }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, appendCard, clearCards, activeAgentId, addNotification, isStale]);
 
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;
@@ -1670,6 +1718,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                             showTerminalCursor={streamEnding}
                             agentSteps={isStreaming ? agentSteps : lastAgentStepsRef.current}
                             agentStepsActive={isStreaming && agentSteps.some(s => s.active)}
+                            cards={isStreaming ? cards : lastCardsRef.current}
                             agentName={activeAgentName}
                         />
                     </div>

@@ -66,6 +66,23 @@ _DEVICE_REMEDY = {
 }
 
 
+def _device_is_available(info) -> bool:
+    """Whether a ``get_system_info()`` device entry counts as usable hardware.
+
+    The contract of ``get_system_info()`` is that availability lives in the
+    per-device ``available`` boolean, so a present-but-``available: false``
+    entry (e.g. an NPU listed but disabled/unpowered) is NOT detected. A
+    missing ``available`` flag is treated as available for backwards
+    compatibility with sysinfo payloads that omit it.
+    """
+    if isinstance(info, dict):
+        return bool(info.get("available", True))
+    if isinstance(info, list):
+        # amd_dgpu can be a list of GPUs — detected if any entry is available.
+        return any(_device_is_available(x) for x in info)
+    return True
+
+
 def _format_device_error(
     device: Optional[str], required_min_device: Optional[str], detected
 ) -> str:
@@ -261,20 +278,32 @@ class LemonadeManager:
         sys_info = client.get_system_info()
         devices = sys_info.get("devices", {})
         detected = set()
-        # devices may be a dict or a list; handle both
+        # devices may be a dict or a list; handle both. A device only counts as
+        # detected when its ``available`` flag is truthy — present-but-disabled
+        # hardware must not satisfy a REQUIRED_HARDWARE floor.
         if isinstance(devices, dict):
-            detected = set(devices.keys())
+            detected = {
+                name for name, info in devices.items() if _device_is_available(info)
+            }
         elif isinstance(devices, list):
             if all(isinstance(x, str) for x in devices):
                 detected = set(devices)
             else:
                 for item in devices:
                     if isinstance(item, dict):
+                        if not _device_is_available(item):
+                            continue
                         # Prefer explicit device_type when available.
                         for k in ("device_type", "type", "id", "name"):
                             if k in item:
                                 detected.add(str(item[k]))
                                 break
+        # Lemonade on Apple Silicon reports the llama.cpp Metal backend as
+        # 'metal' in system_info while its health payload calls the same device
+        # 'gpu' — normalize to the generic GPU tier so a default device='gpu'
+        # request validates on macOS instead of falling through to cpu.
+        if "metal" in detected:
+            detected.add("amd_dgpu")
         # Find highest-capability detected device
         highest = None
         for dev in _DEVICE_PRIORITY:
@@ -371,6 +400,8 @@ class LemonadeManager:
 
         This is the main entry point for both CLI and SDK flows.
         Safe to call multiple times - validates context size on each call.
+        An explicit ``min_context_size=None`` (callers threading through an
+        unset config value) means "the default floor", never a crash.
 
         Args:
             min_context_size: Minimum context size required (default: 32768).
@@ -399,6 +430,10 @@ class LemonadeManager:
             The Lemonade server must be running before calling this method.
             Start it with: lemonade-server serve --ctx-size 32768
         """
+        # Callers thread config values through verbatim — an unset (None)
+        # floor means the default, never a TypeError at the ctx comparison.
+        if min_context_size is None:
+            min_context_size = DEFAULT_CONTEXT_SIZE
         # Map high-level device selector to required_min_device when the
         # caller didn't pass an explicit required_min_device.
         if device and not required_min_device:

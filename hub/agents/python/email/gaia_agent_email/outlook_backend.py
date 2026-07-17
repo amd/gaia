@@ -445,16 +445,19 @@ class LiveOutlookBackend:
 
     def get_thread(self, thread_id: str) -> Dict[str, Any]:
         # Graph has no thread-get; fetch every message in the conversation.
+        # Combining $filter=conversationId with $orderby=receivedDateTime trips
+        # Graph's InefficientFilter (the two properties aren't co-indexed), so
+        # we filter server-side and sort ascending client-side instead.
         data = self._get(
             "/me/messages",
             params={
                 "$filter": f"conversationId eq '{thread_id}'",
                 "$select": _MESSAGE_SELECT,
-                "$orderby": "receivedDateTime asc",
                 "$top": 100,
             },
         )
         messages = [graph_message_to_gmail(m) for m in data.get("value", [])]
+        messages.sort(key=lambda m: m.get("internalDate") or "")
         return {"id": thread_id, "messages": messages}
 
     def list_labels(self) -> List[Dict[str, Any]]:

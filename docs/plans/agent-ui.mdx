@@ -212,11 +212,12 @@ directly against it — "fixed functions for flexibility."
 
 ### Card rendering changes (be honest about "thin")
 
-The UI is thin, but not *unchanged*: today the frontend renders typed cards (e.g.
+The UI is thin, but not *unchanged*: the frontend used to render typed cards (e.g.
 `email_pre_scan`) by **fence-parsing** the assistant text (`MessageBubble.tsx`
-`STRUCTURED_PAYLOAD_LANGS`). v2 replaces that hack — the sidecar declares the card
-type explicitly on a `tool_result` SSE event (`render: "email_pre_scan"`), and the
-frontend maps `render`→component. The host needs no per-tool knowledge; the
+`STRUCTURED_PAYLOAD_LANGS`). The #2109 cutover deleted that hack — the sidecar
+declares the card type explicitly on a `tool_result` SSE event
+(`render: "email_pre_scan"`), and the frontend maps `render`→component. The host
+needs no per-tool knowledge; the
 **frontend still needs a card component per `render` type**, so new agents that
 introduce new cards ship a matching component.
 

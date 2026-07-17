@@ -14,6 +14,7 @@ live-but-unresponsive pid → terminate it, then spawn fresh.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
@@ -93,6 +94,12 @@ def _spawn_and_wait(timeout: float) -> DaemonInstance:
     """Spawn the daemon detached, wait until it registers a live instance.json."""
     paths.ensure_host_dir()
     log_file = open(paths.log_path(), "ab")
+    # 0600: the daemon log lives beside token-minting code (D-5, #2142) and
+    # would otherwise land world-readable under umask 022.
+    try:
+        os.chmod(paths.log_path(), 0o600)
+    except OSError:
+        pass
     creationflags = 0
     start_new_session = False
     if sys.platform == "win32":

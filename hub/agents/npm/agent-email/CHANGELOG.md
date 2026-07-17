@@ -6,6 +6,19 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## 0.6.0
 
+- **The plain-language agent loop is now part of the typed client.** 0.5.0's
+  streaming endpoint required hand-rolled `fetch` + SSE parsing; now
+  `client.query()` returns an async iterator of typed events (`status`, `token`,
+  `tool_call`, `tool_result`, `needs_confirmation`, `final`, `error` — plus a
+  visible `unknown` placeholder for event types added by a newer agent, never a
+  silent drop), and `client.cancelQuery(runId)` stops a run mid-way. You mint
+  `run_id`, so a run is cancellable from the instant you send it. A stream that
+  breaks mid-run throws instead of looking like success.
+- **The client now speaks contract 2.4.** `SCHEMA_VERSION` moved 2.3 → 2.4
+  (additive — every 2.3 request/response shape is unchanged). The startup
+  version handshake accepts any 2.x sidecar, so a 2.3-pinned client keeps
+  working against a 2.4 sidecar exactly as before; only the new `query()` /
+  `cancelQuery()` calls need a 2.4 (0.5.0+) agent binary.
 - **On NPU-capable machines, triage now runs on the NPU by default.** When
   you haven't pinned a specific model, the agent checks whether the
   Lemonade Server it's talking to has an AMD NPU and the NPU-optimized

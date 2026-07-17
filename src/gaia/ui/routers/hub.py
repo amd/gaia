@@ -55,6 +55,32 @@ def _require_ui_header(request: Request) -> None:
         raise HTTPException(status_code=403, detail="missing X-Gaia-UI header")
 
 
+def _shutdown_email_sidecar(agent_id: str) -> None:
+    """Stop a running email sidecar before mutating its install directory.
+
+    The email agent's install dir doubles as the sidecar's own binary cache,
+    and a warm sidecar holds the executable open — install/uninstall/rollback
+    would hit a locked file (Windows) or mutate a live process's dir. Since
+    #2142 the daemon owns the sidecar: this asks it to stop (attach-only —
+    no daemon running is a genuine no-op). A stop failure (the process
+    survived the tree-kill) raises 500 and ABORTS the mutation — proceeding
+    would corrupt a live process's dir. Only the router may bridge the two
+    layers (``gaia.hub`` never imports ``gaia.ui``).
+    """
+    if agent_id != "email":
+        return
+    from gaia.daemon.sidecars.errors import SidecarError
+    from gaia.ui.email_sidecar import daemon_client
+
+    logger.info(
+        "hub: stopping any daemon-supervised email sidecar before mutating its dir"
+    )
+    try:
+        daemon_client.stop_sidecar("email")
+    except SidecarError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 class InstallRequest(BaseModel):
     """Body for ``POST /api/agents/install``."""
 
@@ -170,6 +196,8 @@ async def install_agent(
     except installer_mod.TrustRequiredError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
+    _shutdown_email_sidecar(body.id)
+
     installer_mod.clear_progress(body.id)
     installer_mod._set_progress(  # noqa: SLF001 - seed state for the poller
         body.id, status="queued", phase="queued", percent=0, version=body.version
@@ -208,6 +236,7 @@ async def install_status(agent_id: str):
 async def uninstall_agent(agent_id: str, request: Request):
     """Uninstall a hub-installed agent. Refuses builtins (400)."""
     registry = _registry(request)
+    _shutdown_email_sidecar(agent_id)
     try:
         installer_mod.uninstall(agent_id, registry=registry)
     except installer_mod.NotInstalledError as exc:
@@ -229,6 +258,7 @@ async def uninstall_agent(agent_id: str, request: Request):
 async def rollback_agent(agent_id: str, request: Request):
     """Roll an agent back to its pre-update snapshot in ``.backup/``."""
     registry = _registry(request)
+    _shutdown_email_sidecar(agent_id)
     try:
         restored = installer_mod.rollback(agent_id, registry=registry)
     except installer_mod.InstallError as exc:

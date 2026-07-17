@@ -1,14 +1,15 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Platform-key resolution and binaries.lock.json loading for the email sidecar."""
+"""Platform-key resolution and binaries.lock.json loading for daemon-supervised
+sidecar agents (ported from test_email_sidecar_platform.py, issue #2142 T3)."""
 
 import json
 from pathlib import Path
 
 import pytest
 
-from gaia.ui.email_sidecar import platform as plat
-from gaia.ui.email_sidecar.errors import PlatformError
+from gaia.daemon.sidecars import platform as plat
+from gaia.daemon.sidecars.errors import PlatformError
 
 
 def _write_lock(tmp_path: Path, binaries: dict, base_url="https://example/r2") -> Path:

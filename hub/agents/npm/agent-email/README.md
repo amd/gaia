@@ -86,6 +86,22 @@ console.log(res.result.category, res.result.summary);
 await shutdown(sidecar);
 ```
 
+Or hand the agent a plain-language request and watch it work — `query()` streams
+typed progress events (`status`, `tool_call`, `tool_result`, …) and ends with the
+answer; `cancelQuery()` stops a run mid-way:
+
+```ts
+const runId = crypto.randomUUID(); // yours to mint — it's also the cancel handle
+for await (const ev of sidecar.client.query({
+  query: "Find today's urgent mail and archive the promotions.",
+  run_id: runId,
+  context: [],
+})) {
+  if (ev.type === "status") console.log(ev.message);
+  if (ev.type === "final") console.log(ev.answer); // last event
+}
+```
+
 Triage classifies and drafts using only the local model — no mailbox connection
 needed. Reading or acting on a live inbox (search, send, archive, calendar) uses
 the **Google or Microsoft connector** you set up in GAIA under

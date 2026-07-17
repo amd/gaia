@@ -327,13 +327,18 @@ agent used to pick Google and fail. It now picks Outlook correctly.
 ## Dev mode: run the email agent from source
 
 The Agent UI talks to the email agent as an out-of-process **sidecar** — a
-self-contained HTTP service the Python backend spawns, health-checks, proxies to,
-and tree-kills. No Node.js is involved. Two modes, selected by
-`GAIA_EMAIL_AGENT_MODE`:
+self-contained HTTP service supervised by the **GAIA daemon** (`gaia daemon`),
+which spawns it, health-checks it, and tree-kills it. The UI backend is a
+daemon *client*: on each email request it asks the daemon to ensure the
+sidecar is running, then talks to the sidecar port directly. No Node.js is
+involved. Two modes, selected by `GAIA_EMAIL_AGENT_MODE`:
 
-- `user` (default) — runs the published frozen binary, fetched on first email use
-  and verified against `binaries.lock.json` (SHA-256 is the integrity gate). A
-  tampered or unpublished binary fails loudly; there is no fallback to dev mode.
+- `user` (default) — runs the published frozen binary. An Agent Hub install is
+  used first (its SHA-256 was verified against the hub manifest at install time
+  and is re-checked before every spawn); otherwise the binary is fetched on
+  first email use and verified against `binaries.lock.json`. Either way SHA-256
+  is the integrity gate: a tampered or unpublished binary fails loudly; there is
+  no fallback to dev mode.
 - `dev` — runs the agent from your local source with hot reload, so prompt/tool
   edits show up live without a freeze → publish cycle:
 
@@ -350,18 +355,24 @@ library. If the source package is missing, dev mode fails loudly with the
 `uv pip install -e` remedy — it never silently falls back to the binary.
 
 **Operational behavior:**
-- The backend spawns the sidecar with its stdout/stderr redirected to
+- The **daemon owns the sidecar lifecycle**. Closing the Agent UI no longer
+  kills the sidecar — it keeps running under the daemon until you stop it with
+  `gaia daemon stop-agent email` (sidecar only) or `gaia daemon stop` (daemon +
+  every sidecar). Inspect it any time with `gaia daemon status` or
+  `gaia daemon agents` (id, mode, pid, port, contract version).
+- The daemon spawns the sidecar with its stdout/stderr redirected to
   `~/.gaia/agents/email/logs/sidecar-<port>.log` — check that file first when a
   sidecar won't start (a failed start surfaces the log tail in the error too).
-- On every start the backend reads the sidecar's `/version` and records the
+- On every start the daemon reads the sidecar's `/version` and records the
   contract `apiVersion`/`agentVersion`; a major-version mismatch (when a host
   pins an expected version) fails loudly rather than sending requests the sidecar
   would mishandle.
 - A sidecar HTTP error (e.g. Lemonade down → `502 local LLM triage failed`) is
   surfaced verbatim with its actionable message, not flattened into a generic
   error.
-- If the backend exits without a clean shutdown, an `atexit` reaper tree-kills the
-  sidecar so it never leaks its port or a loaded model.
+- If the daemon is killed hard (SIGKILL, crash) while a sidecar runs, the next
+  daemon start identity-checks and reaps the recorded survivor before serving —
+  a sidecar never silently leaks its port or a loaded model.
 
 ### What the sidecar serves
 
@@ -382,9 +393,10 @@ isolated, and dogfoods the exact binary shipped to integrators.
   Because the sidecar can send mail as you, it requires a **per-session bearer
   token** on every `/v1/email/*` request (#1706, `401` without it) plus a loopback
   Host/Origin allowlist (`400`/`403`) — closing local-process and DNS-rebinding
-  access. The UI backend mints the token, hands it to the sidecar over a private
-  env channel, and replays it on every proxied call, so this is transparent in the
-  UI; integrators embedding the frozen sidecar get the same token wired by
+  access. The daemon mints the token and hands it to the sidecar over a private
+  env channel at spawn; the UI backend receives it when it acquires the sidecar
+  from the daemon and replays it on every proxied call, so this is transparent in
+  the UI; integrators embedding the frozen sidecar get the same token wired by
   `startSidecar`. See
   [Email Integration → Authentication](/guides/email-integration#authentication).
 - **The in-app email chat agent** (`agent_type=email`) — the local-LLM tool loop
@@ -392,8 +404,13 @@ isolated, and dogfoods the exact binary shipped to integrators.
   sidecar. The chat **pre-scan card** runs through the sidecar's `/prescan` route
   and returns the same `email_pre_scan` envelope, so the card renders unchanged.
 
-The sidecar is spawned lazily on first email use and tree-killed on shutdown; the
-REST surface and the chat agent share one sidecar process.
+The sidecar is spawned lazily on first email use (users who never touch email
+never pay for a daemon or sidecar) and keeps running under the daemon until
+`gaia daemon stop-agent email` or `gaia daemon stop`; the REST surface and the
+chat agent share one sidecar process. You can also start it explicitly with
+`gaia daemon start-agent email [--mode user|dev]` — asking for a mode different
+from the one already running is a loud conflict (stop it first), never a silent
+restart.
 
 **Chat tool surface (in-app email agent):** the sidecar-backed chat agent exposes
 the tools the schema-2.3 REST contract serves today — inbox pre-scan, search,

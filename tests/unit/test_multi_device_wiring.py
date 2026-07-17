@@ -124,6 +124,70 @@ class TestUnavailableDeviceRaises:
         assert "gaia init" in msg
 
 
+class TestPerDeviceAvailableFlag:
+    """A present device only counts when its ``available`` flag is truthy.
+
+    ``get_system_info()``'s contract puts usability in the per-device
+    ``available`` boolean, so a device listed with ``available: false`` (e.g. an
+    NPU present but disabled/unpowered) must NOT satisfy a REQUIRED_HARDWARE
+    floor. A missing flag is treated as available (backwards compat).
+    """
+
+    def _patch_sysinfo(self, monkeypatch, devices):
+        from gaia.llm.lemonade_client import LemonadeClient
+
+        data = {"devices": devices}
+        monkeypatch.setattr(
+            LemonadeClient, "get_status", lambda self: _make_status(), raising=False
+        )
+        monkeypatch.setattr(
+            LemonadeClient, "get_system_info", lambda self: data, raising=False
+        )
+
+    def test_available_true_passes(self, monkeypatch):
+        from gaia.llm.lemonade_manager import LemonadeManager
+
+        self._patch_sysinfo(
+            monkeypatch,
+            {"amd_npu": {"available": True}, "cpu": {"available": True}},
+        )
+        assert LemonadeManager.ensure_ready(device="npu") is True
+
+    def test_available_false_fails(self, monkeypatch):
+        from gaia.llm.lemonade_manager import (
+            HardwareRequirementError,
+            LemonadeManager,
+        )
+
+        self._patch_sysinfo(
+            monkeypatch,
+            {"amd_npu": {"available": False}, "cpu": {"available": True}},
+        )
+        with pytest.raises(HardwareRequirementError) as exc:
+            LemonadeManager.ensure_ready(device="npu")
+        msg = str(exc.value)
+        assert "npu" in msg.lower()
+        assert "gaia init --profile npu" in msg
+
+    def test_key_absent_fails(self, monkeypatch):
+        from gaia.llm.lemonade_manager import (
+            HardwareRequirementError,
+            LemonadeManager,
+        )
+
+        self._patch_sysinfo(monkeypatch, {"cpu": {"available": True}})
+        with pytest.raises(HardwareRequirementError):
+            LemonadeManager.ensure_ready(device="npu")
+
+    def test_missing_available_flag_treated_as_available(self, monkeypatch):
+        from gaia.llm.lemonade_manager import LemonadeManager
+
+        # Sysinfo payloads that omit the flag entirely keep the old
+        # presence == detected behavior.
+        self._patch_sysinfo(monkeypatch, {"amd_npu": {"power_mode": "performance"}})
+        assert LemonadeManager.ensure_ready(device="npu") is True
+
+
 class TestDeviceValidatedAfterWarmInit:
     """B2: validation must run even when the manager is already initialized.
 

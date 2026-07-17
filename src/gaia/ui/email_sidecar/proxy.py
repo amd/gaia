@@ -5,7 +5,8 @@
 Forwards the full schema-2.1 ``/v1/email/*`` contract (triage, batch triage,
 search, inbox pre-scan, draft/send + confirm, archive/unarchive,
 quarantine/unquarantine, calendar view/preview/create/respond, health, version,
-readiness init) and returns the sidecar's envelopes **unchanged** so the
+readiness init + streamed provisioning) and returns the sidecar's envelopes
+**unchanged** so the
 existing SSE card pipeline (``pre_scan_inbox`` → ``email_pre_scan``) keeps
 working byte-for-byte.
 
@@ -18,13 +19,27 @@ connector writes stay on the Python backend's single-writer path.
 
 from __future__ import annotations
 
+import json as _json
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Iterator, Optional
 
 from gaia.logger import get_logger
-from gaia.ui.email_sidecar.errors import SidecarHTTPError
+from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
 
 logger = get_logger(__name__)
+
+# POST /init can stay silent for the whole model pull — the read timeout must
+# outlast the sidecar's own 30-min pull read timeout (_LEMONADE_PULL_TIMEOUT).
+_PROVISION_READ_TIMEOUT = 1830.0
+
+# /query connect timeout: fixed and short — a dead sidecar should fail fast on
+# TCP connect, independent of the (much longer) read_timeout that spans the
+# whole agent-loop run.
+_QUERY_CONNECT_TIMEOUT = 10.0
+
+# Cancel POST timeout: best-effort cleanup must never wait out the general
+# sidecar timeout — a hung sidecar would make Cancel as slow as not cancelling.
+_CANCEL_TIMEOUT = 10.0
 
 
 def _extract_detail(resp) -> str:
@@ -170,3 +185,144 @@ class EmailSidecarProxy:
         if resp.status_code not in (200, 503):
             self._raise_for_status(resp, path)
         return resp.status_code, resp.json()
+
+    def provision(self) -> tuple:
+        """Provisioning verb — ``POST /v1/email/init``, streamed passthrough.
+
+        Returns ``(status_code, media_type, chunk_iterator)``. The sidecar
+        streams newline-delimited ``text/plain`` progress: a committed **200**
+        whose final ``✓``/``✗`` line is the authoritative outcome, or a **503**
+        (Lemonade unreachable) whose actionable lines are equally contract —
+        both pass through verbatim. A model pull can take many minutes, so the
+        body is never buffered; anything outside 200/503 keeps the loud
+        :class:`SidecarHTTPError` boundary, raised before any chunk is yielded.
+        """
+        path = "/v1/email/init"
+        resp = self._session.post(
+            f"{self.base_url}{path}",
+            stream=True,
+            timeout=(self.timeout, max(self.timeout, _PROVISION_READ_TIMEOUT)),
+        )
+        if resp.status_code not in (200, 503):
+            try:
+                self._raise_for_status(resp, path)
+            finally:
+                resp.close()
+        media_type = resp.headers.get("Content-Type", "text/plain; charset=utf-8")
+
+        def _chunks():
+            try:
+                yield from resp.iter_content(chunk_size=None)
+            finally:
+                resp.close()
+
+        return resp.status_code, media_type, _chunks()
+
+    # -- Query (canonical streaming agent-loop, #2109) -----------------------
+    def query_stream(
+        self,
+        body: dict,
+        *,
+        read_timeout: float = 300.0,
+        on_response: Optional[Callable[[Any], None]] = None,
+    ) -> Iterator[Dict[str, Any]]:
+        """Stream ``POST /v1/email/query`` as parsed canonical SSE event dicts.
+
+        One ``data: <json>\\n\\n`` frame per event (no multi-line data), so
+        ``resp.iter_lines()`` is safe: blank keep-alive/separator lines are
+        skipped, non-``data:`` lines are ignored, and each ``data:`` payload is
+        JSON-parsed and yielded. A non-2xx status raises the same loud
+        :class:`SidecarHTTPError` boundary as every other proxy method, BEFORE
+        any event is yielded — the response is closed either way.
+
+        ``on_response`` — invoked with the live (still-open) response object
+        EAGERLY at call time, right after the POST returns and before any
+        line is consumed, so a caller holding the returned iterator on a
+        worker thread can hand the response to another thread (the cancel
+        path), which forces a blocked read to error out by calling
+        ``resp.close()`` on it. This method is deliberately NOT a generator
+        function: a lazy body would defer both the POST and the registration
+        to the first ``next()``, widening the early-cancel race in which a
+        cancel finds nothing registered to close.
+
+        A malformed ``data:`` line (the sidecar emitting non-JSON) raises
+        loudly — never silently dropped or swallowed into a placeholder event.
+        """
+        path = "/v1/email/query"
+        resp = self._session.post(
+            f"{self.base_url}{path}",
+            json=body,
+            stream=True,
+            timeout=(_QUERY_CONNECT_TIMEOUT, read_timeout),
+        )
+        if resp.status_code >= 400:
+            try:
+                self._raise_for_status(resp, path)
+            finally:
+                resp.close()
+        if on_response is not None:
+            on_response(resp)
+
+        def _events() -> Iterator[Dict[str, Any]]:
+            try:
+                for raw_line in resp.iter_lines():
+                    if not raw_line:
+                        continue
+                    line = (
+                        raw_line.decode("utf-8", "replace")
+                        if isinstance(raw_line, bytes)
+                        else raw_line
+                    )
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[len("data:") :].strip()
+                    if not payload:
+                        continue
+                    try:
+                        event = _json.loads(payload)
+                    except (ValueError, TypeError) as e:
+                        raise SidecarError(
+                            f"email sidecar /query sent a malformed SSE event: "
+                            f"{payload!r} ({e})"
+                        ) from e
+                    yield event
+            finally:
+                resp.close()
+
+        return _events()
+
+    def cancel_query(self, run_id: str) -> None:
+        """Cancel an in-flight ``/query`` run.
+
+        Best-effort by design: the caller's forced response close has already
+        unblocked the relay's reader, so this POST uses a short dedicated
+        timeout (never the general 300s sidecar timeout) and swallows
+        transport failures with a log — a hung or dead sidecar can't honour
+        a cancel anyway, and surfacing a transport error AFTER the user
+        cancelled would be noise, not signal.
+
+        A 404 means the run already finished by the time the cancel landed —
+        benign, log and return rather than raise (mirrors the sidecar's own
+        ``cancel_query`` route contract). Any other non-2xx keeps the loud
+        :class:`SidecarHTTPError` boundary.
+        """
+        import requests
+
+        path = f"/v1/email/query/{run_id}/cancel"
+        try:
+            resp = self._session.post(f"{self.base_url}{path}", timeout=_CANCEL_TIMEOUT)
+        except requests.exceptions.RequestException as exc:
+            logger.warning(
+                "email sidecar: best-effort cancel for run_id=%s failed at "
+                "transport level (reader already unblocked by forced close): %s",
+                run_id,
+                exc,
+            )
+            return
+        if resp.status_code == 404:
+            logger.info(
+                "email sidecar: cancel for run_id=%s: no longer in flight (404)",
+                run_id,
+            )
+            return
+        self._raise_for_status(resp, path)

@@ -108,11 +108,63 @@ def _maybe_parse_tool_envelope(content: object) -> dict | None:
         ) from exc
 
 
+def _reconstruct_condensed_results(data: dict) -> list[dict]:
+    """Rebuild the full per-email verdict list from a condensed envelope.
+
+    ``triage_condense.condense_triage_result`` trims ``results`` to the
+    leading exemplars that fit the ctx budget but keeps the compact
+    ``grouped`` id-to-category map verbatim for every message. This
+    reconstructs a minimal verdict for each id present in ``grouped`` but
+    missing from the exemplar list, so quality scoring runs over the whole
+    batch instead of just the shown exemplars.
+    """
+    exemplars = list(data.get("results", []))
+    grouped = data.get("grouped")
+    groups = grouped.get("groups") if isinstance(grouped, dict) else None
+    if not isinstance(grouped, dict) or not isinstance(groups, dict):
+        raise ValueError(
+            "condensed triage envelope (results_condensed=True) is missing a "
+            "well-formed 'grouped' map ({'groups': {category: [ids]}, "
+            "'spam': [ids], 'phishing': [ids]}) needed to reconstruct the "
+            f"full verdict list for scoring; got grouped={grouped!r}"
+        )
+
+    exemplar_ids = {item.get("id") for item in exemplars if item.get("id") is not None}
+    spam_ids = set(grouped.get("spam") or [])
+    phishing_ids = set(grouped.get("phishing") or [])
+
+    reconstructed = list(exemplars)
+    for category, ids in groups.items():
+        if not isinstance(ids, list):
+            raise ValueError(
+                "condensed triage envelope's grouped.groups"
+                f"[{category!r}] is not a list of ids: {ids!r}"
+            )
+        for msg_id in ids:
+            if msg_id in exemplar_ids:
+                continue
+            reconstructed.append(
+                {
+                    "id": msg_id,
+                    "category": category,
+                    "is_spam": msg_id in spam_ids,
+                    "is_phishing": msg_id in phishing_ids,
+                    "source": "condensed",
+                }
+            )
+    return reconstructed
+
+
 def _extract_triage_results(conversation: list) -> tuple[list[dict], str]:
     """Find the triage tool result in the conversation.
 
-    Returns ``(results, error)``. Raises ``ValueError`` on a malformed envelope
-    (via :func:`_maybe_parse_tool_envelope`).
+    Returns ``(results, error)``. When the envelope was condensed to fit the
+    agent-loop ctx budget (``results_condensed``), reconstructs the full
+    per-email verdict list from the verbatim ``grouped`` map so quality
+    scoring covers the whole batch, not just the kept exemplars. Raises
+    ``ValueError`` on a malformed envelope (via
+    :func:`_maybe_parse_tool_envelope`) or a condensed envelope lacking a
+    well-formed ``grouped`` map.
     """
     for msg in conversation:
         if msg.get("role") != "tool" or not msg.get("content"):
@@ -122,6 +174,8 @@ def _extract_triage_results(conversation: list) -> tuple[list[dict], str]:
             continue
         data = envelope.get("data")
         if envelope.get("ok") and isinstance(data, dict) and "results" in data:
+            if data.get("results_condensed"):
+                return _reconstruct_condensed_results(data), ""
             return data["results"], ""
         if envelope.get("ok") is False and "error" in envelope:
             return [], str(envelope["error"])
@@ -430,6 +484,49 @@ def _acceptance_variance(aggregate_quality: dict) -> dict[str, Any]:
     return block
 
 
+def _aggregate_triage_usage(results: list[dict]) -> dict[str, Any] | None:
+    """Mean triage-usage token accounting across runs (#1891 gap fix).
+
+    ``build_scorecard`` (``gaia.eval.scorecard``) is shared by every eval
+    category (RAG quality, tool selection, drafting, briefing, …) and has no
+    notion of email's ``triage_llm_tokens`` / ``llm_classified_count`` /
+    ``tokens_per_triage`` — those live only in each run's
+    ``performance_summary`` (stamped by :func:`build_result`), so the
+    scorecard's aggregate ``performance`` block silently omitted them even on
+    a fully-passing run. Mean-of-runs mirrors gen_scorecard.py's
+    ``_compute_performance`` convention (each run scores the same corpus, so
+    the cross-run mean is the representative figure). Returns ``None`` when no
+    run carries these fields (a heuristic-only run, or a pre-#1891 agent).
+    """
+    llm_tokens_vals: list[float] = []
+    classified_vals: list[float] = []
+    per_triage_vals: list[float] = []
+    for r in results:
+        ps = r.get("performance_summary")
+        if not isinstance(ps, dict):
+            continue
+        if isinstance(ps.get("triage_llm_tokens"), (int, float)):
+            llm_tokens_vals.append(float(ps["triage_llm_tokens"]))
+        if isinstance(ps.get("llm_classified_count"), (int, float)):
+            classified_vals.append(float(ps["llm_classified_count"]))
+        if isinstance(ps.get("tokens_per_triage"), (int, float)):
+            per_triage_vals.append(float(ps["tokens_per_triage"]))
+
+    if not (llm_tokens_vals or classified_vals or per_triage_vals):
+        return None
+
+    out: dict[str, Any] = {}
+    if llm_tokens_vals:
+        out["triage_llm_tokens"] = round(sum(llm_tokens_vals) / len(llm_tokens_vals), 1)
+    if classified_vals:
+        out["llm_classified_count"] = round(
+            sum(classified_vals) / len(classified_vals), 1
+        )
+    if per_triage_vals:
+        out["tokens_per_triage"] = round(sum(per_triage_vals) / len(per_triage_vals), 1)
+    return out
+
+
 def _aggregate_perf(results: list[dict]) -> dict[str, Any] | None:
     """Roll per-run ``performance_summary`` blocks into one perf block for the gate.
 
@@ -532,6 +629,13 @@ def summarize_benchmark(
     run_ctx = next(iter(ctx_values), None)
     if run_ctx is not None:
         summary["scorecard"]["ctx_size"] = run_ctx
+
+    # #1891 gap fix: build_scorecard's generic performance block (shared across
+    # every eval category) has no notion of email's triage-usage fields — merge
+    # them in here, same post-build_scorecard enrichment pattern as ctx_size above.
+    triage_usage_agg = _aggregate_triage_usage(results)
+    if triage_usage_agg is not None:
+        summary["scorecard"]["performance"].update(triage_usage_agg)
 
     aggregate_quality = _aggregate_quality(results)
     if aggregate_quality is not None:

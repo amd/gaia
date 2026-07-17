@@ -22,6 +22,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from gaia_agent_email.gmail_backend import decode_message_body
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
+from gaia_agent_email.tools.triage_condense import condense_triage_result
 
 # Re-exported so the pre-scan tests can monkeypatch ``read_tools.make_llm_classifier``
 # to prove pre-scan never wires the LLM (test_pre_scan_counts.py).
@@ -876,6 +877,105 @@ def pre_scan_inbox_impl(
         return out
 
 
+def merge_pre_scan_backends(
+    backends: "Mapping[str, Any]",
+    *,
+    max_messages: int = 25,
+    session_preferences: Optional[Mapping[str, Any]] = None,
+    force_llm: bool = False,
+    debug: bool = False,
+    remember_mailbox: Optional[Callable[[Optional[str], str], None]] = None,
+) -> Dict[str, Any]:
+    """Pre-scan every connected mailbox, tag each item, merge under budget.
+
+    Single home for the multi-inbox consolidation (#1603/#1614) so both the
+    agent loop (``EmailTriageAgent._pre_scan_all_backends``) and the REST
+    ``/prescan`` path produce the identical envelope. Splits the total
+    ``max_messages`` budget across ``backends`` (an ordered ``provider ->
+    backend`` map); each merged item gains a ``mailbox`` tag. This is NOT a
+    silent pick-one — every connected mailbox is scanned.
+
+    A single backend's ``ConnectorsError`` (e.g. a revoked agent grant) is
+    recorded in ``mailbox_errors`` and the loop continues with the rest; when
+    EVERY backend fails the error is raised rather than returning a misleading
+    empty pre-scan. ``remember_mailbox`` is the agent's optional
+    message-id -> mailbox recorder for action routing; the stateless REST path
+    omits it.
+    """
+    prefs = session_preferences
+    per_backend = max(1, max_messages // len(backends))
+    urgent: List[Dict[str, Any]] = []
+    actionable: List[Dict[str, Any]] = []
+    suggested_archives: List[Dict[str, Any]] = []
+    informational_count = 0
+    scanned = 0
+    merged_prefs_applied: Dict[str, Any] = {}
+    mailbox_errors: List[Dict[str, Any]] = []
+    for provider, backend in backends.items():
+        if scanned >= max_messages:
+            break
+        try:
+            out = pre_scan_inbox_impl(
+                backend,
+                max_messages=per_backend,
+                session_preferences=prefs,
+                force_llm=force_llm,
+                debug=debug,
+            )
+        except ConnectorsError as exc:
+            msg = format_connector_error(exc)
+            mailbox_errors.append({"mailbox": provider, "error": msg})
+            log.warning("email pre-scan: skipping %s mailbox — %s", provider, msg)
+            continue
+        # Count messages actually returned, not the cap — an under-filled
+        # backend would otherwise trip the budget guard and skip a later one.
+        backend_totals = out.get("totals", {})
+        scanned += (
+            int(backend_totals.get("urgent", 0))
+            + int(backend_totals.get("actionable", 0))
+            + int(backend_totals.get("suggested_archives", 0))
+            + int(out.get("informational_count", 0))
+        )
+        merged_prefs_applied = out.get("preferences_applied", merged_prefs_applied)
+        for section, dest in (
+            ("urgent", urgent),
+            ("actionable", actionable),
+            ("suggested_archives", suggested_archives),
+        ):
+            for item in out.get(section, []):
+                item["mailbox"] = provider
+                if remember_mailbox is not None:
+                    remember_mailbox(item.get("message_id"), provider)
+                    remember_mailbox(item.get("thread_id"), provider)
+                dest.append(item)
+        informational_count += int(out.get("informational_count", 0))
+    result = {
+        "kind": "email_pre_scan",
+        "urgent": urgent[: max(0, PRE_SCAN_URGENT_CAP)],
+        "actionable": actionable[: max(0, PRE_SCAN_ACTIONABLE_CAP)],
+        "informational_count": informational_count,
+        "suggested_archives": suggested_archives[: max(0, PRE_SCAN_ARCHIVE_CAP)],
+        "suggested_drafts": [],
+        "preferences_applied": merged_prefs_applied,
+        "totals": {
+            "urgent": len(urgent),
+            "actionable": len(actionable),
+            "informational": informational_count,
+            "suggested_archives": len(suggested_archives),
+        },
+    }
+    if mailbox_errors and len(mailbox_errors) == len(backends):
+        # Every connected mailbox failed — surface it loudly rather than
+        # returning ok with zero results (which reads as "empty inbox").
+        raise ConnectorsError(
+            "All connected mailboxes failed during pre-scan: "
+            + "; ".join(f"{e['mailbox']}: {e['error']}" for e in mailbox_errors)
+        )
+    if mailbox_errors:
+        result["mailbox_errors"] = mailbox_errors
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Mixin
 # ---------------------------------------------------------------------------
@@ -1101,6 +1201,13 @@ class ReadToolsMixin:
             ``set_low_priority_sender`` are honored — those senders
             bypass the heuristic and are recorded with
             ``preference_applied`` for downstream inspection.
+
+            For a large batch the per-message ``results`` list may be
+            condensed to fit the context budget: ``results_condensed`` is
+            True, ``results_omitted`` counts the verdicts dropped from
+            ``results``, and the ``grouped`` map still carries every
+            message's id-to-category assignment. Use ``grouped`` (not
+            ``results``) as the complete view when results are condensed.
             """
             try:
                 max_messages = max(
@@ -1110,8 +1217,15 @@ class ReadToolsMixin:
                 # with its source mailbox, split the budget across mailboxes,
                 # and merge. LLM follow-up (#1107) is wired inside the agent
                 # orchestration so agent.chat is initialized at call time.
+                #
+                # Condense the result envelope to the agent-loop ctx budget
+                # (#2087): a large batch's verbatim verdict list overflows
+                # CONTEXT_TARGET_TOKENS when the agent re-reads it next turn.
+                # No-op below budget; verdicts themselves are unchanged.
                 return _envelope_ok(
-                    agent._triage_all_backends(max_messages=max_messages)
+                    condense_triage_result(
+                        agent._triage_all_backends(max_messages=max_messages)
+                    )
                 )
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
