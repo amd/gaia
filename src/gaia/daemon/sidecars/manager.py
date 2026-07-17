@@ -20,11 +20,14 @@ reserved port) and tree-kills the whole process group on shutdown (a
 PyInstaller one-file build spawns a uvicorn child that a plain kill would
 orphan).
 
-Threading note: ``start()`` (health-poll, lazy binary fetch) and the proxy's
-HTTP calls are **synchronous and blocking**. Callers MUST invoke them off the
-event loop (``await asyncio.to_thread(...)`` / ``run_in_executor``). Calling
-``start()`` directly from an async route would stall the caller for up to
-``health_timeout`` seconds.
+Threading note: ``start()`` (health-poll, lazy binary fetch) is **synchronous
+and blocking**. Callers MUST invoke it off the event loop (``await
+asyncio.to_thread(...)`` / ``run_in_executor``). Calling ``start()`` directly
+from an async route would stall the caller for up to ``health_timeout``
+seconds.
+
+Layering: this module never imports ``gaia.ui``. Constructing a request proxy
+against the running sidecar is UI-side work — the UI's daemon client owns it.
 """
 
 from __future__ import annotations
@@ -142,20 +145,6 @@ class AgentSidecarManager:
     @property
     def is_running(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
-
-    def proxy(self, **kwargs):
-        """Return an :class:`EmailSidecarProxy` bound to this running sidecar.
-
-        The manager owns the ephemeral port; the proxy is the request surface.
-        Raises if the sidecar has not been started yet (no silent unbound proxy).
-        """
-        from gaia.ui.email_sidecar.errors import SidecarError
-        from gaia.ui.email_sidecar.proxy import EmailSidecarProxy
-
-        if not self.base_url or not self.is_running:
-            raise SidecarError("sidecar is not started — call start() before proxy().")
-        kwargs.setdefault("auth_token", self.auth_token)
-        return EmailSidecarProxy(self.base_url, **kwargs)
 
     def __enter__(self) -> "AgentSidecarManager":
         self.start()

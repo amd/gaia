@@ -367,16 +367,6 @@ def test_spawn_passes_per_session_token_via_env(monkeypatch, tmp_path):
     assert all(m.auth_token not in str(a) for a in captured["argv"])
 
 
-def test_proxy_is_bound_with_the_session_token(monkeypatch, tmp_path):
-    # The UI path (manager.proxy()) must replay the token so the sidecar accepts
-    # its calls end-to-end.
-    m, _ = _install_fake_spawn(monkeypatch, tmp_path)
-    m.start()
-    proxy = m.proxy()
-    assert proxy._auth_token == m.auth_token
-    assert proxy._session.headers.get("Authorization") == f"Bearer {m.auth_token}"
-
-
 def test_start_captures_version(monkeypatch, tmp_path):
     m, captured = _install_fake_spawn(
         monkeypatch,
@@ -430,22 +420,6 @@ def test_old_sidecar_logs_are_pruned(monkeypatch, tmp_path):
     assert len(remaining) <= mgr._MAX_SIDECAR_LOGS
     # The just-opened log for the live port must survive the prune.
     assert (logs / f"sidecar-{m.port}.log").exists()
-
-
-def test_proxy_requires_started(tmp_path):
-    m = mgr.AgentSidecarManager(_email_spec_with_src(tmp_path))
-    with pytest.raises(SidecarError, match="not started"):
-        m.proxy()
-
-
-def test_proxy_bound_to_base_url(monkeypatch, tmp_path):
-    from gaia.ui.email_sidecar.proxy import EmailSidecarProxy
-
-    m, _ = _install_fake_spawn(monkeypatch, tmp_path)
-    m.start()
-    proxy = m.proxy()
-    assert isinstance(proxy, EmailSidecarProxy)
-    assert proxy.base_url == m.base_url
 
 
 def test_context_manager_starts_and_shuts_down(monkeypatch, tmp_path):
