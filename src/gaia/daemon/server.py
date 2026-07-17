@@ -27,6 +27,11 @@ from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Cap on uvicorn's graceful drain so `gaia daemon stop`/`restart` never waits
+# behind a slow in-flight ensure (a first-run binary fetch can take minutes);
+# shutdown_all() tree-kills the sidecars regardless.
+_GRACEFUL_SHUTDOWN_TIMEOUT = 5.0
+
 
 def _find_free_port(host: str = HOST) -> int:
     """OS-assigned free loopback port. Never returns the reserved 4001."""
@@ -42,16 +47,45 @@ def _find_free_port(host: str = HOST) -> int:
     )
 
 
+def _build_registry(specs):
+    """The daemon's sidecar registry, wired to the crash-reap ledger."""
+    from gaia.daemon.sidecars import ledger
+    from gaia.daemon.sidecars.registry import SidecarRegistry
+
+    def _on_spawn(agent_id, manager) -> None:
+        ledger.record_spawn(
+            agent_id=agent_id,
+            pid=manager.pid,
+            port=manager.port,
+            mode=manager.resolved_mode,
+            argv=list(manager.spawn_argv or []),
+            started_at=manager.started_at,
+        )
+
+    return SidecarRegistry(specs, on_spawn=_on_spawn, on_stop=ledger.remove_entry)
+
+
 def run(host: str = HOST) -> None:
     """Start the daemon and serve until shutdown. Blocks."""
     import uvicorn
+
+    from gaia.daemon.sidecars import ledger
+    from gaia.daemon.sidecars.spec import builtin_specs
 
     port = _find_free_port(host)
     token = secrets.token_urlsafe(32)
     pid = os.getpid()
     started_at = time.time()
 
+    specs = builtin_specs()
+    registry = _build_registry(specs)
+
     def _register() -> None:
+        # Reap identity-confirmed sidecar survivors of a previous daemon that
+        # died hard (SIGKILL/OOM) BEFORE serving — never adopt them silently.
+        killed = ledger.reap_stale(specs)
+        if killed:
+            logger.info("daemon: reaped stale sidecar pids %s", killed)
         write_instance(
             DaemonInstance(
                 pid=pid, port=port, token=token, host=host, started_at=started_at
@@ -60,6 +94,7 @@ def run(host: str = HOST) -> None:
         logger.info("daemon: registered instance pid=%s port=%s", pid, port)
 
     def _deregister() -> None:
+        registry.shutdown_all()
         remove_instance(only_pid=pid)
         logger.info("daemon: deregistered instance pid=%s", pid)
 
@@ -70,9 +105,16 @@ def run(host: str = HOST) -> None:
         started_at=started_at,
         on_startup=_register,
         on_shutdown=_deregister,
+        registry=registry,
     )
 
-    config = uvicorn.Config(app, host=host, port=port, log_level="warning")
+    config = uvicorn.Config(
+        app,
+        host=host,
+        port=port,
+        log_level="warning",
+        timeout_graceful_shutdown=int(_GRACEFUL_SHUTDOWN_TIMEOUT),
+    )
     server = uvicorn.Server(config)
     # Give the shutdown route a handle to trigger a graceful exit.
     app.state.server = server

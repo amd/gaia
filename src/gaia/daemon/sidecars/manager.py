@@ -122,6 +122,10 @@ class AgentSidecarManager:
         self.base_url: Optional[str] = None
         self.api_version: Optional[str] = None
         self.agent_version: Optional[str] = None
+        self.started_at: Optional[float] = None
+        # The argv the live process was spawned with — recorded so the daemon's
+        # crash-reap ledger can later confirm a pid's identity before killing it.
+        self.spawn_argv: Optional[list] = None
         # The mode actually used at spawn time, captured once (NOT the live
         # `mode` property, which re-reads env on every access). A registry
         # comparing "is a re-ensure asking for a different mode than what's
@@ -145,6 +149,10 @@ class AgentSidecarManager:
     @property
     def is_running(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
+
+    @property
+    def pid(self) -> Optional[int]:
+        return self._proc.pid if self._proc is not None else None
 
     def __enter__(self) -> "AgentSidecarManager":
         self.start()
@@ -269,6 +277,8 @@ class AgentSidecarManager:
             raise SidecarSpawnError(
                 f"failed to launch the {self.spec.agent_id} sidecar ({argv[0]}): {e}"
             ) from e
+        self.spawn_argv = list(argv)
+        self.started_at = time.time()
         # Reap the sidecar if the owner exits without calling shutdown() — a
         # detached child otherwise survives a crash/Ctrl-C and holds its port +
         # a loaded LLM. atexit covers normal exit + uncaught exceptions.

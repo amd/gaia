@@ -185,7 +185,9 @@ def _make_registry(specs=None, *, max_live=3, manager_cls=_FakeManager):
     AgentSidecarManager. Uses the registry's manager-construction seam."""
     from gaia.daemon.sidecars.registry import SidecarRegistry
 
-    reg = SidecarRegistry(specs or {"email": builtin_specs()["email"]}, max_live=max_live)
+    reg = SidecarRegistry(
+        specs or {"email": builtin_specs()["email"]}, max_live=max_live
+    )
     # Injection seam: the registry must expose an overridable manager factory so
     # tests never spawn a real AgentSidecarManager/subprocess.
     reg._manager_factory = manager_cls  # type: ignore[attr-defined]
@@ -439,8 +441,8 @@ def test_remove_entry_deletes_only_the_named_agent(daemon_home):
 
 
 def test_ledger_file_never_contains_a_token_field(daemon_home):
-    from gaia.daemon.sidecars import ledger
     from gaia.daemon import paths
+    from gaia.daemon.sidecars import ledger
 
     ledger.record_spawn(
         agent_id="email", pid=1, port=100, mode="user", argv=["a"], started_at=1.0
@@ -578,8 +580,15 @@ class _FakeRegistry:
     """Duck-typed registry stub for route-layer tests. Route tests verify HTTP
     status/body mapping only — registry logic is covered above."""
 
-    def __init__(self, *, ensure_result=None, ensure_error=None, list_result=None,
-                 stop_result=None, stop_error=None):
+    def __init__(
+        self,
+        *,
+        ensure_result=None,
+        ensure_error=None,
+        list_result=None,
+        stop_result=None,
+        stop_error=None,
+    ):
         self._ensure_result = ensure_result
         self._ensure_error = ensure_error
         self._list_result = list_result if list_result is not None else []
@@ -666,7 +675,12 @@ def test_post_ensure_returns_token_in_body():
 
 def test_post_ensure_omitted_body_defaults_mode_to_none():
     reg = _FakeRegistry(
-        ensure_result={"agent_id": "email", "state": "running", "mode": "user", "token": "t"}
+        ensure_result={
+            "agent_id": "email",
+            "state": "running",
+            "mode": "user",
+            "token": "t",
+        }
     )
     client = _routes_client(reg)
     r = client.post("/daemon/v1/agents/email/ensure", headers=_auth())
@@ -676,7 +690,12 @@ def test_post_ensure_omitted_body_defaults_mode_to_none():
 
 def test_post_ensure_passes_mode_through():
     reg = _FakeRegistry(
-        ensure_result={"agent_id": "email", "state": "running", "mode": "dev", "token": "t"}
+        ensure_result={
+            "agent_id": "email",
+            "state": "running",
+            "mode": "dev",
+            "token": "t",
+        }
     )
     client = _routes_client(reg)
     r = client.post(
@@ -729,7 +748,9 @@ def test_all_agent_routes_reject_wrong_token(method, url):
 def test_unknown_agent_error_maps_to_404_listing_registered_ids():
     from gaia.daemon.sidecars.errors import UnknownAgentError
 
-    reg = _FakeRegistry(ensure_error=UnknownAgentError("unknown agent 'bogus'; registered: email"))
+    reg = _FakeRegistry(
+        ensure_error=UnknownAgentError("unknown agent 'bogus'; registered: email")
+    )
     client = _routes_client(reg)
     r = client.post("/daemon/v1/agents/bogus/ensure", headers=_auth(), json={})
     assert r.status_code == 404

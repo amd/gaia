@@ -62,3 +62,19 @@ class SidecarHTTPError(SidecarError):
 
 class VersionMismatchError(SidecarError):
     """The running sidecar speaks a different MAJOR contract version than expected."""
+
+
+class UnknownAgentError(SidecarError):
+    """The requested agent_id is not in the daemon's registered specs."""
+
+
+class ModeConflictError(SidecarError):
+    """The sidecar is running in a different mode than the ensure requested."""
+
+
+class CapacityError(SidecarError):
+    """Starting another sidecar would exceed the live-sidecar cap."""
+
+
+class StopFailedError(SidecarError):
+    """The sidecar process survived a tree-kill — it is still alive."""
