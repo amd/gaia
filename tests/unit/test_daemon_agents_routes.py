@@ -312,6 +312,55 @@ def test_ensure_capacity_error_names_running_agents():
     assert "toy-a" in str(exc_info.value)
 
 
+def test_ensure_concurrent_different_agents_respect_cap():
+    """Cap TOCTOU fence: while agent A is still STARTING (slot reserved, start()
+    not yet returned), an ensure of agent B against max_live=1 must 409 — not
+    slip past the cap check and overshoot."""
+    from gaia.daemon.sidecars.errors import CapacityError
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    class _BlockingManager(_FakeManager):
+        def start(self):
+            if self.spec.agent_id == "toy-a":
+                entered.set()
+                assert release.wait(5), "test deadlock: release never set"
+            return super().start()
+
+    reg = _make_registry(
+        {"toy-a": _TOY_A, "toy-b": _TOY_B}, max_live=1, manager_cls=_BlockingManager
+    )
+    results = {}
+
+    def _run_a():
+        results["a"] = reg.ensure("toy-a")
+
+    ta = threading.Thread(target=_run_a)
+    ta.start()
+    assert entered.wait(5), "toy-a never entered start()"
+    with pytest.raises(CapacityError) as exc_info:
+        reg.ensure("toy-b")
+    assert "toy-a" in str(exc_info.value)
+    release.set()
+    ta.join(10)
+    assert results["a"]["state"] == "running"
+
+
+def test_ensure_without_explicit_mode_attaches_regardless_of_running_mode(monkeypatch):
+    """Attaching without an explicit mode is not a mode request: a no-mode
+    ensure against a dev-mode sidecar attaches cleanly even when the daemon
+    env would resolve to 'user'."""
+    monkeypatch.setenv(_TOY_A.mode_env_var, "dev")
+    reg = _make_registry({"toy-a": _TOY_A})
+    first = reg.ensure("toy-a", mode="dev")
+
+    monkeypatch.setenv(_TOY_A.mode_env_var, "user")
+    second = reg.ensure("toy-a")  # no explicit mode -> attach, never conflict
+    assert second["pid"] == first["pid"]
+    assert second["mode"] == "dev"
+
+
 def test_list_agents_includes_every_registered_spec_running_or_not():
     reg = _make_registry({"toy-a": _TOY_A, "toy-b": _TOY_B})
     reg.ensure("toy-a")
@@ -489,6 +538,121 @@ def test_concurrent_record_spawn_for_different_agents_no_lost_update(daemon_home
     assert entries["toy-b"]["pid"] == 1000 + 19
 
 
+# --- ledger records from Popen onward (R3) ----------------------------------
+
+
+def _toy_dev_spec(tmp_path):
+    import dataclasses as _dc
+
+    src = tmp_path / "toy-src"
+    (src / "packaging").mkdir(parents=True, exist_ok=True)
+    return _dc.replace(_TOY_A, dev_src_dir=src)
+
+
+def _wire_manager_ledger(m, agent_id):
+    from gaia.daemon.sidecars import ledger
+
+    m.on_process_spawned = lambda pid, port, argv: ledger.record_spawn(
+        agent_id=agent_id,
+        pid=pid,
+        port=port,
+        mode=m.resolved_mode,
+        argv=argv,
+        started_at=m.started_at,
+    )
+    m.on_process_reaped = lambda: ledger.remove_entry(agent_id)
+
+
+def test_ledger_entry_exists_from_popen_through_health_wait(
+    daemon_home, monkeypatch, tmp_path
+):
+    """kill-9 of the daemon DURING the health wait must find a ledger entry —
+    the record is written the moment Popen returns, not after health passes."""
+    from gaia.daemon.sidecars import ledger
+    from gaia.daemon.sidecars import manager as mgr_mod
+
+    spec = _toy_dev_spec(tmp_path)
+    monkeypatch.setenv(spec.mode_env_var, "dev")
+
+    class _Proc:
+        pid = 7777
+        returncode = None
+
+        def poll(self):
+            return None
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(mgr_mod.subprocess, "Popen", lambda argv, **kw: _Proc())
+    monkeypatch.setattr(mgr_mod.atexit, "register", lambda fn: None)
+    monkeypatch.setattr(mgr_mod.atexit, "unregister", lambda fn: None)
+
+    m = mgr_mod.AgentSidecarManager(spec, cache_dir=tmp_path, log_dir=tmp_path / "logs")
+    _wire_manager_ledger(m, spec.agent_id)
+
+    during_health = []
+
+    class _Resp:
+        status_code = 200
+
+        def __init__(self, payload):
+            self._payload = payload
+            self.text = str(payload)
+
+        def json(self):
+            return self._payload
+
+    def _http(url, timeout):
+        if url.endswith("/health"):
+            during_health.append(ledger.read_entries())
+            return _Resp({"status": "ok", "service": spec.service_id})
+        return _Resp({"apiVersion": "1.0", "agentVersion": "0.0.1"})
+
+    monkeypatch.setattr(m, "_http_get", _http)
+    m.start()
+
+    assert during_health, "health probe never ran"
+    first = during_health[0]
+    assert len(first) == 1
+    assert first[0]["pid"] == 7777
+    assert first[0]["port"] == m.port
+    assert first[0]["agent_id"] == spec.agent_id
+
+
+def test_ledger_entry_removed_when_start_fails(daemon_home, monkeypatch, tmp_path):
+    """A failed start (early exit every attempt) must not leave a stale ledger
+    entry behind — each reaped attempt removes its record."""
+    from gaia.daemon.sidecars import ledger
+    from gaia.daemon.sidecars import manager as mgr_mod
+    from gaia.daemon.sidecars.errors import SidecarSpawnError
+
+    spec = _toy_dev_spec(tmp_path)
+    monkeypatch.setenv(spec.mode_env_var, "dev")
+
+    class _DeadProc:
+        pid = 8888
+        returncode = 1
+
+        def poll(self):
+            return 1
+
+        def wait(self, timeout=None):
+            return 1
+
+    monkeypatch.setattr(mgr_mod.subprocess, "Popen", lambda argv, **kw: _DeadProc())
+    monkeypatch.setattr(mgr_mod.atexit, "register", lambda fn: None)
+    monkeypatch.setattr(mgr_mod.atexit, "unregister", lambda fn: None)
+
+    m = mgr_mod.AgentSidecarManager(spec, cache_dir=tmp_path, log_dir=tmp_path / "logs")
+    _wire_manager_ledger(m, spec.agent_id)
+    monkeypatch.setattr(m, "_http_get", lambda url, timeout: None)
+
+    with pytest.raises(SidecarSpawnError):
+        m.start(max_attempts=2)
+    assert ledger.read_entries() == []
+
+
 # --- reap_stale() identity matrix ------------------------------------------
 
 
@@ -496,36 +660,9 @@ def _reap_specs():
     return {"toy-a": _TOY_A, "toy-b": _TOY_B}
 
 
-def test_reap_stale_kills_when_health_probe_confirms_identity(daemon_home, monkeypatch):
-    from gaia.daemon.sidecars import ledger
-
-    ledger.record_spawn(
-        agent_id="toy-a",
-        pid=4242,
-        port=51001,
-        mode="user",
-        argv=["/path/to/toy-a-agent", "--port", "51001"],
-        started_at=1.0,
-    )
-
-    killed = []
-    monkeypatch.setattr(
-        ledger,
-        "_probe_health",
-        lambda port: {"service": "gaia-agent-toy-a"} if port == 51001 else None,
-    )
-    monkeypatch.setattr(ledger, "_pid_cmdline", lambda pid: None)
-    monkeypatch.setattr(ledger, "_tree_kill", lambda pid: killed.append(pid))
-
-    result = ledger.reap_stale(_reap_specs())
-    assert result == [4242]
-    assert killed == [4242]
-    assert ledger.read_entries() == []
-
-
-def test_reap_stale_falls_back_to_cmdline_match_when_probe_fails(
-    daemon_home, monkeypatch
-):
+def test_reap_stale_kills_live_pid_when_cmdline_gate_passes(daemon_home, monkeypatch):
+    # Live pid + cmdline gate (recorded argv[0] AND --port both present) →
+    # tree-kill. The port probe is irrelevant for a live pid's kill decision.
     from gaia.daemon.sidecars import ledger
 
     argv = ["/path/to/toy-a-agent", "--port", "51002"]
@@ -534,7 +671,8 @@ def test_reap_stale_falls_back_to_cmdline_match_when_probe_fails(
     )
 
     killed = []
-    monkeypatch.setattr(ledger, "_probe_health", lambda port: None)  # probe fails
+    monkeypatch.setattr(ledger, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(ledger, "_probe_health", lambda port: None)
     monkeypatch.setattr(
         ledger,
         "_pid_cmdline",
@@ -559,6 +697,7 @@ def test_reap_stale_does_not_kill_on_pid_reuse_no_identity_match(
     )
 
     killed = []
+    monkeypatch.setattr(ledger, "_pid_alive", lambda pid: True)
     monkeypatch.setattr(ledger, "_probe_health", lambda port: None)  # probe fails
     # Cmdline belongs to a totally unrelated process now sitting on the reused pid.
     monkeypatch.setattr(ledger, "_pid_cmdline", lambda pid: "/usr/bin/some-other-proc")
@@ -568,6 +707,72 @@ def test_reap_stale_does_not_kill_on_pid_reuse_no_identity_match(
     assert result == []
     assert killed == []
     # The ledger is truncated to [] after the pass regardless of outcome.
+    assert ledger.read_entries() == []
+
+
+def test_reap_stale_never_kills_live_pid_on_port_evidence_alone(
+    daemon_home, monkeypatch
+):
+    # The recorded pid was reused by an INNOCENT process while our orphaned
+    # child still serves the port: the probe confirms our service, but the
+    # live pid's cmdline is not ours — kill NOTHING, warn loudly.
+    from gaia.daemon.sidecars import ledger
+
+    argv = ["/path/to/toy-a-agent", "--port", "51004"]
+    ledger.record_spawn(
+        agent_id="toy-a", pid=4245, port=51004, mode="user", argv=argv, started_at=1.0
+    )
+
+    killed = []
+    group_killed = []
+    monkeypatch.setattr(ledger, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(
+        ledger, "_probe_health", lambda port: {"service": "gaia-agent-toy-a"}
+    )
+    monkeypatch.setattr(ledger, "_pid_cmdline", lambda pid: "/usr/bin/innocent-proc")
+    monkeypatch.setattr(ledger, "_tree_kill", lambda pid: killed.append(pid))
+    monkeypatch.setattr(ledger, "_group_kill", lambda pid: group_killed.append(pid))
+
+    result = ledger.reap_stale(_reap_specs())
+    assert result == []
+    assert killed == []
+    assert group_killed == []
+    assert ledger.read_entries() == []
+
+
+def test_reap_stale_dead_leader_live_child_group_kills_pid_as_pgid(
+    daemon_home, monkeypatch
+):
+    # The recorded leader pid is DEAD but a re-parented child still serves the
+    # port with our service identity → SIGKILL the process group using the
+    # recorded pid AS the pgid (POSIX: the group id survives its leader).
+    from gaia.daemon.sidecars import ledger
+
+    ledger.record_spawn(
+        agent_id="toy-a",
+        pid=4242,
+        port=51001,
+        mode="user",
+        argv=["/path/to/toy-a-agent", "--port", "51001"],
+        started_at=1.0,
+    )
+
+    killed = []
+    group_killed = []
+    monkeypatch.setattr(ledger, "_pid_alive", lambda pid: False)
+    monkeypatch.setattr(
+        ledger,
+        "_probe_health",
+        lambda port: {"service": "gaia-agent-toy-a"} if port == 51001 else None,
+    )
+    monkeypatch.setattr(ledger, "_pid_cmdline", lambda pid: None)
+    monkeypatch.setattr(ledger, "_tree_kill", lambda pid: killed.append(pid))
+    monkeypatch.setattr(ledger, "_group_kill", lambda pid: group_killed.append(pid))
+
+    result = ledger.reap_stale(_reap_specs())
+    assert result == [4242]
+    assert group_killed == [4242]
+    assert killed == []  # never the live-pid path for a dead leader
     assert ledger.read_entries() == []
 
 

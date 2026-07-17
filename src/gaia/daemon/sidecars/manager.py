@@ -41,7 +41,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from gaia.daemon.constants import RESERVED_PORT
 from gaia.daemon.sidecars import fetch
@@ -126,6 +126,12 @@ class AgentSidecarManager:
         # The argv the live process was spawned with — recorded so the daemon's
         # crash-reap ledger can later confirm a pid's identity before killing it.
         self.spawn_argv: Optional[list] = None
+        # Lifecycle hooks (set by the registry). on_process_spawned fires the
+        # moment Popen returns — before the health wait — so the crash-reap
+        # ledger has an entry for the whole vulnerable window. on_process_reaped
+        # fires only once the leader is confirmed exited.
+        self.on_process_spawned: Optional[Callable] = None
+        self.on_process_reaped: Optional[Callable] = None
         # The mode actually used at spawn time, captured once (NOT the live
         # `mode` property, which re-reads env on every access). A registry
         # comparing "is a re-ensure asking for a different mode than what's
@@ -279,6 +285,8 @@ class AgentSidecarManager:
             ) from e
         self.spawn_argv = list(argv)
         self.started_at = time.time()
+        if self.on_process_spawned is not None:
+            self.on_process_spawned(self._proc.pid, port, list(argv))
         # Reap the sidecar if the owner exits without calling shutdown() — a
         # detached child otherwise survives a crash/Ctrl-C and holds its port +
         # a loaded LLM. atexit covers normal exit + uncaught exceptions.
@@ -457,6 +465,7 @@ class AgentSidecarManager:
         if proc.poll() is not None:
             self._proc = None
             self._close_log()
+            self._fire_reaped()
             return
         pid = proc.pid
         logger.info("%s sidecar: tree-killing pid=%s", self.spec.agent_id, pid)
@@ -489,6 +498,13 @@ class AgentSidecarManager:
                 proc.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 pass
+        leader_gone = proc.poll() is not None
         self._proc = None
         self._close_log()
+        if leader_gone:
+            self._fire_reaped()
         logger.info("%s sidecar: shut down", self.spec.agent_id)
+
+    def _fire_reaped(self) -> None:
+        if self.on_process_reaped is not None:
+            self.on_process_reaped()

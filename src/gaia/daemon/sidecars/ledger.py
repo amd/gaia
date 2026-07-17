@@ -5,10 +5,11 @@
 Every sidecar spawn is recorded (``agent_id``, ``pid``, ``port``, ``mode``,
 ``argv``, ``started_at`` — NEVER the token); a clean stop removes the entry.
 After a hard daemon death (SIGKILL / OOM / power loss) the next daemon start
-runs :func:`reap_stale`: each recorded pid is identity-checked (health probe
-first, cmdline fallback) and tree-killed only when confirmed to still be ours —
-a reused pid is left alone. The ledger is then truncated to ``[]``; survivors
-are never silently adopted.
+runs :func:`reap_stale`: a live recorded pid is killed only on a cmdline
+identity match; a dead leader whose port still serves our service gets a
+POSIX group-kill (pid as pgid). A reused pid is left alone — never killed on
+port evidence. The ledger is then truncated to ``[]``; survivors are never
+silently adopted.
 
 Every read-modify-write holds one dedicated process-wide lock (separate from
 the registry lock and any manager's RLock) so two agents spawning concurrently
@@ -112,6 +113,13 @@ def _probe_health(port: int) -> Optional[dict]:
         return None
 
 
+def _pid_alive(pid: int) -> bool:
+    """True when *pid* refers to a live process."""
+    import psutil
+
+    return psutil.pid_exists(pid)
+
+
 def _pid_cmdline(pid: int) -> Optional[str]:
     """The live process's full cmdline, or None when the pid is gone/foreign."""
     import psutil
@@ -139,14 +147,43 @@ def _tree_kill(pid: int) -> None:
         pass
 
 
+def _group_kill(pid: int) -> None:
+    """POSIX: SIGKILL the process group whose id IS *pid* — the group id
+    survives its (dead) leader, so this reaps re-parented children the leader
+    left behind. Guarded: the group may be fully gone already."""
+    try:
+        os.killpg(pid, 9)
+    except (ProcessLookupError, OSError):
+        pass
+
+
+def _cmdline_matches(cmdline: Optional[str], argv: list, port) -> bool:
+    return bool(
+        cmdline and argv and str(argv[0]) in cmdline and f"--port {port}" in cmdline
+    )
+
+
 def reap_stale(specs: "dict[str, AgentSidecarSpec]") -> "list[int]":
     """Kill identity-confirmed survivors of a dead daemon; truncate the ledger.
 
-    Identity, per entry: (1) PRIMARY — the recorded port's ``/health`` answers
-    with the spec's ``service_id``; (2) FALLBACK (port dead/foreign) — the live
-    pid's cmdline contains both the recorded ``argv[0]`` and ``--port <port>``.
-    Confirmed → tree-kill. No match → the pid was reused; leave it alone. The
-    ledger is truncated to ``[]`` afterwards regardless — no silent adoption.
+    Kill gates, per entry (D-4a as amended — pid identity and port identity
+    are separate pieces of evidence and never conflated):
+
+    - pid ALIVE → kill (tree-kill) iff the CMDLINE gate passes: the recorded
+      ``argv[0]`` AND ``--port <port>`` both appear in the live cmdline. A live
+      pid is NEVER killed on port evidence alone — the pid may have been reused
+      by an innocent process while our orphaned child still serves the port.
+      If the cmdline gate fails but the port probe confirms our service, log a
+      loud warning and leave both alone.
+    - pid DEAD but the port's ``/health`` answers with our ``service_id`` → the
+      leader died but a re-parented child survives. POSIX: the process-group id
+      survives its leader, so SIGKILL the group using the RECORDED pid as the
+      pgid (it was the session leader via ``start_new_session``), then re-probe
+      and log the outcome. Windows: no group survives the parent — log the
+      survivor loudly as a known gap, never guess-kill.
+
+    The ledger is truncated to ``[]`` afterwards regardless — no silent
+    adoption.
     """
     with _LEDGER_LOCK:
         entries = read_entries()
@@ -160,31 +197,71 @@ def reap_stale(specs: "dict[str, AgentSidecarSpec]") -> "list[int]":
             if spec is None or pid is None or port is None:
                 logger.warning("sidecar ledger: skipping unreapable entry %r", entry)
                 continue
+            if _pid_alive(pid):
+                if _cmdline_matches(_pid_cmdline(pid), argv, port):
+                    logger.info(
+                        "sidecar ledger: reaping stale %s sidecar pid=%s port=%s",
+                        agent_id,
+                        pid,
+                        port,
+                    )
+                    _tree_kill(pid)
+                    killed.append(pid)
+                    continue
+                body = _probe_health(port)
+                if bool(body) and body.get("service") == spec.service_id:
+                    logger.warning(
+                        "sidecar ledger: port %s still serves %s but live pid %s "
+                        "is NOT ours (cmdline mismatch — pid reused). Not killing "
+                        "either; the survivor on the port must be stopped "
+                        "manually.",
+                        port,
+                        spec.service_id,
+                        pid,
+                    )
+                else:
+                    logger.info(
+                        "sidecar ledger: pid=%s no longer matches %s (reused); "
+                        "leaving it alone",
+                        pid,
+                        agent_id,
+                    )
+                continue
+            # pid dead — check whether a re-parented child still owns the port.
             body = _probe_health(port)
-            confirmed = bool(body) and body.get("service") == spec.service_id
-            if not confirmed:
-                cmdline = _pid_cmdline(pid)
-                confirmed = bool(
-                    cmdline
-                    and argv
-                    and str(argv[0]) in cmdline
-                    and f"--port {port}" in cmdline
-                )
-            if confirmed:
+            if bool(body) and body.get("service") == spec.service_id:
+                if os.name == "nt":
+                    logger.warning(
+                        "sidecar ledger: %s leader pid=%s is dead but port %s "
+                        "still serves %s; Windows cannot group-kill a dead "
+                        "leader's survivors — kill the process on port %s "
+                        "manually (known gap).",
+                        agent_id,
+                        pid,
+                        port,
+                        spec.service_id,
+                        port,
+                    )
+                    continue
                 logger.info(
-                    "sidecar ledger: reaping stale %s sidecar pid=%s port=%s",
+                    "sidecar ledger: %s leader pid=%s dead but port %s still "
+                    "serves %s; group-killing pgid=%s",
                     agent_id,
                     pid,
                     port,
-                )
-                _tree_kill(pid)
-                killed.append(pid)
-            else:
-                logger.info(
-                    "sidecar ledger: pid=%s no longer matches %s (reused); "
-                    "leaving it alone",
+                    spec.service_id,
                     pid,
-                    agent_id,
                 )
+                _group_kill(pid)
+                killed.append(pid)
+                if _probe_health(port) is not None:
+                    logger.warning(
+                        "sidecar ledger: port %s STILL answering after group-kill "
+                        "of pgid=%s — a survivor remains; kill it manually.",
+                        port,
+                        pid,
+                    )
+                else:
+                    logger.info("sidecar ledger: port %s freed after group-kill", port)
         _write_entries([])
         return killed

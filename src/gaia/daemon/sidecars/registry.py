@@ -52,6 +52,10 @@ class SidecarRegistry:
         # process without blocking ensures of OTHER agents.
         self._managers: "dict[str, tuple]" = {}
         self._lock = threading.Lock()
+        # Agents that reserved a live slot but have not finished start() yet.
+        # Counted by the cap check so two DIFFERENT agents racing past it
+        # cannot overshoot max_live (the reservation closes the TOCTOU).
+        self._starting: "set[str]" = set()
         # Injection seam for tests: constructs the manager for a spec.
         self._manager_factory = AgentSidecarManager
 
@@ -70,6 +74,22 @@ class SidecarRegistry:
     def _running_ids(self) -> "list[str]":
         return [aid for aid, (m, _) in self._managers.items() if m.is_running]
 
+    def _new_manager(self, agent_id: str, spec: AgentSidecarSpec, mode):
+        manager = self._manager_factory(
+            spec, mode=mode, expected_api_version=spec.expected_api_major
+        )
+        # Ledger hooks ride the manager's own lifecycle callbacks so the spawn
+        # is recorded the moment Popen returns — NOT after the (up-to-30s)
+        # health wait, during which a kill-9'd daemon would otherwise leave an
+        # unreapable orphan with no ledger entry.
+        if self._on_spawn is not None:
+            manager.on_process_spawned = (
+                lambda pid, port, argv, _m=manager: self._on_spawn(agent_id, _m)
+            )
+        if self._on_stop is not None:
+            manager.on_process_reaped = lambda: self._on_stop(agent_id)
+        return manager
+
     def ensure(self, agent_id: str, mode: Optional[str] = None) -> dict:
         """Spawn-or-attach *agent_id*'s sidecar; return its fields + token."""
         spec = self._spec(agent_id)
@@ -77,44 +97,48 @@ class SidecarRegistry:
             holder = self._managers.get(agent_id)
             if holder is None:
                 holder = (
-                    self._manager_factory(
-                        spec, mode=mode, expected_api_version=spec.expected_api_major
-                    ),
+                    self._new_manager(agent_id, spec, mode),
                     threading.Lock(),
                 )
                 self._managers[agent_id] = holder
         manager, agent_lock = holder
         with agent_lock:
-            requested = self._resolve_mode(spec, mode)
             if manager.is_running:
-                if requested != manager.resolved_mode:
+                # Attaching without an explicit mode is not a mode request —
+                # only an explicit, differing mode conflicts (compared against
+                # the mode CAPTURED at spawn, never the live env).
+                if mode is not None and mode != manager.resolved_mode:
                     raise ModeConflictError(
                         f"agent '{agent_id}' is already running in "
-                        f"'{manager.resolved_mode}' mode but '{requested}' was "
+                        f"'{manager.resolved_mode}' mode but '{mode}' was "
                         f"requested. Stop it first (`gaia daemon stop-agent "
                         f"{agent_id}`), then re-ensure in the new mode."
                     )
                 return self._entry(agent_id, manager, include_token=True)
             with self._lock:
-                running = self._running_ids()
-                if len(running) >= self.max_live:
+                # Cap counts running AND starting: the reservation closes the
+                # window where two different agents both pass at max_live-1.
+                active = set(self._running_ids()) | self._starting
+                if len(active) >= self.max_live:
                     raise CapacityError(
                         f"sidecar capacity reached (max {self.max_live}); "
-                        f"running: {', '.join(sorted(running))}. Stop one "
+                        f"running: {', '.join(sorted(active))}. Stop one "
                         "(`gaia daemon stop-agent <id>`) before starting another."
                     )
-            if mode is not None and self._manager_mode(manager) != requested:
-                # A stopped manager built for another mode: replace it so the
-                # explicit request wins (fresh token, fresh state).
-                manager = self._manager_factory(
-                    spec, mode=mode, expected_api_version=spec.expected_api_major
-                )
+                self._starting.add(agent_id)
+            try:
+                requested = self._resolve_mode(spec, mode)
+                if mode is not None and self._manager_mode(manager) != requested:
+                    # A stopped manager built for another mode: replace it so
+                    # the explicit request wins (fresh token, fresh state).
+                    manager = self._new_manager(agent_id, spec, mode)
+                    with self._lock:
+                        self._managers[agent_id] = (manager, agent_lock)
+                manager.start()
+                return self._entry(agent_id, manager, include_token=True)
+            finally:
                 with self._lock:
-                    self._managers[agent_id] = (manager, agent_lock)
-            manager.start()
-            if self._on_spawn is not None:
-                self._on_spawn(agent_id, manager)
-            return self._entry(agent_id, manager, include_token=True)
+                    self._starting.discard(agent_id)
 
     @staticmethod
     def _manager_mode(manager) -> str:
@@ -171,8 +195,6 @@ class SidecarRegistry:
                     "tree-kill and is still alive. Inspect the process and "
                     "kill it manually before retrying."
                 )
-            if self._on_stop is not None:
-                self._on_stop(agent_id)
         return {"agent_id": agent_id, "state": "stopped"}
 
     def shutdown_all(self) -> None:
@@ -183,8 +205,6 @@ class SidecarRegistry:
             if manager.is_running:
                 logger.info("registry: shutting down %s sidecar", agent_id)
                 manager.shutdown()
-                if self._on_stop is not None:
-                    self._on_stop(agent_id)
 
     def _dev_src_dir(self, agent_id: str) -> Optional[str]:
         spec = self._specs[agent_id]
