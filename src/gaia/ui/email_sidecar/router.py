@@ -38,7 +38,7 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/v1/email", tags=["email-sidecar"])
 
 
-async def _get_proxy(request: Request):
+async def _get_proxy():
     """Acquire a sidecar handle from the daemon (off the event loop); return
     its bound proxy. Per-request acquisition — the daemon's fast is_running
     path makes a warm re-ensure cheap."""
@@ -68,14 +68,14 @@ async def _forward(fn, *args):
 # -- Triage -----------------------------------------------------------------
 @router.post("/triage")
 async def triage(request: Request):
-    proxy = await _get_proxy(request)
+    proxy = await _get_proxy()
     body = await request.json()
     return await _forward(proxy.triage, body)
 
 
 @router.post("/triage/batch")
 async def triage_batch(request: Request):
-    proxy = await _get_proxy(request)
+    proxy = await _get_proxy()
     body = await request.json()
     return await _forward(proxy.triage_batch, body)
 
@@ -83,14 +83,14 @@ async def triage_batch(request: Request):
 # -- Inbox read (search + pre-scan) -----------------------------------------
 @router.post("/search")
 async def search(request: Request):
-    proxy = await _get_proxy(request)
+    proxy = await _get_proxy()
     body = await request.json()
     return await _forward(proxy.search_inbox, body)
 
 
 @router.post("/prescan")
 async def prescan(request: Request):
-    proxy = await _get_proxy(request)
+    proxy = await _get_proxy()
     body = await request.json()
     return await _forward(proxy.pre_scan_inbox, body)
 
@@ -98,14 +98,14 @@ async def prescan(request: Request):
 # -- Reply (draft + send) ----------------------------------------------------
 @router.post("/draft")
 async def draft(request: Request):
-    proxy = await _get_proxy(request)
+    proxy = await _get_proxy()
     body = await request.json()
     return await _forward(proxy.draft, body)
 
 
 @router.post("/send")
 async def send(request: Request):
-    proxy = await _get_proxy(request)
+    proxy = await _get_proxy()
     body = await request.json()
     return await _forward(proxy.send, body)
 
@@ -113,35 +113,35 @@ async def send(request: Request):
 # -- Destructive mailbox actions (confirm-gated) + undo ----------------------
 @router.post("/confirm")
 async def confirm(request: Request):
-    proxy = await _get_proxy(request)
+    proxy = await _get_proxy()
     body = await request.json()
     return await _forward(proxy.confirm, body)
 
 
 @router.post("/archive")
 async def archive(request: Request):
-    proxy = await _get_proxy(request)
+    proxy = await _get_proxy()
     body = await request.json()
     return await _forward(proxy.archive, body)
 
 
 @router.post("/unarchive")
 async def unarchive(request: Request):
-    proxy = await _get_proxy(request)
+    proxy = await _get_proxy()
     body = await request.json()
     return await _forward(proxy.unarchive, body)
 
 
 @router.post("/quarantine")
 async def quarantine(request: Request):
-    proxy = await _get_proxy(request)
+    proxy = await _get_proxy()
     body = await request.json()
     return await _forward(proxy.quarantine, body)
 
 
 @router.post("/unquarantine")
 async def unquarantine(request: Request):
-    proxy = await _get_proxy(request)
+    proxy = await _get_proxy()
     body = await request.json()
     return await _forward(proxy.unquarantine, body)
 
@@ -149,12 +149,11 @@ async def unquarantine(request: Request):
 # -- Calendar ----------------------------------------------------------------
 @router.get("/calendar/events")
 async def calendar_events(
-    request: Request,
     time_min: Optional[str] = None,
     time_max: Optional[str] = None,
     provider: Optional[str] = None,
 ):
-    proxy = await _get_proxy(request)
+    proxy = await _get_proxy()
     params = {
         k: v
         for k, v in (
@@ -169,52 +168,52 @@ async def calendar_events(
 
 @router.post("/calendar/events/preview")
 async def calendar_preview(request: Request):
-    proxy = await _get_proxy(request)
+    proxy = await _get_proxy()
     body = await request.json()
     return await _forward(proxy.calendar_preview, body)
 
 
 @router.post("/calendar/events")
 async def calendar_create(request: Request):
-    proxy = await _get_proxy(request)
+    proxy = await _get_proxy()
     body = await request.json()
     return await _forward(proxy.calendar_create, body)
 
 
 @router.post("/calendar/events/respond")
 async def calendar_respond(request: Request):
-    proxy = await _get_proxy(request)
+    proxy = await _get_proxy()
     body = await request.json()
     return await _forward(proxy.calendar_respond, body)
 
 
 # -- Health / version / readiness ---------------------------------------------
 @router.get("/health")
-async def health(request: Request):
-    proxy = await _get_proxy(request)
+async def health():
+    proxy = await _get_proxy()
     return await _forward(proxy.health)
 
 
 @router.get("/init")
-async def init(request: Request):
+async def init():
     # Readiness (#1795): pass the sidecar's 200/503 + InitResponse body through
     # verbatim.
-    proxy = await _get_proxy(request)
+    proxy = await _get_proxy()
     status_code, body = await _forward(proxy.init)
     return JSONResponse(status_code=status_code, content=body)
 
 
 @router.post("/init")
-async def init_provision(request: Request):
+async def init_provision():
     # Provisioning (#2054): stream the sidecar's text/plain progress through
     # chunk-by-chunk — a multi-minute model pull must never buffer in memory.
     # StreamingResponse iterates the sync chunk iterator in a threadpool.
-    proxy = await _get_proxy(request)
+    proxy = await _get_proxy()
     status_code, media_type, chunks = await _forward(proxy.provision)
     return StreamingResponse(chunks, media_type=media_type, status_code=status_code)
 
 
 @router.get("/version")
-async def version(request: Request):
-    proxy = await _get_proxy(request)
+async def version():
+    proxy = await _get_proxy()
     return await _forward(proxy.version)
