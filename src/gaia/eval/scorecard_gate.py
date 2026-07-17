@@ -34,6 +34,14 @@ Exit codes:
 
 The ``--allow-regression`` flag overrides a regression: prints a ``::warning::``
 GHA annotation and both version/score pairs, then exits 0.
+
+Ctx-window comparability (#1892): when candidate and baseline record different
+``recipe.environment.ctx_size`` values the regression comparison is invalid and
+is SKIPPED — the gate fails unless ``--allow-ctx-mismatch`` acknowledges the
+deliberate change (absolute bars still apply). A baseline without the field
+(pre-#1892) gets a one-time transitional skip-and-warn pass; ``--require-ctx-match``
+makes an unstamped candidate a hard failure (CI sets it via the thresholds
+manifest).
 """
 
 from __future__ import annotations
@@ -78,6 +86,26 @@ def _within_one_stdev(parsed: dict) -> float | None:
     if isinstance(w, dict) and isinstance(w.get("stdev"), (int, float)):
         return float(w["stdev"])
     return None
+
+
+def env_ctx_size(parsed: dict) -> int | None:
+    """The ctx window a card was measured under (#1892), or ``None``.
+
+    Lives in ``recipe.environment.ctx_size`` — absent on cards produced
+    before the envelope landed (implicitly the model's 64K registry floor).
+
+    Public (#2094): the ``email_scorecard_refresh.yml`` ``pre`` step imports
+    this directly to read the committed card's ctx stamp before spending any
+    eval budget, rather than re-deriving the ``recipe.environment.ctx_size``
+    path in ad-hoc PowerShell/Python.
+    """
+    env = parsed.get("recipe", {}).get("environment")
+    if not isinstance(env, dict):
+        return None
+    v = env.get("ctx_size")
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return int(v)
 
 
 def _parse_baseline_ref(scorecard_path: Path, ref: str) -> str | None:
@@ -213,6 +241,27 @@ def main(argv=None) -> int:
             "check is used."
         ),
     )
+    parser.add_argument(
+        "--require-ctx-match",
+        action="store_true",
+        default=False,
+        help=(
+            "Require the candidate card to record the ctx window it was measured "
+            "under (recipe.environment.ctx_size, #1892). A candidate without it "
+            "fails hard — CI sets this once every release is ctx-stamped."
+        ),
+    )
+    parser.add_argument(
+        "--allow-ctx-mismatch",
+        action="store_true",
+        default=False,
+        help=(
+            "Acknowledge a deliberate ctx difference between candidate and "
+            "baseline (#1892): the (invalid) regression comparison is skipped "
+            "with a ::warning:: annotation instead of failing. Absolute bars "
+            "(--min-aggregate / --min-urgent-recall) still apply."
+        ),
+    )
 
     try:
         args = parser.parse_args(argv)
@@ -243,6 +292,18 @@ def main(argv=None) -> int:
         print(
             f"ERROR: Candidate SCORECARD.md at {candidate_path} is invalid:\n"
             + "\n".join(f"  - {e}" for e in errors)
+        )
+        return 1
+
+    # --- Step 1a: ctx-stamp requirement (#1892) ---
+    cand_ctx = env_ctx_size(candidate_parsed)
+    if args.require_ctx_match and cand_ctx is None:
+        print(
+            f"ERROR: --require-ctx-match is set but the candidate SCORECARD.md "
+            f"at {candidate_path} records no 'recipe.environment.ctx_size'.\n"
+            f"  Re-generate the card from a benchmark run made with an explicit "
+            f"ctx pin (gaia eval benchmark --ctx-size ...) so the release "
+            f"states the window it was measured under (#1892)."
         )
         return 1
 
@@ -357,6 +418,85 @@ def main(argv=None) -> int:
             + "\n  Fix the baseline scorecard before releasing."
         )
         return 1
+
+    # --- Step 2b: ctx-window comparability (#1892) — resolves BEFORE the
+    # regression comparison. A number measured at one ctx window is not
+    # comparable to one measured at another; when the windows differ (or the
+    # baseline predates stamping) the regression comparison is SKIPPED, never
+    # run-and-annotated. Absolute bars already ran at Step 1b regardless.
+    base_ctx = env_ctx_size(prev_parsed)
+    cand_version_ctx = candidate_parsed.get("agent", {}).get("version", "?")
+    prev_version_ctx = prev_parsed.get("agent", {}).get("version", "?")
+    if cand_ctx is not None and base_ctx is not None and cand_ctx != base_ctx:
+        if not args.allow_ctx_mismatch:
+            print(
+                f"ERROR: ctx-window mismatch — the regression comparison is "
+                f"invalid and was NOT run.\n"
+                f"  Baseline v{prev_version_ctx}: ctx_size = {base_ctx}\n"
+                f"  Candidate v{cand_version_ctx}: ctx_size = {cand_ctx}\n"
+                f"  Scores measured at different context windows are not "
+                f"comparable. Re-measure the candidate at ctx={base_ctx}, "
+                f"re-record the baseline at ctx={cand_ctx}, or pass "
+                f"--allow-ctx-mismatch to acknowledge a deliberate envelope "
+                f"change (absolute bars still apply)."
+            )
+            return 1
+        print(
+            f"::warning::Scorecard ctx mismatch acknowledged by "
+            f"--allow-ctx-mismatch: baseline v{prev_version_ctx} at "
+            f"ctx={base_ctx} vs candidate v{cand_version_ctx} at "
+            f"ctx={cand_ctx} — regression comparison SKIPPED (not comparable)."
+        )
+        print(
+            f"PASS: Scorecard gate passed (ctx mismatch acknowledged; "
+            f"regression comparison skipped).\n"
+            f"  Candidate v{cand_version_ctx}: ctx_size = {cand_ctx} "
+            f"(baseline v{prev_version_ctx}: ctx_size = {base_ctx})\n"
+            f"  Absolute bars (--min-aggregate / --min-urgent-recall) were "
+            f"still enforced."
+        )
+        return 0
+    if cand_ctx is not None and base_ctx is None:
+        # Transitional grace state (one-time): the baseline predates ctx
+        # stamping — its number was implicitly measured at the model's 64K
+        # registry floor, so comparing it against an envelope-pinned candidate
+        # is exactly the mistake #1892 exists to prevent. Skip the regression
+        # comparison; absolute bars (already applied) are the protection.
+        print(
+            f"::warning::Baseline SCORECARD.md records no ctx_size (pre-#1892 "
+            f"card, implicitly the unpinned 64K window) while candidate "
+            f"v{cand_version_ctx} is stamped at ctx={cand_ctx} — regression "
+            f"comparison SKIPPED (not comparable). This is the one-time "
+            f"transitional state; the next release compares ctx-to-ctx."
+        )
+        print(
+            f"PASS: Scorecard gate passed (transitional: baseline lacks "
+            f"ctx_size; regression comparison skipped).\n"
+            f"  Candidate v{cand_version_ctx}: ctx_size = {cand_ctx}\n"
+            f"  Absolute bars (--min-aggregate / --min-urgent-recall) were "
+            f"still enforced."
+        )
+        return 0
+    if cand_ctx is None and base_ctx is not None:
+        # The reverse of the transitional state: the baseline is stamped but
+        # the candidate LOST the stamp — suspicious (a regenerated card should
+        # keep it). Not comparable either; skip the regression with a loud
+        # warning. CI catches this hard via --require-ctx-match (Step 1a).
+        print(
+            f"::warning::Candidate SCORECARD.md records no ctx_size while the "
+            f"baseline v{prev_version_ctx} is stamped at ctx={base_ctx} — "
+            f"regression comparison SKIPPED (not comparable). Regenerate the "
+            f"candidate from a ctx-pinned run; CI enforces this via "
+            f"--require-ctx-match."
+        )
+        print(
+            f"PASS: Scorecard gate passed (candidate lacks ctx_size; "
+            f"regression comparison skipped).\n"
+            f"  Baseline v{prev_version_ctx}: ctx_size = {base_ctx}\n"
+            f"  Absolute bars (--min-aggregate / --min-urgent-recall) were "
+            f"still enforced."
+        )
+        return 0
 
     candidate_score = candidate_parsed.get("aggregate", {}).get("value")
     prev_score = prev_parsed.get("aggregate", {}).get("value")

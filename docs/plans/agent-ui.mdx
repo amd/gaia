@@ -212,11 +212,12 @@ directly against it — "fixed functions for flexibility."
 
 ### Card rendering changes (be honest about "thin")
 
-The UI is thin, but not *unchanged*: today the frontend renders typed cards (e.g.
+The UI is thin, but not *unchanged*: the frontend used to render typed cards (e.g.
 `email_pre_scan`) by **fence-parsing** the assistant text (`MessageBubble.tsx`
-`STRUCTURED_PAYLOAD_LANGS`). v2 replaces that hack — the sidecar declares the card
-type explicitly on a `tool_result` SSE event (`render: "email_pre_scan"`), and the
-frontend maps `render`→component. The host needs no per-tool knowledge; the
+`STRUCTURED_PAYLOAD_LANGS`). The #2109 cutover deleted that hack — the sidecar
+declares the card type explicitly on a `tool_result` SSE event
+(`render: "email_pre_scan"`), and the frontend maps `render`→component. The host
+needs no per-tool knowledge; the
 **frontend still needs a card component per `render` type**, so new agents that
 introduce new cards ship a matching component.
 
@@ -253,9 +254,12 @@ published, SHA-verified binary the UI dogfoods.
 
 ### What this replaces
 
-The fat backend's in-process responsibilities move into sidecars (agent logic,
-chat/session loop, RAG, memory, scheduling) or the thin host (OAuth, UI serving,
-sidecar supervision). PR #1910 (the incremental email cutover with an in-UI
+The fat backend's in-process responsibilities split by owner: **agent logic** (the
+chat/session loop, tool execution, reasoning) moves into sidecars, while
+**shared-user-data custody** — RAG, memory, the session index, OAuth grants, audit —
+and the **scheduler clock** move into the thin host, never into a sidecar (§0.9,
+§0.22). The host also serves the UI and supervises sidecars. PR #1910 (the
+incremental email cutover with an in-UI
 `EmailProxyAgent`) is **superseded** by this `/query`-driven model — the UI relays
 to the sidecar's agent loop rather than running a reduced loop itself, which also
 removes that PR's tool-surface reduction.

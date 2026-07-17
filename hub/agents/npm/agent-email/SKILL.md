@@ -108,10 +108,12 @@ The interface:
 | `unarchive(req)` | A connected mailbox | Restores within the 30s window (ungated — pass `batch_id`); expired/unknown → 409. |
 | `quarantine(req)` | `confirm` token + a connected **Gmail** mailbox | Applies `GAIA_PHISHING_QUARANTINE` + archives a phishing message. Refuses `is_phishing:false` → 400; Gmail-only (Outlook → 400). |
 | `unquarantine(req)` | A connected mailbox | Restores prior labels within the 30s window (ungated — pass `action_id`); expired/unknown → 409. |
-| `listCalendarEvents(opts?)` | Connected mailbox + calendar scope | Read-only view of the primary calendar. Optional `timeMin`/`timeMax`; `provider` only when >1 account. Missing scope → 403 + reconnect CTA. |
+| `listCalendarEvents(opts?)` | Connected mailbox + calendar scope | Read-only view of the primary calendar. Optional `timeMin`/`timeMax` — omitting both defaults to a forward window (now → +30 days); `provider` only when >1 account. Missing scope → 403 + reconnect CTA. |
 | `previewCalendarEvent(req)` | Nothing external | Mints a single-use confirmation token bound to the event (calendar analogue of `draft`). |
 | `createCalendarEvent(req)` | Preview token + connected calendar | Token gate fires first: no/invalid token → 403, then the calendar checks. |
 | `respondToCalendarEvent(req)` | Connected calendar | RSVP `accepted`/`declined`/`tentative` to an existing invite. |
+| `query(req)` | A connected mailbox (for mailbox tools) | The agent loop (schema 2.4): async iterator of the seven typed SSE events. You mint `run_id`; push the transcript slice in `context`. See "Canonical agent-loop query" below. |
+| `cancelQuery(runId)` | Nothing external | Cancel an in-flight `query()` run between steps (pass the `run_id` you minted). Not in flight → 404. |
 
 **Build the standalone surface (`triage`, `draft`, `confirmAction`,
 `previewCalendarEvent`) with zero connector setup.** The read-only `search` and
@@ -144,8 +146,110 @@ The sidecar serves **same-origin only — no CORS**. A renderer on a different o
 
 ```ts
 import { EmailClient } from "@amd-gaia/agent-email/client";
-const client = new EmailClient({ baseUrl: "http://127.0.0.1:8131" });
+// Pass the sidecar's session token (from sidecar.authToken in the main process,
+// forwarded over IPC) — without it every /v1/email/* call is 401.
+const client = new EmailClient({ baseUrl: "http://127.0.0.1:8131", authToken });
 ```
+
+## Canonical agent-loop query (`POST /v1/email/query`, schema 2.4)
+
+The v2 keystone (#2016): NL request in, the agent reasons and chains its tools, the
+**seven canonical Server-Sent Event types** out — `status` / `token` / `tool_call` /
+`tool_result` / `needs_confirmation` / `final` / `error`, terminated by exactly one
+`final` or `error`. This is the one loop every v2 front-door relays to. The **host
+mints `run_id`** and **pushes** the transcript slice in `context`, so the sidecar
+stays stateless. The typed client wraps it (#2097): `query()` returns an async
+iterator of typed `QueryEvent`s; `cancelQuery(runId)` stops the run between steps:
+
+```ts
+const runId = crypto.randomUUID(); // host-minted; also the cancel handle
+for await (const ev of sidecar.client.query({
+  query: "Triage my inbox",
+  run_id: runId,
+  context: [], // pushed transcript slice; [] for a fresh conversation
+})) {
+  switch (ev.type) {
+    case "status":       console.log(ev.message); break;
+    case "token":        process.stdout.write(ev.delta); break;
+    case "tool_call":    console.log(`→ ${ev.tool}`, ev.args); break;
+    case "tool_result":  console.log(`← ${ev.tool}`, ev.data); break;
+    case "needs_confirmation": break; // run then ends with a final refusal (D1)
+    case "final":        console.log(ev.answer); break;   // terminal
+    case "error":        console.error(ev.detail); break; // terminal, verbatim
+    default:             console.warn("unsupported event", ev); // future additive type
+  }
+}
+// Mid-run, from anywhere that knows runId:
+// await sidecar.client.cancelQuery(runId);
+```
+
+Rules an integration must respect:
+
+- **Mint `run_id` yourself** (`crypto.randomUUID()`) and keep it — it is the cancel
+  handle, valid from the instant the request is sent.
+- **Exactly one terminal event.** A terminal `error` is *yielded* (surface `detail`
+  verbatim); transport/contract failures *throw* (`HttpError` non-2xx,
+  `QueryStreamError` for a non-SSE response / malformed event / stream that closes
+  without a terminal). Never treat iterator completion without a `final` as success —
+  the client already throws for you.
+- **Handle the `default` branch.** A `type` outside the frozen seven arrives as
+  `{ type: "unknown", eventType, raw }` — render an "unsupported event" placeholder or
+  log it; it is never silently dropped.
+- **Long runs are normal.** `timeoutMs` bounds time-to-first-response only. To abort
+  from the client side pass `query(req, { signal })` AND call `cancelQuery` so the
+  sidecar stops the loop, not just the socket.
+
+A confirmation-requiring step (a destructive tool such as `send_now`) emits
+`needs_confirmation` then ends with a `final` refusal pointing at the fixed-function
+route — mint a token via `draft()`, then `send()` (stateless stub, epic decision D1;
+`confirm_url` omitted).
+
+## Stateful agent surface (`/v1/email/agent/*`, 0.4.0)
+
+Everything above is **stateless** — you send a payload, the sidecar analyzes it, no
+memory, no conversation. The sidecar also hosts a **session-scoped, conversational
+agent** that runs the full `EmailTriageAgent` (memory, personalization, every agent
+tool) over HTTP. This is the surface the Agent UI uses. It is **not wrapped by the
+typed `EmailClient` yet** — call it directly with `fetch` against the sidecar's
+`baseUrl`:
+
+```js
+const base = "http://127.0.0.1:8131";
+// 1. Start a session (builds the agent; reports memory availability).
+await fetch(`${base}/v1/email/agent/session`, {
+  method: "POST", headers: { "content-type": "application/json" },
+  body: JSON.stringify({ session_id: "s1" }),
+});
+
+// 2. Run a turn — the reply streams back as Server-Sent Events.
+const res = await fetch(`${base}/v1/email/agent/query`, {
+  method: "POST", headers: { "content-type": "application/json", accept: "text/event-stream" },
+  body: JSON.stringify({ session_id: "s1", message: "Triage my inbox" }),
+});
+const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
+for (;;) {
+  const { value, done } = await reader.read(); if (done) break;
+  buf += dec.decode(value, { stream: true });
+  let i; while ((i = buf.indexOf("\n\n")) >= 0) {
+    const line = buf.slice(0, i).split("\n").find(l => l.startsWith("data: "));
+    buf = buf.slice(i + 2);
+    if (!line) continue;
+    const ev = JSON.parse(line.slice(6));           // {type: "thinking"|"step"|"permission_request"|"run_complete"|...}
+    if (ev.type === "permission_request") {         // a gated tool (send/forward/delete/...) is waiting
+      await fetch(`${base}/v1/email/agent/confirm-tool`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ session_id: "s1", approved: true }),
+      });
+    }
+    if (ev.type === "run_complete") console.log("answer:", ev.answer);
+  }
+}
+```
+
+Other endpoints: `POST /cancel`, `DELETE /session/{id}`, `GET /session/{id}/history`,
+and the runtime memory toggle `POST /memory` + `GET /memory/{id}` (enabling memory that
+was never initialized returns **409**, never a silent no-op). One turn at a time per
+session — an overlapping `/query` returns **409**. See `SPEC.md` for the full table.
 
 ## Running in a server / long-lived app
 
@@ -171,8 +275,16 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
 
 ## Gotchas (read before debugging)
 
+- **Every `/v1/email/*` call needs the session token** (#1706). `sidecar.client`
+  carries it automatically; a client you construct yourself must pass `authToken`
+  (from `sidecar.authToken`) or every call is **401**. Non-loopback `Host` → 400,
+  non-loopback browser `Origin` → 403. `/health` · `/version` · `/v1/email/spec` ·
+  `/v1/email/playground` are exempt.
 - **`health()` is liveness-only.** A green `/health` means the REST surface is up,
-  NOT that triage will work. The real readiness signal is a `triage` returning 200.
+  NOT that triage will work. For real readiness call **`init()`** (`GET
+  /v1/email/init`, #1795) — it probes Lemonade + the triage model and returns the
+  `InitResponse` on both the ready (`200`) and not-ready (`503`) paths, so branch on
+  `.ready` / read `.hint`. `POST /v1/email/init` streams a model-pull (no wrapper yet).
 - **HTTP 502 from `triage`** → Lemonade isn't running/reachable, or the model isn't
   pulled. It is not a bug in this package.
 - **Addresses are objects, not strings.** `to` (and `triage`'s `from` / `principal`)
@@ -195,9 +307,14 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
 - **Cleanup is automatic by default** — the sidecar is reaped on exit/crash/signal;
   only `autoCleanup: false` (or a hard `SIGKILL` of your process) can orphan the
   child. `shutdown` stays the graceful stop.
-- **No scheduled-send / snooze endpoints.** The agent implements them (#1609),
-  but only in its tool loop — the REST contract has no routes for them yet, so
-  don't look for a `client.scheduleSend()` / `client.snooze()`; they don't exist.
+- **Some capabilities are agent-loop-only — no REST endpoint, no client method.**
+  Scheduled send / snooze (#1609), **voice / style-matched drafting** (#1607 —
+  `build_voice_profile` learns a local style profile from Sent mail so drafts
+  come out in the user's own voice), and **follow-up tracking** (#1606 —
+  `check_followups` flags sent mail still awaiting a reply, detection only) all
+  run in the agent tool loop. The REST contract has no routes for them yet, so
+  don't look for `client.scheduleSend()` / `client.snooze()` / a voice or
+  follow-up method — they don't exist (and none of these moves `SCHEMA_VERSION`).
 - **ESM-only.** `require("@amd-gaia/agent-email")` fails; use `import` / dynamic
   `import()`.
 

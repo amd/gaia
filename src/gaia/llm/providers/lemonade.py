@@ -164,7 +164,11 @@ def _classify_lemonade_response(response: dict) -> Tuple[Optional[LemonadeError]
         # ctx will fix it, so let it try. GAIA's default expected ctx
         # is 65536 for chat / rag profiles — threshold is a deliberate
         # constant here rather than imported to avoid a circular dep
-        # with lemonade_client.
+        # with lemonade_client. NOTE (#1892): a client running under an
+        # exact ctx pin (LemonadeClient.ctx_size_override, e.g. the email
+        # eval's 16K envelope — see gaia_agent_email.context_budget)
+        # legitimately sits below this threshold; the retryable hint is
+        # wrong there, but the pinned eval path never consumes it.
         n_ctx_reported = 0
         if isinstance(nested, dict):
             n_ctx_reported = nested.get("n_ctx") or 0
@@ -240,6 +244,11 @@ class LemonadeProvider(LLMClient):
         self._backend = LemonadeClient(**backend_kwargs)
         self._model = model
         self._system_prompt = system_prompt
+        # Token usage from the most recent non-streaming ``chat()`` call
+        # (#1891) — the OpenAI-compatible ``/chat/completions`` response's
+        # ``usage`` field, captured here since ``chat()`` itself returns
+        # just the message content/tool-call envelope as ``str``.
+        self._last_usage: Optional[dict] = None
 
     @property
     def provider_name(self) -> str:
@@ -268,6 +277,11 @@ class LemonadeProvider(LLMClient):
         tools: Optional[List[dict]] = None,
         **kwargs,
     ) -> Union[str, dict, Iterator[str]]:
+        # Reset from any previous call — usage is per-call, not cumulative,
+        # and the streaming branch below never populates it (no non-streaming
+        # JSON body to read a ``usage`` field from).
+        self._last_usage = None
+
         # Use provided model, instance model, or default CPU model
         effective_model = model or self._model or DEFAULT_MODEL_NAME
         tool_capable = is_tool_calling_model(effective_model)
@@ -345,6 +359,24 @@ class LemonadeProvider(LLMClient):
                 payload=response if isinstance(response, dict) else {"raw": response},
             )
 
+        # Capture usage before the choice-shaping logic below discards the
+        # raw response dict (#1891) — enriched with the decode-rate timing
+        # llama.cpp reports alongside ``usage`` (absent from the OpenAI-shape
+        # ``usage`` object itself) so downstream aggregation gets equal-or-
+        # better fidelity than the polled ``/stats`` endpoint, with no extra
+        # HTTP round-trip and no last-request race.
+        usage = response.get("usage")
+        if isinstance(usage, dict):
+            timings = response.get("timings")
+            self._last_usage = {
+                "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+                "completion_tokens": int(usage.get("completion_tokens") or 0),
+                "total_tokens": int(usage.get("total_tokens") or 0),
+                "tokens_per_second": float(
+                    (timings or {}).get("predicted_per_second") or 0.0
+                ),
+            }
+
         if not response["choices"] or len(response["choices"]) == 0:
             raise ValueError("Empty choices in response from Lemonade Server")
 
@@ -407,6 +439,12 @@ class LemonadeProvider(LLMClient):
 
     def get_performance_stats(self) -> dict:
         return self._backend.get_stats() or {}
+
+    def get_last_usage(self) -> Optional[dict]:
+        """Token-usage dict from the most recent non-streaming ``chat()``
+        call (#1891), or ``None`` when unavailable (a streaming call, or the
+        server's response didn't include a ``usage`` field)."""
+        return self._last_usage
 
     def load_model(self, model_name: str, **kwargs) -> None:
         self._backend.load_model(model_name, **kwargs)

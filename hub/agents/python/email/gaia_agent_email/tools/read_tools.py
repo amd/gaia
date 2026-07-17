@@ -17,11 +17,14 @@ module because every read tool that returns body bytes needs to honor it.
 
 from __future__ import annotations
 
-import json
 import os
+import re
+from datetime import date
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from gaia_agent_email.gmail_backend import decode_message_body
+from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
+from gaia_agent_email.tools.triage_condense import condense_triage_result
 
 # Re-exported so the pre-scan tests can monkeypatch ``read_tools.make_llm_classifier``
 # to prove pre-scan never wires the LLM (test_pre_scan_counts.py).
@@ -34,6 +37,7 @@ from gaia_agent_email.tools.triage_heuristics import (
     classify_category_heuristic,
     group_by_category,
 )
+from gaia_agent_email.tools.usage import aggregate_usage_stats
 from gaia_agent_email.verbose import (
     log_tool_call,
     log_triage_decision,
@@ -73,6 +77,10 @@ def _inbox_scan_ceiling() -> int:
 # attack surface for indirect prompt injection.
 DEFAULT_BODY_LIMIT_CHARS = 4000
 
+# Opt-in ceiling for ``get_message(full_body=True)``. Finite on purpose —
+# an unbounded body is a single-email context DoS on a fixed-ctx local model.
+MAX_FULL_BODY_CHARS = 50_000
+
 # Combined body budget for a whole-thread transcript (#1268). Bounds the prompt
 # so a long thread can't overflow a local model's context window. When a thread
 # exceeds it, the per-message budget shrinks so every message stays represented
@@ -95,18 +103,13 @@ def wrap_untrusted_body(body: str) -> str:
     return f"{UNTRUSTED_BODY_OPEN}\n{body}\n{UNTRUSTED_BODY_CLOSE}"
 
 
-def _envelope_ok(data: Any) -> str:
-    return json.dumps({"ok": True, "data": data}, default=str)
-
-
-def _envelope_err(message: str) -> str:
-    return json.dumps({"ok": False, "error": message})
-
-
-def _truncate(text: str, limit: int) -> tuple[str, bool]:
+def _truncate(text: str, limit: int) -> tuple[str, int]:
+    """Return (possibly-truncated text, chars dropped). Dropped == 0 means untouched."""
+    if limit <= 0:
+        raise ValueError(f"body limit must be positive, got {limit}")
     if len(text) <= limit:
-        return text, False
-    return text[:limit] + "\n...[truncated]", True
+        return text, 0
+    return text[:limit] + "\n...[truncated]", len(text) - limit
 
 
 def _format_message_for_llm(
@@ -124,9 +127,9 @@ def _format_message_for_llm(
         for h in payload.get("headers", [])
     }
     body, attachments = decode_message_body(payload)
-    body_truncated = False
+    body_chars_dropped = 0
     if body:
-        body, body_truncated = _truncate(body, body_limit)
+        body, body_chars_dropped = _truncate(body, body_limit)
     return {
         "id": msg.get("id"),
         "thread_id": msg.get("threadId"),
@@ -137,7 +140,8 @@ def _format_message_for_llm(
         "label_ids": list(msg.get("labelIds", [])),
         "snippet": msg.get("snippet", ""),
         "body": wrap_untrusted_body(body),
-        "body_truncated": body_truncated,
+        "body_truncated": body_chars_dropped > 0,
+        "body_chars_dropped": body_chars_dropped,
         "attachments": attachments,
     }
 
@@ -160,10 +164,20 @@ def list_inbox_impl(
         return {"messages": out, "next_page_token": listing.get("nextPageToken")}
 
 
-def get_message_impl(gmail, *, message_id: str, debug: bool = False) -> Dict[str, Any]:
-    with log_tool_call("get_message", {"message_id": message_id}, debug=debug) as st:
+def get_message_impl(
+    gmail,
+    *,
+    message_id: str,
+    body_limit: int = DEFAULT_BODY_LIMIT_CHARS,
+    debug: bool = False,
+) -> Dict[str, Any]:
+    with log_tool_call(
+        "get_message",
+        {"message_id": message_id, "body_limit": body_limit},
+        debug=debug,
+    ) as st:
         msg = gmail.get_message(message_id)
-        formatted = _format_message_for_llm(msg)
+        formatted = _format_message_for_llm(msg, body_limit=body_limit)
         st["result_summary"] = {
             "id": formatted["id"],
             "subject": formatted["subject"],
@@ -172,10 +186,38 @@ def get_message_impl(gmail, *, message_id: str, debug: bool = False) -> Dict[str
 
 
 def get_thread_impl(gmail, *, thread_id: str, debug: bool = False) -> Dict[str, Any]:
+    """Fetch every message in a thread, backend order preserved (no sort).
+
+    The combined body budget mirrors ``_format_thread_for_summary``'s
+    soft-target semantics (#2073): under ``DEFAULT_THREAD_TRANSCRIPT_CHARS``
+    the per-message default limit applies untouched; over budget, every
+    message is re-formatted at a shared fair-share limit (floored at
+    ``THREAD_MIN_PER_MESSAGE_CHARS``) so long threads stay bounded without
+    ever dropping a message.
+    """
     with log_tool_call("get_thread", {"thread_id": thread_id}, debug=debug) as st:
         thread = gmail.get_thread(thread_id)
-        out = [_format_message_for_llm(m) for m in thread.get("messages", [])]
-        st["result_summary"] = {"thread_id": thread_id, "count": len(out)}
+        messages = thread.get("messages", [])
+        out = [_format_message_for_llm(m) for m in messages]
+        total = sum(len(f["body"]) for f in out)
+        if messages and total > DEFAULT_THREAD_TRANSCRIPT_CHARS:
+            # Duplicated (not shared with) _format_thread_for_summary's
+            # fair-share formula on purpose: that helper's limit<=0
+            # unlimited-mode semantics don't belong on a read tool.
+            fair_share = max(
+                THREAD_MIN_PER_MESSAGE_CHARS,
+                DEFAULT_THREAD_TRANSCRIPT_CHARS // len(messages),
+            )
+            if fair_share < DEFAULT_BODY_LIMIT_CHARS:
+                out = [
+                    _format_message_for_llm(m, body_limit=fair_share) for m in messages
+                ]
+        bodies_clipped = sum(1 for f in out if f["body_truncated"])
+        st["result_summary"] = {
+            "thread_id": thread_id,
+            "count": len(out),
+            "bodies_clipped": bodies_clipped,
+        }
         return {"thread_id": thread_id, "messages": out}
 
 
@@ -190,6 +232,42 @@ def _thread_message_sort_key(msg: Dict[str, Any]) -> int:
         return int(msg.get("internalDate", "0"))
     except (TypeError, ValueError):
         return 0
+
+
+def _thread_message_blocks(
+    messages: List[Dict[str, Any]],
+    *,
+    per_message_body_limit: int,
+    start_index: int = 1,
+    total_count: Optional[int] = None,
+) -> List[str]:
+    """Render each message (already sorted) as one numbered, wrapped block.
+
+    Shared by :func:`_format_thread_for_summary` (the full-thread join) and
+    the #1889 over-budget fold path (message-boundary bucketing) so there is
+    exactly one place that defines what a message block looks like — no
+    duplicate formatting to drift.
+    """
+    total = total_count if total_count is not None else len(messages)
+    blocks: List[str] = []
+    for offset, msg in enumerate(messages):
+        idx = start_index + offset
+        payload = msg.get("payload") or {}
+        headers = {
+            (h.get("name") or "").lower(): h.get("value", "")
+            for h in payload.get("headers", [])
+        }
+        body, _attachments = decode_message_body(payload)
+        body = (body or "").strip()
+        if per_message_body_limit > 0 and len(body) > per_message_body_limit:
+            body = body[:per_message_body_limit] + "\n...[truncated]"
+        blocks.append(
+            f"--- Message {idx} of {total} ---\n"
+            f"From: {headers.get('from', '')}\n"
+            f"Date: {headers.get('date', '')}\n"
+            f"{wrap_untrusted_body(body)}"
+        )
+    return blocks
 
 
 def _format_thread_for_summary(
@@ -214,7 +292,8 @@ def _format_thread_for_summary(
     target, not a hard ceiling: ``THREAD_MIN_PER_MESSAGE_CHARS`` is a per-message
     floor, so a thread with very many messages can still exceed the target
     (floor × count) rather than starve each message below readability.
-    ``None`` disables the cap entirely.
+    ``None`` disables the cap entirely — used by the #1889 token-budget gate,
+    which replaces this char cap as the fits criterion.
     """
     ordered = sorted(messages, key=_thread_message_sort_key)
     effective_body_limit = per_message_body_limit
@@ -226,23 +305,9 @@ def _format_thread_for_summary(
         )
         if effective_body_limit <= 0 or fair_share < effective_body_limit:
             effective_body_limit = fair_share
-    blocks: List[str] = []
-    for idx, msg in enumerate(ordered, start=1):
-        payload = msg.get("payload") or {}
-        headers = {
-            (h.get("name") or "").lower(): h.get("value", "")
-            for h in payload.get("headers", [])
-        }
-        body, _attachments = decode_message_body(payload)
-        body = (body or "").strip()
-        if effective_body_limit > 0 and len(body) > effective_body_limit:
-            body = body[:effective_body_limit] + "\n...[truncated]"
-        blocks.append(
-            f"--- Message {idx} of {len(ordered)} ---\n"
-            f"From: {headers.get('from', '')}\n"
-            f"Date: {headers.get('date', '')}\n"
-            f"{wrap_untrusted_body(body)}"
-        )
+    blocks = _thread_message_blocks(
+        ordered, per_message_body_limit=effective_body_limit
+    )
     return "\n\n".join(blocks)
 
 
@@ -271,7 +336,6 @@ def summarize_thread_impl(
     thread_id: str,
     max_chars: Optional[int] = None,
     per_message_body_limit: int = DEFAULT_BODY_LIMIT_CHARS,
-    max_total_transcript_chars: Optional[int] = DEFAULT_THREAD_TRANSCRIPT_CHARS,
     debug: bool = False,
 ) -> Dict[str, Any]:
     """Summarize a whole email thread, comprehending the FULL conversation.
@@ -287,14 +351,34 @@ def summarize_thread_impl(
     collapsing to a latest-only summary (repo "No Silent Fallbacks" rule). The
     user-turn prompt is thread-shaped (no single-email body clip) so the whole
     conversation reaches the model.
+
+    The token-budget gate (#1889) REPLACES the legacy
+    ``max_total_transcript_chars`` fair-share char cap as the fits criterion:
+    the full, uncapped transcript is tried first and used unchanged whenever
+    it fits ``context_budget.thread_budget_tokens()`` — a thread between the
+    old 24K-char cap and the token budget is no longer clipped. Only when the
+    full transcript doesn't fit does the thread get folded: the latest
+    message stays verbatim and every older message is condensed into ONE
+    digest via a single LLM call (``tools.thread_fold``). Threads beyond the
+    message-count ceiling are pre-sliced to the most recent
+    ``DEFAULT_THREAD_FOLD_MESSAGE_CEILING`` messages BEFORE any per-message
+    decode (explicit ``[omitted N older messages]`` marker, never silent).
+    When the fold ran, the result carries its LLM usage under ``usage`` (a
+    plain dict via ``aggregate_usage_stats``, #1891); the fits path has no
+    extra call, so no ``usage`` key.
     """
-    # Deferred import: ``summarize_tools`` imports from this module, so a
-    # top-level import would create a cycle.
+    # Deferred imports: these modules import from this one, so a top-level
+    # import would create a cycle.
+    from gaia_agent_email.context_budget import estimate_tokens, thread_budget_tokens
     from gaia_agent_email.tools.summarize_tools import (
         _THREAD_SYSTEM_PROMPT,
         DEFAULT_SUMMARY_CHAR_LIMIT,
         EmailSummarizeError,
         _bound_to_length,
+    )
+    from gaia_agent_email.tools.thread_fold import (
+        DEFAULT_THREAD_FOLD_MESSAGE_CEILING,
+        fold_older_blocks,
     )
 
     if max_chars is None:
@@ -317,16 +401,54 @@ def summarize_thread_impl(
             )
 
         ordered = sorted(messages, key=_thread_message_sort_key)
+        total_count = len(ordered)
         first_headers = {
             (h.get("name") or "").lower(): h.get("value", "")
             for h in (ordered[0].get("payload") or {}).get("headers", [])
         }
         subject = first_headers.get("subject", "")
-        transcript = _format_thread_for_summary(
-            ordered,
-            per_message_body_limit=per_message_body_limit,
-            max_total_transcript_chars=max_total_transcript_chars,
+
+        # Message-count ceiling BEFORE any per-message decode/render work — a
+        # cheap slice keeping the most recent messages, so an absurdly long
+        # thread never pays O(N) MIME decoding just to be folded anyway.
+        ceiling_dropped = 0
+        if total_count > DEFAULT_THREAD_FOLD_MESSAGE_CEILING:
+            ceiling_dropped = total_count - DEFAULT_THREAD_FOLD_MESSAGE_CEILING
+            ordered = ordered[ceiling_dropped:]
+
+        # Render each message exactly ONCE (one decode per message — both the
+        # fits check and the fold reuse these blocks). The joined blocks are
+        # byte-identical to the pre-existing uncapped renderer's output
+        # (``_format_thread_for_summary(..., max_total_transcript_chars=None)``),
+        # which delegates to the same ``_thread_message_blocks``.
+        blocks = _thread_message_blocks(
+            ordered, per_message_body_limit=per_message_body_limit
         )
+        full_transcript = "\n\n".join(blocks)
+        fold_stats: List[dict] = []
+        if estimate_tokens(full_transcript) <= thread_budget_tokens():
+            transcript = full_transcript
+            if ceiling_dropped:
+                # Bounded and visible, never a silent clip (same marker as the
+                # fold input's) — oldest-first transcript, so it leads.
+                transcript = (
+                    f"[omitted {ceiling_dropped} older messages]\n\n{transcript}"
+                )
+        else:
+            # Over budget: keep the latest message's block verbatim; fold
+            # every older block into ONE digest call.
+            digest = fold_older_blocks(
+                blocks[:-1],
+                chat=chat,
+                subject=subject,
+                collect_stats=fold_stats,
+                pre_omitted=ceiling_dropped,
+            )
+            condensed_block = (
+                f"--- Condensed summary of {len(blocks) - 1 + ceiling_dropped} "
+                f"earlier messages ---\n{wrap_untrusted_body(digest)}"
+            )
+            transcript = "\n\n".join([condensed_block, blocks[-1]])
 
         prompt = _build_thread_user_prompt(subject, transcript)
         try:
@@ -356,15 +478,130 @@ def summarize_thread_impl(
 
         st["result_summary"] = {
             "thread_id": thread_id,
-            "message_count": len(ordered),
+            "message_count": total_count,
             "chars": len(summary),
         }
-        return {
+        result = {
             "thread_id": thread_id,
             "subject": subject,
-            "message_count": len(ordered),
+            "message_count": total_count,
             "summary": summary,
         }
+        # Fold-call usage mirrors the REST path's accounting (#1891): a plain
+        # dict, present only when the fold actually ran — absent on the fits
+        # path (no extra LLM call to account for).
+        usage = aggregate_usage_stats(fold_stats)
+        if usage is not None:
+            result["usage"] = usage
+        return result
+
+
+# Gmail's after:/before:/older:/newer: operators only accept YYYY/MM/DD (or
+# epoch seconds). Anything else — e.g. the model's `after:July 1` — is treated
+# as a free-text content match, silently returning 0 results (#2161).
+_MONTH_NAMES = {
+    "jan": 1, "january": 1,
+    "feb": 2, "february": 2,
+    "mar": 3, "march": 3,
+    "apr": 4, "april": 4,
+    "may": 5,
+    "jun": 6, "june": 6,
+    "jul": 7, "july": 7,
+    "aug": 8, "august": 8,
+    "sep": 9, "sept": 9, "september": 9,
+    "oct": 10, "october": 10,
+    "nov": 11, "november": 11,
+    "dec": 12, "december": 12,
+}  # fmt: skip
+
+_MONTH_ALT = "|".join(sorted(_MONTH_NAMES, key=len, reverse=True))
+
+# Value grammar: quoted string, "July 1[, 2026]", "1 July[, 2026]", or a
+# single token. `older_than:`/`newer_than:` never match — the op name must be
+# followed immediately by a colon.
+_DATE_OP_RE = re.compile(
+    rf"""
+    \b(?P<op>after|before|older|newer):
+    (?P<val>
+        "[^"]*"
+      | (?:{_MONTH_ALT})\s+\d{{1,2}}(?:st|nd|rd|th)?(?:,?\s*\d{{4}}\b)?
+      | \d{{1,2}}\s+(?:{_MONTH_ALT})\b(?:,?\s*\d{{4}}\b)?
+      | \S+
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+_ORDINAL_RE = re.compile(r"^(\d{1,2})(?:st|nd|rd|th)?$", re.IGNORECASE)
+
+
+def _parse_gmail_date_value(raw: str, *, op: str) -> str:
+    """Parse one date-operator value into Gmail's ``YYYY/MM/DD`` form.
+
+    Accepts the formats the model actually produces: ``2026/07/01``,
+    ``2026-07-01``, ``7/1/2026`` (US month-first), ``July 1[, 2026]``,
+    ``1 July [2026]``. Epoch values (all digits, >= 8 chars) pass through —
+    Gmail accepts them natively. Anything else raises ``ValueError``.
+    """
+    value = raw.strip().strip('"').strip()
+    if value.isdigit() and len(value) >= 8:
+        return value
+
+    y = mo = d = None
+    m = re.fullmatch(r"(\d{4})[/-](\d{1,2})[/-](\d{1,2})", value)
+    if m:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    else:
+        m = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{4})", value)
+        if m:
+            mo, d, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        else:
+            tokens = [t for t in re.split(r"[\s,]+", value) if t]
+            if len(tokens) in (2, 3):
+                a, b = tokens[0].lower(), tokens[1].lower()
+                day_tok = None
+                if a in _MONTH_NAMES and _ORDINAL_RE.fullmatch(b):
+                    mo, day_tok = _MONTH_NAMES[a], b
+                elif b in _MONTH_NAMES and _ORDINAL_RE.fullmatch(a):
+                    mo, day_tok = _MONTH_NAMES[b], a
+                if day_tok is not None:
+                    d = int(_ORDINAL_RE.fullmatch(day_tok).group(1))
+                    if len(tokens) == 3:
+                        if not re.fullmatch(r"\d{4}", tokens[2]):
+                            mo = d = None
+                        else:
+                            y = int(tokens[2])
+                    else:
+                        y = date.today().year
+
+    if y is None or mo is None or d is None:
+        raise ValueError(
+            f"search_messages: cannot parse date value {raw!r} for the "
+            f"'{op}:' operator. Use Gmail date format {op}:YYYY/MM/DD "
+            f"(e.g. {op}:2026/07/01)."
+        )
+    try:
+        date(y, mo, d)
+    except ValueError as exc:
+        raise ValueError(
+            f"search_messages: {raw!r} is not a valid calendar date for the "
+            f"'{op}:' operator ({exc}). Use {op}:YYYY/MM/DD "
+            f"(e.g. {op}:2026/07/01)."
+        ) from exc
+    return f"{y:04d}/{mo:02d}/{d:02d}"
+
+
+def normalize_gmail_date_operators(query: str) -> str:
+    """Rewrite date-operator values in ``query`` to Gmail's ``YYYY/MM/DD``.
+
+    Raises ``ValueError`` on an unparseable value — a loud error beats
+    passing it through as free text and returning a false zero-result.
+    """
+    def _sub(m: "re.Match[str]") -> str:
+        op = m.group("op").lower()
+        return f"{op}:{_parse_gmail_date_value(m.group('val'), op=op)}"
+
+    return _DATE_OP_RE.sub(_sub, query)
 
 
 def search_messages_impl(
@@ -374,6 +611,7 @@ def search_messages_impl(
     max_results: int = 25,
     debug: bool = False,
 ) -> Dict[str, Any]:
+    query = normalize_gmail_date_operators(query)
     with log_tool_call(
         "search_messages",
         {"query": query, "max_results": max_results},
@@ -750,6 +988,105 @@ def pre_scan_inbox_impl(
         return out
 
 
+def merge_pre_scan_backends(
+    backends: "Mapping[str, Any]",
+    *,
+    max_messages: int = 25,
+    session_preferences: Optional[Mapping[str, Any]] = None,
+    force_llm: bool = False,
+    debug: bool = False,
+    remember_mailbox: Optional[Callable[[Optional[str], str], None]] = None,
+) -> Dict[str, Any]:
+    """Pre-scan every connected mailbox, tag each item, merge under budget.
+
+    Single home for the multi-inbox consolidation (#1603/#1614) so both the
+    agent loop (``EmailTriageAgent._pre_scan_all_backends``) and the REST
+    ``/prescan`` path produce the identical envelope. Splits the total
+    ``max_messages`` budget across ``backends`` (an ordered ``provider ->
+    backend`` map); each merged item gains a ``mailbox`` tag. This is NOT a
+    silent pick-one — every connected mailbox is scanned.
+
+    A single backend's ``ConnectorsError`` (e.g. a revoked agent grant) is
+    recorded in ``mailbox_errors`` and the loop continues with the rest; when
+    EVERY backend fails the error is raised rather than returning a misleading
+    empty pre-scan. ``remember_mailbox`` is the agent's optional
+    message-id -> mailbox recorder for action routing; the stateless REST path
+    omits it.
+    """
+    prefs = session_preferences
+    per_backend = max(1, max_messages // len(backends))
+    urgent: List[Dict[str, Any]] = []
+    actionable: List[Dict[str, Any]] = []
+    suggested_archives: List[Dict[str, Any]] = []
+    informational_count = 0
+    scanned = 0
+    merged_prefs_applied: Dict[str, Any] = {}
+    mailbox_errors: List[Dict[str, Any]] = []
+    for provider, backend in backends.items():
+        if scanned >= max_messages:
+            break
+        try:
+            out = pre_scan_inbox_impl(
+                backend,
+                max_messages=per_backend,
+                session_preferences=prefs,
+                force_llm=force_llm,
+                debug=debug,
+            )
+        except ConnectorsError as exc:
+            msg = format_connector_error(exc)
+            mailbox_errors.append({"mailbox": provider, "error": msg})
+            log.warning("email pre-scan: skipping %s mailbox — %s", provider, msg)
+            continue
+        # Count messages actually returned, not the cap — an under-filled
+        # backend would otherwise trip the budget guard and skip a later one.
+        backend_totals = out.get("totals", {})
+        scanned += (
+            int(backend_totals.get("urgent", 0))
+            + int(backend_totals.get("actionable", 0))
+            + int(backend_totals.get("suggested_archives", 0))
+            + int(out.get("informational_count", 0))
+        )
+        merged_prefs_applied = out.get("preferences_applied", merged_prefs_applied)
+        for section, dest in (
+            ("urgent", urgent),
+            ("actionable", actionable),
+            ("suggested_archives", suggested_archives),
+        ):
+            for item in out.get(section, []):
+                item["mailbox"] = provider
+                if remember_mailbox is not None:
+                    remember_mailbox(item.get("message_id"), provider)
+                    remember_mailbox(item.get("thread_id"), provider)
+                dest.append(item)
+        informational_count += int(out.get("informational_count", 0))
+    result = {
+        "kind": "email_pre_scan",
+        "urgent": urgent[: max(0, PRE_SCAN_URGENT_CAP)],
+        "actionable": actionable[: max(0, PRE_SCAN_ACTIONABLE_CAP)],
+        "informational_count": informational_count,
+        "suggested_archives": suggested_archives[: max(0, PRE_SCAN_ARCHIVE_CAP)],
+        "suggested_drafts": [],
+        "preferences_applied": merged_prefs_applied,
+        "totals": {
+            "urgent": len(urgent),
+            "actionable": len(actionable),
+            "informational": informational_count,
+            "suggested_archives": len(suggested_archives),
+        },
+    }
+    if mailbox_errors and len(mailbox_errors) == len(backends):
+        # Every connected mailbox failed — surface it loudly rather than
+        # returning ok with zero results (which reads as "empty inbox").
+        raise ConnectorsError(
+            "All connected mailboxes failed during pre-scan: "
+            + "; ".join(f"{e['mailbox']}: {e['error']}" for e in mailbox_errors)
+        )
+    if mailbox_errors:
+        result["mailbox_errors"] = mailbox_errors
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Mixin
 # ---------------------------------------------------------------------------
@@ -787,7 +1124,7 @@ class ReadToolsMixin:
                 JSON envelope with ``{"messages": [...]}`` per message:
                 id, thread_id, subject, from, to, date, label_ids,
                 snippet, body (wrapped in untrusted-input delimiters),
-                body_truncated, attachments, mailbox.
+                body_truncated, body_chars_dropped, attachments, mailbox.
             """
             try:
                 max_results = max(1, min(int(max_results or 25), 100))
@@ -815,17 +1152,34 @@ class ReadToolsMixin:
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def get_message(message_id: str, mailbox: str = "") -> str:
-            """Fetch a single message by id, including full body.
+        def get_message(
+            message_id: str, mailbox: str = "", full_body: bool = False
+        ) -> str:
+            """Fetch a single message by id.
+
+            The body is truncated at 4000 chars by default for context safety.
+            Set ``full_body=True`` ONLY when the user explicitly asks to see
+            the complete/untruncated message — never as a self-directed step
+            while triaging or analyzing a message on your own initiative. The
+            body stays wrapped in the untrusted-input delimiters either way,
+            and the result reports ``body_truncated`` / ``body_chars_dropped``.
 
             ``mailbox`` (optional) names the source mailbox ('google' /
             'microsoft') from triage output so the read routes correctly when
             multiple mailboxes are connected.
             """
             try:
+                body_limit = (
+                    MAX_FULL_BODY_CHARS if full_body else DEFAULT_BODY_LIMIT_CHARS
+                )
                 backend = agent._backend_for_message(message_id, mailbox or None)
                 return _envelope_ok(
-                    get_message_impl(backend, message_id=message_id, debug=debug_flag)
+                    get_message_impl(
+                        backend,
+                        message_id=message_id,
+                        body_limit=body_limit,
+                        debug=debug_flag,
+                    )
                 )
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
@@ -837,7 +1191,10 @@ class ReadToolsMixin:
         def get_thread(thread_id: str, mailbox: str = "") -> str:
             """Fetch every message in a thread (conversation view).
 
-            ``mailbox`` (optional) routes when multiple mailboxes are connected.
+            Long threads share a combined body budget: over-budget message
+            bodies are clipped with a ``...[truncated]`` marker; messages are
+            never dropped. ``mailbox`` (optional) routes when multiple
+            mailboxes are connected.
             """
             try:
                 backend = agent._backend_for_message(thread_id, mailbox or None)
@@ -868,7 +1225,9 @@ class ReadToolsMixin:
             Returns:
                 JSON envelope ``{"ok": true, "data": {"thread_id", "subject",
                 "message_count", "summary"}}`` — ``summary`` is a short,
-                length-bounded string covering the full thread.
+                length-bounded string covering the full thread. When an
+                over-budget thread was condensed to fit (#1889), ``data``
+                also carries ``usage`` with the condense call's LLM tokens.
             """
             try:
                 # Deferred import avoids a module-load cycle with summarize_tools.
@@ -903,7 +1262,9 @@ class ReadToolsMixin:
             downstream tools route actions without re-asking.
 
             ``query`` uses Gmail search syntax (e.g.
-            ``"from:boss@example.com is:unread newer_than:7d"``).
+            ``"from:boss@example.com is:unread newer_than:7d"``). Date
+            operators require ``YYYY/MM/DD`` — e.g. ``after:2026/07/01
+            before:2026/07/08``, never ``after:July 1``.
             """
             try:
                 max_results = max(1, min(int(max_results or 25), 100))
@@ -953,6 +1314,13 @@ class ReadToolsMixin:
             ``set_low_priority_sender`` are honored — those senders
             bypass the heuristic and are recorded with
             ``preference_applied`` for downstream inspection.
+
+            For a large batch the per-message ``results`` list may be
+            condensed to fit the context budget: ``results_condensed`` is
+            True, ``results_omitted`` counts the verdicts dropped from
+            ``results``, and the ``grouped`` map still carries every
+            message's id-to-category assignment. Use ``grouped`` (not
+            ``results``) as the complete view when results are condensed.
             """
             try:
                 max_messages = max(
@@ -962,8 +1330,15 @@ class ReadToolsMixin:
                 # with its source mailbox, split the budget across mailboxes,
                 # and merge. LLM follow-up (#1107) is wired inside the agent
                 # orchestration so agent.chat is initialized at call time.
+                #
+                # Condense the result envelope to the agent-loop ctx budget
+                # (#2087): a large batch's verbatim verdict list overflows
+                # CONTEXT_TARGET_TOKENS when the agent re-reads it next turn.
+                # No-op below budget; verdicts themselves are unchanged.
                 return _envelope_ok(
-                    agent._triage_all_backends(max_messages=max_messages)
+                    condense_triage_result(
+                        agent._triage_all_backends(max_messages=max_messages)
+                    )
                 )
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))

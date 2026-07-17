@@ -2,15 +2,16 @@
 # SPDX-License-Identifier: MIT
 """Phishing quarantine tool — reversible, confirmation-gated.
 
-``quarantine_phishing_message`` is registered in
-``TOOLS_REQUIRING_CONFIRMATION`` at the agent level.  It MUST NOT execute
+``quarantine_phishing_message`` is declared in the agent's
+``CONFIRMATION_REQUIRED_TOOLS`` (merged with the generic base set via
+``confirmation_required_tools()``, #1440).  It MUST NOT execute
 without explicit user confirmation because it removes the message from INBOX
 and adds a quarantine label.
 
 Design principles:
 - Reversible: the prior label set is recorded in the action log so
   ``unquarantine_impl`` can restore the message exactly.
-- Confirmation-gated: added to ``TOOLS_REQUIRING_CONFIRMATION`` — never
+- Confirmation-gated: declared in ``CONFIRMATION_REQUIRED_TOOLS`` — never
   auto-executes.
 - No hard delete: the message stays in the mailbox with a quarantine label;
   it is NEVER permanently deleted.
@@ -27,9 +28,9 @@ path can call ``unquarantine_impl``.
 
 from __future__ import annotations
 
-import json
 from typing import Any, Dict, Optional
 
+from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email import action_store
 from gaia_agent_email.verbose import log_tool_call
 
@@ -43,14 +44,6 @@ log = get_logger(__name__)
 # The Gmail label name used to quarantine phishing messages.  This is the
 # human-readable display name; the tool resolves it to a label_id at runtime.
 QUARANTINE_LABEL_NAME = "GAIA_PHISHING_QUARANTINE"
-
-
-def _envelope_ok(data: Any) -> str:
-    return json.dumps({"ok": True, "data": data}, default=str)
-
-
-def _envelope_err(message: str) -> str:
-    return json.dumps({"ok": False, "error": message})
 
 
 def _resolve_quarantine_label_id(gmail) -> str:
@@ -209,8 +202,8 @@ class PhishingToolsMixin:
     """Registers the ``quarantine_phishing_message`` and
     ``unquarantine_message`` tools on the email agent.
 
-    ``quarantine_phishing_message`` is confirmation-gated (added to
-    ``TOOLS_REQUIRING_CONFIRMATION`` in ``agent.py``).
+    ``quarantine_phishing_message`` is confirmation-gated (declared in
+    ``EmailTriageAgent.CONFIRMATION_REQUIRED_TOOLS`` in ``agent.py``).
     ``unquarantine_message`` is the undo path — not gated.
     """
 

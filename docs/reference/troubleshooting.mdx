@@ -173,7 +173,7 @@ icon: "bug"
        ```
     3. Restart Lemonade cleanly:
        ```bash
-       gaia kill && lemonade-server serve
+       gaia kill --lemonade && lemonade-server serve
        ```
     4. Close other GPU/NPU-heavy apps competing for the device (image
        generators, other LLM servers, GPU benchmarks).
@@ -381,18 +381,18 @@ icon: "bug"
 ## Evaluation Issues
 
 <AccordionGroup>
-  <Accordion title="Evaluation mode confusion" icon="scale-balanced">
-    If `gaia eval` produces inconsistent results:
-    - **Check**: Are you using Comparative Evaluation or Standalone Assessment mode?
-    - **Fix**: Ensure groundtruth data is either embedded or provided via `-g` flag
-    - **Verify**: Look for log message "Loaded ground truth data from:" vs "No ground truth file provided"
+  <Accordion title="`--compare` reports no baseline" icon="scale-balanced">
+    `gaia eval agent --compare` only *diffs* scorecards — it does not run an eval.
+    - **Fix**: Run the eval first (`gaia eval agent --category <cat>`); it prints the run dir and writes `<run-dir>/scorecard.json`.
+    - **Then**: `gaia eval agent --compare <baseline>/scorecard.json <run-dir>/scorecard.json`.
+    - **Baseline**: pick the committed baseline matching your model under `tests/fixtures/eval_baselines/` — don't rely on mtime sorting.
   </Accordion>
 
-  <Accordion title="Q&A experiments failing" icon="clipboard-question">
-    If batch-experiment fails with "No queries found":
-    - **Check**: Are you using groundtruth files as input?
-    - **Fix**: Use `gaia batch-experiment -i ./output/groundtruth/consolidated_qa_groundtruth.json`
-    - **Why**: Q&A groundtruth contains the specific questions models need to answer
+  <Accordion title="Eval runs fail with chaotic context/model errors" icon="clipboard-question">
+    Symptoms like `request exceeds the available context size`, spurious `INFRA_ERROR`, or `llama-server failed to start` usually mean two evals raced the same Lemonade server.
+    - **Rule**: run at most one `gaia eval agent` process at a time — never in parallel (`&`). Chain runs serially instead.
+    - **Backend**: the Agent UI backend must be running (`python -m gaia.ui.server --port 4200`).
+    - **Judge access**: if the run errors with `ANTHROPIC_API_KEY not found`, export the key for the judge/simulator.
   </Accordion>
 
   <Accordion title="Dependency compatibility issues" icon="cubes">

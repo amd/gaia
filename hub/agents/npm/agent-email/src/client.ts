@@ -18,6 +18,9 @@
  *   POST /v1/email/calendar/events/preview     (mint a calendar confirmation token)
  *   POST /v1/email/calendar/events             (create — gated on a valid token)
  *   POST /v1/email/calendar/events/respond     (RSVP accept/decline/tentative)
+ *   POST /v1/email/query                       (agent loop — SSE stream, schema 2.4)
+ *   POST /v1/email/query/{run_id}/cancel       (cancel an in-flight /query run)
+ *   GET  /v1/email/init       (readiness preflight — Lemonade + model probe)
  *   GET  /health              (root liveness — what the standalone sidecar serves)
  *   GET  /version             (root apiVersion / agentVersion)
  *   GET  /v1/email/health     (router-scoped liveness — for the mounted-on-app case)
@@ -27,16 +30,19 @@
  *
  * NOTE: `/health` is liveness-only — it does NOT check Lemonade or the model, so a
  * green health probe does not guarantee `triage` will succeed (a cold/unprovisioned
- * host returns 502 on the first triage). A real readiness endpoint is tracked
- * separately. The interactive `/docs` and `/redoc` UIs are intentionally not
- * wrapped — they are browser pages, not a programmatic surface.
+ * host returns 502 on the first triage). For the real readiness signal, call
+ * `init()` (`GET /v1/email/init`, #1795): it probes Lemonade reachability + model
+ * presence and returns a structured `InitResponse` — 200 when ready, 503 when not,
+ * both parsed the same way. The interactive `/docs` and `/redoc` UIs are
+ * intentionally not wrapped — they are browser pages, not a programmatic surface.
  *
  * Uses the global `fetch` (Node >= 18). Every non-2xx response raises an
  * `HttpError` carrying the status and body — no silent empty/null fallback.
  */
 
-import { HttpError } from "./errors.js";
+import { HttpError, QueryStreamError } from "./errors.js";
 import { createLogger } from "./logger.js";
+import { SseDataParser } from "./sse.js";
 import { stripTrailingSlashes } from "./url.js";
 import type {
   BatchTriageRequest,
@@ -55,6 +61,7 @@ import type {
   EmailDraftResponse,
   EmailPreScanRequest,
   EmailPreScanResponse,
+  EmailQueryRequest,
   EmailQuarantineRequest,
   EmailQuarantineResponse,
   EmailSearchRequest,
@@ -68,7 +75,10 @@ import type {
   EmailUnquarantineRequest,
   EmailUnquarantineResponse,
   HealthResponse,
+  InitResponse,
   OpenApiDocument,
+  QueryCancelResponse,
+  QueryEvent,
   VersionResponse,
 } from "./types.js";
 
@@ -81,6 +91,13 @@ export interface EmailClientOptions {
   timeoutMs?: number;
   /** Optional fetch override (for tests). Defaults to the global `fetch`. */
   fetchImpl?: typeof fetch;
+  /**
+   * Per-session caller-auth bearer token (#1706). When set, it is sent as
+   * `Authorization: Bearer <token>` on every request. The sidecar requires it on
+   * `/v1/email/*` calls (401 otherwise); `spawnSidecar` generates one and binds
+   * it to the sidecar's client automatically.
+   */
+  authToken?: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -89,6 +106,7 @@ export class EmailClient {
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
+  private readonly authToken?: string;
 
   constructor(opts: EmailClientOptions) {
     if (!opts?.baseUrl) {
@@ -99,6 +117,7 @@ export class EmailClient {
     // Normalize: strip trailing slashes so path joins are predictable.
     this.baseUrl = stripTrailingSlashes(opts.baseUrl);
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.authToken = opts.authToken;
     const rawFetch = opts.fetchImpl ?? globalThis.fetch;
     if (typeof rawFetch !== "function") {
       throw new TypeError(
@@ -217,8 +236,10 @@ export class EmailClient {
 
   /**
    * View calendar events on the primary calendar (GET /v1/email/calendar/events).
-   * Read-only. `timeMin`/`timeMax` are optional RFC 3339 bounds; `provider`
-   * (google|microsoft) is required only when more than one account is connected.
+   * Read-only. `timeMin`/`timeMax` are optional RFC 3339 bounds — omitting
+   * both makes the agent default to a forward window (now → +30 days);
+   * `provider` (google|microsoft) is required only when more than one
+   * account is connected.
    */
   async listCalendarEvents(opts?: {
     timeMin?: string;
@@ -278,8 +299,224 @@ export class EmailClient {
   }
 
   /**
+   * Run the agent loop for one natural-language request and stream the seven
+   * canonical SSE events (POST /v1/email/query — schema 2.4, #2016/#2097).
+   *
+   * Returns an async iterator of typed {@link QueryEvent}s. YOU mint `run_id`
+   * (e.g. `crypto.randomUUID()`) — spec §2.3 — and keep it: `cancelQuery(runId)`
+   * keys off it, so the run is cancellable from the instant the request is sent.
+   * The transcript slice is pushed in `request.context` (spec §2.4); the sidecar
+   * stays stateless.
+   *
+   * Stream semantics (spec §3–§4):
+   *   - events interleave freely; exactly one terminal `final` OR `error` ends
+   *     the run, after which the iterator completes. A terminal `error` event is
+   *     YIELDED (its `detail` is the actionable message, surfaced verbatim), not
+   *     thrown — transport/contract failures throw instead.
+   *   - an event `type` outside the frozen seven is yielded as
+   *     `{ type: "unknown", eventType, raw }` — surfaced, never silently dropped
+   *     (spec §7). Handle it in your `default` branch.
+   *   - a gated step emits `needs_confirmation`, then (stateless model, epic
+   *     decision D1) the run ends with a `final` refusal pointing at the
+   *     fixed-function route (`draft()` → `send()`).
+   *
+   * Failures throw: non-2xx → `HttpError`; a non-SSE response, a malformed
+   * event payload, or a stream that closes without a terminal event →
+   * `QueryStreamError`. The client's `timeoutMs` bounds time-to-first-response
+   * only — a healthy run streams as long as the agent works; pass
+   * `opts.signal` to abort the transport (and also call `cancelQuery` so the
+   * sidecar stops the loop, not just the socket).
+   */
+  async *query(
+    request: EmailQueryRequest,
+    opts?: { signal?: AbortSignal },
+  ): AsyncGenerator<QueryEvent, void, undefined> {
+    const url = `${this.baseUrl}/v1/email/query`;
+    const ctrl = new AbortController();
+    // timeoutMs bounds the time to response HEADERS only (cleared below) —
+    // the stream itself must run as long as the agent loop does.
+    const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
+    const onCallerAbort = (): void => ctrl.abort();
+    opts?.signal?.addEventListener("abort", onCallerAbort, { once: true });
+    log.debug(`POST ${url} (SSE)`);
+    const authHeaders: Record<string, string> = this.authToken
+      ? { authorization: `Bearer ${this.authToken}` }
+      : {};
+
+    let res: Response;
+    try {
+      res = await this.fetchImpl(url, {
+        method: "POST",
+        signal: ctrl.signal,
+        headers: {
+          accept: "text/event-stream",
+          "content-type": "application/json",
+          ...authHeaders,
+        },
+        body: JSON.stringify(request),
+      });
+    } catch (e) {
+      clearTimeout(timer);
+      opts?.signal?.removeEventListener("abort", onCallerAbort);
+      if (e instanceof Error && e.name === "AbortError") {
+        if (opts?.signal?.aborted) throw e; // caller-initiated — propagate as-is
+        throw new HttpError(
+          0,
+          url,
+          `request timed out after ${this.timeoutMs}ms — is the sidecar running at ${this.baseUrl}?`,
+        );
+      }
+      throw new HttpError(
+        0,
+        url,
+        `network error: ${(e as Error).message} — is the sidecar running at ${this.baseUrl}?`,
+      );
+    }
+    clearTimeout(timer); // headers received — the stream is unbounded from here
+
+    try {
+      if (!res.ok) {
+        const text = await res.text();
+        log.debug(`POST ${url} -> ${res.status}`);
+        throw new HttpError(res.status, url, text);
+      }
+      const contentType = res.headers.get("content-type") ?? "";
+      if (!contentType.includes("text/event-stream")) {
+        throw new QueryStreamError(
+          `expected a text/event-stream response from ${url} but got ` +
+            `'${contentType || "(no content-type)"}' — is this a /v1/email/query-capable ` +
+            "(apiVersion >= 2.4) sidecar?",
+        );
+      }
+      if (!res.body) {
+        throw new QueryStreamError(`response from ${url} has no body to stream`);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      const parser = new SseDataParser();
+      let sawTerminal = false;
+
+      const toEvent = (payload: string): QueryEvent => {
+        let raw: unknown;
+        try {
+          raw = JSON.parse(payload);
+        } catch (e) {
+          throw new QueryStreamError(
+            `malformed /query event — not valid JSON: ${(e as Error).message} ` +
+              `(payload: ${payload.slice(0, 200)})`,
+          );
+        }
+        if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+          throw new QueryStreamError(
+            `malformed /query event — expected a JSON object, got: ${payload.slice(0, 200)}`,
+          );
+        }
+        const obj = raw as Record<string, unknown>;
+        const type = obj.type;
+        if (typeof type !== "string" || type.length === 0) {
+          throw new QueryStreamError(
+            `malformed /query event — missing string 'type': ${payload.slice(0, 200)}`,
+          );
+        }
+        switch (type) {
+          case "status":
+          case "token":
+          case "tool_call":
+          case "tool_result":
+          case "needs_confirmation":
+          case "final":
+          case "error":
+            return obj as unknown as QueryEvent;
+          default:
+            // Additive future type (spec §7): surface it, never drop it.
+            return { type: "unknown", eventType: type, raw: obj };
+        }
+      };
+
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          // At EOF flush the decoder (a multibyte char can straddle the last
+          // chunk) before flushing the parser's pending event.
+          const payloads = done
+            ? [...parser.push(decoder.decode()), ...parser.end()]
+            : parser.push(decoder.decode(value, { stream: true }));
+          for (const payload of payloads) {
+            const event = toEvent(payload);
+            yield event;
+            if (event.type === "final" || event.type === "error") {
+              sawTerminal = true;
+              return;
+            }
+          }
+          if (done) break;
+        }
+      } finally {
+        // Consumer break / terminal / throw: release the connection.
+        reader.cancel().catch(() => undefined);
+      }
+
+      if (!sawTerminal) {
+        throw new QueryStreamError(
+          `the /query stream from ${url} closed without a terminal 'final' or ` +
+            "'error' event — the run's outcome is unknown (contract requires exactly one).",
+        );
+      }
+    } finally {
+      opts?.signal?.removeEventListener("abort", onCallerAbort);
+    }
+  }
+
+  /**
+   * Cancel an in-flight `query()` run (POST /v1/email/query/{run_id}/cancel).
+   * Cooperative, not a kill: the agent loop stops tool execution at its next
+   * step boundary. 404 (`HttpError`) if no run with that id is in flight —
+   * including a run that already finished.
+   */
+  async cancelQuery(runId: string): Promise<QueryCancelResponse> {
+    if (!runId) {
+      throw new TypeError("cancelQuery requires the run_id the query was sent with");
+    }
+    return this.post<QueryCancelResponse>(
+      `/v1/email/query/${encodeURIComponent(runId)}/cancel`,
+      undefined,
+    );
+  }
+
+  /**
+   * Readiness preflight (GET /v1/email/init, #1795) — the real "can triage
+   * actually run?" signal, unlike liveness-only `health()`. Probes Lemonade
+   * reachability + version and triage-model presence (read-only; never pulls a
+   * model). The endpoint answers **200 when `ready`** and **503 when not**, both
+   * carrying the same `InitResponse`; this method parses either into a value —
+   * branch on `.ready` / read `.hint` rather than catching an error. Any other
+   * status (or a network failure) still throws `HttpError` as usual.
+   */
+  async init(): Promise<InitResponse> {
+    try {
+      return await this.get<InitResponse>("/v1/email/init");
+    } catch (e) {
+      // 503 is the expected not-ready response — its body IS a valid
+      // InitResponse (ready:false, with a hint), not an error to swallow.
+      if (e instanceof HttpError && e.status === 503 && e.bodyText) {
+        try {
+          return JSON.parse(e.bodyText) as InitResponse;
+        } catch {
+          // A 503 whose body isn't the InitResponse JSON (e.g. a proxy/LB
+          // HTML error page) is a real failure — re-throw the HttpError so
+          // callers still get the promised HttpError, not a bare SyntaxError.
+          throw e;
+        }
+      }
+      throw e;
+    }
+  }
+
+  /**
    * Root liveness probe (GET /health). LIVENESS ONLY — it does not check
    * Lemonade or the model, so a green result does not guarantee `triage` works.
+   * For the real readiness signal, use `init()`.
    */
   async health(): Promise<HealthResponse> {
     return this.get<HealthResponse>("/health");
@@ -369,14 +606,18 @@ export class EmailClient {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
     log.debug(`${method} ${url}`);
+    // Per-session caller-auth token (#1706), when the client was given one.
+    const authHeaders: Record<string, string> = this.authToken
+      ? { authorization: `Bearer ${this.authToken}` }
+      : {};
     let res: Response;
     try {
       res = await this.fetchImpl(url, {
         method,
         signal: ctrl.signal,
         headers: hasBody
-          ? { accept, "content-type": "application/json" }
-          : { accept },
+          ? { accept, "content-type": "application/json", ...authHeaders }
+          : { accept, ...authHeaders },
         body: hasBody ? JSON.stringify(opts!.body) : undefined,
       });
     } catch (e) {

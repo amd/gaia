@@ -41,7 +41,7 @@ const triageResponse: EmailTriageResponse = {
       { description: "Open the dashboard", type: "link", url: "https://example.com/dashboard" },
     ],
     suggested_action: "reply",
-    draft: { to: [{ email: "a@b.com" }], subject: "Re: x", body: "" },
+    draft: { to: [{ email: "a@b.com" }], subject: "Re: x" },
     message_id: "m1",
     usage: { prompt_tokens: 120, completion_tokens: 40, total_tokens: 160, tokens_per_second: 32.5 },
   },
@@ -198,6 +198,72 @@ describe("EmailClient", () => {
     const v = await client.version();
     expect(v.apiVersion).toBe("2.0");
     expect(v.agentVersion).toBe("0.2.0");
+  });
+
+  it("init() parses the ready (200) readiness preflight", async () => {
+    const ready = {
+      ready: true,
+      lemonade: {
+        reachable: true,
+        base_url: "http://localhost:8000/api/v1",
+        version: "8.1.0",
+        min_version: "8.0.0",
+        compatible: true,
+      },
+      model: { id: "Gemma-4-E4B-it-GGUF", present: true, loadable: null },
+      hint: null,
+    };
+    const fetchImpl = vi.fn(async (url) => {
+      expect(String(url)).toBe("http://x/v1/email/init");
+      return jsonResponse(ready, 200);
+    }) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    const r = await client.init();
+    expect(r.ready).toBe(true);
+    expect(r.model.present).toBe(true);
+    expect(r.hint).toBeNull();
+  });
+
+  it("init() returns the not-ready body on 503 instead of throwing", async () => {
+    const notReady = {
+      ready: false,
+      lemonade: {
+        reachable: false,
+        base_url: "http://localhost:8000/api/v1",
+        version: null,
+        min_version: "8.0.0",
+        compatible: null,
+      },
+      model: { id: "Gemma-4-E4B-it-GGUF", present: false, loadable: null },
+      hint: "Lemonade Server not reachable — run `lemonade-server serve`.",
+    };
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse(notReady, 503),
+    ) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    const r = await client.init();
+    expect(r.ready).toBe(false);
+    expect(r.lemonade.reachable).toBe(false);
+    expect(r.hint).toMatch(/lemonade-server serve/);
+  });
+
+  it("init() still throws HttpError on a non-503 failure", async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response("upstream boom", { status: 500 }),
+    ) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    await expect(client.init()).rejects.toBeInstanceOf(HttpError);
+  });
+
+  it("init() throws HttpError (not SyntaxError) on a 503 with a non-JSON body", async () => {
+    // A proxy / load-balancer can return 503 with an HTML error page — the body
+    // isn't an InitResponse, so init() must surface the HttpError, not a bare
+    // JSON.parse SyntaxError.
+    const fetchImpl = vi.fn(async () =>
+      new Response("<html>Bad Gateway</html>", { status: 503 }),
+    ) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    await expect(client.init()).rejects.toBeInstanceOf(HttpError);
   });
 
   it("draft + send round-trip types", async () => {
@@ -604,5 +670,38 @@ describe("EmailClient", () => {
     const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
     await client.health();
     expect(calledThis).toBe(globalThis);
+  });
+
+  it("sends the per-session bearer token on every request when given (#1706)", async () => {
+    const seen: (string | null)[] = [];
+    const fetchImpl = vi.fn(async (_url, init) => {
+      const headers = new Headers(init?.headers as HeadersInit);
+      seen.push(headers.get("authorization"));
+      return jsonResponse({ status: "ok", service: "gaia-agent-email" });
+    }) as unknown as typeof fetch;
+
+    const client = new EmailClient({
+      baseUrl: "http://127.0.0.1:8131",
+      fetchImpl,
+      authToken: "tok-abc",
+    });
+    await client.health(); // GET (no body)
+    await client.draft({
+      to: [{ email: "a@b.com" }],
+      subject: "Re: x",
+      body: "hi",
+    });
+
+    expect(seen).toEqual(["Bearer tok-abc", "Bearer tok-abc"]);
+  });
+
+  it("omits the Authorization header when no token is configured", async () => {
+    const fetchImpl = vi.fn(async (_url, init) => {
+      const headers = new Headers(init?.headers as HeadersInit);
+      expect(headers.has("authorization")).toBe(false);
+      return jsonResponse({ status: "ok", service: "gaia-agent-email" });
+    }) as unknown as typeof fetch;
+    const client = new EmailClient({ baseUrl: "http://x", fetchImpl });
+    await client.health();
   });
 });

@@ -132,6 +132,8 @@ Everything is stored in a single file at `~/.gaia/memory.db` (SQLite with WAL mo
     gaia memory bootstrap --discover     # System scan only
     ```
 
+    The questions adapt to your answers -- say you are a student and the follow-up asks about coursework, not deployment pipelines. When the questions are done, everything the agent learned is shown back as a list and stored one item at a time on your approval (`[Y] store · [n] skip · [q] stop`). Nothing reaches the database unreviewed.
+
     <Tip>
       Bootstrap is repeatable. Run it again anytime to refresh the agent's understanding. New discoveries will not overwrite items you have manually edited.
     </Tip>
@@ -144,7 +146,7 @@ Everything is stored in a single file at `~/.gaia/memory.db` (SQLite with WAL mo
     gaia memory status
     ```
 
-    This shows counts by category (fact, preference, error, skill, note, reminder), context (work, personal, global), total conversations, tool call stats, and database size.
+    This shows counts by category (fact, preference, error, skill, note, reminder, profile, system, permission), context (work, personal, global), total conversations, tool call stats, and database size.
   </Step>
 
   <Step title="Start chatting">
@@ -514,6 +516,7 @@ rm ~/.gaia/memory.db
 | `gaia memory bootstrap` | Run full onboarding (conversation + discovery) |
 | `gaia memory bootstrap --chat-only` | Conversational onboarding only |
 | `gaia memory bootstrap --discover` | System discovery scan only |
+| `gaia memory bootstrap --infer` | LLM-assisted profile inference from browser history and installed apps |
 | `gaia memory bootstrap --reset` | Delete discovery items (with confirmation) |
 | `gaia memory bootstrap --system` | Re-scan and refresh system context (OS, hardware, apps, versions) |
 | `gaia memory bootstrap --reset-system` | Clear system context entries and optionally disable auto-collection |

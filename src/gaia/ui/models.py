@@ -280,6 +280,10 @@ class UpdateSessionRequest(BaseModel):
     """Request to update a session."""
 
     title: Optional[str] = None
+    # Pin state for the title (#2165). Omitted + title set → the server pins
+    # (a rename is explicit). The webui's client-side auto-title sends False
+    # so the server-side LLM titler can still improve the title later.
+    title_is_custom: Optional[bool] = None
     system_prompt: Optional[str] = None
     document_ids: Optional[List[str]] = None
     private: Optional[bool] = None
@@ -293,6 +297,9 @@ class SessionResponse(BaseModel):
 
     id: str
     title: str
+    # True when the title was explicitly set (user rename / API caller) and
+    # is therefore pinned against auto-retitling (#2165).
+    title_is_custom: bool = False
     created_at: str
     updated_at: str
     model: str
@@ -386,6 +393,15 @@ class AgentStepResponse(BaseModel):
     fileList: Optional[FileListResponse] = None
     mcpServer: Optional[str] = None
     latencyMs: Optional[float] = None
+    # Render-map card persistence (#2109): populated ONLY when the source
+    # tool_result event carried a ``render`` kind (e.g. "email_pre_scan") —
+    # render-less tool results keep today's summary-only persistence, a
+    # deliberate retention cap since a full tool payload can carry raw email
+    # bodies. Without these fields pydantic's default extra='ignore' would
+    # silently drop them on every read, so a reload could never rehydrate a
+    # card from history.
+    render: Optional[str] = None
+    data: Optional[Any] = None
 
 
 class InferenceStatsResponse(BaseModel):

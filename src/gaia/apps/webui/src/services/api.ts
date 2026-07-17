@@ -378,7 +378,7 @@ export async function getSession(id: string): Promise<Session> {
     return apiFetch('GET', `/sessions/${id}`);
 }
 
-export async function updateSession(id: string, data: { title?: string; system_prompt?: string; private?: boolean; agent_type?: string }): Promise<Session> {
+export async function updateSession(id: string, data: { title?: string; title_is_custom?: boolean; system_prompt?: string; private?: boolean; agent_type?: string }): Promise<Session> {
     return apiFetch('PUT', `/sessions/${id}`, data);
 }
 
@@ -431,7 +431,7 @@ export interface StreamCallbacks {
 const AGENT_EVENT_TYPES = new Set([
     'status', 'step', 'thinking', 'plan',
     'tool_start', 'tool_end', 'tool_result', 'tool_args', 'tool_confirm', 'agent_error',
-    'permission_request', 'policy_alert',
+    'permission_request', 'needs_confirmation', 'policy_alert',
 ]);
 
 export function sendMessageStream(

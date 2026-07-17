@@ -103,7 +103,7 @@ The GAIA VSCode extension integrates GAIA agents as selectable language models i
 
 <Warning>
 GAIA Code requires **three services** running simultaneously:
-1. Lemonade Server (LLM backend on port 8000)
+1. Lemonade Server (LLM backend on port 13305)
 2. GAIA API Server (REST API on port 8080)
 3. VSCode Extension (installed in VSCode)
 </Warning>
@@ -465,9 +465,7 @@ src/vscode/gaia/
     4. This opens a new VSCode window (Extension Development Host) with the extension loaded
 
     <Info>
-    The launch configuration is defined in `.vscode/launch.json` and automatically compiles TypeScript before launching. There are two configurations:
-    - **GAIA VSCode Extension (API)** - For testing with the GAIA API server (port 8080)
-    - **GAIA VSCode Extension (MCP)** - For testing with the GAIA MCP server (port 8765)
+    The launch configuration is defined in `.vscode/launch.json` and automatically compiles TypeScript before launching. Use **GAIA VSCode Extension (API)** to run the extension against the GAIA API server (port 8080). A separate **MCP Bridge Debug** configuration launches the standalone MCP bridge (port 8765) for the MCP-client workflow — that path is a client integration, not a VSCode extension.
     </Info>
   </Step>
 
@@ -587,7 +585,6 @@ View > Output > Select "GAIA" from dropdown
 <Tabs>
   <Tab title="Message Flow">
     ```mermaid
-    %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'actorBkg':'#E2A33E', 'actorTextColor':'#fff', 'actorBorder':'#A87B2D', 'signalColor':'#EFC480', 'signalTextColor':'#333', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
     sequenceDiagram
         participant User
         participant VSCode
@@ -606,7 +603,6 @@ View > Output > Select "GAIA" from dropdown
 
   <Tab title="Model Discovery">
     ```mermaid
-    %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'actorBkg':'#E2A33E', 'actorTextColor':'#fff', 'actorBorder':'#A87B2D', 'signalColor':'#EFC480', 'signalTextColor':'#333', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
     sequenceDiagram
         participant VSCode
         participant Provider
@@ -659,7 +655,7 @@ When making changes to the extension:
 | **Exposes** | Agents as "models" | Agents as "tools" |
 | **Model Picker** | ✅ Yes | ❌ No |
 | **Setup Complexity** | Install extension | Configure MCP client |
-| **Launch Config** | "GAIA VSCode Extension (API)" | "GAIA VSCode Extension (MCP)" |
+| **Launch Config** | "GAIA VSCode Extension (API)" | "MCP Bridge Debug" (runs the bridge) |
 | **Best For** | Language model provider workflow | MCP client workflow |
 
 ---

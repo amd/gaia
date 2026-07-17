@@ -30,7 +30,7 @@ const { agent, eyebrow = 'Featured' } = Astro.props;
     </div>
     <p class="text-[14px] text-g-muted max-w-md mb-6">{agent.description}</p>
     <!-- Static chip, not a copy button — the whole card is a link; nested buttons are invalid HTML. -->
-    <span class="inline-flex items-center rounded-md border border-g-gold/40 px-4 py-2 font-mono text-[12px] text-g-gold-text">
+    <span class="inline-flex max-w-full items-center break-all rounded-md border border-g-gold/40 px-4 py-2 font-mono text-[12px] text-g-gold-text">
       $ gaia agent install {agent.id}
     </span>
   </div>

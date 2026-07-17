@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: MIT
 """Reply / send / forward tools.
 
-``send_draft``, ``send_now``, and ``forward_message`` are registered in
-``TOOLS_REQUIRING_CONFIRMATION`` at the agent level — they never
+``send_draft``, ``send_now``, and ``forward_message`` are declared in the
+agent's ``CONFIRMATION_REQUIRED_TOOLS`` (merged with the generic base set
+via ``confirmation_required_tools()``, #1440) — they never
 auto-execute. The confirmation payload includes the LITERAL ``to``,
 ``subject``, and ``body[:200]`` (Phase I2 / S2.M1) so the user sees what
 will actually be sent, not an LLM-generated paraphrase.
@@ -19,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email import action_store
 from gaia_agent_email.tools.read_tools import extract_sender_email
 from gaia_agent_email.verbose import log_tool_call
@@ -77,14 +79,6 @@ def _load_attachment_files(paths: str) -> Optional[List[Dict[str, Any]]]:
             {"filename": path.name, "mime_type": mime_type, "content": content}
         )
     return out
-
-
-def _envelope_ok(data: Any) -> str:
-    return json.dumps({"ok": True, "data": data}, default=str)
-
-
-def _envelope_err(message: str) -> str:
-    return json.dumps({"ok": False, "error": message})
 
 
 def _compute_reply_latency_seconds(original_msg: Dict[str, Any]) -> Optional[float]:

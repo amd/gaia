@@ -24,6 +24,24 @@ def _make_mock_anthropic():
     return mock_module
 
 
+def _build_client(monkeypatch, temperature=None, model="claude-sonnet-4-6"):
+    """Construct a ClaudeClient with mocked anthropic/bs4 deps.
+
+    ``temperature`` is only forwarded to the constructor when not ``None`` so
+    tests can exercise the true default-argument path (no kwarg at all), not
+    just an explicit ``temperature=None``.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr("gaia.eval.claude.anthropic", _make_mock_anthropic())
+    monkeypatch.setattr("gaia.eval.claude.BeautifulSoup", MagicMock())
+    from gaia.eval.claude import ClaudeClient
+
+    kwargs = {"model": model}
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    return ClaudeClient(**kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Initialization
 # ---------------------------------------------------------------------------
@@ -200,3 +218,233 @@ class TestCountTokens:
             model="claude-sonnet-4-6",
             messages=[{"role": "user", "content": "test prompt"}],
         )
+
+
+# ---------------------------------------------------------------------------
+# Judge sampling temperature (#2094 AC-5)
+#
+# The judge's own sampling must be pinnable via a `temperature` constructor
+# kwarg, forwarded to every `messages.create` call site *only* when set —
+# leaving it unset must reproduce today's behavior exactly (no `temperature`
+# kwarg at all), since a non-judge caller (pdf_document_generator.py) relies
+# on the API default for fixture-generation diversity.
+# ---------------------------------------------------------------------------
+
+
+class TestTemperatureStored:
+    def test_default_temperature_is_none(self, monkeypatch):
+        client = _build_client(monkeypatch)
+        assert client.temperature is None
+
+    def test_explicit_temperature_is_stored(self, monkeypatch):
+        client = _build_client(monkeypatch, temperature=0.0)
+        assert client.temperature == 0.0
+
+
+class TestGetCompletionTemperature:
+    def test_temperature_pinned_when_set(self, monkeypatch):
+        client = _build_client(monkeypatch, temperature=0.0)
+        client.client.messages.create.return_value = SimpleNamespace(
+            content=[SimpleNamespace(text="ok")]
+        )
+        client.get_completion("prompt")
+        kwargs = client.client.messages.create.call_args.kwargs
+        assert kwargs["temperature"] == 0.0
+
+    def test_temperature_omitted_by_default(self, monkeypatch):
+        client = _build_client(monkeypatch)
+        client.client.messages.create.return_value = SimpleNamespace(
+            content=[SimpleNamespace(text="ok")]
+        )
+        client.get_completion("prompt")
+        kwargs = client.client.messages.create.call_args.kwargs
+        assert "temperature" not in kwargs
+
+    def test_non_default_temperature_is_forwarded(self, monkeypatch):
+        """Distinguishes "reads self.temperature" from "hardcodes 0.0 at each
+        call site" — both satisfy AC-5's wording, only the former survives a
+        future default change."""
+        client = _build_client(monkeypatch, temperature=0.7)
+        client.client.messages.create.return_value = SimpleNamespace(
+            content=[SimpleNamespace(text="ok")]
+        )
+        client.get_completion("prompt")
+        kwargs = client.client.messages.create.call_args.kwargs
+        assert kwargs["temperature"] == 0.7
+
+
+class TestGetCompletionWithUsageTemperature:
+    def test_temperature_pinned_when_set(self, monkeypatch):
+        client = _build_client(monkeypatch, temperature=0.0)
+        client.client.messages.create.return_value = SimpleNamespace(
+            content=[SimpleNamespace(text="ok")],
+            usage=SimpleNamespace(input_tokens=10, output_tokens=5),
+        )
+        client.get_completion_with_usage("prompt")
+        kwargs = client.client.messages.create.call_args.kwargs
+        assert kwargs["temperature"] == 0.0
+
+    def test_temperature_omitted_by_default(self, monkeypatch):
+        client = _build_client(monkeypatch)
+        client.client.messages.create.return_value = SimpleNamespace(
+            content=[SimpleNamespace(text="ok")],
+            usage=SimpleNamespace(input_tokens=10, output_tokens=5),
+        )
+        client.get_completion_with_usage("prompt")
+        kwargs = client.client.messages.create.call_args.kwargs
+        assert "temperature" not in kwargs
+
+
+class TestAnalyzeFileHtmlTemperature:
+    """analyze_file's HTML branch (claude.py:246)."""
+
+    @pytest.fixture()
+    def html_file(self, tmp_path):
+        path = tmp_path / "doc.html"
+        path.write_text("<html><body>hello</body></html>", encoding="utf-8")
+        return path
+
+    def test_temperature_pinned_when_set(self, monkeypatch, html_file):
+        client = _build_client(monkeypatch, temperature=0.0)
+        monkeypatch.setattr(client, "_convert_html_to_text", lambda *a, **kw: "hello")
+        client.client.messages.create.return_value = SimpleNamespace(
+            content=[SimpleNamespace(text="analysis")]
+        )
+        client.analyze_file(str(html_file), "summarize")
+        kwargs = client.client.messages.create.call_args.kwargs
+        assert kwargs["temperature"] == 0.0
+
+    def test_temperature_omitted_by_default(self, monkeypatch, html_file):
+        client = _build_client(monkeypatch)
+        monkeypatch.setattr(client, "_convert_html_to_text", lambda *a, **kw: "hello")
+        client.client.messages.create.return_value = SimpleNamespace(
+            content=[SimpleNamespace(text="analysis")]
+        )
+        client.analyze_file(str(html_file), "summarize")
+        kwargs = client.client.messages.create.call_args.kwargs
+        assert "temperature" not in kwargs
+
+
+class TestAnalyzeFileBinaryTemperature:
+    """analyze_file's base64/document branch (claude.py:277)."""
+
+    @pytest.fixture()
+    def pdf_file(self, tmp_path):
+        path = tmp_path / "doc.pdf"
+        path.write_bytes(b"%PDF-1.4 fake pdf content")
+        return path
+
+    def test_temperature_pinned_when_set(self, monkeypatch, pdf_file):
+        client = _build_client(monkeypatch, temperature=0.0)
+        client.client.messages.create.return_value = SimpleNamespace(
+            content=[SimpleNamespace(text="analysis")]
+        )
+        client.analyze_file(str(pdf_file), "summarize")
+        kwargs = client.client.messages.create.call_args.kwargs
+        assert kwargs["temperature"] == 0.0
+
+    def test_temperature_omitted_by_default(self, monkeypatch, pdf_file):
+        client = _build_client(monkeypatch)
+        client.client.messages.create.return_value = SimpleNamespace(
+            content=[SimpleNamespace(text="analysis")]
+        )
+        client.analyze_file(str(pdf_file), "summarize")
+        kwargs = client.client.messages.create.call_args.kwargs
+        assert "temperature" not in kwargs
+
+
+class TestAnalyzeFileWithUsageTextTemperature:
+    """analyze_file_with_usage's text branch (claude.py:342)."""
+
+    @pytest.fixture()
+    def txt_file(self, tmp_path):
+        path = tmp_path / "doc.txt"
+        path.write_text("hello world", encoding="utf-8")
+        return path
+
+    def test_temperature_pinned_when_set(self, monkeypatch, txt_file):
+        client = _build_client(monkeypatch, temperature=0.0)
+        client.client.messages.create.return_value = SimpleNamespace(
+            content=[SimpleNamespace(text="analysis")],
+            usage=SimpleNamespace(input_tokens=10, output_tokens=5),
+        )
+        client.analyze_file_with_usage(str(txt_file), "summarize")
+        kwargs = client.client.messages.create.call_args.kwargs
+        assert kwargs["temperature"] == 0.0
+
+    def test_temperature_omitted_by_default(self, monkeypatch, txt_file):
+        client = _build_client(monkeypatch)
+        client.client.messages.create.return_value = SimpleNamespace(
+            content=[SimpleNamespace(text="analysis")],
+            usage=SimpleNamespace(input_tokens=10, output_tokens=5),
+        )
+        client.analyze_file_with_usage(str(txt_file), "summarize")
+        kwargs = client.client.messages.create.call_args.kwargs
+        assert "temperature" not in kwargs
+
+
+class TestAnalyzeFileWithUsageBinaryTemperature:
+    """analyze_file_with_usage's binary/PDF branch (claude.py:389)."""
+
+    @pytest.fixture()
+    def pdf_file(self, tmp_path):
+        path = tmp_path / "doc.pdf"
+        path.write_bytes(b"%PDF-1.4 fake pdf content")
+        return path
+
+    def test_temperature_pinned_when_set(self, monkeypatch, pdf_file):
+        client = _build_client(monkeypatch, temperature=0.0)
+        client.client.messages.create.return_value = SimpleNamespace(
+            content=[SimpleNamespace(text="analysis")],
+            usage=SimpleNamespace(input_tokens=10, output_tokens=5),
+        )
+        client.analyze_file_with_usage(str(pdf_file), "summarize")
+        kwargs = client.client.messages.create.call_args.kwargs
+        assert kwargs["temperature"] == 0.0
+
+    def test_temperature_omitted_by_default(self, monkeypatch, pdf_file):
+        client = _build_client(monkeypatch)
+        client.client.messages.create.return_value = SimpleNamespace(
+            content=[SimpleNamespace(text="analysis")],
+            usage=SimpleNamespace(input_tokens=10, output_tokens=5),
+        )
+        client.analyze_file_with_usage(str(pdf_file), "summarize")
+        kwargs = client.client.messages.create.call_args.kwargs
+        assert "temperature" not in kwargs
+
+
+# ---------------------------------------------------------------------------
+# Judge factories pin temperature=0.0 (#2094 AC-5)
+# ---------------------------------------------------------------------------
+
+
+class TestJudgeFactoryTemperature:
+    def test_action_item_quality_pins_temperature_zero(self, monkeypatch):
+        spy = MagicMock()
+        monkeypatch.setattr("gaia.eval.claude.ClaudeClient", spy)
+
+        from gaia.eval.action_item_quality import make_claude_judge
+
+        make_claude_judge(model="claude-sonnet-4-6")
+
+        spy.assert_called_once_with(model="claude-sonnet-4-6", temperature=0.0)
+
+    def test_briefing_quality_pins_temperature_zero(self, monkeypatch):
+        spy = MagicMock()
+        monkeypatch.setattr("gaia.eval.claude.ClaudeClient", spy)
+
+        from gaia.eval.briefing_quality import make_claude_judge
+
+        make_claude_judge(model="claude-sonnet-4-6")
+
+        spy.assert_called_once_with(model="claude-sonnet-4-6", temperature=0.0)
+
+    def test_draft_quality_pins_temperature_zero(self, monkeypatch):
+        spy = MagicMock()
+        monkeypatch.setattr("gaia.eval.claude.ClaudeClient", spy)
+
+        from gaia.eval.draft_quality import make_claude_judge
+
+        make_claude_judge(model="claude-sonnet-4-6")
+
+        spy.assert_called_once_with(model="claude-sonnet-4-6", temperature=0.0)

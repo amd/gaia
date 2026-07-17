@@ -14,9 +14,9 @@ icon: "inbox"
 >
 > **Related issues:** [#645](https://github.com/amd/gaia/issues/645) (Email Triage Agent), [#663](https://github.com/amd/gaia/issues/663) (Daily briefs), [#660](https://github.com/amd/gaia/issues/660) (Email & Calendar via MCP), [#634](https://github.com/amd/gaia/issues/634) (Autonomy engine), [#698](https://github.com/amd/gaia/issues/698) (Credential vault), [#542](https://github.com/amd/gaia/issues/542) (Memory system), [#701](https://github.com/amd/gaia/issues/701) (Configuration Dashboard)
 >
-> **Related plans:** [Email & Calendar](email-calendar-integration.mdx) (parent plan), [Autonomy Engine](autonomy-engine.mdx), [Security Model](security-model.mdx), [Agent UI](agent-ui.mdx), [Setup Wizard](setup-wizard.mdx)
+> **Related plans:** [Email & Calendar](/plans/email-calendar-integration) (parent plan), [Autonomy Engine](/plans/autonomy-engine), [Security Model](/plans/security-model), [Agent UI](/plans/agent-ui), [Setup Wizard](/plans/setup-wizard)
 >
-> **Scope:** This document specifies the **Email Triage Agent** as a two-phase deliverable. Phase C1 ships an on-demand inbox companion in v0.20.0. Phase C2 promotes it to a dedicated autonomous agent in v0.23.0. Integration is **auto-discovered and hands-off** — the agent detects the user's email client, picks the right adapter, and walks through OAuth with minimum friction. Users enable/disable the whole integration with a single toggle in the Agent UI. This spec complements (and does not replace) the broader [Email & Calendar plan](email-calendar-integration.mdx).
+> **Scope:** This document specifies the **Email Triage Agent** as a two-phase deliverable. Phase C1 ships an on-demand inbox companion in v0.20.0. Phase C2 promotes it to a dedicated autonomous agent in v0.23.0. Integration is **auto-discovered and hands-off** — the agent detects the user's email client, picks the right adapter, and walks through OAuth with minimum friction. Users enable/disable the whole integration with a single toggle in the Agent UI. This spec complements (and does not replace) the broader [Email & Calendar plan](/plans/email-calendar-integration).
 
 ---
 
@@ -213,7 +213,7 @@ scheduled delivery, tests) are layered on top of MVT once it's demoable.
 
 ## 2. Why This Spec Exists (Relative to the Broader Plan)
 
-The existing [Email & Calendar Integration](email-calendar-integration.mdx) plan covers
+The existing [Email & Calendar Integration](/plans/email-calendar-integration) plan covers
 the full surface — Gmail, Outlook, calendar, meeting notes, daily briefs. This spec
 drills into the **triage agent itself** with additional depth the broader plan does
 not cover:
@@ -528,7 +528,7 @@ a `normalized_body` field the classifier consumes.
 
 Email triage at scale is fundamentally a **cost-and-latency problem**. Summarizing a
 thread every 30 minutes with a 35B model burns budget and battery. Research and the
-existing [autonomy engine](autonomy-engine.mdx) both converge on cheap-first cascading.
+existing [autonomy engine](/plans/autonomy-engine) both converge on cheap-first cascading.
 
 | Tier | Model | Use | Typical warm latency | Cold-start |
 |------|-------|-----|-----------------|------------|
@@ -552,7 +552,7 @@ Design rules:
    (rule-based categorization). All cached data remains queryable.
 5. **Cold-start amortization.** Keeping T1 warm (~600 MB RAM) is the right default for
    always-on triage — pay the 3s load once. T2 and T3 load on demand. See
-   [autonomy-engine.mdx](autonomy-engine.mdx) §14 Open Question 1.
+   [autonomy-engine.mdx](/plans/autonomy-engine) §14 Open Question 1.
 
 ### 6.1 Email Content Never Routes to Cloud
 
@@ -633,7 +633,7 @@ email agent consumes that catalog rather than shipping a bespoke Settings surfac
 The agent exposes a consolidated tool surface, compatible with the GongRzhe Gmail
 convention. All tools are registered via `@tool` in
 `src/gaia/agents/base/tools.py`. Tool risk tiers follow the
-[Security Model](security-model.mdx) §4.1.
+[Security Model](/plans/security-model) §4.1.
 
 > **Prerequisite:** The `@tool` decorator currently accepts `atomic: bool` but
 > **not** a `risk_tier` parameter (see §2.5). Before C1 ships, extend the
@@ -1188,7 +1188,7 @@ triage review" button or `g`-`z` keyboard shortcut.
 
 - **Natural-language query box** ("emails from Sarah about the contract last month").
 - **Results with citations** — each hit shows the snippet that matched and the
-  surrounding context (RAG-backed; see [RAG SDK](../sdk/sdks/rag.mdx)).
+  surrounding context (RAG-backed; see [RAG SDK](/sdk/sdks/rag)).
 - **Thread preview on hover**.
 - **Filters** — sender, date range, label, has-attachment, unread, cohort —
   composable with natural-language query.
@@ -1270,7 +1270,7 @@ Desktop notifications (Electron `Notification` API; platform-native fallback via
 | New email account auto-discovered | Agent Inbox Notify | Click → connect flow |
 
 All notifications respect quiet hours (inherited from
-[autonomy engine](autonomy-engine.mdx) §4).
+[autonomy engine](/plans/autonomy-engine) §4).
 
 ### 12.15 Voice-First Synergy (C2 + v0.21.0 Voice)
 
@@ -1407,7 +1407,7 @@ users can self-diagnose:
 - "Restart server" button.
 
 This is the Agent-UI-native equivalent of reading `journalctl`. Matches the
-[observability dashboard](agent-ui.mdx) pattern rather than duplicating it.
+[observability dashboard](/plans/agent-ui) pattern rather than duplicating it.
 
 #### 12.18.5 Bulk Actions
 
@@ -1536,14 +1536,14 @@ When the brief is read aloud (§12.15), the same grammar applies:
 - Bucket names spoken ("urgent", "actionable") — emoji are display-only.
 - Thread titles truncated to first 8 words for speech.
 - Interactive — user can say "skip" to advance, "more" to get the full summary.
-- Uses [`TalkSDK`](../sdk/sdks/audio.mdx) with Kokoro TTS per §2.5.
+- Uses [`TalkSDK`](/sdk/sdks/audio) with Kokoro TTS per §2.5.
 
 ### 12.20 Slack as an Output Channel
 
 Slack is a first-class channel for the email agent to communicate with the user.
 Many users live in Slack during the workday — pushing the morning brief and
 urgent alerts there is higher-impact than an Agent-UI-only surface. This section
-aligns with [Messaging Integrations](messaging-integrations-plan.mdx)
+aligns with [Messaging Integrations](/plans/messaging-integrations-plan)
 ([#635](https://github.com/amd/gaia/issues/635)) but front-loads Slack for the
 email agent specifically.
 
@@ -1576,7 +1576,7 @@ email agent specifically.
   registered via `MCPClientMixin`.
 - User can DM GaiaAgent in Slack: "what's urgent?" → agent queries local Gmail
   MCP, classifies, replies in-thread. This reuses the messaging-adapter
-  restricted tool set ([Security Model](security-model.mdx) §12.2) — Slack DMs
+  restricted tool set ([Security Model](/plans/security-model) §12.2) — Slack DMs
   cannot trigger email sends without an explicit confirm in the Agent UI.
 
 **C2 — Interactive Approval Flow:**
@@ -1586,7 +1586,7 @@ email agent specifically.
   buttons. Approve = send via Gmail MCP. Edit = opens thread in Agent UI. Reject
   = discard.
 - Scheduled brief delivery via the autonomy engine
-  ([autonomy-engine.mdx](autonomy-engine.mdx)) — runs T0/T1/T2 cascade, posts
+  ([autonomy-engine.mdx](/plans/autonomy-engine)) — runs T0/T1/T2 cascade, posts
   structured brief to Slack.
 - Hooks into Agent Inbox (§12.6): Slack-driven approvals write to the same
   ledger as UI-driven approvals; undo works across both.
@@ -1599,7 +1599,7 @@ email agent specifically.
 - Emoji prefixes for triage buckets (🔥 urgent, 📬 actionable, ℹ️ info,
   🗃️ auto-archived).
 
-**Security (extends [Security Model](security-model.mdx) §12):**
+**Security (extends [Security Model](/plans/security-model) §12):**
 
 - **Slack token** stored in credential vault (C2) or `~/.gaia/email/slack.json`
   (chmod 600) for MVT/C1. Treated as a secret; log-redacted.
@@ -1693,7 +1693,7 @@ A red **"Stop Email Agent Now"** button is visible at all times in the tray menu
 Click → immediate pause of all email activity + pending actions cancelled + confirm
 modal to fully disable. This is the trust safety net: even if the agent is doing
 something a user didn't expect, one click stops everything. Matches the observability-
-first principle in the [Security Model](security-model.mdx).
+first principle in the [Security Model](/plans/security-model).
 
 ### 13.7 Telemetry Transparency (opt-in, off by default)
 
@@ -1757,7 +1757,7 @@ Flagged messages never trigger auto-actions; they route to the Questions inbox w
 ### 14.3 Credential Security
 
 - OAuth tokens stored in the encrypted credential vault
-  ([Security Model](security-model.mdx) §7), not environment variables, not plain JSON.
+  ([Security Model](/plans/security-model) §7), not environment variables, not plain JSON.
 - Platform-appropriate backing: DPAPI (Windows), Keychain (macOS), Secret Service
   (Linux).
 - Tokens never logged, never appear in audit trail, never sent to cloud endpoints.
@@ -1785,7 +1785,7 @@ user downgrades scope at the provider side, the agent degrades gracefully.
 
 - Agent responses are scanned for PII leakage before being returned to messaging
   adapters (Discord/Slack/Telegram). The existing PII redaction in
-  [Security Model](security-model.mdx) §12.3 applies.
+  [Security Model](/plans/security-model) §12.3 applies.
 - Email content never leaves the device for inference. If hybrid-routing sends any
   task to a cloud model, email content is explicitly blocked from that routing by
   policy — and the persistent UI privacy indicator (§12.11) flips loud if this
@@ -1822,7 +1822,7 @@ an **adversarial probabilistic problem**, not a solved one. Known residual risk:
 - **Supply chain for MCP packages.** If `taylorwilsdon/google_workspace_mcp`
   or `softeria/ms-365-mcp-server` is compromised upstream, the attacker has the
   user's tokens. Mitigated by the in-tree Gmail MCP in C2 (§7.2) and by package
-  checksum verification ([Security Model](security-model.mdx) §5.3).
+  checksum verification ([Security Model](/plans/security-model) §5.3).
 - **User confusion as attack vector.** If the UI shows a drafted reply the user
   is pressured to send quickly, the user may approve without reading. The
   confirm-before-send modal (§12.8) is necessary but not sufficient — long-term
@@ -1997,7 +1997,7 @@ Same two-column format as §16.2 (Human vs CC-assisted with parallelism).
 | 2 | `EmailTriageAgent` class with full tool surface (§8) | 2d | 0.7d | ║ (with #1) |
 | 3 | Write-side ledger + undo protocol (§9) | 2d | 0.6d | ║ (with #2) |
 | 4 | Per-cohort autonomy engine (§4) — rule-matcher + policy-evaluator + §4.6 L5 template gating | 2d | 0.7d | |
-| 5 | Scheduled triage task — heartbeat entry in [`autonomy-engine.mdx`](autonomy-engine.mdx); T0/T1/T2 cascade; batched per §5.2; escalates to Agent Inbox | 2d | 0.8d | |
+| 5 | Scheduled triage task — heartbeat entry in [`autonomy-engine.mdx`](/plans/autonomy-engine); T0/T1/T2 cascade; batched per §5.2; escalates to Agent Inbox | 2d | 0.8d | |
 | 6 | Morning & evening scheduled daily-brief with voice readout via TalkSDK | 1.5d | 0.5d | ║ (with #5) |
 | 7 | Auto-follow-up on no-reply (Superhuman Auto Drafts pattern) | 1.5d | 0.6d | (research bet; see §27.2) |
 | 8 | Writing-voice learning with per-relationship tone (Fyxer pattern) | 2d | 1.0d | (research bet; prototype first) |
@@ -2094,7 +2094,7 @@ Inbox-Zero mode, injection defense, and the full UI scope are net-new.
 | Credential vault | `~/.gaia/credentials.db` (encrypted) | OAuth tokens, refresh tokens |
 | Email ledger | `~/.gaia/email/ledger.db` (SQLite) | message_state, actions, corrections, sender_reputation |
 | Discovery cache | `~/.gaia/email/discovery.json` | Detected candidates + last-scan timestamps |
-| Audit log | `~/.gaia/audit.db` (SQLite) | Unified tool execution audit (existing — [Security Model](security-model.mdx) §6) |
+| Audit log | `~/.gaia/audit.db` (SQLite) | Unified tool execution audit (existing — [Security Model](/plans/security-model) §6) |
 | Memory | `~/.gaia/memory/memory.db` (SQLite) | Cross-session preferences, VIPs, correction patterns (v0.20.0 MemoryStore) |
 | RAG index | `~/.gaia/rag/email_index/` | Optional — message bodies + attachments indexed for semantic search |
 | MCP state | `~/.gaia/mcp_servers.json` | Server configs (tokens moved to vault in C2) |
@@ -2146,7 +2146,7 @@ gaia email slack-test                     # Send a test message to verify delive
 ## 20. OpenAI-Compatible API Surface (C2)
 
 Exposed via `ApiAgent` mixin. All endpoints localhost-only by default
-([Security Model](security-model.mdx) §3.1).
+([Security Model](/plans/security-model) §3.1).
 
 ```
 POST /v1/email/triage                { dry_run: bool, cohorts: [...] }
@@ -2287,7 +2287,7 @@ were merged; if any do merge, the MVT workarounds get simpler accordingly.
 | [#676](https://github.com/amd/gaia/issues/676) | `Shared memory database with per-agent namespaces for multi-agent architecture` | If we adopt namespaces, the email ledger becomes one namespace in a shared DB rather than a standalone SQLite file. Cleaner long-term. |
 | [#700](https://github.com/amd/gaia/issues/700) | `Meeting notes capture with speaker diarization` | Synergistic with meeting-prep assembly (§17.2 item 16). |
 | [#704](https://github.com/amd/gaia/issues/704) | `Personal CRM with AI-managed contact profiles and per-person tone matching` | Feeds per-relationship writing voice (§17.2 item 8). |
-| [#690](https://github.com/amd/gaia/issues/690) | `Messaging security: restricted default tool set and input sanitization` | Applies to our Slack bidirectional path (§12.20 C1) — Slack DMs are untrusted input per [Security Model](security-model.mdx) §12. |
+| [#690](https://github.com/amd/gaia/issues/690) | `Messaging security: restricted default tool set and input sanitization` | Applies to our Slack bidirectional path (§12.20 C1) — Slack DMs are untrusted input per [Security Model](/plans/security-model) §12. |
 | [#689](https://github.com/amd/gaia/issues/689) | `Messaging adapter rate limiting infrastructure` | Applies to §12.20 C2 interactive approval flow (Slack rate limits). |
 
 #### 22.4.4 Conflict: Two Memory PRs in Flight
@@ -2377,7 +2377,7 @@ C1 Polish.
 | 10 | Auto-unsubscribe: body-link click (via browser) or RFC 8058 one-click only? | 8058 only / both | 8058 only (body-click is prompt-injection risk) |
 | 11 | Should auto-discovery include reading Chrome/Edge cookies to detect Gmail sessions? | Yes / No / opt-in | Opt-in — requires user acknowledgment; privacy-sensitive signal |
 | 12 | Should the agent ask before the weekly re-discovery heartbeat? | Always / first time / never | First time only (with "don't ask again") |
-| 13 | Which error states get toast vs banner vs modal? | Ad-hoc / systematic | Systematic — use the [Agent UI](agent-ui.mdx) pattern library; documented in §12.12 |
+| 13 | Which error states get toast vs banner vs modal? | Ad-hoc / systematic | Systematic — use the [Agent UI](/plans/agent-ui) pattern library; documented in §12.12 |
 | 14 | How aggressive is default cohort policy on first run? (C2 — L3+ only exists in C2) | Conservative (all L2) / balanced (defaults per §4.2) / aggressive | Balanced per §4.2 in C2 — and the first scheduled triage run's archived items are all surfaced in the next morning brief so the user sees what was archived before it disappears. C1 is capped at L2 so this only applies in C2. |
 | 15 | Which Slack MCP server for C1 Polish? | `@modelcontextprotocol/server-slack` (reference) / active community alternative / in-tree build | Use Anthropic's reference server first; evaluate community forks if scope grows. Decision at C1 implementation plan stage. |
 | 16 | Slack brief content: full bodies or sender+summary redacted? | Full / redacted default with user opt-in to include bodies | **Redacted default** — Slack workspace admins may see messages; bodies stay on-device. User can opt into full-body delivery per-channel. |
@@ -2564,14 +2564,14 @@ Choices the spec implies but does not resolve:
 ## 28. References
 
 **GAIA documents:**
-- [Email & Calendar Integration](email-calendar-integration.mdx) (parent plan)
-- [Autonomy Engine](autonomy-engine.mdx)
-- [Security Model](security-model.mdx)
-- [Agent UI](agent-ui.mdx)
-- [Messaging Integrations](messaging-integrations-plan.mdx)
-- [Setup Wizard](setup-wizard.mdx)
-- [Agent System SDK](../sdk/core/agent-system.mdx)
-- [MCP Client SDK](../sdk/infrastructure/mcp.mdx)
+- [Email & Calendar Integration](/plans/email-calendar-integration) (parent plan)
+- [Autonomy Engine](/plans/autonomy-engine)
+- [Security Model](/plans/security-model)
+- [Agent UI](/plans/agent-ui)
+- [Messaging Integrations](/plans/messaging-integrations-plan)
+- [Setup Wizard](/plans/setup-wizard)
+- [Agent System SDK](/sdk/core/agent-system)
+- [MCP Client SDK](/sdk/infrastructure/mcp)
 
 **Commercial products (feature references):**
 - [Superhuman Mail AI](https://superhuman.com/products/mail/ai) — Split Inbox, Auto Labels, Auto Drafts, Ask AI

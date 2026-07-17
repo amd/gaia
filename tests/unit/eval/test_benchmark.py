@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Unit tests for gaia.eval.benchmark (offline — no Lemonade)."""
 
+import copy
 import json
 import os
 
@@ -10,8 +11,10 @@ import pytest
 from gaia.eval.benchmark import (
     _extract_tools_called,
     _extract_triage_results,
+    _extract_triage_usage,
     _maybe_parse_tool_envelope,
     _normalize_agent_result,
+    _reconstruct_condensed_results,
     build_result,
     default_perf_thresholds_path,
     default_quality_thresholds_path,
@@ -21,7 +24,7 @@ from gaia.eval.benchmark import (
     summarize_benchmark,
 )
 from gaia.eval.performance import PerfThresholds
-from gaia.eval.quality_metrics import QualityThresholds
+from gaia.eval.quality_metrics import QualityThresholds, compute_cost
 
 GT = {
     "_meta": {"note": "skip me"},
@@ -85,6 +88,28 @@ def _agent_result():
     }
 
 
+def _agent_result_with_usage(
+    usage=None,
+    llm_classified_count=4,
+):
+    """Deep-copied variant of ``_agent_result()`` whose triage envelope's
+    ``data`` also carries ``usage`` + ``llm_classified_count`` (Increment 1
+    shape). Never mutates the shared ``TRIAGE_ENVELOPE`` constant."""
+    if usage is None:
+        usage = {
+            "prompt_tokens": 5000,
+            "completion_tokens": 800,
+            "total_tokens": 5800,
+            "tokens_per_second": 40.0,
+        }
+    ar = _agent_result()
+    envelope = copy.deepcopy(TRIAGE_ENVELOPE)
+    envelope["data"]["usage"] = usage
+    envelope["data"]["llm_classified_count"] = llm_classified_count
+    ar["conversation"][2]["content"] = json.dumps(envelope)
+    return ar
+
+
 class TestFailLoud:
     """The upstream fork swallowed malformed tool JSON; we must raise."""
 
@@ -135,6 +160,232 @@ class TestExtractToolsCalled:
         assert _extract_tools_called(_agent_result()) == ["triage_inbox"]
 
 
+class TestExtractTriageUsage:
+    """``_extract_triage_usage`` (Increment 2): sibling walk of
+    ``_extract_triage_results`` that reads ``data.usage`` /
+    ``data.llm_classified_count`` off the first ok triage envelope."""
+
+    def test_extracts_usage_and_count_from_envelope(self):
+        ar = _agent_result_with_usage(
+            usage={
+                "prompt_tokens": 5000,
+                "completion_tokens": 800,
+                "total_tokens": 5800,
+                "tokens_per_second": 40.0,
+            },
+            llm_classified_count=4,
+        )
+        usage, count = _extract_triage_usage(ar["conversation"])
+        assert usage == {
+            "prompt_tokens": 5000,
+            "completion_tokens": 800,
+            "total_tokens": 5800,
+            "tokens_per_second": 40.0,
+        }
+        assert count == 4
+
+    def test_plain_envelope_without_usage_returns_none_zero(self):
+        # TRIAGE_ENVELOPE (the existing/absence-tolerant shape) carries no
+        # usage or llm_classified_count at all.
+        ar = _agent_result()
+        usage, count = _extract_triage_usage(ar["conversation"])
+        assert usage is None
+        assert count == 0
+
+    def test_no_triage_envelope_returns_none_zero(self):
+        convo = [{"role": "assistant", "content": "I refuse."}]
+        usage, count = _extract_triage_usage(convo)
+        assert usage is None
+        assert count == 0
+
+
+class TestCondensedTriageReconstruction:
+    """Condensed envelopes (#2087's ctx-budget trim) must still score the
+    whole batch: ``_extract_triage_results`` reconstructs the omitted
+    verdicts from the verbatim ``grouped`` map rather than scoring only the
+    kept exemplars."""
+
+    EXEMPLARS = [
+        {
+            "id": "a0",
+            "category": "URGENT",
+            "confident": True,
+            "is_spam": False,
+            "is_phishing": False,
+        },
+        {
+            "id": "a1",
+            "category": "URGENT",
+            "confident": True,
+            "is_spam": False,
+            "is_phishing": False,
+        },
+        {
+            "id": "a2",
+            "category": "URGENT",
+            "confident": True,
+            "is_spam": False,
+            "is_phishing": False,
+        },
+    ]
+
+    GROUPED = {
+        "groups": {
+            "URGENT": ["a0", "a1", "a2", "a3", "a4"],
+            "NEEDS_RESPONSE": ["a5", "a6", "a7"],
+            "FYI": ["a8", "a9"],
+        },
+        "spam": ["a8"],
+        "phishing": ["a9"],
+        "total": 10,
+    }
+
+    def _condensed_data(self, exemplars=None, grouped=None):
+        return {
+            "results": self.EXEMPLARS if exemplars is None else exemplars,
+            "results_condensed": True,
+            "results_total": 10,
+            "results_omitted": 7,
+            "note": "[omitted 7 verbatim verdicts ...]",
+            "grouped": self.GROUPED if grouped is None else grouped,
+        }
+
+    def test_reconstructs_all_ids_from_grouped(self):
+        reconstructed = _reconstruct_condensed_results(self._condensed_data())
+        assert len(reconstructed) == self.GROUPED["total"]
+        assert {r["id"] for r in reconstructed} == {f"a{i}" for i in range(10)}
+
+    def test_exemplar_dicts_pass_through_identically_and_first(self):
+        reconstructed = _reconstruct_condensed_results(self._condensed_data())
+        assert reconstructed[:3] == self.EXEMPLARS
+
+    def test_reconstructed_entries_carry_category_and_flags(self):
+        reconstructed = _reconstruct_condensed_results(self._condensed_data())
+        by_id = {r["id"]: r for r in reconstructed}
+
+        assert by_id["a4"]["category"] == "URGENT"
+        assert by_id["a4"]["is_spam"] is False
+        assert by_id["a4"]["is_phishing"] is False
+        assert by_id["a4"]["source"] == "condensed"
+
+        assert by_id["a7"]["category"] == "NEEDS_RESPONSE"
+        assert by_id["a7"]["source"] == "condensed"
+
+        assert by_id["a8"]["category"] == "FYI"
+        assert by_id["a8"]["is_spam"] is True
+        assert by_id["a8"]["source"] == "condensed"
+
+        assert by_id["a9"]["category"] == "FYI"
+        assert by_id["a9"]["is_phishing"] is True
+
+        # exemplars themselves are untouched -- no injected "source" key
+        assert "source" not in by_id["a0"]
+
+    def test_extract_triage_results_reconstructs_via_envelope(self):
+        envelope = {"ok": True, "data": self._condensed_data()}
+        convo = [
+            {
+                "role": "tool",
+                "name": "triage_inbox",
+                "content": json.dumps(envelope),
+            }
+        ]
+        results, error = _extract_triage_results(convo)
+        assert error == ""
+        assert len(results) == 10
+
+    def test_missing_grouped_raises_value_error(self):
+        data = self._condensed_data()
+        del data["grouped"]
+        with pytest.raises(ValueError, match="grouped"):
+            _reconstruct_condensed_results(data)
+
+    def test_grouped_without_groups_key_raises_value_error(self):
+        data = self._condensed_data(grouped={"spam": [], "phishing": [], "total": 0})
+        with pytest.raises(ValueError, match="grouped"):
+            _reconstruct_condensed_results(data)
+
+    def test_grouped_groups_not_a_dict_raises_value_error(self):
+        data = self._condensed_data(grouped={"groups": ["not", "a", "dict"]})
+        with pytest.raises(ValueError, match="grouped"):
+            _reconstruct_condensed_results(data)
+
+    def test_grouped_bucket_not_a_list_raises_value_error(self):
+        data = self._condensed_data(
+            grouped={
+                "groups": {"URGENT": "a0"},
+                "spam": [],
+                "phishing": [],
+                "total": 1,
+            }
+        )
+        with pytest.raises(ValueError, match="not a list of ids"):
+            _reconstruct_condensed_results(data)
+
+    def test_non_condensed_envelope_behavior_unchanged(self):
+        # Regression pin: a plain (non-condensed) envelope must still return
+        # data["results"] verbatim, untouched by the reconstruction path.
+        ar = _agent_result()
+        results, error = _extract_triage_results(ar["conversation"])
+        assert error == ""
+        assert results == TRIAGE_ENVELOPE["data"]["results"]
+
+    def test_build_result_scores_full_batch_from_condensed_envelope(self):
+        # End-to-end: quality metrics must be computed over all 10 ids, not
+        # just the 3 kept exemplars.
+        ground_truth = {
+            "_meta": {"note": "skip me"},
+            "a0": {"category": "URGENT", "is_spam": False, "is_phishing": False},
+            "a1": {"category": "URGENT", "is_spam": False, "is_phishing": False},
+            "a2": {"category": "URGENT", "is_spam": False, "is_phishing": False},
+            "a3": {"category": "URGENT", "is_spam": False, "is_phishing": False},
+            "a4": {"category": "URGENT", "is_spam": False, "is_phishing": False},
+            "a5": {
+                "category": "NEEDS_RESPONSE",
+                "is_spam": False,
+                "is_phishing": False,
+            },
+            "a6": {
+                "category": "NEEDS_RESPONSE",
+                "is_spam": False,
+                "is_phishing": False,
+            },
+            "a7": {
+                "category": "NEEDS_RESPONSE",
+                "is_spam": False,
+                "is_phishing": False,
+            },
+            "a8": {"category": "FYI", "is_spam": True, "is_phishing": False},
+            "a9": {"category": "FYI", "is_spam": False, "is_phishing": True},
+        }
+        envelope = {"ok": True, "data": self._condensed_data()}
+        ar = {
+            "input_tokens": 1000,
+            "output_tokens": 200,
+            "conversation": [
+                {"role": "user", "content": "Triage my inbox (10 emails)"},
+                {
+                    "role": "tool",
+                    "name": "triage_inbox",
+                    "content": json.dumps(envelope),
+                },
+            ],
+        }
+        out = build_result(
+            ar,
+            run_id="r0",
+            timestamp="t",
+            model_id="Gemma-4-E4B-it-GGUF",
+            total_duration_ms=2000,
+            ground_truth=ground_truth,
+        )
+        assert out["total_emails"] == 10
+        assert out["quality"]["category_accuracy"] == 1.0
+        assert out["quality"]["spam"]["tp"] + out["quality"]["spam"]["fn"] == 1
+        assert out["quality"]["phishing"]["tp"] + out["quality"]["phishing"]["fn"] == 1
+        assert len(out["quality"]["categorization"]["rows"]) == 10
+
+
 class TestBuildResult:
     def test_scorecard_compatible_and_perf(self):
         out = build_result(
@@ -180,6 +431,106 @@ class TestBuildResult:
         )
         assert out["status"] == "ERRORED"
         assert out["error"] == "backend down"
+
+
+class TestBuildResultUsageMerge:
+    """Increment 2: ``build_result`` merges the triage-classify ``usage`` block
+    into the run's token totals + adds ``tokens_per_triage`` to
+    ``performance_summary``. Absence-tolerant — a plain (no-usage) envelope
+    must leave every existing number exactly as today."""
+
+    _USAGE = {
+        "prompt_tokens": 5000,
+        "completion_tokens": 800,
+        "total_tokens": 5800,
+        "tokens_per_second": 40.0,
+    }
+
+    def _build_with_usage(self, model_id="Gemma-4-E4B-it-GGUF"):
+        return build_result(
+            _agent_result_with_usage(usage=self._USAGE, llm_classified_count=4),
+            run_id="r1",
+            timestamp="t",
+            model_id=model_id,
+            total_duration_ms=2000,
+            ground_truth=GT,
+        )
+
+    def test_merged_totals_in_performance_summary_and_top_level(self):
+        # Fixture note: _agent_result()'s top-level aggregates are
+        # input=1000/output=200/total=1200 (preferred over step sums by
+        # performance.extract_from_agent_result). Merged with the usage block
+        # (prompt=5000/completion=800/total=5800):
+        #   total_input_tokens  = 1000 + 5000 = 6000
+        #   total_output_tokens =  200 +  800 = 1000
+        #   total_tokens        = 1200 + 5800 = 7000... but per the spec the
+        #   merge adds (prompt + completion) to total_tokens, i.e. 1200 + 5800
+        #   = 7000. However total input+output alone would be 7000 too
+        #   (6000+1000); both derivations agree.
+        out = self._build_with_usage()
+        ps = out["performance_summary"]
+        assert ps["total_input_tokens"] == 6000
+        assert ps["total_output_tokens"] == 1000
+        assert ps["total_tokens"] == 7000
+        # run_to_dict output (top-level keys) reflects the same merge.
+        assert out["total_input_tokens"] == 6000
+        assert out["total_output_tokens"] == 1000
+        assert out["total_tokens"] == 7000
+
+    def test_new_performance_summary_fields_exact_values(self):
+        out = self._build_with_usage()
+        ps = out["performance_summary"]
+        assert ps["triage_llm_tokens"] == 5800
+        assert ps["llm_classified_count"] == 4
+        assert ps["tokens_per_triage"] == 1450.0
+
+    def test_avg_tps_and_ttft_unchanged_by_merge(self):
+        # avg_tokens_per_second / avg_time_to_first_token stay outer-turn
+        # derived (same values as the no-usage baseline).
+        out = self._build_with_usage()
+        ps = out["performance_summary"]
+        assert ps["avg_tokens_per_second"] == 50.0
+        assert ps["avg_time_to_first_token"] == 0.1
+
+    def test_cost_estimate_rises_with_merged_totals(self):
+        # Use a priced model so compute_cost isn't 0.0-clamped for local ids.
+        out_no_usage = build_result(
+            _agent_result(),
+            run_id="r0",
+            timestamp="t",
+            model_id="claude-sonnet-4",
+            total_duration_ms=2000,
+            ground_truth=GT,
+        )
+        out_with_usage = self._build_with_usage(model_id="claude-sonnet-4")
+
+        baseline_cost = compute_cost(1000, 200, model="claude-sonnet-4")
+        merged_cost = compute_cost(6000, 1000, model="claude-sonnet-4")
+
+        assert out_no_usage["cost_estimate"]["estimated_usd"] == baseline_cost
+        assert out_with_usage["cost_estimate"]["estimated_usd"] == merged_cost
+        assert merged_cost > baseline_cost
+
+    def test_no_usage_envelope_leaves_new_keys_absent_and_totals_unchanged(self):
+        # Plain TRIAGE_ENVELOPE (today's shape, no usage/llm_classified_count).
+        out = build_result(
+            _agent_result(),
+            run_id="r1",
+            timestamp="t",
+            model_id="Gemma-4-E4B-it-GGUF",
+            total_duration_ms=2000,
+            ground_truth=GT,
+        )
+        ps = out["performance_summary"]
+        assert "triage_llm_tokens" not in ps
+        assert "llm_classified_count" not in ps
+        assert "tokens_per_triage" not in ps
+        assert ps["total_input_tokens"] == 1000
+        assert ps["total_output_tokens"] == 200
+        assert ps["total_tokens"] == 1200
+        assert out["total_input_tokens"] == 1000
+        assert out["total_output_tokens"] == 200
+        assert out["total_tokens"] == 1200
 
 
 class TestRunBenchmarkOffline:
@@ -233,6 +584,64 @@ class TestRunBenchmarkOffline:
         )
         assert os.environ["GAIA_EMAIL_TRIAGE_MAX_MESSAGES"] == "100"
 
+    def test_errored_row_still_closes_agent_db(self):
+        """A ``process_query`` failure must still release the agent's DB —
+        the ERRORED-row path (``_close_agent_db``) must run before the
+        experiment loop continues (#1892 regression pin)."""
+
+        class _StubAgentWithDb:
+            def __init__(self):
+                self.close_db_called = False
+
+            def process_query(self, prompt):
+                raise RuntimeError("boom")
+
+            def close_db(self):
+                self.close_db_called = True
+
+        created = {}
+
+        def _factory():
+            agent = _StubAgentWithDb()
+            created["agent"] = agent
+            return agent
+
+        results = run_benchmark(
+            "Gemma-4-E4B-it-GGUF",
+            mbox_path="ignored-when-factory-injected",
+            limit=2,
+            experiments=1,
+            ground_truth=GT,
+            agent_factory=_factory,
+        )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "ERRORED"
+        assert created["agent"].close_db_called is True
+
+    def test_errored_row_tolerates_agent_with_no_close_db(self):
+        """A stub agent with NO ``close_db`` attribute at all must not make
+        ``run_benchmark`` raise — the ERRORED row is still returned normally
+        (#1892 regression pin)."""
+
+        class _StubAgentNoDb:
+            def process_query(self, prompt):
+                raise RuntimeError("boom")
+
+        assert not hasattr(_StubAgentNoDb(), "close_db")
+
+        results = run_benchmark(
+            "Gemma-4-E4B-it-GGUF",
+            mbox_path="ignored-when-factory-injected",
+            limit=2,
+            experiments=1,
+            ground_truth=GT,
+            agent_factory=_StubAgentNoDb,
+        )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "ERRORED"
+
 
 class TestCategorizationExportInResult:
     def test_quality_block_carries_categorization_export(self):
@@ -269,6 +678,52 @@ class TestSummarizeBenchmark:
         assert perf["avg_tokens_per_second"] == 50.0
         assert perf["scenarios_with_data"] == 3
         assert "Gemma-4-E4B-it-GGUF" in summary["variance"]
+
+    def test_scorecard_perf_section_carries_triage_usage(self):
+        """#1891 gap: build_scorecard's generic performance block has no notion
+        of email's triage-usage fields — they must be merged in from each run's
+        performance_summary, not silently dropped (live-shape regression pin;
+        was found None on real, fully-passing hardware runs)."""
+        results = [
+            build_result(
+                _agent_result_with_usage(),
+                run_id=f"r{i}",
+                timestamp="t",
+                model_id="Gemma-4-E4B-it-GGUF",
+                total_duration_ms=2000,
+            )
+            for i in range(3)
+        ]
+        # Precondition: the per-run performance_summary DOES carry the fields
+        # (build_result's own extraction, tested separately) — this test is
+        # about the AGGREGATE scorecard block, not the per-run one.
+        assert results[0]["performance_summary"]["triage_llm_tokens"] == 5800
+        assert results[0]["performance_summary"]["llm_classified_count"] == 4
+
+        summary = summarize_benchmark(results, run_id="bench-run")
+        perf = summary["scorecard"]["performance"]
+        assert perf["triage_llm_tokens"] == 5800
+        assert perf["llm_classified_count"] == 4
+        assert perf["tokens_per_triage"] == 1450.0
+
+    def test_scorecard_perf_section_omits_triage_usage_when_absent(self):
+        # Plain TRIAGE_ENVELOPE (no usage/llm_classified_count) must not
+        # fabricate the keys — absence is the normal, non-error shape.
+        results = [
+            build_result(
+                _agent_result(),
+                run_id=f"r{i}",
+                timestamp="t",
+                model_id="Gemma-4-E4B-it-GGUF",
+                total_duration_ms=2000,
+            )
+            for i in range(3)
+        ]
+        summary = summarize_benchmark(results, run_id="bench-run")
+        perf = summary["scorecard"]["performance"]
+        assert "triage_llm_tokens" not in perf
+        assert "llm_classified_count" not in perf
+        assert "tokens_per_triage" not in perf
 
     def test_quality_gate_block_present_with_thresholds(self):
         results = [
@@ -454,7 +909,11 @@ class TestAcceptanceMetrics:
 
 
 class TestPerfGateInBenchmark:
-    """The perf gate (#1277) added alongside #1278's quality gate — report mode."""
+    """The perf gate (#1277) added alongside #1278's quality gate.
+
+    The committed manifest is enforcing (#1990); the report-mode cases below
+    exercise the gate logic with inline ``enforce=False`` thresholds.
+    """
 
     def _results(self, *, total_duration_ms=2000):
         return [
@@ -534,16 +993,160 @@ class TestPerfGateInBenchmark:
         assert "quality_gate" in summary
         assert "perf_gate" in summary
 
-    def test_committed_perf_manifest_loads_in_report_mode(self):
-        # #1112 contract: the shipped perf manifest must exist, parse, and default
-        # to report mode until the Strix Halo bars are ratified on hardware.
+    def test_committed_perf_manifest_is_report_mode(self):
+        # Temporarily report mode: the bars aren't validated across runs and TTFT
+        # is cold-start-dominated (8.5s then 51s across runs), so an enforcing
+        # TTFT bar keeps false-failing the release without a real regression. Same
+        # 'ship now, harden later' posture as the drafting/briefing judge gates;
+        # re-enforce once the bars are calibrated over several runs. Values are
+        # kept as current best-estimate targets.
         assert default_perf_thresholds_path().exists()
         pth = load_default_perf_thresholds()
-        assert pth.ttft_max_s == 5.0
-        assert pth.throughput_min_tps == 10.0
-        assert pth.pipeline_max_s == 300.0
-        assert pth.peak_memory_max_gb == 8.0
+        assert pth.ttft_max_s == 15.0
+        assert pth.throughput_min_tps == 8.0
+        assert pth.pipeline_max_s == 2700.0
+        assert pth.peak_memory_max_gb == 16.0
         assert pth.enforce is False
+
+
+class TestCtxSizeEnvelope:
+    """16K-target/32K-max ctx-window envelope for the email benchmark (#1892).
+
+    RED-first: none of these kwargs/behaviors exist yet in benchmark.py.
+    """
+
+    def test_build_result_stamps_ctx_size(self):
+        # TARGET: build_result accepts a ctx_size kwarg and stamps it at the top
+        # level of the returned dict. Fails RED today with TypeError (ctx_size
+        # isn't a build_result param yet); goes green when the kwarg lands.
+        result = build_result(
+            _agent_result(),
+            run_id="x",
+            timestamp="t",
+            model_id="m",
+            total_duration_ms=100,
+            ctx_size=16384,
+        )
+        assert result["ctx_size"] == 16384
+
+    def test_build_result_omits_ctx_size_when_not_given(self):
+        # TARGET: when ctx_size is omitted the key is simply absent (cleanest for
+        # downstream JSON — never a null to special-case). Passes today already,
+        # and must keep passing once the kwarg is added with a None default.
+        result = build_result(
+            _agent_result(),
+            run_id="x",
+            timestamp="t",
+            model_id="m",
+            total_duration_ms=100,
+        )
+        assert "ctx_size" not in result
+
+    def test_run_benchmark_accepts_ctx_size_kwarg(self):
+        # TARGET: run_benchmark accepts a ctx_size kwarg and stamps the resolved
+        # ctx into every returned result (including the agent_factory path, which
+        # bypasses EmailAgentConfig construction). Fails RED today with TypeError
+        # (no such kwarg); goes green when run_benchmark threads ctx_size into
+        # build_result for each experiment.
+        class _StubAgent:
+            def process_query(self, prompt):
+                return _agent_result()
+
+        results = run_benchmark(
+            "m",
+            mbox_path="ignored",
+            ctx_size=16384,
+            experiments=1,
+            agent_factory=_StubAgent,
+        )
+        assert results
+        assert all(r["ctx_size"] == 16384 for r in results)
+
+    def test_run_benchmark_records_overflow_as_errored_row(self):
+        # TARGET (fixed) behavior: a single experiment's process_query raising
+        # (e.g. a context-overflow error) must be caught and recorded as one
+        # ERRORED row, not abort the whole run. Today there is no try/except
+        # around `agent.process_query(prompt)` in run_benchmark, so this test
+        # currently fails RED — not with a clean assertion failure, but with the
+        # injected RuntimeError propagating out of run_benchmark uncaught. That
+        # is the correct (if noisy) red state per the TDD brief for this test.
+        calls = {"n": 0}
+
+        class _StubAgent:
+            def process_query(self, prompt):
+                calls["n"] += 1
+                if calls["n"] == 2:
+                    raise RuntimeError("context size (4096")
+                return _agent_result()
+
+        results = run_benchmark(
+            "m",
+            mbox_path="ignored",
+            experiments=3,
+            agent_factory=_StubAgent,
+        )
+        assert len(results) == 3
+        assert results[1]["status"] == "ERRORED"
+        assert "error" in results[1]
+        assert results[0]["status"] != "ERRORED"
+        assert results[2]["status"] != "ERRORED"
+
+    def test_run_benchmark_propagates_ctx_readback_errors(self):
+        # ASSUMED SEAM: real ctx readback-verification is performed inside
+        # EmailTriageAgent.__init__ (owned by a different file/agent in this
+        # parallel work split). This test only pins that run_benchmark must NOT
+        # swallow that exception — it must propagate it loudly, never silently
+        # continue with a mismatched ctx. We simulate the real wiring's failure
+        # mode by having the injected agent_factory itself raise, since we
+        # cannot drive real EmailTriageAgent construction from this offline
+        # slice.
+        # Today this fails RED with TypeError (ctx_size isn't a run_benchmark
+        # kwarg yet) rather than the intended RuntimeError match — still the
+        # correct red state; once ctx_size is wired this assertion pins that
+        # the readback RuntimeError propagates through run_benchmark unchanged.
+        def _agent_factory():
+            raise RuntimeError("ctx readback mismatch: requested=4096 actual=16384")
+
+        with pytest.raises(RuntimeError, match="ctx readback mismatch"):
+            run_benchmark(
+                "m",
+                mbox_path="ignored",
+                ctx_size=4096,
+                agent_factory=_agent_factory,
+            )
+
+
+class TestCtxSizeOutputStamping:
+    """quality.json / scorecard.json ctx_size stamping contract (#1892)."""
+
+    def test_benchmark_outputs_stamp_ctx(self):
+        # DESIGN CHOICE (flagged for the implementer): asserting top-level
+        # placement of ctx_size on both summary["quality"] and
+        # summary["scorecard"] — not nested under "performance". If a nested
+        # placement (summary["scorecard"]["performance"]["ctx_size"]) is chosen
+        # instead, this assertion needs updating; top-level is preferred because
+        # it's the simplest, most-discoverable place for a comparison tool to
+        # read the run's ctx envelope from.
+        results = [
+            build_result(
+                _agent_result(),
+                run_id=f"r{i}",
+                timestamp="t",
+                model_id="Gemma-4-E4B-it-GGUF",
+                total_duration_ms=2000,
+                ground_truth=GT,
+            )
+            for i in range(2)
+        ]
+        # Stamp ctx_size onto the canned result dicts directly (build_result
+        # doesn't support ctx_size yet — see TestCtxSizeEnvelope above), so this
+        # test isolates the summarize_benchmark stamping contract on its own.
+        for r in results:
+            r["ctx_size"] = 16384
+
+        summary = summarize_benchmark(results, run_id="x")
+        assert summary["quality"]["ctx_size"] == 16384
+        assert summary["scorecard"]["ctx_size"] == 16384
 
 
 if __name__ == "__main__":

@@ -13,7 +13,9 @@ No external assets — inline CSS only. No LLM, no network calls.
 
 from __future__ import annotations
 
+import argparse
 import html as _html_lib
+import sys
 import webbrowser
 from pathlib import Path
 from typing import (
@@ -28,6 +30,7 @@ from typing import (
     get_origin,
 )
 
+from gaia_agent_email.context_budget import CONTEXT_MAX_TOKENS, CONTEXT_TARGET_TOKENS
 from gaia_agent_email.contract import (
     SCHEMA_VERSION,
     ActionItem,
@@ -45,6 +48,7 @@ from gaia_agent_email.contract import (
     CalendarRespondRequest,
     CalendarRespondResponse,
     DraftReply,
+    DraftScaffold,
     EmailActionConfirmRequest,
     EmailActionConfirmResponse,
     EmailAddress,
@@ -389,11 +393,28 @@ def render_endpoint_spec_html() -> str:
         f'<p class="desc">Triage a single email or a full thread. '
         f"Accepts the frozen #1262 EmailTriageRequest and returns "
         f"a structured EmailTriageResponse — category, spam/phishing signals, "
-        f"a plain-text summary, extracted action items, and an optional draft reply. "
+        f"a plain-text summary, extracted action items, and an optional reply "
+        f"scaffold. "
         f"No mail is read or sent; this analyses only the payload in the request. "
         f"Extracted action items also persist to the local task store, linked to "
         f"the source <code>message_id</code> and de-duplicated per message (#1605) "
-        f"— the response shape is unchanged.</p>"
+        f"— the response shape is unchanged. "
+        f"A thread whose combined body exceeds the context-window budget is "
+        f"condensed to fit before triage (#1889): the latest message is kept "
+        f"verbatim and older messages are summarized by one extra LLM call "
+        f"(expect one extra call's latency; its tokens appear in "
+        f"<code>usage</code>). A failed condense call is a loud 502, never a "
+        f"silent fallback.</p>"
+        f"<p class='desc'><strong>The draft is a scaffold, not a written reply "
+        f"(schema 2.3):</strong> when one is proposed it is a "
+        f"<code>DraftScaffold</code> carrying only <code>to</code> and "
+        f"<code>subject</code> — triage classifies and summarises, it never "
+        f"composes reply prose (so the model choice does not change this). To "
+        f"obtain a sendable reply, compose the body yourself (e.g. an LLM call "
+        f"over the returned <code>summary</code> + <code>action_items</code> + "
+        f"the original message) and pass <code>(to, subject, body)</code> to "
+        f"<code>POST /v1/email/draft</code>, which returns a full "
+        f"<code>DraftReply</code> and a single-use send-confirmation token.</p>"
         f"<h3>Request envelope</h3>"
         f"{_model_table(EmailTriageRequest, 'EmailTriageRequest')}"
         f"<h3>Payload shapes</h3>"
@@ -401,7 +422,7 @@ def render_endpoint_spec_html() -> str:
         f"<h3>Response envelope</h3>"
         f"{_model_table(EmailTriageResponse, 'EmailTriageResponse')}"
         f"{_model_table(EmailTriageResult, 'EmailTriageResult')}"
-        f"{_model_table(DraftReply, 'DraftReply (optional)')}"
+        f"{_model_table(DraftScaffold, 'DraftScaffold (optional — reply scaffold, no body)')}"
         f"{_model_table(ActionItem, 'ActionItem')}"
         f"</div>"
     )
@@ -419,7 +440,8 @@ def render_endpoint_spec_html() -> str:
         f"item sets that entry's <code>error</code> and the rest still run. "
         f"<strong>HTTP 200 with every item errored is valid</strong> — inspect each "
         f"<code>results[].error</code>, not just the status. A 502 means the local "
-        f"LLM was unreachable before any item was processed (the whole batch fails).</p>"
+        f"LLM was unreachable or the triage model is unavailable there, detected "
+        f"before any item was processed (the whole batch fails).</p>"
         f"<h3>Request envelope</h3>"
         f"{_model_table(BatchTriageRequest, 'BatchTriageRequest')}"
         f"<h3>Response envelope</h3>"
@@ -515,7 +537,10 @@ def render_endpoint_spec_html() -> str:
             ("EmailDraftRequest", EmailDraftRequest),
             ("OutgoingAttachment", OutgoingAttachment),
         ],
-        response_sections=[("EmailDraftResponse", EmailDraftResponse)],
+        response_sections=[
+            ("EmailDraftResponse", EmailDraftResponse),
+            ("DraftReply (full reply — includes the composed body)", DraftReply),
+        ],
     )
 
     send_block = _endpoint_block(
@@ -648,7 +673,8 @@ def render_endpoint_spec_html() -> str:
         method="GET",
         description=(
             "View events on the primary calendar (read-only). Optional RFC 3339 "
-            "query params time_min / time_max bound the window; provider "
+            "query params time_min / time_max bound the window — omitting both "
+            "defaults to a forward window (now → +30 days); provider "
             "(google|microsoft) is required only when more than one account is "
             "connected. Fails loudly (403 + reconnect CTA) if the calendar scope "
             "is missing."
@@ -699,6 +725,121 @@ def render_endpoint_spec_html() -> str:
         response_sections=[("CalendarRespondResponse", CalendarRespondResponse)],
     )
 
+    # Stateful agent surface (/v1/email/agent/*). Hand-authored (not model
+    # tables) because the request/response shapes live in agent_routes.py — not
+    # the frozen contract — and /query returns an SSE stream, not a JSON body.
+    query_block = """
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/query</span>
+  <p class="desc">Run the email agent loop for one natural-language request and
+    stream the result as <b>Server-Sent Events</b> (<code>text/event-stream</code>)
+    using the <b>frozen canonical /query wire contract</b> (#2015). Request body:
+    <code>{ "query": str, "run_id": uuid, "context": [{role, content}],
+    "model"?: str, "provider"?: str, "max_steps"?: int }</code>. The host mints
+    <code>run_id</code> so the run is cancellable from the instant the request is
+    sent; the transcript slice is <b>pushed</b> in <code>context</code> (the sidecar
+    stays stateless).</p>
+  <p class="desc">Each SSE frame is <code>data: {json}</code> discriminated on
+    <code>type</code>, one of the <b>seven canonical event types</b>:
+    <code>status</code> {message} &middot; <code>token</code> {delta} &middot;
+    <code>tool_call</code> {tool, args} &middot; <code>tool_result</code>
+    {tool, render?, data} &middot; <code>needs_confirmation</code>
+    {run_id, action, summary} &middot; <code>final</code> {answer, usage?} &middot;
+    <code>error</code> {detail, status}. The stream is terminated by <b>exactly one
+    <code>final</code> or <code>error</code></b>.</p>
+  <p class="desc"><b>Confirmation (stateless stub, epic decision D1):</b> a step
+    that needs approval (a destructive/external tool such as <code>send_now</code>)
+    emits <code>needs_confirmation</code> and then the run ends with a
+    <code>final</code> refusal pointing at the deterministic fixed-function route
+    (<code>POST /v1/email/draft</code> to mint a single-use token, then
+    <code>POST /v1/email/send</code>). Server-side resume is not wired yet;
+    <code>confirm_url</code> is omitted.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/query/{run_id}/cancel</span>
+  <p class="desc">Cancel an in-flight <code>/query</code> run — stops tool execution
+    between steps (cooperative, not a kill). Returns
+    <code>{ run_id, cancelled, status }</code>. 404 if no run with that id is in
+    flight.</p>
+</div>
+"""
+
+    agent_block = """
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/agent/session</span>
+  <p class="desc">Create (or, with <code>reset:true</code>, recreate) a
+    session-scoped agent. Body: <code>{ "session_id": str, "reset"?: bool }</code>.
+    Returns <code>{ session_id, created, memory:{ enabled, available, message } }</code>.
+    Building the agent here surfaces construction failures early and warms memory.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/agent/query</span>
+  <p class="desc">Run one conversational turn and stream the agent loop back as
+    <b>Server-Sent Events</b> (<code>text/event-stream</code>). Body:
+    <code>{ "session_id": str, "message": str, "memory_enabled"?: bool }</code>.
+    Each SSE frame is <code>data: {json}</code> with a <code>type</code> of
+    <code>status</code>, <code>thinking</code>, <code>step</code>, tool usage,
+    <code>permission_request</code> (a gated tool is waiting), <code>error</code>,
+    or the terminal <code>run_complete</code> (carrying <code>answer</code>).
+    Because this runs the real agent loop, every agent tool is reachable via
+    natural language. One turn at a time per session — an overlapping call
+    returns <b>HTTP 409</b>.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/agent/confirm-tool</span>
+  <p class="desc">Approve or deny a tool the agent is blocking on (send / forward /
+    delete / quarantine / calendar-create). Body:
+    <code>{ "session_id": str, "approved": bool }</code>. The run resumes when this
+    returns. 404 when no run is awaiting confirmation.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/agent/cancel</span>
+  <p class="desc">Cooperatively cancel the session's in-flight run. Body:
+    <code>{ "session_id": str }</code>.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">DELETE</span>
+  <span class="path">/v1/email/agent/session/{session_id}</span>
+  <p class="desc">Evict the session and tear down its agent. 404 if unknown.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">GET</span>
+  <span class="path">/v1/email/agent/session/{session_id}/history</span>
+  <p class="desc">Return the conversation so far:
+    <code>{ session_id, turns:[{ user, assistant }] }</code> (oldest first).</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/agent/memory</span>
+  <p class="desc">Enable/disable the session agent's memory at runtime (#1666).
+    Body: <code>{ "session_id": str, "enabled": bool }</code>. Returns
+    <code>{ enabled, available, message }</code>. Enabling memory that was never
+    initialized this session (started with <code>GAIA_MEMORY_DISABLED</code> or
+    Lemonade unreachable) returns <b>HTTP 409</b> with an actionable message —
+    never a silent no-op.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">GET</span>
+  <span class="path">/v1/email/agent/memory/{session_id}</span>
+  <p class="desc">Report the session agent's memory state without changing it:
+    <code>{ enabled, available, message }</code>.</p>
+</div>
+"""
+
     body = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -719,6 +860,30 @@ def render_endpoint_spec_html() -> str:
   Field descriptions are sourced directly from the pydantic models and stay
   in sync with the contract automatically.
 </p>
+
+<h2>Authentication</h2>
+<p class="subtitle">
+  The sidecar binds <code>127.0.0.1</code> and can send mail as the user, so it
+  authenticates its <strong>caller</strong> (#1706). This is separate from the
+  draft&rarr;send <code>confirmation_token</code>, which binds a send to one exact
+  message but does not identify who is calling.
+</p>
+<ul class="desc">
+  <li><strong>Per-session bearer token.</strong> The parent process that spawns
+    the sidecar (the <code>@amd-gaia/agent-email</code> lifecycle or the GAIA UI
+    sidecar manager) generates a cryptographically-random token and hands it to
+    the sidecar over the private <code>GAIA_EMAIL_SIDECAR_TOKEN</code> env
+    channel. Every <code>/v1/email/*</code> request must carry
+    <code>Authorization: Bearer &lt;token&gt;</code> or it is rejected with
+    <strong>HTTP 401</strong>. Liveness/version probes
+    (<code>/health</code>, <code>/version</code>) and these HTML pages are exempt.</li>
+  <li><strong>Host allowlist.</strong> A non-loopback <code>Host</code> header is
+    rejected with <strong>HTTP 400</strong>, closing DNS-rebinding.</li>
+  <li><strong>Origin rejection.</strong> A request carrying a non-loopback browser
+    <code>Origin</code> is rejected with <strong>HTTP 403</strong>, closing
+    drive-by web-page access. Non-browser clients send no Origin and are
+    unaffected.</li>
+</ul>
 
 <h2>Endpoints</h2>
 
@@ -774,6 +939,53 @@ def render_endpoint_spec_html() -> str:
 
 {calendar_respond_block}
 
+<h2>Canonical agent-loop query (v2)</h2>
+<p class="subtitle">
+  The v2 keystone (#2016): a natural-language request in, the agent reasons and
+  chains its tools into a multi-step workflow, and the seven canonical Server-Sent
+  Event types out (the frozen #2015 <code>/query</code> wire contract). This is the
+  one loop every v2 front-door (Agent UI, <code>gaia email</code> CLI,
+  <code>gaia api</code>) relays to. Unlike the stateful surface below, the host
+  mints <code>run_id</code> and pushes the transcript slice, so the sidecar stays
+  stateless.
+</p>
+
+{query_block}
+
+<h2>Stateful agent surface</h2>
+<p class="subtitle">
+  A session-scoped, conversational surface (<code>/v1/email/agent/*</code>) that
+  hosts the full <code>EmailTriageAgent</code> — memory, personalization, and
+  every agent tool — behind an HTTP query interface. Distinct from the stateless
+  triage contract above: this runs the real agent loop and streams it back as
+  Server-Sent Events. This is the surface the Agent UI uses to drive the packaged
+  agent over the network instead of importing it in-process.
+</p>
+
+{agent_block}
+
+<h2>Context-window envelope</h2>
+<p class="body-t">The agent is designed, measured, and released against a pinned
+  context-window envelope (<a class="iss" href="https://github.com/amd/gaia/issues/1892"
+  target="_blank" rel="noopener">#1892</a>; constants in
+  <code class="inl">gaia_agent_email/context_budget.py</code>). Published scorecards
+  and baselines state the window they were measured under
+  (<code class="inl">ctx_size</code> in the scorecard's environment block and in the
+  committed accuracy baseline).</p>
+<table>
+  <thead><tr><th>Bound</th><th>Tokens</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><b>Target</b></td><td><b>{CONTEXT_TARGET_TOKENS:,}</b></td><td>The window published numbers are measured at — fits everyday triage/draft prompts on consumer NPU/GPU KV-cache budgets</td></tr>
+    <tr><td><b>Acceptable max</b></td><td><b>{CONTEXT_MAX_TOKENS:,}</b></td><td>Ceiling for deliberately larger runs (long-thread stress); above it the measurement stops representing a real device</td></tr>
+  </tbody>
+</table>
+<p class="body-t">To see what a live triage actually consumed, read the
+  <code class="inl">usage</code> block in the triage response
+  (<code class="inl">prompt_tokens</code> / <code class="inl">completion_tokens</code>).
+  <code class="inl">GET /v1/email/init</code> additionally reports the currently
+  loaded <code class="inl">ctx_size</code> on <code class="inl">model</code> when the
+  triage model is loaded and the server exposes it — null otherwise.</p>
+
 <h2>Convenience pages</h2>
 
 <div class="endpoint-block">
@@ -804,6 +1016,30 @@ def render_endpoint_spec_html() -> str:
 # Default location for the generated spec when no explicit path is given.
 DEFAULT_SPEC_PATH = Path.home() / ".gaia" / "email" / "endpoint-spec.html"
 
+# Committed artifact lives at the email package root (next to pyproject.toml and
+# openapi.email.json). It is a pure render of ``render_endpoint_spec_html()`` —
+# a drift guard (see tests/test_spec_html_artifact.py) keeps it from silently
+# diverging so a regeneration can never drop hand-maintained sections.
+ARTIFACT_PATH = Path(__file__).resolve().parents[1] / "specification.html"
+
+
+def write_artifact(path: Path = ARTIFACT_PATH) -> Path:
+    """Generate the spec HTML and write it to ``path``. Returns the path written."""
+    path.write_text(render_endpoint_spec_html(), encoding="utf-8")
+    return path
+
+
+def check_artifact(path: Path = ARTIFACT_PATH) -> bool:
+    """Return True iff the committed artifact matches a freshly rendered spec.
+
+    Used by CI and the drift test to detect divergence between
+    ``specification.html`` and its generator. Reads the committed file and
+    compares against the current render — never rewrites it.
+    """
+    if not path.exists():
+        return False
+    return path.read_text(encoding="utf-8") == render_endpoint_spec_html()
+
 
 def write_and_open_spec(output_path: Optional[str] = None) -> Path:
     """Render the spec, write it to disk, and open it in a browser.
@@ -823,8 +1059,59 @@ def write_and_open_spec(output_path: Optional[str] = None) -> Path:
     return dest
 
 
+def main(argv=None) -> int:
+    """Regenerate or verify the committed ``specification.html`` artifact.
+
+    Mirrors ``gaia_agent_email.export_openapi`` so the HTML spec is a
+    generator-guarded artifact just like ``openapi.email.json``::
+
+        # Regenerate after changing spec_html.py or the contract models:
+        python -m gaia_agent_email.spec_html
+
+        # CI drift check — non-zero exit if the committed file is stale:
+        python -m gaia_agent_email.spec_html --check
+    """
+    parser = argparse.ArgumentParser(
+        description="Export or verify the committed email specification.html artifact."
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Exit non-zero if the committed artifact is stale (no write).",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=ARTIFACT_PATH,
+        help=f"Artifact path (default: {ARTIFACT_PATH}).",
+    )
+    args = parser.parse_args(argv)
+
+    if args.check:
+        if check_artifact(args.output):
+            print(f"specification.html up to date: {args.output}")
+            return 0
+        print(
+            f"specification.html is STALE or missing: {args.output}\n"
+            "Regenerate it with:  python -m gaia_agent_email.spec_html",
+            file=sys.stderr,
+        )
+        return 1
+
+    written = write_artifact(args.output)
+    print(f"Wrote specification.html artifact: {written}")
+    return 0
+
+
 __all__ = [
     "render_endpoint_spec_html",
     "write_and_open_spec",
+    "write_artifact",
+    "check_artifact",
     "DEFAULT_SPEC_PATH",
+    "ARTIFACT_PATH",
 ]
+
+
+if __name__ == "__main__":
+    sys.exit(main())

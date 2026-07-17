@@ -3,11 +3,11 @@
 //
 // C++ GAIA VLM integration tests.
 // Requires: lemonade-server running at GAIA_CPP_BASE_URL
-//           (default: http://localhost:8000/api/v1) with a VLM model
+//           (default: http://localhost:13305/api/v1) with a VLM model
 //           (default: Qwen3-VL-4B-Instruct-GGUF) available.
 //
 // Env overrides:
-//   GAIA_CPP_BASE_URL       base URL (default http://localhost:8000/api/v1)
+//   GAIA_CPP_BASE_URL       base URL (default http://localhost:13305/api/v1)
 //   GAIA_CPP_TEST_VLM_MODEL VLM model id (default Qwen3-VL-4B-Instruct-GGUF)
 //   GAIA_CPP_TEST_VLM_CTX   context size (default 32768)
 //   GAIA_CPP_TEST_VLM_SMALL_CTX  ctx size used by the overflow test (default 2048)
@@ -41,7 +41,7 @@
 namespace {
 
 std::string testBaseUrl() {
-    return gaia::getEnvVar("GAIA_CPP_BASE_URL", "http://localhost:8000/api/v1");
+    return gaia::getEnvVar("GAIA_CPP_BASE_URL", "http://localhost:13305/api/v1");
 }
 
 std::string testVlmModel() {

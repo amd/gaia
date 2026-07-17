@@ -37,7 +37,6 @@ def mock_dependencies():
         patch("gaia.llm.vlm_client.VLMClient") as mock_vlm_class,
         patch("gaia.llm.lemonade_client.LemonadeClient") as mock_lemonade,
         patch("gaia.rag.sdk.PdfReader") as mock_pdf,
-        patch("gaia.rag.sdk.SentenceTransformer") as mock_st,
         patch("gaia.rag.sdk.faiss") as mock_faiss,
         patch("gaia.rag.sdk.AgentSDK") as mock_chat,
     ):
@@ -62,10 +61,6 @@ def mock_dependencies():
         )
         mock_pdf.return_value = mock_pdf_instance
 
-        mock_embedder = Mock()
-        mock_embedder.encode.return_value = np.array([[0.1, 0.2, 0.3, 0.4]])
-        mock_st.return_value = mock_embedder
-
         mock_index = Mock()
         mock_index.search.return_value = (np.array([[0.5]]), np.array([[0]]))
         mock_faiss.IndexFlatL2.return_value = mock_index
@@ -79,7 +74,6 @@ def mock_dependencies():
 
         yield {
             "pdf": mock_pdf,
-            "embedder": mock_embedder,
             "index": mock_index,
             "chat": mock_chat_instance,
             "vlm": mock_vlm_instance,
@@ -166,7 +160,6 @@ class TestRAGSDK:
             patch("gaia.llm.vlm_client.VLMClient") as mock_vlm_class,
             patch("gaia.llm.lemonade_client.LemonadeClient") as mock_lemonade,
             patch("gaia.rag.sdk.PdfReader") as mock_pdf,
-            patch("gaia.rag.sdk.SentenceTransformer") as mock_st,
             patch("gaia.rag.sdk.faiss") as mock_faiss,
             patch("gaia.rag.sdk.AgentSDK") as mock_chat,
         ):
@@ -197,9 +190,6 @@ class TestRAGSDK:
             mock_pdf.return_value = mock_pdf_instance
 
             # Mock sentence transformer
-            mock_embedder = Mock()
-            mock_embedder.encode.return_value = np.array([[0.1, 0.2, 0.3, 0.4]])
-            mock_st.return_value = mock_embedder
 
             # Mock FAISS
             mock_index = Mock()
@@ -216,7 +206,6 @@ class TestRAGSDK:
 
             yield {
                 "pdf": mock_pdf,
-                "embedder": mock_embedder,
                 "index": mock_index,
                 "chat": mock_chat_instance,
                 "vlm": mock_vlm_instance,
@@ -289,7 +278,6 @@ class TestRAGSDK:
         # Test when dependencies are missing
         with (
             patch("gaia.rag.sdk.PdfReader", None),
-            patch("gaia.rag.sdk.SentenceTransformer", None),
             patch("gaia.rag.sdk.faiss", None),
         ):
 
@@ -367,7 +355,7 @@ class TestRAGSDK:
                 # Set up mock state
                 rag.chunks = ["Sample chunk 1", "Sample chunk 2"]
                 rag.index = mock_dependencies["index"]
-                rag.embedder = mock_dependencies["embedder"]
+                rag.embedder = mock_dependencies["lemonade"]
                 rag.chat = mock_dependencies["chat"]
                 rag.chunk_to_file = {0: "test.pdf", 1: "test.pdf"}
                 rag.indexed_files = {"test.pdf"}
@@ -856,7 +844,6 @@ class TestErrorHandling:
 
         with (
             patch("gaia.rag.sdk.PdfReader", None),
-            patch("gaia.rag.sdk.SentenceTransformer", None),
             patch("gaia.rag.sdk.faiss", None),
         ):
 
@@ -908,7 +895,6 @@ class TestMemoryLimits:
             patch("gaia.llm.vlm_client.VLMClient") as mock_vlm_class,
             patch("gaia.llm.lemonade_client.LemonadeClient") as mock_lemonade,
             patch("gaia.rag.sdk.PdfReader") as mock_pdf,
-            patch("gaia.rag.sdk.SentenceTransformer") as mock_st,
             patch("gaia.rag.sdk.faiss") as mock_faiss,
             patch("gaia.rag.sdk.AgentSDK") as mock_chat,
         ):
@@ -933,10 +919,6 @@ class TestMemoryLimits:
             )
             mock_pdf.return_value = mock_pdf_instance
 
-            mock_embedder = Mock()
-            mock_embedder.encode.return_value = np.array([[0.1, 0.2, 0.3, 0.4]])
-            mock_st.return_value = mock_embedder
-
             mock_index = Mock()
             mock_index.search.return_value = (np.array([[0.5]]), np.array([[0]]))
             mock_faiss.IndexFlatL2.return_value = mock_index
@@ -950,7 +932,6 @@ class TestMemoryLimits:
 
             yield {
                 "pdf": mock_pdf,
-                "embedder": mock_embedder,
                 "index": mock_index,
                 "chat": mock_chat_instance,
                 "vlm": mock_vlm_instance,
@@ -1234,7 +1215,6 @@ class TestCacheSecurity:
             patch("gaia.llm.vlm_client.VLMClient") as mock_vlm_class,
             patch("gaia.llm.lemonade_client.LemonadeClient") as mock_lemonade,
             patch("gaia.rag.sdk.PdfReader") as mock_pdf,
-            patch("gaia.rag.sdk.SentenceTransformer") as mock_st,
             patch("gaia.rag.sdk.faiss") as mock_faiss,
             patch("gaia.rag.sdk.AgentSDK") as mock_chat,
         ):
@@ -1259,10 +1239,6 @@ class TestCacheSecurity:
             )
             mock_pdf.return_value = mock_pdf_instance
 
-            mock_embedder = Mock()
-            mock_embedder.encode.return_value = np.array([[0.1, 0.2, 0.3, 0.4]])
-            mock_st.return_value = mock_embedder
-
             mock_index = Mock()
             mock_index.search.return_value = (np.array([[0.5]]), np.array([[0]]))
             mock_faiss.IndexFlatL2.return_value = mock_index
@@ -1276,7 +1252,6 @@ class TestCacheSecurity:
 
             yield {
                 "pdf": mock_pdf,
-                "embedder": mock_embedder,
                 "index": mock_index,
                 "chat": mock_chat_instance,
                 "vlm": mock_vlm_instance,

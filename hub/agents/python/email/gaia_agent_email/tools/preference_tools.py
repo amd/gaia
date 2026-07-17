@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict
 
+from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email.tools.triage_heuristics import (
     CATEGORY_FYI,
     CATEGORY_PROMOTIONAL,
@@ -49,14 +50,6 @@ _PREF_CATEGORY = "preference"
 # would silently drop important mail.
 _CATEGORIES_WITH_DEFAULTS = (CATEGORY_FYI, CATEGORY_PROMOTIONAL)
 _VALID_ACTIONS = ("archive", "keep")
-
-
-def _envelope_ok(data: Any) -> str:
-    return json.dumps({"ok": True, "data": data}, default=str)
-
-
-def _envelope_err(message: str) -> str:
-    return json.dumps({"ok": False, "error": message})
 
 
 def _normalize_email(value: str) -> str:
@@ -169,11 +162,14 @@ class PreferenceToolsMixin:
         that preferences set in a previous session are immediately available.
 
         When no record exists (first run or after ``clear_session_preferences``
-        wiped everything) or when memory is disabled, the empty default set by
-        ``init_session_preferences()`` is left untouched.
+        wiped everything) or when memory is off, the empty default set by
+        ``init_session_preferences()`` is left untouched. "Off" means either
+        ``_memory_store is None`` (never initialized) or ``_incognito`` (the
+        runtime toggle, #1666) — an incognito agent must not read stored
+        personalization back into the session.
         """
         store = getattr(self, "_memory_store", None)
-        if store is None:
+        if store is None or getattr(self, "_incognito", False):
             return
 
         existing = store.get_by_entity(_PREF_ENTITY)

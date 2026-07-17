@@ -591,6 +591,8 @@ describe("POST /publish — SPEC & SKILL doc tabs", () => {
     const env = makeEnv();
     const spec = "# Spec\n\nThe wire contract is 2.0.\n";
     const skill = "# Skill\n\nSpawn the sidecar, then call triage.\n";
+    const evaluation = "# Evaluation\n\nRun the eval, compare to baseline.\n";
+    const capabilityMatrix = "# Capability Matrix\n\n| Capability | Supported |\n| --- | --- |\n| triage | yes |\n";
     const res = await publish(env, {
       token: "tok_amd",
       manifestYaml: sampleManifest(),
@@ -598,10 +600,14 @@ describe("POST /publish — SPEC & SKILL doc tabs", () => {
       filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
       spec,
       skill,
+      evaluation,
+      capabilityMatrix,
     });
     expect(res.status).toBe(201);
     expect(env.bucket.keys()).toContain("agents/chat/0.1.0/SPEC.md");
     expect(env.bucket.keys()).toContain("agents/chat/0.1.0/SKILL.md");
+    expect(env.bucket.keys()).toContain("agents/chat/0.1.0/EVALUATION.md");
+    expect(env.bucket.keys()).toContain("agents/chat/0.1.0/CAPABILITY_MATRIX.md");
 
     // Served by the existing GET /agents/... download route, as markdown.
     const getSpec = await worker.fetch(
@@ -612,10 +618,34 @@ describe("POST /publish — SPEC & SKILL doc tabs", () => {
     expect(getSpec.headers.get("content-type")).toContain("text/markdown");
     expect(await getSpec.text()).toBe(spec);
 
+    const getEvaluation = await worker.fetch(
+      new Request("https://hub.amd-gaia.ai/agents/chat/0.1.0/EVALUATION.md"),
+      env as never
+    );
+    expect(getEvaluation.status).toBe(200);
+    expect(getEvaluation.headers.get("content-type")).toContain("text/markdown");
+    expect(await getEvaluation.text()).toBe(evaluation);
+
+    const getCapabilityMatrix = await worker.fetch(
+      new Request("https://hub.amd-gaia.ai/agents/chat/0.1.0/CAPABILITY_MATRIX.md"),
+      env as never
+    );
+    expect(getCapabilityMatrix.status).toBe(200);
+    expect(getCapabilityMatrix.headers.get("content-type")).toContain("text/markdown");
+    expect(await getCapabilityMatrix.text()).toBe(capabilityMatrix);
+
     const index = (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex;
     const entry = index.agents.find((a) => a.id === "chat")!;
     expect(entry.spec).toBe(spec);
     expect(entry.skill).toBe(skill);
+    expect(entry.evaluation).toBe(evaluation);
+    expect(entry.capability_matrix).toBe(capabilityMatrix);
+
+    // No eval_scorecard was published — neighboring scorecard fields must stay
+    // at their defaults, unaffected by the new capability_matrix wiring.
+    expect(entry.scorecard).toBe("");
+    expect(entry.eval_score).toBeUndefined();
+    expect(entry.eval_scorecard_url).toBeUndefined();
   });
 
   it('defaults spec + skill to "" in index.json when none are published', async () => {
@@ -627,11 +657,46 @@ describe("POST /publish — SPEC & SKILL doc tabs", () => {
       filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
     });
     expect(env.bucket.keys()).not.toContain("agents/chat/0.1.0/SPEC.md");
+    expect(env.bucket.keys()).not.toContain("agents/chat/0.1.0/EVALUATION.md");
+    expect(env.bucket.keys()).not.toContain("agents/chat/0.1.0/CAPABILITY_MATRIX.md");
     const entry = (
       (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex
     ).agents.find((a) => a.id === "chat")!;
     expect(entry.spec).toBe("");
     expect(entry.skill).toBe("");
+    expect(entry.evaluation).toBe("");
+    expect(entry.capability_matrix).toBe("");
+  });
+
+  it("index.json carries the latest version's capability_matrix, but older versions stay downloadable", async () => {
+    const env = makeEnv();
+    const capabilityMatrixV1 = "# Capability Matrix v1\n\n| Capability | Supported |\n| --- | --- |\n| triage | yes |\n";
+    await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ version: "0.1.0" }),
+      artifact: "v1",
+      filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
+      capabilityMatrix: capabilityMatrixV1,
+    });
+    await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest({ version: "0.2.0" }),
+      artifact: "v2",
+      filename: "gaia_agent_chat-0.2.0-py3-none-any.whl",
+      // No capabilityMatrix for this version.
+    });
+
+    const index = (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex;
+    const entry = index.agents.find((a) => a.id === "chat")!;
+    expect(entry.capability_matrix).toBe("");
+
+    // The old version's capability matrix remains individually downloadable.
+    const v1 = await worker.fetch(
+      new Request("https://hub.amd-gaia.ai/agents/chat/0.1.0/CAPABILITY_MATRIX.md"),
+      env as never
+    );
+    expect(v1.status).toBe(200);
+    expect(await v1.text()).toBe(capabilityMatrixV1);
   });
 
   it("rejects an empty spec part (400) — omit it instead", async () => {

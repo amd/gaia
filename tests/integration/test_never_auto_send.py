@@ -78,8 +78,10 @@ def _make_probe_agent(console, sent_counter: Dict[str, int]):
     """A minimal real ``Agent`` that registers a sentinel ``send_now`` tool.
 
     The gate under test lives in the *base* ``Agent._execute_tool`` and is
-    keyed purely on the tool name being in ``TOOLS_REQUIRING_CONFIRMATION`` —
-    it is surface-agnostic. So a tiny agent with a ``send_now`` tool exercises
+    keyed on the tool name being in ``confirmation_required_tools()`` (the
+    agent's own ``CONFIRMATION_REQUIRED_TOOLS`` merged with the generic base
+    set, #1440) — it is surface-agnostic. So a tiny agent with a ``send_now``
+    tool declared in that set exercises
     the identical code path the email agent's ``send_now`` flows through,
     without needing Lemonade or live Gmail (``EmailTriageAgent`` hard-wires a
     Lemonade connection at construction). The sentinel increments a counter
@@ -90,6 +92,9 @@ def _make_probe_agent(console, sent_counter: Dict[str, int]):
 
     class _ProbeAgent(Agent):
         AGENT_ID = "never-auto-send-probe"
+        # Declare the gated tool on the agent (#1440): agent-specific gated
+        # tools now live on the owning class, merged with the generic base set.
+        CONFIRMATION_REQUIRED_TOOLS = frozenset({"send_now"})
 
         def __init__(self, **kwargs: Any):
             kwargs.setdefault("skip_lemonade", True)
@@ -133,9 +138,9 @@ class TestAgentLayerGate:
         if a future refactor drops ``send_now`` (etc.) from the set, this
         fails even though the mechanism still works for other tools.
         """
-        from gaia.agents.base.agent import TOOLS_REQUIRING_CONFIRMATION
+        from gaia_agent_email.agent import EmailTriageAgent
 
-        assert tool_name in TOOLS_REQUIRING_CONFIRMATION
+        assert tool_name in EmailTriageAgent.confirmation_required_tools()
 
     def test_denied_confirmation_blocks_the_send(self):
         """A withheld confirmation → ``denied`` status, and the send tool's

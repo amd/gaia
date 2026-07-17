@@ -8,9 +8,17 @@ icon: "envelope"
 
 The Email Triage Agent connects to your Gmail account through GAIA's connectors framework and runs every email-body inference **locally on your machine** via Lemonade. No email content ever leaves your device.
 
+<Note>
+  **Embedding the agent in your own app?** If you're building an application that owns the
+  mailbox UX and OAuth and wants GAIA's email agent as a local processing component, see
+  [Email Integration (API)](/guides/email-integration) — it covers self-OAuth → connection
+  forwarding → triage/draft/send over REST or MCP. This page covers the flow where GAIA
+  owns the UX.
+</Note>
+
 ## What it does
 
-- **Triage your inbox** — classify every message as `urgent`, `actionable`, `informational`, or `low priority`, plus separate `is_spam` and `is_phishing` flags.
+- **Triage your inbox** — classify every message into one of five buckets — `URGENT`, `NEEDS_RESPONSE`, `FYI`, `PROMOTIONAL`, or `PERSONAL` — with a `suggested_action` verb (`reply` / `archive` / `none`) and separate `is_spam` and `is_phishing` flags.
 - **Follow-up tracking** — flag the mail you *sent* that never got a reply after a configurable window (default 3 days). Detection only — the agent never sends a nudge on its own.
 - **Capture action items as tasks** — action items extracted during triage persist to a local task list, each linked back to its source message and de-duplicated so re-triaging never duplicates a task.
 - **Find past mail** — search your mailbox with keyword or Gmail-syntax queries (`from:alice is:unread newer_than:7d`). Ask in chat (the `search_messages` tool) or call it from a consuming app via `POST /v1/email/search` on the REST contract; results carry metadata only (id, sender, subject, date, snippet) — never message bodies.
@@ -127,26 +135,40 @@ Plus an **informational count** for the rest, so you know how much you're not se
 
 Each row carries inline action buttons:
 
-- **Reply / Archive** (primary) — Reply for urgent + actionable rows; Archive for suggested-archive rows. Clicking dispatches the corresponding tool call back through the chat (with confirmation when the action requires it).
+- **Reply / Archive** (primary) — Reply for urgent + needs-a-response rows; Archive for suggested-archive rows. Clicking dispatches the corresponding tool call back through the chat (with confirmation when the action requires it).
 - **Open** — open the message in Gmail in a new tab.
 - **Dismiss** — remove the row from the visible card without affecting Gmail.
 
 If you haven't connected Google yet, the agent surfaces a one-click **Connect Google** button inline in the chat — no need to navigate to Settings → Connections manually.
 
-### In-session preferences (in-memory, wiped on restart)
+### Classification preferences (persist across restarts)
 
-Tell the agent how you want classification to behave for this session:
+Tell the agent how you want classification to behave:
 
-- *"Treat boss@company.com as urgent"* → calls `set_priority_sender`. That sender bypasses the heuristic and lands in **Urgent** for the rest of the session.
+- *"Treat boss@company.com as urgent"* → calls `set_priority_sender`. That sender bypasses the heuristic and lands in **Urgent**.
 - *"Treat newsletter@stripe.com as low priority"* → calls `set_low_priority_sender`. That sender lands in **Suggested archives**.
-- *"Default informational mail to archive"* → calls `set_category_default("informational", "archive")`. Informational items lift into **Suggested archives** until you reset.
+- *"Default promotional mail to archive"* → calls `set_category_default("PROMOTIONAL", "archive")`. `set_category_default` supports the `FYI` and `PROMOTIONAL` categories (action `archive` or `keep`); the corresponding items lift into **Suggested archives** until you reset.
 - *"Clear my preferences"* → calls `clear_session_preferences`.
 
-Preferences are stored in process memory only — restarting the agent (or quitting Agent UI) wipes them. This is deliberate: the goal is to prove the value of session-scoped learning before we wire up persistent memory. Once persistent memory ships, the same tools will write through to it without changing this surface.
+Preferences are snapshotted to the agent's on-device MemoryStore on every change and re-seeded on the next start, so they **survive restarts** (and quitting Agent UI). When memory is disabled the tools still work in-process — they just can't persist between sessions. Nothing leaves the device.
 
 ### Behavioral learning (auto-promotion)
 
 Senders you reply to quickly are automatically promoted to priority on the next triage run — no explicit command needed. The agent measures how long it took you to reply to each sender (using the original message's receipt timestamp as the anchor) and promotes senders whose median reply latency falls below the threshold. Promotion is applied on-demand during triage, not on a background thread, and persists across agent restarts. Works across both connected mailboxes (Gmail and Outlook).
+
+### Turning memory on or off
+
+All of the personalization above — inbox profiling, behavioral auto-promotion, and preference persistence — depends on the agent's memory. Memory is **on by default**; you can turn it off so nothing is read from or written to memory:
+
+- **At startup**, set the config field: `EmailAgentConfig(memory_enabled=False)`. The agent still constructs normally; it just runs with memory off from the first turn.
+- **At runtime**, call `agent.set_memory_enabled(False)` (and `True` to re-enable) — no restart. The Agent UI drives this per session, so a private session runs with memory off automatically.
+
+When memory is off, both halves are covered: the **write** path (profiling, behavioral learning, preference persistence, conversation storage) is suppressed, and the **read** path (your stored preferences/facts) is not injected into the prompt. This supersedes the older `GAIA_MEMORY_DISABLED=1` env var, which only worked at startup and required a restart to change.
+
+`set_memory_enabled()` returns a status dict — `{"ok", "enabled", "available", "message"}` — so a caller always gets feedback about what happened. Two cases worth knowing:
+
+- If memory was **never initialized this session** (started with `GAIA_MEMORY_DISABLED=1`, or Lemonade's embedding service was unreachable at startup), `available` is `false`. Trying to *enable* it at runtime returns `ok=false` with an actionable message — it can't be turned on without a restart, and the call says so rather than silently doing nothing.
+- Query the current state anytime with `agent.is_memory_enabled()` (bool) or `agent.memory_status()` (the same dict without changing anything).
 
 ### Scheduled daily briefing (off by default)
 
@@ -173,13 +195,13 @@ are planned on the autonomy engine (#555).
 
 `list_inbox`, `get_message`, `get_thread`, `search_messages`, `list_labels`, `triage_inbox`, `pre_scan_inbox`, `check_followups`
 
-### Session preferences (in-memory; wiped on agent restart)
+### Classification preferences (persist across restarts)
 
 `set_priority_sender`, `set_low_priority_sender`, `set_category_default`, `clear_session_preferences`
 
 ### Inbox profiling
 
-`profile_inbox` — asks "who emails me most?" and returns a frequency ranking of senders with their dominant category (e.g. *urgent*, *informational*) and the timestamp of their most recent message. Profiling is built from the interaction history the agent accumulates during triage, so it improves the more you use the agent.
+`profile_inbox` — asks "who emails me most?" and returns a frequency ranking of senders with their dominant category (e.g. *URGENT*, *FYI*) and the timestamp of their most recent message. Profiling is built from the interaction history the agent accumulates during triage, so it improves the more you use the agent.
 
 ### Follow-up tracking (read-only)
 
@@ -234,6 +256,19 @@ are exposed alongside triage/draft/send:
 
 Each reaches whichever calendar (Google or Microsoft) the user connected; a missing
 `calendar.events` scope fails loud with **HTTP 403** and the reconnect CTA.
+
+## Driving the full agent over HTTP (sidecar)
+
+The stateless REST endpoints above (`/v1/email/triage`, `/draft`, `/send`, …) analyze a payload you pass in — they don't run the conversational agent and have no memory. For the full experience the Agent UI shows (natural-language requests, multi-step tool use, personalization, memory), the sidecar also hosts a **stateful, session-scoped agent** under `/v1/email/agent/*`:
+
+- `POST /v1/email/agent/session` — create (or `reset`) a session; builds the agent and reports memory status.
+- `POST /v1/email/agent/query` — run one turn; streams the agent loop back as Server-Sent Events (`thinking`, `step`, `tool` usage, `permission_request`, and a terminal `run_complete` with the answer). Because this runs the real agent loop, **every** agent tool is reachable through natural language — no per-tool endpoint.
+- `POST /v1/email/agent/confirm-tool` — approve or deny a gated tool (send/forward/delete/quarantine/calendar-create). The run blocks until you respond, mirroring the in-app confirmation prompt.
+- `POST /v1/email/agent/cancel` — cooperatively cancel an in-flight run.
+- `GET /v1/email/agent/session/{id}/history` — the conversation so far.
+- `POST /v1/email/agent/memory` + `GET /v1/email/agent/memory/{id}` — the runtime memory toggle over HTTP. Enabling memory that was never initialized this session (started with `GAIA_MEMORY_DISABLED` or Lemonade unreachable) returns **409** with an actionable message rather than silently doing nothing.
+
+Each session holds one agent; one turn runs at a time (an overlapping `/query` returns **409**). This is the surface the Agent UI uses to drive the packaged email agent over the network instead of importing it in-process.
 
 ## Sending email — safety
 
@@ -292,13 +327,18 @@ agent used to pick Google and fail. It now picks Outlook correctly.
 ## Dev mode: run the email agent from source
 
 The Agent UI talks to the email agent as an out-of-process **sidecar** — a
-self-contained HTTP service the Python backend spawns, health-checks, proxies to,
-and tree-kills. No Node.js is involved. Two modes, selected by
-`GAIA_EMAIL_AGENT_MODE`:
+self-contained HTTP service supervised by the **GAIA daemon** (`gaia daemon`),
+which spawns it, health-checks it, and tree-kills it. The UI backend is a
+daemon *client*: on each email request it asks the daemon to ensure the
+sidecar is running, then talks to the sidecar port directly. No Node.js is
+involved. Two modes, selected by `GAIA_EMAIL_AGENT_MODE`:
 
-- `user` (default) — runs the published frozen binary, fetched on first email use
-  and verified against `binaries.lock.json` (SHA-256 is the integrity gate). A
-  tampered or unpublished binary fails loudly; there is no fallback to dev mode.
+- `user` (default) — runs the published frozen binary. An Agent Hub install is
+  used first (its SHA-256 was verified against the hub manifest at install time
+  and is re-checked before every spawn); otherwise the binary is fetched on
+  first email use and verified against `binaries.lock.json`. Either way SHA-256
+  is the integrity gate: a tampered or unpublished binary fails loudly; there is
+  no fallback to dev mode.
 - `dev` — runs the agent from your local source with hot reload, so prompt/tool
   edits show up live without a freeze → publish cycle:
 
@@ -315,18 +355,24 @@ library. If the source package is missing, dev mode fails loudly with the
 `uv pip install -e` remedy — it never silently falls back to the binary.
 
 **Operational behavior:**
-- The backend spawns the sidecar with its stdout/stderr redirected to
+- The **daemon owns the sidecar lifecycle**. Closing the Agent UI no longer
+  kills the sidecar — it keeps running under the daemon until you stop it with
+  `gaia daemon stop-agent email` (sidecar only) or `gaia daemon stop` (daemon +
+  every sidecar). Inspect it any time with `gaia daemon status` or
+  `gaia daemon agents` (id, mode, pid, port, contract version).
+- The daemon spawns the sidecar with its stdout/stderr redirected to
   `~/.gaia/agents/email/logs/sidecar-<port>.log` — check that file first when a
   sidecar won't start (a failed start surfaces the log tail in the error too).
-- On every start the backend reads the sidecar's `/version` and records the
+- On every start the daemon reads the sidecar's `/version` and records the
   contract `apiVersion`/`agentVersion`; a major-version mismatch (when a host
   pins an expected version) fails loudly rather than sending requests the sidecar
   would mishandle.
 - A sidecar HTTP error (e.g. Lemonade down → `502 local LLM triage failed`) is
   surfaced verbatim with its actionable message, not flattened into a generic
   error.
-- If the backend exits without a clean shutdown, an `atexit` reaper tree-kills the
-  sidecar so it never leaks its port or a loaded model.
+- If the daemon is killed hard (SIGKILL, crash) while a sidecar runs, the next
+  daemon start identity-checks and reaps the recorded survivor before serving —
+  a sidecar never silently leaks its port or a loaded model.
 
 ### What the sidecar serves
 
@@ -336,7 +382,7 @@ isolated, and dogfoods the exact binary shipped to integrators.
 `GAIA_EMAIL_AGENT_MODE` only selects which *process* answers (`user` default /
 `dev`); there is no in-process fallback. Two surfaces run through it:
 
-- **The `/v1/email/*` REST surface** — the full schema-2.2 contract (init
+- **The `/v1/email/*` REST surface** — the full schema-2.3 contract (init
   readiness probe + provisioning, triage,
   batch triage, search, inbox pre-scan, scheduled daily briefing, draft/send +
   confirm — attachments included, archive/unarchive, quarantine/unquarantine,
@@ -344,16 +390,30 @@ isolated, and dogfoods the exact binary shipped to integrators.
   third-party integrators consume, so the UI
   exercises the real product. The sidecar's connector OAuth **write** routes are
   never exposed (all grant writes stay on the backend's single-writer path).
+  Because the sidecar can send mail as you, it requires a **per-session bearer
+  token** on every `/v1/email/*` request (#1706, `401` without it) plus a loopback
+  Host/Origin allowlist (`400`/`403`) — closing local-process and DNS-rebinding
+  access. The daemon mints the token and hands it to the sidecar over a private
+  env channel at spawn; the UI backend receives it when it acquires the sidecar
+  from the daemon and replays it on every proxied call, so this is transparent in
+  the UI; integrators embedding the frozen sidecar get the same token wired by
+  `startSidecar`. See
+  [Email Integration → Authentication](/guides/email-integration#authentication).
 - **The in-app email chat agent** (`agent_type=email`) — the local-LLM tool loop
   still runs in the UI backend, but every tool is a thin HTTP call to the
   sidecar. The chat **pre-scan card** runs through the sidecar's `/prescan` route
   and returns the same `email_pre_scan` envelope, so the card renders unchanged.
 
-The sidecar is spawned lazily on first email use and tree-killed on shutdown; the
-REST surface and the chat agent share one sidecar process.
+The sidecar is spawned lazily on first email use (users who never touch email
+never pay for a daemon or sidecar) and keeps running under the daemon until
+`gaia daemon stop-agent email` or `gaia daemon stop`; the REST surface and the
+chat agent share one sidecar process. You can also start it explicitly with
+`gaia daemon start-agent email [--mode user|dev]` — asking for a mode different
+from the one already running is a loud conflict (stop it first), never a silent
+restart.
 
 **Chat tool surface (in-app email agent):** the sidecar-backed chat agent exposes
-the tools the schema-2.2 REST contract serves today — inbox pre-scan, search,
+the tools the schema-2.3 REST contract serves today — inbox pre-scan, search,
 calendar view, and archive + undo. Tools that have no REST route yet (labels,
 stars, mark-read, move, trash/delete, summarize, profile, preferences, forward,
 send, scheduled send / snooze) are not exposed in the chat agent until their
@@ -366,6 +426,10 @@ contract yet.
 ### "AGENT_NOT_GRANTED — Email agent needs additional Google permissions"
 
 Your Google connection predates the email agent and lacks `gmail.modify`. Open Settings → Connections → Google → Reconnect to grant the missing scopes.
+
+### "NOT_CONNECTED: microsoft is not currently connected"
+
+You asked about a specific provider's mailbox (e.g. *"check my Outlook inbox"*) that isn't connected. The agent refuses rather than silently answering from a different mailbox. Connect that provider in Settings → Connections, or rephrase without naming a provider to scan every connected mailbox.
 
 ### "Gmail API returned 401"
 

@@ -1,5 +1,15 @@
 # Email Sidecar in Agent UI — Implementation Plan
 
+> **⚠️ Partially superseded by Agent UI v2** ([`agent-ui.mdx`](agent-ui.mdx) +
+> [`agent-ui-agent-capabilities-plan.md`](agent-ui-agent-capabilities-plan.md) §0).
+> The **UI-owned supervisor** this plan builds (the `src/gaia/ui/email_sidecar/`
+> package where the *UI backend* fetches/spawns/proxies/tree-kills the sidecar) is
+> the **interim shape**, not the end state: under v2 a **headless custody daemon**
+> owns sidecar supervision (§0.3, §0.13) and the UI backend becomes just another
+> client of it. The fetch/spawn/health/tree-kill mechanics below are reused; their
+> *owner* moves out of the UI process. Read v2 §0 before treating the UI backend as
+> the permanent supervisor.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a Node-free, out-of-process email-agent sidecar that the Python Agent UI backend fetches (verified download), spawns (user=frozen binary / dev=uvicorn-from-source), health-checks, proxies to, and tree-kills — gated behind `GAIA_EMAIL_AGENT_MODE` so it is additive and non-breaking.

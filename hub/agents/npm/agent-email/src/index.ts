@@ -36,6 +36,7 @@ export {
   shutdown,
   startSidecar,
   executableName,
+  generateSessionToken,
 } from "./lifecycle.js";
 export type {
   ResolveOptions,
@@ -64,6 +65,7 @@ export {
   HealthTimeoutError,
   VersionMismatchError,
   BinaryNotFoundError,
+  QueryStreamError,
 } from "./errors.js";
 
 export { SCHEMA_VERSION, MAX_BATCH_SIZE } from "./types.js";

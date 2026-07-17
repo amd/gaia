@@ -17,8 +17,9 @@ offline coverage of the judge scorer in ``gaia.eval.draft_quality``:
 - The scorer runs end-to-end on a mocked judge (no backend, no network)
   and produces an approval rate in range plus a build_scorecard-compatible
   summary.
-- The committed thresholds manifest ships the #1269 bar in report mode
-  (``enforce: false``) and the gate honors the ``should_fail`` contract.
+- The committed thresholds manifest ships the #1269 bar as a hard gate
+  (``enforce: true`` — release_agent_email.yml eval-gate) and the gate
+  honors the ``should_fail`` contract.
 
 Everything here runs offline: no Lemonade, no Anthropic, no live mailbox.
 """
@@ -260,8 +261,12 @@ def test_missing_draft_and_unparseable_judge_become_errored(corpus):
 
 def test_committed_thresholds_manifest_is_report_mode():
     thresholds = dq.load_drafting_thresholds(THRESHOLDS_PATH)
-    assert thresholds.approval_min == 0.70  # the #1269 reported target
-    assert thresholds.enforce is False  # report mode — see the manifest comment
+    assert thresholds.approval_min == 0.70  # the #1269 target
+    # Temporarily report mode: flipped enforcing (#1990) before the gate ever
+    # completed a CI run (the perf gate failed first and masked it), so the bar
+    # isn't hardware-validated yet. Re-enforce once a passing baseline exists
+    # (see the manifest comment).
+    assert thresholds.enforce is False
     # The module default points at the same committed manifest.
     assert dq.default_drafting_thresholds_path() == THRESHOLDS_PATH
 

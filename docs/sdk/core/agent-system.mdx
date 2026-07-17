@@ -77,7 +77,7 @@ The agent calls a weather API and returns real data.
 When you send a message to an agent, it doesn't just generate a response. It enters a **reasoning loop**:
 
 ```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#EFC480', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E2A33E', 'primaryTextColor':'#1a1a1a', 'primaryBorderColor':'#A87B2D', 'lineColor':'#A87B2D', 'secondaryColor':'#2d2d2d', 'tertiaryColor':'#f5f5f5', 'edgeLabelBackground':'#ffffff', 'fontFamily': 'system-ui, -apple-system, sans-serif'}}}%%
 flowchart TD
     A(["RECEIVE"]) --> B(["THINK"])
     B --> C(["ACT"])
@@ -837,35 +837,33 @@ The `@tool` decorator does several things:
 
 ```python
 def tool(func):
-    # 1. Extract function signature
+    # 1. Extract the function signature
     sig = inspect.signature(func)
 
-    # 2. Build JSON schema from type hints
-    schema = {
-        "name": func.__name__,
-        "description": func.__doc__,
-        "parameters": {
-            "type": "object",
-            "properties": {},
-            "required": []
-        }
-    }
-
+    # 2. Build a minimal per-parameter map from type hints.
+    #    Each entry is just {type, required} — the whole docstring is stored
+    #    once as `description`; per-argument descriptions are NOT parsed out.
+    params = {}
     for name, param in sig.parameters.items():
-        if param.annotation != inspect.Parameter.empty:
-            schema["parameters"]["properties"][name] = {
-                "type": python_type_to_json_type(param.annotation),
-                "description": extract_arg_description(func.__doc__, name)
-            }
-        if param.default == inspect.Parameter.empty:
-            schema["parameters"]["required"].append(name)
+        params[name] = {
+            "type": python_type_to_json_type(param.annotation),  # str→string, int→integer, …
+            "required": param.default is inspect.Parameter.empty,
+        }
 
-    # 3. Register with the agent's tool registry
-    func._tool_schema = schema
-    return func
+    # 3. Register in the global _TOOL_REGISTRY under the function name.
+    _TOOL_REGISTRY[func.__name__] = {
+        "name": func.__name__,
+        "description": func.__doc__ or "",  # whole docstring, not per-arg
+        "parameters": params,
+        "function": func,
+        "atomic": False,
+    }
+    return func  # returned unchanged
 ```
 
-This schema is what the LLM sees, which is why type hints and docstrings are so important!
+The function name, type hints, and docstring are what the LLM sees, which is why
+they matter so much. See the [Tools guide](./tools) for the authoritative
+walkthrough of the registry entry.
 
 </Accordion>
 

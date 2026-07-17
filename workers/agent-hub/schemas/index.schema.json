@@ -146,6 +146,28 @@
           "type": "string",
           "description": "SKILL.md (AI-integration playbook) markdown of the latest version; empty string if none was published."
         },
+        "evaluation": {
+          "type": "string",
+          "description": "EVALUATION.md (evaluation guide) markdown of the latest version; empty string if none was published."
+        },
+        "capability_matrix": {
+          "type": "string",
+          "description": "CAPABILITY_MATRIX.md markdown of the latest version; empty string if none was published."
+        },
+        "scorecard": {
+          "type": "string",
+          "description": "Eval-scorecard markdown (SCORECARD.md body, YAML front matter stripped) of the latest version, rendered as its own doc tab; empty string if none was published."
+        },
+        "eval_scorecard_url": {
+          "type": "string",
+          "description": "Public URL of the eval scorecard markdown for the latest version; absent when none was published."
+        },
+        "eval_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Aggregate eval score (0-100) parsed from the latest version's scorecard front matter; absent when none was published or parseable."
+        },
         "npm_package": {
           "type": "string",
           "description": "npm package name when the agent is distributed via npm (e.g. \"@amd-gaia/agent-email\"); absent otherwise."

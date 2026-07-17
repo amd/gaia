@@ -159,7 +159,9 @@ export function publishRequest(opts: {
   changelog?: string;
   spec?: string;
   skill?: string;
+  evaluation?: string;
   evalScorecard?: string;
+  capabilityMatrix?: string;
   packageFiles?: string;
 }): Request {
   const form = new FormData();
@@ -168,7 +170,9 @@ export function publishRequest(opts: {
   if (opts.changelog !== undefined) form.set("changelog", opts.changelog);
   if (opts.spec !== undefined) form.set("spec", opts.spec);
   if (opts.skill !== undefined) form.set("skill", opts.skill);
+  if (opts.evaluation !== undefined) form.set("evaluation", opts.evaluation);
   if (opts.evalScorecard !== undefined) form.set("eval_scorecard", opts.evalScorecard);
+  if (opts.capabilityMatrix !== undefined) form.set("capability_matrix", opts.capabilityMatrix);
   if (opts.packageFiles !== undefined) form.set("package_files", opts.packageFiles);
   const bytes = typeof opts.artifact === "string" ? new TextEncoder().encode(opts.artifact) : opts.artifact;
   form.set(

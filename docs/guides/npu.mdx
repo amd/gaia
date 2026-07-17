@@ -4,8 +4,6 @@ description: "Run GAIA agents on AMD Ryzen AI NPU for power-efficient local infe
 icon: "bolt"
 ---
 
-# NPU Acceleration
-
 GAIA supports running agents on your AMD Ryzen AI NPU via the [FastFlowLM (FLM)](https://fastflowlm.com) backend. NPU inference is power-efficient and frees your GPU for other tasks.
 
 ## Requirements
@@ -13,7 +11,7 @@ GAIA supports running agents on your AMD Ryzen AI NPU via the [FastFlowLM (FLM)]
 - **Hardware:** AMD Ryzen AI 300/400/Max series processor with XDNA2 NPU
   - Strix Point, Strix Halo, Kraken Point, or Gorgon Point
   - Ryzen AI 7000/8000/200-series (XDNA1) is **not supported**
-- **Software:** [Lemonade Server](https://lemonade-server.ai) v10.9.0+
+- **Software:** [Lemonade Server](https://lemonade-server.ai) v11.0.0+
 - **Driver:** Latest AMD NPU driver (firmware v1.1.0.0+)
 
 <Warning>
@@ -92,6 +90,17 @@ gaia eval agent --compare eval/results/run1/scorecard.json eval/results/run2/sco
 
 - **Explicit `--device npu`:** fails immediately if NPU not available
 - **Default (no `--device`):** uses GPU; falls back to CPU with a warning if no GPU detected
+
+### Email agent: no `--device` flag — auto-detected instead
+
+The email triage agent doesn't take a `--device` flag. When it isn't given
+an explicit model, it probes the Lemonade Server it's configured against and
+picks `gemma4-it-e2b-FLM` automatically if an NPU is available there and the
+model is already downloaded — otherwise it falls back to
+`Gemma-4-E4B-it-GGUF`, the same GPU/CPU default above. `GET /v1/email/init`
+reports which one was resolved. See the [email agent
+contract](https://github.com/amd/gaia/blob/main/hub/agents/python/email/CONTRACT.md#default-model-selection)
+for the full resolution order.
 
 ## Troubleshooting
 

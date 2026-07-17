@@ -29,6 +29,8 @@ setup(
         "gaia.audio",
         "gaia.chat",
         "gaia.schedule",
+        "gaia.daemon",
+        "gaia.daemon.sidecars",
         "gaia.ui",
         "gaia.ui.routers",
         "gaia.ui.email_sidecar",
@@ -144,16 +146,18 @@ setup(
             # the OS credential store (macOS Keychain, Windows DPAPI, Linux
             # SecretService). Pinned upper bound per supply-chain advisory.
             "keyring>=24.0.0,<26.0.0",
-            # RAG runtime deps — gaia.ui.server boots faiss + sentence_transformers
-            # eagerly, and gaia.rag.sdk uses pypdf/pymupdf/numpy. See #845.
-            # Version specifiers match the standalone "rag" extra; "ui"
-            # additionally declares safetensors and a torch lower bound.
+            # RAG runtime deps — gaia.rag.sdk uses faiss/pypdf/pymupdf/numpy and
+            # embeds via Lemonade (NOT sentence-transformers). See #845.
+            # Version specifiers match the standalone "rag" extra.
             "faiss-cpu>=1.7.0",
             "numpy>=1.24.0",
             "pymupdf>=1.24.0",
             "pypdf",
             "python-pptx>=0.6.21",
             "python-docx>=1.1.0",
+            # Memory cross-encoder reranker (gaia.agents.base.memory) — optional
+            # at runtime (graceful degradation) but bundled with "ui" so the
+            # full chat experience gets reranking out of the box. NOT a RAG dep.
             "sentence-transformers",
             "safetensors",
             # torch is pinned lower-bound only. The "audio" extra caps
@@ -163,8 +167,8 @@ setup(
             "torch>=2.0.0",
         ],
         "audio": [
-            "torch>=2.0.0,<2.13",
-            "torchvision<0.28.0",
+            "torch>=2.0.0,<2.14",
+            "torchvision<0.29.0",
             "torchaudio",
         ],
         "blender": [
@@ -212,6 +216,9 @@ setup(
             # Tokenizer proxy for the tool-prompt cost harness (#1448,
             # gaia.eval.tool_cost) so the budget test can count tokens.
             "tiktoken>=0.7.0,<1.0.0",
+            # OpenAPI response-body validation against the committed spec
+            # (tests/test_email_openapi_conformance.py, #1897).
+            "jsonschema>=4.0.0,<5.0.0",
         ],
         "eval": [
             "anthropic",
@@ -235,13 +242,14 @@ setup(
             "llama-index-readers-youtube-transcript",
         ],
         "rag": [
+            # RAG embeds via Lemonade, not sentence-transformers — do NOT add it
+            # here. It is only needed for the optional memory reranker (see "ui").
             "faiss-cpu>=1.7.0",
             "numpy>=1.24.0",
             "pymupdf>=1.24.0",
             "pypdf",
             "python-pptx>=0.6.21",
             "python-docx>=1.1.0",
-            "sentence-transformers",
         ],
         "lint": [
             "black",

@@ -57,6 +57,24 @@ export interface Agent {
   // published. Optional for the same older-index.json resilience as `changelog`.
   spec?: string;
   skill?: string;
+  // EVALUATION.md (evaluation guide) markdown of the latest version, rendered as its
+  // own doc tab. "" / absent if none was published. Optional for the same
+  // older-index.json resilience as `spec`/`skill`.
+  evaluation?: string;
+  // CAPABILITY_MATRIX.md markdown of the latest version, rendered as its own doc
+  // tab. "" / absent if none was published. Optional for the same older-index.json
+  // resilience as `spec`/`skill`.
+  capability_matrix?: string;
+  // Eval-scorecard markdown (SCORECARD.md body, YAML front matter already stripped
+  // by the hub Worker), rendered as its own doc tab. "" / absent if none was
+  // published. Same older-index.json resilience as `spec`/`skill`.
+  scorecard?: string;
+  // Public URL of the eval scorecard markdown for the latest version (the canonical
+  // source, with anchors/relative links intact); absent when none was published.
+  eval_scorecard_url?: string;
+  // Aggregate eval score (0–100) parsed from the scorecard front matter; absent
+  // when none was published or parseable. Drives the sidebar score badge.
+  eval_score?: number;
   // npm package name (e.g. "@amd-gaia/agent-email") when the agent is
   // distributed as an npm client + frozen sidecar. Present → npm is the install
   // path. Absent → the agent installs via pip/GAIA (language-driven).

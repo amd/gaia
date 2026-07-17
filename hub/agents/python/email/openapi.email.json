@@ -187,7 +187,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.2",
+            "default": "2.4",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -212,7 +212,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.2",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -289,7 +289,7 @@
             "title": "Provider"
           },
           "schema_version": {
-            "default": "2.2",
+            "default": "2.4",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -476,7 +476,7 @@
             "title": "Location"
           },
           "schema_version": {
-            "default": "2.2",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -516,7 +516,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.2",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -547,7 +547,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.2",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -583,7 +583,7 @@
             "title": "Provider"
           },
           "schema_version": {
-            "default": "2.2",
+            "default": "2.4",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -623,7 +623,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.2",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -684,6 +684,32 @@
           "body"
         ],
         "title": "DraftReply",
+        "type": "object"
+      },
+      "DraftScaffold": {
+        "additionalProperties": false,
+        "description": "A reply *scaffold* the triage path proposes — recipient + subject only,\nno body (schema 2.3).\n\nTriage classifies and summarizes; it never composes reply prose. So the\nscaffold it returns carries only the resolved reply recipient and a\n``Re:``-prefixed subject. To turn it into a sendable reply, compose the body\nyourself (e.g. an LLM call over the triage ``summary`` + ``action_items`` +\nthe original message) and pass ``(to, subject, body)`` to\n``POST /v1/email/draft`` — that endpoint returns a full :class:`DraftReply`\nand a single-use send-confirmation token.",
+        "properties": {
+          "subject": {
+            "description": "Proposed subject line.",
+            "title": "Subject",
+            "type": "string"
+          },
+          "to": {
+            "description": "Proposed recipients (non-empty).",
+            "items": {
+              "$ref": "#/components/schemas/EmailAddress"
+            },
+            "minItems": 1,
+            "title": "To",
+            "type": "array"
+          }
+        },
+        "required": [
+          "to",
+          "subject"
+        ],
+        "title": "DraftScaffold",
         "type": "object"
       },
       "EmailActionConfirmRequest": {
@@ -748,7 +774,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.2",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -861,7 +887,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.2",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -896,7 +922,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.2",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1096,7 +1122,7 @@
             "type": "integer"
           },
           "schema_version": {
-            "default": "2.2",
+            "default": "2.4",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1114,7 +1140,7 @@
             "description": "The pre-scan envelope."
           },
           "schema_version": {
-            "default": "2.2",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1279,7 +1305,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.2",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1351,7 +1377,7 @@
             "title": "Query"
           },
           "schema_version": {
-            "default": "2.2",
+            "default": "2.4",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1402,7 +1428,7 @@
             "title": "Query"
           },
           "schema_version": {
-            "default": "2.2",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1623,7 +1649,7 @@
             "title": "Payload"
           },
           "schema_version": {
-            "default": "2.2",
+            "default": "2.4",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1653,7 +1679,7 @@
             "description": "The structured analysis."
           },
           "schema_version": {
-            "default": "2.2",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1693,13 +1719,13 @@
           "draft": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/DraftReply"
+                "$ref": "#/components/schemas/DraftScaffold"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "Proposed reply, or null when none is suggested."
+            "description": "Proposed reply SCAFFOLD (recipient + subject only, no body), or null when no reply is suggested (schema 2.3). Triage never composes reply prose; to send a reply, compose the body and POST it to /v1/email/draft."
           },
           "is_phishing": {
             "default": false,
@@ -1750,7 +1776,7 @@
                 "type": "null"
               }
             ],
-            "description": "LLM usage metrics (tokens + aggregate TPS) for this triage. Null on the heuristic-only path where no LLM call was made."
+            "description": "LLM usage metrics (tokens + aggregate TPS) for this triage. Null on the heuristic-only path where no LLM call was made. Compare prompt_tokens against the agent's context-window envelope (16K target / 32K max, #1892) to see how much of the window a payload consumed."
           }
         },
         "required": [
@@ -1819,7 +1845,7 @@
             "type": "integer"
           },
           "schema_version": {
-            "default": "2.2",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1887,7 +1913,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.2",
+            "default": "2.4",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1991,6 +2017,18 @@
         "additionalProperties": false,
         "description": "Presence (and, when cheap, loadability) of the triage model.",
         "properties": {
+          "ctx_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The context window the model is CURRENTLY loaded at, as reported by the server's /health (recipe_options.ctx_size). Null whenever the model is not loaded right now or the server does not report a ctx — never a config echo or a guess (#1892). Compare against the envelope (16384 target / 32768 max) to see what window a run would actually measure.",
+            "title": "Ctx Size"
+          },
           "id": {
             "description": "Resolved Lemonade model id for triage.",
             "title": "Id",
@@ -2213,6 +2251,125 @@
           }
         },
         "title": "PreScanTotals",
+        "type": "object"
+      },
+      "QueryCancelResponse": {
+        "additionalProperties": false,
+        "description": "Result of ``POST /v1/email/query/{run_id}/cancel``.",
+        "properties": {
+          "cancelled": {
+            "default": true,
+            "description": "True once the cancel was delivered to the run.",
+            "title": "Cancelled",
+            "type": "boolean"
+          },
+          "run_id": {
+            "description": "The run that was signalled to cancel.",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "status": {
+            "default": "ok",
+            "description": "Always 'ok' on success.",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "title": "QueryCancelResponse",
+        "type": "object"
+      },
+      "QueryContextItem": {
+        "additionalProperties": false,
+        "description": "One prior turn pushed in the request body (spec §2.4).",
+        "properties": {
+          "content": {
+            "description": "The message text for this turn.",
+            "title": "Content",
+            "type": "string"
+          },
+          "role": {
+            "description": "Transcript role: 'user', 'assistant', 'system', or 'tool'.",
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "title": "QueryContextItem",
+        "type": "object"
+      },
+      "QueryRequest": {
+        "additionalProperties": false,
+        "description": "``POST /v1/email/query`` request body (frozen #2015 contract, spec §2.2).",
+        "properties": {
+          "context": {
+            "description": "The relevant transcript slice, pushed in the body. May be an empty array for a fresh conversation, but the field must be present.",
+            "items": {
+              "$ref": "#/components/schemas/QueryContextItem"
+            },
+            "title": "Context",
+            "type": "array"
+          },
+          "max_steps": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Agent-loop step ceiling. Omitted → the agent's configured default.",
+            "title": "Max Steps"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Model id override. Omitted → the sidecar's default.",
+            "title": "Model"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "LLM provider override. The email agent runs local inference only, so only 'lemonade' is accepted; any other value is rejected (400).",
+            "title": "Provider"
+          },
+          "query": {
+            "description": "The natural-language request driving the agent loop.",
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "run_id": {
+            "description": "Host-minted streaming-run handle (UUIDv4). Cancellation (POST /v1/email/query/{run_id}/cancel) keys off it, so the run is cancellable from the instant the request is sent.",
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query",
+          "run_id",
+          "context"
+        ],
+        "title": "QueryRequest",
         "type": "object"
       },
       "SingleEmailInput": {
@@ -2469,7 +2626,7 @@
   "info": {
     "description": "REST surface for the GAIA Email Triage agent (/v1/email/*). Cross-implementation contract for the npm client and native builds.",
     "title": "GAIA Email Agent API",
-    "version": "2.2"
+    "version": "2.4"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -2498,6 +2655,12 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "description": "Ambiguous or unknown account: the named provider is not connected, or no provider was given while several accounts are connected."
+          },
+          "403": {
+            "description": "Authorization failed — the account's auth is missing, expired, or revoked (reconnect via Settings → Connectors), or a confirmation gate rejected the request (mint a fresh confirmation token)."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -2507,6 +2670,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "502": {
+            "description": "Upstream provider/connector failure."
+          },
+          "503": {
+            "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
         "summary": "Archive Email",
@@ -2529,6 +2698,12 @@
               }
             },
             "description": "Successful Response"
+          },
+          "404": {
+            "description": "No briefing generated yet — enable the daily schedule (GAIA_EMAIL_BRIEFING_ENABLED) or POST /v1/email/prescan."
+          },
+          "500": {
+            "description": "The persisted briefing could not be read or does not match the email_pre_scan envelope."
           }
         },
         "summary": "Get Briefing",
@@ -2539,7 +2714,7 @@
     },
     "/v1/email/calendar/events": {
       "get": {
-        "description": "View calendar events on the primary calendar (read-only).\n\n``time_min`` / ``time_max`` are optional RFC 3339 bounds. ``provider``\n(google|microsoft) is required only when more than one account is connected;\nwith exactly one, it is inferred. Reaches whichever calendar the user\nconnected. Fails loudly (403 + reconnect CTA) if the calendar scope is missing.",
+        "description": "View calendar events on the primary calendar (read-only).\n\n``time_min`` / ``time_max`` are optional RFC 3339 bounds; when both are\nomitted the listing defaults to a forward window (now → +30 days), so\nrecurring series don't surface their oldest instances. ``provider``\n(google|microsoft) is required only when more than one account is connected;\nwith exactly one, it is inferred. Reaches whichever calendar the user\nconnected. Fails loudly (403 + reconnect CTA) if the calendar scope is missing.",
         "operationId": "list_calendar_events_v1_email_calendar_events_get",
         "parameters": [
           {
@@ -2602,6 +2777,12 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "description": "Ambiguous or unknown account: the named provider is not connected, or no provider was given while several accounts are connected."
+          },
+          "403": {
+            "description": "Authorization failed — the account's auth is missing, expired, or revoked (reconnect via Settings → Connectors), or a confirmation gate rejected the request (mint a fresh confirmation token)."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -2611,6 +2792,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "502": {
+            "description": "Upstream provider/connector failure."
+          },
+          "503": {
+            "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
         "summary": "List Calendar Events",
@@ -2642,6 +2829,12 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "description": "Bad event input (no usable time / inverted window), or the provider is ambiguous/not connected."
+          },
+          "403": {
+            "description": "Authorization failed — the account's auth is missing, expired, or revoked (reconnect via Settings → Connectors), or a confirmation gate rejected the request (mint a fresh confirmation token)."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -2651,6 +2844,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "502": {
+            "description": "Upstream provider/connector failure."
+          },
+          "503": {
+            "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
         "summary": "Create Calendar Event",
@@ -2726,6 +2925,12 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "description": "Ambiguous or unknown account: the named provider is not connected, or no provider was given while several accounts are connected."
+          },
+          "403": {
+            "description": "Authorization failed — the account's auth is missing, expired, or revoked (reconnect via Settings → Connectors), or a confirmation gate rejected the request (mint a fresh confirmation token)."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -2735,6 +2940,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "502": {
+            "description": "Upstream provider/connector failure."
+          },
+          "503": {
+            "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
         "summary": "Respond Calendar Event",
@@ -2883,7 +3094,7 @@
     },
     "/v1/email/prescan": {
       "post": {
-        "description": "Pre-scan the connected inbox into the scannable triage card envelope.\n\nLists the ``max_messages`` most-recent inbox messages via the connected\nmailbox backend and returns the aggregate pre-scan summary the Agent UI's\n``EmailPreScanCard`` renders — top urgent / actionable rows, an\ninformational count, and suggested archives, each with a heuristic reason.\nRead-only: nothing is archived, marked, or sent.\n\nClassification reuses the agent's ``pre_scan_inbox_impl`` (the same\nheuristic path the agent loop runs) — categories are not re-implemented\nhere. The backend is resolved by :func:`get_prescan_backend`, which fails\nloudly on zero or ambiguous mailboxes.",
+        "description": "Pre-scan the connected inbox into the scannable triage card envelope.\n\nLists the ``max_messages`` most-recent inbox messages via every connected\nmailbox and returns the aggregate pre-scan summary the Agent UI's\n``EmailPreScanCard`` renders — top urgent / actionable rows, an\ninformational count, and suggested archives, each with a heuristic reason.\nRead-only: nothing is archived, marked, or sent.\n\nClassification reuses the agent's ``pre_scan_inbox_impl`` (the same\nheuristic path the agent loop runs) — categories are not re-implemented\nhere. The backend is resolved by :func:`get_prescan_backend`: 503 when no\nmailbox is connected, and with 2+ connected it consolidates every mailbox\ninto one merged envelope rather than failing on ambiguity (the frozen REST\ncontract carries no per-item mailbox tag).",
         "operationId": "prescan_inbox_v1_email_prescan_post",
         "requestBody": {
           "content": {
@@ -2906,6 +3117,9 @@
             },
             "description": "Successful Response"
           },
+          "403": {
+            "description": "Authorization failed — the account's auth is missing, expired, or revoked (reconnect via Settings → Connectors), or a confirmation gate rejected the request (mint a fresh confirmation token)."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -2915,6 +3129,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "502": {
+            "description": "Upstream provider/connector failure."
+          },
+          "503": {
+            "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
         "summary": "Prescan Inbox",
@@ -2948,6 +3168,64 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "description": "Refused: is_phishing was false (only phishing-flagged mail may be quarantined), the mailbox is Outlook (quarantine is Gmail-only), or the provider is ambiguous/not connected."
+          },
+          "403": {
+            "description": "Authorization failed — the account's auth is missing, expired, or revoked (reconnect via Settings → Connectors), or a confirmation gate rejected the request (mint a fresh confirmation token)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "description": "Upstream provider/connector failure."
+          },
+          "503": {
+            "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
+          }
+        },
+        "summary": "Quarantine Email",
+        "tags": [
+          "email"
+        ]
+      }
+    },
+    "/v1/email/query": {
+      "post": {
+        "description": "Run the email agent loop for one request and stream canonical SSE events.\n\nBuilds an agent, injects the pushed ``context`` as conversation history, runs\n``process_query(query)`` on a worker thread with an ``SSEOutputHandler``, and\nrelays the loop as the seven canonical event types (spec §4). The stream ends\nwith exactly one ``final`` or ``error``. A confirmation-requiring step ends the\nstream with a ``needs_confirmation`` followed by a ``final`` refusal (the\nstateless D1 stub — see module docstring).",
+        "operationId": "query_v1_email_query_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "text/event-stream": {
+                "schema": {
+                  "example": "data: {\"type\": \"status\", \"message\": \"Processing...\"}\n\ndata: {\"type\": \"tool_call\", \"tool\": \"triage_inbox\", \"args\": {}}\n\ndata: {\"type\": \"tool_result\", \"tool\": \"triage_inbox\", \"data\": {}}\n\ndata: {\"type\": \"final\", \"answer\": \"Triaged 5 emails.\"}\n\n",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Server-Sent Events stream (text/event-stream). Each `data:` line is one canonical event discriminated on `type`, one of: status {message} | token {delta} | tool_call {tool, args} | tool_result {tool, render?, data} | needs_confirmation {run_id, action, summary} | final {answer, usage?} | error {detail, status}. The stream is terminated by exactly one `final` or one `error`."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -2959,9 +3237,54 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Quarantine Email",
+        "summary": "Query",
         "tags": [
-          "email"
+          "email",
+          "email-query"
+        ]
+      }
+    },
+    "/v1/email/query/{run_id}/cancel": {
+      "post": {
+        "description": "Cancel an in-flight ``/query`` run — stops tool execution between steps.\n\nCooperative, not a kill: it sets the run's cancel flag, which the agent loop\nobserves at its next step boundary (per-tool timeouts keep each step bounded,\nso that point is always reached in finite time) and the handler observes while\nwaiting on any confirmation. 404 if no run with that id is in flight.",
+        "operationId": "cancel_query_v1_email_query__run_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryCancelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Query",
+        "tags": [
+          "email",
+          "email-query"
         ]
       }
     },
@@ -2990,6 +3313,12 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "description": "Ambiguous or unknown account: the named provider is not connected, or no provider was given while several accounts are connected."
+          },
+          "403": {
+            "description": "Authorization failed — the account's auth is missing, expired, or revoked (reconnect via Settings → Connectors), or a confirmation gate rejected the request (mint a fresh confirmation token)."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -2999,6 +3328,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "502": {
+            "description": "Upstream provider/connector failure."
+          },
+          "503": {
+            "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
         "summary": "Search Inbox",
@@ -3009,7 +3344,7 @@
     },
     "/v1/email/send": {
       "post": {
-        "description": "Send a reply — gated on explicit confirmation (#1264).\n\nThe confirmation gate is enforced FIRST: a request without a valid,\npayload-bound confirmation token is rejected with HTTP 403 before any\nbackend call (or even backend resolution). This mirrors the agent's\n``TOOLS_REQUIRING_CONFIRMATION`` guard, translated to the API boundary,\nand guarantees the gate fires regardless of backend health. Never\nauto-confirms.",
+        "description": "Send a reply — gated on explicit confirmation (#1264).\n\nThe confirmation gate is enforced FIRST: a request without a valid,\npayload-bound confirmation token is rejected with HTTP 403 before any\nbackend call (or even backend resolution). This mirrors the agent's\n``CONFIRMATION_REQUIRED_TOOLS`` guard, translated to the API boundary,\nand guarantees the gate fires regardless of backend health. Never\nauto-confirms.",
         "operationId": "send_email_v1_email_send_post",
         "requestBody": {
           "content": {
@@ -3032,6 +3367,15 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "description": "Ambiguous or unknown account: the named provider is not connected, or no provider was given while several accounts are connected."
+          },
+          "403": {
+            "description": "Authorization failed — the account's auth is missing, expired, or revoked (reconnect via Settings → Connectors), or a confirmation gate rejected the request (mint a fresh confirmation token)."
+          },
+          "413": {
+            "description": "An attachment exceeds the connected provider's size ceiling."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -3041,6 +3385,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "502": {
+            "description": "Upstream provider/connector failure."
+          },
+          "503": {
+            "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
         "summary": "Send Email",
@@ -3083,6 +3433,9 @@
               }
             },
             "description": "Validation Error"
+          },
+          "502": {
+            "description": "Local LLM triage failed — Lemonade Server unreachable or it returned an unusable result."
           }
         },
         "summary": "Triage Email",
@@ -3093,7 +3446,7 @@
     },
     "/v1/email/triage/batch": {
       "post": {
-        "description": "Triage an array of emails or threads in a single request (#1887).\n\nAccepts a ``BatchTriageRequest`` (1..MAX_BATCH_SIZE ``EmailInput`` items)\nand returns a ``BatchTriageResponse`` — one ``BatchItemResult`` per item,\norder-preserved. Per-item failures surface as ``BatchItemResult.error``\n(HTTP 200 with all items errored is valid — inspect each result). A 502\nmeans Lemonade was unreachable before any item was processed. No mail is\nread or sent; this analyzes only the items in the request. Each\nsuccessful item's action items are persisted to the local task store,\nlinked to its source ``message_id`` and de-duplicated per message\n(#1605) — additive, the response shape is unchanged.",
+        "description": "Triage an array of emails or threads in a single request (#1887).\n\nAccepts a ``BatchTriageRequest`` (1..MAX_BATCH_SIZE ``EmailInput`` items)\nand returns a ``BatchTriageResponse`` — one ``BatchItemResult`` per item,\norder-preserved. Per-item failures surface as ``BatchItemResult.error``\n(HTTP 200 with all items errored is valid — inspect each result). A 502\nmeans Lemonade was unreachable or the triage model is unavailable there,\ndetected before any item was processed. No mail is read or sent; this\nanalyzes only the items in the request. Each\nsuccessful item's action items are persisted to the local task store,\nlinked to its source ``message_id`` and de-duplicated per message\n(#1605) — additive, the response shape is unchanged.",
         "operationId": "triage_email_batch_v1_email_triage_batch_post",
         "requestBody": {
           "content": {
@@ -3125,6 +3478,9 @@
               }
             },
             "description": "Validation Error"
+          },
+          "502": {
+            "description": "Local LLM triage failed — Lemonade Server unreachable or it returned an unusable result."
           }
         },
         "summary": "Triage Email Batch",
@@ -3158,6 +3514,15 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "description": "Ambiguous or unknown account: the named provider is not connected, or no provider was given while several accounts are connected."
+          },
+          "403": {
+            "description": "Authorization failed — the account's auth is missing, expired, or revoked (reconnect via Settings → Connectors), or a confirmation gate rejected the request (mint a fresh confirmation token)."
+          },
+          "409": {
+            "description": "The undo window has expired, or the handle is unknown or already undone — the action can no longer be reversed via the API."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -3167,6 +3532,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "502": {
+            "description": "Upstream provider/connector failure."
+          },
+          "503": {
+            "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
         "summary": "Unarchive Email",
@@ -3200,6 +3571,15 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "description": "Refused: the recorded mailbox is Outlook (quarantine is Gmail-only), or the provider is ambiguous/not connected."
+          },
+          "403": {
+            "description": "Authorization failed — the account's auth is missing, expired, or revoked (reconnect via Settings → Connectors), or a confirmation gate rejected the request (mint a fresh confirmation token)."
+          },
+          "409": {
+            "description": "The undo window has expired, or the handle is unknown or already undone — the action can no longer be reversed via the API."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -3209,6 +3589,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "502": {
+            "description": "Upstream provider/connector failure."
+          },
+          "503": {
+            "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
         "summary": "Unquarantine Email",

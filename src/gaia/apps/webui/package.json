@@ -1,6 +1,6 @@
 {
   "name": "@amd-gaia/agent-ui",
-  "version": "0.21.2",
+  "version": "0.22.0",
   "type": "module",
   "productName": "GAIA Agent UI",
   "description": "Privacy-first agentic AI interface with document Q&A - runs 100% locally on AMD Ryzen AI",
@@ -81,7 +81,7 @@
     "react-markdown": "^10.1.0",
     "rehype-sanitize": "^6.0.0",
     "remark-gfm": "^4.0.1",
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.2",
     "vite": "^8.0.16",
     "vitest": "^4.1.8",
     "zustand": "^5.0.14"

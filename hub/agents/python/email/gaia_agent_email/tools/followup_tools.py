@@ -31,11 +31,8 @@ from datetime import datetime, timezone
 from email.utils import getaddresses
 from typing import Any, Dict, List, Optional
 
-from gaia_agent_email.tools.read_tools import (
-    _envelope_err,
-    _envelope_ok,
-    extract_sender_email,
-)
+from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
+from gaia_agent_email.tools.read_tools import extract_sender_email
 from gaia_agent_email.verbose import log_tool_call
 
 from gaia.agents.base.tools import tool

@@ -6,6 +6,14 @@ icon: "clock"
 
 # Autonomy Engine -- Background Service, Heartbeat Scheduler & Event Hooks
 
+> **⚠️ Reconcile with Agent UI v2** ([agent-ui.mdx](/plans/agent-ui) +
+> [agent-ui-agent-capabilities-plan.md](/plans/agent-ui-agent-capabilities-plan) §0).
+> This doc's "always-on background service" **is** the v2 **headless custody daemon**
+> — don't build a second one. The daemon (§0.0, §0.25) owns the single scheduler
+> clock (§0.22) that this engine describes; jobs fire into the owning agent sidecar
+> via `/query`, not into an in-process loop. Read v2 §0 and treat the heartbeat/event
+> hooks below as capabilities *of the daemon*, not a separate service.
+
 > **Date:** 2026-04-01
 >
 > **Status:** Planning (0% implemented)
@@ -15,9 +23,9 @@ icon: "clock"
 > **Prerequisites:** v0.20.0 Memory & Bootstrap must ship first (MemoryStore, MemoryMixin)
 >
 > **Related plans:**
-> - [Agent UI](agent-ui.mdx) -- Phase C (autonomous infra)
-> - [Messaging Integrations](messaging-integrations-plan.mdx) -- Messaging adapters depend on this service
-> - [Security Model](security-model.mdx) -- Tool guardrails and dangerous mode
+> - [Agent UI](/plans/agent-ui) -- Phase C (autonomous infra)
+> - [Messaging Integrations](/plans/messaging-integrations-plan) -- Messaging adapters depend on this service
+> - [Security Model](/plans/security-model) -- Tool guardrails and dangerous mode
 
 ---
 
@@ -278,7 +286,7 @@ tasks:
       - auto_commit_if_ready
 ```
 
-For comprehensive security analysis, see [security-model.mdx](security-model.mdx).
+For comprehensive security analysis, see [security-model.mdx](/plans/security-model).
 
 ---
 

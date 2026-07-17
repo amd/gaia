@@ -109,6 +109,11 @@ class EmailAgentConfig:
     - ``scheduler_poll_seconds`` / ``start_scheduler``: the one-shot scheduler
       for scheduled send + snooze (#1609). ``start_scheduler=False`` skips the
       polling thread — tests drive ``fire_due_jobs()`` deterministically.
+    - ``ctx_size``: exact context-window pin for THIS agent's LLM client
+      (#1892). When set, the agent wires it as the LemonadeClient's
+      instance-scoped ``ctx_size_override`` so every model load happens at
+      exactly this ctx (see ``context_budget.py`` for the 16K/32K envelope).
+      ``None`` (the default) keeps Lemonade's registry floor semantics.
     """
 
     base_url: Optional[str] = None
@@ -123,6 +128,13 @@ class EmailAgentConfig:
     followup_window_days: int = 3
     db_path: Optional[str] = None
     memory_db_path: Optional[str] = None
+    # Runtime memory toggle (#1666). When False the agent constructs with memory
+    # in incognito mode: personalization/persistence (inbox profiling #1289,
+    # behavioral learning #1290, preference persistence #1288) is suppressed and
+    # the stored working context is NOT injected into the prompt. Unlike
+    # GAIA_MEMORY_DISABLED (startup-only), this is per-instance and can be flipped
+    # at runtime via ``EmailTriageAgent.set_memory_enabled``.
+    memory_enabled: bool = True
     mail_provider: Optional[str] = None
     calendar_provider: Optional[str] = None
     gmail_backend: Optional[Any] = None
@@ -134,6 +146,7 @@ class EmailAgentConfig:
     # ``EmailJobScheduler.fire_due_jobs()`` deterministically instead.
     scheduler_poll_seconds: float = 30.0
     start_scheduler: bool = True
+    ctx_size: Optional[int] = None
 
     def validate(self) -> None:
         """Run startup-time invariants. Called from the agent's __init__.
@@ -164,6 +177,15 @@ class EmailAgentConfig:
             raise ConfigurationError(
                 f"EmailAgentConfig.followup_window_days must be a positive "
                 f"integer number of days, got {self.followup_window_days!r}."
+            )
+        if self.ctx_size is not None and (
+            not isinstance(self.ctx_size, int) or self.ctx_size <= 0
+        ):
+            raise ConfigurationError(
+                f"EmailAgentConfig.ctx_size must be a positive integer token "
+                f"count, got {self.ctx_size!r}. Pass e.g. 16384 (the #1892 "
+                "envelope target) or leave it None for Lemonade's default "
+                "floor."
             )
 
     def resolved_db_path(self) -> str:
@@ -265,6 +287,28 @@ class EmailAgentConfig:
             "Expected 'google' or 'microsoft'."
         )
 
+    def available_mailbox_providers(self) -> List[str]:
+        """Return the UNFILTERED available mailbox providers, registry order.
+
+        The eval seam rules apply exactly as in ``resolve_mail_backends``:
+        when a fake backend is injected, the injected set FULLY defines
+        availability (the live keyring is not consulted); otherwise the
+        available set is the connected mailboxes. Unlike
+        ``resolve_mail_backends``, the ``mail_provider`` filter is NOT
+        applied — callers that need to distinguish "not connected" from
+        "connected but filtered out by the session selection" (the #2164
+        provider-intent guard) read this.
+        """
+        injected = set()
+        if self.gmail_backend is not None:
+            injected.add("google")
+        if self.outlook_backend is not None:
+            injected.add("microsoft")
+        available = injected if injected else set(connected_mailbox_providers())
+        # Canonical registry order (google before microsoft) — deterministic
+        # regardless of keyring vs injection ordering.
+        return [p for p in ("google", "microsoft") if p in available]
+
     def resolve_mail_backends(self) -> List[Tuple[str, Any]]:
         """Return ``[(provider, backend), ...]`` for every admitted mailbox.
 
@@ -297,15 +341,7 @@ class EmailAgentConfig:
         # available set — the live keyring is not consulted at all, so an
         # injected-fake run stays hermetic regardless of the host's real OAuth
         # connections. Otherwise the available set is the connected mailboxes.
-        injected = set()
-        if self.gmail_backend is not None:
-            injected.add("google")
-        if self.outlook_backend is not None:
-            injected.add("microsoft")
-        available = injected if injected else set(connected_mailbox_providers())
-        # Canonical registry order (google before microsoft) — deterministic
-        # regardless of keyring vs injection ordering.
-        connected = [p for p in ("google", "microsoft") if p in available]
+        connected = self.available_mailbox_providers()
         selected_filter = (self.mail_provider or "").strip().lower()
         if selected_filter:
             selected = [p for p in connected if p == selected_filter]

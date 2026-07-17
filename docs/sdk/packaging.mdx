@@ -99,7 +99,8 @@ my-agent = "my_package.cli:main"
 # After install, users can:
 # 1. Import: from my_package.agent import MyAgent
 # 2. CLI: my-agent "Do something"
-# 3. API: Start server with `gaia api --agent my-agent`
+# 3. API: the gaia.agents entry point makes MyAgent discoverable;
+#         start the OpenAI-compatible server with `gaia api start`
 ```
 
 ---

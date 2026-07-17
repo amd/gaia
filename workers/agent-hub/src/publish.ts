@@ -7,8 +7,9 @@
  * Flow: authenticate -> parse multipart -> validate manifest -> enforce
  * publisher scope -> enforce version immutability -> generate server-side
  * SHA-256 -> store artifact + raw manifest + optional README + optional
- * CHANGELOG + per-agent manifest -> rebuild index.json. Every guard fails
- * loudly with a structured error.
+ * CHANGELOG + optional SPEC + optional SKILL + optional EVALUATION +
+ * optional CAPABILITY_MATRIX + per-agent manifest -> rebuild index.json.
+ * Every guard fails loudly with a structured error.
  */
 
 import { assertAuthorAllowed, authenticate } from "./auth";
@@ -17,8 +18,10 @@ import { HttpError, json } from "./http";
 import { parseManifest } from "./manifest";
 import {
   artifactKey,
+  capabilityMatrixKey,
   changelogKey,
   evalScorecardKey,
+  evaluationKey,
   packageFilesKey,
   rawManifestKey,
   readAgentManifest,
@@ -174,6 +177,17 @@ export async function handlePublish(
   // semantics as README/CHANGELOG.
   const specText = await optionalMarkdownPart(form, "spec", "SPEC.md");
   const skillText = await optionalMarkdownPart(form, "skill", "SKILL.md");
+  // Optional EVALUATION.md (evaluation guide), rendered as its own doc tab on the
+  // hub page. Same per-version, first-POST semantics as SPEC/SKILL.
+  const evaluationText = await optionalMarkdownPart(form, "evaluation", "EVALUATION.md");
+  // Optional CAPABILITY_MATRIX.md (tool-level capability matrix), rendered as its
+  // own doc tab on the hub page. Same per-version, first-POST semantics as
+  // SPEC/SKILL/EVALUATION.
+  const capabilityMatrixText = await optionalMarkdownPart(
+    form,
+    "capability_matrix",
+    "CAPABILITY_MATRIX.md"
+  );
   // Optional eval scorecard markdown (the agent's benchmark results, rendered on
   // the hub listing as an aggregate score + link). Per-version, first-POST semantics.
   const evalScorecardText = await optionalMarkdownPart(form, "eval_scorecard", "SCORECARD.md");
@@ -279,6 +293,18 @@ export async function handlePublish(
       await env.BUCKET.put(skillKey(manifest.id, manifest.version), skillText, {
         httpMetadata: { contentType: "text/markdown; charset=utf-8" },
       });
+    }
+    if (evaluationText != null) {
+      await env.BUCKET.put(evaluationKey(manifest.id, manifest.version), evaluationText, {
+        httpMetadata: { contentType: "text/markdown; charset=utf-8" },
+      });
+    }
+    if (capabilityMatrixText != null) {
+      await env.BUCKET.put(
+        capabilityMatrixKey(manifest.id, manifest.version),
+        capabilityMatrixText,
+        { httpMetadata: { contentType: "text/markdown; charset=utf-8" } }
+      );
     }
     if (evalScorecardText != null) {
       await env.BUCKET.put(evalScorecardKey(manifest.id, manifest.version), evalScorecardText, {

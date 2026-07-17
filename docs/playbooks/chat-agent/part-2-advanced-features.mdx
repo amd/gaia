@@ -5,7 +5,7 @@ icon: "wrench"
 ---
 
 <Info>
-  **Source Code:** [`src/gaia/chat/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/chat/sdk.py) | [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py)
+  **Source Code:** [`hub/agents/python/chat/gaia_agent_chat/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/python/chat/gaia_agent_chat/agent.py) | [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py)
 </Info>
 
 <Badge text="development" color="orange" />
@@ -33,6 +33,7 @@ from gaia.agents.base.console import AgentConsole
 from gaia.agents.tools import RAGToolsMixin, FileToolsMixin
 from gaia.agents.tools import FileSearchToolsMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
+from pathlib import Path
 
 class FullFeaturedAgent(
     Agent,
@@ -534,14 +535,15 @@ Extend the agent by adding domain-specific tools.
         allowed_paths=[
             "/home/user/work",
             "/home/user/research"
-        ],
-
-        # Embedding model
-        embedding_model="user.embeddinggemma-300m-GGUF"
+        ]
     )
 
     agent = ChatAgent(config)
     ```
+
+    <Note>
+    `ChatAgentConfig` does not take an `embedding_model` field — the embedding model is selected automatically based on your device (EmbeddingGemma 300M on Ryzen AI). To override it, construct a `RAGSDK` with a custom `RAGConfig(embedding_model=...)` directly.
+    </Note>
   </Tab>
 
   <Tab title="Trade-offs">

@@ -138,9 +138,13 @@ if importlib.util.find_spec("gaia_agent_email") is None:
         "(`pip install gaia-agent-email`) to enable POST /v1/email/*."
     )
 else:
+    from gaia_agent_email.agent_routes import router as email_agent_router
     from gaia_agent_email.api_routes import router as email_router
 
     app.include_router(email_router)
+    # Stateful conversational surface (/v1/email/agent/*): session-scoped agent
+    # with memory + tool-confirmation, for hosts driving the full agent over HTTP.
+    app.include_router(email_agent_router)
 
 
 # Raw request logging middleware (debug mode only)

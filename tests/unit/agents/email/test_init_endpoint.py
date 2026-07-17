@@ -113,10 +113,13 @@ def test_health_probe_extracts_server_version_from_body():
     resp = MagicMock(status_code=200)
     resp.json.return_value = {"version": "10.3.1", "all_models_loaded": []}
     with patch("requests.get", return_value=resp) as mock_get:
-        reachable, base, version = _probe_lemonade_health("http://localhost:9999")
+        reachable, base, version, loaded = _probe_lemonade_health(
+            "http://localhost:9999"
+        )
     assert reachable is True
     assert base == "http://localhost:9999/api/v1"
     assert version == "10.3.1"
+    assert loaded == []
     # Shares the same /health probe target + short timeout as reachability.
     args, kwargs = mock_get.call_args
     assert args[0] == "http://localhost:9999/api/v1/health"
@@ -127,7 +130,7 @@ def test_health_probe_version_none_when_not_advertised():
     resp = MagicMock(status_code=200)
     resp.json.return_value = {"all_models_loaded": []}  # no 'version' key
     with patch("requests.get", return_value=resp):
-        _, _, version = _probe_lemonade_health("http://localhost:9999")
+        _, _, version, _ = _probe_lemonade_health("http://localhost:9999")
     assert version is None
 
 
@@ -135,10 +138,11 @@ def test_health_probe_version_none_when_body_not_json():
     resp = MagicMock(status_code=200)
     resp.json.side_effect = ValueError("no json")
     with patch("requests.get", return_value=resp):
-        reachable, _, version = _probe_lemonade_health("http://localhost:9999")
+        reachable, _, version, loaded = _probe_lemonade_health("http://localhost:9999")
     # Server is up (HTTP responded) even though the body wasn't JSON.
     assert reachable is True
     assert version is None
+    assert loaded == []
 
 
 # ---------------------------------------------------------------------------
@@ -199,11 +203,15 @@ def test_resolve_email_model_id_defaults_to_agent_default():
 _BASE = "http://localhost:8000/api/v1"
 
 
-def _patch_health(version):
+def _patch_health(version, loaded_models=()):
     """Patch the GET readiness path's /health probe to a reachable server at
-    ``version`` (None = server doesn't advertise one)."""
+    ``version`` (None = server doesn't advertise one). ``loaded_models``
+    mirrors /health's raw ``all_models_loaded`` — empty by default because
+    these route tests imply a downloaded (present) model, not a loaded one."""
     return patch.object(
-        ar, "_probe_lemonade_health", return_value=(True, _BASE, version)
+        ar,
+        "_probe_lemonade_health",
+        return_value=(True, _BASE, version, list(loaded_models)),
     )
 
 
@@ -232,7 +240,9 @@ def test_init_ready_returns_200(client):
 
 
 def test_init_lemonade_down_returns_503_with_actionable_hint(client):
-    with patch.object(ar, "_probe_lemonade_health", return_value=(False, _BASE, None)):
+    with patch.object(
+        ar, "_probe_lemonade_health", return_value=(False, _BASE, None, [])
+    ):
         resp = client.get("/v1/email/init")
 
     assert resp.status_code == 503
@@ -360,7 +370,7 @@ def test_init_response_forbids_unknown_fields(client):
         "min_version",
         "compatible",
     }
-    assert set(body["model"]) == {"id", "present", "loadable"}
+    assert set(body["model"]) == {"id", "present", "loadable", "ctx_size"}
 
 
 # ---------------------------------------------------------------------------
@@ -405,9 +415,65 @@ def test_min_lemonade_version_locksteps_with_manifest():
     )
 
 
+def test_shipped_lemonade_pin_satisfies_the_agent_floor():
+    # The version `gaia init` installs must clear the floor triage requires, or a
+    # pin bump ships an agent that rejects the server it was just handed.
+    from gaia_agent_email.api_routes import _version_meets_min
+    from gaia_agent_email.version import MIN_LEMONADE_VERSION
+
+    from gaia.version import LEMONADE_VERSION
+
+    assert _version_meets_min(LEMONADE_VERSION, MIN_LEMONADE_VERSION) is True, (
+        f"gaia init installs Lemonade {LEMONADE_VERSION}, but triage requires "
+        f">= {MIN_LEMONADE_VERSION} — /v1/email/init would report incompatible."
+    )
+
+
 # ---------------------------------------------------------------------------
 # 6. OpenAPI + sidecar mount
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# 6b. GET /v1/email/init tracks the LEMONADE_BASE_URL override (#1888 AC3)
+# ---------------------------------------------------------------------------
+
+
+def test_init_endpoint_tracks_lemonade_base_url_override(monkeypatch, client):
+    """Setting LEMONADE_BASE_URL redirects the readiness endpoint's reported
+    base_url + resolved model (AC3). Mocks ``requests.get`` directly (NOT the
+    ``_probe_*`` helpers) so the assertion isn't tautological.
+    """
+    monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:9556")
+    resolved_model_id = _resolve_email_model_id()
+    probe_base = "http://127.0.0.1:9556/api/v1"
+
+    def _fake_get(url, *args, **kwargs):
+        if url == f"{probe_base}/health":
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"version": MIN_LEMONADE_VERSION}
+            return resp
+        if url == f"{probe_base}/system-info":
+            # No NPU — this test is about base_url tracking (AC3), not
+            # NPU auto-select (#1439); keep the resolved model unchanged.
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"devices": {"amd_npu": {"available": False}}}
+            return resp
+        if url == f"{probe_base}/models":
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"data": [{"id": resolved_model_id}]}
+            return resp
+        raise AssertionError(f"unexpected probe URL: {url}")
+
+    monkeypatch.setattr(requests, "get", _fake_get)
+
+    resp = client.get("/v1/email/init")
+    body = resp.json()
+
+    assert body["lemonade"]["base_url"] == probe_base
+    assert body["model"]["id"] == resolved_model_id
+    assert resp.status_code == 200
+    assert body["ready"] is True
 
 
 def test_init_route_in_openapi_with_init_response_model(client):
@@ -446,9 +512,11 @@ def test_init_route_mounted_via_packaging_server():
     with patch.object(
         ar,
         "_probe_lemonade_health",
-        return_value=(False, "http://localhost:8000/api/v1", None),
+        return_value=(False, "http://localhost:8000/api/v1", None, []),
     ):
-        resp = TestClient(app).get("/v1/email/init")
+        # Loopback base_url: the sidecar app's caller-auth Host allowlist (#1706)
+        # rejects TestClient's default `testserver` Host with 400.
+        resp = TestClient(app, base_url="http://127.0.0.1").get("/v1/email/init")
     assert resp.status_code != 404, "/v1/email/init is not mounted on the sidecar app"
     assert resp.status_code == 503
     assert resp.json()["ready"] is False
@@ -605,7 +673,12 @@ def test_get_init_still_readiness_only_unchanged(client):
         patch.object(
             ar,
             "_probe_lemonade_health",
-            return_value=(True, "http://localhost:8000/api/v1", MIN_LEMONADE_VERSION),
+            return_value=(
+                True,
+                "http://localhost:8000/api/v1",
+                MIN_LEMONADE_VERSION,
+                [],
+            ),
         ),
         patch.object(ar, "_probe_model_present", return_value=True),
         patch.object(ar, "_pull_model") as mock_pull,

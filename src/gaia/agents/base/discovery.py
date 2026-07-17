@@ -630,7 +630,7 @@ class SystemDiscovery:
     """Local system scanner for bootstrap. No agent dependencies.
 
     Each method returns a list of discovered fact dicts, NOT stored directly.
-    The caller (MemoryMixin.run_bootstrap) presents them for user review.
+    The caller (`gaia memory bootstrap --discover`) presents them for user review.
 
     All methods catch exceptions internally and return partial results.
     """

@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: MIT
 """Scheduled send + snooze tools (#1609).
 
-``schedule_send`` is registered in ``TOOLS_REQUIRING_CONFIRMATION`` at the
-agent level — the user confirms the LITERAL ``to``/``subject``/``body`` and
+``schedule_send`` is declared in the email agent's
+``CONFIRMATION_REQUIRED_TOOLS`` (#1440) — the user confirms the LITERAL
+``to``/``subject``/``body`` and
 the fire time AT CREATION (#1264); the send then fires unattended at/after
 that time. The body is persisted as a backend draft (visible in the user's
 mail client), never in SQLite — the job row carries only the draft_id and a
@@ -22,11 +23,11 @@ class. Cancelling is a loud operation: cancelling a job that already fired
 
 from __future__ import annotations
 
-import json
 import time
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email import action_store, schedule_store
 from gaia_agent_email.verbose import log_tool_call
 
@@ -36,14 +37,6 @@ from gaia.connectors.formatting import format_connector_error
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
-
-
-def _envelope_ok(data: Any) -> str:
-    return json.dumps({"ok": True, "data": data}, default=str)
-
-
-def _envelope_err(message: str) -> str:
-    return json.dumps({"ok": False, "error": message})
 
 
 def _parse_future_ts(value: str, *, now: Optional[float] = None) -> float:

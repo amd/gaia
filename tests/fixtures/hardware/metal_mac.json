@@ -1,0 +1,6 @@
+{
+  "devices": {
+    "cpu": { "cores": 12, "ram_gb": 32, "available": true },
+    "metal": { "name": "Apple M-series GPU", "available": true }
+  }
+}

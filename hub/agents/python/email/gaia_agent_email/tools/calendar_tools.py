@@ -5,7 +5,8 @@ detect meeting requests embedded in an email body, and flag scheduling
 conflicts against the user's calendar.
 
 ``accept_invite``, ``decline_invite``, ``create_event_from_email`` are
-registered in ``TOOLS_REQUIRING_CONFIRMATION`` at the agent level —
+declared in the agent's ``CONFIRMATION_REQUIRED_TOOLS`` (merged with the
+generic base set via ``confirmation_required_tools()``, #1440) —
 calendar mutations are externally visible to other attendees.
 ``detect_meeting_request`` and ``detect_calendar_conflicts`` are read-only
 (they inspect text / read the calendar but make no changes) and are NOT
@@ -28,9 +29,11 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
+from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
+from gaia_agent_email.tools.read_tools import DEFAULT_BODY_LIMIT_CHARS
 from gaia_agent_email.verbose import log_tool_call
 
 from gaia.agents.base.tools import tool
@@ -39,14 +42,6 @@ from gaia.connectors.formatting import format_connector_error
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
-
-
-def _envelope_ok(data: Any) -> str:
-    return json.dumps({"ok": True, "data": data}, default=str)
-
-
-def _envelope_err(message: str) -> str:
-    return json.dumps({"ok": False, "error": message})
 
 
 # ===========================================================================
@@ -318,10 +313,6 @@ _LLM_SYSTEM_PROMPT = (
     '"reasoning" (one short sentence).'
 )
 
-# Cap body characters sent to the model — enough signal for a yes/no without
-# unbounded prompt growth on long threads. Matches llm_triage's limit.
-_BODY_CHAR_LIMIT = 4000
-
 _TRUE_STRINGS = {"true", "yes", "y", "1"}
 _FALSE_STRINGS = {"false", "no", "n", "0"}
 
@@ -352,7 +343,7 @@ def _build_llm_user_prompt(subject: str, body: str) -> str:
     # prompt is trained to treat as data.
     from gaia_agent_email.tools.read_tools import wrap_untrusted_body
 
-    clipped = (body or "").strip()[:_BODY_CHAR_LIMIT]
+    clipped = (body or "").strip()[:DEFAULT_BODY_LIMIT_CHARS]
     return (
         "Does this email ask to schedule a meeting?\n\n"
         f"Subject: {subject}\n"
@@ -641,9 +632,27 @@ def detect_calendar_conflicts_impl(
         }
 
 
+DEFAULT_LIST_WINDOW_DAYS = 30
+
+
 def list_calendar_events_impl(
-    cal, *, time_min: Optional[str], time_max: Optional[str], debug: bool = False
+    cal,
+    *,
+    time_min: Optional[str],
+    time_max: Optional[str],
+    debug: bool = False,
+    now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
+    """List events; explicit bounds pass through unchanged.
+
+    When BOTH bounds are absent, defaults to a forward window of
+    ``now → +DEFAULT_LIST_WINDOW_DAYS`` — an unbounded listing makes the
+    backend expand recurring series from their first-ever instance (#2162).
+    """
+    if time_min is None and time_max is None:
+        now_dt = now if now is not None else datetime.now(timezone.utc)
+        time_min = now_dt.isoformat()
+        time_max = (now_dt + timedelta(days=DEFAULT_LIST_WINDOW_DAYS)).isoformat()
     with log_tool_call(
         "list_calendar_events",
         {"time_min": time_min, "time_max": time_max},
@@ -833,7 +842,9 @@ class CalendarToolsMixin:
         def list_calendar_events(
             time_min: Optional[str] = None, time_max: Optional[str] = None
         ) -> str:
-            """List calendar events between two RFC 3339 timestamps."""
+            """List calendar events between two RFC 3339 timestamps.
+
+            Omit both to list the next 30 days (starting now)."""
             try:
                 return _envelope_ok(
                     list_calendar_events_impl(

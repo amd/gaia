@@ -15,7 +15,17 @@ on:
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
       - 'setup.py'
+      # Repo-side email suites this workflow runs — changing them must trigger it.
       - 'tests/test_email_openapi_conformance.py'
+      - 'tests/unit/agents/email/**'
+      - 'tests/unit/email/**'
+      - 'tests/unit/agents/test_email_*.py'
+      - 'tests/unit/agents/test_email_llm_triage.py'
+      - 'tests/unit/test_email_cli.py'
+      - 'tests/integration/test_never_auto_send.py'
+      - 'tests/integration/test_email_rest_api_e2e.py'
+      - 'tests/integration/test_email_rest_http_corpus.py'
+      - 'tests/integration/test_email_corpus_alignment.py'
       - '.github/workflows/test_email_agent.yml'
   pull_request:
     branches: [ main ]
@@ -25,7 +35,17 @@ on:
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
       - 'setup.py'
+      # Repo-side email suites this workflow runs — changing them must trigger it.
       - 'tests/test_email_openapi_conformance.py'
+      - 'tests/unit/agents/email/**'
+      - 'tests/unit/email/**'
+      - 'tests/unit/agents/test_email_*.py'
+      - 'tests/unit/agents/test_email_llm_triage.py'
+      - 'tests/unit/test_email_cli.py'
+      - 'tests/integration/test_never_auto_send.py'
+      - 'tests/integration/test_email_rest_api_e2e.py'
+      - 'tests/integration/test_email_rest_http_corpus.py'
+      - 'tests/integration/test_email_corpus_alignment.py'
       - '.github/workflows/test_email_agent.yml'
   merge_group:
   workflow_dispatch:
@@ -81,6 +101,19 @@ jobs:
             tests/unit/test_email_cli.py \
             tests/integration/test_never_auto_send.py \
             tests/integration/test_email_rest_api_e2e.py \
+            tests/integration/test_email_rest_http_corpus.py \
+            tests/integration/test_email_corpus_alignment.py \
             tests/test_api.py::TestEmailTriageEndpoint \
             tests/test_api.py::TestEmailSendConfirmationGate \
-            -v --tb=short
+            -v --tb=short -ra 2>&1 | tee pytest-email.log
+          test "${PIPESTATUS[0]}" -eq 0
+
+      - name: Fail if the corpus-wired tests were skipped (#1897)
+        run: |
+          # A skipped corpus test is a silent false-green (e.g. a broken wheel
+          # install makes importorskip skip the whole file). Red the job when
+          # EITHER wired file skips — legitimate skips elsewhere stay green.
+          if grep -E "SKIPPED.*(test_email_rest_http_corpus|test_email_corpus_alignment)" pytest-email.log; then
+            echo "::error::corpus-wired email tests were SKIPPED — silent false-green, failing loudly"
+            exit 1
+          fi

@@ -41,7 +41,7 @@ import re
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
 import numpy as np
@@ -53,6 +53,9 @@ from gaia.agents.base.memory_store import (
 )
 from gaia.agents.base.procedural_memory import ProceduralMemoryMixin
 from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL
+
+if TYPE_CHECKING:
+    from gaia.agents.base.bootstrap import BootstrapResult
 
 logger = logging.getLogger(__name__)
 
@@ -337,11 +340,13 @@ class MemoryMixin(ProceduralMemoryMixin):
                 The embedding dimension is derived from the live embedder, not
                 this id, so a model with a different dim works without changes.
 
-        Raises:
-            RuntimeError: If Lemonade embedding service is unreachable
-                (unless ``GAIA_MEMORY_DISABLED=1`` is set, in which case
-                memory is skipped entirely — used by security tests and CI
-                environments that don't need memory but instantiate agents).
+        Does not raise when the embedding service is unreachable: it logs a
+        warning and degrades to a memory-disabled session (``memory_store`` is
+        ``None``), so an agent still starts on a machine without Lemonade.
+        ``GAIA_MEMORY_DISABLED=1`` skips init the same way — used by security
+        tests and CI environments that instantiate agents without memory.
+        Callers that need a live store must check ``memory_store is None`` and
+        fail with an actionable message.
         """
         # Explicit opt-out for environments that don't need memory (security
         # tests, lint-time imports, etc.).  This is NOT a silent fallback —
@@ -619,6 +624,73 @@ class MemoryMixin(ProceduralMemoryMixin):
             logger.info("[MemoryMixin] stored %d system context items", stored)
 
         return {"stored": stored}
+
+    # ------------------------------------------------------------------
+    # Bootstrap: day-zero conversational onboarding
+    # ------------------------------------------------------------------
+
+    def run_bootstrap_conversation(
+        self,
+        *,
+        prompt_fn: Callable[[str], str],
+        output_fn: Callable[[str], None],
+    ) -> "BootstrapResult":
+        """Run the adaptive onboarding conversation and store the answers.
+
+        The spec'd entry point for day-zero onboarding: asks a branching set of
+        questions (a student is asked about coursework, an engineer about their
+        deployment workflow), shows every proposed entry for approval, and
+        stores the approved ones with ``source="user"``. Each stored entry is
+        embedded immediately, so it is searchable in this same session.
+
+        The CLI drives the same engine directly against a bare ``MemoryStore``
+        (``gaia memory bootstrap --chat-only``), which is why onboarding still
+        works with no embedding backend.
+
+        Args:
+            prompt_fn: Asks the user one question and returns the raw reply.
+                Raise ``BootstrapCancelled`` from it to abort onboarding.
+            output_fn: Shows one line of narration to the user.
+
+        Returns:
+            A ``BootstrapResult`` with the stored/skipped/rejected counts,
+            whether the user cancelled, the raw answers, and the stored ids.
+
+        Raises:
+            RuntimeError: If memory is disabled for this session, or if an
+                approved entry cannot be stored or embedded.
+        """
+        from gaia.agents.base.bootstrap import (
+            run_bootstrap_conversation as _run_bootstrap_conversation,
+        )
+
+        store = self.memory_store  # raises if init_memory() was never called
+        if store is None:
+            raise RuntimeError(
+                "Cannot run onboarding: memory is disabled for this session "
+                "(the embedding service was unreachable at agent start, or "
+                "GAIA_MEMORY_DISABLED=1 is set). Start lemonade-server and "
+                "re-create the agent, or run `gaia memory bootstrap "
+                "--chat-only`, which onboards without an embedder. See "
+                "docs/guides/memory.mdx."
+            )
+
+        return _run_bootstrap_conversation(
+            store,
+            prompt_fn=prompt_fn,
+            output_fn=output_fn,
+            on_stored=self._embed_bootstrap_entry,
+        )
+
+    def _embed_bootstrap_entry(self, knowledge_id: str, content: str) -> None:
+        """Embed one stored onboarding entry and index it for search.
+
+        Failures propagate — the bootstrap core turns them into an actionable
+        RuntimeError naming the row that was stored but not embedded.
+        """
+        vec = self._embed_text(content)
+        self.memory_store.store_embedding(knowledge_id, _embedding_to_blob(vec))
+        self._faiss_add(knowledge_id, vec)
 
     # ------------------------------------------------------------------
     # Properties

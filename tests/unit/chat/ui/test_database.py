@@ -174,6 +174,80 @@ class TestMailProviderMigration:
             database.close()
 
 
+class TestTitleIsCustom:
+    """Sessions must record whether their title was explicitly set (#2165)
+    so the auto-retitler never overwrites a user/API-chosen title."""
+
+    def test_explicit_title_marks_custom(self, db):
+        session = db.create_session(title="My Research Project")
+        assert session["title_is_custom"] == 1
+
+    @pytest.mark.parametrize("title", [None, "New Chat", "New Task", "Untitled"])
+    def test_placeholder_or_default_title_not_custom(self, db, title):
+        session = db.create_session(title=title)
+        assert session["title_is_custom"] == 0
+
+    def test_rename_pins_title(self, db):
+        session = db.create_session()
+        updated = db.update_session(
+            session["id"], title="Pinned Name", title_is_custom=True
+        )
+        assert updated["title"] == "Pinned Name"
+        assert updated["title_is_custom"] == 1
+
+    def test_auto_title_update_leaves_flag_alone(self, db):
+        """The backend auto-titler updates title WITHOUT the flag — the
+        session must stay non-custom so later auto-titles still apply."""
+        session = db.create_session()
+        updated = db.update_session(session["id"], title="LLM Generated Title")
+        assert updated["title_is_custom"] == 0
+
+    def test_unrelated_update_preserves_pin(self, db):
+        session = db.create_session(title="Pinned")
+        updated = db.update_session(session["id"], device="npu")
+        assert updated["title_is_custom"] == 1
+
+
+class TestTitleIsCustomMigration:
+    """Pre-#2165 DBs get the title_is_custom column; existing rows with a
+    non-placeholder title are backfilled as pinned (can't tell user-set from
+    auto-generated, so err on never renaming)."""
+
+    def test_migration_adds_and_backfills_column(self, tmp_path):
+        db_path = str(tmp_path / "old.db")
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, "
+            "created_at TEXT, updated_at TEXT, model TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO sessions (id, title, created_at, updated_at, model) "
+            "VALUES (?, ?, '2025-01-01', '2025-01-01', 'm')",
+            [
+                ("s1", "Quarterly Report Analysis"),
+                ("s2", "New Chat"),
+                ("s3", "New Task"),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        database = ChatDatabase(db_path)
+        try:
+            cols = [
+                r[1]
+                for r in database._conn.execute(
+                    "PRAGMA table_info(sessions)"
+                ).fetchall()
+            ]
+            assert "title_is_custom" in cols
+            assert database.get_session("s1")["title_is_custom"] == 1
+            assert database.get_session("s2")["title_is_custom"] == 0
+            assert database.get_session("s3")["title_is_custom"] == 0
+        finally:
+            database.close()
+
+
 class TestMessages:
     def test_add_and_get_messages(self, db):
         session = db.create_session()

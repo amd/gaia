@@ -83,7 +83,7 @@
   <div class="card" id="card">
     <div class="head">
       <span class="pkg">@amd-gaia/agent-email</span>
-      <span class="ver" id="ver">v0.3.0</span>
+      <span class="ver" id="ver">v0.5.0</span>
       <span class="tag">architecture</span>
     </div>
     <div class="install"><span class="p mono">$</span><code>npm i @amd-gaia/agent-email</code></div>
@@ -107,6 +107,7 @@
         <div class="eps">
           <span><b>POST</b> /v1/email/triage · /draft · /send</span>
           <span><b>GET</b>&nbsp;&nbsp;/health · /version</span>
+          <span>🔒 Bearer token · loopback Host/Origin</span>
         </div>
         <div class="desc">frozen FastAPI binary — no Python on host</div>
       </div>
@@ -143,6 +144,7 @@
 
 <span class="k">const</span> client = <span class="k">new</span> EmailClient({
   baseUrl: <span class="s">"http://127.0.0.1:8131"</span>,   <span class="c">// a running sidecar</span>
+  authToken,                        <span class="c">// per-session token via IPC</span>
 });
 <span class="k">const</span> { result } = <span class="k">await</span> client.triage({ payload });</pre>
       </div>

@@ -18,8 +18,8 @@ endpoints, mounted on the existing OpenAI-compatible FastAPI app
                              valid confirmation token for *this* payload is
                              supplied. This is the send-confirmation gate
                              (#1264) translated to the API boundary — the
-                             same rule the agent enforces via
-                             ``TOOLS_REQUIRING_CONFIRMATION`` /
+                             same rule the agent enforces via its
+                             ``CONFIRMATION_REQUIRED_TOOLS`` /
                              ``console.confirm_tool_execution``.
 
 Design commitments
@@ -51,8 +51,9 @@ import secrets
 import threading
 from typing import Any, Dict, Iterator, List, Literal, NoReturn, Optional, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
+from gaia_agent_email import caller_auth
 from gaia_agent_email.contract import (
     ActionItem,
     AttachmentMeta,
@@ -69,6 +70,7 @@ from gaia_agent_email.contract import (
     CalendarRespondRequest,
     CalendarRespondResponse,
     DraftReply,
+    DraftScaffold,
     EmailActionConfirmRequest,
     EmailActionConfirmResponse,
     EmailAddress,
@@ -98,13 +100,19 @@ from gaia_agent_email.contract import (
     UnarchivedMessage,
     UnarchiveFailure,
 )
+from gaia_agent_email.context_budget import estimate_tokens, thread_budget_tokens
 from gaia_agent_email.outlook_backend import AttachmentTooLargeError
 from gaia_agent_email.tools.llm_triage import LLMTriageError
 from gaia_agent_email.tools.summarize_tools import EmailSummarizeError
+from gaia_agent_email.tools.thread_fold import (
+    DEFAULT_THREAD_FOLD_MESSAGE_CEILING,
+    fold_older_blocks,
+)
 from gaia_agent_email.tools.triage_heuristics import (
     classify_category_heuristic,
     default_action_for,
 )
+from gaia_agent_email.tools.usage import aggregate_usage_stats
 from gaia_agent_email.version import AGENT_VERSION, API_VERSION
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import iterate_in_threadpool
@@ -122,6 +130,55 @@ from gaia.logger import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/v1/email", tags=["email"])
+
+# Canonical streaming agent-loop surface (#2016): POST /v1/email/query and
+# /v1/email/query/{run_id}/cancel. Included into THIS router (prefix /v1/email)
+# so the routes are part of the frozen OpenAPI contract and the export picks them
+# up. The query module keeps its heavy imports (agent, gaia.ui.sse_handler) lazy,
+# so importing it here does not weigh down the dependency-light export.
+from gaia_agent_email.query_routes import router as _query_router  # noqa: E402
+
+router.include_router(_query_router)
+
+
+# ---------------------------------------------------------------------------
+# Caller authentication (#1706)
+# ---------------------------------------------------------------------------
+
+
+async def require_caller_token(request: Request) -> None:
+    """Reject a request that lacks a valid per-session bearer token (401).
+
+    Wired onto the email router ONLY by the frozen sidecar app
+    (``packaging/server.py``) — the product server and OpenAPI-export app mount
+    the same router without this dependency, so their posture is unchanged. The
+    policy is read from :mod:`gaia_agent_email.caller_auth`:
+
+    - No policy configured, or a policy with ``token is None`` (a dev running the
+      sidecar by hand without ``GAIA_EMAIL_SIDECAR_TOKEN``) → allowed. The Host/
+      Origin controls in ``HostOriginMiddleware`` still apply.
+    - Liveness/version probes and the HTML pages are exempt (:data:`caller_auth.
+      EXEMPT_PATHS`) so the readiness handshake works before a token is in play.
+    - Otherwise a missing/malformed/wrong ``Authorization: Bearer <token>`` is a
+      loud, actionable 401.
+    """
+    config = caller_auth.get_config()
+    if config is None or config.token is None:
+        return
+    if caller_auth.is_exempt_path(request.url.path):
+        return
+    if not caller_auth.token_ok(config, request.headers.get("authorization", "")):
+        raise HTTPException(
+            status_code=401,
+            detail=(
+                "Unauthorized: this email sidecar endpoint requires the "
+                "per-session bearer token. Send 'Authorization: Bearer "
+                "<token>' using the token the sidecar was started with "
+                f"(the parent process passes it via the {caller_auth.TOKEN_ENV_VAR} "
+                "env var on spawn). Requests without a valid token are refused so "
+                "no other local process or web page can act on your mailbox."
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -168,8 +225,19 @@ _MAX_SUMMARY_CHARS = 300
 # it also governs the TCP connect, so an unreachable server blocks on the OS
 # SYN timeout (~30s) before erroring. A short connect timeout turns "server
 # down" into a prompt 502 instead of a 30s hang.
-_LEMONADE_PROBE_CONNECT_TIMEOUT = 2.0
-_LEMONADE_PROBE_READ_TIMEOUT = 3.0
+#
+# _resolve_probe_base / _probe_model_present / the two timeout constants live
+# in gaia_agent_email.model_select (#1439) — that module is the NPU-aware
+# default-model resolver's home and must stay import-light (never pulls in
+# this FastAPI router), so the shared probe helpers moved there and are
+# re-imported here rather than duplicated.
+from gaia_agent_email.model_select import (  # noqa: E402
+    _LEMONADE_PROBE_CONNECT_TIMEOUT,
+    _LEMONADE_PROBE_READ_TIMEOUT,
+    _probe_model_present,
+    _resolve_probe_base,
+    resolve_default_email_model,
+)
 
 # A model pull is a first-download of multi-GB weights — minutes, not seconds.
 # Generous ceiling so a slow link doesn't abort a real download; the connect
@@ -177,37 +245,22 @@ _LEMONADE_PROBE_READ_TIMEOUT = 3.0
 _LEMONADE_PULL_TIMEOUT = (5.0, 1800.0)
 
 
-def _resolve_probe_base(base_url: Optional[str]) -> str:
-    """Resolve the Lemonade ``/api/v1`` base URL for a health/model probe.
-
-    An explicit ``base_url`` is normalised to end in ``/api/v1`` (callers often
-    omit it); ``None`` falls back to the env-derived default via
-    ``_get_lemonade_config``. Shared by the reachability probe and the
-    model-presence probe so both target the exact same server.
-    """
-    from gaia.llm.lemonade_client import _get_lemonade_config
-
-    if base_url:
-        probe_base = base_url.rstrip("/")
-        if not probe_base.endswith("/api/v1"):
-            probe_base = f"{probe_base}/api/v1"
-        return probe_base
-    _, _, probe_base = _get_lemonade_config()
-    return probe_base
-
-
 def _probe_lemonade_health(
     base_url: Optional[str] = None,
-) -> Tuple[bool, str, Optional[str]]:
+) -> Tuple[bool, str, Optional[str], List[dict]]:
     """Probe Lemonade's ``/health`` with a short connect timeout (#1677).
 
-    Returns ``(reachable, probe_base, version)``. Any HTTP response — even an
-    error status — means the server is up; only a connection/timeout failure
-    counts as unreachable (auth/model errors surface later on the real chat
-    call, where their messages are specific). ``version`` is Lemonade's
-    self-reported server version from the ``/health`` body (``None`` when the
-    server doesn't advertise one or the body isn't JSON). Never raises: the
-    readiness endpoint reports the values rather than failing.
+    Returns ``(reachable, probe_base, version, loaded_models)``. Any HTTP
+    response — even an error status — means the server is up; only a
+    connection/timeout failure counts as unreachable (auth/model errors
+    surface later on the real chat call, where their messages are specific).
+    ``version`` is Lemonade's self-reported server version from the
+    ``/health`` body (``None`` when the server doesn't advertise one or the
+    body isn't JSON). ``loaded_models`` is the raw ``all_models_loaded`` list
+    from the same body (``[]`` when unreachable or unparseable) — note raw
+    /health entries carry ``model_name``/``checkpoint`` keys, NOT the ``id``
+    key ``get_status()`` enrichment adds. Never raises: the readiness
+    endpoint reports the values rather than failing.
     """
     import requests
 
@@ -218,16 +271,45 @@ def _probe_lemonade_health(
             timeout=(_LEMONADE_PROBE_CONNECT_TIMEOUT, _LEMONADE_PROBE_READ_TIMEOUT),
         )
     except requests.exceptions.RequestException:
-        return False, probe_base, None
+        return False, probe_base, None, []
 
     version: Optional[str] = None
+    loaded_models: List[dict] = []
     try:
         body = resp.json()
         if isinstance(body, dict):
             version = body.get("version")
+            raw_loaded = body.get("all_models_loaded", [])
+            if isinstance(raw_loaded, list):
+                loaded_models = [m for m in raw_loaded if isinstance(m, dict)]
     except ValueError:
         version = None
-    return True, probe_base, version
+    return True, probe_base, version, loaded_models
+
+
+def _extract_loaded_ctx(loaded_models: List[dict], model_id: str) -> Optional[int]:
+    """The ctx_size the server reports ``model_id`` loaded at, or None.
+
+    Reads raw /health entries (``model_name``/``checkpoint`` keys — no ``id``
+    at this layer) and matches tolerantly via ``_model_ids_match`` (#1952:
+    ``user.`` prefix, case-insensitive). Reports only what the server says:
+    missing entry, missing ``recipe_options``, or a non-positive/non-int
+    value all yield None — never a config echo or a guess.
+    """
+    from gaia.llm.lemonade_client import _model_ids_match
+
+    for entry in loaded_models:
+        if _model_ids_match(entry.get("model_name"), model_id) or _model_ids_match(
+            entry.get("checkpoint"), model_id
+        ):
+            recipe_options = entry.get("recipe_options")
+            if not isinstance(recipe_options, dict):
+                return None
+            ctx = recipe_options.get("ctx_size")
+            if isinstance(ctx, int) and not isinstance(ctx, bool) and ctx > 0:
+                return ctx
+            return None
+    return None
 
 
 def _probe_lemonade_reachable(base_url: Optional[str] = None) -> Tuple[bool, str]:
@@ -236,40 +318,8 @@ def _probe_lemonade_reachable(base_url: Optional[str] = None) -> Tuple[bool, str
     Kept for callers (the POST provisioning verb) that need only "is it up?",
     not the version — so they share the single ``/health`` probe logic.
     """
-    reachable, probe_base, _version = _probe_lemonade_health(base_url)
+    reachable, probe_base, _version, _loaded = _probe_lemonade_health(base_url)
     return reachable, probe_base
-
-
-def _probe_model_present(probe_base: str, model_id: str) -> bool:
-    """Cheaply check whether ``model_id`` is downloaded on the Lemonade server.
-
-    Queries the model list (downloaded models only) with the same short
-    timeout as the reachability probe and matches on the ``id`` field. Sends
-    the resolved Lemonade auth header so an authenticated server answers
-    instead of 401-ing. Raises ``requests.RequestException`` on a transport
-    failure — the caller turns that into an actionable readiness hint rather
-    than silently reporting "absent".
-
-    "Present" is intentionally cheap (a list lookup, no model load). Whether
-    the model actually *loads* (``loadable``) is not probed in v1 — forcing a
-    load is heavy, so the readiness response reports ``loadable=null``.
-    """
-    import requests
-
-    from gaia.llm.lemonade_client import (
-        lemonade_auth_headers,
-        resolve_lemonade_api_key,
-    )
-
-    resp = requests.get(
-        f"{probe_base}/models",
-        headers=lemonade_auth_headers(resolve_lemonade_api_key()),
-        timeout=(_LEMONADE_PROBE_CONNECT_TIMEOUT, _LEMONADE_PROBE_READ_TIMEOUT),
-    )
-    resp.raise_for_status()
-    payload = resp.json()
-    data = payload.get("data", []) if isinstance(payload, dict) else []
-    return any(isinstance(m, dict) and m.get("id") == model_id for m in data)
 
 
 def _pull_model(probe_base: str, model_id: str) -> None:
@@ -302,18 +352,19 @@ def _pull_model(probe_base: str, model_id: str) -> None:
     resp.raise_for_status()
 
 
-def _resolve_email_model_id() -> str:
+def _resolve_email_model_id(base_url: Optional[str] = None) -> str:
     """Resolve the Lemonade model id the email agent triages with.
 
     Mirrors the agent's own resolution (``config.model_id or
-    DEFAULT_MODEL_NAME``) so the readiness probe reports the exact model the
-    triage path will load.
+    resolve_default_email_model(base_url)``, #1439) so the readiness probe
+    reports the exact model the triage path will load — including the
+    NPU-aware auto-select, and against the SAME ``base_url`` the caller is
+    probing (a caller with an explicit non-default ``base_url`` must not
+    silently fall back to resolving against the default server).
     """
     from gaia_agent_email.config import EmailAgentConfig
 
-    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
-
-    return EmailAgentConfig().model_id or DEFAULT_MODEL_NAME
+    return EmailAgentConfig().model_id or resolve_default_email_model(base_url)
 
 
 def _parse_version(version: Optional[str]) -> Optional[Tuple[int, ...]]:
@@ -358,39 +409,19 @@ def _split_sentences(text: str) -> List[str]:
 
 
 def _aggregate_usage(call_stats: List[dict]) -> Optional[TriageUsage]:
-    """Sum the per-call ``AgentResponse.stats`` (#1277/#1278) across the
-    classify + summarize LLM calls into a single :class:`TriageUsage`.
+    """Sum the per-call usage/stats entries across the classify + summarize
+    LLM calls into a single :class:`TriageUsage`.
 
-    prompt_tokens = Σ input_tokens; total_tokens = Σ(input + output);
-    tokens_per_second = Σ output / Σ decode_time, where each call's decode time
-    is output_tokens / tokens_per_second (so the aggregate is total output
-    tokens over total decode time, not a naive TPS average). Returns ``None``
-    when no LLM call produced stats (the heuristic-only path).
+    Thin wrapper around :func:`gaia_agent_email.tools.usage.aggregate_usage_stats`
+    (#1891) — the pure aggregation logic is shared with the tool-call triage
+    path (``EmailTriageAgent._triage_all_backends``) so both surfaces report
+    the same numbers from the same math. Returns ``None`` when no LLM call
+    produced usage/stats (the heuristic-only path).
     """
-    if not call_stats:
+    agg = aggregate_usage_stats(call_stats)
+    if agg is None:
         return None
-    total_input = 0
-    total_output = 0
-    decode_output = 0  # output only from calls with a usable TPS (>0)
-    total_decode_time = 0.0
-    for s in call_stats:
-        inp = int(s.get("input_tokens") or 0)
-        out = int(s.get("output_tokens") or 0)
-        tps = float(s.get("tokens_per_second") or 0.0)
-        total_input += inp
-        total_output += out
-        if out and tps > 0:
-            decode_output += out
-            total_decode_time += out / tps
-    # Numerator excludes output from tps==0 calls so they can't inflate the
-    # aggregate (they add nothing to the decode-time denominator).
-    agg_tps = decode_output / total_decode_time if total_decode_time > 0 else 0.0
-    return TriageUsage(
-        prompt_tokens=total_input,
-        completion_tokens=total_output,
-        total_tokens=total_input + total_output,
-        tokens_per_second=agg_tps,
-    )
+    return TriageUsage(**agg)
 
 
 class EmailTriageService:
@@ -441,8 +472,9 @@ class EmailTriageService:
         """Triage a batch of emails/threads into a per-item result array (#1887).
 
         The pre-loop Lemonade probe runs ONCE — if it raises ``LLMTriageError``
-        (server unreachable), the whole request fails with a 502; that error is
-        intentionally NOT caught here. Per-item failures (``LLMTriageError``,
+        (server unreachable, or the triage model unavailable there, #1888), the
+        whole request fails with a 502; that error is intentionally NOT caught
+        here. Per-item failures (``LLMTriageError``,
         ``EmailSummarizeError``) are caught inside the loop and surfaced as a
         ``BatchItemResult.error`` for that index while remaining items continue.
 
@@ -451,8 +483,8 @@ class EmailTriageService:
             chat:    Pre-built chat client. When None a local Lemonade client
                      is constructed via :meth:`_build_llm_chat` (probe once).
         """
-        # Pre-loop probe: fail fast if Lemonade is unreachable before spending
-        # time on any item. Raises LLMTriageError → propagates as 502.
+        # Pre-loop probe: fail fast if Lemonade is unreachable or missing the
+        # model before spending time on any item. LLMTriageError → 502.
         resolved_chat = chat or self._build_llm_chat()
         context = request.context
         results: List[BatchItemResult] = []
@@ -480,6 +512,12 @@ class EmailTriageService:
         Validates the AC3 local-only contract before constructing the client.
         Raises ``ConfigurationError`` loudly when ``base_url`` points at a
         cloud LLM — no silent fallback to heuristic.
+
+        The pre-flight (which honors the same ``base_url``/``LEMONADE_BASE_URL``
+        resolution as the chat client itself, #1888) guarantees the target
+        server is reachable AND has the triage model before the client is
+        returned; either failure raises ``LLMTriageError`` (→ HTTP 502) naming
+        the URL and the fix.
         """
         from gaia_agent_email.config import EmailAgentConfig
 
@@ -491,9 +529,22 @@ class EmailTriageService:
         # Fail fast + loud if Lemonade isn't reachable, before the chat path's
         # long-timeout connect can stall ~30s (#1677).
         self._assert_lemonade_reachable(base_url)
+        # ...and if the triage model isn't on that server (#1888) — a loud 502
+        # with the fix beats a generic chat-time failure with no URL/model.
+        self._assert_model_present(base_url)
+
+        # #1439: the resolved model id (explicit config.model_id, or the
+        # NPU-aware auto-select) MUST reach the chat client. Omitting `model=`
+        # here would make the resolution cosmetic — /v1/email/init could
+        # report the FLM model while the real triage call silently ran the
+        # SDK's own default instead. resolve_default_email_model() is cached
+        # per probe_base, so this second resolution (the first happened
+        # inside _assert_model_present above) is not a second network probe.
+        model_id = _resolve_email_model_id(base_url)
 
         sdk_cfg = AgentConfig(
             base_url=base_url,
+            model=model_id,
             use_local_llm=True,
             use_claude=False,
             use_chatgpt=False,
@@ -536,6 +587,41 @@ class EmailTriageService:
                 f"({type(exc).__name__}: {exc}). Start it with "
                 "`lemonade-server serve` (or run `gaia init`), then retry."
             ) from exc
+
+    def _assert_model_present(self, base_url: Optional[str]) -> None:
+        """Pre-flight: the triage model must exist on the target server (#1888).
+
+        Reuses :func:`_probe_model_present` against the same
+        ``base_url``/``LEMONADE_BASE_URL`` resolution as the chat client.
+        Raises ``LLMTriageError`` (→ HTTP 502 at the route) when the model is
+        absent — naming the model, the server URL, and the fix — or when the
+        ``/models`` read itself fails (never silently skip the check). No
+        fallback: presence is required, though a present-but-unloadable model
+        still fails later on the chat call.
+        """
+        import requests
+
+        probe_base = _resolve_probe_base(base_url)
+        model_id = _resolve_email_model_id(base_url)
+
+        try:
+            present = _probe_model_present(probe_base, model_id)
+        except requests.RequestException as exc:
+            raise LLMTriageError(
+                f"Could not read the model list at {probe_base}/models "
+                f"({type(exc).__name__}: {exc}). The model-presence pre-flight "
+                "cannot be skipped; fix the server (or LEMONADE_BASE_URL), "
+                "then retry."
+            ) from exc
+
+        if not present:
+            raise LLMTriageError(
+                f"Model '{model_id}' is not available on the Lemonade Server "
+                f"at {probe_base}. To fix: pull it on that server "
+                f"(POST {probe_base}/pull or 'gaia init'), or point "
+                "LEMONADE_BASE_URL at a server that has it; "
+                "verify with GET /v1/email/init."
+            )
 
     def triage_gmail_message(
         self, msg: dict, *, principal_email: str
@@ -600,11 +686,48 @@ class EmailTriageService:
         self, payload: ThreadInput, chat: Any, context: Any = None
     ) -> EmailTriageResult:
         messages: List[EmailMessage] = payload.messages
+        total_count = len(messages)
         last = messages[-1]
+
+        # Message-count ceiling BEFORE any per-message string work — a cheap
+        # slice keeping the most recent messages, so an absurdly long thread
+        # never pays the O(N) join just to be folded anyway.
+        ceiling_dropped = 0
+        if total_count > DEFAULT_THREAD_FOLD_MESSAGE_CEILING:
+            ceiling_dropped = total_count - DEFAULT_THREAD_FOLD_MESSAGE_CEILING
+            messages = messages[ceiling_dropped:]
+
         # Join newest-first so the model sees the most recent context first.
         combined_body = "\n\n".join(
             f"{_format_address(m.from_)}: {m.body}" for m in reversed(messages)
         )
+
+        fold_stats: List[dict] = []
+        if estimate_tokens(combined_body) > thread_budget_tokens():
+            # Over budget: keep the latest message verbatim; fold everything
+            # older into ONE digest call (#1889).
+            older = messages[:-1]
+            older_blocks = [f"{_format_address(m.from_)}: {m.body}" for m in older]
+            digest = fold_older_blocks(
+                older_blocks,
+                chat=chat,
+                subject=last.subject,
+                collect_stats=fold_stats,
+                pre_omitted=ceiling_dropped,
+            )
+            combined_body = (
+                f"{_format_address(last.from_)}: {last.body}\n\n"
+                f"[Condensed summary of {len(older) + ceiling_dropped} "
+                f"earlier messages]\n{digest}"
+            )
+        elif ceiling_dropped:
+            # Bounded and visible, never a silent clip (same marker as the
+            # fold input's) — newest-first join, so the marker trails where
+            # the omitted oldest messages would have been.
+            combined_body = (
+                f"{combined_body}\n\n[omitted {ceiling_dropped} older messages]"
+            )
+
         return self._build_result_llm(
             subject=last.subject,
             sender_raw=_format_address(last.from_),
@@ -612,12 +735,15 @@ class EmailTriageService:
             label_ids=[],
             principal=payload.principal,
             reply_to=last.from_,
-            summary_prefix=f"Thread of {len(messages)} messages. ",
+            summary_prefix=f"Thread of {total_count} messages. ",
             chat=chat,
             message_id=payload.thread_id,
             context=context,
-            # Oldest-first, matching the request's message order.
-            attachments=[a for m in messages for a in m.attachments],
+            # Oldest-first, matching the request's message order (echoed for
+            # the FULL thread — attachment metadata is cheap and downstream
+            # consumers must not silently lose items to the analysis ceiling).
+            attachments=[a for m in payload.messages for a in m.attachments],
+            extra_call_stats=fold_stats,
         )
 
     def _build_result_llm(
@@ -634,8 +760,15 @@ class EmailTriageService:
         message_id: Optional[str] = None,
         context: Any = None,
         attachments: Optional[List[AttachmentMeta]] = None,
+        extra_call_stats: Optional[List[dict]] = None,
     ) -> EmailTriageResult:
-        """Build a result using LLM escalation when heuristic confidence is low."""
+        """Build a result using LLM escalation when heuristic confidence is low.
+
+        ``extra_call_stats`` seeds the usage accumulator with stats from a
+        call made before this method runs (e.g. #1889's thread-fold digest
+        call) so the reported ``usage`` covers every LLM call the request
+        actually made, not just the classify/summarize pair.
+        """
         from gaia_agent_email.tools.llm_triage import classify_email_llm
         from gaia_agent_email.tools.summarize_tools import summarize_email_llm
 
@@ -645,11 +778,14 @@ class EmailTriageService:
 
         # Per-call LLM stats accumulate here so the result can report aggregate
         # usage (#1540). Reuses AgentResponse.stats — no new measurement.
-        call_stats: List[dict] = []
+        call_stats: List[dict] = list(extra_call_stats) if extra_call_stats else []
 
-        if heuristic.confident:
-            category = EmailCategory(heuristic.category)
-        else:
+        # Escalate to the LLM when the heuristic is unsure of the category OR
+        # abstains on spam (spam_confident=False, where content-based spam
+        # exclusively lives). Mirrors read_tools.py so REST and the agent loop
+        # reach the same verdict on identical input (#2124).
+        llm_result: Optional[dict] = None
+        if not heuristic.confident or not heuristic.spam_confident:
             llm_result = classify_email_llm(
                 chat,
                 subject=subject,
@@ -658,7 +794,17 @@ class EmailTriageService:
                 collect_stats=call_stats,
                 context=context,
             )
+
+        if heuristic.confident:
+            category = EmailCategory(heuristic.category)
+        else:
             category = EmailCategory(llm_result["category"])
+
+        # Heuristic wins only when spam-confident; otherwise the LLM decides.
+        if heuristic.spam_confident:
+            is_spam = heuristic.is_spam
+        else:
+            is_spam = bool(llm_result.get("is_spam", heuristic.is_spam))
 
         llm_summary = summarize_email_llm(
             chat,
@@ -675,7 +821,7 @@ class EmailTriageService:
             subject=subject,
             reply_to=reply_to,
             principal=principal,
-            is_spam=heuristic.is_spam,
+            is_spam=is_spam,
             is_phishing=heuristic.is_phishing,
         )
         suggested_action = (
@@ -685,7 +831,7 @@ class EmailTriageService:
         ) or default_action_for(category.value)
         return EmailTriageResult(
             category=category,
-            is_spam=heuristic.is_spam,
+            is_spam=is_spam,
             is_phishing=heuristic.is_phishing,
             summary=summary,
             action_items=action_items,
@@ -797,7 +943,7 @@ class EmailTriageService:
         principal: EmailAddress,
         is_spam: bool,
         is_phishing: bool,
-    ) -> Optional[DraftReply]:
+    ) -> Optional[DraftScaffold]:
         # Never propose a reply to spam/phishing — surfacing a draft would
         # nudge the user toward engaging with a hostile sender.
         if is_spam or is_phishing or reply_to is None:
@@ -811,11 +957,9 @@ class EmailTriageService:
             reply_subject = f"Re: {reply_subject}"
         elif not reply_subject:
             reply_subject = "Re:"
-        return DraftReply(
-            to=[reply_to],
-            subject=reply_subject,
-            body="",  # proposal scaffold; the user/agent fills the body in
-        )
+        # Triage returns a scaffold (recipient + subject) — it never composes a
+        # body. Callers compose the body and POST it to /v1/email/draft.
+        return DraftScaffold(to=[reply_to], subject=reply_subject)
 
 
 def _format_address(addr: EmailAddress) -> str:
@@ -1452,40 +1596,8 @@ def _raise_calendar_connector_http(exc: ConnectorsError) -> NoReturn:
 # ---------------------------------------------------------------------------
 
 
-def get_prescan_backend():
-    """Resolve the read-only mailbox backend for an inbox pre-scan.
-
-    Mirrors :func:`get_send_backend`'s fail-loud resolution — the pre-scan reads
-    the single connected mailbox; an absent or ambiguous mailbox is an
-    actionable error, never a silent guess:
-
-      - 0 connected → HTTP 503 (actionable: go connect a mailbox)
-      - 2+ connected → HTTP 400 (actionable: the pre-scan API can't choose)
-      - exactly 1 → build the matching live backend (list/get only)
-
-    Wired as a FastAPI ``Depends`` so tests inject a fake via
-    ``app.dependency_overrides[get_prescan_backend]`` without touching live mail.
-    """
-    providers = connected_mailbox_providers()
-    if not providers:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "No mailbox connected — connect Google or Microsoft in "
-                "Settings → Connectors before running an inbox pre-scan."
-            ),
-        )
-    if len(providers) > 1:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Multiple mailboxes connected ({', '.join(providers)}); the "
-                "pre-scan API can't choose. Disconnect one in Settings → "
-                "Connectors, or run the pre-scan from the agent/UI (which scans "
-                "every connected mailbox)."
-            ),
-        )
-    provider = providers[0]
+def _build_prescan_live_backend(provider: str):
+    """Build the read-only (list/get) live backend for one connected provider."""
     if provider == "google":
         from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
 
@@ -1506,16 +1618,81 @@ def get_prescan_backend():
     )
 
 
-def _run_prescan(backend, *, max_messages: int) -> dict:
-    """Run the agent's ``pre_scan_inbox_impl`` against ``backend``.
+class _MultiMailboxPrescanBackend:
+    """Every connected mailbox's read backend, for a consolidated pre-scan.
 
-    Reuses the agent's exact heuristic classification path (the same call the
-    agent loop makes) — no duplicated categorization — and returns its envelope
-    dict, which maps field-for-field onto :class:`EmailPreScanResult`.
+    Carries the ordered ``provider -> live backend`` map so :func:`_run_prescan`
+    fans the scan across all connected mailboxes and returns one merged envelope
+    — the multi-inbox behaviour the agent loop already ships (#1603/#1614), now
+    reachable from the REST ``/prescan`` surface as well instead of dead-ending
+    on a single-mailbox guard. It is NOT a silent pick-one: every connected
+    mailbox is scanned and merged. Send/search stay fail-loud — a write can't
+    target "all".
     """
-    from gaia_agent_email.tools.read_tools import pre_scan_inbox_impl
 
-    return pre_scan_inbox_impl(backend, max_messages=max_messages)
+    def __init__(self, backends: "dict"):
+        self.backends = backends
+
+
+def get_prescan_backend():
+    """Resolve the read-only mailbox backend(s) for an inbox pre-scan.
+
+    Pre-scan is read-only and consolidatable, so an ambiguous mailbox is not an
+    error here (unlike the send/search write-or-target surfaces): scan them all.
+
+      - 0 connected → HTTP 503 (actionable: go connect a mailbox)
+      - 2+ connected → a :class:`_MultiMailboxPrescanBackend` over every mailbox
+      - exactly 1 → the matching live backend (list/get only)
+
+    Never a silent guess-one — 2+ scans every connected mailbox and returns
+    one merged envelope. Wired as a FastAPI ``Depends`` so tests inject a
+    fake via ``app.dependency_overrides[get_prescan_backend]`` without touching
+    live mail.
+    """
+    providers = connected_mailbox_providers()
+    if not providers:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No mailbox connected — connect Google or Microsoft in "
+                "Settings → Connectors before running an inbox pre-scan."
+            ),
+        )
+    if len(providers) > 1:
+        return _MultiMailboxPrescanBackend(
+            {provider: _build_prescan_live_backend(provider) for provider in providers}
+        )
+    return _build_prescan_live_backend(providers[0])
+
+
+def _run_prescan(backend, *, max_messages: int) -> dict:
+    """Run the agent's pre-scan classification against ``backend``.
+
+    Reuses the agent's exact heuristic path (no duplicated categorization) and
+    returns its envelope dict, which maps field-for-field onto
+    :class:`EmailPreScanResult`. A :class:`_MultiMailboxPrescanBackend` fans out
+    over every connected mailbox via the shared ``merge_pre_scan_backends`` — the
+    same consolidation the agent loop runs — so the Agent UI sees one result.
+    """
+    from gaia_agent_email.tools.read_tools import (
+        merge_pre_scan_backends,
+        pre_scan_inbox_impl,
+    )
+
+    if not isinstance(backend, _MultiMailboxPrescanBackend):
+        return pre_scan_inbox_impl(backend, max_messages=max_messages)
+
+    merged = merge_pre_scan_backends(backend.backends, max_messages=max_messages)
+    # The frozen pre-scan contract (PreScanItem / EmailPreScanResult, both
+    # extra="forbid") has no per-item ``mailbox`` tag or ``mailbox_errors`` field
+    # — those belong to the agent-loop card's richer shape. Drop them at this
+    # boundary so the consolidated envelope validates; the surfaced items (from
+    # every connected mailbox) are unchanged.
+    merged.pop("mailbox_errors", None)
+    for section in ("urgent", "actionable", "suggested_archives"):
+        for item in merged.get(section, []):
+            item.pop("mailbox", None)
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -1602,6 +1779,17 @@ class InitModelStatus(_Strict):
             "Whether the model actually loads. Not probed in v1 (forcing a "
             "load is heavy), so this is null — `present` is the readiness "
             "signal. Reserved for an opt-in deeper check."
+        ),
+    )
+    ctx_size: Optional[int] = Field(
+        default=None,
+        description=(
+            "The context window the model is CURRENTLY loaded at, as reported "
+            "by the server's /health (recipe_options.ctx_size). Null whenever "
+            "the model is not loaded right now or the server does not report "
+            "a ctx — never a config echo or a guess (#1892). Compare against "
+            "the envelope (16384 target / 32768 max) to see what window a "
+            "run would actually measure."
         ),
     )
 
@@ -1791,7 +1979,59 @@ def _triage_batch_and_persist(request: BatchTriageRequest) -> BatchTriageRespons
     return response
 
 
-@router.post("/triage", response_model=EmailTriageResponse)
+# Error contract shared by every route that resolves a connected-mailbox /
+# calendar backend (#1897): auth/scope/revocation (and the confirmation gate on
+# gated routes) -> 403, upstream provider/connector failure -> 502, no account
+# connected or configuration missing -> 503. Mirrors the send handler's
+# except-ladder and ``_raise_calendar_connector_http``. Description-only on
+# purpose: these routes raise plain ``HTTPException`` whose body is FastAPI's
+# ``{"detail": ...}`` — there is no shared error model to reference (only
+# ``/init`` returns a real model on its error path).
+_CONNECTOR_ERROR_RESPONSES = {
+    403: {
+        "description": (
+            "Authorization failed — the account's auth is missing, expired, or "
+            "revoked (reconnect via Settings → Connectors), or a confirmation "
+            "gate rejected the request (mint a fresh confirmation token)."
+        )
+    },
+    502: {"description": "Upstream provider/connector failure."},
+    503: {
+        "description": (
+            "No account connected, or backend configuration is missing — "
+            "connect Google or Microsoft in Settings → Connectors."
+        )
+    },
+}
+
+# Passing an unconnected provider, or omitting it with 2+ accounts connected,
+# is ambiguous — the backend resolvers refuse to guess (fail-loud, never a
+# silent pick). Shared by every route that resolves a provider-bound backend.
+_AMBIGUOUS_PROVIDER_400 = {
+    400: {
+        "description": (
+            "Ambiguous or unknown account: the named provider is not connected, "
+            "or no provider was given while several accounts are connected."
+        )
+    }
+}
+
+# LLM-backed triage: Lemonade unreachable / invalid LLM output -> 502.
+_TRIAGE_ERROR_RESPONSES = {
+    502: {
+        "description": (
+            "Local LLM triage failed — Lemonade Server unreachable or it "
+            "returned an unusable result."
+        )
+    }
+}
+
+
+@router.post(
+    "/triage",
+    response_model=EmailTriageResponse,
+    responses={**_TRIAGE_ERROR_RESPONSES},
+)
 async def triage_email(request: EmailTriageRequest) -> EmailTriageResponse:
     """Triage a single email or a full thread.
 
@@ -1812,7 +2052,11 @@ async def triage_email(request: EmailTriageRequest) -> EmailTriageResponse:
         ) from e
 
 
-@router.post("/triage/batch", response_model=BatchTriageResponse)
+@router.post(
+    "/triage/batch",
+    response_model=BatchTriageResponse,
+    responses={**_TRIAGE_ERROR_RESPONSES},
+)
 async def triage_email_batch(request: BatchTriageRequest) -> BatchTriageResponse:
     """Triage an array of emails or threads in a single request (#1887).
 
@@ -1820,8 +2064,9 @@ async def triage_email_batch(request: BatchTriageRequest) -> BatchTriageResponse
     and returns a ``BatchTriageResponse`` — one ``BatchItemResult`` per item,
     order-preserved. Per-item failures surface as ``BatchItemResult.error``
     (HTTP 200 with all items errored is valid — inspect each result). A 502
-    means Lemonade was unreachable before any item was processed. No mail is
-    read or sent; this analyzes only the items in the request. Each
+    means Lemonade was unreachable or the triage model is unavailable there,
+    detected before any item was processed. No mail is read or sent; this
+    analyzes only the items in the request. Each
     successful item's action items are persisted to the local task store,
     linked to its source ``message_id`` and de-duplicated per message
     (#1605) — additive, the response shape is unchanged.
@@ -1830,14 +2075,19 @@ async def triage_email_batch(request: BatchTriageRequest) -> BatchTriageResponse
         return await asyncio.to_thread(_triage_batch_and_persist, request)
     except LLMTriageError as e:
         # Only LLMTriageError can escape triage_batch — it is raised by the
-        # pre-loop Lemonade probe when the server is unreachable. Per-item
+        # pre-loop pre-flight when the server is unreachable or the triage
+        # model is unavailable there (#1888). Per-item
         # EmailSummarizeError/LLMTriageError are caught inside triage_batch.
         raise HTTPException(
             status_code=502, detail=f"local LLM triage failed: {e}"
         ) from e
 
 
-@router.post("/search", response_model=EmailSearchResponse)
+@router.post(
+    "/search",
+    response_model=EmailSearchResponse,
+    responses={**_CONNECTOR_ERROR_RESPONSES, **_AMBIGUOUS_PROVIDER_400},
+)
 async def search_inbox(
     request: EmailSearchRequest,
     backend: Any = Depends(get_search_backend),
@@ -1871,23 +2121,29 @@ async def search_inbox(
         raise HTTPException(status_code=502, detail=str(e)) from e
 
 
-@router.post("/prescan", response_model=EmailPreScanResponse)
+@router.post(
+    "/prescan",
+    response_model=EmailPreScanResponse,
+    responses={**_CONNECTOR_ERROR_RESPONSES},
+)
 async def prescan_inbox(
     request: EmailPreScanRequest,
     backend=Depends(get_prescan_backend),
 ) -> EmailPreScanResponse:
     """Pre-scan the connected inbox into the scannable triage card envelope.
 
-    Lists the ``max_messages`` most-recent inbox messages via the connected
-    mailbox backend and returns the aggregate pre-scan summary the Agent UI's
+    Lists the ``max_messages`` most-recent inbox messages via every connected
+    mailbox and returns the aggregate pre-scan summary the Agent UI's
     ``EmailPreScanCard`` renders — top urgent / actionable rows, an
     informational count, and suggested archives, each with a heuristic reason.
     Read-only: nothing is archived, marked, or sent.
 
     Classification reuses the agent's ``pre_scan_inbox_impl`` (the same
     heuristic path the agent loop runs) — categories are not re-implemented
-    here. The backend is resolved by :func:`get_prescan_backend`, which fails
-    loudly on zero or ambiguous mailboxes.
+    here. The backend is resolved by :func:`get_prescan_backend`: 503 when no
+    mailbox is connected, and with 2+ connected it consolidates every mailbox
+    into one merged envelope rather than failing on ambiguity (the frozen REST
+    contract carries no per-item mailbox tag).
     """
     try:
         out = await asyncio.to_thread(
@@ -1921,7 +2177,24 @@ class EmailBriefingResponse(_Strict):
     )
 
 
-@router.get("/briefing", response_model=EmailBriefingResponse)
+@router.get(
+    "/briefing",
+    response_model=EmailBriefingResponse,
+    responses={
+        404: {
+            "description": (
+                "No briefing generated yet — enable the daily schedule "
+                "(GAIA_EMAIL_BRIEFING_ENABLED) or POST /v1/email/prescan."
+            )
+        },
+        500: {
+            "description": (
+                "The persisted briefing could not be read or does not match "
+                "the email_pre_scan envelope."
+            )
+        },
+    },
+)
 async def get_briefing() -> EmailBriefingResponse:
     """Return the latest scheduled inbox briefing (#1608).
 
@@ -1986,14 +2259,26 @@ async def draft_reply(request: EmailDraftRequest) -> EmailDraftResponse:
     return EmailDraftResponse(draft=draft, confirmation_token=token)
 
 
-@router.post("/send", response_model=EmailSendResponse)
+@router.post(
+    "/send",
+    response_model=EmailSendResponse,
+    responses={
+        **_CONNECTOR_ERROR_RESPONSES,
+        **_AMBIGUOUS_PROVIDER_400,
+        413: {
+            "description": (
+                "An attachment exceeds the connected provider's size ceiling."
+            )
+        },
+    },
+)
 async def send_email(request: EmailSendRequest) -> EmailSendResponse:
     """Send a reply — gated on explicit confirmation (#1264).
 
     The confirmation gate is enforced FIRST: a request without a valid,
     payload-bound confirmation token is rejected with HTTP 403 before any
     backend call (or even backend resolution). This mirrors the agent's
-    ``TOOLS_REQUIRING_CONFIRMATION`` guard, translated to the API boundary,
+    ``CONFIRMATION_REQUIRED_TOOLS`` guard, translated to the API boundary,
     and guarantees the gate fires regardless of backend health. Never
     auto-confirms.
     """
@@ -2110,7 +2395,11 @@ async def confirm_action(
     )
 
 
-@router.post("/archive", response_model=EmailArchiveResponse)
+@router.post(
+    "/archive",
+    response_model=EmailArchiveResponse,
+    responses={**_CONNECTOR_ERROR_RESPONSES, **_AMBIGUOUS_PROVIDER_400},
+)
 async def archive_email(request: EmailArchiveRequest) -> EmailArchiveResponse:
     """Archive a message — gated on confirmation, reversible for 30s.
 
@@ -2160,7 +2449,25 @@ async def archive_email(request: EmailArchiveRequest) -> EmailArchiveResponse:
     )
 
 
-@router.post("/unarchive", response_model=EmailUnarchiveResponse)
+_UNDO_WINDOW_409 = {
+    409: {
+        "description": (
+            "The undo window has expired, or the handle is unknown or already "
+            "undone — the action can no longer be reversed via the API."
+        )
+    }
+}
+
+
+@router.post(
+    "/unarchive",
+    response_model=EmailUnarchiveResponse,
+    responses={
+        **_CONNECTOR_ERROR_RESPONSES,
+        **_AMBIGUOUS_PROVIDER_400,
+        **_UNDO_WINDOW_409,
+    },
+)
 async def unarchive_email(request: EmailUnarchiveRequest) -> EmailUnarchiveResponse:
     """Reverse an archive within the undo window (NOT gated — it restores).
 
@@ -2200,7 +2507,20 @@ async def unarchive_email(request: EmailUnarchiveRequest) -> EmailUnarchiveRespo
     )
 
 
-@router.post("/quarantine", response_model=EmailQuarantineResponse)
+@router.post(
+    "/quarantine",
+    response_model=EmailQuarantineResponse,
+    responses={
+        **_CONNECTOR_ERROR_RESPONSES,
+        400: {
+            "description": (
+                "Refused: is_phishing was false (only phishing-flagged mail may "
+                "be quarantined), the mailbox is Outlook (quarantine is "
+                "Gmail-only), or the provider is ambiguous/not connected."
+            )
+        },
+    },
+)
 async def quarantine_email(
     request: EmailQuarantineRequest,
 ) -> EmailQuarantineResponse:
@@ -2254,7 +2574,20 @@ async def quarantine_email(
     )
 
 
-@router.post("/unquarantine", response_model=EmailUnquarantineResponse)
+@router.post(
+    "/unquarantine",
+    response_model=EmailUnquarantineResponse,
+    responses={
+        **_CONNECTOR_ERROR_RESPONSES,
+        400: {
+            "description": (
+                "Refused: the recorded mailbox is Outlook (quarantine is "
+                "Gmail-only), or the provider is ambiguous/not connected."
+            )
+        },
+        **_UNDO_WINDOW_409,
+    },
+)
 async def unquarantine_email(
     request: EmailUnquarantineRequest,
 ) -> EmailUnquarantineResponse:
@@ -2349,11 +2682,15 @@ def _compute_init_status(base_url: Optional[str] = None) -> InitResponse:
     import requests
     from gaia_agent_email.version import MIN_LEMONADE_VERSION
 
-    model_id = _resolve_email_model_id()
-    reachable, probe_base, version = _probe_lemonade_health(base_url)
+    # #1439: pass base_url through — this used to call _resolve_email_model_id()
+    # with no argument, silently resolving against the DEFAULT server even when
+    # this readiness probe targets a different one.
+    model_id = _resolve_email_model_id(base_url)
+    reachable, probe_base, version, loaded_models = _probe_lemonade_health(base_url)
     compatible = (
         _version_meets_min(version, MIN_LEMONADE_VERSION) if reachable else None
     )
+    loaded_ctx = _extract_loaded_ctx(loaded_models, model_id)
     lemonade = InitLemonadeStatus(
         reachable=reachable,
         base_url=probe_base,
@@ -2381,7 +2718,11 @@ def _compute_init_status(base_url: Optional[str] = None) -> InitResponse:
         return InitResponse(
             ready=False,
             lemonade=lemonade,
-            model=InitModelStatus(id=model_id, present=False, loadable=None),
+            # /health succeeded, so a server-reported loaded ctx is still honest
+            # here even though the /models presence read failed.
+            model=InitModelStatus(
+                id=model_id, present=False, loadable=None, ctx_size=loaded_ctx
+            ),
             hint=(
                 f"Lemonade is reachable but its model list at {probe_base}/models "
                 f"could not be read ({type(exc).__name__}: {exc}). Make sure the "
@@ -2389,7 +2730,9 @@ def _compute_init_status(base_url: Optional[str] = None) -> InitResponse:
             ),
         )
 
-    model = InitModelStatus(id=model_id, present=present, loadable=None)
+    model = InitModelStatus(
+        id=model_id, present=present, loadable=None, ctx_size=loaded_ctx
+    )
 
     # Version too old is the most fundamental blocker — surface it before the
     # model hint (upgrading Lemonade comes first even if the model is missing).
@@ -2575,7 +2918,11 @@ async def email_provision() -> StreamingResponse:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/calendar/events", response_model=CalendarEventsResponse)
+@router.get(
+    "/calendar/events",
+    response_model=CalendarEventsResponse,
+    responses={**_CONNECTOR_ERROR_RESPONSES, **_AMBIGUOUS_PROVIDER_400},
+)
 async def list_calendar_events(
     time_min: Optional[str] = None,
     time_max: Optional[str] = None,
@@ -2583,7 +2930,9 @@ async def list_calendar_events(
 ) -> CalendarEventsResponse:
     """View calendar events on the primary calendar (read-only).
 
-    ``time_min`` / ``time_max`` are optional RFC 3339 bounds. ``provider``
+    ``time_min`` / ``time_max`` are optional RFC 3339 bounds; when both are
+    omitted the listing defaults to a forward window (now → +30 days), so
+    recurring series don't surface their oldest instances. ``provider``
     (google|microsoft) is required only when more than one account is connected;
     with exactly one, it is inferred. Reaches whichever calendar the user
     connected. Fails loudly (403 + reconnect CTA) if the calendar scope is missing.
@@ -2634,7 +2983,19 @@ async def preview_calendar_event(
     )
 
 
-@router.post("/calendar/events", response_model=CalendarEventResponse)
+@router.post(
+    "/calendar/events",
+    response_model=CalendarEventResponse,
+    responses={
+        **_CONNECTOR_ERROR_RESPONSES,
+        400: {
+            "description": (
+                "Bad event input (no usable time / inverted window), or the "
+                "provider is ambiguous/not connected."
+            )
+        },
+    },
+)
 async def create_calendar_event(
     request: CalendarCreateEventRequest,
 ) -> CalendarEventResponse:
@@ -2692,7 +3053,11 @@ async def create_calendar_event(
     )
 
 
-@router.post("/calendar/events/respond", response_model=CalendarRespondResponse)
+@router.post(
+    "/calendar/events/respond",
+    response_model=CalendarRespondResponse,
+    responses={**_CONNECTOR_ERROR_RESPONSES, **_AMBIGUOUS_PROVIDER_400},
+)
 async def respond_calendar_event(
     request: CalendarRespondRequest,
 ) -> CalendarRespondResponse:
@@ -2764,6 +3129,7 @@ async def email_playground() -> HTMLResponse:
 
 __all__ = [
     "router",
+    "require_caller_token",
     "EmailTriageService",
     "ConfirmationStore",
     "confirmation_store",

@@ -289,6 +289,70 @@ class TestMessageToResponse:
 
         assert isinstance(message_to_response(base_message), MessageResponse)
 
+    def test_agent_steps_preserves_render_map_card_fields(self, base_message):
+        """Render-map card persistence (#2109): a step with a ``render``
+        kind (e.g. "email_pre_scan") and its ``data`` payload must survive
+        the REAL pydantic round-trip inside ``message_to_response`` —
+        ``AgentStepResponse(**s)`` — not just a raw dict access. Pydantic
+        v2's default ``extra='ignore'`` would silently drop undeclared
+        fields, so this only proves the fix if it goes through
+        ``message_to_response`` rather than reading the dict directly."""
+        base_message["agent_steps"] = json.dumps(
+            [
+                {
+                    "id": 1,
+                    "type": "tool",
+                    "label": "Using pre_scan_inbox",
+                    "tool": "pre_scan_inbox",
+                    "active": False,
+                    "success": True,
+                    "timestamp": 1000,
+                    "render": "email_pre_scan",
+                    "data": {
+                        "kind": "email_pre_scan",
+                        "urgent": [],
+                        "actionable": [{"message_id": "m1"}],
+                    },
+                }
+            ]
+        )
+
+        resp = message_to_response(base_message)
+
+        assert resp.agent_steps is not None
+        step = resp.agent_steps[0]
+        assert step.render == "email_pre_scan"
+        assert step.data == {
+            "kind": "email_pre_scan",
+            "urgent": [],
+            "actionable": [{"message_id": "m1"}],
+        }
+
+    def test_agent_steps_render_and_data_default_none_when_absent(self, base_message):
+        """A step without ``render``/``data`` keys (the vast majority of
+        tool results, per the retention cap) must not crash and must
+        default both fields to None."""
+        base_message["agent_steps"] = json.dumps(
+            [
+                {
+                    "id": 1,
+                    "type": "tool",
+                    "label": "Using search_file",
+                    "tool": "search_file",
+                    "active": False,
+                    "success": True,
+                    "timestamp": 1000,
+                }
+            ]
+        )
+
+        resp = message_to_response(base_message)
+
+        assert resp.agent_steps is not None
+        step = resp.agent_steps[0]
+        assert step.render is None
+        assert step.data is None
+
 
 # ── doc_to_response ──────────────────────────────────────────────────────
 

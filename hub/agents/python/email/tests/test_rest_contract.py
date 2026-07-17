@@ -67,6 +67,17 @@ _EXPECTED_RESPONSE_MODELS = {
     ("post", "/v1/email/calendar/events"): "CalendarEventResponse",
     ("post", "/v1/email/calendar/events/preview"): "CalendarEventPreviewResponse",
     ("post", "/v1/email/calendar/events/respond"): "CalendarRespondResponse",
+    # Canonical streaming agent-loop surface (schema 2.4, #2016). The cancel
+    # route returns a JSON model; /query streams text/event-stream (no JSON
+    # response model) and is asserted separately in _EXPECTED_STREAMING_ROUTES.
+    ("post", "/v1/email/query/{run_id}/cancel"): "QueryCancelResponse",
+}
+
+# Routes whose 200 response is a text/event-stream (not an application/json
+# model), so they are excluded from the response-model assertions below and
+# checked by ``test_query_route_streams_event_stream`` instead.
+_EXPECTED_STREAMING_ROUTES = {
+    ("post", "/v1/email/query"),
 }
 
 
@@ -120,6 +131,10 @@ def test_contract_models_present_in_spec(spec):
         "EmailTriageRequest",
         "EmailTriageResponse",
         "EmailTriageResult",
+        # Draft models: triage returns DraftScaffold (no body); /draft returns
+        # the full DraftReply (with body) — schema 2.3.
+        "DraftScaffold",
+        "DraftReply",
         # Batch models (#1887 additive)
         "BatchTriageRequest",
         "BatchTriageResponse",
@@ -150,7 +165,19 @@ def test_documented_routes_match_expected_set(spec):
     documented = {
         (method, path) for path, ops in spec["paths"].items() for method in ops
     }
-    assert documented == set(_EXPECTED_RESPONSE_MODELS)
+    assert documented == set(_EXPECTED_RESPONSE_MODELS) | _EXPECTED_STREAMING_ROUTES
+
+
+def test_query_route_streams_event_stream(spec):
+    """POST /v1/email/query documents a text/event-stream 200 (the SSE contract),
+    not an application/json body — the canonical seven-event wire (#2016)."""
+    responses = spec["paths"]["/v1/email/query"]["post"]["responses"]
+    assert "text/event-stream" in responses["200"]["content"]
+    # The request body is the canonical QueryRequest contract model.
+    req = spec["paths"]["/v1/email/query"]["post"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]
+    assert req == {"$ref": "#/components/schemas/QueryRequest"}
 
 
 @pytest.mark.parametrize(
@@ -1119,18 +1146,69 @@ def test_prescan_no_mailbox_connected_fails_loud(monkeypatch):
     assert exc.value.status_code == 503
 
 
-def test_prescan_ambiguous_mailbox_fails_loud(monkeypatch):
-    # Two connected mailboxes → 400, never a silent guess of which to scan.
-    from fastapi import HTTPException
-    from gaia_agent_email.api_routes import get_prescan_backend
+def test_prescan_two_mailboxes_consolidates_not_400(monkeypatch):
+    # Two connected mailboxes → a multi-mailbox backend spanning BOTH, never a
+    # 400 (pre-scan is read-only and consolidatable) and never a silent pick-one.
+    from gaia_agent_email.api_routes import (
+        _MultiMailboxPrescanBackend,
+        get_prescan_backend,
+    )
 
     monkeypatch.setattr(
         "gaia_agent_email.api_routes.connected_mailbox_providers",
         lambda: ["google", "microsoft"],
     )
-    with pytest.raises(HTTPException) as exc:
-        get_prescan_backend()
-    assert exc.value.status_code == 400
+    backend = get_prescan_backend()
+    assert isinstance(backend, _MultiMailboxPrescanBackend)
+    assert set(backend.backends) == {"google", "microsoft"}
+
+
+def test_prescan_two_mailboxes_end_to_end_consolidated(monkeypatch):
+    # End-to-end through the surface the Agent UI actually calls: a fake
+    # multi-provider backend injected via app.dependency_overrides. Both
+    # mailboxes' promotional messages must land in the consolidated result.
+    from gaia_agent_email.api_routes import (
+        _MultiMailboxPrescanBackend,
+        get_prescan_backend,
+    )
+
+    app = export_openapi.build_app()
+    gmail = _FakePreScanBackend(
+        [
+            _prescan_gmail_message(
+                "g1",
+                subject="50% off this weekend!",
+                sender="deals@shop.example",
+                label_ids=["INBOX", "CATEGORY_PROMOTIONS"],
+            ),
+        ]
+    )
+    outlook = _FakePreScanBackend(
+        [
+            _prescan_gmail_message(
+                "o1",
+                subject="Flash sale — today only!",
+                sender="promo@store.example",
+                label_ids=["INBOX", "CATEGORY_PROMOTIONS"],
+            ),
+        ]
+    )
+    multi = _MultiMailboxPrescanBackend({"google": gmail, "microsoft": outlook})
+    app.dependency_overrides[get_prescan_backend] = lambda: multi
+    try:
+        client = TestClient(app)
+        resp = client.post("/v1/email/prescan", json={"max_messages": 10})
+        assert resp.status_code == 200, resp.text
+        result = resp.json()["result"]
+        # No 400, no "pick one" — both mailboxes' promos are consolidated.
+        archive_ids = {item["message_id"] for item in result["suggested_archives"]}
+        assert {"g1", "o1"} <= archive_ids
+        # The frozen contract has no per-item mailbox tag → boundary stripped it.
+        for section in ("urgent", "actionable", "suggested_archives"):
+            for item in result[section]:
+                assert "mailbox" not in item
+    finally:
+        app.dependency_overrides.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -1287,6 +1365,59 @@ def test_triage_result_echoes_message_attachments(monkeypatch):
     assert [a.filename for a in out.result.attachments] == ["coupon.pdf"]
 
 
+def test_triage_draft_is_scaffold_without_body(monkeypatch):
+    # schema 2.3: triage returns a reply SCAFFOLD (to + subject) with NO body.
+    # Triage never composed prose, so the always-empty body it used to return is
+    # dropped from the shape entirely rather than left as a confusing "".
+    from gaia_agent_email import api_routes as email_routes
+
+    monkeypatch.setattr(
+        email_routes.EmailTriageService, "_build_llm_chat", lambda self: object()
+    )
+    monkeypatch.setattr(
+        "gaia_agent_email.tools.summarize_tools.summarize_email_llm",
+        lambda chat, **kw: "Stub summary.",
+    )
+    monkeypatch.setattr(
+        "gaia_agent_email.tools.llm_triage.classify_email_llm",
+        lambda chat, **kw: {"category": "NEEDS_RESPONSE", "suggested_action": "reply"},
+    )
+    req = parse_request(
+        {
+            "payload": {
+                "kind": "single",
+                "principal": {"email": "user@example.com"},
+                "message": {
+                    "message_id": "m1",
+                    "from": {"name": "Alice", "email": "alice@example.com"},
+                    "subject": "Cost proposal?",
+                    "body": "Could you please send a cost proposal for this?",
+                },
+            }
+        }
+    )
+    out = email_routes.EmailTriageService().triage_request(req)
+    draft = out.result.draft
+    assert draft is not None
+    assert [a.email for a in draft.to] == ["alice@example.com"]
+    assert draft.subject == "Re: Cost proposal?"
+    # No body field at all on the scaffold — not even an empty string.
+    dumped = draft.model_dump()
+    assert set(dumped) == {"to", "subject"}
+    assert "body" not in dumped
+
+
+def test_draft_endpoint_still_returns_body(client):
+    # DraftReply (the /draft response) is UNCHANGED by schema 2.3 — it still
+    # carries the caller-composed body so the send-confirmation UI can show the
+    # literal message the token authorizes.
+    resp = client.post(
+        "/v1/email/draft", json=_draft_payload(body="Hi Bob, report attached.")
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["draft"]["body"] == "Hi Bob, report attached."
+
+
 def test_draft_echoes_attachment_metadata_never_content(client):
     resp = client.post("/v1/email/draft", json=_draft_payload())
     assert resp.status_code == 200, resp.text
@@ -1434,3 +1565,325 @@ def test_outgoing_attachment_to_meta_round_trip():
     assert meta.filename == "q3-report.pdf"
     assert meta.size_bytes == len(base64.b64decode(_PDF_B64))
     assert meta.attachment_id is None
+
+
+# ---------------------------------------------------------------------------
+# 12. Per-route error paths (#1897) — every branch asserts the EXACT documented
+#     status code (the same codes the spec's responses= metadata now lists).
+# ---------------------------------------------------------------------------
+
+from gaia.connectors.errors import (  # noqa: E402
+    AuthRequiredError,
+    ConfigurationError,
+    ConnectorsError,
+)
+
+
+def _minimal_triage_body() -> dict:
+    return {
+        "payload": {
+            "kind": "single",
+            "principal": {"email": "user@example.com"},
+            "message": {
+                "message_id": "m-err-1",
+                "from": {"email": "alice@example.com"},
+                "subject": "Quick question",
+                "body": "Do you have five minutes today?",
+            },
+        }
+    }
+
+
+def test_triage_llm_failure_is_502(client, monkeypatch):
+    """An LLMTriageError out of the triage path is the documented 502 — the
+    spec's only /triage error code, previously untested at the route level."""
+    from gaia_agent_email import api_routes as email_routes
+    from gaia_agent_email.tools.llm_triage import LLMTriageError
+
+    def _boom(request):
+        raise LLMTriageError("Lemonade Server unreachable", message_id="m-err-1")
+
+    monkeypatch.setattr(email_routes, "_triage_and_persist", _boom)
+    resp = client.post("/v1/email/triage", json=_minimal_triage_body())
+    assert resp.status_code == 502
+    assert "triage failed" in resp.json()["detail"].lower()
+
+
+def test_triage_batch_llm_failure_is_502(client, monkeypatch):
+    """The pre-loop Lemonade probe failing fails the whole batch with 502."""
+    from gaia_agent_email import api_routes as email_routes
+    from gaia_agent_email.tools.llm_triage import LLMTriageError
+
+    def _boom(request):
+        raise LLMTriageError("Lemonade Server unreachable")
+
+    monkeypatch.setattr(email_routes, "_triage_batch_and_persist", _boom)
+    resp = client.post(
+        "/v1/email/triage/batch",
+        json={"items": [_minimal_triage_body()["payload"]]},
+    )
+    assert resp.status_code == 502
+
+
+class _RaisingMailbox:
+    """Mailbox backend whose read/mutate calls raise a chosen connector error.
+
+    ``get_message`` raises too, so archive fails during its prior-labels fetch
+    regardless of call order — the route's except-ladder is what's under test.
+    """
+
+    def __init__(self, exc: Exception):
+        self._exc = exc
+
+    def _raise(self, *a, **k):
+        raise self._exc
+
+    get_message = _raise
+    archive_message = _raise
+    unarchive_message = _raise
+    add_label = _raise
+    remove_label = _raise
+
+
+_CONNECTOR_ERROR_CASES = [
+    pytest.param(
+        AuthRequiredError(AuthRequiredError.Reason.REAUTH_REQUIRED, provider="google"),
+        403,
+        id="auth-required-403",
+    ),
+    pytest.param(
+        ConfigurationError("google connector is not configured"),
+        503,
+        id="configuration-503",
+    ),
+    pytest.param(
+        ConnectorsError("Gmail API returned 500"),
+        502,
+        id="connector-502",
+    ),
+]
+
+
+def _mutate_env(monkeypatch, exc: Exception):
+    """action_env variant whose mailbox raises ``exc`` on every backend call."""
+    from gaia_agent_email import action_store
+    from gaia_agent_email import api_routes as email_routes
+
+    from gaia.database.mixin import DatabaseMixin
+
+    class _DB(DatabaseMixin):
+        pass
+
+    db = _DB()
+    db.init_db(":memory:")
+    action_store.init_schema(db)
+    mailbox = _RaisingMailbox(exc)
+    monkeypatch.setattr(email_routes, "resolve_action_db", lambda: db)
+    monkeypatch.setattr(
+        email_routes, "_resolve_mutate_backend", lambda provider: (mailbox, "google")
+    )
+    monkeypatch.setattr(
+        email_routes, "_resolve_backend_for_provider", lambda provider: mailbox
+    )
+    return TestClient(export_openapi.build_app())
+
+
+@pytest.mark.parametrize("exc,expected", _CONNECTOR_ERROR_CASES)
+def test_archive_connector_error_maps_to_documented_code(monkeypatch, exc, expected):
+    tc = _mutate_env(monkeypatch, exc)
+    tok = tc.post(
+        "/v1/email/confirm", json={"action": "archive", "message_id": "m1"}
+    ).json()["confirmation_token"]
+    resp = tc.post(
+        "/v1/email/archive", json={"message_id": "m1", "confirmation_token": tok}
+    )
+    assert resp.status_code == expected, resp.text
+
+
+@pytest.mark.parametrize("exc,expected", _CONNECTOR_ERROR_CASES)
+def test_quarantine_connector_error_maps_to_documented_code(monkeypatch, exc, expected):
+    tc = _mutate_env(monkeypatch, exc)
+    tok = tc.post(
+        "/v1/email/confirm", json={"action": "quarantine", "message_id": "m1"}
+    ).json()["confirmation_token"]
+    resp = tc.post(
+        "/v1/email/quarantine",
+        json={"message_id": "m1", "is_phishing": True, "confirmation_token": tok},
+    )
+    assert resp.status_code == expected, resp.text
+
+
+@pytest.mark.parametrize("exc,expected", _CONNECTOR_ERROR_CASES)
+def test_unarchive_connector_error_maps_to_documented_code(monkeypatch, exc, expected):
+    """Archive against a healthy fake, then break backend RESOLUTION for the
+    undo — the unarchive route's own except-ladder maps each connector error.
+
+    Resolution is the right seam: a per-row ``unarchive_message`` failure is
+    collected inside ``undo_archive_batch_impl`` by design (partial success)
+    and surfaces as its all-rows-failed RuntimeError → 409, not the connector
+    codes. Only an error escaping the impl — the per-row backend build, e.g. a
+    revoked live-token resolution — reaches the route's 403/503/502 arms."""
+    from gaia_agent_email import action_store
+    from gaia_agent_email import api_routes as email_routes
+
+    from gaia.database.mixin import DatabaseMixin
+
+    class _DB(DatabaseMixin):
+        pass
+
+    db = _DB()
+    db.init_db(":memory:")
+    action_store.init_schema(db)
+    healthy = _FakeMailbox()
+    monkeypatch.setattr(email_routes, "resolve_action_db", lambda: db)
+    monkeypatch.setattr(
+        email_routes, "_resolve_mutate_backend", lambda provider: (healthy, "google")
+    )
+    monkeypatch.setattr(
+        email_routes, "_resolve_backend_for_provider", lambda provider: healthy
+    )
+    tc = TestClient(export_openapi.build_app())
+    tok = tc.post(
+        "/v1/email/confirm", json={"action": "archive", "message_id": "m1"}
+    ).json()["confirmation_token"]
+    batch_id = tc.post(
+        "/v1/email/archive", json={"message_id": "m1", "confirmation_token": tok}
+    ).json()["batch_id"]
+
+    def _resolution_fails(provider):
+        raise exc
+
+    monkeypatch.setattr(
+        email_routes, "_resolve_backend_for_provider", _resolution_fails
+    )
+    resp = tc.post("/v1/email/unarchive", json={"batch_id": batch_id})
+    assert resp.status_code == expected, resp.text
+
+
+@pytest.mark.parametrize("exc,expected", _CONNECTOR_ERROR_CASES)
+def test_unquarantine_connector_error_maps_to_documented_code(
+    monkeypatch, exc, expected
+):
+    """Quarantine against a healthy fake, then break the backend for the undo."""
+    from gaia_agent_email import action_store
+    from gaia_agent_email import api_routes as email_routes
+
+    from gaia.database.mixin import DatabaseMixin
+
+    class _DB(DatabaseMixin):
+        pass
+
+    db = _DB()
+    db.init_db(":memory:")
+    action_store.init_schema(db)
+    healthy = _FakeMailbox()
+    monkeypatch.setattr(email_routes, "resolve_action_db", lambda: db)
+    monkeypatch.setattr(
+        email_routes, "_resolve_mutate_backend", lambda provider: (healthy, "google")
+    )
+    monkeypatch.setattr(
+        email_routes, "_resolve_backend_for_provider", lambda provider: healthy
+    )
+    tc = TestClient(export_openapi.build_app())
+    tok = tc.post(
+        "/v1/email/confirm", json={"action": "quarantine", "message_id": "m2"}
+    ).json()["confirmation_token"]
+    action_id = tc.post(
+        "/v1/email/quarantine",
+        json={"message_id": "m2", "is_phishing": True, "confirmation_token": tok},
+    ).json()["action_id"]
+
+    broken = _RaisingMailbox(exc)
+    monkeypatch.setattr(
+        email_routes, "_resolve_mutate_backend", lambda provider: (broken, "google")
+    )
+    resp = tc.post("/v1/email/unquarantine", json={"action_id": action_id})
+    assert resp.status_code == expected, resp.text
+
+
+class _RaisingCalendar:
+    """Calendar backend whose RSVP call raises a chosen connector error."""
+
+    def __init__(self, exc: Exception):
+        self._exc = exc
+
+    def update_event_rsvp(
+        self, *, calendar_id="primary", event_id, attendee_email, response_status
+    ):
+        raise self._exc
+
+
+@pytest.mark.parametrize("exc,expected", _CONNECTOR_ERROR_CASES)
+def test_calendar_respond_connector_error_maps_to_documented_code(
+    client, monkeypatch, exc, expected
+):
+    """/calendar/events/respond translates each connector error to the exact
+    documented code (view has a 403 test, create a 503 one; respond had none)."""
+    from gaia_agent_email import api_routes as email_routes
+
+    monkeypatch.setattr(
+        email_routes, "resolve_calendar_backend", lambda: _RaisingCalendar(exc)
+    )
+    resp = client.post(
+        "/v1/email/calendar/events/respond",
+        json={
+            "event_id": "evt-1",
+            "status": "declined",
+            "attendee_email": "me@example.com",
+        },
+    )
+    assert resp.status_code == expected, resp.text
+
+
+def test_calendar_respond_unconnected_provider_is_400(client, monkeypatch):
+    """Naming a provider that is not connected is the documented 400 (the
+    provider-bound resolver refuses to guess — fail-loud, no silent pick)."""
+    from gaia_agent_email import api_routes as email_routes
+
+    monkeypatch.setattr(email_routes, "connected_mailbox_providers", lambda: [])
+    resp = client.post(
+        "/v1/email/calendar/events/respond",
+        json={
+            "event_id": "evt-1",
+            "status": "declined",
+            "attendee_email": "me@example.com",
+            "provider": "google",
+        },
+    )
+    assert resp.status_code == 400
+    assert "not connected" in resp.json()["detail"].lower()
+
+
+def test_calendar_create_bad_event_after_gate_is_400(client, monkeypatch):
+    """Post-gate 400: a backend rejecting the event window (ValueError) maps to
+    the documented 400 — distinct from the pre-gate 422 contract validation."""
+    from gaia_agent_email import api_routes as email_routes
+
+    class _RejectingCalendar:
+        def create_event(self, **kwargs):
+            raise ValueError("event end precedes its start")
+
+    monkeypatch.setattr(
+        email_routes, "resolve_calendar_backend", lambda: _RejectingCalendar()
+    )
+    payload = {
+        "summary": "Backwards meeting",
+        "start": {"date_time": "2026-07-01T15:00:00Z"},
+        "end": {"date_time": "2026-07-01T14:00:00Z"},
+        "attendees": [],
+    }
+    token = client.post("/v1/email/calendar/events/preview", json=payload).json()[
+        "confirmation_token"
+    ]
+    resp = client.post(
+        "/v1/email/calendar/events", json={**payload, "confirmation_token": token}
+    )
+    assert resp.status_code == 400
+    assert "start" in resp.json()["detail"].lower()
+
+
+def test_spec_page_serves_html(client):
+    """GET /spec (include_in_schema=False, human page) serves the HTML spec."""
+    resp = client.get("/v1/email/spec")
+    assert resp.status_code == 200
+    assert "<html" in resp.text.lower()

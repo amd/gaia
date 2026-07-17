@@ -154,7 +154,7 @@ gaia init [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--profile, -p` | string | chat | Profile to initialize (minimal, sd, chat, code, rag, vlm, npu, all) |
+| `--profile, -p` | string | chat | Profile to initialize (minimal, sd, chat, code, rag, mcp, vlm, email, npu, all) |
 | `--minimal` | flag | false | Shortcut for `--profile minimal` |
 | `--skip-models` | flag | false | Skip model downloads (only install Lemonade) |
 | `--skip-lemonade` | flag | false | Skip Lemonade installation check (for CI with pre-installed Lemonade) |
@@ -177,8 +177,10 @@ canonical choices list):
 | `chat` | Gemma-4-E4B-it-GGUF, user.embeddinggemma-300m-GGUF | Interactive chat with RAG and vision support | ~4 GB |
 | `code` | Gemma-4-E4B-it-GGUF | Autonomous coding assistant | ~3 GB |
 | `rag` | Gemma-4-E4B-it-GGUF, user.embeddinggemma-300m-GGUF | Document Q&A with retrieval | ~4 GB |
+| `mcp` | _(none)_ | Sets up the MCP servers config (`~/.gaia/mcp_servers.json`) — no Lemonade install or model downloads | – |
 | `vlm` | Gemma-4-E4B-it-GGUF | Vision pipeline for document and image extraction | ~3 GB |
-| `npu` | gemma4-it-e2b-FLM | Ryzen AI NPU acceleration via FLM backend (requires XDNA2 NPU) | ~3 GB |
+| `email` | Gemma-4-E4B-it-GGUF | Gmail/Outlook triage with local inference | ~3 GB |
+| `npu` | gemma4-it-e2b-FLM, embed-gemma-300m-FLM | Ryzen AI NPU acceleration via FLM backend (requires XDNA2 NPU) | ~3 GB |
 | `all` | All models | All models for all agents | ~26 GB |
 
 <Note>
@@ -673,6 +675,8 @@ gaia chat [MESSAGE] [OPTIONS]
 | `--max-chunks` | integer | 3 | Maximum chunks to retrieve for RAG |
 | `--max-indexed-files` | integer | 100 | Maximum number of files to keep indexed. Evicts least-recently-accessed files when LRU eviction is enabled; rejects new files when disabled. |
 | `--max-total-chunks` | integer | 10000 | Maximum total chunks across all indexed files. Same eviction behavior as `--max-indexed-files`. |
+| `--device` | `cpu`\|`gpu`\|`npu` | gpu | Inference device — selects the model and backend for this session |
+| `--mcp-tool-limit` | integer | 50 | Maximum MCP tools to register. Larger tool sets bloat the system prompt and degrade small-model tool-calling accuracy — keep as low as your workflow allows |
 | `--allowed-paths` | path(s) | - | Restrict RAG/file tools to these directories (security sandbox) |
 | `--stats`, `--show-stats` | flag | false | Show performance statistics |
 | `--stream` | flag | false | Enable streaming responses |
@@ -801,6 +805,8 @@ gaia prompt "MESSAGE" [OPTIONS]
 |--------|------|---------|-------------|
 | `--model` | string | auto | Model ID to use (default: auto-selected by each agent). Falls back to `default_model` from config — see [Configuration](#configuration) |
 | `--max-tokens` | integer | 512 | Maximum tokens to generate |
+| `--device` | `cpu`\|`gpu`\|`npu` | gpu | Inference device (Ryzen AI for `npu`) |
+| `--config` | path | `~/.gaia/config.json` | GAIA config file used to resolve `default_model` (or `$GAIA_CONFIG_FILE`) |
 | `--stats` | flag | false | Show performance statistics |
 
 **Examples:**
@@ -934,7 +940,7 @@ Common flags at the `index` level: `--repo`, `--max-files`, `--model`, `--base-u
 | `--query` | string | – | Custom query to run instead of the built-in examples |
 | `--interactive` | flag | false | Continuously input queries in interactive mode |
 | `--example` | string | – | Run a specific built-in example (1-6); omit for interactive mode |
-| `--steps` | integer | 5 | Maximum number of steps per query |
+| `--steps` | integer | 50 | Maximum number of steps per query (defaults to the global agent step limit, or `$GAIA_AGENT_MAX_STEPS` if set) |
 | `--output-dir` | path | output | Directory to save output files |
 | `--mcp-port` | integer | 9876 | Port for the Blender MCP server |
 | `--debug-prompts` | flag | false | Show prompts sent to the LLM |
@@ -981,6 +987,8 @@ gaia email -v -q "Triage my inbox"  # verbose logs for benchmarking
 | `-i, --interactive` | flag | false | REPL loop until `/quit`. |
 | `-v, --verbose` | flag | false | Emit structured logs for every triage decision and tool call. |
 | `--debug` | flag | false | Adds full prompt + LLM-response logging (sensitive payloads in logs). |
+| `--spec` | flag | false | Generate the HTML endpoint spec page, write it to disk, and open it in a browser. No LLM or Lemonade required. |
+| `--output PATH` | path | `~/.gaia/email/endpoint-spec.html` | Where to write the HTML spec (only used with `--spec`). |
 
 **Setup:** requires the Google connector. Run `gaia connectors connect google` first; you'll be asked to grant Gmail and Calendar scopes.
 
@@ -1016,14 +1024,14 @@ gaia sd <prompt> [OPTIONS]
 
 **Examples:**
 
-Fast generation with default (SD-Turbo, ~13s):
+Fast, good-quality generation with the default (SDXL-Turbo, ~17s):
 ```bash
 gaia sd "a sunset over mountains"
 ```
 
-Better quality with SDXL-Turbo (~17s):
+Even faster (lower quality) with SD-Turbo (~13s):
 ```bash
-gaia sd "cyberpunk city at night" --sd-model SDXL-Turbo
+gaia sd "cyberpunk city at night" --sd-model SD-Turbo
 ```
 
 Photorealistic with SDXL-Base-1.0 (slow, ~9min):
@@ -1399,6 +1407,7 @@ gaia mcp test --query "Hello from GAIA MCP!"
 | `test` | Test MCP bridge functionality (optionally against a specific `--tool`) |
 | `agent` | Invoke the MCP orchestrator agent (positional `request` arg + `--domain`, `--context`) |
 | `docker` | Start the Docker MCP server (default port 8080) |
+| `serve` | Start the Agent UI MCP server (wraps the Agent UI backend) |
 
 #### `gaia mcp start` options
 
@@ -1559,7 +1568,7 @@ gaia download [OPTIONS]
 | `--timeout` | integer | 1800 | Timeout per model in seconds |
 | `--host` | string | localhost | Lemonade server host |
 | `--port` | integer | 13305 | Lemonade server port |
-| `--clear-cache` | flag | false | Remove cached download progress/metadata before running |
+| `--clear-cache` | flag | false | Delete all downloaded GAIA models to free up disk space |
 
 **Available Agents:**
 chat, code, talk, rag, blender, jira, docker, vlm, minimal, mcp
@@ -1686,7 +1695,11 @@ gaia eval agent [OPTIONS]
 | `--scenario` | string | all | Run a specific scenario by ID |
 | `--category` | string | all | Run all scenarios in a category |
 | `--backend` | string | `http://localhost:4200` | Agent UI backend URL |
+| `--agent-type` | string | backend default | Agent registration ID to target (e.g. `gaia-lite`); scenarios run against this agent |
 | `--model` | string | `claude-sonnet-4-6` | Judge/simulator model |
+| `--iterations` | integer | `1` | Run each scenario N times for reliability measurement |
+| `--keep-sessions` | flag | false | Don't delete Agent UI sessions after eval — leave them for manual inspection |
+| `--device` | `cpu`\|`gpu`\|`npu` | – | Inference device hint for the run |
 | `--budget` | string | `2.00` | Maximum USD spend per scenario |
 | `--timeout` | integer | `900` | Per-scenario timeout in seconds (auto-scaled for complex scenarios) |
 | `--audit-only` | flag | false | Run architecture audit without LLM calls (free) |
@@ -1785,8 +1798,9 @@ gaia eval benchmark [OPTIONS]
 | `--ground-truth` | str | fixture's | Ground-truth JSON for quality scoring |
 | `--backend` | str | agent default | Lemonade base URL |
 | `--output-dir` | str | — | Write `scorecard.json` / `summary.md` / `variance.json` |
-| `--compare` | path | — | Compare throughput against a saved baseline (non-gating) |
+| `--compare` | path | — | Compare throughput against a saved baseline (non-gating for throughput; a ctx-window mismatch vs the baseline is a hard error) |
 | `--save-baseline` | flag | off | Save this run's scorecard as the throughput baseline |
+| `--ctx-size` | int | `16384` | Exact ctx window to pin the model load to (#1892 envelope: 16384 target / 32768 max). Verified by readback and stamped into `scorecard.json` / `quality.json`; values above the envelope max are allowed but warned loudly |
 
 <CodeGroup>
 ```bash Benchmark the primary model
@@ -1799,6 +1813,10 @@ gaia eval benchmark --experiments 3 --save-baseline
 
 ```bash Compare against a saved baseline
 gaia eval benchmark --compare eval/results/bench_baseline.json
+```
+
+```bash Measure a non-default ctx sweep point
+gaia eval benchmark --ctx-size 4096 --experiments 1
 ```
 </CodeGroup>
 
@@ -1889,6 +1907,8 @@ Manage agent memory: run day-zero onboarding and view memory statistics.
     ```bash
     gaia memory bootstrap --chat-only
     ```
+
+    The questions adapt to your answers (a student is asked about coursework, an engineer about their deployment workflow), and everything they produce is shown for approval (`[Y/n/q]`) before it is stored. `--chat-only` needs no LLM and no Lemonade Server -- it writes plain rows, which are embedded the next time an agent starts.
 
     Re-run system discovery:
     ```bash
@@ -2099,6 +2119,44 @@ gaia youtube \
   --download-transcript "https://youtube.com/watch?v=..." \
   --output-path transcript.txt
 ```
+
+---
+
+### Daemon Command
+
+Manage the headless custody daemon — the always-on, single-instance background
+process that supervises agent **sidecars** (spawn, health, tree-kill; email is
+the first) and that later Agent UI v2 phases (`/host/v1/*` custody, the
+model-slot broker, the scheduler clock) mount into. The Agent UI backend is a
+daemon *client*: it asks the daemon to ensure a sidecar and talks to the
+sidecar directly, so **closing the UI leaves the sidecar running** — stopping
+is a daemon command.
+
+Requires the daemon extras (`fastapi`/`uvicorn`/`psutil`) — install with
+`pip install "amd-gaia[ui]"` (or `[api]`/`[dev]`). Running it on a base install
+fails loudly with that instruction.
+
+```bash
+gaia daemon start      # start the daemon, or attach if one is already running
+gaia daemon status     # pid, port, uptime + the supervised sidecar list
+gaia daemon stop       # graceful shutdown (tree-kills daemon + every sidecar)
+gaia daemon restart    # stop then start
+gaia daemon logs [--lines N] [--follow]   # tail the daemon log
+gaia daemon agents                        # list supervised sidecar agents
+gaia daemon start-agent email [--mode user|dev]  # start/attach one sidecar
+gaia daemon stop-agent email              # stop one sidecar, daemon stays up
+```
+
+| Action | Options | Description |
+|--------|---------|-------------|
+| `start` | — | Start the daemon or attach to the running one (two callers → one daemon). |
+| `status` | — | Print pid / port / uptime and the supervised sidecar list, or report if no daemon is running. |
+| `stop` | — | Shut the daemon down (tree-killing every sidecar) and release `~/.gaia/host/instance.json`. |
+| `restart` | — | `stop` followed by `start`. |
+| `logs` | `--lines`, `--follow` | Print (or stream) the daemon log tail. |
+| `agents` | — | List every registered sidecar agent: id, state, and (when running) mode, pid, port, contract version — never the bearer token. Dev-mode entries also show their source dir. |
+| `start-agent <id>` | `--mode user\|dev` | Start (or attach to) one agent's sidecar, auto-starting the daemon if needed. Requesting a mode different from the running sidecar's is a loud conflict — stop it first. |
+| `stop-agent <id>` | — | Tree-kill one agent's sidecar; the daemon keeps running. Attach-only: no daemon running → clear error, exit 1. A sidecar surviving the kill is a loud failure, never silent. |
 
 ---
 

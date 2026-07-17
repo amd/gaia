@@ -183,6 +183,14 @@ DEFAULT_MODEL_LOAD_TIMEOUT = 12000
 DEFAULT_MODEL_LOAD_RETRIES = 3
 MODEL_LOAD_RETRY_BACKOFF = 8  # base seconds; escalates as backoff * attempt
 
+# Exact-pin settle deadlines (#1892). Lemonade's /load and /unload are
+# ASYNCHRONOUS (observed on 10.7): /load on an already-loaded model can no-op
+# with status success, and /health transiently drops the entry mid-reload. A
+# pinned reload therefore polls /health until each phase settles.
+PIN_UNLOAD_SETTLE_DEADLINE_S = 120.0
+PIN_LOAD_SETTLE_DEADLINE_S = 300.0  # big GGUF loads are slow
+PIN_SETTLE_POLL_INTERVAL_S = 2.0
+
 
 # =========================================================================
 # Model Types and Agent Profiles
@@ -845,6 +853,7 @@ class LemonadeClient:
         verbose: bool = True,
         keep_alive: bool = False,
         api_key: Optional[str] = None,
+        ctx_size_override: Optional[int] = None,
     ):
         """
         Initialize the Lemonade client.
@@ -858,6 +867,12 @@ class LemonadeClient:
             keep_alive: If True, don't terminate server in __del__
             api_key: API key for an authenticated Lemonade server (defaults to
                 LEMONADE_API_KEY env var; ``None`` for unauthenticated)
+            ctx_size_override: Pin every model load THIS client performs to this
+                exact ctx_size (#1892). Instance-scoped — other clients in the
+                same process keep the MODELS-registry floor semantics. With an
+                override set, ``_ensure_model_loaded`` reloads whenever the
+                loaded ctx differs from the override (exact-pin, not floor),
+                so a ctx sweep can step DOWN as well as up.
         """
         from urllib.parse import urlparse
 
@@ -890,6 +905,10 @@ class LemonadeClient:
         self.keep_alive = keep_alive
         self._log_file = None
         self.api_key = resolve_lemonade_api_key(api_key)
+        # Instance-scoped exact-pin ctx override (#1892). Never a class-level
+        # default or MODELS mutation — chat/RAG clients sharing this process
+        # must keep their own floor semantics.
+        self.ctx_size_override = ctx_size_override
 
         # Track active downloads for cancellation support
         self.active_downloads: Dict[str, DownloadTask] = {}
@@ -2821,6 +2840,124 @@ class LemonadeClient:
             )
         return False
 
+    @staticmethod
+    def _find_loaded_entry(status: "LemonadeStatus", model: str) -> Optional[dict]:
+        """The /health entry for ``model`` in ``status.loaded_models``, or None.
+
+        Matches tolerantly via ``_model_ids_match`` (#1952: strips the
+        ``user.`` prefix, case-insensitive) — a strict ``==`` here would miss
+        a model reported back with the ``user.`` prefix Lemonade adds to
+        locally-registered GGUFs.
+        """
+        for _m in status.loaded_models:
+            if _model_ids_match(_m.get("id"), model) or _model_ids_match(
+                _m.get("model_name"), model
+            ):
+                return _m
+        return None
+
+    def _wait_model_state(
+        self, model: str, *, present: bool, deadline_s: float
+    ) -> Optional[dict]:
+        """Poll /health until ``model`` is (not) loaded; loud on deadline (#1892).
+
+        Lemonade's /load and /unload are asynchronous — the only way to know a
+        phase completed is to watch /health settle. Returns the loaded entry
+        when waiting for presence, None when waiting for absence.
+
+        A failed probe (``get_status().running is False``) is UNKNOWN, not
+        "confirmed absent": ``get_status()`` swallows probe exceptions into
+        ``running=False`` / ``loaded_models=[]``, so treating that as absence
+        would let ``present=False`` settle on a server that's merely mid-
+        teardown and unresponsive right now — re-enabling the stale-ctx no-op
+        this state machine exists to prevent. Only a successful probe that
+        actually shows the model gone satisfies ``present=False``.
+
+        Raises:
+            LemonadeClientError: if the state does not settle within
+                ``deadline_s`` — the message names the deadline and the
+                /health state actually observed.
+        """
+        start = time.monotonic()
+        while True:
+            status = self.get_status()
+            entry = self._find_loaded_entry(status, model) if status.running else None
+            if present and entry is not None:
+                return entry
+            if not present and status.running and entry is None:
+                return None
+            if time.monotonic() - start > deadline_s:
+                observed = [
+                    {
+                        "model": _m.get("model_name") or _m.get("id"),
+                        "ctx_size": _m.get("recipe_options", {}).get("ctx_size"),
+                    }
+                    for _m in status.loaded_models
+                ]
+                raise LemonadeClientError(
+                    f"Timed out after {deadline_s:.0f}s waiting for model "
+                    f"'{model}' to become {'loaded' if present else 'unloaded'} "
+                    f"on {self.base_url}. /health currently reports loaded "
+                    f"models: {observed or '[]'}. Lemonade's /load and /unload "
+                    f"are asynchronous — the server may be stuck mid-reload; "
+                    f"check the Lemonade server logs or restart it, then retry."
+                )
+            time.sleep(PIN_SETTLE_POLL_INTERVAL_S)
+
+    def _ensure_pinned_load(self, model: str) -> None:
+        """Load ``model`` at exactly ``self.ctx_size_override``, settling each
+        phase against /health (#1892).
+
+        Observed on Lemonade 10.7: /load and /unload are asynchronous, and
+        /load on an already-loaded model can no-op with ``status: success`` —
+        a plain reload can leave the STALE ctx window in place while /health
+        transiently drops the entry. The only reliable re-pin is:
+        unload → poll until ABSENT → load with ctx_size → poll until PRESENT
+        → verify the settled ``recipe_options.ctx_size``.
+
+        Raises:
+            LemonadeClientError: on settle-deadline exhaustion (distinct
+                message naming the observed /health state) or when the settled
+                ctx differs from the pin (possible model ctx-ceiling clamp).
+        """
+        pin = self.ctx_size_override
+        status = self.get_status()
+        entry = self._find_loaded_entry(status, model)
+        if entry is not None:
+            loaded_ctx = entry.get("recipe_options", {}).get("ctx_size", 0) or 0
+            if loaded_ctx == pin:
+                self.log.debug(
+                    f"Model '{model}' already loaded at ctx={loaded_ctx} "
+                    f"(pinned == {pin})"
+                )
+                return
+            # Divergence from an exact pin mid-run means something else
+            # reloaded this model on the shared server — loud.
+            self.log.warning(
+                f"Model '{model}' found at ctx={loaded_ctx} but this client "
+                f"pins ctx={pin} (#1892 override); re-pinning via "
+                f"unload/settle/load. Another process likely reloaded it."
+            )
+
+        self.unload_model(model, ignore_if_not_loaded=True)
+        self._wait_model_state(
+            model, present=False, deadline_s=PIN_UNLOAD_SETTLE_DEADLINE_S
+        )
+        self.load_model(model, auto_download=True, prompt=False, ctx_size=pin)
+        settled = self._wait_model_state(
+            model, present=True, deadline_s=PIN_LOAD_SETTLE_DEADLINE_S
+        )
+        settled_ctx = settled.get("recipe_options", {}).get("ctx_size", 0) or 0
+        if settled_ctx != pin:
+            raise LemonadeClientError(
+                f"ctx pin failed for '{model}': requested ctx_size={pin} but "
+                f"the model settled at ctx_size={settled_ctx} after a fresh "
+                f"unload/load cycle. The model may clamp ctx to its own "
+                f"ceiling, or another process re-loaded it mid-pin — the run "
+                f"would measure the wrong window."
+            )
+        self.log.info(f"Model '{model}' pinned at ctx={settled_ctx} (#1892)")
+
     def _ensure_model_loaded(self, model: str, auto_download: bool = True) -> None:
         """Ensure a model is loaded on the server before making requests.
 
@@ -2839,6 +2976,13 @@ class LemonadeClient:
         """
         if not auto_download:
             return  # Skip if auto_download disabled
+
+        # Exact-pin path (#1892): async-safe unload→settle→load→settle. Its
+        # failures PROPAGATE — never the best-effort debug-swallow below (a
+        # silently unpinned eval run would measure the wrong window).
+        if self.ctx_size_override is not None:
+            self._ensure_pinned_load(model)
+            return
 
         try:
             # Determine the ctx_size GAIA expects for this model. This lookup
@@ -2863,13 +3007,7 @@ class LemonadeClient:
             # Look the model up in the actually-loaded set (health-format).
             # ``status.loaded_models`` now carries health entries enriched
             # with ``id`` + ``recipe_options`` so we can read ctx_size.
-            loaded_entry: Optional[dict] = None
-            for _m in status.loaded_models:
-                if _model_ids_match(_m.get("id"), model) or _model_ids_match(
-                    _m.get("model_name"), model
-                ):
-                    loaded_entry = _m
-                    break
+            loaded_entry = self._find_loaded_entry(status, model)
 
             if loaded_entry is not None:
                 loaded_ctx = (
@@ -3808,8 +3946,9 @@ class LemonadeClient:
         """
         Check if the lemonade-server version is compatible.
 
-        Checks major version for hard incompatibility, and warns on
-        minor/patch mismatches.
+        Checks against ``LEMONADE_MIN_VERSION`` (the oldest Lemonade Server
+        GAIA supports) for hard incompatibility, and warns on any mismatch
+        with ``expected_version`` that's still at or above that floor.
 
         Args:
             expected_version: Expected version string (e.g., "10.0.0")
@@ -3818,7 +3957,8 @@ class LemonadeClient:
             quiet: Suppress warning output
 
         Returns:
-            True if compatible (or version check failed), False if incompatible major version
+            True if compatible (or version check failed), False if below
+            the minimum supported version
         """
         if actual_version is None:
             actual_version = self.get_lemonade_version()
@@ -3827,33 +3967,33 @@ class LemonadeClient:
             # Can't determine version, assume compatible (don't block)
             return True
 
+        from gaia.version import LEMONADE_MIN_VERSION
+
         try:
-            # Parse versions
-            expected_parts = expected_version.split(".")
-            actual_parts = actual_version.split(".")
 
-            expected_major = int(expected_parts[0])
-            actual_major = int(actual_parts[0])
+            def _version_tuple(v: str) -> tuple:
+                return tuple(int(p) for p in v.lstrip("v").split(".")[:3])
 
-            if expected_major != actual_major:
+            actual_tuple = _version_tuple(actual_version)
+            min_tuple = _version_tuple(LEMONADE_MIN_VERSION)
+
+            if actual_tuple < min_tuple:
                 if not quiet:
                     print("")
-                    print(
-                        f"{_emoji('⚠️', '[WARN]')}  Lemonade Server version mismatch detected!"
-                    )
-                    print(f"   Expected major version: {expected_major}.x.x")
+                    print(f"{_emoji('⚠️', '[WARN]')}  Lemonade Server version too old!")
                     print(f"   Installed version: {actual_version}")
+                    print(f"   Minimum supported: {LEMONADE_MIN_VERSION}")
                     print("")
                     print(
-                        "   This may cause compatibility issues. "
-                        f"Please install Lemonade Server {expected_version}:"
+                        "   This version is not supported and will cause failures. "
+                        f"Please upgrade Lemonade Server to at least {LEMONADE_MIN_VERSION}:"
                     )
                     print("   https://lemonade-server.ai")
                     print("")
 
                 return False
 
-            # Same major version – warn if minor/patch differs
+            # Above the floor but not the expected pin – low-key note only
             if actual_version != expected_version:
                 if not quiet:
                     print(
@@ -4105,6 +4245,7 @@ def create_lemonade_client(
     background: str = "terminal",
     keep_alive: bool = False,
     api_key: Optional[str] = None,
+    ctx_size_override: Optional[int] = None,
 ) -> LemonadeClient:
     """
     Factory function to create and configure a LemonadeClient instance.
@@ -4131,6 +4272,8 @@ def create_lemonade_client(
         keep_alive: If True, don't terminate server when client is deleted
         api_key: API key for an authenticated Lemonade server
                  (defaults to env var LEMONADE_API_KEY; ``None`` for unauthenticated)
+        ctx_size_override: Instance-scoped exact-pin ctx override (#1892) —
+                 forwarded verbatim to ``LemonadeClient``
 
     Returns:
         A configured LemonadeClient instance
@@ -4153,6 +4296,7 @@ def create_lemonade_client(
         verbose=verbose,
         keep_alive=keep_alive,
         api_key=api_key,
+        ctx_size_override=ctx_size_override,
     )
 
     # Auto-start server if requested

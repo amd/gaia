@@ -54,7 +54,7 @@ def _past_iso(days: int = 1) -> str:
 
 @pytest.fixture
 def memory_store(tmp_path):
-    """Real SQLite MemoryStore with v2 schema in a temp directory."""
+    """Real SQLite MemoryStore at the current schema, in a temp directory."""
     store = MemoryStore(db_path=tmp_path / "test_memory.db")
     yield store
     store.close()
@@ -1369,16 +1369,16 @@ class TestPruningPipeline:
 
 
 class TestSchemaMigration:
-    """Test that v2 schema features work on fresh databases."""
+    """Test that the current schema features work on fresh databases."""
 
-    def test_fresh_install_gets_v2_schema(self, memory_store):
-        """Fresh install creates schema version 2."""
+    def test_fresh_install_gets_current_schema(self, memory_store):
+        """Fresh install creates schema version 3 (procedures table, #887)."""
         with memory_store._lock:
             cursor = memory_store._conn.execute(
                 "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
             )
             version = cursor.fetchone()[0]
-        assert version == 2
+        assert version == 3
 
     def test_embedding_column_exists(self, memory_store):
         """The embedding BLOB column exists in the knowledge table."""

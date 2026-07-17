@@ -6,6 +6,15 @@ icon: "plug"
 
 # Connectors Framework
 
+> **⚠️ Partially superseded by Agent UI v2** ([agent-ui.mdx](/plans/agent-ui) +
+> [agent-ui-agent-capabilities-plan.md](/plans/agent-ui-agent-capabilities-plan) §0).
+> The connector-consumption model changes: v2 agents run as out-of-process sidecars
+> that **no longer read `grants.json` directly**. Instead the host stays the single
+> writer/refresher and **forwards short-lived access tokens out** to the sidecar
+> (§0.6 OAuth forward-out); the sidecar never sees the refresh token. The registry,
+> Settings UI, and `oauth_pkce`/`mcp_server` types below still hold — only the
+> grant-delivery path is superseded. Read v2 §0.6 for the current model.
+
 <Note>
 **Target:** v0.18.x | **Status:** Spec approved; implementation underway | **Priority:** High
 </Note>
@@ -18,7 +27,7 @@ icon: "plug"
 >
 > **Related issues:** [#915](https://github.com/amd/gaia/issues/915) (OAuth PKCE for Google — first concrete connector); [#735](https://github.com/amd/gaia/issues/735) / [#736](https://github.com/amd/gaia/issues/736) / [#737](https://github.com/amd/gaia/issues/737) / [#738](https://github.com/amd/gaia/issues/738) / [#740](https://github.com/amd/gaia/issues/740) (Connector Hub track — supersede-vs-children call pending @kovtcharov-amd; see #927's Coordination block).
 >
-> **Related plans:** [Agent UI](agent-ui.mdx), [Security Model](security-model.mdx).
+> **Related plans:** [Agent UI](/plans/agent-ui), [Security Model](/plans/security-model).
 >
 > **Scope:** This spec promotes the OAuth-only `gaia.connectors` library shipped in #915 into a generalized **Connectors framework** with a `Settings → Connectors` page modeled on Claude desktop's native UI. The existing 22-entry MCP server catalog (today read-only in Settings) is unified into the same surface. v1 ships the framework with two implemented types (`oauth_pkce` + `mcp_server`); other types (`api_token`, `composite_form`, `local_extension`) are framework-shaped but follow-up.
 
