@@ -245,60 +245,9 @@ function stripBogusCodeFences(text: string): string {
     );
 }
 
-/**
- * Promote bare structured-payload JSON to fenced blocks so card components render
- * even when the LLM skips the fenced-block output format instruction.
- * Detects JSON starting with {"kind":"<known-payload>"} using brace-depth tracking
- * to handle nested objects, then wraps it in the appropriate language-tagged fence.
- */
-const STRUCTURED_PAYLOAD_KINDS: Record<string, string> = {
-    'email_pre_scan': 'email_pre_scan',
-    'email-pre-scan': 'email_pre_scan',
-};
-
-function promoteStructuredPayloads(text: string): string {
-    const trimmed = text.trimStart();
-    if (!trimmed.startsWith('{')) return text;
-
-    // Fast-reject: must have "kind" near the start
-    const kindMatch = trimmed.match(/^\{"kind"\s*:\s*"([^"]+)"/);
-    if (!kindMatch) return text;
-    const lang = STRUCTURED_PAYLOAD_KINDS[kindMatch[1]];
-    if (!lang) return text;
-
-    // Find the matching closing brace with string-aware depth tracking so that
-    // `}` characters inside JSON string values don't prematurely end the scan.
-    let depth = 0;
-    let end = -1;
-    let inString = false;
-    let escape = false;
-    for (let i = 0; i < trimmed.length; i++) {
-        const ch = trimmed[i];
-        if (escape) { escape = false; continue; }
-        if (inString) {
-            if (ch === '\\') escape = true;
-            else if (ch === '"') inString = false;
-            continue;
-        }
-        if (ch === '"') inString = true;
-        else if (ch === '{') depth++;
-        else if (ch === '}' && --depth === 0) { end = i; break; }
-    }
-    if (end === -1) return text;
-
-    const jsonPart = trimmed.slice(0, end + 1);
-    const rest = trimmed.slice(end + 1);
-    const leading = text.slice(0, text.length - trimmed.length);
-    return `${leading}\`\`\`${lang}\n${jsonPart}\n\`\`\`\n${rest}`;
-}
-
 function cleanToolCallContent(content: string): string {
     if (!content) return content;
     let cleaned = content;
-
-    // Promote bare structured-payload JSON (e.g. email_pre_scan) to fenced blocks
-    // so card components mount even when the LLM omits the fenced-block wrapper.
-    cleaned = promoteStructuredPayloads(cleaned);
 
     // Remove all tool-call JSON blocks from the content
     cleaned = cleaned.replace(TOOL_CALL_JSON_RE, '');
@@ -668,6 +617,10 @@ function linkifyChildren(children: React.ReactNode): React.ReactNode {
     );
 }
 
+// Legacy-history rendering only (#2109): new turns get cards via
+// tool_result.render/data (RenderCard), but old persisted sessions have this
+// fence baked into their stored message text, so the match + EmailPreScanCard
+// mount below must stay for those to still render.
 const STRUCTURED_FENCE_RE = /```(email[_-]pre[_-]scan)[ \t]*\r?\n([\s\S]*?)\r?\n```/;
 
 function RenderedContent({ content, showCursor }: { content: string; showCursor?: boolean }) {
@@ -725,7 +678,8 @@ function RenderedContent({ content, showCursor }: { content: string; showCursor?
                     // Extract the language and code text, render as CodeBlock —
                     // unless the language tag is one of our structured-payload
                     // contracts (currently: ``email_pre_scan``), in which case
-                    // we mount a typed component instead.
+                    // we mount a typed component instead. Legacy-history path
+                    // (#2109): new turns render cards via tool_result.render.
                     pre({ children }) {
                         // children is <code className="language-xxx">...</code>
                         const codeChild = React.Children.toArray(children)[0];

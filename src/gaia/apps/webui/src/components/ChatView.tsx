@@ -151,9 +151,43 @@ function agentEventToStep(event: StreamEvent, stepIdRef: React.MutableRefObject<
                 timestamp: ts,
             };
         }
+        case 'needs_confirmation': {
+            const action = event.action || 'unknown action';
+            const summary =
+                event.summary ||
+                event.message ||
+                event.content ||
+                'This action requires confirmation before it can run.';
+            return {
+                id,
+                type: 'needs_confirmation',
+                label: `Needs confirmation: ${action}`,
+                detail: summary,
+                action,
+                summary,
+                success: false,
+                active: false,
+                timestamp: ts,
+            };
+        }
         default:
             return null;
     }
+}
+
+/**
+ * Derive persisted render cards from hydrated agent steps (#2109). The
+ * backend now persists `render`/`data` on tool_result-type steps whenever a
+ * card was involved (retention cap: only when `render` is present), so this
+ * replaces the #2108 in-memory refetch-merge that reattached cards from
+ * pre-refetch state by id/role+content matching.
+ */
+function cardsFromSteps(agentSteps?: AgentStep[]): RenderCardData[] | undefined {
+    if (!agentSteps || agentSteps.length === 0) return undefined;
+    const cards = agentSteps
+        .filter((s) => typeof s.render === 'string' && s.render.length > 0)
+        .map((s) => ({ render: s.render as string, data: s.data }));
+    return cards.length > 0 ? cards : undefined;
 }
 
 function policyReceiptAnchor(receiptId: string): string {
@@ -336,13 +370,19 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
             api.getMessages(sessionId)
                 .then((data) => {
                     if (cancelled) return;
-                    const msgs = (data.messages || []).map((m: any) => ({
-                        ...m,
+                    const msgs = (data.messages || []).map((m: any) => {
                         // Map snake_case agent_steps from API to camelCase agentSteps
-                        agentSteps: m.agentSteps || m.agent_steps || undefined,
-                        // Map inference_stats from API to stats field
-                        stats: m.stats || m.inference_stats || undefined,
-                    }));
+                        const agentSteps = m.agentSteps || m.agent_steps || undefined;
+                        return {
+                            ...m,
+                            agentSteps,
+                            // Map inference_stats from API to stats field
+                            stats: m.stats || m.inference_stats || undefined,
+                            // Re-derive cards from hydrated steps (#2109) so
+                            // reloaded sessions show cards without re-running tools.
+                            cards: cardsFromSteps(agentSteps),
+                        };
+                    });
                     if (isInitial) {
                         setMessages(msgs);
                         lastMsgCountRef.current = msgs.length;
@@ -1072,21 +1112,17 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                     api.getMessages(sessionId)
                         .then((data) => {
                             if (isStale()) return;
-                            // The backend doesn't persist cards, so this replace
-                            // would drop them — merge from the pre-refetch
-                            // in-memory messages by id, else role+content.
-                            // #2109 replaces this merge with steps-derived hydration.
-                            const prevWithCards = useChatStore.getState().messages
-                                .filter((m) => m.cards && m.cards.length > 0);
+                            // Cards are re-derived from the persisted agent_steps
+                            // (#2109) rather than merged from pre-refetch in-memory
+                            // state — the backend now persists render/data on
+                            // tool_result steps whenever a card was involved.
                             const msgs: Message[] = (data.messages || []).map((m: any) => {
-                                const prev = prevWithCards.find(
-                                    (p) => p.id === m.id || (p.role === m.role && p.content === m.content),
-                                );
+                                const agentSteps = m.agentSteps || m.agent_steps || undefined;
                                 return {
                                     ...m,
-                                    agentSteps: m.agentSteps || m.agent_steps || undefined,
+                                    agentSteps,
                                     stats: m.stats || m.inference_stats || undefined,
-                                    cards: prev?.cards,
+                                    cards: cardsFromSteps(agentSteps),
                                 };
                             });
                             setMessages(msgs);

@@ -578,7 +578,7 @@ export interface RetrievalChunk {
 /** A single step in the agent's execution. */
 export interface AgentStep {
     id: number;
-    type: 'thinking' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert';
+    type: 'thinking' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert' | 'needs_confirmation';
     /** Short label shown in collapsed view. */
     label: string;
     /** Detailed content shown when expanded. */
@@ -618,6 +618,15 @@ export interface AgentStep {
     mcpServer?: string;
     /** Tool call latency in milliseconds. */
     latencyMs?: number;
+    /** Action name requiring confirmation (for type='needs_confirmation'). */
+    action?: string;
+    /** Human-readable summary of the pending action (for type='needs_confirmation'). */
+    summary?: string;
+    /** Card render key (issue #2108/#2109) — populated on hydrated tool_result
+     *  steps so `message.cards` can be re-derived after a session reload. */
+    render?: string;
+    /** Card payload for `render`, mirroring `StreamEvent.data`. */
+    data?: unknown;
 }
 
 /** Extended SSE event types for agent communication. */
@@ -638,6 +647,7 @@ export type StreamEventType =
     | 'agent_error'  // Agent-level error (non-fatal)
     | 'permission_request' // Tool confirmation request
     | 'policy_alert' // Governance policy blocked a tool
+    | 'needs_confirmation' // Sidecar agent action awaits user confirmation
     | 'mcp_status'   // MCP server connection status update
     | 'agent_created'; // New agent created — triggers agent list refresh
 
@@ -695,6 +705,8 @@ export interface StreamEvent {
     policy_version?: string;
     /** Governance receipt ID (for policy_alert). */
     receipt_id?: string;
+    /** Action name awaiting confirmation (for needs_confirmation). */
+    action?: string;
     /** Structured result data (for tool_result with search results, file lists, etc.). */
     result_data?: {
         type: string;

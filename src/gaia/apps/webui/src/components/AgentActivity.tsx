@@ -158,6 +158,8 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
     const toolSteps = displaySteps.filter((s) => s.type === 'tool');
     const policySteps = displaySteps.filter((s) => s.type === 'policy_alert');
     const hasPolicyAlerts = policySteps.length > 0;
+    const confirmationSteps = displaySteps.filter((s) => s.type === 'needs_confirmation');
+    const hasNeedsConfirmation = confirmationSteps.length > 0;
 
     // ── Filter state (for MCP tool visualization) ───────────────────
     const [toolNameFilter, setToolNameFilter] = useState('');
@@ -180,8 +182,8 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
     const hasErrors = errorSteps.length > 0;
 
     useEffect(() => {
-        if (hasPolicyAlerts) setExpanded(true);
-    }, [hasPolicyAlerts]);
+        if (hasPolicyAlerts || hasNeedsConfirmation) setExpanded(true);
+    }, [hasPolicyAlerts, hasNeedsConfirmation]);
 
     // Auto-expand native tools for visibility. MCP tools start collapsed
     // by default (users expand on demand) to reduce noise in busy sessions.
@@ -301,6 +303,9 @@ export function AgentActivity({ steps, isActive, variant = 'inline' }: AgentActi
                             }
                             if (step.type === 'policy_alert') {
                                 return <FlowPolicyAlert key={step.id} step={step} />;
+                            }
+                            if (step.type === 'needs_confirmation') {
+                                return <FlowNeedsConfirmation key={step.id} step={step} />;
                             }
                             return null;
                         })}
@@ -595,6 +600,27 @@ function FlowPolicyAlert({ step }: { step: AgentStep }) {
                     <span>Receipt</span>
                     {step.receiptId ? <code>{step.receiptId}</code> : <em>Receipt unavailable</em>}
                 </div>
+            </div>
+        </div>
+    );
+}
+
+// Reuses FlowPolicyAlert's CSS classes (issue #2109) — a sidecar agent action
+// awaiting confirmation is visually the same "notice" shape, just without the
+// governance-specific fields (decision/rules/receipt).
+function FlowNeedsConfirmation({ step }: { step: AgentStep }) {
+    return (
+        <div className="flow-policy-alert">
+            <div className="flow-policy-alert-header">
+                <ShieldAlert size={14} />
+                <span className="flow-policy-alert-title">Confirmation needed</span>
+            </div>
+            <div className="flow-policy-alert-body">
+                <div className="flow-policy-alert-line">
+                    <span>Action</span>
+                    <code>{step.action || 'unknown action'}</code>
+                </div>
+                <div className="flow-policy-alert-reason">{step.summary || step.detail}</div>
             </div>
         </div>
     );
