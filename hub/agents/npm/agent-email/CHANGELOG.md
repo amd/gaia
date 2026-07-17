@@ -6,6 +6,12 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## 0.6.0
 
+- **Asking "what's on my calendar?" no longer digs up years-old meetings.**
+  Listing calendar events without a date range used to return the oldest
+  instances of recurring series — events from years ago narrated as if they
+  were this week. An unbounded listing now defaults to the next 30 days
+  (starting now); passing explicit `time_min`/`time_max` bounds works exactly
+  as before.
 - **The plain-language agent loop is now part of the typed client.** 0.5.0's
   streaming endpoint required hand-rolled `fetch` + SSE parsing; now
   `client.query()` returns an async iterator of typed events (`status`, `token`,
