@@ -414,6 +414,12 @@ def relay_query(
         if not terminated:
             handler._emit({"type": "status", "message": "Cancelled."})
     elif crashed or not terminated:
+        # No terminal event arrived — the sidecar generation is still decoding
+        # on the single GPU slot; stop it or later queries death-spiral.
+        try:
+            proxy.cancel_query(rid)
+        except SidecarError as exc:
+            logger.info("email relay: cancel_query for run_id=%s: %s", rid, exc)
         handler._emit({"type": "agent_error", "content": crash_message})
 
 
