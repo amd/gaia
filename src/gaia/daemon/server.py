@@ -14,10 +14,12 @@ file is never clobbered).
 
 from __future__ import annotations
 
+import json
 import os
 import secrets
 import socket
 import time
+from pathlib import Path
 
 from gaia.daemon.app import create_app
 from gaia.daemon.constants import HOST, RESERVED_PORT
@@ -45,6 +47,43 @@ def _find_free_port(host: str = HOST) -> int:
         "could not find a free loopback port for the daemon after 50 attempts — "
         "the ephemeral port range may be exhausted; check `gaia daemon logs`."
     )
+
+
+def _load_extra_specs() -> dict:
+    """Test-only spec seam (#2142 T4): ``GAIA_DAEMON_EXTRA_SPECS`` names a JSON
+    file mapping ``agent_id -> spec fields``, merged over ``builtin_specs()``.
+
+    Read once at daemon startup. This is how the integration suite registers
+    its toy agent inside a real daemon process; production agents are added in
+    ``builtin_specs()`` — there is deliberately NO runtime registration route.
+    """
+    path = os.environ.get("GAIA_DAEMON_EXTRA_SPECS")
+    if not path:
+        return {}
+    from gaia.daemon.sidecars.spec import AgentSidecarSpec
+
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise DaemonStartError(
+            f"GAIA_DAEMON_EXTRA_SPECS points at {path} but it could not be "
+            f"read as JSON: {e}. Fix or unset the variable, then restart the "
+            "daemon."
+        ) from e
+    specs = {}
+    for agent_id, fields in raw.items():
+        data = dict(fields)
+        data["agent_id"] = agent_id
+        if data.get("dev_src_dir"):
+            data["dev_src_dir"] = Path(data["dev_src_dir"])
+        try:
+            specs[agent_id] = AgentSidecarSpec(**data)
+        except TypeError as e:
+            raise DaemonStartError(
+                f"GAIA_DAEMON_EXTRA_SPECS entry '{agent_id}' in {path} is not "
+                f"a valid AgentSidecarSpec: {e}"
+            ) from e
+    return specs
 
 
 def _build_registry(specs):
@@ -77,7 +116,7 @@ def run(host: str = HOST) -> None:
     pid = os.getpid()
     started_at = time.time()
 
-    specs = builtin_specs()
+    specs = {**builtin_specs(), **_load_extra_specs()}
     registry = _build_registry(specs)
 
     def _register() -> None:

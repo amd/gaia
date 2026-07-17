@@ -2818,6 +2818,26 @@ Examples:
     daemon_subparsers.add_parser(
         "restart", help="Restart the daemon (stop if running, then start)"
     )
+    daemon_subparsers.add_parser(
+        "agents", help="List the sidecar agents the daemon supervises"
+    )
+    daemon_start_agent_parser = daemon_subparsers.add_parser(
+        "start-agent",
+        help="Start (or attach to) one agent's sidecar under the daemon",
+    )
+    daemon_start_agent_parser.add_argument(
+        "agent_id", help="Agent to start (e.g. email)"
+    )
+    daemon_start_agent_parser.add_argument(
+        "--mode",
+        choices=["user", "dev"],
+        default=None,
+        help="Sidecar mode: user (frozen binary, default) or dev (from source)",
+    )
+    daemon_stop_agent_parser = daemon_subparsers.add_parser(
+        "stop-agent", help="Stop one agent's sidecar (the daemon keeps running)"
+    )
+    daemon_stop_agent_parser.add_argument("agent_id", help="Agent to stop")
     daemon_logs_parser = daemon_subparsers.add_parser(
         "logs", help="Show the daemon log"
     )
@@ -6932,12 +6952,13 @@ def _check_daemon_deps():
 
 
 def handle_daemon_command(args):
-    """Handle `gaia daemon status|stop|restart|logs|start`."""
+    """Handle `gaia daemon status|stop|restart|logs|start|agents|start-agent|stop-agent`."""
     action = getattr(args, "daemon_action", None)
     if action is None:
         print(
             "❌ No daemon action specified. Use 'gaia daemon --help' to see "
-            "available actions (start, status, stop, restart, logs)."
+            "available actions (start, status, stop, restart, logs, agents, "
+            "start-agent, stop-agent)."
         )
         return
     _check_daemon_deps()
@@ -6951,6 +6972,12 @@ def handle_daemon_command(args):
         _handle_daemon_restart()
     elif action == "logs":
         _handle_daemon_logs(args)
+    elif action == "agents":
+        _handle_daemon_agents()
+    elif action == "start-agent":
+        _handle_daemon_start_agent(args)
+    elif action == "stop-agent":
+        _handle_daemon_stop_agent(args)
     else:
         print(f"❌ Unknown daemon action: {action}")
 
@@ -7004,6 +7031,143 @@ def _handle_daemon_status():
     print(f"  uptime:     {_fmt_uptime(body.get('uptime_seconds', 0))}")
     print(f"  api:        v{body.get('api_version')}")
     print(f"  url:        {inst.base_url}")
+    print("Sidecar agents:")
+    _print_daemon_agents(inst, indent="  ")
+
+
+def _daemon_http_detail(response) -> str:
+    """The actionable `detail` from a daemon error response (or the raw status)."""
+    try:
+        body = response.json()
+    except ValueError:
+        return f"HTTP {response.status_code}"
+    if isinstance(body, dict) and body.get("detail"):
+        return str(body["detail"])
+    return f"HTTP {response.status_code}"
+
+
+def _fetch_daemon_agents(inst) -> list:
+    """GET the daemon's supervised-agent list. Raises SystemExit on failure."""
+    import requests
+
+    try:
+        r = requests.get(
+            f"{inst.base_url}/daemon/v1/agents",
+            headers={"Authorization": f"Bearer {inst.token}"},
+            timeout=10,
+        )
+    except requests.exceptions.RequestException as e:
+        print(f"❌ could not reach the daemon at {inst.base_url}: {e}")
+        sys.exit(1)
+    if r.status_code != 200:
+        print(f"❌ the daemon refused the agents request: {_daemon_http_detail(r)}")
+        sys.exit(1)
+    return r.json().get("agents", [])
+
+
+def _print_daemon_agents(inst, indent: str = "") -> None:
+    # NEVER prints tokens — the list route does not return them and this
+    # renderer only touches the fields below.
+    for entry in _fetch_daemon_agents(inst):
+        agent_id = entry.get("agent_id")
+        state = entry.get("state")
+        if state == "running":
+            line = (
+                f"{indent}{agent_id}: running  mode: {entry.get('mode')}"
+                f"  pid: {entry.get('pid')}  port: {entry.get('port')}"
+                f"  api: v{entry.get('api_version')}"
+            )
+            if entry.get("mode") == "dev" and entry.get("dev_src_dir"):
+                line += f"  src: {entry.get('dev_src_dir')}"
+            print(line)
+        else:
+            print(f"{indent}{agent_id}: stopped")
+
+
+def _handle_daemon_agents():
+    from gaia.daemon import client
+    from gaia.daemon.errors import DaemonError
+
+    try:
+        inst = client.attach()
+    except DaemonError as e:
+        print(f"❌ {e}")
+        sys.exit(1)
+    if inst is None:
+        print("GAIA daemon: not running")
+        print("  Start it with `gaia daemon start` (or `gaia daemon start-agent <id>`).")
+        sys.exit(1)
+    _print_daemon_agents(inst)
+
+
+def _handle_daemon_start_agent(args):
+    import requests
+
+    from gaia.daemon import client
+    from gaia.daemon.errors import DaemonError
+
+    try:
+        inst = client.start_or_attach()
+    except DaemonError as e:
+        print(f"❌ {e}")
+        sys.exit(1)
+    try:
+        # Read generously: a first-run ensure may lazily fetch the binary.
+        r = requests.post(
+            f"{inst.base_url}/daemon/v1/agents/{args.agent_id}/ensure",
+            headers={"Authorization": f"Bearer {inst.token}"},
+            json={"mode": args.mode},
+            timeout=(5.0, 900.0),
+        )
+    except requests.exceptions.RequestException as e:
+        print(f"❌ could not reach the daemon at {inst.base_url}: {e}")
+        sys.exit(1)
+    if r.status_code != 200:
+        print(
+            f"❌ the daemon could not start agent '{args.agent_id}': "
+            f"{_daemon_http_detail(r)}"
+        )
+        sys.exit(1)
+    # The ensure body carries the sidecar bearer token — print ONLY these fields.
+    body = r.json()
+    print(
+        f"✅ agent '{args.agent_id}' sidecar running "
+        f"(mode: {body.get('mode')}, pid: {body.get('pid')}, "
+        f"port: {body.get('port')}, api: v{body.get('api_version')})"
+    )
+
+
+def _handle_daemon_stop_agent(args):
+    import requests
+
+    from gaia.daemon import client
+    from gaia.daemon.errors import DaemonError
+
+    try:
+        inst = client.attach()
+    except DaemonError as e:
+        print(f"❌ {e}")
+        sys.exit(1)
+    if inst is None:
+        # Attach-only by design: never start a daemon just to stop nothing.
+        print("GAIA daemon: not running (no sidecars to stop)")
+        sys.exit(1)
+    try:
+        r = requests.post(
+            f"{inst.base_url}/daemon/v1/agents/{args.agent_id}/stop",
+            headers={"Authorization": f"Bearer {inst.token}"},
+            timeout=30,
+        )
+    except requests.exceptions.RequestException as e:
+        print(f"❌ could not reach the daemon at {inst.base_url}: {e}")
+        sys.exit(1)
+    if r.status_code != 200:
+        print(
+            f"❌ the daemon failed to stop agent '{args.agent_id}': "
+            f"{_daemon_http_detail(r)}"
+        )
+        sys.exit(1)
+    print(f"✅ agent '{args.agent_id}' sidecar stopped (daemon still running)")
 
 
 def _handle_daemon_stop():
