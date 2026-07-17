@@ -22,14 +22,14 @@ icon: mail
 tools_count: 52
 
 language: python
-min_gaia_version: "0.20.0"
+min_gaia_version: "0.22.0"
 models: [Gemma-4-E4B-it-GGUF]
 
 python:
   entry_module: gaia_agent_email
   entry_class: EmailTriageAgent
   dependencies:
-    - "amd-gaia>=0.20.0"
+    - "amd-gaia>=0.22.0"
 
 requirements:
   min_memory_gb: 8
