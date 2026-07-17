@@ -3,8 +3,7 @@
 
 /**
  * Characterization tests for MessageBubble's fenced ``email_pre_scan``
- * code-block path: STRUCTURED_FENCE_RE, promoteStructuredPayloads, and the
- * EmailPreScanCard mount.
+ * code-block path: STRUCTURED_FENCE_RE and the EmailPreScanCard mount.
  *
  * These pin TODAY's behavior as a baseline for issue #2109, which is
  * expected to delete/replace this path with the render-registry system
@@ -52,14 +51,18 @@ describe('MessageBubble fenced email_pre_scan characterization', () => {
         expect(screen.getByText('Server down')).toBeInTheDocument();
     });
 
-    it('renders EmailPreScanCard identically for bare leading JSON (promoteStructuredPayloads)', () => {
-        // No fence markers at all — promoteStructuredPayloads must wrap this
-        // in a fence itself before RenderedContent's STRUCTURED_FENCE_RE runs.
+    it('does not promote bare unfenced JSON to a card (auto-promotion removed, #2109)', () => {
+        // No fence markers at all — this used to be auto-wrapped into a
+        // fence so EmailPreScanCard would mount (#2109 removed that
+        // auto-promotion). The bare JSON now falls through to a plain
+        // ReactMarkdown render instead.
         const content = JSON.stringify(payload);
 
+        // A successful render() call below (no uncaught exception) is itself
+        // part of the proof this does not crash.
         render(<MessageBubble message={{ ...minimalMessage, content }} />);
 
-        expect(screen.getByText('Server down')).toBeInTheDocument();
+        expect(screen.queryByRole('region', { name: 'Inbox pre-scan' })).toBeNull();
     });
 
     it('falls through to a plain code block for an invalid payload, without crashing', () => {

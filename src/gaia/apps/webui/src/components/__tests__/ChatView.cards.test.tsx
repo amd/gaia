@@ -68,6 +68,26 @@ const toolResultWithoutRender = {
     summary: 'ok',
 } as unknown as StreamEvent;
 
+/**
+ * A persisted AgentStep carrying render/data (issue #2109). The backend now
+ * populates these fields on tool_result-type steps whenever a card was
+ * involved, so `getMessages()` returning a message with this step is enough
+ * for `cardsFromSteps(agentSteps)` to derive the card — no in-memory merge
+ * needed.
+ */
+const agentStepWithRenderCard = {
+    id: 1,
+    type: 'tool',
+    label: 'Using tool',
+    tool: 'pre_scan_inbox',
+    result: 'Scanned',
+    success: true,
+    active: false,
+    timestamp: 1234567890,
+    render: 'email_pre_scan',
+    data: preScanPayload,
+};
+
 let capturedCallbacks: api.StreamCallbacks | null = null;
 
 beforeEach(() => {
@@ -171,8 +191,9 @@ describe('ChatView streaming cards (#2108)', () => {
                 capturedCallbacks!.onAgentEvent(toolResultWithRender);
             });
 
-            // The backend's view of getMessages does NOT return a cards field —
-            // the refetch-merge must reattach cards from the pre-refetch message.
+            // #2109: agent_steps now carries render/data — cardsFromSteps
+            // derives the card from this hydrated step, replacing the old
+            // in-memory prevWithCards merge.
             mockedApi.getMessages.mockResolvedValue({
                 messages: [
                     {
@@ -190,8 +211,9 @@ describe('ChatView streaming cards (#2108)', () => {
                         content: 'Here is your inbox summary.',
                         created_at: '2026-07-16T00:00:01.000Z',
                         rag_sources: null,
+                        agent_steps: [agentStepWithRenderCard],
                     },
-                ],
+                ] as any,
                 total: 2,
             });
 
@@ -281,5 +303,32 @@ describe('ChatView streaming cards (#2108)', () => {
         });
 
         expect(useChatStore.getState().cards).toEqual([]);
+    });
+});
+
+describe('ChatView cards hydration from persisted agent_steps, no live streaming (#2109)', () => {
+    it('renders a card from a persisted agent_steps entry on initial session load', async () => {
+        mockedApi.getMessages.mockResolvedValue({
+            messages: [
+                {
+                    id: 20,
+                    session_id: SESSION.id,
+                    role: 'assistant',
+                    content: 'Here is your inbox summary.',
+                    created_at: '2026-07-16T00:00:01.000Z',
+                    rag_sources: null,
+                    agent_steps: [agentStepWithRenderCard],
+                },
+            ] as any,
+            total: 1,
+        });
+
+        render(<ChatView sessionId={SESSION.id} />);
+
+        // No sendMessageStream call and no onAgentEvent/onDone callback fired —
+        // the card must come purely from the initial getMessages() response
+        // (ChatView's loadMessages mapper), never from the streaming path.
+        expect(await screen.findByText('Server down')).toBeInTheDocument();
+        expect(capturedCallbacks).toBeNull();
     });
 });
