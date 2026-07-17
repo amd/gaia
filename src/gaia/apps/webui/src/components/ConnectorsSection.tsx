@@ -430,6 +430,9 @@ function OAuthConfigureBody({
                     </p>
                 </div>
             )}
+            {!showSetupForm && (
+                <OAuthClientEditor connector={connector} onChanged={onChanged} />
+            )}
             {err && (
                 <div className="configure-error">
                     <AlertCircle size={12} /> {err}
@@ -487,6 +490,147 @@ function OAuthConfigureBody({
                     </a>
                 )}
             </div>
+        </div>
+    );
+}
+
+// ── OAuthClientEditor ────────────────────────────────────────────────────────
+
+/**
+ * Collapsible "OAuth client" editor (#2104 interim).
+ *
+ * The first-time setup form only renders while the provider is
+ * unconfigurable; every other state (client from env, stale keyring
+ * credentials, rotating a client, already connected) previously had no
+ * UI at all — a user holding a client ID dead-ended in Settings. This
+ * section is always available for OAuth connectors: it shows which
+ * client the provider resolves (keyring / env / none) and saves a new
+ * client ID + optional secret through the same keyring slot the CLI
+ * `gaia connectors configure` path writes, so precedence (stored → env)
+ * is unchanged. Saving never starts an OAuth flow (``save_only``).
+ */
+function OAuthClientEditor({
+    connector,
+    onChanged,
+}: {
+    connector: ConnectorRow;
+    onChanged: () => void;
+}) {
+    const [open, setOpen] = useState(false);
+    const [values, setValues] = useState<Record<string, string>>({});
+    const [busy, setBusy] = useState(false);
+    const [saved, setSaved] = useState(false);
+    const [err, setErr] = useState<string | null>(null);
+
+    const fields = connector.oauth_setup_fields ?? [];
+    if (fields.length === 0) return null;
+
+    const client = connector.oauth_client;
+    const statusLine =
+        client?.source === 'keyring'
+            ? `Saved client: ${client.client_id}`
+            : client?.source === 'env'
+              ? `From environment: ${client.client_id}`
+              : 'No OAuth client configured';
+
+    const handleSave = async () => {
+        const clientId = values['client_id']?.trim();
+        if (!clientId) {
+            setErr('Client ID is required.');
+            return;
+        }
+        setBusy(true);
+        setErr(null);
+        setSaved(false);
+        try {
+            await api.configureConnector(connector.id, {
+                ...Object.fromEntries(
+                    Object.entries(values).map(([k, v]) => [k, v.trim()]),
+                ),
+                save_only: true,
+            });
+            setSaved(true);
+            setValues({});
+            onChanged();
+            setTimeout(() => setSaved(false), 2200);
+        } catch (e) {
+            setErr(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    return (
+        <div className="oauth-client-editor">
+            <button
+                type="button"
+                className="oauth-client-editor__toggle"
+                onClick={() => setOpen((v) => !v)}
+                aria-expanded={open}
+            >
+                {open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                <span>OAuth client</span>
+                <span className="oauth-client-editor__status">{statusLine}</span>
+            </button>
+            {open && (
+                <div className="oauth-setup-form">
+                    <p className="connector-desc">
+                        Bring your own OAuth client — saved encrypted in your OS
+                        keyring (same store as{' '}
+                        <code>gaia connectors configure</code>) and reused for
+                        future connections. Environment variables are only used
+                        when no saved client exists.
+                    </p>
+                    {fields.map((field) => (
+                        <label key={field.key} className="oauth-setup-field">
+                            <span className="oauth-setup-label">{field.label}</span>
+                            <input
+                                type={field.kind === 'secret' ? 'password' : 'text'}
+                                className="oauth-setup-input"
+                                placeholder={
+                                    field.kind === 'secret' &&
+                                    client?.source === 'keyring' &&
+                                    client.has_secret
+                                        ? '••••••••'
+                                        : field.placeholder
+                                }
+                                value={values[field.key] ?? ''}
+                                onChange={(e) =>
+                                    setValues((prev) => ({
+                                        ...prev,
+                                        [field.key]: e.target.value,
+                                    }))
+                                }
+                                autoComplete="off"
+                                spellCheck={false}
+                            />
+                            {field.help_md && (
+                                <span className="oauth-setup-help">{field.help_md}</span>
+                            )}
+                        </label>
+                    ))}
+                    {err && (
+                        <div className="configure-error">
+                            <AlertCircle size={12} /> {err}
+                        </div>
+                    )}
+                    <div className="configure-actions">
+                        <button
+                            className={`btn-model-save${saved ? ' saved' : ''}`}
+                            disabled={busy || !values['client_id']?.trim()}
+                            onClick={() => void handleSave()}
+                        >
+                            {busy ? (
+                                <Loader2 size={12} className="spin" />
+                            ) : saved ? (
+                                <><CheckCircle2 size={12} /> Saved</>
+                            ) : (
+                                'Save client'
+                            )}
+                        </button>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

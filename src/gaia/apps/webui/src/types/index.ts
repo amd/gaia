@@ -287,6 +287,19 @@ export interface ConnectorRow {
      * provider credentials.
      */
     oauth_setup_fields: ConnectorConfigField[];
+    /**
+     * Which OAuth *client* (app credentials) the provider resolves (#2104).
+     * ``source`` is ``'keyring'`` for credentials saved via Settings /
+     * `gaia connectors configure`, ``'env'`` for GAIA_*_CLIENT_ID, or
+     * ``null`` when no client is configured. The client secret value is
+     * never included — only whether one is stored. ``null``/absent for
+     * ``mcp_server`` connectors.
+     */
+    oauth_client?: {
+        source: 'keyring' | 'env' | null;
+        client_id: string | null;
+        has_secret: boolean;
+    } | null;
 }
 
 /**

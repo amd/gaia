@@ -115,14 +115,18 @@ class OAuthPkceHandler:
         """
         Persist OAuth-client credentials (if supplied), then start a PKCE flow.
 
-        Three call shapes:
+        Four call shapes:
           1. ``{client_id, client_secret}`` — first-run path from the
              AgentUI "Save & Connect" form. We persist the app
              credentials in the keyring, evict the cached provider
              instance, then start a fresh PKCE flow.
-          2. ``{flow_id, code}`` — completion path for callers that
+          2. ``{client_id, client_secret, save_only: true}`` — persist
+             the OAuth client credentials WITHOUT starting a flow
+             (#2104). Same persistence as ``gaia connectors configure``;
+             the user connects separately.
+          3. ``{flow_id, code}`` — completion path for callers that
              drove the browser step themselves.
-          3. ``{}`` (or just ``scopes``) — start a new PKCE flow using
+          4. ``{}`` (or just ``scopes``) — start a new PKCE flow using
              whatever provider credentials are already on disk
              (keyring / env vars).
 
@@ -147,6 +151,16 @@ class OAuthPkceHandler:
                 client_secret=client_secret,
             )
             _provider_registry.pop(provider_id, None)
+
+        if config.get("save_only"):
+            if not client_id:
+                raise ConfigurationError(
+                    f"configure({spec.id!r}): save_only requires a non-empty "
+                    "client_id. Enter the OAuth client ID from your provider "
+                    "console, or use `gaia connectors configure "
+                    f"{provider_id}`."
+                )
+            return {"status": "saved", "connector_id": spec.id}
 
         scopes = config.get("scopes") or list(spec.default_scopes)
 

@@ -55,6 +55,14 @@ You do **not** need to create a client secret for the standard flow.
    Secret** field blank.
 5. Click **Save & Connect**.
 
+Already past first-time setup (client came from env vars, or you need to
+rotate it)? Expand the tile's collapsible **OAuth client** section — it
+shows which client GAIA currently resolves (saved / environment / none)
+and accepts a replacement at any time. **Save client** persists to the OS
+keyring without starting a sign-in; saved credentials take precedence over
+`GAIA_MICROSOFT_CLIENT_ID`, exactly like
+`gaia connectors configure microsoft`.
+
 GAIA will:
 
 1. Store the Client ID in your OS keyring (macOS Keychain on Mac,

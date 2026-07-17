@@ -151,6 +151,14 @@ This is the credential GAIA uses.
 4. Paste the **Client ID** and **Client Secret** from Step 4.
 5. Click **Save & Connect**.
 
+Already past first-time setup (client came from env vars, or you need to
+rotate it)? Expand the tile's collapsible **OAuth client** section — it
+shows which client GAIA currently resolves (saved / environment / none)
+and accepts a replacement Client ID + Secret at any time. **Save client**
+persists to the OS keyring without starting a sign-in; saved credentials
+take precedence over `GAIA_GOOGLE_CLIENT_ID` / `GAIA_GOOGLE_CLIENT_SECRET`,
+exactly like `gaia connectors configure google`.
+
 GAIA will:
 
 1. Store the credentials in your OS keyring (macOS Keychain on Mac,
