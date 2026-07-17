@@ -72,6 +72,10 @@ class ModeConflictError(SidecarError):
     """The sidecar is running in a different mode than the ensure requested."""
 
 
+class SidecarNotRunningError(SidecarError):
+    """The agent is registered but has no running sidecar to talk to."""
+
+
 class CapacityError(SidecarError):
     """Starting another sidecar would exceed the live-sidecar cap."""
 
