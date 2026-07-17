@@ -2,24 +2,20 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Contract tests for the planned `needs_confirmation` AgentStep type (issue
- * #2109, increment 4). `AgentStep` does not yet have a `'needs_confirmation'`
- * member in its `type` union, and AgentActivity does not yet auto-expand or
- * render such a step — these tests are written against the target contract
- * and are expected to fail (red) until that implementation lands:
+ * Contract tests for the `needs_confirmation` AgentStep type (issue #2109,
+ * increment 4): a sidecar agent action awaiting confirmation.
  *
  *   - A step with `type: 'needs_confirmation'` auto-expands the panel
  *     (mirroring the existing `hasPolicyAlerts` auto-expand), without any
- *     click, via a new `hasNeedsConfirmation` check OR'd into the same
+ *     click, via `hasNeedsConfirmation` OR'd into the same
  *     `useEffect`/`expanded` state.
  *   - It renders inline via a `FlowNeedsConfirmation` block reusing
  *     `FlowPolicyAlert`'s CSS classes: a "Confirmation needed" header, an
  *     "Action" line showing `step.action`, and a body/reason line showing
  *     `step.summary` (falling back to `step.detail`).
- *   - Ordinary step types (no `policy_alert` / `needs_confirmation`) must
- *     continue to stay collapsed by default — this guards that the new
- *     auto-expand doesn't fire unconditionally, and should already pass
- *     against today's unmodified AgentActivity.
+ *   - Ordinary step types (no `policy_alert` / `needs_confirmation`) stay
+ *     collapsed by default — guards that auto-expand doesn't fire
+ *     unconditionally.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -27,10 +23,7 @@ import { render, screen } from '@testing-library/react';
 import { AgentActivity } from '../AgentActivity';
 import type { AgentStep } from '../../types';
 
-// Cast via `unknown` — `type`/`action`/`summary` aren't valid AgentStep
-// members yet; that's exactly the contract this file pins ahead of the
-// implementation (see docstring above).
-const needsConfirmationStep = {
+const needsConfirmationStep: AgentStep = {
     id: 1,
     type: 'needs_confirmation',
     label: 'Needs confirmation',
@@ -38,7 +31,7 @@ const needsConfirmationStep = {
     summary: 'Archive 12 low-priority messages older than 30 days.',
     detail: 'fallback detail text (must not be used — summary is set)',
     timestamp: 1234567890,
-} as unknown as AgentStep;
+};
 
 const ordinaryToolStep: AgentStep = {
     id: 1,
