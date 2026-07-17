@@ -427,6 +427,10 @@ contract yet.
 
 Your Google connection predates the email agent and lacks `gmail.modify`. Open Settings → Connections → Google → Reconnect to grant the missing scopes.
 
+### "NOT_CONNECTED: microsoft is not currently connected"
+
+You asked about a specific provider's mailbox (e.g. *"check my Outlook inbox"*) that isn't connected. The agent refuses rather than silently answering from a different mailbox. Connect that provider in Settings → Connections, or rephrase without naming a provider to scan every connected mailbox.
+
 ### "Gmail API returned 401"
 
 The access token has expired or scopes were revoked. Reconnect Google in Settings → Connections.
