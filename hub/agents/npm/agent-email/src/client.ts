@@ -236,8 +236,10 @@ export class EmailClient {
 
   /**
    * View calendar events on the primary calendar (GET /v1/email/calendar/events).
-   * Read-only. `timeMin`/`timeMax` are optional RFC 3339 bounds; `provider`
-   * (google|microsoft) is required only when more than one account is connected.
+   * Read-only. `timeMin`/`timeMax` are optional RFC 3339 bounds — omitting
+   * both makes the agent default to a forward window (now → +30 days);
+   * `provider` (google|microsoft) is required only when more than one
+   * account is connected.
    */
   async listCalendarEvents(opts?: {
     timeMin?: string;

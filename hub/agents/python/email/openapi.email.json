@@ -2714,7 +2714,7 @@
     },
     "/v1/email/calendar/events": {
       "get": {
-        "description": "View calendar events on the primary calendar (read-only).\n\n``time_min`` / ``time_max`` are optional RFC 3339 bounds. ``provider``\n(google|microsoft) is required only when more than one account is connected;\nwith exactly one, it is inferred. Reaches whichever calendar the user\nconnected. Fails loudly (403 + reconnect CTA) if the calendar scope is missing.",
+        "description": "View calendar events on the primary calendar (read-only).\n\n``time_min`` / ``time_max`` are optional RFC 3339 bounds; when both are\nomitted the listing defaults to a forward window (now → +30 days), so\nrecurring series don't surface their oldest instances. ``provider``\n(google|microsoft) is required only when more than one account is connected;\nwith exactly one, it is inferred. Reaches whichever calendar the user\nconnected. Fails loudly (403 + reconnect CTA) if the calendar scope is missing.",
         "operationId": "list_calendar_events_v1_email_calendar_events_get",
         "parameters": [
           {

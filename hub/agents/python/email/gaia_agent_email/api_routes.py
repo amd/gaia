@@ -2930,7 +2930,9 @@ async def list_calendar_events(
 ) -> CalendarEventsResponse:
     """View calendar events on the primary calendar (read-only).
 
-    ``time_min`` / ``time_max`` are optional RFC 3339 bounds. ``provider``
+    ``time_min`` / ``time_max`` are optional RFC 3339 bounds; when both are
+    omitted the listing defaults to a forward window (now → +30 days), so
+    recurring series don't surface their oldest instances. ``provider``
     (google|microsoft) is required only when more than one account is connected;
     with exactly one, it is inferred. Reaches whichever calendar the user
     connected. Fails loudly (403 + reconnect CTA) if the calendar scope is missing.

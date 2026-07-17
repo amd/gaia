@@ -673,7 +673,8 @@ def render_endpoint_spec_html() -> str:
         method="GET",
         description=(
             "View events on the primary calendar (read-only). Optional RFC 3339 "
-            "query params time_min / time_max bound the window; provider "
+            "query params time_min / time_max bound the window — omitting both "
+            "defaults to a forward window (now → +30 days); provider "
             "(google|microsoft) is required only when more than one account is "
             "connected. Fails loudly (403 + reconnect CTA) if the calendar scope "
             "is missing."
