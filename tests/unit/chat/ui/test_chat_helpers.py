@@ -18,9 +18,11 @@ import pytest
 from fastapi import HTTPException
 
 from gaia.ui._chat_helpers import (
+    _EMPTY_ANSWER_LEMONADE_MSG,
     _build_history_pairs,
     _canonical_agent_type,
     _compute_allowed_paths,
+    _empty_answer_outcome,
     _find_last_tool_step,
     _resolve_rag_paths,
     set_agent_registry,
@@ -330,6 +332,53 @@ class TestFindLastToolStep:
         ]
         result = _find_last_tool_step(steps)
         assert result["label"] == "has_type"
+
+
+# ── _empty_answer_outcome ────────────────────────────────────────────────
+
+
+class TestEmptyAnswerOutcome:
+    """Tests for ``_empty_answer_outcome`` — how the persistence tail handles a
+    chat turn that produced no answer text (issue #2137)."""
+
+    def test_cancel_persists_marker_and_keeps_steps(self):
+        """A user Stop is persisted as a 'Cancelled.' marker, not a Lemonade
+        error, and keeps the steps taken before the cancel."""
+        content, sse_type, keep_steps = _empty_answer_outcome(
+            turn_cancelled=True, has_steps=True
+        )
+        assert content == "Cancelled."
+        assert sse_type == "done"
+        assert keep_steps is True
+
+    def test_cancel_without_steps_still_marks_cancelled(self):
+        content, sse_type, keep_steps = _empty_answer_outcome(
+            turn_cancelled=True, has_steps=False
+        )
+        assert content == "Cancelled."
+        assert sse_type == "done"
+        assert keep_steps is True
+
+    def test_empty_answer_with_steps_persists_empty_and_keeps_cards(self):
+        """A legitimately-empty final (e.g. an echoed render card stripped to
+        empty) persists empty content but keeps the steps/cards."""
+        content, sse_type, keep_steps = _empty_answer_outcome(
+            turn_cancelled=False, has_steps=True
+        )
+        assert content == ""
+        assert sse_type == "done"
+        assert keep_steps is True
+
+    def test_no_answer_no_cancel_no_steps_uses_lemonade_copy(self):
+        """The Lemonade remediation copy appears ONLY when there is no answer,
+        no cancel, and no steps/cards."""
+        content, sse_type, keep_steps = _empty_answer_outcome(
+            turn_cancelled=False, has_steps=False
+        )
+        assert content == _EMPTY_ANSWER_LEMONADE_MSG
+        assert "Lemonade Server is running" in content
+        assert sse_type == "error"
+        assert keep_steps is False
 
 
 # ── _canonical_agent_type ─────────────────────────────────────────────────
