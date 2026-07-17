@@ -2597,10 +2597,10 @@ Do NOT wrap conversational replies in JSON.
     ) -> Optional["Goal"]:
         """Submit a proactive proposal for user approval.
 
-        Delegates to ``GoalStore.propose()``. Low-risk actions are
-        auto-approved; medium/high/critical actions go into
-        ``pending_approval`` and must be explicitly accepted before
-        execution. DB errors propagate from ``GoalStore.propose()``.
+        Delegates to ``GoalStore.propose()``. Every proposal goes into
+        ``pending_approval`` and must be explicitly accepted by the user
+        before execution, regardless of its risk tier. DB errors propagate
+        from ``GoalStore.propose()``.
         """
         from gaia.agents.base.goal_store import GoalStore
 

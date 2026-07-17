@@ -7,7 +7,7 @@ Tests cover:
   - Default on_first_run / on_heartbeat return empty lists
   - propose() stores a proposal in GoalStore
   - Regression: plain process_query does NOT trigger proactive hooks
-  - Low-risk proposals auto-approve; others need approval
+  - Every proposal awaits explicit user approval, regardless of risk tier
 
 All tests use temp-file GoalStore — no real ~/.gaia directory touched.
 """
@@ -294,18 +294,18 @@ class TestExampleAgentEndToEnd:
                 first = [agent.propose(p) for p in agent.on_first_run(None)]
                 beat = [agent.propose(p) for p in agent.on_heartbeat(None)]
 
-            # Low-risk first-run proposal auto-approves and queues.
+            # Low-risk first-run proposal still waits for the user (spec §6.3).
             assert len(first) == 1
-            assert first[0].status == "queued"
-            assert first[0].approved_for_auto is True
+            assert first[0].status == "pending_approval"
+            assert first[0].approved_for_auto is False
 
             # High-risk heartbeat proposal waits for the user.
             assert len(beat) == 1
             assert beat[0].status == "pending_approval"
             assert beat[0].approved_for_auto is False
 
-            # Both are actually persisted; only the high-risk one is pending.
+            # Both are persisted and both are pending approval.
             pending = store.get_pending_approval()
-            assert [g.id for g in pending] == [beat[0].id]
+            assert {g.id for g in pending} == {first[0].id, beat[0].id}
         finally:
             store.close()

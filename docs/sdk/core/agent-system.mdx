@@ -886,11 +886,12 @@ methods for this (issue #1484):
 All three are **no-ops by default** — a plain agent never acts on its own, and
 `process_query()` never triggers them. You opt in by overriding the hooks.
 
-Proposals carry a **risk tier** that decides how they're handled:
-
-- `risk="low"` → **auto-approved** and queued for the agent loop.
-- `risk="medium" | "high" | "critical"` → parked in `pending_approval`; the user
-  must explicitly accept before anything runs.
+**Every proposal requires explicit user approval before anything runs.**
+`propose()` parks the proposal in `pending_approval`; nothing executes until the
+user accepts it. Proposals also carry a **risk tier** (`low` / `medium` / `high`
+/ `critical`) — it's stored as signal to help the approving user prioritize, but
+it never gates execution: even `risk="low"` proposals wait for approval, per the
+[autonomous agent spec](https://github.com/amd/gaia/blob/main/docs/spec/autonomous-agent-mode.md).
 
 ### Example: a proactive workspace agent
 
@@ -913,7 +914,7 @@ class WorkspaceAgent(Agent):
         pass
 
     def on_first_run(self, context: Optional[Dict[str, Any]]) -> List[Proposal]:
-        # Reading a directory is safe -> low risk, auto-approved.
+        # Reading a directory is safe -> low risk, but still needs approval.
         return [
             Proposal(
                 action="index_workspace",
@@ -938,8 +939,8 @@ class WorkspaceAgent(Agent):
 agent = WorkspaceAgent(silent_mode=True, skip_lemonade=True)
 
 for proposal in agent.on_first_run(context=None):
-    goal = agent.propose(proposal)          # low risk -> queued, approved
-    print(goal.status)                       # "queued"
+    goal = agent.propose(proposal)          # low risk -> still awaits the user
+    print(goal.status)                       # "pending_approval"
 
 for proposal in agent.on_heartbeat(context=None):
     goal = agent.propose(proposal)          # high risk -> awaits the user

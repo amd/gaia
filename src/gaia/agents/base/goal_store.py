@@ -532,26 +532,24 @@ class GoalStore:
     def propose(
         self,
         proposal: "Proposal",
-        proposer: str = "agent",  # pylint: disable=unused-argument
+        proposer: str = "agent",
         source: GoalSource = "agent_inferred",
         priority: Priority = "medium",
     ) -> Optional[Goal]:
         """Submit a proactive proposal to GoalStore as pending approval.
 
-        Low-risk actions (risk=\"low\") are auto-approved and queued.
-        Medium/high/critical actions start as ``pending_approval``.
+        Every proposal lands in ``pending_approval`` and must be explicitly
+        approved by the user before execution, regardless of risk tier
+        (docs/spec/autonomous-agent-mode.md §6.3/§6.5). ``risk`` is stored as
+        signal for the approving user but never gates execution.
         Returns the created Goal; DB errors propagate as ``sqlite3.Error``.
         """
         now = _now_iso()
         goal_id = str(uuid4())
 
-        # Low-risk proposals auto-approve per the spec's trust tier
-        if proposal.risk == "low":
-            status = "queued"
-            approved = True
-        else:
-            status = "pending_approval"
-            approved = False
+        # Spec §6.3: agent_inferred → pending_approval is the only entry path.
+        status = "pending_approval"
+        approved = False
 
         description = f"[{source}] {proposal.rationale}"
         source_label = source
@@ -572,7 +570,7 @@ class GoalStore:
                     "goal_driven",
                     int(approved),
                     priority,
-                    json.dumps(proposal.to_dict()),
+                    json.dumps({**proposal.to_dict(), "proposer": proposer}),
                     now,
                     now,
                 ),

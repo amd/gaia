@@ -395,7 +395,8 @@ class TestThreadSafety:
 
 class TestPropose:
 
-    def test_propose_low_risk_auto_approves(self, store):
+    def test_propose_low_risk_requires_approval(self, store):
+        """Low risk is signal, not a gate — spec §6.3: no auto-approve path."""
         from gaia.agents.base.goal_store import Proposal
 
         p = Proposal(
@@ -403,8 +404,8 @@ class TestPropose:
         )
         goal = store.propose(p)
         assert goal is not None
-        assert goal.status == "queued"
-        assert goal.approved_for_auto is True
+        assert goal.status == "pending_approval"
+        assert goal.approved_for_auto is False
         assert goal.source == "agent_inferred"
 
     def test_propose_medium_risk_pending_approval(self, store):
@@ -443,4 +444,23 @@ class TestPropose:
         store.propose(Proposal(action="a2", rationale="medium", risk="medium"))
         store.propose(Proposal(action="a3", rationale="high", risk="high"))
         pending = store.get_pending_approval()
-        assert len(pending) == 2  # low-risk auto-approved, not pending
+        assert len(pending) == 3  # every risk tier awaits approval
+
+    def test_propose_persists_proposer_and_risk(self, store):
+        import json
+
+        from gaia.agents.base.goal_store import Proposal
+
+        p = Proposal(action="scan_inbox", rationale="triage", risk="low")
+        goal = store.propose(p, proposer="email-agent")
+        meta = json.loads(goal.progress_notes)
+        assert meta["proposer"] == "email-agent"
+        assert meta["risk"] == "low"
+
+    def test_propose_default_proposer_is_agent(self, store):
+        import json
+
+        from gaia.agents.base.goal_store import Proposal
+
+        goal = store.propose(Proposal(action="a", rationale="r"))
+        assert json.loads(goal.progress_notes)["proposer"] == "agent"
