@@ -30,6 +30,7 @@ setup(
         "gaia.chat",
         "gaia.schedule",
         "gaia.daemon",
+        "gaia.daemon.sidecars",
         "gaia.ui",
         "gaia.ui.routers",
         "gaia.ui.email_sidecar",

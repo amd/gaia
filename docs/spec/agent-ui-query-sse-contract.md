@@ -225,12 +225,13 @@ valid on the wire; a receiver applies the §7 unknown-type rule to anything else
 
 ### 4.2 `render` replaces the in-process fence-injection hack
 
-Today `MessageBubble.tsx` renders structured cards by *fence-parsing* the
-assistant text (`STRUCTURED_PAYLOAD_LANGS`), fed by the
+Before the #2109 cutover, `MessageBubble.tsx` rendered structured cards by
+*fence-parsing* the assistant text (`STRUCTURED_PAYLOAD_LANGS`), fed by the
 `_capture_render_payload` / `_drain_render_payloads` hack in `sse_handler.py`
-(HACK, issue #1000). In v2 the sidecar declares the card type explicitly via
-`tool_result.render`, so the host needs no per-tool knowledge and the fence
-injection is deleted. Each `render` type still needs a frontend component; per
+(HACK, issue #1000). Both are now deleted: the sidecar declares the card type
+explicitly via `tool_result.render`, so the host needs no per-tool knowledge
+(pre-cutover session history containing fenced payloads degrades to a plain
+JSON code block). Each `render` type still needs a frontend component; per
 §0.15 a **custom `render` type is first-party / AMD-verified only in v1**, and an
 unknown `render` degrades to the generic result card (see §7).
 

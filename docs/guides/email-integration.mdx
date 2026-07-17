@@ -199,8 +199,12 @@ How this maps to the entry points above:
   construct yourself must pass `authToken` (from `sidecar.authToken`); forward it to
   a browser/Electron renderer over your own IPC — never embed it in a page.
 - **GAIA backend (REST)** — the Agent UI backend proxies `/v1/email/*` to a sidecar
-  it spawns and authenticates for you, so your calls to `127.0.0.1:4200` need **no**
-  bearer token; the token is internal to the backend→sidecar hop.
+  supervised by the GAIA daemon (`gaia daemon`), which spawns it and mints its
+  token; the backend acquires and replays the token for you, so your calls to
+  `127.0.0.1:4200` need **no** bearer token — it is internal to the
+  backend→sidecar hop. Because the daemon owns the sidecar, it keeps running
+  after the backend exits; stop it with `gaia daemon stop-agent email` or
+  `gaia daemon stop`.
 - **Direct-to-sidecar for local dev** — if you launch the frozen binary yourself,
   set `GAIA_EMAIL_SIDECAR_TOKEN` and send the matching bearer header. Running it
   **without** the env var disables the token check (local development only, logged

@@ -158,6 +158,49 @@ def test_falsy_gate_returns_0_and_writes_report(monkeypatch, gate):
     assert fake_summarize.called
 
 
+def test_zero_briefings_generated_returns_1_no_report_no_judge(monkeypatch):
+    """A total generation outage (0 briefings produced) fails loudly BEFORE
+    judging and never emits a report — regardless of the manifest's enforce
+    flag. This is the fast/green zero-case signature #2121 flagged."""
+    _set_model_env(monkeypatch)
+    # Report-mode gate (should_fail False): the guard must fire independent of it.
+    summary = _summary(_gate(False))
+    (
+        fake_generate,
+        fake_judge_briefings,
+        fake_make_judge,
+        fake_load_corpus,
+        fake_summarize,
+    ) = _install_fakes(monkeypatch, summary)
+    # No briefing produced for any case.
+    fake_generate.return_value = [{"briefing": None}, {"briefing": ""}]
+
+    assert mod.main() == 1
+
+    assert fake_generate.called
+    assert not fake_judge_briefings.called
+    assert not fake_summarize.called
+    assert not _report_path().exists()
+
+
+def test_skipped_gate_in_report_mode_blocks_and_writes_no_report(monkeypatch):
+    """No case judged (gate skipped) must fail loudly and emit NO report EVEN
+    under a report-mode manifest (should_fail False) — the eval could not prove
+    anything, so it is not a tolerable report-mode breach (#2121)."""
+    _set_model_env(monkeypatch)
+    gate = {
+        "skipped": True,
+        "reason": "no case carried a judge verdict",
+        "enforce": False,
+        "should_fail": False,
+    }
+    summary = _summary(gate)
+    _install_fakes(monkeypatch, summary)
+
+    assert mod.main() == 1
+    assert not _report_path().exists()
+
+
 def test_skipped_gate_variant_blocks_the_build(monkeypatch):
     _set_model_env(monkeypatch)
     # shape from src/gaia/eval/briefing_quality.py:434-442 — briefing is the

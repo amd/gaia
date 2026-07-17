@@ -78,6 +78,22 @@ def main() -> int:
     produced = sum(1 for g in generations if g["briefing"])
     print(f"[BRIEF-EVAL] generated {produced}/{len(generations)} briefings")
 
+    if produced == 0:
+        # A total generation outage is NOT a tolerable report-mode breach: with
+        # nothing generated there is nothing to judge, so the eval cannot prove
+        # the briefing is any good. Fail loudly regardless of the manifest's
+        # enforce flag — same contract as the missing-judge-credential path
+        # above (module docstring: no report-mode fallback, no silent skip).
+        print(
+            f"[BRIEF-EVAL] ERROR: 0/{len(generations)} briefings were generated "
+            f"from {CORPUS_PATH} — nothing to judge. The generation path produced "
+            "no envelope for any case (check the corpus loads and the email agent "
+            "is installed). Failing the build; a zero-case run must never pass as "
+            "a report.",
+            file=sys.stderr,
+        )
+        return 1
+
     results = judge_briefings(
         load_briefing_corpus(CORPUS_PATH),
         generations,
@@ -111,6 +127,19 @@ def main() -> int:
         f"skipped={gate.get('skipped', False)}"
     )
     print("===============================================================\n")
+
+    if gate.get("skipped"):
+        # No case carried a judge verdict even though briefings were generated
+        # (e.g. every judge reply was unparseable). Like a total outage, the
+        # eval could not prove anything — fail loudly regardless of enforce and
+        # do NOT emit a report the scorecard would treat as a real judged run.
+        print(
+            "[BRIEF-EVAL] ERROR: no case was judged — "
+            f"{gate.get('reason', 'the briefing-quality gate could not be evaluated')}."
+            " Failing the build regardless of report mode (no silent skip).",
+            file=sys.stderr,
+        )
+        return 1
 
     (out / "briefing_gate_report.json").write_text(
         json.dumps(

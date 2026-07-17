@@ -119,6 +119,15 @@ jobs:
           echo ""
           pytest tests/integration/test_database_agent.py -v --tb=short
 
+      - name: Run daemon integration tests
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          echo "=== Running Daemon Integration Tests ==="
+          echo "Real python -m gaia.daemon lifecycle + sidecar supervision (#2142)"
+          echo ""
+          pytest tests/integration/test_daemon.py tests/integration/test_daemon_sidecars.py -v --tb=short
+
       - name: Unit test summary
         if: always()
         run: |

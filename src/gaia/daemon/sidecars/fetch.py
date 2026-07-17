@@ -13,6 +13,11 @@ Two verified sources, checked in order; there is NO 'use it anyway' path:
    on POSIX.
 
 A tampered/truncated binary is rejected before it can ever be spawned.
+
+Relocated from ``gaia.ui.email_sidecar.fetch`` (issue #2142, T1). Generalization
+capped to relocation: ``default_cache_dir`` now takes the agent's cache dir
+name (from its spec) instead of hardcoding "email" — everything else is
+unchanged.
 """
 
 from __future__ import annotations
@@ -24,9 +29,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from gaia.daemon.sidecars import platform as plat
+from gaia.daemon.sidecars.errors import IntegrityError, PlatformError
 from gaia.logger import get_logger
-from gaia.ui.email_sidecar import platform as plat
-from gaia.ui.email_sidecar.errors import IntegrityError, PlatformError
 
 logger = get_logger(__name__)
 
@@ -56,8 +61,8 @@ def verify_sha256(data: bytes, expected: str, source_label: str) -> str:
     return actual
 
 
-def default_cache_dir() -> Path:
-    return Path.home() / ".gaia" / "agents" / "email"
+def default_cache_dir(agent_dir_name: str = "email") -> Path:
+    return Path.home() / ".gaia" / "agents" / agent_dir_name
 
 
 @dataclass(frozen=True)
@@ -100,14 +105,14 @@ def _hub_installed_binary(cache: Path, platform_key: str) -> Optional[FetchResul
         return None
     if actual.lower() != sentinel.artifact_sha256.lower():
         raise IntegrityError(
-            f"hub-installed email agent binary at {binary_path} does not match the "
+            f"hub-installed agent binary at {binary_path} does not match the "
             f"SHA-256 its install sentinel recorded:\n"
             f"  expected {sentinel.artifact_sha256}\n  actual   {actual}\n"
-            "The install is corrupt or was tampered with — reinstall the email "
-            "agent from the Agent Hub."
+            "The install is corrupt or was tampered with — reinstall the agent "
+            "from the Agent Hub."
         )
     logger.info(
-        "email sidecar: using hub-installed verified binary %s (v%s)",
+        "sidecar fetch: using hub-installed verified binary %s (v%s)",
         binary_path,
         sentinel.version,
     )
@@ -123,8 +128,9 @@ def fetch_binary(
     force: bool = False,
     timeout: float = 120.0,
     session=None,
+    agent_dir_name: str = "email",
 ) -> FetchResult:
-    """Fetch + verify + cache the email-agent binary for the current platform.
+    """Fetch + verify + cache a sidecar agent's binary for the current platform.
 
     A Hub-installed, sentinel-verified binary short-circuits BEFORE the lock is
     consulted (#2095) — unless ``force`` explicitly asks for a lock re-fetch.
@@ -135,7 +141,7 @@ def fetch_binary(
         RuntimeError: download/network failure (HTTP status surfaced).
     """
     key = platform_key or plat.current_platform_key()
-    cache = Path(out_dir) if out_dir is not None else default_cache_dir()
+    cache = Path(out_dir) if out_dir is not None else default_cache_dir(agent_dir_name)
 
     if not force:
         installed = _hub_installed_binary(cache, key)
@@ -166,14 +172,14 @@ def fetch_binary(
     if not force:
         existing = file_sha256(binary_path)
         if existing and existing.lower() == entry.sha256.lower():
-            logger.info("email sidecar: cache hit %s matches lock sha256", binary_path)
+            logger.info("sidecar fetch: cache hit %s matches lock sha256", binary_path)
             return FetchResult(binary_path, key, existing, url, cached=True)
 
     if session is None:
         import requests
 
         session = requests.Session()
-    logger.info("email sidecar: downloading %s binary from %s", key, url)
+    logger.info("sidecar fetch: downloading %s binary from %s", key, url)
     resp = session.get(
         url, timeout=timeout, headers={"accept": "application/octet-stream"}
     )
@@ -199,5 +205,5 @@ def fetch_binary(
         binary_path.chmod(
             binary_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
         )
-    logger.info("email sidecar: installed verified binary -> %s", binary_path)
+    logger.info("sidecar fetch: installed verified binary -> %s", binary_path)
     return FetchResult(binary_path, key, sha, url, cached=False)
