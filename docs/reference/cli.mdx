@@ -1908,6 +1908,8 @@ Manage agent memory: run day-zero onboarding and view memory statistics.
     gaia memory bootstrap --chat-only
     ```
 
+    The questions adapt to your answers (a student is asked about coursework, an engineer about their deployment workflow), and everything they produce is shown for approval (`[Y/n/q]`) before it is stored. `--chat-only` needs no LLM and no Lemonade Server -- it writes plain rows, which are embedded the next time an agent starts.
+
     Re-run system discovery:
     ```bash
     gaia memory bootstrap --discover
