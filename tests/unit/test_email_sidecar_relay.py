@@ -569,6 +569,86 @@ class TestStreamFailureHandling:
         relay.relay_query(handler, proxy, query="q", context=[])
 
 
+# --- Orphaned-generation cleanup (#2158) -------------------------------------
+
+
+class TestOrphanCancelOnCrash:
+    """A run that ends without a terminal sidecar event (read-timeout, dropped
+    connection, exhausted stream) leaves the sidecar's ``/v1/email/query``
+    generation decoding on the single GPU slot unless the relay cancels it —
+    #2158's multi-query death-spiral."""
+
+    def test_stream_raise_without_terminal_event_calls_cancel_query(self):
+        handler = _FakeHandler()
+
+        def _source():
+            yield {"type": "status", "message": "hi"}
+            raise RuntimeError("read timed out")
+
+        proxy = _ScriptedProxy(_source)
+        relay.relay_query(handler, proxy, query="q", context=[], run_id="rid-t1")
+        assert proxy.cancel_calls == ["rid-t1"]
+
+    def test_stream_raise_with_zero_events_calls_cancel_query(self):
+        handler = _FakeHandler()
+        proxy = _ScriptedProxy(
+            lambda: _RaisingIterator(RuntimeError("connection reset"))
+        )
+        relay.relay_query(handler, proxy, query="q", context=[], run_id="rid-t2")
+        assert proxy.cancel_calls == ["rid-t2"]
+
+    def test_stream_exhausted_without_terminal_event_calls_cancel_query(self):
+        handler = _FakeHandler()
+
+        def _source():
+            yield {"type": "status", "message": "hi"}
+            # Generator ends -- no final/error was ever yielded.
+
+        proxy = _ScriptedProxy(_source)
+        relay.relay_query(handler, proxy, query="q", context=[], run_id="rid-t3")
+        assert proxy.cancel_calls == ["rid-t3"]
+
+    def test_terminal_final_does_not_call_cancel_query(self):
+        handler = _FakeHandler()
+        proxy = _ScriptedProxy(_events({"type": "final", "answer": "done"}))
+        relay.relay_query(handler, proxy, query="q", context=[], run_id="rid-t4")
+        assert proxy.cancel_calls == []
+
+    def test_terminal_error_does_not_call_cancel_query(self):
+        handler = _FakeHandler()
+        proxy = _ScriptedProxy(
+            _events({"type": "error", "detail": "Lemonade down", "status": 500})
+        )
+        relay.relay_query(handler, proxy, query="q", context=[], run_id="rid-t5")
+        assert proxy.cancel_calls == []
+
+    def test_user_cancel_still_calls_cancel_query_exactly_once(self):
+        handler = _FakeHandler()
+
+        def _source():
+            yield {"type": "tool_call", "tool": "pre_scan_inbox", "args": {}}
+            handler.cancelled.set()
+
+        proxy = _ScriptedProxy(_source)
+        relay.relay_query(handler, proxy, query="q", context=[], run_id="rid-t6")
+        assert proxy.cancel_calls == ["rid-t6"]
+
+    def test_crash_path_swallows_cancel_query_error_and_still_emits(self):
+        handler = _FakeHandler()
+
+        def _source():
+            yield {"type": "status", "message": "hi"}
+            raise RuntimeError("read timed out")
+
+        proxy = _ScriptedProxy(_source, cancel_raises=SidecarError("cancel failed"))
+        # Must not raise even though proxy.cancel_query raises SidecarError.
+        relay.relay_query(handler, proxy, query="q", context=[], run_id="rid-t7")
+        assert proxy.cancel_calls == ["rid-t7"]
+        agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
+        assert len(agent_errors) == 1
+        assert agent_errors[0]["content"] == relay.STREAM_ENDED_UNEXPECTEDLY
+
+
 # --- Cancellation mid-stream -------------------------------------------------
 
 
