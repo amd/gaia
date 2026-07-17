@@ -280,6 +280,10 @@ class UpdateSessionRequest(BaseModel):
     """Request to update a session."""
 
     title: Optional[str] = None
+    # Pin state for the title (#2165). Omitted + title set → the server pins
+    # (a rename is explicit). The webui's client-side auto-title sends False
+    # so the server-side LLM titler can still improve the title later.
+    title_is_custom: Optional[bool] = None
     system_prompt: Optional[str] = None
     document_ids: Optional[List[str]] = None
     private: Optional[bool] = None
@@ -293,6 +297,9 @@ class SessionResponse(BaseModel):
 
     id: str
     title: str
+    # True when the title was explicitly set (user rename / API caller) and
+    # is therefore pinned against auto-retitling (#2165).
+    title_is_custom: bool = False
     created_at: str
     updated_at: str
     model: str
