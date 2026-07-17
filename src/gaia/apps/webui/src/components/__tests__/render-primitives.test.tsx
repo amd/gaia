@@ -60,6 +60,17 @@ describe('table primitive', () => {
 
         expect(screen.getByText('Invalid table payload')).toBeInTheDocument();
     });
+
+    it('caps columns at 500 and appends one truncation header cell', () => {
+        const columns = Array.from({ length: 501 }, (_, i) => `col-${i}`);
+        const { container } = render(<RenderCard render="table" data={{ columns, rows: [] }} />);
+
+        const headers = container.querySelectorAll('thead th');
+        expect(headers).toHaveLength(501);
+        expect(screen.getByText('col-499')).toBeInTheDocument();
+        expect(screen.queryByText('col-500')).not.toBeInTheDocument();
+        expect(screen.getByText('+1 more (truncated)')).toBeInTheDocument();
+    });
 });
 
 describe('key_value primitive', () => {
@@ -196,6 +207,28 @@ describe('diff primitive', () => {
         render(<RenderCard render="diff" data={{ unified: 42 }} />);
 
         expect(screen.getByText('Invalid diff payload')).toBeInTheDocument();
+    });
+
+    it('styles unified-diff file header lines as neutral, not added/removed', () => {
+        const unified = '--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new';
+        const { container } = render(<RenderCard render="diff" data={{ unified }} />);
+
+        const lines = Array.from(container.querySelectorAll('.render-diff__line'));
+
+        const minusHeader = lines.find((el) => el.textContent === '--- a/x');
+        const plusHeader = lines.find((el) => el.textContent === '+++ b/x');
+        const removedLine = lines.find((el) => el.textContent === '-old');
+        const addedLine = lines.find((el) => el.textContent === '+new');
+
+        expect(minusHeader).toBeTruthy();
+        expect(minusHeader?.className).toBe('render-diff__line');
+        expect(plusHeader).toBeTruthy();
+        expect(plusHeader?.className).toBe('render-diff__line');
+
+        expect(removedLine).toBeTruthy();
+        expect(removedLine?.classList.contains('render-diff__line--removed')).toBe(true);
+        expect(addedLine).toBeTruthy();
+        expect(addedLine?.classList.contains('render-diff__line--added')).toBe(true);
     });
 });
 

@@ -27,8 +27,10 @@ export function TableCard({ data }: { data: unknown }) {
     if (!isTablePayload(data)) {
         return <UnsupportedCard variant="invalid" render="table" data={data} />;
     }
-    const truncated = data.rows.length > MAX_ITEMS;
-    const rows = truncated ? data.rows.slice(0, MAX_ITEMS) : data.rows;
+    const rowsTruncated = data.rows.length > MAX_ITEMS;
+    const rows = rowsTruncated ? data.rows.slice(0, MAX_ITEMS) : data.rows;
+    const columnsTruncated = data.columns.length > MAX_ITEMS;
+    const columns = columnsTruncated ? data.columns.slice(0, MAX_ITEMS) : data.columns;
     return (
         <div className="render-table-card">
             {data.title && <div className="render-table-card__title">{data.title}</div>}
@@ -36,15 +38,16 @@ export function TableCard({ data }: { data: unknown }) {
                 <table>
                     <thead>
                         <tr>
-                            {data.columns.map((col, i) => (
+                            {columns.map((col, i) => (
                                 <th key={i}>{col}</th>
                             ))}
+                            {columnsTruncated && <th>{truncationLabel(data.columns.length)}</th>}
                         </tr>
                     </thead>
                     <tbody>
                         {rows.map((row, ri) => (
                             <tr key={ri}>
-                                {row.map((cell, ci) => (
+                                {row.slice(0, columns.length).map((cell, ci) => (
                                     <td key={ci}>{scalarText(cell)}</td>
                                 ))}
                             </tr>
@@ -52,7 +55,7 @@ export function TableCard({ data }: { data: unknown }) {
                     </tbody>
                 </table>
             </div>
-            {truncated && (
+            {rowsTruncated && (
                 <div className="render-truncation">{truncationLabel(data.rows.length)}</div>
             )}
         </div>
