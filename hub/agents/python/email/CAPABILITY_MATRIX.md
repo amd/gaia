@@ -69,7 +69,7 @@ python hub/agents/python/email/packaging/capability_matrix.py
   - `followups`: enforce=False, acceptance_enforce=None, wired=False
   - `perf`: enforce=False, acceptance_enforce=None, wired=True
   - `quality`: enforce=False, acceptance_enforce=True, wired=True
-- Additionally served but **out of the frozen contract** (footnote context, not guarded machinery): `agent_routes.py` 8 session routes, `connector_routes.py` 4 OAuth routes, `packaging/server.py` 2 inline probes -- ~36 total routes served by the sidecar.
+- Additionally served but **out of the frozen contract** (footnote context, not guarded machinery): `agent_routes.py` 8 session routes, `connector_routes.py` 4 OAuth routes, `server.py` 2 inline probes -- ~36 total routes served by the sidecar.
 
 ## MCP Scope Decision
 

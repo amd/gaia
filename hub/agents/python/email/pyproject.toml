@@ -19,6 +19,12 @@ requires-python = ">=3.10"
 # start (#2112). tests/test_dependency_floor.py guards this floor.
 dependencies = ["amd-gaia[api]>=0.22.0"]
 
+# Console script for the REST sidecar — the fast dev-iteration entry point.
+# `gaia-agent-email serve --reload` runs the same app the frozen binary serves,
+# from source, with auto-reload; pair it with the npm client's connectSidecar().
+[project.scripts]
+gaia-agent-email = "gaia_agent_email.server:main"
+
 # Agent registration temporarily disabled: with the entry point commented out,
 # `AgentRegistry.discover()` no longer surfaces the in-process email agent (it's
 # being superseded by the packaged REST sidecar). The package still ships the

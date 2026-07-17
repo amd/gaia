@@ -149,9 +149,10 @@ router.include_router(_query_router)
 async def require_caller_token(request: Request) -> None:
     """Reject a request that lacks a valid per-session bearer token (401).
 
-    Wired onto the email router ONLY by the frozen sidecar app
-    (``packaging/server.py``) — the product server and OpenAPI-export app mount
-    the same router without this dependency, so their posture is unchanged. The
+    Wired onto the email router ONLY by the sidecar app
+    (``gaia_agent_email.server``; the frozen binary freezes a re-export of it) —
+    the product server and OpenAPI-export app mount the same router without this
+    dependency, so their posture is unchanged. The
     policy is read from :mod:`gaia_agent_email.caller_auth`:
 
     - No policy configured, or a policy with ``token is None`` (a dev running the
