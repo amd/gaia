@@ -27,10 +27,6 @@ pytest.importorskip("fastapi")
 from gaia_agent_email import server  # noqa: E402
 
 
-def _route_paths(app) -> set[str]:
-    return {getattr(r, "path", None) for r in app.routes}
-
-
 def _load_packaging_shim():
     """Load ``packaging/server.py`` by path, exactly as the freeze + test_caller_auth do."""
     path = Path(__file__).resolve().parents[1] / "packaging" / "server.py"
@@ -41,15 +37,23 @@ def _load_packaging_shim():
 
 
 def test_shim_serves_identical_routes_to_in_package_builder():
-    pkg_routes = _route_paths(server.build_app())
+    # NOTE: no app.routes path introspection here — older Starlette versions
+    # expose _IncludedRouter objects without a .path attribute, so router-mounted
+    # paths would all read as None. Contract parity (OpenAPI) + HTTP reachability
+    # are the robust cross-version assertions.
+    from fastapi.testclient import TestClient
+
     shim = _load_packaging_shim()
-    shim_routes = _route_paths(shim.build_app())
-    assert shim_routes == pkg_routes
-    # And the shim re-exports the very same builder, not a fork.
+    # The shim re-exports the very same builder, not a fork.
     assert shim.build_app is server.build_app
-    # Sanity: the canonical surfaces are present.
-    for path in ("/health", "/version", "/v1/email/triage"):
-        assert path in pkg_routes
+    # Parity: both entry points serve an identical OpenAPI contract.
+    assert shim.build_app().openapi() == server.build_app().openapi()
+    # Sanity: the canonical surfaces are reachable (anything but 404 proves the
+    # route is mounted; 422 on the empty triage body is expected).
+    client = TestClient(server.build_app(), raise_server_exceptions=False)
+    assert client.get("/health").status_code != 404
+    assert client.get("/version").status_code != 404
+    assert client.post("/v1/email/triage", json={}).status_code != 404
 
 
 def test_print_openapi_emits_the_contract(capsys):
