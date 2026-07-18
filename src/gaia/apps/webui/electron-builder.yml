@@ -84,19 +84,23 @@ afterPack: ../../../../installer/scripts/after-pack.cjs
 # Auto-update provider — R2-primary generic feed (#1724).
 #
 # The forward-update channel is a generic provider pointing at the R2 channel
-# base URL, with a mutable `latest*.yml` pointer (channel: latest) that the Hub
-# Worker re-points each release while versioned artifacts stay immutable
-# (A6/A7). The base URL is build-time configurable via GAIA_UPDATE_FEED_URL so
-# the R2 bucket/CDN host isn't hard-coded here.
+# base URL (fronted by the hub.amd-gaia.ai Worker), with a mutable `latest*.yml`
+# pointer (channel: latest) that the Worker re-points each release while
+# versioned artifacts stay immutable (A6/A7).
 #
-# NOTE (#1719): the R2 publish feed + Worker channel pointer are milestone-52
-# work and not live yet. At RUNTIME, services/auto-updater.cjs re-resolves the
-# feed (env/config) and calls setFeedURL itself — so this baked value is a
-# fallback only, and an unconfigured app enters a loud "no channel" state
-# rather than checking a dead feed.
+# This baked `url` is INERT at runtime: services/auto-updater.cjs always
+# re-resolves the feed (GAIA_UPDATE_FEED_URL env → feedUrl in
+# ~/.gaia/update-config.json) and calls setFeedURL itself; with nothing
+# configured it enters a loud "no channel" state instead of checking this feed.
+# The value exists only because electron-builder requires a non-empty,
+# expandable `url` to emit app-update.yml at build time.
+#
+# NOTE (#1719): the R2 publish feed + Worker `latest*.yml` channel pointer are
+# milestone-52 work and not live yet; the exact channel path under
+# hub.amd-gaia.ai is finalized there.
 publish:
   provider: generic
-  url: ${env.GAIA_UPDATE_FEED_URL}
+  url: https://hub.amd-gaia.ai/updates
   channel: latest
 
 # Code signing — env-driven, off by default for unsigned local builds.
