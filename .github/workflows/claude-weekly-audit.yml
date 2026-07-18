@@ -404,8 +404,10 @@ jobs:
             4. Build the **suppressed-forever** key set (accepted debt):
                `gh issue list --repo ${{ github.repository }} --label weekly-audit --label audit-wontfix --state all --json body --limit 200`
                Collect their `audit-key` KEYs too. These are permanently dismissed.
-            5. Find the **previous parent** to supersede: the currently-open issue whose title
-               starts `Weekly audit —` (there should be at most one). Note its number.
+            5. Find the **previous parent** to cross-link: parents are never auto-closed, so
+               there may now be SEVERAL currently-open issues whose title starts
+               `Weekly audit —`. Pick the MOST RECENTLY CREATED one (highest issue number).
+               Note its number. Do NOT close it.
 
             ## Dedup + verify (the single biggest quality risk)
             Reduce the raw findings to the NEW, real set, in this order:
@@ -418,8 +420,8 @@ jobs:
             3. **Evidence gate:** drop any 🔴/🟠 finding whose `evidence` is missing or does not
                actually substantiate its `title`. If evidence looks thin, spot-check by reading the
                cited `path`/`symbol` yourself before filing — a false issue erodes the whole audit.
-            If, after all of the above, there are ZERO new findings, post NOTHING, still run the
-            "supersede" step below to close the stale parent, and exit cleanly.
+            If, after all of the above, there are ZERO new findings, post NOTHING and exit
+            cleanly — do not file a parent issue, and never close or comment on a prior parent.
 
             ## File per-finding CHILD issues — 🔴 high / 🟠 medium ONLY (non-security)
             Open a child issue only for NEW, verified, non-security findings whose severity is
@@ -474,15 +476,20 @@ jobs:
             with the run-log link: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}.
             NEVER put a security `file:line`, exploit, or payload in this issue.
 
-            ## Supersede the previous parent (tracker hygiene — always run this)
-            After filing the new parent (or, on a zero-new-findings run, instead of filing one),
-            close the previous parent you found in First-actions step 5 so triage issues don't
-            pile up: `gh issue close <prev-parent-#> --repo ${{ github.repository }} --comment "Superseded by #<new-parent-# or 'this week — no new findings'>."`
-            Child issues stay OPEN — they are the actionable units; only the parent rolls over.
+            ## Cross-link the previous parent (NEVER close it)
+            After filing the new parent, comment on the previous parent you found in
+            First-actions step 5 so readers can follow the chain — but leave it OPEN:
+            `gh issue comment <prev-parent-#> --repo ${{ github.repository }} --body "Follow-up audit run filed as #<new-parent-#>. This issue stays OPEN until its findings are addressed — only a maintainer should close it."`
+            Child issues stay OPEN too — they are the actionable units. Parents now
+            accumulate across runs by design, so unaddressed findings stay visible: only a
+            human maintainer closes a parent, and only after its findings are addressed.
+            Never call `gh issue close` on a parent from this workflow.
 
             ## Rules
             - No Claude attribution anywhere (no "Generated with", no Co-Authored-By).
             - Do not open any PR and do not apply the `bug` label — humans gate every code change.
+            - Never close a parent triage issue — only a human maintainer closes one, after its
+              findings are addressed.
             - Lead with the finding; keep each line to one sentence (CLAUDE.md issue style).
           claude_args: |
             --max-turns 32

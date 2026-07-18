@@ -84,12 +84,23 @@ skips a finding whose key is in EITHER set:
   `audit-wontfix` and it never comes back. Without this, wontfix findings resurface every
   deep run forever.
 
-## Parent triage issues roll over
+## Parent triage issues accumulate — the workflow NEVER closes one
 
-Each run files a NEW parent (`Weekly audit — <mode> — <run_id>`) and then **closes the
-previous open parent** with a "Superseded by #N" comment — otherwise ~52 stale parents pile
-up per year. Only the parent rolls over; child issues stay open (they're the actionable
-units). The parent opens with a one-line tally (new/low/suppressed counts) for trend.
+Each run files a NEW parent (`Weekly audit — <mode> — <run_id>`) and **cross-links the
+most recently created open parent** with a comment ("Follow-up audit run filed as #N —
+stays OPEN until its findings are addressed") — it does **not** close it. An earlier
+version auto-closed the previous parent as "superseded," which silently hid an epic's
+still-open child findings the moment the next run fired (#2010: 18 unaddressed children
+went dark). Only a **human maintainer** may close a parent, and only after its findings
+are addressed. Child issues stay open regardless (they're the actionable units) — that
+was already true and is unchanged.
+
+Since parents are never auto-closed, there can be several open `Weekly audit —` issues at
+once; synthesis always cross-links the highest-numbered (most recent) one, never assumes
+there's "at most one." The tradeoff is deliberate: parents pile up until a maintainer
+closes them, trading tracker tidiness for guaranteeing unaddressed findings stay visible.
+The parent opens with a one-line tally (new/low/suppressed counts) for trend. On a
+zero-new-findings run, synthesis posts nothing and does not touch any prior parent.
 
 ## Security findings stay private
 
