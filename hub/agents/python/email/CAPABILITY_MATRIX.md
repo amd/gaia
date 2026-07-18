@@ -14,10 +14,13 @@ python hub/agents/python/email/packaging/capability_matrix.py
 
 ## Capability matrix
 
-22 exposed ops (18 REST functional + 4 MCP) and their eval coverage:
+25 exposed ops (21 REST functional + 4 MCP) and their eval coverage:
 
 | Op | Surface | Eval coverage |
 |---|---|---|
+| `/v1/connections` | REST | no quality eval (contract-tested only) |
+| `/v1/connections/{provider} (DELETE)` | REST | no quality eval (contract-tested only) |
+| `/v1/connections/{provider} (POST)` | REST | no quality eval (contract-tested only) |
 | `archive` | REST | no quality eval (contract-tested only) |
 | `briefing` | REST | briefing |
 | `calendar/events (GET)` | REST | no quality eval (contract-tested only) |
@@ -56,7 +59,7 @@ python hub/agents/python/email/packaging/capability_matrix.py
   - `schedule_tools`: 4
   - `summarize_tools`: 1
   - `voice_tools`: 2
-- REST functional verbs: **18** (21 total operations in the frozen contract, including health/version/init probes)
+- REST functional verbs: **21** (24 total operations in the frozen contract, including health/version/init probes)
 - MCP tools: **4**
   - `draft_reply`
   - `send_email`
