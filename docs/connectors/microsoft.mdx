@@ -75,10 +75,17 @@ GAIA will:
 
 The tile flips to **Connected as you@outlook.com** once the flow completes.
 
-## Step 4 — Grant scopes to specific agents
+## Step 4 — Per-agent grants
 
-Connecting Microsoft doesn't automatically give every agent access to your
-mailbox. Each agent must be granted the specific Graph scopes it needs:
+The connect panel shows **"Grant access to these agents when you
+connect"** — a default-on checkbox for every installed agent that
+declares Microsoft access. Checked agents are granted their declared
+Graph scopes automatically the moment the OAuth flow completes, so a
+fresh connect needs no follow-up command. Uncheck an agent before
+connecting to withhold its grant.
+
+You can adjust or revoke grants at any time from the same tile's
+**Per-agent grants** section, or via the CLI:
 
 ```bash
 # Grant an agent read-only Outlook mail access
