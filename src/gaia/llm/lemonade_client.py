@@ -854,6 +854,7 @@ class LemonadeClient:
         keep_alive: bool = False,
         api_key: Optional[str] = None,
         ctx_size_override: Optional[int] = None,
+        model_lease_priority: Optional[str] = None,
     ):
         """
         Initialize the Lemonade client.
@@ -909,6 +910,12 @@ class LemonadeClient:
         # default or MODELS mutation — chat/RAG clients sharing this process
         # must keep their own floor semantics.
         self.ctx_size_override = ctx_size_override
+        # Priority this client's model loads request from the host broker
+        # (#2151 / V2-11): "interactive" for a user-facing turn, "background"
+        # for autonomous jobs. ``None`` defers to the GAIA_MODEL_LEASE_PRIORITY
+        # env default. Only consulted when the broker is configured
+        # (GAIA_MODEL_BROKER_URL set); standalone loads are unaffected.
+        self.model_lease_priority = model_lease_priority
 
         # Track active downloads for cancellation support
         self.active_downloads: Dict[str, DownloadTask] = {}
@@ -2958,12 +2965,41 @@ class LemonadeClient:
             )
         self.log.info(f"Model '{model}' pinned at ctx={settled_ctx} (#1892)")
 
+    def _model_slot_lease(self, model: str):
+        """Hold a host-broker model-slot lease across a load (#2151 / V2-11).
+
+        Serializes this load against every other process sharing the
+        single-tenant Lemonade slot. A no-op when the broker is not configured
+        (standalone ``gaia llm`` etc.) — that is the absence of a broker, not a
+        silent fallback. When the broker IS configured but unreachable, the
+        underlying context manager raises loudly rather than racing the slot.
+
+        Deferred import keeps ``gaia.daemon`` off the standalone import path.
+        """
+        from gaia.daemon.broker_client import model_lease
+
+        def _on_wait(reason: str) -> None:
+            self.log.info(f"Model slot busy — {reason}")
+            try:
+                from rich.console import Console
+
+                Console().print(f"[bold yellow]⏳ {reason}[/bold yellow]")
+            except ImportError:
+                print(f"⏳ {reason}")
+
+        return model_lease(model, priority=self.model_lease_priority, on_wait=_on_wait)
+
     def _ensure_model_loaded(self, model: str, auto_download: bool = True) -> None:
         """Ensure a model is loaded on the server before making requests.
 
         This method proactively checks if the model is loaded and loads it if not,
         preventing 404 errors when making completions requests. Downloads are
         automatic without user prompts when auto_download is enabled.
+
+        When the host model-slot broker is configured (#2151 / V2-11), the whole
+        check-and-load runs while holding a broker lease so it serializes against
+        other processes sharing Lemonade's single model slot — no race-evict, and
+        no #1030 ctx-cap regression from a concurrent load at the wrong ctx.
 
         Args:
             model: Model name to ensure is loaded
@@ -2977,6 +3013,12 @@ class LemonadeClient:
         if not auto_download:
             return  # Skip if auto_download disabled
 
+        with self._model_slot_lease(model):
+            self._ensure_model_loaded_locked(model)
+
+    def _ensure_model_loaded_locked(self, model: str) -> None:
+        """The check-and-load body of :meth:`_ensure_model_loaded`, run while
+        holding the broker lease (when configured)."""
         # Exact-pin path (#1892): async-safe unload→settle→load→settle. Its
         # failures PROPAGATE — never the best-effort debug-swallow below (a
         # silently unpinned eval run would measure the wrong window).
@@ -4263,6 +4305,7 @@ def create_lemonade_client(
     keep_alive: bool = False,
     api_key: Optional[str] = None,
     ctx_size_override: Optional[int] = None,
+    model_lease_priority: Optional[str] = None,
 ) -> LemonadeClient:
     """
     Factory function to create and configure a LemonadeClient instance.
@@ -4291,6 +4334,9 @@ def create_lemonade_client(
                  (defaults to env var LEMONADE_API_KEY; ``None`` for unauthenticated)
         ctx_size_override: Instance-scoped exact-pin ctx override (#1892) —
                  forwarded verbatim to ``LemonadeClient``
+        model_lease_priority: Broker lease priority for this client's model
+                 loads ("interactive"|"background") — forwarded verbatim to
+                 ``LemonadeClient`` (#2151 / V2-11)
 
     Returns:
         A configured LemonadeClient instance
@@ -4314,6 +4360,7 @@ def create_lemonade_client(
         keep_alive=keep_alive,
         api_key=api_key,
         ctx_size_override=ctx_size_override,
+        model_lease_priority=model_lease_priority,
     )
 
     # Auto-start server if requested

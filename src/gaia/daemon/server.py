@@ -126,6 +126,16 @@ def run(host: str = HOST) -> None:
     specs = {**builtin_specs(), **_load_extra_specs()}
     registry = _build_registry(specs)
 
+    from gaia.daemon.broker import ModelSlotBroker
+    from gaia.daemon.constants import BROKER_URL_ENV_VAR
+
+    broker = ModelSlotBroker()
+    # Advertise the broker to the processes this daemon spawns. Sidecars inherit
+    # os.environ at spawn (AgentSidecarManager builds spawn_env from it) and add
+    # their own launch token as GAIA_MODEL_BROKER_TOKEN, so both host-side and
+    # sidecar model loads route through the broker rather than racing the slot.
+    os.environ[BROKER_URL_ENV_VAR] = f"http://{host}:{port}"
+
     def _register() -> None:
         # Reap identity-confirmed sidecar survivors of a previous daemon that
         # died hard (SIGKILL/OOM) BEFORE serving — never adopt them silently.
@@ -152,6 +162,7 @@ def run(host: str = HOST) -> None:
         on_startup=_register,
         on_shutdown=_deregister,
         registry=registry,
+        broker=broker,
     )
 
     config = uvicorn.Config(
