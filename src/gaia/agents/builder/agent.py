@@ -292,10 +292,18 @@ class BuilderAgent(Agent):
                 break
             except Exception as exc:  # pylint: disable=broad-except
                 logger.error("BuilderAgent unexpected LLM error: %s", exc)
-                final_answer = (
-                    "Sorry, I ran into an unexpected problem. "
-                    "Please try again in a moment."
-                )
+                # Surface a typed Lemonade error's actionable message (e.g. the
+                # missing model id on a 404) instead of a generic placeholder
+                # that masks a diagnosable failure — matches the base agent (#2243).
+                typed_msg = self._extract_lemonade_user_message(exc)
+                if typed_msg is not None:
+                    final_answer = typed_msg
+                else:
+                    final_answer = (
+                        "Sorry, I ran into an unexpected problem. This might be "
+                        "a temporary issue — try again in a moment.\n\n"
+                        f"*Technical details: {exc}*"
+                    )
                 break
 
             logger.debug("BuilderAgent response: %s", response[:300])
