@@ -56,13 +56,11 @@ CONNECT_TIMEOUT = 10.0
 #: daemon, so it matches the daemon relay's own long per-request budget.
 READ_TIMEOUT = 300.0
 
-#: Methods the proxy accepts — the full surface the daemon relay serves.
-RELAY_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
-
 #: First-segment ids owned by the OpenAI-compatible surface — never relayed as
-#: agents. Defense-in-depth: these routes are declared first and win on match
-#: order, but an unknown subpath under them (``/v1/chat/foo``) must not silently
-#: become an "agent chat" relay.
+#: agents. The proxy only claims the ``/v1/<agent>/query`` surface (so it can't
+#: shadow the OpenAI routes' 404/405 semantics), but ``/v1/chat/query`` and
+#: ``/v1/models/query`` would still match the pattern; this blocks them so a
+#: reserved id can never masquerade as an agent.
 _RESERVED_AGENT_IDS = frozenset({"chat", "models"})
 
 # Hop-by-hop headers never forwarded in either direction (RFC 9110 §7.6.1).
@@ -218,14 +216,28 @@ async def _acquire_daemon():
 
 
 def build_agent_proxy_router() -> APIRouter:
-    """API-key-guarded router relaying ``ANY /v1/{agent_id}/*`` to the daemon's
-    streaming relay (#2150). The daemon does the sidecar-bearer swap, so this
-    proxy holds only the daemon client token."""
+    """API-key-guarded router relaying the ``/v1/<agent>/query`` surface to the
+    daemon's streaming relay (#2150). The daemon does the sidecar-bearer swap, so
+    this proxy holds only the daemon client token.
+
+    Scoped to ``POST /v1/{agent}/query`` and ``POST
+    /v1/{agent}/query/{run_id}/cancel`` on purpose: a generic ``/v1/{agent}/*``
+    catch-all would swallow the OpenAI surface's own 404/405 (e.g. ``GET
+    /v1/chat/completions`` or ``GET /v1/nonexistent``) behind this router's
+    API-key dependency. Narrow routes leave those to FastAPI's default routing.
+    """
     require_api_key = build_require_api_key()
     router = APIRouter(dependencies=[Depends(require_api_key)])
 
-    @router.api_route("/v1/{agent_id}/{path:path}", methods=RELAY_METHODS)
-    async def proxy(agent_id: str, path: str, request: Request):
+    @router.post("/v1/{agent_id}/query")
+    async def proxy_query(agent_id: str, request: Request):
+        return await _relay(agent_id, "query", request)
+
+    @router.post("/v1/{agent_id}/query/{run_id}/cancel")
+    async def proxy_query_cancel(agent_id: str, run_id: str, request: Request):
+        return await _relay(agent_id, f"query/{run_id}/cancel", request)
+
+    async def _relay(agent_id: str, path: str, request: Request):
         if agent_id in _RESERVED_AGENT_IDS:
             raise HTTPException(
                 status_code=404,

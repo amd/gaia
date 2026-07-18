@@ -12,8 +12,8 @@ Part 1 (helpers): the API-key dependency + synthetic-frame shape (pure unit).
 
 Part 2 (routes): TestClient over the real ``gaia.api.openai_server:app`` — the
 API-key 503/401 contract and the daemon-down loud 503, with ``start_or_attach``
-monkeypatched (no upstream involved). Also asserts ``/v1/chat/completions`` and
-``/v1/models`` are NOT shadowed by the catch-all relay.
+monkeypatched (no upstream involved). Also asserts the scoped ``/query`` relay
+does NOT shadow ``/v1/chat/completions`` / ``/v1/models`` or their 404/405.
 
 Part 3 (integration): a REAL uvicorn fake *daemon* (mimicking the #2150 relay
 surface) + the REAL ``gaia api`` app on ephemeral ports (never 4001). The fake
@@ -174,10 +174,10 @@ def test_daemon_down_maps_to_loud_503(api_client, with_api_key, monkeypatch):
 
 
 @needs_fastapi
-def test_reserved_chat_subpath_not_relayed_as_agent(api_client, with_api_key):
-    """A stray /v1/chat/<x> must not become an "agent chat" relay."""
+def test_reserved_chat_query_not_relayed_as_agent(api_client, with_api_key):
+    """A stray /v1/chat/query must not become an "agent chat" relay."""
     r = api_client.post(
-        "/v1/chat/bogus",
+        "/v1/chat/query",
         json={"query": "hi"},
         headers={"Authorization": f"Bearer {_API_KEY}"},
     )
@@ -188,8 +188,7 @@ def test_reserved_chat_subpath_not_relayed_as_agent(api_client, with_api_key):
 @needs_fastapi
 def test_openai_routes_not_shadowed_by_relay(api_client, with_api_key):
     """/v1/models and /v1/chat/completions keep their own handlers even with the
-    catch-all relay mounted and an API key set."""
-    # /v1/models has a single path segment → cannot match /v1/{agent}/{path}.
+    query relay mounted and an API key set."""
     r = api_client.get("/v1/models")
     assert r.status_code == 200
     assert r.json()["object"] == "list"
@@ -204,6 +203,25 @@ def test_openai_routes_not_shadowed_by_relay(api_client, with_api_key):
     )
     assert r.status_code == 404
     assert "not found" in r.json()["detail"].lower()
+
+
+@needs_fastapi
+@pytest.mark.parametrize("has_key", [False, True])
+def test_query_relay_does_not_shadow_openai_404_405(api_client, monkeypatch, has_key):
+    """The scoped /query relay must NOT swallow the OpenAI surface's own 404/405
+    (regression for the generic-catch-all shadowing that reached CI: GET
+    /v1/chat/completions returned the relay's 503 instead of FastAPI's 405).
+    Holds whether or not the API key is configured — these paths never reach the
+    relay's API-key dependency."""
+    if has_key:
+        monkeypatch.setenv(API_KEY_ENV, _API_KEY)
+    else:
+        monkeypatch.delenv(API_KEY_ENV, raising=False)
+    # Wrong method on a real OpenAI route → 405, not the relay's 503.
+    assert api_client.get("/v1/chat/completions").status_code == 405
+    assert api_client.post("/v1/models", json={}).status_code == 405
+    # Unknown single-segment path → FastAPI 404, not the relay's 503.
+    assert api_client.get("/v1/nonexistent").status_code == 404
 
 
 # ---------------------------------------------------------------------------

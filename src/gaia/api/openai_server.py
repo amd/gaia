@@ -28,6 +28,7 @@ from fastapi.responses import StreamingResponse
 
 from gaia.agents.base.api_agent import ApiAgent
 
+from .agent_proxy import build_agent_proxy_router
 from .agent_registry import registry
 from .schemas import (
     ChatCompletionChoice,
@@ -626,11 +627,10 @@ async def health_check():
 
 
 # Agent /query surface (#2178 / V2-17): POST /v1/<agent>/query streams the
-# agentic loop through the always-on daemon relay (#2150). Mounted LAST so the
-# OpenAI-compatible routes (/v1/chat/completions, /v1/models) declared above win
-# on match order; the catch-all only claims /v1/<agent>/<path> pairs. The API
-# server stays a thin client — it forwards only the daemon client token, never a
-# sidecar bearer. Gated by GAIA_API_KEY (§0.33), independent of the email wheel.
-from .agent_proxy import build_agent_proxy_router  # noqa: E402
-
+# agentic loop through the always-on daemon relay (#2150). Mounted after the
+# OpenAI-compatible routes are declared; the router only claims the narrow
+# /v1/<agent>/query surface, so it never shadows /v1/chat/completions or
+# /v1/models (nor their 404/405). The API server stays a thin client — it
+# forwards only the daemon client token, never a sidecar bearer. Gated by
+# GAIA_API_KEY (§0.33), independent of the email wheel.
 app.include_router(build_agent_proxy_router())
