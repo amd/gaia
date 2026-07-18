@@ -53,7 +53,7 @@ export interface AgentInfo {
     min_memory_gb?: number | null;
     /**
      * Connection requirements declared by the agent's REQUIRED_CONNECTORS
-     * (issue #915). The Settings → Connections page renders these so the
+     * (issue #915). The Settings → Connectors page renders these so the
      * user can grant scopes per agent.
      */
     required_connections?: ConnectorRequirement[];

@@ -24,11 +24,11 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from gaia_agent_email.gmail_backend import decode_message_body
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
-from gaia_agent_email.tools.triage_condense import condense_triage_result
 
 # Re-exported so the pre-scan tests can monkeypatch ``read_tools.make_llm_classifier``
 # to prove pre-scan never wires the LLM (test_pre_scan_counts.py).
 from gaia_agent_email.tools.llm_triage import make_llm_classifier  # noqa: F401
+from gaia_agent_email.tools.triage_condense import condense_triage_result
 from gaia_agent_email.tools.triage_heuristics import (
     CATEGORY_FYI,
     CATEGORY_NEEDS_RESPONSE,
@@ -597,11 +597,61 @@ def normalize_gmail_date_operators(query: str) -> str:
     Raises ``ValueError`` on an unparseable value — a loud error beats
     passing it through as free text and returning a false zero-result.
     """
+
     def _sub(m: "re.Match[str]") -> str:
         op = m.group("op").lower()
         return f"{op}:{_parse_gmail_date_value(m.group('val'), op=op)}"
 
     return _DATE_OP_RE.sub(_sub, query)
+
+
+# Gmail search operators (a leading ``token:`` in the query). If a query
+# already uses one, we treat it as intentional and never rewrite it.
+_GMAIL_OPERATORS = (
+    "from",
+    "to",
+    "cc",
+    "bcc",
+    "subject",
+    "label",
+    "is",
+    "in",
+    "has",
+    "filename",
+    "after",
+    "before",
+    "older",
+    "newer",
+    "older_than",
+    "newer_than",
+    "category",
+    "list",
+    "deliveredto",
+    "rfc822msgid",
+    "larger",
+    "smaller",
+    "size",
+)
+_OPERATOR_RE = re.compile(
+    r"\b(?:" + "|".join(_GMAIL_OPERATORS) + r")\s*:", re.IGNORECASE
+)
+
+
+def has_gmail_operator(query: str) -> bool:
+    """True if ``query`` already uses a Gmail search operator (``from:`` …)."""
+    return bool(_OPERATOR_RE.search(query or ""))
+
+
+def operatorize_query(query: str) -> str:
+    """Turn a bare literal phrase into an operator query.
+
+    A verbatim subject/brand phrase (e.g. ``"Netflix promotional email"``)
+    matched as free text often returns zero hits even when the message is
+    present; ``from:``/``subject:`` operators find it. Widen the search to
+    match the phrase in either the sender or the subject.
+    """
+    cleaned = " ".join((query or "").split())
+    return f"from:({cleaned}) OR subject:({cleaned})"
 
 
 def search_messages_impl(
@@ -610,6 +660,7 @@ def search_messages_impl(
     query: str,
     max_results: int = 25,
     debug: bool = False,
+    operator_retry: bool = True,
 ) -> Dict[str, Any]:
     query = normalize_gmail_date_operators(query)
     with log_tool_call(
@@ -618,12 +669,28 @@ def search_messages_impl(
         debug=debug,
     ) as st:
         listing = gmail.list_messages(query=query, max_results=max_results)
+        stubs = listing.get("messages", [])
+        retried_query = None
+        # A literal-phrase query with zero hits is the #2114 failure mode:
+        # retry once as an operator query before giving up. Only when the
+        # user's query carried no operator of its own (else we'd second-guess
+        # an intentional ``from:`` search).
+        if not stubs and operator_retry and not has_gmail_operator(query):
+            retried_query = operatorize_query(query)
+            if retried_query != query:
+                listing = gmail.list_messages(
+                    query=retried_query, max_results=max_results
+                )
+                stubs = listing.get("messages", [])
         out = []
-        for stub in listing.get("messages", []):
+        for stub in stubs:
             msg = gmail.get_message(stub["id"])
             out.append(_format_message_for_llm(msg))
-        st["result_summary"] = {"count": len(out)}
-        return {"messages": out}
+        summary: Dict[str, Any] = {"count": len(out)}
+        if retried_query is not None:
+            summary["operator_retry"] = retried_query
+        st["result_summary"] = summary
+        return {"messages": out, "operator_retry": retried_query}
 
 
 def list_labels_impl(gmail, *, debug: bool = False) -> List[Dict[str, Any]]:
@@ -1261,10 +1328,23 @@ class ReadToolsMixin:
             total budget. Each returned message carries a ``mailbox`` field so
             downstream tools route actions without re-asking.
 
-            ``query`` uses Gmail search syntax (e.g.
-            ``"from:boss@example.com is:unread newer_than:7d"``). Date
-            operators require ``YYYY/MM/DD`` — e.g. ``after:2026/07/01
-            before:2026/07/08``, never ``after:July 1``.
+            ``query`` uses Gmail search syntax. ALWAYS prefer operators over a
+            verbatim user phrase — a literal phrase like
+            ``"Netflix promotional email"`` usually returns zero hits even when
+            the message is present. Map the user's words to operators instead:
+
+              - a sender / brand name → ``from:netflix`` (e.g. "the Netflix
+                promo" → ``from:netflix``)
+              - words expected in the subject → ``subject:invoice``
+              - status / recency → ``is:unread``, ``newer_than:7d``,
+                ``label:promotions``
+
+            Combine them: ``"from:boss@example.com is:unread newer_than:7d"``.
+            Date operators require ``YYYY/MM/DD`` — e.g. ``after:2026/07/01
+            before:2026/07/08``, never ``after:July 1``. If a bare phrase is
+            passed and returns nothing, the tool retries once as an operator
+            query automatically, but forming the operator query yourself is
+            more reliable.
             """
             try:
                 max_results = max(1, min(int(max_results or 25), 100))
@@ -1300,7 +1380,11 @@ class ReadToolsMixin:
                 log.exception("email tool error: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
-        @tool
+        # Full-inbox triage legitimately runs minutes on consumer hardware
+        # (~55-65 tok/s) — grant headroom over the 180s global tool timeout so
+        # a real triage isn't abandoned mid-run (#2114). pre_scan_inbox stays
+        # the fast alternative for "what's urgent right now" asks.
+        @tool(timeout=600.0)
         def triage_inbox(max_messages: int = 25) -> str:
             """Triage the inbox, returning per-message categories.
 

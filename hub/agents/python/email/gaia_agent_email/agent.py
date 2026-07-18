@@ -219,6 +219,12 @@ actionable, 1 suggested archive.") and stop. The user can see the card;
 do not re-state its contents in prose. For follow-up questions about
 specific items, refer to the message_id values from the card.
 
+ALWAYS write at least one sentence of plain prose in your final answer. A
+render payload (a ```email_pre_scan fence or any raw JSON) must NEVER stand
+alone as your entire reply — render-less consumers (CLI, integrators) see
+only your text, so a bare fence reads as an empty answer to them. If you
+have nothing to add beyond the card, still write the one framing sentence.
+
 MAILBOX TARGETING:
 Read/triage tools scan only CONNECTED mailboxes, and every result item is
 tagged with its source mailbox (google or microsoft). If the user asks
@@ -227,11 +233,72 @@ provider's tag, that provider is not connected — say so plainly and stop.
 NEVER present one mailbox's data as if it came from the provider the user
 asked for.
 
+SEARCH:
+When searching, translate the user's words into Gmail operators — never pass
+the raw phrase to search_messages. "archive the Netflix promo email" →
+search_messages("from:netflix"), NOT search_messages("Netflix promotional
+email"). Map a sender/brand to ``from:``, expected subject words to
+``subject:``, and status/recency to ``is:unread`` / ``newer_than:7d`` /
+``label:promotions``. A literal-phrase search that returns zero results has
+almost certainly mis-formed the query — retry with ``from:``/``subject:``
+operators before telling the user the message can't be found.
+
 OUTPUT:
 Tool results come back as JSON envelopes ``{"ok": true, "data": ...}``
 or ``{"ok": false, "error": "..."}``. Summarize tool output briefly for
-the user — do not recite raw JSON.
+the user — do not recite raw JSON. Write plain text only: use Unicode
+symbols directly (→, ≤, ×), never LaTeX/TeX markup like $\\rightarrow$.
 """
+
+
+# ---------------------------------------------------------------------------
+# Output normalization
+# ---------------------------------------------------------------------------
+
+# LaTeX/TeX commands that models sometimes emit inside plain-text answers
+# (e.g. ``$\rightarrow$`` instead of ``→``). Map them to the Unicode symbol.
+_LATEX_SYMBOLS = {
+    r"\rightarrow": "→",
+    r"\Rightarrow": "⇒",
+    r"\leftarrow": "←",
+    r"\Leftarrow": "⇐",
+    r"\leftrightarrow": "↔",
+    r"\to": "→",
+    r"\times": "×",
+    r"\div": "÷",
+    r"\leq": "≤",
+    r"\geq": "≥",
+    r"\neq": "≠",
+    r"\approx": "≈",
+    r"\pm": "±",
+    r"\cdot": "·",
+    r"\ldots": "…",
+    r"\bullet": "•",
+    r"\deg": "°",
+}
+
+# Match an optional ``$``/``\(`` math wrapper around a single known command,
+# so ``$\rightarrow$`` and a bare ``\rightarrow`` both normalize.
+_LATEX_CMD_RE = re.compile(
+    r"\$?\\(" + "|".join(cmd[1:] for cmd in _LATEX_SYMBOLS) + r")\b\$?"
+)
+
+
+def _normalize_plain_text_answer(text: str) -> str:
+    """Strip LaTeX artifacts from a plain-text answer (#2115).
+
+    Models occasionally emit TeX markup (``$\\rightarrow$``) in prose meant
+    to be plain text. Rewrite the known commands to their Unicode symbol so
+    CLI / integrator consumers see ``→`` rather than raw TeX. Leaves text
+    without any such artifact untouched.
+    """
+    if not text or "\\" not in text:
+        return text
+
+    def _sub(m: "re.Match[str]") -> str:
+        return _LATEX_SYMBOLS["\\" + m.group(1)]
+
+    return _LATEX_CMD_RE.sub(_sub, text)
 
 
 # ---------------------------------------------------------------------------
@@ -643,7 +710,12 @@ class EmailTriageAgent(
         guard = self._mailbox_target_guard(user_input)
         if guard is not None:
             return guard
-        return super().process_query(user_input, *args, **kwargs)
+        result = super().process_query(user_input, *args, **kwargs)
+        # Normalize LaTeX artifacts at the output boundary so render-less
+        # consumers never see raw TeX in the final answer (#2115).
+        if isinstance(result, dict) and isinstance(result.get("result"), str):
+            result["result"] = _normalize_plain_text_answer(result["result"])
+        return result
 
     def _mailbox_target_guard(self, user_input: str) -> Optional[Dict[str, Any]]:
         """Reject a request that explicitly targets an unavailable mailbox (#2164).

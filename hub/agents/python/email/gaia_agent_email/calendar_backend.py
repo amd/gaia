@@ -24,6 +24,11 @@ from typing import (
 import httpx
 
 from gaia_agent_email.scopes import AGENT_NAMESPACED_ID, CALENDAR_SCOPES
+from gaia_agent_email.google_errors import (
+    access_not_configured_message,
+    access_not_configured_url,
+)
+
 from gaia.connectors.api import get_access_token_sync
 from gaia.connectors.errors import ConnectorsError
 from gaia.logger import get_logger
@@ -109,6 +114,11 @@ class LiveCalendarBackend:
                 "Calendar API returned 401. The access token may have expired or "
                 "scopes were revoked. Reconnect Google in Settings → "
                 f"Connectors. (where: {where})"
+            )
+        enable_url = access_not_configured_url(response)
+        if enable_url:
+            raise ConnectorsError(
+                access_not_configured_message("Calendar API", enable_url)
             )
         raise ConnectorsError(
             f"Calendar API {where} returned {response.status_code}: "
