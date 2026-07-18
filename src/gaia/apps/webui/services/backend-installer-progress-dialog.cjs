@@ -399,7 +399,7 @@ async function showFailureDialog(parentWindow, errorInfo = {}) {
         return "retry";
       case 2: {
         try {
-          await shell.openExternal("https://amd-gaia.ai/quickstart#cli-install");
+          await shell.openExternal("https://amd-gaia.ai/docs/quickstart#cli-install");
         } catch {
           // ignore
         }

@@ -1534,11 +1534,11 @@ async function installBackend(opts = {}) {
           ? "GAIA retried with the OS certificate store and it still failed. "
           : "") +
         "Ask IT to install the proxy's root CA in your system's trusted certificate store, then relaunch GAIA. " +
-        "See https://amd-gaia.ai/quickstart#cli-install";
+        "See https://amd-gaia.ai/docs/quickstart#cli-install";
     } else {
       suggestion = `Try installing manually:\n  uv pip install ${pipPackage} --python ${
         IS_WINDOWS ? `${GAIA_VENV_DISPLAY}/Scripts/python.exe` : `${GAIA_VENV_DISPLAY}/bin/python`
-      }\nThen restart GAIA. See https://amd-gaia.ai/quickstart#cli-install`;
+      }\nThen restart GAIA. See https://amd-gaia.ai/docs/quickstart#cli-install`;
     }
     throw new InstallError(
       `Failed to install ${pipPackage} (pip exit ${installResult.code}).`,
@@ -1555,7 +1555,7 @@ async function installBackend(opts = {}) {
       `GAIA binary not found at ${GAIA_VENV_DISPLAY} after install.`,
       {
         stage: STAGES.INSTALL_PACKAGE,
-        suggestion: "The package was installed but the gaia executable is missing. Try reinstalling from https://amd-gaia.ai/quickstart",
+        suggestion: "The package was installed but the gaia executable is missing. Try reinstalling from https://amd-gaia.ai/docs/quickstart",
       }
     );
   }
@@ -1792,7 +1792,7 @@ async function ensureBackend(opts = {}) {
         "GAIA backend not found after installation.",
         {
           stage: STAGES.VERIFY,
-          suggestion: "Check the log file and try reinstalling. See https://amd-gaia.ai/quickstart",
+          suggestion: "Check the log file and try reinstalling. See https://amd-gaia.ai/docs/quickstart",
         }
       );
       setState(STATES.FAILED, {

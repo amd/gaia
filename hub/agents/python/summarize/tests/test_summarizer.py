@@ -252,21 +252,24 @@ class TestSummarizer:
 
         print(f"Successfully created synthetic OCR PDF (text as images): {output_path}")
 
+    # Test data lives at the repo root (data/), not in the hub package — the
+    # suite predates the move to hub/agents/python/summarize (#1992).
     @pytest.fixture
     def data_txt_path(self) -> Path:
-        """Path to data/txt directory"""
-        return Path(__file__).parent.parent / "data" / "txt"
+        """Path to the repo-root data/txt directory"""
+        return Path(__file__).resolve().parents[5] / "data" / "txt"
 
     @pytest.fixture
     def data_pdf_path(self) -> Path:
-        """Path to data/pdf directory"""
-        return Path(__file__).parent.parent / "data" / "pdf"
+        """Path to the repo-root data/pdf directory"""
+        return Path(__file__).resolve().parents[5] / "data" / "pdf"
 
     @pytest.fixture
     def test_model(self) -> str:
         """Get test model from environment or use default"""
         return os.environ.get("GAIA_TEST_MODEL", SummarizerAgent.DEFAULT_MODEL)
 
+    @pytest.mark.lemonade
     def test_summarize_transcript(self, data_txt_path, test_model) -> None:
         """Integration test: summarize a real meeting transcript via CLI"""
         # Create temporary output file
@@ -395,6 +398,7 @@ class TestSummarizer:
             if output_path.exists():
                 output_path.unlink()
 
+    @pytest.mark.lemonade
     def test_summarize_email(self, data_txt_path, test_model) -> None:
         """Integration test: summarize a real email via CLI"""
         # Add delay to prevent server overload from previous test
@@ -519,6 +523,7 @@ class TestSummarizer:
             if output_path.exists():
                 output_path.unlink()
 
+    @pytest.mark.lemonade
     def test_multiple_styles(self, data_txt_path, test_model) -> None:
         """Integration test: verify multiple summary styles work correctly via CLI"""
         # Add delay to prevent server overload from previous tests
@@ -651,6 +656,7 @@ class TestSummarizer:
             if output_path.exists():
                 output_path.unlink()
 
+    @pytest.mark.lemonade
     def test_summarize_directory(self, test_model) -> None:
         """Unit-style test for SummarizerAgent.summarize_directory on a temp dir."""
         # Build a temporary directory with a few small files
@@ -721,6 +727,7 @@ class TestSummarizer:
         # Error message should list allowed styles
         assert "Unsupported style" in str(exc.value)
 
+    @pytest.mark.lemonade
     def test_summarize_synthetic_pdf_ocr(self, data_pdf_path, test_model) -> None:
         """Test OCR extraction on a synthetically generated PDF"""
         if not HAS_REPORTLAB:
@@ -741,6 +748,7 @@ class TestSummarizer:
         )
         print(f"Synthetic PDF retained at: {synthetic_pdf_path}")
 
+    @pytest.mark.lemonade
     def test_summarize_pdf_ocr(self, data_pdf_path, test_model) -> None:
         self._run_pdf_cli_test(
             data_pdf_path,

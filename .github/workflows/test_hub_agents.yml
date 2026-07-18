@@ -1,0 +1,98 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Runs the test suites that ship inside hub agent packages which have no
+# dedicated test_*_agent.yml workflow (#1992). Packages with their own
+# workflow (analyst, browser, chat, code, docqa, email, routing, mcp-server)
+# are intentionally NOT in this matrix.
+#
+# LLM-integration tests inside these suites (summarize's `lemonade`-marked
+# tests, blender's `integration`-marked tests) skip cleanly on hosted
+# runners — the remaining tests run for real, and every suite is at least
+# imported and collected so bit-rot fails loudly.
+
+name: Hub Agent Package Tests
+
+on:
+  workflow_call:
+  push:
+    branches: [ main ]
+    paths:
+      - 'hub/agents/python/blender/**'
+      - 'hub/agents/python/doc-search/**'
+      - 'hub/agents/python/docker/**'
+      - 'hub/agents/python/emr/**'
+      - 'hub/agents/python/fileio/**'
+      - 'hub/agents/python/hello-world/**'
+      - 'hub/agents/python/sd/**'
+      - 'hub/agents/python/summarize/**'
+      - 'hub/agents/python/word-count/**'
+      - 'src/gaia/agents/base/**'
+      - 'src/gaia/agents/tools/**'
+      - 'setup.py'
+      - '.github/workflows/test_hub_agents.yml'
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'hub/agents/python/blender/**'
+      - 'hub/agents/python/doc-search/**'
+      - 'hub/agents/python/docker/**'
+      - 'hub/agents/python/emr/**'
+      - 'hub/agents/python/fileio/**'
+      - 'hub/agents/python/hello-world/**'
+      - 'hub/agents/python/sd/**'
+      - 'hub/agents/python/summarize/**'
+      - 'hub/agents/python/word-count/**'
+      - 'src/gaia/agents/base/**'
+      - 'src/gaia/agents/tools/**'
+      - 'setup.py'
+      - '.github/workflows/test_hub_agents.yml'
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test-hub-package:
+    name: Test ${{ matrix.package }}
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - blender
+          - doc-search
+          - docker
+          - emr
+          - fileio
+          - hello-world
+          - sd
+          - summarize
+          - word-count
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system -e .[dev]
+          uv pip install --system -e hub/agents/python/${{ matrix.package }}
+
+      - name: Run ${{ matrix.package }} package tests
+        run: |
+          python -m pytest hub/agents/python/${{ matrix.package }}/tests/ -v --tb=short
