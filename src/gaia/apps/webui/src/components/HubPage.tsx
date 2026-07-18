@@ -58,6 +58,9 @@ export function HubPage({ agents, activeAgentId, onSelect, onStartChat, onCreate
 
     const activeDevice = useChatStore((s) => s.activeDevice);
     const setStoreAgents = useChatStore((s) => s.setAgents);
+    // Loud discovery failure: if GET /api/agents fails, the installed list can't
+    // be trusted — surface it with a Retry instead of a silently-empty grid (#2118).
+    const agentsError = useChatStore((s) => s.agentsError);
 
     // ── Catalog fetch ──────────────────────────────────────────────────────
     const fetchCatalog = useCallback(async () => {
@@ -259,6 +262,16 @@ export function HubPage({ agents, activeAgentId, onSelect, onStartChat, onCreate
                     </div>
                 </div>
             </div>
+
+            {agentsError && (
+                <div className="agent-hub-banner agent-hub-banner-error" role="alert">
+                    <AlertTriangle size={14} />
+                    <span>Couldn’t load installed agents: {agentsError}</span>
+                    <button className="agent-hub-retry" onClick={refreshAgents}>
+                        <RotateCcw size={13} /> Retry
+                    </button>
+                </div>
+            )}
 
             {offline && (
                 <div className="agent-hub-banner agent-hub-banner-offline" role="status">

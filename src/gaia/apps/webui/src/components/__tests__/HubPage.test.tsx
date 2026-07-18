@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HubPage } from '../HubPage';
+import { useChatStore } from '../../stores/chatStore';
 import type { AgentInfo, AgentCatalogResponse, InstallStatus } from '../../types';
 import * as api from '../../services/api';
 
@@ -62,6 +63,8 @@ beforeEach(() => {
     mockedApi.listCatalog.mockResolvedValue(CATALOG);
     mockedApi.listAgents.mockResolvedValue({ agents: INSTALLED, total: INSTALLED.length });
     mockedApi.installAgent.mockResolvedValue(INSTALLED_STATUS);
+    // Keep discovery-error state from leaking between tests.
+    useChatStore.setState({ agentsError: null });
 });
 
 function renderHub() {
@@ -93,6 +96,25 @@ describe('HubPage lanes', () => {
         renderHub();
         expect(await screen.findByRole('alert')).toHaveTextContent('hub unreachable');
         expect(screen.getByRole('button', { name: /Retry/ })).toBeInTheDocument();
+    });
+});
+
+describe('HubPage agent-discovery failure (#2118)', () => {
+    beforeEach(() => {
+        useChatStore.setState({ agentsError: null });
+    });
+
+    it('surfaces a loud, actionable error with Retry when GET /api/agents fails', async () => {
+        const user = userEvent.setup();
+        useChatStore.setState({ agentsError: 'Server not reachable' });
+        renderHub();
+
+        const alert = await screen.findByRole('alert');
+        expect(alert).toHaveTextContent('Server not reachable');
+
+        await user.click(screen.getByRole('button', { name: /Retry/ }));
+        // Retry re-runs discovery (GET /api/agents) rather than a dead button.
+        await waitFor(() => expect(mockedApi.listAgents).toHaveBeenCalled());
     });
 });
 

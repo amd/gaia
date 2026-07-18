@@ -11,7 +11,7 @@ import { FileBrowser } from './components/FileBrowser';
 import { MemoryDashboard } from './components/MemoryDashboard';
 import { ScheduleManager } from './components/ScheduleManager';
 import { SettingsPage } from './components/SettingsPage';
-import { AgentHubView } from './components/AgentHubView';
+import { HubPage } from './components/HubPage';
 import { MobileAccessModal } from './components/MobileAccessModal';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { UpdateIndicator } from './components/UpdateIndicator';
@@ -61,6 +61,9 @@ function AnimatedPresence({ show, children, duration = 250 }: {
 
 function App() {
     const {
+        agents,
+        activeAgentId,
+        setActiveAgentId,
         currentSessionId,
         setSessions,
         setCurrentSession,
@@ -664,10 +667,12 @@ function App() {
                 ) : showSchedules ? (
                     <ScheduleManager />
                 ) : showHub ? (
-                    <AgentHubView
+                    <HubPage
+                        agents={agents}
+                        activeAgentId={activeAgentId}
+                        onSelect={setActiveAgentId}
                         onStartChat={handleStartAgentTask}
                         onCreateAgent={handleNewBuilderTask}
-                        onRetryAgents={loadAgents}
                     />
                 ) : (
                     <>
