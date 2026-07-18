@@ -733,18 +733,34 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             super().log_message(format, *args)
 
 
+def resolve_bind_host(host):
+    """Map the requested host to the address the socket actually binds.
+
+    The bridge is unauthenticated, so "localhost" must never widen beyond
+    loopback. On non-Windows it resolves to 127.0.0.1 (Python may otherwise
+    bind ::1, which curl can't reach by default). Binding all interfaces
+    requires the caller to pass a wildcard address explicitly, and is loudly
+    logged because it exposes the bridge to the whole network.
+    """
+    if host == "localhost" and sys.platform != "win32":
+        return "127.0.0.1"
+    if host in ("0.0.0.0", "::"):  # nosec B104 - explicit caller opt-in only
+        logger.warning(
+            "MCP bridge binding to ALL network interfaces (%s). The bridge is "
+            "UNAUTHENTICATED - anyone on the network can invoke its tools. "
+            "Use --host localhost unless network exposure is intentional.",
+            host,
+        )
+    return host
+
+
 def start_server(host="localhost", port=8765, base_url=None, verbose=False):
     """Start the HTTP MCP server."""
     # Fix Windows Unicode
     if sys.platform == "win32":
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
-    # Fix Linux IPv6 issue: When host is "localhost", Python's socket might bind
-    # to ::1 (IPv6) which curl can't connect to by default. Use 0.0.0.0 on Linux
-    # to bind to all IPv4 interfaces. Keep localhost on Windows where it works.
-    bind_host = host
-    if host == "localhost" and sys.platform != "win32":
-        bind_host = "0.0.0.0"
+    bind_host = resolve_bind_host(host)
 
     logger.info(f"Creating MCP bridge for {host}:{port}")
 
