@@ -13,7 +13,7 @@ const mockedApi = vi.mocked(api);
 
 beforeEach(() => {
     vi.clearAllMocks();
-    mockedApi.listCatalog.mockResolvedValue({ agents: [], total: 0, offline: false });
+    mockedApi.listCatalog.mockResolvedValue({ agents: [], offline: false });
     useChatStore.setState({ agents: [], activeAgentId: 'chat', agentsError: null });
 });
 
