@@ -612,11 +612,12 @@ async def health_check():
     return {"status": "ok", "service": "gaia-api"}
 
 
-# Agent /query surface (#2178 / V2-17): POST /v1/<agent>/query streams the
-# agentic loop through the always-on daemon relay (#2150). Mounted after the
-# OpenAI-compatible routes are declared; the router only claims the narrow
-# /v1/<agent>/query surface, so it never shadows /v1/chat/completions or
-# /v1/models (nor their 404/405). The API server stays a thin client — it
-# forwards only the daemon client token, never a sidecar bearer. Gated by
-# GAIA_API_KEY (§0.33), independent of the email wheel.
+# Agent /v1/<agent>/* surface (#2178 / V2-17, #2176): the /query loop streams
+# through the always-on daemon relay (#2150); the fixed-function agent routes
+# (e.g. the email agent's /v1/email/{triage,draft,send,…}) relay buffered.
+# Mounted after the OpenAI-compatible routes are declared; the router refuses the
+# reserved chat/models ids at routing time, so it never shadows
+# /v1/chat/completions or /v1/models (nor their 404/405). The API server stays a
+# thin client — it forwards only the daemon client token, never a sidecar
+# bearer. Gated by GAIA_API_KEY (§0.33), independent of the email wheel.
 app.include_router(build_agent_proxy_router())
