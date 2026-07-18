@@ -81,13 +81,27 @@ asarUnpack: []
 # Replaces the postPackage hook from forge.config.cjs.
 afterPack: ../../../../installer/scripts/after-pack.cjs
 
-# Auto-update provider — Phase F wires up the actual electron-updater logic;
-# for now this just declares where electron-updater should look.
+# Auto-update provider — R2-primary generic feed (#1724).
+#
+# The forward-update channel is a generic provider pointing at the R2 channel
+# base URL (fronted by the hub.amd-gaia.ai Worker), with a mutable `latest*.yml`
+# pointer (channel: latest) that the Worker re-points each release while
+# versioned artifacts stay immutable (A6/A7).
+#
+# This baked `url` is INERT at runtime: services/auto-updater.cjs always
+# re-resolves the feed (GAIA_UPDATE_FEED_URL env → feedUrl in
+# ~/.gaia/update-config.json) and calls setFeedURL itself; with nothing
+# configured it enters a loud "no channel" state instead of checking this feed.
+# The value exists only because electron-builder requires a non-empty,
+# expandable `url` to emit app-update.yml at build time.
+#
+# NOTE (#1719): the R2 publish feed + Worker `latest*.yml` channel pointer are
+# milestone-52 work and not live yet; the exact channel path under
+# hub.amd-gaia.ai is finalized there.
 publish:
-  provider: github
-  owner: amd
-  repo: gaia
-  vPrefixedTagName: true
+  provider: generic
+  url: https://hub.amd-gaia.ai/updates
+  channel: latest
 
 # Code signing — env-driven, off by default for unsigned local builds.
 # Phase H integrates SignPath for Windows and Apple Developer ID for macOS.

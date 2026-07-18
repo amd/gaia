@@ -44,6 +44,7 @@ beforeEach(() => {
   mockAutoUpdaterInstance._feedURL = null;
   delete process.env.GAIA_DISABLE_UPDATE;
   delete process.env.GAIA_UPDATE_PRERELEASE;
+  delete process.env.GAIA_UPDATE_FEED_URL;
 });
 
 afterEach(() => {
@@ -334,6 +335,9 @@ describe("installVersion()", () => {
   });
 
   test("throws a busy error when a check is already in progress", async () => {
+    // A configured feed so checkForUpdates() proceeds far enough to flip the
+    // in-progress guard (an unconfigured updater short-circuits to NO_CHANNEL).
+    process.env.GAIA_UPDATE_FEED_URL = "https://updates.example.com/gaia";
     const mod = loadModule();
     const win = makeMockWindow();
     mod.init(win);
@@ -392,7 +396,10 @@ describe("pin gating", () => {
 // ── Tests: clearPin ────────────────────────────────────────────────────────────
 
 describe("clearPin()", () => {
-  test("sets autoDownload=true, allowDowngrade=false, restores github feed, clears pin file", () => {
+  test("sets autoDownload=true, allowDowngrade=false, restores the R2 forward feed, clears pin file", () => {
+    // A configured R2 forward feed is what resume restores to (#1724).
+    process.env.GAIA_UPDATE_FEED_URL = "https://updates.example.com/gaia";
+
     // Write a pin
     const gaiaDirPath = path.join(tmpHome, ".gaia");
     fs.mkdirSync(gaiaDirPath, { recursive: true });
@@ -412,11 +419,15 @@ describe("clearPin()", () => {
 
     expect(mockAutoUpdaterInstance.autoDownload).toBe(true);
     expect(mockAutoUpdaterInstance.allowDowngrade).toBe(false);
-    // Feed should be restored to github
+    // Feed should be restored to the generic R2 forward channel.
     expect(mockAutoUpdaterInstance._feedURL).not.toBeNull();
-    expect(mockAutoUpdaterInstance._feedURL.provider).toBe("github");
+    expect(mockAutoUpdaterInstance._feedURL.provider).toBe("generic");
+    expect(mockAutoUpdaterInstance._feedURL.url).toBe(
+      "https://updates.example.com/gaia"
+    );
+    expect(mockAutoUpdaterInstance._feedURL.channel).toBe("latest");
 
-    // Pin file should be cleared
+    // Pin file should be cleared (feedUrl, if any, preserved).
     const configPath = path.join(gaiaDirPath, "update-config.json");
     const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
     expect(config.pinnedVersion).toBeNull();

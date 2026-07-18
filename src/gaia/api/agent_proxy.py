@@ -39,6 +39,7 @@ from typing import Optional
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
+from starlette.convertors import Convertor, register_url_convertor
 
 from gaia.daemon.errors import DaemonError
 from gaia.logger import get_logger
@@ -56,12 +57,53 @@ CONNECT_TIMEOUT = 10.0
 #: daemon, so it matches the daemon relay's own long per-request budget.
 READ_TIMEOUT = 300.0
 
+#: HTTP methods the fixed-function relay accepts. OPTIONS/HEAD are intentionally
+#: left to the CORS middleware / FastAPI defaults.
+RELAY_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"]
+
 #: First-segment ids owned by the OpenAI-compatible surface — never relayed as
-#: agents. The proxy only claims the ``/v1/<agent>/query`` surface (so it can't
-#: shadow the OpenAI routes' 404/405 semantics), but ``/v1/chat/query`` and
-#: ``/v1/models/query`` would still match the pattern; this blocks them so a
-#: reserved id can never masquerade as an agent.
+#: agents. The ``/v1/<agent>/query`` routes use the default ``{agent_id}``
+#: convertor and reject these ids in-handler (a stray ``/v1/chat/query`` →
+#: 404). The fixed-function catch-all instead uses the ``relayagent`` convertor
+#: below, whose regex refuses these ids at *routing* time so it never shadows
+#: the OpenAI routes' native 404/405 (e.g. ``GET /v1/chat/completions`` → 405).
 _RESERVED_AGENT_IDS = frozenset({"chat", "models"})
+
+
+class _RelayAgentConvertor(Convertor):
+    """Path convertor for the fixed-function relay's ``{agent_id}`` segment.
+
+    Matches any single segment EXCEPT the reserved OpenAI ids (``chat`` /
+    ``models``). A plain ``{agent_id}`` would match ``GET /v1/chat/completions``
+    and steal FastAPI's native 405; refusing reserved ids at match time leaves
+    those paths to the OpenAI routes' own 404/405 semantics.
+    """
+
+    regex = "(?!chat/)(?!models/)[^/]+"
+
+    def convert(self, value: str) -> str:
+        return value
+
+    def to_string(self, value: str) -> str:
+        return value
+
+
+class _RelaySubpathConvertor(Convertor):
+    """Path convertor for the relay's trailing sub-path — like ``:path`` but
+    NON-empty, so ``/v1/<agent>`` and ``/v1/nonexistent`` (no sub-path) fall
+    through to FastAPI's 404 instead of being relayed as an agent root."""
+
+    regex = ".+"
+
+    def convert(self, value: str) -> str:
+        return value
+
+    def to_string(self, value: str) -> str:
+        return value
+
+
+register_url_convertor("relayagent", _RelayAgentConvertor())
+register_url_convertor("relaysubpath", _RelaySubpathConvertor())
 
 # Hop-by-hop headers never forwarded in either direction (RFC 9110 §7.6.1).
 _HOP_BY_HOP = frozenset(
@@ -216,15 +258,24 @@ async def _acquire_daemon():
 
 
 def build_agent_proxy_router() -> APIRouter:
-    """API-key-guarded router relaying the ``/v1/<agent>/query`` surface to the
-    daemon's streaming relay (#2150). The daemon does the sidecar-bearer swap, so
-    this proxy holds only the daemon client token.
+    """API-key-guarded router relaying the ``/v1/<agent>/*`` surface to the
+    daemon's relay (#2150). The daemon does the sidecar-bearer swap, so this
+    proxy holds only the daemon client token.
 
-    Scoped to ``POST /v1/{agent}/query`` and ``POST
-    /v1/{agent}/query/{run_id}/cancel`` on purpose: a generic ``/v1/{agent}/*``
-    catch-all would swallow the OpenAI surface's own 404/405 (e.g. ``GET
-    /v1/chat/completions`` or ``GET /v1/nonexistent``) behind this router's
-    API-key dependency. Narrow routes leave those to FastAPI's default routing.
+    Two kinds of route, both API-key gated:
+
+    * ``POST /v1/{agent}/query`` and ``.../query/{run_id}/cancel`` — the
+      streaming agent loop (SSE, relayed unbuffered).
+    * ``{METHOD} /v1/{agent}/{subpath}`` — the fixed-function agent surface
+      (e.g. the email agent's ``/v1/email/{triage,draft,send,health,…}``),
+      buffered passthrough. Without this, those routes 404 on ``gaia api`` even
+      though the sidecar serves them (#2176).
+
+    The fixed-function catch-all uses the ``relayagent`` convertor so it refuses
+    the reserved OpenAI ids at routing time (never shadowing ``GET
+    /v1/chat/completions``'s 405) and the ``relaysubpath`` convertor so a bare
+    ``/v1/<agent>`` / ``/v1/nonexistent`` still yields FastAPI's 404. The
+    ``/query`` routes are declared first so they win for that exact path.
     """
     require_api_key = build_require_api_key()
     router = APIRouter(dependencies=[Depends(require_api_key)])
@@ -236,6 +287,12 @@ def build_agent_proxy_router() -> APIRouter:
     @router.post("/v1/{agent_id}/query/{run_id}/cancel")
     async def proxy_query_cancel(agent_id: str, run_id: str, request: Request):
         return await _relay(agent_id, f"query/{run_id}/cancel", request)
+
+    @router.api_route(
+        "/v1/{agent_id:relayagent}/{path:relaysubpath}", methods=RELAY_METHODS
+    )
+    async def proxy_fixed(agent_id: str, path: str, request: Request):
+        return await _relay(agent_id, path, request)
 
     async def _relay(agent_id: str, path: str, request: Request):
         if agent_id in _RESERVED_AGENT_IDS:

@@ -44,6 +44,7 @@ markers = [
     "integration: marks tests as integration tests (require external services like Lemonade server)",
     "gmail_live: marks tests that hit the live Gmail API (requires GAIA_GMAIL_LIVE_ACCOUNT env var; never in CI)",
     "real_model: marks tests that require a real Lemonade model server and real model inference (self-hosted runner only; see #1297)",
+    "distributed_seams: marks the consolidated daemon<->sidecar seam contract suite (V2-19 / #2180); deterministic, runs in normal CI, skips seams not yet merged",
 ]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

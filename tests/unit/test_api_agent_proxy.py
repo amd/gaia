@@ -186,6 +186,52 @@ def test_reserved_chat_query_not_relayed_as_agent(api_client, with_api_key):
 
 
 @needs_fastapi
+def test_fixed_function_route_claimed_by_relay_not_404(api_client, no_api_key):
+    """Regression for #2176: a fixed-function agent route (e.g. the email
+    agent's POST /v1/email/triage) must be CLAIMED by the relay on ``gaia api``,
+    not answered with FastAPI's 404. With no API key configured it hits the
+    relay's own 503 (surface disabled) — proving the route reaches the relay
+    (before the fix it 404'd because the relay only claimed /query)."""
+    r = api_client.post("/v1/email/triage", json={"payload": {}})
+    assert r.status_code == 503
+    assert API_KEY_ENV in r.json()["detail"]  # names the remedy
+
+
+@needs_fastapi
+def test_fixed_function_route_daemon_down_is_loud_503(
+    api_client, with_api_key, monkeypatch
+):
+    """A fixed-function route with the daemon down fails loud (503), never a
+    silent in-process fallback (#2176)."""
+    from gaia.daemon.errors import DaemonStartError
+
+    def _boom():
+        raise DaemonStartError("the daemon did not become healthy within 30s.")
+
+    monkeypatch.setattr("gaia.daemon.client.start_or_attach", _boom)
+    r = api_client.post(
+        "/v1/email/triage",
+        json={"payload": {}},
+        headers={"Authorization": f"Bearer {_API_KEY}"},
+    )
+    assert r.status_code == 503
+    assert "gaia daemon status" in r.json()["detail"]  # names where to look
+
+
+@needs_fastapi
+def test_fixed_function_reserved_id_not_relayed(api_client, with_api_key):
+    """The fixed-function catch-all must not relay the reserved OpenAI ids: a
+    two-segment /v1/chat/<x> is not an agent route (never reaches the daemon)."""
+    r = api_client.post(
+        "/v1/chat/completions/extra",
+        json={},
+        headers={"Authorization": f"Bearer {_API_KEY}"},
+    )
+    # 'chat' is refused by the relayagent convertor, so nothing matches → 404.
+    assert r.status_code == 404
+
+
+@needs_fastapi
 def test_openai_routes_not_shadowed_by_relay(api_client, with_api_key):
     """/v1/models and /v1/chat/completions keep their own handlers even with the
     query relay mounted and an API key set."""
@@ -253,7 +299,7 @@ class _FakeDaemon:
         import asyncio
 
         from fastapi import FastAPI, Request
-        from fastapi.responses import StreamingResponse
+        from fastapi.responses import JSONResponse, StreamingResponse
 
         app = FastAPI()
         daemon = self
@@ -264,6 +310,14 @@ class _FakeDaemon:
         )
         async def relay(agent_id: str, path: str, request: Request):
             daemon.seen_auth.append(request.headers.get("authorization"))
+
+            # Fixed-function (non-/query) routes answer buffered JSON, mimicking
+            # the daemon relaying a sidecar's e.g. /v1/email/triage response.
+            if path != "query" and not path.endswith("/cancel"):
+                return JSONResponse(
+                    {"agent": agent_id, "path": path, "relayed": True},
+                    status_code=200,
+                )
 
             async def _events():
                 try:
@@ -397,6 +451,34 @@ def test_sse_relayed_unbuffered_first_event_before_upstream_completes(live_proxy
         daemon.release.set()
         rest = list(events)
     assert [e["type"] for e in rest] == ["final"]
+
+
+@needs_live_servers
+def test_fixed_function_relayed_buffered_through_core_server(live_proxy):
+    """End-to-end regression for #2176: a fixed-function agent route relays
+    through the REAL ``gaia api`` server (buffered passthrough) to the daemon —
+    status, body, and the DAEMON token all cross. This is the coverage that
+    exercises the email fixed-function surface via the core server, not only the
+    wheel's own app."""
+    import requests
+
+    daemon, api_url = live_proxy
+    r = requests.post(
+        f"{api_url}/v1/email/triage",
+        json={"payload": {"kind": "single"}},
+        headers=_auth(),
+        timeout=(5, 15),
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body == {"agent": "email", "path": "triage", "relayed": True}
+    # A GET fixed-function route relays too (email health/version/init are GET).
+    rg = requests.get(f"{api_url}/v1/email/health", headers=_auth(), timeout=(5, 15))
+    assert rg.status_code == 200
+    assert rg.json()["path"] == "health"
+    # The daemon saw the DAEMON client token, never the API key.
+    assert daemon.seen_auth[-1] == f"Bearer {_DAEMON_TOKEN}"
+    assert f"Bearer {_API_KEY}" not in daemon.seen_auth
 
 
 @needs_live_servers

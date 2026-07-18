@@ -4,9 +4,19 @@
 /**
  * auto-updater.cjs — GAIA Agent UI auto-update service.
  *
- * Wraps `electron-updater` for the GitHub Releases auto-update flow.
+ * Wraps `electron-updater` against a CONFIGURABLE generic feed (R2-primary —
+ * issue #1724). The forward-update channel URL is resolved at runtime from
+ * `GAIA_UPDATE_FEED_URL` or `feedUrl` in ~/.gaia/update-config.json, and the
+ * app fetches the mutable `latest*.yml` channel pointer from it. When no feed
+ * is configured the updater enters a loud `no-channel` state (no silent
+ * no-op). The actual R2 publish feed + mutable channel pointer is milestone-52
+ * work (#1719); until it lands, point the env var at any generic feed (a local
+ * mock works) to exercise the path.
+ *
  * Implements §4 Layer 3 + §7 Phase F of docs/plans/desktop-installer.mdx.
- * Issue #1336: adds in-app rollback to a specific previous release.
+ * Issue #1336: in-app rollback to a specific previous release still lists and
+ * installs from GitHub Releases (that path is independent of the forward feed
+ * and migrates to R2 with #1719).
  *
  * Behavior:
  *   - First check 10 seconds after `init()` is called (typically from
@@ -51,6 +61,12 @@ const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // Subsequent checks every 4h
 const LOG_PATH = path.join(os.homedir(), ".gaia", "electron-updater.log");
 const UPDATE_CONFIG_PATH = path.join(os.homedir(), ".gaia", "update-config.json");
 
+// Mutable channel pointer name. electron-updater's generic provider fetches
+// `${feedUrl}/${DEFAULT_CHANNEL}.yml` (+ per-platform variants). The Hub Worker
+// re-points this file each release while versioned artifacts stay immutable —
+// that split is the A6/A7 resolution (#1724).
+const DEFAULT_CHANNEL = "latest";
+
 // per_page=100 is the GitHub API max for a single page; we fetch broadly so
 // draft/prerelease/platform filtering still yields a full page of installable
 // releases before the display cap below. >100 releases would need pagination
@@ -72,6 +88,8 @@ const STATES = Object.freeze({
   DOWNLOADED: "downloaded",
   ERROR: "error",
   DISABLED: "disabled",
+  // No forward-update feed configured — loud, actionable, never a silent no-op.
+  NO_CHANNEL: "no-channel",
 });
 
 // ── Module state ─────────────────────────────────────────────────────────────
@@ -93,6 +111,8 @@ let scheduledTimeout = null;
 let initialCheckTimeout = null;
 let ipcHandlersRegistered = false;
 let initialized = false;
+// The resolved forward-update feed URL (generic/R2), or null when unconfigured.
+let forwardFeedUrl = null;
 
 // Lazy-loaded Electron references (populated inside init()).
 let electronApi = null; // { dialog, ipcMain, app }
@@ -147,11 +167,84 @@ function _loadPin() {
  */
 function _savePin(pinnedVersion) {
   fs.mkdirSync(path.dirname(UPDATE_CONFIG_PATH), { recursive: true });
+  // Merge into any existing config so we don't clobber a persisted feedUrl.
+  let existing = {};
+  try {
+    if (fs.existsSync(UPDATE_CONFIG_PATH)) {
+      existing = JSON.parse(fs.readFileSync(UPDATE_CONFIG_PATH, "utf8")) || {};
+    }
+  } catch {
+    existing = {};
+  }
   fs.writeFileSync(
     UPDATE_CONFIG_PATH,
-    JSON.stringify({ pinnedVersion }, null, 2),
+    JSON.stringify({ ...existing, pinnedVersion }, null, 2),
     "utf8"
   );
+}
+
+// ── Forward-update feed resolution (issue #1724) ────────────────────────────────
+
+/**
+ * Resolve the generic forward-update feed URL, or null if none is configured.
+ * Precedence: GAIA_UPDATE_FEED_URL env > feedUrl in update-config.json.
+ */
+function _resolveFeedUrl() {
+  const envUrl = process.env.GAIA_UPDATE_FEED_URL;
+  if (typeof envUrl === "string" && envUrl.trim()) return envUrl.trim();
+  try {
+    if (fs.existsSync(UPDATE_CONFIG_PATH)) {
+      const cfg = JSON.parse(fs.readFileSync(UPDATE_CONFIG_PATH, "utf8"));
+      if (cfg && typeof cfg.feedUrl === "string" && cfg.feedUrl.trim()) {
+        return cfg.feedUrl.trim();
+      }
+    }
+  } catch (err) {
+    log("warn", "Failed to read feedUrl from update-config.json:", err && err.message);
+  }
+  return null;
+}
+
+/**
+ * Point electron-updater at the configured generic (R2) feed + mutable channel.
+ * When nothing is configured, enter the loud NO_CHANNEL state and set no feed —
+ * an unconfigured updater must never silently pretend it's up to date.
+ *
+ * @returns {boolean} true when a feed was applied, false when NO_CHANNEL.
+ */
+function _applyForwardFeed() {
+  if (!autoUpdaterRef) return false;
+  const url = _resolveFeedUrl();
+  if (!url) {
+    forwardFeedUrl = null;
+    setState({
+      status: STATES.NO_CHANNEL,
+      error:
+        "No update channel configured — set GAIA_UPDATE_FEED_URL (or feedUrl " +
+        "in ~/.gaia/update-config.json) to your R2 channel base URL. " +
+        "Auto-update is paused until a feed is configured.",
+    });
+    log("warn", "No update feed configured — auto-update paused (NO_CHANNEL)");
+    return false;
+  }
+  try {
+    autoUpdaterRef.setFeedURL({
+      provider: "generic",
+      url,
+      channel: DEFAULT_CHANNEL,
+    });
+    forwardFeedUrl = url;
+    log("info", `Update feed set (generic): ${url} [channel=${DEFAULT_CHANNEL}]`);
+    return true;
+  } catch (err) {
+    forwardFeedUrl = null;
+    setState({
+      status: STATES.ERROR,
+      error: `Failed to set update feed URL: ${(err && err.message) || String(err)}`,
+    });
+    log("error", "Failed to set feed URL:", err && err.message);
+    return false;
+  }
 }
 
 // ── State management ─────────────────────────────────────────────────────────
@@ -359,8 +452,10 @@ async function installVersion(tag) {
 /**
  * Clear the version pin and resume normal auto-updates.
  *
- * Restores the GitHub provider feed, sets autoDownload=true, and clears
- * allowDowngrade so the next check is the normal forward-only flow.
+ * Restores the configured forward (R2 generic) feed, sets autoDownload=true,
+ * and clears allowDowngrade so the next check is the normal forward-only flow.
+ * If no feed is configured, resume lands in the loud NO_CHANNEL state rather
+ * than silently reverting to a stale rollback feed.
  */
 function clearPin() {
   // A failed clear is non-fatal — worst case the stale pin re-pauses updates
@@ -375,17 +470,9 @@ function clearPin() {
   if (autoUpdaterRef) {
     autoUpdaterRef.autoDownload = true;
     autoUpdaterRef.allowDowngrade = false;
-    // Restore the GitHub provider (overrides any generic/tagged feed set by
-    // installVersion). Owner/repo must match electron-builder.yml publish block.
-    try {
-      autoUpdaterRef.setFeedURL({
-        provider: "github",
-        owner: "amd",
-        repo: "gaia",
-      });
-    } catch (err) {
-      log("warn", "Failed to restore GitHub feed on resume:", err && err.message);
-    }
+    // Restore the forward channel (overrides any generic/tagged rollback feed
+    // set by installVersion). Loud NO_CHANNEL if unconfigured.
+    _applyForwardFeed();
   }
 
   log("info", "Version pin cleared — auto-updates resumed");
@@ -402,6 +489,12 @@ async function checkForUpdates() {
   if (!autoUpdaterRef) {
     log("warn", "checkForUpdates called before init — ignoring");
     return;
+  }
+  // No forward feed and not pinned → surface the loud NO_CHANNEL state instead
+  // of asking electron-updater to check a feed that doesn't exist. Re-resolve
+  // first so a feed written to config after init() is picked up here.
+  if (!forwardFeedUrl && !state.pinnedVersion) {
+    if (!_applyForwardFeed()) return;
   }
   if (checkInProgress) {
     log("info", "Skipping check — another check is already in progress");
@@ -691,6 +784,25 @@ function init(mainWindow) {
     log("warn", "Failed to register IPC handlers:", err && err.message);
   }
 
+  // Point the updater at the configured R2 generic feed (#1724). When a pin is
+  // active, installVersion() owns the feed (rollback path), so skip. With no
+  // pin and no feed, _applyForwardFeed enters the loud NO_CHANNEL state and we
+  // don't schedule checks against a nonexistent feed.
+  let feedReady = true;
+  if (!savedPin) {
+    feedReady = _applyForwardFeed();
+  }
+
+  initialized = true;
+
+  if (!feedReady && !savedPin) {
+    log(
+      "info",
+      "Auto-updater initialized without a channel — checks paused until a feed is configured"
+    );
+    return;
+  }
+
   // First check after CHECK_DELAY_MS, then every CHECK_INTERVAL_MS.
   initialCheckTimeout = setTimeout(async () => {
     try {
@@ -701,7 +813,6 @@ function init(mainWindow) {
     scheduleNextCheck();
   }, CHECK_DELAY_MS);
 
-  initialized = true;
   log(
     "info",
     `Auto-updater initialized; first check in ${CHECK_DELAY_MS}ms`

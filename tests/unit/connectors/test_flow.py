@@ -276,6 +276,85 @@ class TestBrowserOpenNonBlocking:
         await cancel_flow(results[0]["flow_id"])
 
 
+class TestGrantOnConnect:
+    """#2117 — grants requested at ``start_authorization`` time are committed
+    to the ledger the moment the token exchange succeeds, so connecting a
+    mailbox grants it to the email agent in the same flow (no CLI step)."""
+
+    _EMAIL_SCOPES = [
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.send",
+    ]
+
+    @respx.mock
+    async def test_grant_committed_on_success(self, google_provider):
+        from gaia.connectors.grants import list_agent_grants
+
+        _mock_token_endpoint()
+        info = await start_authorization(
+            "google",
+            scopes=self._EMAIL_SCOPES,
+            grant_agents={"installed:email": self._EMAIL_SCOPES},
+        )
+        params = parse_qs(urlparse(info["authorization_url"]).query)
+        redirect_uri = params["redirect_uri"][0]
+        state = params["state"][0]
+
+        async with httpx.AsyncClient() as c:
+            resp = await c.get(f"{redirect_uri}?code=ok&state={state}")
+        assert resp.status_code == 200
+        await asyncio.wait_for(complete_authorization(info["flow_id"]), timeout=2.0)
+
+        grants = list_agent_grants("google")
+        assert grants.get("installed:email") == self._EMAIL_SCOPES
+
+    @respx.mock
+    async def test_no_grant_agents_leaves_ledger_empty(self, google_provider):
+        from gaia.connectors.grants import list_agent_grants
+
+        _mock_token_endpoint()
+        info = await start_authorization("google", scopes=["openid"])
+        params = parse_qs(urlparse(info["authorization_url"]).query)
+        redirect_uri = params["redirect_uri"][0]
+        state = params["state"][0]
+
+        async with httpx.AsyncClient() as c:
+            await c.get(f"{redirect_uri}?code=ok&state={state}")
+        await asyncio.wait_for(complete_authorization(info["flow_id"]), timeout=2.0)
+
+        assert list_agent_grants("google") == {}
+
+    @respx.mock
+    async def test_grant_failure_fails_flow_loudly(self, google_provider, monkeypatch):
+        """A grant that cannot be written must fail the whole flow — connecting
+        without granting is the exact silent half-success this flow prevents."""
+        from gaia.connectors.errors import ConnectorsError
+
+        _mock_token_endpoint()
+
+        def _boom(*_args, **_kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr("gaia.connectors.grants.grant_agent", _boom)
+
+        info = await start_authorization(
+            "google",
+            scopes=self._EMAIL_SCOPES,
+            grant_agents={"installed:email": self._EMAIL_SCOPES},
+        )
+        params = parse_qs(urlparse(info["authorization_url"]).query)
+        redirect_uri = params["redirect_uri"][0]
+        state = params["state"][0]
+
+        async with httpx.AsyncClient() as c:
+            resp = await c.get(f"{redirect_uri}?code=ok&state={state}")
+        # The callback surfaces the failure page, not the success page.
+        assert resp.status_code == 502
+
+        with pytest.raises(ConnectorsError, match="failed to grant"):
+            await asyncio.wait_for(complete_authorization(info["flow_id"]), timeout=2.0)
+
+
 class TestDecodeEmailFromIdToken:
     """Unit tests for _decode_email_from_id_token — the multi-provider claim
     fallback added in the provider-aware forward-connection fix."""
