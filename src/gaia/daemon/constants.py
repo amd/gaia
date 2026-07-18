@@ -27,3 +27,24 @@ AUTH_SCHEME = "Bearer"
 
 # Route prefix for the versioned client API surface.
 API_PREFIX = "/daemon/v1"
+
+# Route prefix for the daemon-owned callback API surface (§0.31) — the reverse
+# leg sidecars and host-side components call back INTO. V2-11 mounts only the
+# model-slot broker's lease route here; V2-12 adds memory/rag/sessions/audit.
+# Authenticated by the caller's launch token (sidecar) or the daemon client
+# token (host-side), NOT the client-plane token contract on API_PREFIX.
+HOST_API_PREFIX = "/host/v1"
+
+# Env channel the daemon uses to advertise the broker to the processes it
+# spawns (and host-side components discover via start_or_attach). A caller
+# routes model loads through the broker only when GAIA_MODEL_BROKER_URL is set;
+# when it is set but the broker is unreachable, the caller fails LOUD rather
+# than doing a silent direct load that would race-evict (CLAUDE.md).
+BROKER_URL_ENV_VAR = "GAIA_MODEL_BROKER_URL"
+BROKER_TOKEN_ENV_VAR = "GAIA_MODEL_BROKER_TOKEN"
+# 0600-file delivery of the broker credential (#2149 posture): when set, it
+# names a file whose contents are the credential. Preferred over the bare-env
+# var so a sidecar's launch secret is never copied into inspectable process env.
+BROKER_TOKEN_FILE_ENV_VAR = "GAIA_MODEL_BROKER_TOKEN_FILE"
+# Optional per-caller default lease priority ("interactive"|"background").
+BROKER_PRIORITY_ENV_VAR = "GAIA_MODEL_LEASE_PRIORITY"
