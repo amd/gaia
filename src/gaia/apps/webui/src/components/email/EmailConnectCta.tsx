@@ -27,6 +27,45 @@ import * as api from '../../services/api';
 import { useChatStore } from '../../stores/chatStore';
 import './EmailConnectCta.css';
 
+// The base agent id this CTA belongs to. The connect CTA lives in the email
+// chat, so it may only grant the email agent — never co-installed agents that
+// happen to declare the same mailbox connector.
+const EMAIL_AGENT_ID = 'email';
+
+/**
+ * #2117 — resolve the grant target for the email connect CTA.
+ *
+ * Returns the namespaced id of the EMAIL agent (and only it) when that agent
+ * declares ``connectorId``. Co-installed agents that also declare the connector
+ * (e.g. ``installed:connectors-demo`` for Google) are deliberately excluded:
+ * granting them here would hand them the mailbox scopes with no consent surface,
+ * bypassing the per-agent grant model. Those agents are granted explicitly from
+ * Settings → Connectors instead.
+ *
+ * Filtering by base ``id`` keeps this robust to the namespace prefix
+ * (``installed:`` vs ``builtin:``). Returns ``[]`` if the email agent isn't
+ * present or doesn't declare the connector — a connect-only flow, never an
+ * over-grant.
+ */
+export function emailAgentGrantIds(
+    agents: Array<{
+        id?: string;
+        namespaced_agent_id?: string;
+        required_connections?: Array<{ connector_id: string }>;
+    }>,
+    connectorId: string,
+): string[] {
+    return agents
+        .filter(
+            (a) =>
+                a.id === EMAIL_AGENT_ID &&
+                !!a.namespaced_agent_id &&
+                (a.required_connections?.some((rc) => rc.connector_id === connectorId) ??
+                    false),
+        )
+        .map((a) => a.namespaced_agent_id!);
+}
+
 // ── Detection ────────────────────────────────────────────────────────────────
 
 /** Match the canonical prefixes the connectors framework emits. The
@@ -177,20 +216,14 @@ export function EmailConnectCta({
     const [googleDone, setGoogleDone] = useState(false);
     const [microsoftDone, setMicrosoftDone] = useState(false);
 
-    // #2117 — resolve the namespaced ids of agents that declare each mailbox
-    // connector so connecting grants them in the same flow. This CTA is
-    // email-initiated, so the email agent is granted the moment consent
-    // completes — no follow-up CLI grant, no "no grant for google" dead end.
+    // #2117 — this CTA is email-initiated, so connecting grants ONLY the email
+    // agent the moment consent completes (no follow-up CLI grant, no "no grant
+    // for google" dead end). Co-installed agents that declare the same connector
+    // are NOT granted here — that would bypass their per-agent consent; the user
+    // grants them explicitly from Settings → Connectors.
     const { agents } = useChatStore();
     const grantAgentsFor = useCallback(
-        (cid: string): string[] =>
-            agents
-                .filter(
-                    (a) =>
-                        a.namespaced_agent_id &&
-                        a.required_connections?.some((rc) => rc.connector_id === cid),
-                )
-                .map((a) => a.namespaced_agent_id!),
+        (cid: string): string[] => emailAgentGrantIds(agents, cid),
         [agents],
     );
 
