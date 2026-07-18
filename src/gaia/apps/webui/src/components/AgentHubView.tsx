@@ -3,7 +3,7 @@
 
 import { ArrowLeft, AlertTriangle, RotateCcw } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
-import { AgentHubGrid } from './AgentHubGrid';
+import { HubPage } from './HubPage';
 import './SettingsPage.css';
 import './AgentHub.css';
 
@@ -48,7 +48,7 @@ export function AgentHubView({ onStartChat, onCreateAgent, onRetryAgents }: Agen
                         </button>
                     </div>
                 )}
-                <AgentHubGrid
+                <HubPage
                     agents={agents}
                     activeAgentId={activeAgentId}
                     onSelect={setActiveAgentId}
