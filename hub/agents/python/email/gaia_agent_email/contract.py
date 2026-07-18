@@ -81,7 +81,14 @@ CATEGORY_PERSONAL = "PERSONAL"
 #     error, terminated by a single final or error).
 #   - POST /v1/email/query/{run_id}/cancel — stop tool execution between steps.
 # No existing shape changed, so 2.3 consumers keep working (additive MINOR).
-SCHEMA_VERSION = "2.4"
+# 2.5 is additive over 2.4 (#2154): the OAuth forward-OUT intake surface
+#   - POST /v1/connections/{provider}  — the daemon forwards a SHORT-LIVED
+#     access token (never a refresh token) for a granted connector; the sidecar
+#     stores it in memory and answers mailbox calls with it.
+#   - GET /v1/connections               — metadata-only view of forwarded creds.
+#   - DELETE /v1/connections/{provider} — withdraw a forward (revoke/uninstall).
+# No existing shape changed, so 2.4 consumers keep working (additive MINOR).
+SCHEMA_VERSION = "2.5"
 
 # Maximum number of items in a single batch request. Protects the single-tenant
 # local model slot from runaway batches. Enforced via Pydantic max_length.
@@ -1354,6 +1361,85 @@ class EmailPreScanResponse(_Strict):
 
 
 # ---------------------------------------------------------------------------
+# OAuth forward-OUT intake (schema 2.5, #2154) — the daemon (custody home)
+# forwards a short-lived access token for a granted connector to the sidecar.
+# The sidecar NEVER receives the refresh token or the OAuth client secret; it
+# holds the access token in memory and answers mailbox calls with it.
+# ---------------------------------------------------------------------------
+
+
+class ForwardedConnectionRequest(_Strict):
+    """A short-lived connector access token forwarded by the daemon (#2154).
+
+    Deliberately carries NO ``refresh_token`` and NO ``client_secret`` — the
+    daemon owns refresh; forwarding either across the process boundary is the
+    exact posture forward-out exists to prevent. The provider is the path
+    parameter, so it is not repeated in the body.
+    """
+
+    access_token: str = Field(
+        ...,
+        min_length=1,
+        description="The short-lived OAuth access token (bearer). Non-empty.",
+    )
+    scopes: List[str] = Field(
+        default_factory=list,
+        description="Scopes this access token carries (the granted set).",
+    )
+    expires_at: float = Field(
+        ...,
+        gt=0,
+        description=(
+            "Wall-clock UNIX expiry of the access token, so the sidecar knows "
+            "when to expect a re-forward. Must be positive."
+        ),
+    )
+    account_email: Optional[str] = Field(
+        default=None,
+        description="Mailbox address the token is for (display only), if known.",
+    )
+
+
+class ForwardedConnectionSummary(_Strict):
+    """Metadata echo for a forwarded connection. NEVER includes the token."""
+
+    provider: str = Field(..., description="Connector provider id, e.g. 'google'.")
+    scopes: List[str] = Field(
+        default_factory=list, description="Scopes the forwarded token carries."
+    )
+    account_email: Optional[str] = Field(
+        default=None, description="Mailbox address (display only), or null."
+    )
+    expires_at: float = Field(
+        ..., description="Wall-clock UNIX expiry of the forwarded access token."
+    )
+    forwarded: bool = Field(
+        default=True, description="Always true — this is a forwarded credential."
+    )
+
+
+class ForwardedConnectionsResponse(_Strict):
+    """Metadata-only list of the sidecar's forwarded connections (#2154)."""
+
+    schema_version: str = Field(
+        default=SCHEMA_VERSION, description="Echoes the contract version."
+    )
+    connections: List[ForwardedConnectionSummary] = Field(
+        default_factory=list, description="One entry per forwarded connection."
+    )
+
+
+class ForwardedConnectionWithdrawResponse(_Strict):
+    """Result of withdrawing a forwarded connection (#2154). Idempotent —
+    ``withdrawn`` is False when there was nothing to drop."""
+
+    provider: str = Field(..., description="Connector provider id that was targeted.")
+    withdrawn: bool = Field(
+        ..., description="True when a forwarded credential was removed, else False."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -1435,6 +1521,11 @@ __all__ = [
     "CalendarEventResponse",
     "CalendarRespondRequest",
     "CalendarRespondResponse",
+    # OAuth forward-out intake (schema 2.5, #2154).
+    "ForwardedConnectionRequest",
+    "ForwardedConnectionSummary",
+    "ForwardedConnectionsResponse",
+    "ForwardedConnectionWithdrawResponse",
     "parse_request",
     "parse_response",
 ]

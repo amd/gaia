@@ -2073,18 +2073,23 @@ class MemoryStore:
 
         Returns: {"items": [...], "total": N, "offset": N, "limit": N}
         """
-        # Whitelist sort columns
+        # Whitelist sort columns — map caller input to our own literal column
+        # names so no external string is ever interpolated into the SQL.
         allowed_sort = {
-            "updated_at",
-            "created_at",
-            "confidence",
-            "category",
-            "context",
-            "content",
-            "use_count",
+            "updated_at": "updated_at",
+            "created_at": "created_at",
+            "confidence": "confidence",
+            "category": "category",
+            "context": "context",
+            "content": "content",
+            "use_count": "use_count",
         }
-        if sort_by not in allowed_sort:
-            sort_by = "updated_at"
+        sort_col = allowed_sort.get(sort_by)
+        if sort_col is None:
+            raise ValueError(
+                f"Invalid sort_by {sort_by!r}; must be one of: "
+                f"{', '.join(sorted(allowed_sort))}"
+            )
         order_dir = "DESC" if order.lower() == "desc" else "ASC"
 
         conditions: list = []
@@ -2146,7 +2151,7 @@ class MemoryStore:
             data_sql = f"""
                 SELECT {select_cols} FROM knowledge k {fts_join}
                 {where}
-                ORDER BY k.{sort_by} {order_dir}
+                ORDER BY k.{sort_col} {order_dir}
                 LIMIT ? OFFSET ?
             """
             data_params = tuple(params) + (limit, offset)

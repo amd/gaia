@@ -187,7 +187,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.4",
+            "default": "2.5",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -212,7 +212,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.4",
+            "default": "2.5",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -289,7 +289,7 @@
             "title": "Provider"
           },
           "schema_version": {
-            "default": "2.4",
+            "default": "2.5",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -476,7 +476,7 @@
             "title": "Location"
           },
           "schema_version": {
-            "default": "2.4",
+            "default": "2.5",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -516,7 +516,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.4",
+            "default": "2.5",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -547,7 +547,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.4",
+            "default": "2.5",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -583,7 +583,7 @@
             "title": "Provider"
           },
           "schema_version": {
-            "default": "2.4",
+            "default": "2.5",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -623,7 +623,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.4",
+            "default": "2.5",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -774,7 +774,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.4",
+            "default": "2.5",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -887,7 +887,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.4",
+            "default": "2.5",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -922,7 +922,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.4",
+            "default": "2.5",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1122,7 +1122,7 @@
             "type": "integer"
           },
           "schema_version": {
-            "default": "2.4",
+            "default": "2.5",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1140,7 +1140,7 @@
             "description": "The pre-scan envelope."
           },
           "schema_version": {
-            "default": "2.4",
+            "default": "2.5",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1305,7 +1305,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.4",
+            "default": "2.5",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1377,7 +1377,7 @@
             "title": "Query"
           },
           "schema_version": {
-            "default": "2.4",
+            "default": "2.5",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1428,7 +1428,7 @@
             "title": "Query"
           },
           "schema_version": {
-            "default": "2.4",
+            "default": "2.5",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1649,7 +1649,7 @@
             "title": "Payload"
           },
           "schema_version": {
-            "default": "2.4",
+            "default": "2.5",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1679,7 +1679,7 @@
             "description": "The structured analysis."
           },
           "schema_version": {
-            "default": "2.4",
+            "default": "2.5",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1845,7 +1845,7 @@
             "type": "integer"
           },
           "schema_version": {
-            "default": "2.4",
+            "default": "2.5",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1913,7 +1913,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.4",
+            "default": "2.5",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1924,6 +1924,142 @@
           "message_id"
         ],
         "title": "EmailUnquarantineResponse",
+        "type": "object"
+      },
+      "ForwardedConnectionRequest": {
+        "additionalProperties": false,
+        "description": "A short-lived connector access token forwarded by the daemon (#2154).\n\nDeliberately carries NO ``refresh_token`` and NO ``client_secret`` — the\ndaemon owns refresh; forwarding either across the process boundary is the\nexact posture forward-out exists to prevent. The provider is the path\nparameter, so it is not repeated in the body.",
+        "properties": {
+          "access_token": {
+            "description": "The short-lived OAuth access token (bearer). Non-empty.",
+            "minLength": 1,
+            "title": "Access Token",
+            "type": "string"
+          },
+          "account_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Mailbox address the token is for (display only), if known.",
+            "title": "Account Email"
+          },
+          "expires_at": {
+            "description": "Wall-clock UNIX expiry of the access token, so the sidecar knows when to expect a re-forward. Must be positive.",
+            "exclusiveMinimum": 0.0,
+            "title": "Expires At",
+            "type": "number"
+          },
+          "scopes": {
+            "description": "Scopes this access token carries (the granted set).",
+            "items": {
+              "type": "string"
+            },
+            "title": "Scopes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "access_token",
+          "expires_at"
+        ],
+        "title": "ForwardedConnectionRequest",
+        "type": "object"
+      },
+      "ForwardedConnectionSummary": {
+        "additionalProperties": false,
+        "description": "Metadata echo for a forwarded connection. NEVER includes the token.",
+        "properties": {
+          "account_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Mailbox address (display only), or null.",
+            "title": "Account Email"
+          },
+          "expires_at": {
+            "description": "Wall-clock UNIX expiry of the forwarded access token.",
+            "title": "Expires At",
+            "type": "number"
+          },
+          "forwarded": {
+            "default": true,
+            "description": "Always true — this is a forwarded credential.",
+            "title": "Forwarded",
+            "type": "boolean"
+          },
+          "provider": {
+            "description": "Connector provider id, e.g. 'google'.",
+            "title": "Provider",
+            "type": "string"
+          },
+          "scopes": {
+            "description": "Scopes the forwarded token carries.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Scopes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "provider",
+          "expires_at"
+        ],
+        "title": "ForwardedConnectionSummary",
+        "type": "object"
+      },
+      "ForwardedConnectionWithdrawResponse": {
+        "additionalProperties": false,
+        "description": "Result of withdrawing a forwarded connection (#2154). Idempotent —\n``withdrawn`` is False when there was nothing to drop.",
+        "properties": {
+          "provider": {
+            "description": "Connector provider id that was targeted.",
+            "title": "Provider",
+            "type": "string"
+          },
+          "withdrawn": {
+            "description": "True when a forwarded credential was removed, else False.",
+            "title": "Withdrawn",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "provider",
+          "withdrawn"
+        ],
+        "title": "ForwardedConnectionWithdrawResponse",
+        "type": "object"
+      },
+      "ForwardedConnectionsResponse": {
+        "additionalProperties": false,
+        "description": "Metadata-only list of the sidecar's forwarded connections (#2154).",
+        "properties": {
+          "connections": {
+            "description": "One entry per forwarded connection.",
+            "items": {
+              "$ref": "#/components/schemas/ForwardedConnectionSummary"
+            },
+            "title": "Connections",
+            "type": "array"
+          },
+          "schema_version": {
+            "default": "2.5",
+            "description": "Echoes the contract version.",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "title": "ForwardedConnectionsResponse",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -2626,10 +2762,126 @@
   "info": {
     "description": "REST surface for the GAIA Email Triage agent (/v1/email/*). Cross-implementation contract for the npm client and native builds.",
     "title": "GAIA Email Agent API",
-    "version": "2.4"
+    "version": "2.5"
   },
   "openapi": "3.1.0",
   "paths": {
+    "/v1/connections": {
+      "get": {
+        "description": "Metadata-only view of the forwarded connections. NEVER returns tokens.",
+        "operationId": "list_forwarded_connections_v1_connections_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForwardedConnectionsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Forwarded Connections",
+        "tags": [
+          "email-forward-out"
+        ]
+      }
+    },
+    "/v1/connections/{provider}": {
+      "delete": {
+        "description": "Withdraw a forwarded credential (daemon revoke/uninstall). Idempotent.",
+        "operationId": "withdraw_forwarded_connection_v1_connections__provider__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "title": "Provider",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForwardedConnectionWithdrawResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Withdraw Forwarded Connection",
+        "tags": [
+          "email-forward-out"
+        ]
+      },
+      "post": {
+        "description": "Accept a daemon-forwarded short-lived access token for ``provider``.\n\nStores it in memory only. A malformed forward (empty token / non-positive\nexpiry) is rejected loudly (400) rather than deferred to an opaque 401 in a\nlater mailbox call.",
+        "operationId": "import_forwarded_connection_v1_connections__provider__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "title": "Provider",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForwardedConnectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForwardedConnectionSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Forwarded Connection",
+        "tags": [
+          "email-forward-out"
+        ]
+      }
+    },
     "/v1/email/archive": {
       "post": {
         "description": "Archive a message — gated on confirmation, reversible for 30s.\n\nThe gate fires FIRST: a request without a valid token for this exact\n``(action='archive', message_id)`` is rejected with 403 before any backend\ncall. On success a ``batch_id`` undo handle is returned; pass it to\nPOST /v1/email/unarchive within the window to restore the message. The\nresponse also surfaces ``post_archive_id`` (the id a folder backend mints on\nthe move) so a caller can track the message after Outlook changes its id.",

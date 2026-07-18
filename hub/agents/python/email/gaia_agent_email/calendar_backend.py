@@ -255,11 +255,21 @@ class LiveCalendarBackend:
 
 
 def _get_calendar_token() -> str:
-    """Return a Calendar access token via the standard grant-checked path."""
-    return get_access_token_sync(
-        provider="google",
-        agent_id=AGENT_NAMESPACED_ID,
-        scopes=list(CALENDAR_SCOPES),
+    """Return a Calendar access token, honoring the sidecar's runtime mode.
+
+    Forwarded mode (#2154) → the daemon-forwarded 'google' token; standalone
+    mode → the grant-checked connectors path. Loud on missing/expired/short.
+    """
+    from gaia_agent_email import forwarded_credentials
+
+    return forwarded_credentials.resolve_access_token(
+        "google",
+        list(CALENDAR_SCOPES),
+        live_fetch=lambda: get_access_token_sync(
+            provider="google",
+            agent_id=AGENT_NAMESPACED_ID,
+            scopes=list(CALENDAR_SCOPES),
+        ),
     )
 
 

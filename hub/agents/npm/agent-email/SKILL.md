@@ -332,6 +332,12 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
 - **Cleanup is automatic by default** — the sidecar is reaped on exit/crash/signal;
   only `autoCleanup: false` (or a hard `SIGKILL` of your process) can orphan the
   child. `shutdown` stays the graceful stop.
+- **OAuth forward-out is daemon-only (sidecar contract 2.5, #2154).** The
+  `/v1/connections/{provider}` intake exists for the GAIA Agent UI daemon to
+  forward short-lived access tokens to the sidecar (the sidecar never holds the
+  refresh token). A standalone integrator using this package does **not** call it —
+  keep resolving the mailbox from the host's GAIA connector store as before. There
+  is no `client.forwardConnection()` method, by design.
 - **Some capabilities are agent-loop-only — no REST endpoint, no client method.**
   Scheduled send / snooze (#1609), **voice / style-matched drafting** (#1607 —
   `build_voice_profile` learns a local style profile from Sent mail so drafts

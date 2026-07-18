@@ -85,33 +85,25 @@ _DEFAULT_REQUIRED_SCOPES_BY_PROVIDER: dict[str, tuple[str, ...]] = {
 }
 
 
-async def get_access_token(
+def _authorize_access(
     *,
     provider: str,
     scopes: List[str],
-    agent_id: Optional[str] = None,
-    account_email: str = DEFAULT_ACCOUNT,
-) -> str:
-    """
-    Return a short-lived bearer access token for ``provider``.
+    agent_id: Optional[str],
+    account_email: str,
+) -> None:
+    """Run the two authorization gates that precede any token fetch.
+
+    Raises ``AuthRequiredError`` (no grant / not connected / connection
+    missing scopes) so the caller can prompt the user — never returns a
+    partial/empty result. Shared by :func:`get_access_token` and
+    :func:`get_access_token_with_expiry` so the grant + scope contract has one
+    home and the two accessors cannot drift.
 
     Agent-id resolution order (per AC8 explicit opt-out clause):
       1. Explicit ``agent_id`` kwarg, if non-None.
       2. Active contextvar (``current_agent_id()``), set by the agent runtime.
       3. ``None``, which BYPASSES the per-agent grant check.
-
-    The contextvar path is the production path: ``Agent.process_query``
-    enters ``_agent_context(self.namespaced_agent_id)`` before invoking
-    tools. The kwarg path is for SDK callers who manage their own
-    identity, and the None path is for CLI/debug callers.
-
-    Two layers of authorization gate the call:
-      a. Per-agent grant — the user must have explicitly granted this
-         agent the required scopes via Settings → Connections, or
-         ``gaia connectors grants grant``.
-      b. OAuth scopes — the stored connection's actual scopes must
-         cover the requested ones; otherwise reconnect with the
-         missing scopes.
     """
     resolved_agent = agent_id if agent_id is not None else current_agent_id()
 
@@ -150,8 +142,73 @@ async def get_access_token(
             missing_scopes=missing,
         )
 
+
+async def get_access_token(
+    *,
+    provider: str,
+    scopes: List[str],
+    agent_id: Optional[str] = None,
+    account_email: str = DEFAULT_ACCOUNT,
+) -> str:
+    """
+    Return a short-lived bearer access token for ``provider``.
+
+    Agent-id resolution order (per AC8 explicit opt-out clause):
+      1. Explicit ``agent_id`` kwarg, if non-None.
+      2. Active contextvar (``current_agent_id()``), set by the agent runtime.
+      3. ``None``, which BYPASSES the per-agent grant check.
+
+    The contextvar path is the production path: ``Agent.process_query``
+    enters ``_agent_context(self.namespaced_agent_id)`` before invoking
+    tools. The kwarg path is for SDK callers who manage their own
+    identity, and the None path is for CLI/debug callers.
+
+    Two layers of authorization gate the call:
+      a. Per-agent grant — the user must have explicitly granted this
+         agent the required scopes via Settings → Connections, or
+         ``gaia connectors grants grant``.
+      b. OAuth scopes — the stored connection's actual scopes must
+         cover the requested ones; otherwise reconnect with the
+         missing scopes.
+    """
+    _authorize_access(
+        provider=provider,
+        scopes=scopes,
+        agent_id=agent_id,
+        account_email=account_email,
+    )
     # All checks passed — fetch (or refresh) the access token.
     return await get_or_refresh(provider, account_email=account_email)
+
+
+async def get_access_token_with_expiry(
+    *,
+    provider: str,
+    scopes: List[str],
+    agent_id: Optional[str] = None,
+    account_email: str = DEFAULT_ACCOUNT,
+) -> tuple[str, float]:
+    """Grant-gated variant of :func:`get_access_token` that also returns expiry.
+
+    Returns ``(access_token, wall_clock_expires_at)`` where ``expires_at`` is a
+    ``time.time()``-based UNIX timestamp. This is the accessor the daemon's
+    OAuth **forward-out** path (#2154) uses: it must hand the sidecar a
+    short-lived access token *and* know when to re-forward, without duplicating
+    either the grant/scope gate here or the refresh engine in ``tokens.py``.
+
+    Same two authorization gates and loud-error contract as
+    :func:`get_access_token`; the expiry is read from the token cache the
+    refresh just populated (see ``tokens.get_token_with_expiry``).
+    """
+    _authorize_access(
+        provider=provider,
+        scopes=scopes,
+        agent_id=agent_id,
+        account_email=account_email,
+    )
+    from gaia.connectors.tokens import get_token_with_expiry
+
+    return await get_token_with_expiry(provider, account_email=account_email)
 
 
 def get_access_token_sync(
@@ -197,6 +254,42 @@ def get_access_token_sync(
 
     return run_sync(
         get_access_token(
+            provider=provider,
+            scopes=scopes,
+            agent_id=agent_id,
+            account_email=account_email,
+        )
+    )
+
+
+def get_access_token_with_expiry_sync(
+    *,
+    provider: str,
+    scopes: List[str],
+    agent_id: Optional[str] = None,
+    account_email: str = DEFAULT_ACCOUNT,
+) -> tuple[str, float]:
+    """Synchronous wrapper around :func:`get_access_token_with_expiry`.
+
+    Runs on the persistent connector event loop (see ``_loop.py``) and blocks,
+    mirroring :func:`get_access_token_sync`. Used by the daemon's forward-out
+    path, which runs synchronously inside the sidecar-registry ensure worker
+    thread. Must NOT be called from a thread with a running event loop.
+    """
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+    if running is not None:
+        raise RuntimeError(
+            "get_access_token_with_expiry_sync was called from a thread with a "
+            "running asyncio event loop. Call `await "
+            "get_access_token_with_expiry(...)` directly from async code instead."
+        )
+    from gaia.connectors._loop import run_sync
+
+    return run_sync(
+        get_access_token_with_expiry(
             provider=provider,
             scopes=scopes,
             agent_id=agent_id,
@@ -583,6 +676,8 @@ __all__ = [
     "deactivate_agent",
     "get_access_token",
     "get_access_token_sync",
+    "get_access_token_with_expiry",
+    "get_access_token_with_expiry_sync",
     "get_connection",
     "grant_agent",
     "import_forwarded_connection",
