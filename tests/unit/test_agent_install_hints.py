@@ -12,11 +12,11 @@ across `src/gaia/` and `hub/agents/python/`.
 
 Scope, stated explicitly so this test's coverage is unambiguous:
 
-* **In scope:** ``src/gaia/**/*.py`` and ``hub/agents/python/<id>/**/*.py``
-  (this deliberately includes each hub agent's own ``tests/`` subtree and
-  packaging scripts — nothing currently living there matches the patterns
-  below, by design; see the false-positive corpus this test was validated
-  against, in the PR description).
+* **In scope:** ``src/gaia/**/*.py`` and ``hub/agents/python/<id>/**/*.py``,
+  excluding any ``tests/`` subtree. Test files are skipped because they
+  legitimately assert on the very strings this guard forbids — both the
+  historical ones and the new replacement text — so scanning them would
+  make the guard flag its own fixtures.
 * **Out of scope, deliberately — NOT covered by this test:** ``docs/**``
   (fixed by hand in a separate increment), ``hub/agents/python/*/README.md``
   (already hedge with "once published"), and
@@ -28,32 +28,42 @@ Scope, stated explicitly so this test's coverage is unambiguous:
 No network calls (no PyPI queries) — this only reads local files with
 ``ast``/regex.
 
-Why AST instead of a raw-text regex scan (the ``test_amd_gaia_urls.py``
-style): a naive regex for ``gaia-agent-[a-z0-9_-]+`` over raw file text hits
-many strings that are NOT install advice — console-script usage docstrings,
-argparse ``prog=``, health-check JSON payloads, pyproject-name assertions in
-each hub agent's own tests, a `--copy-metadata` pyinstaller flag, and a
-docstring in ``gaia/hub/publisher.py`` describing the *future* PyPI design.
-None of those are inside a raised exception. Every real offender in the
-current codebase (verified by reading each of the ~20 sites) is a string
-literal passed directly to a raised exception constructor (``raise
-RuntimeError(...)`` / ``ImportError(...)`` / ``ValueError(...)``) — so this
-test walks ``ast.Raise`` nodes specifically, not the whole file's text, for
-the ``gaia-agent-<name>`` pattern. One real site (``agent_registry.py``)
-builds its offending text in a local ``hint = "..."`` variable and
-interpolates it into the raise's f-string rather than writing the literal
-directly in the ``raise(...)`` call — so the scanner also resolves a simple
-one-level "name assigned a string literal earlier in the file, then
-referenced by a bare ``{name}`` in the raised f-string" indirection. This is
-a deliberate, narrow extension beyond pure literal-argument scanning; it is
-exercised directly by
-``test_scan_resolves_a_name_bound_to_a_literal_and_interpolated_into_the_raise``
-below.
+**The discriminator, stated plainly:** a string literal is flagged when it
+contains BOTH
 
-The `amd-gaia[agents]` bracket-extra syntax, by contrast, is dead syntax with
-no legitimate use anywhere in shipped source after the fix — so that check is
-intentionally NOT limited to raise() calls; it's a broad whole-file substring
-scan across the same in-scope files.
+1. an install verb — ``pip install`` or ``uv pip install``; and
+2. a package that cannot be installed — ``gaia-agent-<name>`` (nothing is
+   published) or the exact broken extra ``amd-gaia[agents]``.
+
+Both halves are required, and this is a *content* test, not a *context*
+one — it deliberately does NOT care whether the literal sits in a
+``raise``, a ``print``, an f-string, a logger call, or a return value. An
+install hint can hide in any of them: ``gaia init``'s completion banner
+emits guidance through ``self._print(...)``, with existing precedent at
+``src/gaia/installer/init_command.py:1301,1304``
+(``"Run: pip install lemonade-sdk"``). Scoping this guard to ``raise``
+arguments would leave every ``print``-based hint uncovered — including the
+one this issue's own fix adds to that banner.
+
+Requiring the install verb is what makes an allowlist unnecessary. Every
+legitimate ``gaia-agent-<name>`` reference in the tree — console-script
+usage docstrings, argparse ``prog=``, health-check JSON payloads, the
+``--copy-metadata`` pyinstaller flag, pyproject-name assertions, plain
+comments — names the distribution without telling anyone to install it, so
+none contain an install verb and all fall out with nothing to maintain.
+
+Note the second half is ``amd-gaia[agents]`` exactly, NOT a broad
+``amd-gaia[`` prefix. ``amd-gaia[ui]``, ``[api]``, ``[dev]``, ``[publish]``
+and friends are real, working, still-declared extras; ~15 shipped hints
+recommend them correctly. Flagging those would repeat precisely the mistake
+this issue is about — mislabelling a functioning install path as a broken
+one (the same reason ``cli.py``'s ``pip install -e ".[blender]"`` branch is
+deliberately left alone).
+
+The `amd-gaia[agents]` bracket-extra syntax is additionally checked on its
+own, with no install-verb requirement: it is dead syntax with no legitimate
+use anywhere in shipped source after this fix, so that check is a broad
+whole-file substring scan across the same in-scope files.
 
 An allowlist exists for future-proofing: once an agent wheel is actually
 published, its `gaia-agent-<id>` name becomes legitimate install advice and
@@ -72,8 +82,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 _SRC_GAIA = REPO_ROOT / "src" / "gaia"
 _HUB_AGENTS_PYTHON = REPO_ROOT / "hub" / "agents" / "python"
 
-_BAD_PACKAGE_RE = re.compile(r"gaia-agent-[a-z0-9_-]+")
 _BRACKET_EXTRA = "amd-gaia[agents]"
+
+# Half 2 of the discriminator: a package that cannot be installed. Note the
+# exact `[agents]` — a bare `amd-gaia[` prefix would flag the working
+# [ui]/[api]/[dev]/[publish] extras (see the module docstring).
+_UNINSTALLABLE_RE = re.compile(r"gaia-agent-[a-z0-9_-]+|amd-gaia\[agents\]")
+
+# Half 1 of the discriminator: an install verb.
+_INSTALL_VERB_RE = re.compile(r"\b(?:uv\s+)?pip\s+install\b")
 
 # Grows only once a hub agent wheel is actually published to PyPI (#1179,
 # #1513). Empty today.
@@ -81,7 +98,8 @@ _PUBLISHED_AGENT_WHEELS: frozenset[str] = frozenset()
 
 
 def _in_scope_files() -> list[Path]:
-    """Every ``*.py`` under ``src/gaia/`` and each ``hub/agents/python/<id>/``.
+    """Every ``*.py`` under ``src/gaia/`` and each ``hub/agents/python/<id>/``,
+    excluding ``tests/`` subtrees.
 
     Deliberately excludes docs/**, hub agent READMEs, and pyproject.toml —
     see the module docstring.
@@ -91,71 +109,39 @@ def _in_scope_files() -> list[Path]:
         for agent_dir in sorted(_HUB_AGENTS_PYTHON.iterdir()):
             if agent_dir.is_dir():
                 files.extend(agent_dir.rglob("*.py"))
-    return sorted(files)
+    return sorted(f for f in files if "tests" not in f.parts)
 
 
-def _string_literal_text(node: ast.AST) -> str:
-    """Return the literal string content of a Constant or a JoinedStr's
-    constant segments (FormattedValue expressions are not evaluated — a
-    variable's runtime value can't contain a hardcoded broken package name
-    from a variable alone; see the module docstring for the one exception
-    this scanner does resolve)."""
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return node.value
-    if isinstance(node, ast.JoinedStr):
-        return "".join(
-            value.value
-            for value in node.values
-            if isinstance(value, ast.Constant) and isinstance(value.value, str)
-        )
-    return ""
+def _iter_string_literals(tree: ast.AST):
+    """Yield ``(lineno, text)`` for every string literal in *tree*.
 
-
-def _build_name_literal_map(tree: ast.AST) -> dict:
-    """Resolve simple ``name = "literal"`` assignments anywhere in the file.
-
-    Deliberately not scope-aware (module- vs function-local) — this is a
-    lint-style heuristic, not an interpreter. It exists solely to catch the
-    one real call site (``agent_registry.py``) that builds its offending
-    text in a ``hint = "..."`` variable and interpolates it into the raised
-    f-string via a bare ``{hint}``, rather than writing the string directly
-    as a raise() argument.
+    Covers plain ``str`` constants (adjacent literals are already merged
+    into one node by the parser, so a hint split across several source
+    lines is seen whole) and f-strings, for which only the constant
+    segments are concatenated — a ``{variable}``'s runtime value is not
+    knowable statically and never supplies the literal ``pip install`` /
+    ``gaia-agent-`` characters this scanner matches on.
     """
-    mapping: dict = {}
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign):
-            continue
-        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
-            continue
-        text = _string_literal_text(node.value)
-        if text:
-            mapping[node.targets[0].id] = text
-    return mapping
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            yield node.lineno, node.value
+        elif isinstance(node, ast.JoinedStr):
+            text = "".join(
+                value.value
+                for value in node.values
+                if isinstance(value, ast.Constant) and isinstance(value.value, str)
+            )
+            if text:
+                yield node.lineno, text
 
 
-def _raise_call_text(call: ast.Call, name_map: dict) -> str:
-    """Concatenate all string content passed to a raised exception's Call,
-    including one-level resolution of bare-Name f-string interpolations
-    against `name_map` (see `_build_name_literal_map`)."""
-    chunks = []
-    for arg in call.args:
-        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-            chunks.append(arg.value)
-        elif isinstance(arg, ast.JoinedStr):
-            for value in arg.values:
-                if isinstance(value, ast.Constant) and isinstance(value.value, str):
-                    chunks.append(value.value)
-                elif isinstance(value, ast.FormattedValue) and isinstance(
-                    value.value, ast.Name
-                ):
-                    resolved = name_map.get(value.value.id)
-                    if resolved:
-                        chunks.append(resolved)
-    return "".join(chunks)
+def _scan_file_for_bad_install_hints(path: Path) -> list[str]:
+    """Return one ``"path:line: reason"`` per offending literal in *path*.
 
-
-def _scan_file_for_bad_raises(path: Path) -> list[str]:
-    """Return one `"path:line: reason"` string per offending raise() in *path*."""
+    A literal offends when it carries an install verb AND names something
+    that cannot be installed — see the module docstring for why both halves
+    are required and why context (raise vs print vs return) is irrelevant.
+    """
     try:
         text = path.read_text(encoding="utf-8")
     except (UnicodeDecodeError, OSError):
@@ -165,28 +151,22 @@ def _scan_file_for_bad_raises(path: Path) -> list[str]:
     except SyntaxError:
         return []
 
-    name_map = _build_name_literal_map(tree)
     offenders: list[str] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Raise) or not isinstance(node.exc, ast.Call):
+    seen: set = set()
+    for lineno, literal in _iter_string_literals(tree):
+        if not _INSTALL_VERB_RE.search(literal):
             continue
-        combined = _raise_call_text(node.exc, name_map)
-        if not combined:
-            continue
-        bad_names = sorted(
+        bad = sorted(
             {
-                m
-                for m in _BAD_PACKAGE_RE.findall(combined)
-                if m not in _PUBLISHED_AGENT_WHEELS
+                match
+                for match in _UNINSTALLABLE_RE.findall(literal)
+                if match not in _PUBLISHED_AGENT_WHEELS
             }
         )
-        has_bracket_extra = _BRACKET_EXTRA in combined
-        if not bad_names and not has_bracket_extra:
+        if not bad or (lineno, tuple(bad)) in seen:
             continue
-        reasons = list(bad_names)
-        if has_bracket_extra:
-            reasons.append(_BRACKET_EXTRA)
-        offenders.append(f"{path}:{node.lineno}: {', '.join(reasons)}")
+        seen.add((lineno, tuple(bad)))
+        offenders.append(f"{path}:{lineno}: {', '.join(bad)}")
     return offenders
 
 
@@ -206,13 +186,13 @@ def _file_contains_bracket_extra_anywhere(path: Path) -> bool:
 # ── Whole-repo scans (the actual regression guard) ──────────────────────────
 
 
-def test_no_raise_recommends_installing_an_unpublished_agent_package():
+def test_no_shipped_string_advises_installing_an_unpublished_package():
     offenders: list[str] = []
     for path in _in_scope_files():
-        offenders.extend(_scan_file_for_bad_raises(path))
+        offenders.extend(_scan_file_for_bad_install_hints(path))
     assert not offenders, (
-        "raise() calls that advise installing an unpublished gaia-agent-* "
-        "package or the broken amd-gaia[agents] extra (issue #2240):\n  "
+        "install hints naming an unpublished gaia-agent-* package or the "
+        "broken amd-gaia[agents] extra (issue #2240):\n  "
         + "\n  ".join(str(o) for o in offenders)
     )
 
@@ -235,15 +215,28 @@ def test_amd_gaia_agents_extra_appears_nowhere_in_shipped_source():
 # repo's current state, so they are expected to PASS even in the red phase.)
 
 
-def test_scan_flags_a_bare_pip_install_of_an_unpublished_package(tmp_path):
+def test_scan_flags_a_pip_install_of_an_unpublished_package(tmp_path):
     f = tmp_path / "mod.py"
     f.write_text(
         "def f():\n" '    raise RuntimeError("pip install gaia-agent-foo")\n',
         encoding="utf-8",
     )
-    assert _scan_file_for_bad_raises(
+    assert _scan_file_for_bad_install_hints(
         f
-    ), "a raise() naming gaia-agent-foo must be flagged"
+    ), "a hint naming gaia-agent-foo must be flagged"
+
+
+def test_scan_flags_a_hint_inside_a_print_not_only_a_raise(tmp_path):
+    """The discriminator is content, not context — `gaia init`'s banner emits
+    guidance via print(), and that path must be covered too (#2240)."""
+    f = tmp_path / "mod.py"
+    f.write_text(
+        "def f():\n" '    print("Install it with: pip install gaia-agent-foo")\n',
+        encoding="utf-8",
+    )
+    assert _scan_file_for_bad_install_hints(
+        f
+    ), "a print()-based hint must be flagged just like a raise()"
 
 
 def test_scan_ignores_a_comment_mentioning_the_package_name(tmp_path):
@@ -252,24 +245,44 @@ def test_scan_ignores_a_comment_mentioning_the_package_name(tmp_path):
         "# comment mentioning gaia-agent-foo\n" "def f():\n" "    return 1\n",
         encoding="utf-8",
     )
-    assert _scan_file_for_bad_raises(f) == []
+    assert _scan_file_for_bad_install_hints(f) == []
 
 
-def test_scan_ignores_a_non_raise_assignment_of_the_package_name(tmp_path):
+def test_scan_ignores_the_package_name_without_an_install_verb(tmp_path):
+    """The install verb is what separates advice from mere reference — this
+    is why no allowlist is needed for prog=/docstrings/health payloads."""
     f = tmp_path / "mod.py"
-    f.write_text('SERVICE_NAME = "gaia-agent-foo"\n', encoding="utf-8")
-    assert _scan_file_for_bad_raises(f) == []
+    f.write_text(
+        'SERVICE_NAME = "gaia-agent-foo"\n'
+        'PROG = "gaia-agent-foo"\n'
+        '"""Smoke tests for the standalone gaia-agent-foo package."""\n',
+        encoding="utf-8",
+    )
+    assert _scan_file_for_bad_install_hints(f) == []
 
 
-def test_scan_flags_the_bracket_extra_inside_a_raise(tmp_path):
+def test_scan_ignores_an_install_verb_for_a_working_extra(tmp_path):
+    """amd-gaia[ui]/[api]/[dev]/[publish] are real, declared, working extras.
+    Flagging them would mislabel a functioning install path as broken — the
+    same mistake #2240 exists to fix."""
+    f = tmp_path / "mod.py"
+    f.write_text(
+        "def f():\n"
+        '    raise RuntimeError("Install it with: uv pip install \\"amd-gaia[ui]\\"")\n',
+        encoding="utf-8",
+    )
+    assert _scan_file_for_bad_install_hints(f) == []
+
+
+def test_scan_flags_the_broken_agents_extra(tmp_path):
     f = tmp_path / "mod.py"
     f.write_text(
         "def f():\n" "    raise ValueError('pip install \"amd-gaia[agents]\"')\n",
         encoding="utf-8",
     )
-    assert _scan_file_for_bad_raises(
+    assert _scan_file_for_bad_install_hints(
         f
-    ), "a raise() naming amd-gaia[agents] must be flagged"
+    ), "a hint naming amd-gaia[agents] must be flagged"
 
 
 def test_scan_ignores_an_fstring_whose_interpolated_value_is_a_real_variable(tmp_path):
@@ -278,31 +291,51 @@ def test_scan_ignores_an_fstring_whose_interpolated_value_is_a_real_variable(tmp
     does, which this static scanner correctly can't (and shouldn't) see."""
     f = tmp_path / "mod.py"
     f.write_text(
-        "def f(wheel):\n" '    raise RuntimeError(f"install {wheel} for all agents")\n',
+        "def f(wheel):\n"
+        '    raise RuntimeError(f"pip install {wheel} for all agents")\n',
         encoding="utf-8",
     )
-    assert _scan_file_for_bad_raises(f) == []
+    assert _scan_file_for_bad_install_hints(f) == []
 
 
-def test_scan_resolves_a_name_bound_to_a_literal_and_interpolated_into_the_raise(
-    tmp_path,
-):
-    """Mirrors agent_registry.py's `hint` variable: the offending text is
-    assigned to a plain-string local earlier, then interpolated via a bare
-    `{name}` into the raised f-string."""
+def test_scan_flags_an_fstring_whose_literal_segments_carry_the_bad_advice(tmp_path):
+    """Mirrors cli.py:821 — the interpolated `{wheel}` is opaque, but the
+    literal text around it still names the broken extra."""
+    f = tmp_path / "mod.py"
+    f.write_text(
+        "def f(wheel):\n"
+        '    raise RuntimeError(\n'
+        '        f"install `uv pip install {wheel}` (or "\n'
+        '        f\'`uv pip install "amd-gaia[agents]"`)\'\n'
+        "    )\n",
+        encoding="utf-8",
+    )
+    assert _scan_file_for_bad_install_hints(
+        f
+    ), "literal f-string segments naming the broken extra must be flagged"
+
+
+def test_scan_flags_a_hint_split_across_adjacent_source_lines(tmp_path):
+    """The real call sites wrap the hint across several adjacent string
+    literals; the parser merges them, so the verb and the package are seen
+    together even though neither line carries both."""
     f = tmp_path / "mod.py"
     f.write_text(
         "def f():\n"
-        '    hint = "install gaia-agent-foo"\n'
-        '    raise ValueError(f"boom.{hint}")\n',
+        "    raise RuntimeError(\n"
+        '        "The chat agent is not installed. Install it with "\n'
+        '        "`pip install gaia-agent-chat`, then retry."\n'
+        "    )\n",
         encoding="utf-8",
     )
-    assert _scan_file_for_bad_raises(f), "the resolved hint variable must be flagged"
+    assert _scan_file_for_bad_install_hints(
+        f
+    ), "a hint split across adjacent literals must still be flagged"
 
 
-def test_bracket_extra_anywhere_flags_non_raise_usage(tmp_path):
-    """The broader bracket-extra scan (unlike the raise-scoped one) also
-    catches non-raise occurrences — e.g. a stray docstring or comment."""
+def test_bracket_extra_anywhere_flags_non_hint_usage(tmp_path):
+    """The broader bracket-extra scan (unlike the discriminator) needs no
+    install verb — it catches a stray docstring or comment too."""
     f = tmp_path / "mod.py"
     f.write_text('# See pip install "amd-gaia[agents]" for details\n', encoding="utf-8")
     assert _file_contains_bracket_extra_anywhere(f) is True
