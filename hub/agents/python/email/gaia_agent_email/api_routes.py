@@ -409,6 +409,53 @@ def _split_sentences(text: str) -> List[str]:
     return [s.strip() for s in _SENTENCE_SPLIT_RE.split(text) if s.strip()]
 
 
+def extract_action_items_from_body(body: str) -> List[ActionItem]:
+    """Extract action items from a message body (cue-based, deterministic).
+
+    Module-level so both the REST triage path
+    (``EmailTriageService._extract_action_items``) and the agent-loop
+    ``extract_action_items`` tool (#2110) share ONE extractor — the two
+    surfaces can't drift.
+    """
+    items: List[ActionItem] = []
+    seen: set[str] = set()
+    for sentence in _split_sentences(body):
+        low = sentence.lower()
+        if not any(cue in low for cue in _ACTION_CUES):
+            continue
+        normalized = sentence.strip()
+        key = normalized.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        due_match = _DUE_HINT_RE.search(sentence)
+        due_hint = due_match.group(1) if due_match else None
+        url_match = _URL_RE.search(sentence)
+        if url_match:
+            # Trim trailing sentence punctuation the greedy match grabs
+            # ("...report." → "...report") so the link is well-formed.
+            # Strip char-by-char, but keep a ")" that closes a "(" inside
+            # the URL itself (e.g. .../Python_(programming_language)) so we
+            # don't silently truncate Wikipedia/Confluence-style links.
+            url = url_match.group(0)
+            _trailing = ".,;:!?)]}\"'"
+            while url and url[-1] in _trailing:
+                if url[-1] == ")" and "(" in url:
+                    break
+                url = url[:-1]
+            items.append(
+                ActionItem(
+                    description=normalized,
+                    due_hint=due_hint,
+                    type="link",
+                    url=url,
+                )
+            )
+        else:
+            items.append(ActionItem(description=normalized, due_hint=due_hint))
+    return items
+
+
 def _aggregate_usage(call_stats: List[dict]) -> Optional[TriageUsage]:
     """Sum the per-call usage/stats entries across the classify + summarize
     LLM calls into a single :class:`TriageUsage`.
@@ -898,43 +945,7 @@ class EmailTriageService:
         return summary
 
     def _extract_action_items(self, body: str) -> List[ActionItem]:
-        items: List[ActionItem] = []
-        seen: set[str] = set()
-        for sentence in _split_sentences(body):
-            low = sentence.lower()
-            if not any(cue in low for cue in _ACTION_CUES):
-                continue
-            normalized = sentence.strip()
-            key = normalized.lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            due_match = _DUE_HINT_RE.search(sentence)
-            due_hint = due_match.group(1) if due_match else None
-            url_match = _URL_RE.search(sentence)
-            if url_match:
-                # Trim trailing sentence punctuation the greedy match grabs
-                # ("...report." → "...report") so the link is well-formed.
-                # Strip char-by-char, but keep a ")" that closes a "(" inside
-                # the URL itself (e.g. .../Python_(programming_language)) so we
-                # don't silently truncate Wikipedia/Confluence-style links.
-                url = url_match.group(0)
-                _trailing = ".,;:!?)]}\"'"
-                while url and url[-1] in _trailing:
-                    if url[-1] == ")" and "(" in url:
-                        break
-                    url = url[:-1]
-                items.append(
-                    ActionItem(
-                        description=normalized,
-                        due_hint=due_hint,
-                        type="link",
-                        url=url,
-                    )
-                )
-            else:
-                items.append(ActionItem(description=normalized, due_hint=due_hint))
-        return items
+        return extract_action_items_from_body(body)
 
     def _build_draft(
         self,

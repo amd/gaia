@@ -195,6 +195,14 @@ are planned on the autonomy engine (#555).
 
 `list_inbox`, `get_message`, `get_thread`, `search_messages`, `list_labels`, `triage_inbox`, `pre_scan_inbox`, `check_followups`
 
+### Briefing & tasks
+
+`get_briefing`, `list_tasks`, `extract_action_items` — natural-language asks like
+"give me a daily briefing", "what do I need to do from my inbox", and "show my
+tasks" bind to these dedicated tools. `extract_action_items` drives a fresh scan
+of your recent mail (it does not require a prior triage run), and `get_briefing`
+returns the latest scheduled briefing or generates one on demand.
+
 ### Classification preferences (persist across restarts)
 
 `set_priority_sender`, `set_low_priority_sender`, `set_category_default`, `clear_session_preferences`
