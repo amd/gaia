@@ -221,7 +221,10 @@ def read_sentinel(
     # with path separators could point health checks / the daemon outside
     # the install dir. Treat it like any other corrupt sentinel.
     if executable and (
-        "/" in executable or "\\" in executable or Path(executable).name != executable
+        not isinstance(executable, str)
+        or "/" in executable
+        or "\\" in executable
+        or Path(executable).name != executable
     ):
         logger.warning(
             "installer: sentinel %s has unsafe executable %r (must be a bare "

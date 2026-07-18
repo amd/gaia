@@ -1243,6 +1243,27 @@ class TestAgentIdPathSafety:
             assert read_sentinel("demo", tmp_path) is None
         assert "unsafe executable" in caplog.text
 
+    def test_sentinel_with_non_string_executable_is_ignored(self, tmp_path, caplog):
+        """A corrupt/malicious sentinel with a non-string executable (e.g. a
+        JSON list) must degrade to "not installed", not crash Path(...)."""
+        agent_dir = tmp_path / "demo"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / installer.SENTINEL_NAME).write_text(
+            json.dumps(
+                {
+                    "id": "demo",
+                    "version": "1.0.0",
+                    "language": "cpp",
+                    "installed_at": "now",
+                    "artifact_kind": "binary",
+                    "executable": ["not", "a", "string"],
+                }
+            )
+        )
+        with caplog.at_level("WARNING"):
+            assert read_sentinel("demo", tmp_path) is None
+        assert "unsafe executable" in caplog.text
+
     def test_sentinel_with_bare_executable_is_kept(self, tmp_path):
         agent_dir = tmp_path / "demo"
         agent_dir.mkdir(parents=True)
