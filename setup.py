@@ -153,6 +153,12 @@ setup(
         # gaia connectors is a base CLI command; keyring is its OS credential store (OAuth tokens #915). #1621
         "keyring>=24.0.0,<26.0.0",
         "tavily-python>=0.5.0",
+        # gaia.daemon locks the sidecar launch-secret file down with an
+        # owner-only NTFS DACL (#2250) — chmod 0600 is inert on Windows. Core,
+        # not an extra: without win32security the daemon cannot spawn ANY
+        # sidecar. Distinct from keyring's pywin32-ctypes, which has no
+        # win32security module.
+        'pywin32; sys_platform == "win32"',
     ],
     extras_require={
         "image": [

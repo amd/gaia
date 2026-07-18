@@ -122,8 +122,10 @@ def _lock_down_windows_acl(path: Path) -> None:
         raise SidecarSpawnError(
             f"cannot lock down {path} to the current user: pywin32 is not "
             "installed. There is no fallback — a launch secret without an "
-            'owner-only ACL is world-readable on NTFS. Install it via `pip '
-            'install "amd-gaia[ui]"` (or `pip install pywin32`) and retry.'
+            "owner-only ACL is readable by other local accounts on NTFS. "
+            "Run `pip install pywin32` (it ships as a core amd-gaia "
+            "dependency on Windows, so a plain `pip install --upgrade "
+            "amd-gaia` also repairs this). See issue #2250."
         ) from e
 
     try:
