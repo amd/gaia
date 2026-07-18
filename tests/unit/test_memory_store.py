@@ -3614,22 +3614,14 @@ class TestGetAllKnowledgeSortByValidation:
         result = store.get_all_knowledge(sort_by="updated_at")
         assert result["total"] >= 1
 
-    def test_invalid_sort_by_raises_or_falls_back(self, store):
-        # An invalid sort_by value should either raise ValueError or silently
-        # fall back to the default — it must NOT execute an unvalidated column name.
-        try:
-            result = store.get_all_knowledge(sort_by="'; DROP TABLE knowledge; --")
-            # If it doesn't raise, verify the table is intact
-            assert result["total"] >= 1, "Table should survive an invalid sort_by"
-        except (ValueError, Exception):
-            # Raising is also acceptable
-            pass
+    def test_invalid_sort_by_raises(self, store):
+        # An invalid sort_by must raise ValueError — never reach the SQL.
+        with pytest.raises(ValueError, match="Invalid sort_by"):
+            store.get_all_knowledge(sort_by="'; DROP TABLE knowledge; --")
 
     def test_sql_injection_in_sort_by_does_not_drop_table(self, store):
-        try:
+        with pytest.raises(ValueError, match="Invalid sort_by"):
             store.get_all_knowledge(sort_by="id; DROP TABLE knowledge; --")
-        except Exception:
-            pass
         # Table must still exist and be queryable
         result = store.get_all_knowledge()
         assert result["total"] >= 1
