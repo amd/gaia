@@ -325,6 +325,11 @@ STATUS_INSTALLED = "installed"
 STATUS_AVAILABLE = "available"
 STATUS_UPDATE_AVAILABLE = "update_available"
 
+# Package-kind discriminator (#1716). Kept in sync with
+# ``gaia.hub.manifest.DEFAULT_TYPE`` — the merge defaults to it when the catalog
+# entry predates the field and for registry-only agents.
+DEFAULT_PACKAGE_TYPE = "agent"
+
 
 def _requires_trust(language: str, security_tier: str) -> bool:
     """Whether a catalog entry needs an explicit native-trust opt-in to install.
@@ -394,11 +399,18 @@ def merge_with_registry(
             "name": entry.get("name", agent_id),
             "description": entry.get("description", ""),
             "category": entry.get("category", "general"),
+            # Package kind (#1716): agent | app | component. Drives the Hub
+            # page's Apps · Components · Agents lanes; defaults to "agent" for
+            # older catalog entries that predate the discriminator.
+            "type": entry.get("type", DEFAULT_PACKAGE_TYPE),
             "icon": entry.get("icon", ""),
             "language": language,
             "author": entry.get("author", ""),
             "security_tier": security_tier,
             "requires_trust": _requires_trust(language, security_tier),
+            # Declared permission scopes (``<domain>:<action>``) shown in the
+            # install trust gate. Absent from older entries / local-only agents.
+            "permissions": entry.get("permissions", []),
             "download_size_bytes": entry.get("download_size_bytes", 0),
             "requirements": entry.get("requirements", {"platforms": []}),
             "deprecated": entry.get("deprecated", False),
@@ -425,11 +437,15 @@ def merge_with_registry(
             "name": reg.name,
             "description": reg.description,
             "category": reg.category,
+            # Registry-only agents (builtins / custom) are always "agent" —
+            # apps and components only exist as published hub packages.
+            "type": DEFAULT_PACKAGE_TYPE,
             "icon": reg.icon,
             "language": reg.language,
             "author": "",
             "security_tier": reg_tier,
             "requires_trust": _requires_trust(reg.language, reg_tier),
+            "permissions": [],
             "download_size_bytes": 0,
             "requirements": {"platforms": []},
             "deprecated": False,
