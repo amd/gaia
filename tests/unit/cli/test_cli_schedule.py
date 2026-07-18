@@ -95,7 +95,8 @@ def test_add_prompt_constructs_schedule_from_parsed_args(parser, mock_store, cap
     assert "0 7 * * 1-5" in out
 
 
-def test_add_skill_variant_leaves_prompt_unset(parser, mock_store):
+def test_add_skill_variant_is_rejected_until_888(parser, mock_store, capsys):
+    """A --skill schedule would register but never fire, so `add` rejects it (#888)."""
     args = _parse(
         parser,
         [
@@ -109,14 +110,17 @@ def test_add_skill_variant_leaves_prompt_unset(parser, mock_store):
         ],
     )
 
-    _handle_schedule(args)
+    with pytest.raises(SystemExit) as excinfo:
+        _handle_schedule(args)
 
-    (constructed,) = mock_store.add.call_args.args
-    assert constructed.skill == "brainstorming"
-    assert constructed.prompt is None
-    # default sink, no --to supplied
-    assert constructed.sink == "stdout"
-    assert constructed.sink_args == {}
+    assert excinfo.value.code == 1
+    # Nothing may be persisted — a stored skill schedule is the silent-failure case.
+    mock_store.add.assert_not_called()
+
+    err = capsys.readouterr().err
+    assert "--skill is not supported yet" in err
+    assert "--prompt" in err  # names the workaround
+    assert "888" in err  # points at the tracking issue
 
 
 def test_add_default_sink_without_to_has_empty_sink_args(parser, mock_store):
