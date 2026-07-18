@@ -38,15 +38,19 @@
 # answer -- they use a targeted Python snippet against AgentRegistry instead
 # of a live model catalog; see the executor prompt below.
 #
-# NOT VALIDATED END-TO-END AT AUTHORING TIME: this workflow was written and
-# reviewed without access to the self-hosted runner. Run it once via
-# workflow_dispatch with doc_filter scoped to a single guide (e.g.
-# "docs/quickstart.mdx") before trusting the full weekly schedule. In
-# particular: the executor/judge prompts do not assume a specific shell
-# (PowerShell vs. bash/git-bash) for claude-code-action's Bash tool on this
-# runner -- they instruct Claude to detect it at runtime, since which one the
-# action actually uses here was not confirmed at authoring time. Confirm this
-# on the first live run and hardcode the syntax if it's always the same.
+# VALIDATION HISTORY (real workflow_dispatch runs against docs/quickstart.mdx):
+# - Run 29663253865 (2026-07-18): FAILED at Lemonade startup --
+#   `LemonadeServer.exe serve --port N` never bound (v10.x removed the `serve`
+#   subcommand). Fixed by reusing the already-proven
+#   installer/scripts/start-lemonade.ps1 (bare `--port N`) instead of
+#   hand-rolling the invocation. Same run also surfaced that
+#   claude-code-action's own internal steps need `bash` on PATH, which this
+#   self-hosted Windows runner doesn't provide by default even though Git for
+#   Windows (and its bash.exe) is installed -- fixed with an explicit
+#   "Ensure bash is on PATH" step before any claude-code-action use.
+# - Re-run pending as of this comment -- if you're reading this in a PR that
+#   updates it, check whether both fixes actually resolved the run before
+#   trusting the weekly schedule.
 
 name: Claude Weekly Doc Walkthrough
 
@@ -156,6 +160,26 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # FOUND ON A LIVE RUN (2026-07-18, run 29663253865): claude-code-action's
+      # own internal composite-action steps (its bun install + post-processing
+      # scripts) assume `bash` is on PATH and fail with "bash: command not
+      # found" before Claude ever runs -- the judge session never actually
+      # executed. Git for Windows IS installed on this runner (checkout uses
+      # C:\Program Files\Git\cmd\git.exe successfully) and ships bash.exe in
+      # the same install root; it's just never added to PATH. Fix at the
+      # source rather than working around it per-step.
+      - name: Ensure bash is on PATH (claude-code-action requires it)
+        shell: powershell
+        run: |
+          $gitBash = "C:\Program Files\Git\bin"
+          if (Test-Path "$gitBash\bash.exe") {
+            Write-Host "Found bash.exe at $gitBash -- adding to PATH for this job."
+            Add-Content -Path $env:GITHUB_PATH -Value $gitBash
+          } else {
+            Write-Host "::error::No bash.exe at $gitBash -- claude-code-action's internal steps will fail. Runner may need Git for Windows (re)installed."
+            exit 1
+          }
+
       - name: Verify clean start state
         shell: powershell
         run: |
@@ -220,25 +244,30 @@ jobs:
             "- **Lemonade:** ✅ reused an already-healthy instance on port $env:WALKTHROUGH_LEMONADE_PORT" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           } else {
             Write-Host "Dedicated port not yet serving -- starting a fresh instance."
-            $proc = Start-Process -FilePath "LemonadeServer.exe" -ArgumentList "serve --port $env:WALKTHROUGH_LEMONADE_PORT" -PassThru
-            $proc.Id | Out-File "$env:RUN_DIR\lemonade.pid"
-            Write-Host "Started LemonadeServer.exe pid=$($proc.Id) on port $env:WALKTHROUGH_LEMONADE_PORT, polling for health ..."
-            $deadline = (Get-Date).AddSeconds(60)
-            $healthy = $false
-            do {
-              Start-Sleep -Seconds 2
-              try {
-                $resp = Invoke-WebRequest -Uri $healthUrl -TimeoutSec 3 -ErrorAction Stop
-                if ($resp.StatusCode -eq 200) { $healthy = $true; break }
-              } catch {}
-            } while ((Get-Date) -lt $deadline)
-            if (-not $healthy) {
-              Write-Host "::error::Dedicated-port Lemonade did not become healthy within 60s"
-              "- **Lemonade:** ❌ did not become healthy within 60s (pid=$($proc.Id))" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+            # FOUND ON A LIVE RUN (2026-07-18, run 29663253865): hand-rolling
+            # `Start-Process LemonadeServer.exe -ArgumentList "serve --port N"`
+            # never binds -- v10.x removed the `serve` subcommand entirely; the
+            # real invocation is a bare `--port N`, and this exact gotcha is
+            # already documented and fixed in installer/scripts/start-lemonade.ps1
+            # ("Verified on the stx runner: `LemonadeServer.exe --port N` binds
+            # N -- the legacy `serve --port` shape is what never bound."). Reuse
+            # that proven script instead of re-deriving its exe-path resolution,
+            # correct CLI shape, and stdout/stderr-capture-on-failure logic.
+            Push-Location $env:RUN_DIR
+            try {
+              & "$env:GITHUB_WORKSPACE\installer\scripts\start-lemonade.ps1" -Port $env:WALKTHROUGH_LEMONADE_PORT -NoModel
+              $startExit = $LASTEXITCODE
+            } finally {
+              Pop-Location
+            }
+            if ($startExit -ne 0 -or -not $env:LEMONADE_PROCESS_ID) {
+              Write-Host "::error::start-lemonade.ps1 did not report a healthy server (exit $startExit)"
+              "- **Lemonade:** ❌ start-lemonade.ps1 failed (exit $startExit) -- see its own stdout/stderr log dump above" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
               exit 1
             }
-            Write-Host "Lemonade healthy on port $env:WALKTHROUGH_LEMONADE_PORT after $((Get-Date) - ($deadline.AddSeconds(-60))) "
-            "- **Lemonade:** ✅ started fresh (pid=$($proc.Id)), healthy on port $env:WALKTHROUGH_LEMONADE_PORT" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+            $env:LEMONADE_PROCESS_ID | Out-File "$env:RUN_DIR\lemonade.pid"
+            Write-Host "Lemonade healthy on port $env:WALKTHROUGH_LEMONADE_PORT, pid=$env:LEMONADE_PROCESS_ID"
+            "- **Lemonade:** ✅ started fresh (pid=$env:LEMONADE_PROCESS_ID), healthy on port $env:WALKTHROUGH_LEMONADE_PORT" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           }
 
       - name: "Executor (Sonnet): walk ${{ matrix.doc.path }}"
