@@ -128,8 +128,9 @@ class DevServer {
     // The MCP server sends 'access-control-allow-origin: *' header, allowing direct browser connections
     // No proxy endpoints needed - apps should connect directly to MCP URL from environment variables
 
-    // Start the server
-    this.server = this.app.listen(this.port, () => {
+    // Start the server. Loopback-only bind: this is a local development
+    // server and must never be reachable from other machines.
+    this.server = this.app.listen(this.port, '127.0.0.1', () => {
       console.log(`✅ ${this.appConfig.displayName} dev server running at:`);
       console.log(`   http://localhost:${this.port}`);
       console.log(`   Press Ctrl+C to stop`);
