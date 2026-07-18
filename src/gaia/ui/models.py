@@ -137,7 +137,9 @@ class SettingsResponse(BaseModel):
     context_size: Optional[int] = (
         None  # Persisted ctx_size override; None = use default
     )
-    agent_mode: str = "autonomous"  # "manual" | "goal_driven" | "autonomous"
+    # "manual" | "goal_driven". "autonomous" is unshipped (#2005) and rejected
+    # on write; legacy-stored values are reported as "goal_driven".
+    agent_mode: str = "goal_driven"
     # Beta dynamic tool loader (#1798). Effective value: env override
     # (GAIA_DYNAMIC_TOOLS) wins when set, else the persisted setting.
     dynamic_tools: bool = False
@@ -170,9 +172,9 @@ class SettingsUpdateRequest(BaseModel):
         None,
         description=(
             "Agent operating mode. One of: 'manual' (request/response only), "
-            "'goal_driven' (execute approved goals), "
-            "'autonomous' (observe, infer, and execute own goals). "
-            "Default: 'autonomous'."
+            "'goal_driven' (execute approved goals). Default: 'goal_driven'. "
+            "'autonomous' (observe, infer, and execute own goals) is not "
+            "implemented yet and is rejected (#2005)."
         ),
     )
     dynamic_tools: Optional[bool] = Field(
