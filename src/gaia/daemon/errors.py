@@ -31,3 +31,12 @@ class DaemonVersionError(DaemonError):
     Restart the daemon so the new client can attach — never silently talk a stale
     contract.
     """
+
+
+class MigrationError(DaemonError):
+    """A one-time state migration could not complete (see ``daemon.migrate``).
+
+    Raised on a corrupt schema stamp, an unknown-newer on-disk version, or a step
+    that failed mid-flight. The daemon does not start on this error — better a
+    loud refusal the user can act on than a silent proceed over ambiguous state.
+    """

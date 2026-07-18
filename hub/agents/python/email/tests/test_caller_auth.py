@@ -198,6 +198,56 @@ def test_host_and_origin_apply_even_to_exempt_paths():
 
 
 # ---------------------------------------------------------------------------
+# Secret-file delivery (#2149) — the preferred channel: the spawning parent
+# writes the token to a 0600 file and passes its PATH, so the secret never
+# sits in the sidecar's environment.
+# ---------------------------------------------------------------------------
+
+
+def test_config_from_env_reads_token_from_secret_file(tmp_path, monkeypatch):
+    secret = tmp_path / "launch-secret"
+    secret.write_text(_TOKEN + "\n", encoding="utf-8")  # trailing newline is ok
+    monkeypatch.setenv(caller_auth.TOKEN_FILE_ENV_VAR, str(secret))
+    monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    assert caller_auth.config_from_env().token == _TOKEN
+
+
+def test_config_from_env_missing_secret_file_is_a_loud_error(tmp_path, monkeypatch):
+    # Path var set but no file: that is a broken spawn, NOT dev-mode auth-off.
+    # A silent token=None here would disable auth exactly when the parent
+    # believed it was enabled.
+    monkeypatch.setenv(caller_auth.TOKEN_FILE_ENV_VAR, str(tmp_path / "gone"))
+    monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    with pytest.raises(RuntimeError, match="cannot be read"):
+        caller_auth.config_from_env()
+
+
+def test_config_from_env_empty_secret_file_is_a_loud_error(tmp_path, monkeypatch):
+    secret = tmp_path / "launch-secret"
+    secret.write_text("  \n", encoding="utf-8")
+    monkeypatch.setenv(caller_auth.TOKEN_FILE_ENV_VAR, str(secret))
+    monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    with pytest.raises(RuntimeError, match="empty"):
+        caller_auth.config_from_env()
+
+
+def test_config_from_env_secret_file_wins_over_bare_env_token(tmp_path, monkeypatch):
+    secret = tmp_path / "launch-secret"
+    secret.write_text(_TOKEN, encoding="utf-8")
+    monkeypatch.setenv(caller_auth.TOKEN_FILE_ENV_VAR, str(secret))
+    monkeypatch.setenv(caller_auth.TOKEN_ENV_VAR, "stale-env-token")
+    assert caller_auth.config_from_env().token == _TOKEN
+
+
+def test_config_from_env_bare_env_leg_still_works(monkeypatch):
+    # Older spawning parents (and bare integrators) still hand the token over
+    # the env channel — explicitly supported, negotiated by the daemon.
+    monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
+    monkeypatch.setenv(caller_auth.TOKEN_ENV_VAR, _TOKEN)
+    assert caller_auth.config_from_env().token == _TOKEN
+
+
+# ---------------------------------------------------------------------------
 # The real sidecar app wiring (packaging/server.py) — guards against the
 # middleware/dependency not actually being installed on the shipped app.
 # ---------------------------------------------------------------------------
@@ -228,6 +278,36 @@ def test_shipped_sidecar_app_enforces_token(monkeypatch):
     assert ok.status_code == 200
     # Root liveness probe stays open (readiness handshake needs it pre-token).
     assert client.get("/health").status_code == 200
+
+
+def test_shipped_sidecar_app_enforces_token_delivered_via_file(
+    tmp_path, monkeypatch
+):
+    # The full boundary for the #2149 file leg: token delivered as a file path,
+    # enforced by the real app over HTTP — missing/wrong bearer → 401, the
+    # delivered token → 200. No mocks between the request and the check.
+    secret = tmp_path / "launch-secret"
+    secret.write_text(_TOKEN, encoding="utf-8")
+    monkeypatch.setenv(caller_auth.TOKEN_FILE_ENV_VAR, str(secret))
+    monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    server = _load_sidecar_server()
+    client = TestClient(server.build_app(), base_url=_BASE_URL)
+
+    assert client.post("/v1/email/draft", json=_DRAFT_BODY).status_code == 401
+    assert (
+        client.post(
+            "/v1/email/draft",
+            json=_DRAFT_BODY,
+            headers={"Authorization": "Bearer wrong"},
+        ).status_code
+        == 401
+    )
+    ok = client.post(
+        "/v1/email/draft",
+        json=_DRAFT_BODY,
+        headers={"Authorization": f"Bearer {_TOKEN}"},
+    )
+    assert ok.status_code == 200
 
 
 def test_shipped_app_gates_connector_and_agent_routers(monkeypatch):

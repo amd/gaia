@@ -229,6 +229,42 @@
     line-height: 1.4;
 }
 
+/* #2117 — per-agent grant selection shown before connecting an OAuth
+   mailbox. Connecting grants the checked agents in the same flow. */
+.oauth-grant-onconnect {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 8px 0 4px 0;
+    padding: 10px 12px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    border-radius: 6px;
+}
+
+.oauth-grant-onconnect-label {
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 500;
+    margin: 0;
+}
+
+.oauth-grant-onconnect-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.oauth-grant-onconnect-help {
+    color: var(--text-secondary);
+    font-size: 11px;
+    line-height: 1.4;
+    margin: 2px 0 0 0;
+}
+
 .connector-product-link {
     display: inline-flex;
     align-items: center;

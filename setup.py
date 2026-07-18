@@ -129,12 +129,12 @@ setup(
             "fastapi>=0.115.0",
             "uvicorn>=0.32.0",
             "python-multipart>=0.0.9",
-            # [api] auto-mounts the gaia-agent-email REST router (openai_server.py),
-            # whose import chain reaches gaia.connectors.store -> `import keyring`
-            # at module load AND at request time (connected_mailbox_providers).
-            # Declare it so `amd-gaia[api]` + gaia-agent-email starts & serves triage
-            # with zero manual installs. Same pin as [ui]/[dev]. See #1617.
-            "keyring>=24.0.0,<26.0.0",
+            # Async client for the /v1/<agent>/* daemon relay (#2178): the API
+            # server streams SSE from the daemon unbuffered via httpx. This is
+            # the sole path to agent surfaces now — no agent is mounted
+            # in-process (#2176), so [api] carries no per-agent deps (keyring is
+            # already a core install_requires dep for `gaia connectors`, #1621).
+            "httpx>=0.27.0",
         ],
         "ui": [
             "fastapi>=0.115.0",

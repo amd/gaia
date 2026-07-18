@@ -1,0 +1,7 @@
+{
+  "scenario_id": "send_needs_confirmation",
+  "required_subsequence": ["status", "needs_confirmation", "final"],
+  "terminal": "final",
+  "forbidden": [],
+  "_comment": "A destructive/external step (e.g. send_now) must surface a needs_confirmation event and then, under the stateless D1 stub, end in a final refusal that points at the fixed-function route — never silently perform the action. Pins the §0.2 needs_confirmation seam (issue #2180 / V2-19)."
+}

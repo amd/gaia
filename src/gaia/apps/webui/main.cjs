@@ -63,6 +63,11 @@ const backendInstaller = require("./services/backend-installer.cjs");
 const installerProgressDialog = require("./services/backend-installer-progress-dialog.cjs");
 const autoUpdater = require("./services/auto-updater.cjs");
 const agentSeeder = require("./services/agent-seeder.cjs");
+const {
+  parseDeepLink,
+  extractDeepLinkFromArgv,
+  dispatchDeepLink,
+} = require("./services/deep-link.cjs");
 
 // ── F7: Ozone hint (issue #782) ─────────────────────────────────────────────
 // Electron-recommended switch for distro-agnostic Linux behaviour: picks
@@ -586,7 +591,12 @@ function initializeServices() {
   console.log("[main] Initializing services...");
 
   // T2: Agent Process Manager (manages OS agent subprocesses)
-  agentProcessManager = new AgentProcessManager(mainWindow);
+  // getBackendPort lets its install/uninstall handlers proxy to the live
+  // Python backend's install runtime (issue #1721) on whatever random port
+  // port-manager picked this session.
+  agentProcessManager = new AgentProcessManager(mainWindow, {
+    getBackendPort: () => backendPort,
+  });
 
   // T1: Tray Manager (system tray icon + context menu)
   trayManager = new TrayManager(mainWindow, { backendPort });
@@ -723,6 +733,157 @@ async function bootstrapBackend() {
   return false;
 }
 
+// ── gaia:// deep-link install bridge (issue #1725) ──────────────────────────
+//
+// The website's "Open in GAIA" button opens a `gaia://hub/install/<id>` URL.
+// The OS routes it to this app (registered as the gaia:// protocol client);
+// we parse it and hand the agent id to the install runtime (issue #1721).
+//
+// Sources of the URL differ per OS:
+//   • macOS      — the `open-url` app event (registered before whenReady).
+//   • Win/Linux  — a command-line argument, either at cold start (process.argv)
+//                  or on a second launch (the `second-instance` event argv).
+// A malformed/unsupported link surfaces a loud error dialog — never a silent
+// no-op (deep-link.cjs throws with an actionable message).
+
+/** Holds a deep link that arrived before services were ready. */
+let pendingDeepLinkUrl = null;
+
+/**
+ * Register this app as the handler for the gaia:// scheme. In dev (`electron .`)
+ * the launcher is Electron itself, so the app path must be threaded through
+ * explicitly; packaged builds register their own executable.
+ */
+function registerProtocolHandler() {
+  try {
+    let registered;
+    if (process.defaultApp && process.argv.length >= 2) {
+      // Dev: `electron . <args>` — point the scheme at this script.
+      registered = app.setAsDefaultProtocolClient("gaia", process.execPath, [
+        path.resolve(process.argv[1]),
+      ]);
+    } else {
+      registered = app.setAsDefaultProtocolClient("gaia");
+    }
+    if (registered) {
+      console.log("[main] Registered as gaia:// protocol client");
+    } else {
+      console.warn(
+        "[main] Could not register gaia:// protocol client — deep-link installs may not route to this app"
+      );
+    }
+  } catch (err) {
+    console.warn(
+      `[main] setAsDefaultProtocolClient failed: ${err && err.message ? err.message : err}`
+    );
+  }
+}
+
+/**
+ * Entry point for any inbound deep link. Queues the URL if services aren't up
+ * yet, otherwise dispatches immediately. Parse failures are surfaced loudly.
+ */
+function handleDeepLink(rawUrl) {
+  let command;
+  try {
+    command = parseDeepLink(rawUrl);
+  } catch (err) {
+    const message = err && err.message ? err.message : String(err);
+    console.error(`[main] Rejected deep link: ${message}`);
+    try {
+      dialog.showErrorBox("Invalid GAIA link", message);
+    } catch {
+      /* dialog may be unavailable pre-ready — the log line above still fires */
+    }
+    return;
+  }
+
+  // If services aren't wired yet (cold start still bootstrapping), stash it.
+  if (!agentProcessManager) {
+    console.log("[main] Deep link received before services ready — queuing");
+    pendingDeepLinkUrl = rawUrl;
+    return;
+  }
+
+  void runDeepLink(command);
+}
+
+/**
+ * Explicit per-agent confirmation for a web-triggered install. This is the
+ * security gate: the user must confirm the SPECIFIC agent before any download
+ * happens (issue #2196 review). Defaults to the safe (Cancel) option.
+ * @returns {Promise<boolean>}
+ */
+async function confirmDeepLinkInstall(command) {
+  const choice = await dialog.showMessageBox(
+    mainWindow && !mainWindow.isDestroyed() ? mainWindow : null,
+    {
+      type: "question",
+      buttons: ["Install", "Cancel"],
+      defaultId: 1, // Enter selects the safe option
+      cancelId: 1,
+      title: "Install agent from the web?",
+      message: `Install the "${command.agentId}" agent?`,
+      detail:
+        `A website asked GAIA to install "${command.agentId}". ` +
+        "Only continue if you trust this source — installing downloads and " +
+        "runs third-party code on your machine.",
+      noLink: true,
+    }
+  );
+  return !!choice && choice.response === 0;
+}
+
+/** Wire the injected deep-link dispatcher to this process's runtime effects. */
+async function runDeepLink(command) {
+  console.log(`[main] Deep-link install request: ${command.agentId}`);
+  try {
+    await dispatchDeepLink(command, {
+      confirm: confirmDeepLinkInstall,
+      installAgent: (agentId) => agentProcessManager.installAgent(agentId),
+      focusWindow: () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          if (mainWindow.isMinimized()) mainWindow.restore();
+          if (!mainWindow.isVisible()) mainWindow.show();
+          mainWindow.focus();
+        }
+      },
+      logger: { log: console.log.bind(console), error: console.error.bind(console) },
+    });
+  } catch (err) {
+    const message = err && err.message ? err.message : String(err);
+    console.error(
+      `[main] Deep-link install of "${command.agentId}" failed: ${message}`
+    );
+    try {
+      dialog.showErrorBox(`Could not install "${command.agentId}"`, message);
+    } catch {
+      /* best-effort */
+    }
+  }
+}
+
+/** Drain a queued deep link, plus any gaia:// URL present in the cold-start argv. */
+function processStartupDeepLinks() {
+  if (pendingDeepLinkUrl) {
+    const url = pendingDeepLinkUrl;
+    pendingDeepLinkUrl = null;
+    handleDeepLink(url);
+    return;
+  }
+  const fromArgv = extractDeepLinkFromArgv(process.argv);
+  if (fromArgv) handleDeepLink(fromArgv);
+}
+
+// macOS delivers deep links via this event; it can fire before whenReady, so
+// register it at module load and let handleDeepLink queue as needed.
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  handleDeepLink(url);
+});
+
+registerProtocolHandler();
+
 // ── App Lifecycle ──────────────────────────────────────────────────────────
 
 // Note: electron-squirrel-startup was removed in Phase C of the
@@ -760,7 +921,7 @@ if (!gotTheSingleInstanceLock) {
   process.exit(0);
 }
 
-app.on("second-instance", (_event, _argv, _cwd) => {
+app.on("second-instance", (_event, argv, _cwd) => {
   // A second launch happened while we were running. Surface our window
   // (the user almost certainly wanted to see it). mainWindow may be null
   // if we're still in the bootstrap phase — in that case the first
@@ -771,6 +932,11 @@ app.on("second-instance", (_event, _argv, _cwd) => {
     if (!mainWindow.isVisible()) mainWindow.show();
     mainWindow.focus();
   }
+
+  // Win/Linux: a `gaia://…` deep link from the second launch arrives as an argv
+  // entry. Route it into the already-running first instance (issue #1725).
+  const deepLink = extractDeepLinkFromArgv(argv);
+  if (deepLink) handleDeepLink(deepLink);
 });
 
 app.whenReady().then(async () => {
@@ -836,6 +1002,10 @@ app.whenReady().then(async () => {
 
   // Setup Windows Jump List (T11)
   setupJumpList();
+
+  // Act on any gaia:// deep link that arrived during bootstrap or via the
+  // cold-start command line (issue #1725). Services are now wired.
+  processStartupDeepLinks();
 
   // Show loading state
   await loadApp();

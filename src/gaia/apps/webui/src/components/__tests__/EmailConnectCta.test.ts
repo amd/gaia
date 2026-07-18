@@ -2,7 +2,11 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, it, expect } from 'vitest';
-import { detectProvider, isAuthRequiredMessage } from '../email/EmailConnectCta';
+import {
+    detectProvider,
+    emailAgentGrantIds,
+    isAuthRequiredMessage,
+} from '../email/EmailConnectCta';
 
 /**
  * Tests for isAuthRequiredMessage — the CTA detection function that decides
@@ -129,5 +133,65 @@ describe('detectProvider', () => {
 
     it('returns both for an ambiguous message without provider names', () => {
         expect(detectProvider('AGENT_NOT_GRANTED: this agent is not granted.')).toBe('both');
+    });
+});
+
+/**
+ * #2117 consent-scoping: the email connect CTA must grant ONLY the email agent,
+ * never co-installed agents that also declare the connector — granting a sibling
+ * agent its mailbox scopes here would bypass the per-agent consent surface.
+ */
+describe('emailAgentGrantIds', () => {
+    const email = {
+        id: 'email',
+        namespaced_agent_id: 'installed:email',
+        required_connections: [
+            { connector_id: 'google' },
+            { connector_id: 'microsoft' },
+        ],
+    };
+    const connectorsDemo = {
+        id: 'connectors-demo',
+        namespaced_agent_id: 'installed:connectors-demo',
+        required_connections: [{ connector_id: 'google' }],
+    };
+
+    it('grants only the email agent, not co-installed agents that declare the connector', () => {
+        expect(emailAgentGrantIds([email, connectorsDemo], 'google')).toEqual([
+            'installed:email',
+        ]);
+    });
+
+    it('does not grant a co-installed agent even when the email agent is absent', () => {
+        // No silent fall-through to a sibling agent — returns empty, not the demo.
+        expect(emailAgentGrantIds([connectorsDemo], 'google')).toEqual([]);
+    });
+
+    it('returns the email agent for microsoft too', () => {
+        expect(emailAgentGrantIds([email, connectorsDemo], 'microsoft')).toEqual([
+            'installed:email',
+        ]);
+    });
+
+    it('returns empty when the email agent does not declare the connector', () => {
+        const emailNoGoogle = {
+            id: 'email',
+            namespaced_agent_id: 'installed:email',
+            required_connections: [{ connector_id: 'microsoft' }],
+        };
+        expect(emailAgentGrantIds([emailNoGoogle], 'google')).toEqual([]);
+    });
+
+    it('is robust to a builtin: namespace prefix', () => {
+        const builtinEmail = {
+            id: 'email',
+            namespaced_agent_id: 'builtin:email',
+            required_connections: [{ connector_id: 'google' }],
+        };
+        expect(emailAgentGrantIds([builtinEmail], 'google')).toEqual(['builtin:email']);
+    });
+
+    it('returns empty for an empty agent list', () => {
+        expect(emailAgentGrantIds([], 'google')).toEqual([]);
     });
 });

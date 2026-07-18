@@ -27,9 +27,14 @@ pytest.importorskip("gaia_agent_email")
 import gaia_agent_email.api_routes as email_routes
 from fastapi.testclient import TestClient
 
-# The FastAPI app the email router is mounted on.
+# The email agent is no longer mounted in-process on the core API server
+# (#2176); build its standalone REST app directly — the same app the OpenAPI
+# exporter and the sidecar mount, so these binding tests exercise the real
+# email surface, not the (removed) `gaia api` mount.
 try:
-    from gaia.api.openai_server import app
+    from gaia_agent_email.export_openapi import build_app as _build_email_app
+
+    app = _build_email_app()
 except ImportError:
     app = None
 
