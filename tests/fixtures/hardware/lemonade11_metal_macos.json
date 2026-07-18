@@ -1,0 +1,20 @@
+{
+  "devices": {
+    "amd_gpu": [],
+    "amd_npu": {
+      "available": false,
+      "error": "NPU not supported on macOS (Ryzen AI NPUs are Windows/Linux only)"
+    },
+    "cpu": { "available": true, "cores": 16, "threads": 16, "family": "arm64" },
+    "metal": {
+      "available": true,
+      "driver_version": "Metal",
+      "family": "metal",
+      "name": "Apple M3 Max",
+      "vram_gb": 51.84
+    },
+    "nvidia_gpu": [
+      { "available": false, "error": "NVIDIA GPUs not detected on macOS", "name": "" }
+    ]
+  }
+}

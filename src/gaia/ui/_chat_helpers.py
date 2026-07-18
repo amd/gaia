@@ -181,6 +181,7 @@ def _classify_chat_exception(exc: BaseException):
     from gaia.llm.providers.lemonade import (  # local import to avoid cycle at import time
         LemonadeContextOverflowError,
         LemonadeError,
+        LemonadeModelNotFoundError,
         LemonadeModelNotLoadedError,
         LemonadeNetworkError,
         LemonadeUpstreamTimeoutError,
@@ -206,9 +207,22 @@ def _classify_chat_exception(exc: BaseException):
     # 2. Substring match on the stringified exception — covers the case
     # where AgentSDK re-raises with ``str(original)`` as the message,
     # losing the typed-class info.
-    text = str(exc).lower()
+    raw = str(exc)
+    text = raw.lower()
     if "no model loaded" in text or "model_not_loaded" in text:
         return LemonadeModelNotLoadedError()
+    # Model genuinely not installed (Lemonade HTTP 404 / model_not_found) — the
+    # model was never pulled, so this is NOT retryable and NOT the same as
+    # "not loaded". Naming the missing model is actionable (#2243).
+    # "was not found" is anchored to a nearby "model" token so an unrelated
+    # 404 ("file X was not found") isn't mislabelled as a missing model.
+    if (
+        "model_not_found" in text
+        or _re.search(r"\bmodel\b[^\n]{0,80}?\bwas not found\b", text)
+        or ("model not found" in text and "not loaded" not in text)
+    ):
+        m = _re.search(r"[Mm]odel ['\"]([^'\"]+)['\"]", raw)
+        return LemonadeModelNotFoundError(model_id=m.group(1) if m else None)
     if "exceed_context_size" in text or "exceeds the available context size" in text:
         err = LemonadeContextOverflowError()
         # If the textual error mentions a small n_ctx, the model was

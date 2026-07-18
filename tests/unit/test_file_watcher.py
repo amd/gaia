@@ -251,6 +251,25 @@ class TestJsonExtraction:
         result = extract_json_from_text(text)
         assert result == {"q": 'say "hi" }', "n": 2}
 
+    def test_extract_array_with_surrounding_text(self):
+        """A top-level array in chatter must come back whole, not as its
+        first row object (which silently dropped every other row)."""
+        text = (
+            "Sure! Here's the table:\n"
+            '[{"a": 1}, {"a": 2}]\n'
+            "Let me know if you need anything else."
+        )
+        assert extract_json_from_text(text) == [{"a": 1}, {"a": 2}]
+
+    def test_extract_plain_array(self):
+        """A bare JSON array parses via the whole-text path."""
+        assert extract_json_from_text('[1, 2, "three"]') == [1, 2, "three"]
+
+    def test_extract_object_after_prose_bracket(self):
+        """A stray '[' in prose before the object must not mask the object."""
+        text = 'See [note 1] then {"ok": true} thanks'
+        assert extract_json_from_text(text) == {"ok": True}
+
 
 class TestFieldChangeDetection:
     """Tests for field change detection."""

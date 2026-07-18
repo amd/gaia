@@ -189,6 +189,16 @@ def _default_loader(agent_id: str, registry: Any) -> List[str]:
     no entry-point probe. For installed wheel agents we re-resolve the
     ``gaia.agent`` / ``gaia.agents`` entry point named *agent_id* and ``.load()``
     it — that is precisely "the entry point resolves". A failure raises.
+
+    File-based custom agents (``source == "custom_python"``) have no entry point
+    by construction — they are exec'd from ``~/.gaia/agents/<id>/agent.py`` during
+    discovery. So the registry's own successful discovery IS the health signal,
+    the same way a registered builtin is proof it loaded. We additionally verify
+    the discovered class is *concrete*: an agent that never implements an abstract
+    method (e.g. ``_register_tools``) discovers fine but can never be constructed,
+    so it is genuinely broken. This check inspects ``__abstractmethods__`` only —
+    it does not construct the agent, so ``gaia agent status`` triggers no
+    constructor side effects (#2268).
     """
     if installer_mod.is_builtin(agent_id):
         # Builtins ship in the core wheel; presence in the registry is proof.
@@ -196,6 +206,19 @@ def _default_loader(agent_id: str, registry: Any) -> List[str]:
             raise LifecycleError(
                 f"builtin agent '{agent_id}' is not present in the registry; "
                 f"the core install may be broken."
+            )
+        return []
+
+    reg = registry.get(agent_id) if registry is not None else None
+    if reg is not None and getattr(reg, "source", None) == "custom_python":
+        agent_class = getattr(reg, "agent_class", None)
+        missing = sorted(getattr(agent_class, "__abstractmethods__", ()) or ())
+        if missing:
+            raise LifecycleError(
+                f"custom agent '{agent_id}' is discoverable but cannot be "
+                f"constructed: its class does not implement abstract method(s) "
+                f"{', '.join(missing)}. Implement them in its agent.py, then "
+                f"re-run 'gaia agent status {agent_id}'."
             )
         return []
 

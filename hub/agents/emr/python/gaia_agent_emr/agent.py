@@ -1100,6 +1100,25 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
             logger.warning("No valid JSON found in extraction")
             return None
 
+        # A VLM sometimes wraps the single patient object in an array.
+        if isinstance(result, list):
+            if len(result) == 1 and isinstance(result[0], dict):
+                result = result[0]
+            else:
+                logger.error(
+                    f"Extraction returned a JSON array of {len(result)} item(s); "
+                    "expected one patient object. Re-scan the form, or adjust the "
+                    "extraction prompt to emit a single JSON object per form."
+                )
+                return None
+
+        if not isinstance(result, dict):
+            logger.error(
+                f"Extraction returned a JSON {type(result).__name__}; expected an "
+                "object of patient fields. Check the VLM output for this form."
+            )
+            return None
+
         # Normalize phone fields: prefer mobile_phone if phone is not set
         # This handles forms where VLM extracts to mobile_phone instead of phone
         if not result.get("phone"):

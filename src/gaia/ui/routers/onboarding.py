@@ -36,6 +36,7 @@ from pydantic import BaseModel, Field
 from gaia.hub.compatibility import check_compatibility
 from gaia.hub.manifest import Requirements
 from gaia.llm.lemonade_client import lemonade_auth_headers, resolve_lemonade_api_key
+from gaia.llm.lemonade_manager import gpu_display_info
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,14 @@ async def _probe_lemonade_devices() -> Dict[str, Any]:
     "gpu_name": Optional[str], "gpu_vram_gb": Optional[float]}``. A ``None`` for
     a device means we could not determine it (Lemonade down, or it did not
     report that device) — the caller turns that into a "couldn't verify"
-    warning rather than assuming the hardware is present.
+    warning rather than assuming the hardware is present. A ``None`` GPU name
+    likewise means "not detected"; it is never the empty string, which the UI
+    would render as a successfully-detected but nameless GPU.
+
+    GPU shape handling is delegated to :func:`gpu_display_info` so this probe,
+    the ``/api/system/status`` probe, and the CLI all agree on what counts as
+    an available GPU (live Lemonade reports ``amd_gpu`` as a *list*; Apple
+    Silicon reports ``metal``).
     """
     result: Dict[str, Any] = {
         "lemonade_running": False,
@@ -88,14 +96,10 @@ async def _probe_lemonade_devices() -> Dict[str, Any]:
             # Once Lemonade reports its device table we *do* know whether an NPU
             # is present — so absence becomes a definite False, not None.
             npu_seen = False
+            result["gpu_name"], result["gpu_vram_gb"] = gpu_display_info(devices)
             for key, dev in devices.items():
                 if not isinstance(dev, dict):
                     continue
-                if "gpu" in key.lower():
-                    result["gpu_name"] = dev.get("name") or result["gpu_name"]
-                    vram = dev.get("vram_gb")
-                    if vram is not None:
-                        result["gpu_vram_gb"] = float(vram)
                 if "npu" in key.lower():
                     npu_seen = True
                     if dev.get("available"):

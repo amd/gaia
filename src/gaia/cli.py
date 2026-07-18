@@ -515,6 +515,52 @@ class GaiaCliClient:
             sys.exit(1)
 
 
+def resolve_effective_device(
+    effective_device: str, device_was_explicit: bool, devices: dict
+) -> str:
+    """Resolve the device `gaia chat` reports/runs on, validating whichever
+    device is actually landed on.
+
+    Sequential npu -> gpu checks (not if/elif) so a non-explicit npu->gpu
+    reassignment falls through to the GPU probe in the same call, instead of
+    being reported unchecked (#2241: an if/elif chain evaluates once, so the
+    npu branch's reassignment could never trigger the gpu branch). An
+    explicit --device still fails loudly (sys.exit(1)) when unavailable
+    rather than falling back; cpu needs no availability check.
+    """
+    if effective_device == "npu":
+        npu_info = devices.get("amd_npu", {})
+        if not npu_info.get("available"):
+            if device_was_explicit:
+                print(
+                    "❌ NPU not available on this system. "
+                    "Requires Ryzen AI 300/400/Max (XDNA2). "
+                    "Run `gaia init --profile npu` to set it up, "
+                    "or choose --device gpu.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            effective_device = "gpu"
+
+    if effective_device == "gpu":
+        from gaia.llm.lemonade_manager import system_info_has_gpu
+
+        has_gpu = system_info_has_gpu(devices)
+        if not has_gpu and not device_was_explicit:
+            # No accelerator reported — describe the resulting state
+            # (Lemonade runs on CPU) rather than claiming a fallback GAIA
+            # forces; it does not send a device to Lemonade, which picks the
+            # backend itself.
+            print(
+                "No GPU detected — inference will run on CPU "
+                "(slower). Run `gaia init` to set up GPU "
+                "acceleration."
+            )
+            effective_device = "cpu"
+
+    return effective_device
+
+
 async def async_main(action, **kwargs):
     log = get_logger(__name__)
 
@@ -618,14 +664,25 @@ async def async_main(action, **kwargs):
             use_silent_mode = not debug_mode  # Hide processing steps unless debugging
 
             # Resolve device to model_id when --device is set and --model is not.
-            # GPU is the default when no --device is specified.
+            # No --device: fall back to the persisted config default (GPU out of
+            # the box; `gaia init --profile npu` records NPU), so the write of
+            # config.default_device is honoured at runtime rather than ignored.
             # Fallback policy:
             #   - Explicit --device: fail loudly if unavailable (no fallback)
-            #   - Default (no --device): GPU default, fallback to CPU with warning
+            #   - Default (no --device): config default, fallback to CPU with warning
             explicit_model = kwargs.get("model", None)
             device = kwargs.get("device", None)
             device_was_explicit = device is not None
-            effective_device = device or "gpu"
+            if device_was_explicit:
+                effective_device = device
+            else:
+                from gaia.config import GaiaConfig, GaiaConfigError
+
+                try:
+                    effective_device = GaiaConfig.load().default_device
+                except GaiaConfigError as _cfg_err:
+                    print(f"❌ {_cfg_err}", file=sys.stderr)
+                    sys.exit(1)
 
             # Check device availability when Lemonade is reachable
             if not explicit_model:
@@ -636,35 +693,9 @@ async def async_main(action, **kwargs):
                     _sysinfo = _dev_client.get_system_info()
                     _devices = _sysinfo.get("devices", {})
 
-                    if effective_device == "npu":
-                        npu_info = _devices.get("amd_npu", {})
-                        if not npu_info.get("available"):
-                            if device_was_explicit:
-                                print(
-                                    "❌ NPU not available on this system. "
-                                    "Requires Ryzen AI 300/400/Max (XDNA2). "
-                                    "Run `gaia init --profile npu` to set it up, "
-                                    "or choose --device gpu.",
-                                    file=sys.stderr,
-                                )
-                                sys.exit(1)
-                            effective_device = "gpu"
-                    elif effective_device == "gpu":
-                        has_gpu = any(
-                            "gpu" in k.lower()
-                            and isinstance(v, dict)
-                            and v.get("available")
-                            for k, v in _devices.items()
-                        )
-                        if not has_gpu and not device_was_explicit:
-                            # Default GPU target unavailable — announce the
-                            # *reason* for the CPU fallback so it doesn't read
-                            # like a deliberate user choice.
-                            print(
-                                "No GPU detected; falling back to CPU (slower). "
-                                "Run `gaia init` to set up GPU acceleration."
-                            )
-                            effective_device = "cpu"
+                    effective_device = resolve_effective_device(
+                        effective_device, device_was_explicit, _devices
+                    )
                 except LemonadeClientError as _probe_err:
                     # Only treat "server not reachable yet" (connection refused /
                     # timeout) as a soft pass. A reachable but broken server

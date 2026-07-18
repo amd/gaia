@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 from enum import Enum
-from typing import Optional
+from typing import Any, Dict, Iterator, Optional, Tuple
 
 from gaia.llm.lemonade_client import (
     DEFAULT_CONTEXT_SIZE,
@@ -81,6 +81,130 @@ def _device_is_available(info) -> bool:
         # amd_dgpu can be a list of GPUs — detected if any entry is available.
         return any(_device_is_available(x) for x in info)
     return True
+
+
+def _is_gpu_device_key(key: str) -> bool:
+    """Whether a ``devices`` key names a GPU accelerator.
+
+    Matches any key containing ``"gpu"`` (``amd_gpu``/``nvidia_gpu`` and the
+    legacy ``amd_igpu``/``amd_dgpu``) plus ``"metal"`` — Apple Silicon reports
+    its GPU under ``metal``, which has no ``"gpu"`` substring.
+    """
+    k = key.lower()
+    return "gpu" in k or k == "metal"
+
+
+def system_info_has_gpu(devices) -> bool:
+    """Whether a ``get_system_info()`` ``devices`` payload reports a usable GPU.
+
+    Availability is delegated to :func:`_device_is_available`, so list-shaped
+    entries are handled — live Lemonade returns ``amd_gpu``/``nvidia_gpu`` as
+    *lists*, and a present-but-``available: false`` GPU (e.g. an absent discrete
+    NVIDIA card) is correctly not counted. Reuses the single availability check
+    rather than re-implementing it inline.
+    """
+    if isinstance(devices, dict):
+        return any(
+            _is_gpu_device_key(k) and _device_is_available(v)
+            for k, v in devices.items()
+        )
+    if isinstance(devices, list):
+        for item in devices:
+            if not isinstance(item, dict) or not _device_is_available(item):
+                continue
+            for k in ("device_type", "type", "id", "name"):
+                if k in item and _is_gpu_device_key(str(item[k])):
+                    return True
+    return False
+
+
+def _iter_gpu_entries(devices) -> Iterator[Dict[str, Any]]:
+    """Yield every per-GPU entry in a ``devices`` payload, shape-agnostic.
+
+    Live Lemonade reports ``amd_gpu``/``nvidia_gpu`` as *lists* of entries
+    while ``metal`` and the legacy ``amd_igpu``/``amd_dgpu`` keys are single
+    dicts; both are flattened here so callers never branch on shape. A
+    top-level *list* payload — where GPU-ness lives in the entry rather than
+    the key — is handled the same way :func:`system_info_has_gpu` handles it,
+    so the two helpers agree on every shape.
+    """
+    if isinstance(devices, dict):
+        for key, value in devices.items():
+            if not _is_gpu_device_key(key):
+                continue
+            for entry in value if isinstance(value, list) else [value]:
+                if isinstance(entry, dict):
+                    yield entry
+    elif isinstance(devices, list):
+        for entry in devices:
+            if not isinstance(entry, dict):
+                continue
+            if any(
+                k in entry and _is_gpu_device_key(str(entry[k]))
+                for k in ("device_type", "type", "id", "name")
+            ):
+                yield entry
+
+
+def _coerce_vram_gb(raw) -> Optional[float]:
+    """Parse a device entry's ``vram_gb``, or ``None`` when it is unusable."""
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        log = get_logger(__name__)
+        log.warning(
+            "Lemonade reported a non-numeric vram_gb (%r); "
+            "reporting VRAM as undetected rather than guessing.",
+            raw,
+        )
+        return None
+
+
+def _gpu_rank(entry: Dict[str, Any]) -> Tuple[int, float, int, int]:
+    """Sort key picking the GPU a user would call "their" GPU (highest wins).
+
+    Ordered: not-integrated, then most VRAM, then carries discrete-card
+    identity, then named. The identity term matters on real Windows payloads,
+    where an APU's iGPU and a discrete card are both listed with neither
+    ``vram_gb`` nor ``integrated`` — only the discrete entry reports a
+    ``family``/``driver_version``, so without it a 7900 XTX owner would be
+    told they have "AMD Radeon(TM) Graphics". It ranks below VRAM so a larger
+    card still wins when both report VRAM.
+    """
+    vram = _coerce_vram_gb(entry.get("vram_gb"))
+    has_discrete_identity = bool(
+        str(entry.get("family") or "").strip() or entry.get("driver_version")
+    )
+    return (
+        0 if entry.get("integrated") else 1,
+        vram if vram is not None else -1.0,
+        1 if has_discrete_identity else 0,
+        1 if str(entry.get("name") or "").strip() else 0,
+    )
+
+
+def gpu_display_info(devices) -> Tuple[Optional[str], Optional[float]]:
+    """``(name, vram_gb)`` for the GPU a UI should name, from ``get_system_info()``.
+
+    Returns ``(None, None)`` when no *available* GPU is reported, so callers can
+    say "not detected" honestly. Never returns a blank string: an entry whose
+    ``name`` is empty (real Lemonade does this for an absent NVIDIA card) yields
+    ``None``, because a blank name renders as success in the UI when it is not.
+
+    Availability and GPU-key matching reuse :func:`_device_is_available` and
+    :func:`_is_gpu_device_key` — the same checks :func:`system_info_has_gpu`
+    uses — so the UI and CLI cannot disagree about what counts as a GPU.
+    When several GPUs are available, :func:`_gpu_rank` picks the one the user
+    would call theirs (the discrete card over an APU's integrated graphics).
+    """
+    available = [e for e in _iter_gpu_entries(devices) if _device_is_available(e)]
+    if not available:
+        return None, None
+    best = max(available, key=_gpu_rank)
+    name = str(best.get("name") or "").strip() or None
+    return name, _coerce_vram_gb(best.get("vram_gb"))
 
 
 def _format_device_error(
