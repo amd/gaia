@@ -24,7 +24,7 @@ import sqlite3
 
 import pytest
 
-from gaia.daemon import migrate, paths
+from gaia.daemon import migrate
 from gaia.daemon.errors import MigrationError
 
 
@@ -187,6 +187,47 @@ def test_second_run_ignores_new_legacy_writes(homes):
 
 
 # ---------------------------------------------------------------------------
+# WAL safety: committed-but-uncheckpointed rows must survive the migration
+# ---------------------------------------------------------------------------
+
+
+def test_uncheckpointed_wal_row_is_migrated(homes):
+    """Regression for the raw-byte-copy data-loss bug: a row committed to the WAL
+    but not yet checkpointed lives in the ``-wal`` sidecar, which a raw copy of the
+    main ``.db`` misses. The engine-level snapshot must capture it — here with the
+    writer STILL OPEN (the worst case: a live legacy process)."""
+    legacy, _ = homes
+    db = migrate.legacy_memory_db()
+    db.parent.mkdir(parents=True, exist_ok=True)
+
+    writer = sqlite3.connect(str(db))
+    try:
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("CREATE TABLE k(id INTEGER PRIMARY KEY, v TEXT)")
+        writer.execute("INSERT INTO k(v) VALUES('checkpointed')")
+        writer.commit()
+        # Fold the first row into the main file, then commit a SECOND row that
+        # stays in the -wal (no checkpoint) — exactly what a raw copy would drop.
+        writer.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        writer.execute("INSERT INTO k(v) VALUES('in-wal-only')")
+        writer.commit()
+        assert (db.parent / f"{db.name}-wal").exists()  # sanity: WAL is populated
+
+        result = migrate.run_migrations()
+        assert result["status"] == migrate.MigrationState.MIGRATED
+    finally:
+        writer.close()
+
+    conn = sqlite3.connect(str(migrate.custody_memory_db()))
+    try:
+        values = {row[0] for row in conn.execute("SELECT v FROM k").fetchall()}
+    finally:
+        conn.close()
+    # Both rows survive — the uncheckpointed one is NOT lost.
+    assert values == {"checkpointed", "in-wal-only"}
+
+
+# ---------------------------------------------------------------------------
 # Unknown-newer version → loud refusal
 # ---------------------------------------------------------------------------
 
@@ -216,7 +257,7 @@ def test_failed_step_preserves_originals_and_does_not_stamp(homes, monkeypatch):
     def boom(src, dst, mode=0o600):
         raise OSError("disk full")
 
-    monkeypatch.setattr(paths, "atomic_copy_file", boom)
+    monkeypatch.setattr(migrate, "_atomic_sqlite_snapshot", boom)
 
     with pytest.raises(MigrationError) as ei:
         migrate.run_migrations()
@@ -234,7 +275,7 @@ def test_retry_after_failure_completes(homes, monkeypatch):
     _seed_legacy_memory(legacy)
 
     calls = {"n": 0}
-    real_copy = paths.atomic_copy_file
+    real_copy = migrate._atomic_sqlite_snapshot
 
     def flaky(src, dst, mode=0o600):
         calls["n"] += 1
@@ -242,13 +283,13 @@ def test_retry_after_failure_completes(homes, monkeypatch):
             raise OSError("transient")
         return real_copy(src, dst, mode)
 
-    monkeypatch.setattr(paths, "atomic_copy_file", flaky)
+    monkeypatch.setattr(migrate, "_atomic_sqlite_snapshot", flaky)
     with pytest.raises(MigrationError):
         migrate.run_migrations()
     assert migrate.read_schema_version() == 0
 
     # Retry (fault cleared) completes and stamps.
-    monkeypatch.setattr(paths, "atomic_copy_file", real_copy)
+    monkeypatch.setattr(migrate, "_atomic_sqlite_snapshot", real_copy)
     result = migrate.run_migrations()
     assert result["status"] == migrate.MigrationState.MIGRATED
     assert migrate.read_schema_version() == migrate.SCHEMA_VERSION

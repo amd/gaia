@@ -24,9 +24,15 @@ Invariants (CLAUDE.md — critical for a migration):
 
 * **Non-destructive.** Legacy stores are *copied*, never moved or deleted, so the
   original data is always recoverable even if the daemon is later rolled back.
-* **Atomic.** Each store is copied via temp-file-then-rename
-  (:func:`gaia.daemon.paths.atomic_copy_file`), so a crash mid-copy never leaves a
-  half-written database in custody.
+* **WAL-aware.** The legacy stores run in WAL mode, so committed-but-not-yet-
+  checkpointed transactions live in the ``-wal`` sidecar, not the main ``.db``.
+  A raw byte copy of the main file would silently drop them — losing the newest
+  sessions/memory of a user whose old process crashed or is still writing. The
+  copy therefore goes through ``sqlite3``'s online-backup API
+  (:func:`_atomic_sqlite_snapshot`), which reads through the engine and captures
+  a transaction-consistent snapshot including the WAL.
+* **Atomic.** Each snapshot is written to a temp file then ``os.replace``-d into
+  place, so a crash mid-copy never leaves a half-written database in custody.
 * **Fail loud.** Any step that cannot complete raises :class:`MigrationError`
   (originals intact, version left un-stamped so the next start retries) — never a
   partial success that swallows the error.
@@ -40,6 +46,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import time
 from pathlib import Path
 from typing import Callable, List
@@ -166,6 +173,59 @@ def _stamp_schema_version(version: int, applied: List[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# WAL-aware, atomic SQLite copy
+# ---------------------------------------------------------------------------
+
+
+def _atomic_sqlite_snapshot(src: Path, dst: Path, mode: int = 0o600) -> None:
+    """Copy the SQLite database *src* to *dst* as a consistent, WAL-aware snapshot.
+
+    The legacy stores run in WAL mode (``PRAGMA journal_mode = WAL``), so a
+    committed transaction that has not yet been checkpointed lives in the ``-wal``
+    sidecar file, not the main ``.db``. A raw byte copy of the main file would
+    silently omit it — losing the newest sessions/memory of any user whose old
+    process is still running or crashed before a checkpoint. ``sqlite3``'s
+    online-backup API reads *through* the engine, so the snapshot is
+    transaction-consistent and includes the WAL, even against a live writer.
+
+    The source is opened for reading only — ``backup`` never writes to it, so the
+    migration stays non-destructive. (A literal read-only handle,
+    ``file:...?mode=ro``, cannot be used: SQLite cannot open a WAL database
+    read-only once its writer has exited, because it may not create the ``-shm``
+    wal-index — which is exactly the common upgrade case.) The snapshot is written
+    to a temp file and atomically ``os.replace``-d over *dst*, so a crash
+    mid-backup never leaves a half-written database in custody.
+    """
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.parent / f".{dst.name}.{os.getpid()}.tmp"
+    if tmp.exists():
+        tmp.unlink()
+    # A generous busy_timeout so a brief lock held by a live legacy writer is
+    # waited out rather than surfaced as a spurious "database is locked" failure.
+    src_conn = sqlite3.connect(str(src), timeout=30.0)
+    try:
+        src_conn.execute("PRAGMA busy_timeout=30000")
+        dst_conn = sqlite3.connect(str(tmp))
+        try:
+            src_conn.backup(dst_conn)
+        finally:
+            dst_conn.close()
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+    finally:
+        src_conn.close()
+    os.replace(str(tmp), str(dst))
+    try:
+        os.chmod(str(dst), mode)
+    except OSError:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Migration steps — each keyed by the version it PRODUCES
 # ---------------------------------------------------------------------------
 
@@ -190,15 +250,15 @@ def _migrate_v0_to_v1() -> List[str]:
             logger.info("migrate: no legacy %s at %s; skipping", name, src)
             continue
         try:
-            paths.atomic_copy_file(src, dst)
-        except OSError as e:
+            _atomic_sqlite_snapshot(src, dst)
+        except (OSError, sqlite3.Error) as e:
             raise MigrationError(
                 f"failed to migrate legacy {name} from {src} to {dst}: {e}. The "
                 f"original at {src} is untouched; free up disk space / fix "
                 "permissions on the custody directory and restart the daemon to "
                 "retry. No data was lost."
             ) from e
-        logger.info("migrate: copied legacy %s %s -> %s", name, src, dst)
+        logger.info("migrate: snapshotted legacy %s %s -> %s", name, src, dst)
         applied.append(f"{name}:{src.name}")
 
     return applied
