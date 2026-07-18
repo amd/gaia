@@ -38,15 +38,16 @@ export GAIA_GOOGLE_CLIENT_SECRET="<client-secret>"
 ```
 
 The connections layer reads these at first use (`gaia.connectors.providers.get("google")`).
-Missing → the layer raises `ConfigurationError`; the AgentUI surfaces a
-503 on `/api/connections/*`, but the rest of the AgentUI keeps working
-(per plan amendment A3).
+A missing **client id** raises `ConfigurationError` immediately — the
+AgentUI surfaces a 503 on `/api/connections/*`, but the rest of the AgentUI
+keeps working (per plan amendment A3). A missing **secret** is not caught
+here; Google's token endpoint rejects the exchange later, so set both.
 
 For development against personal Google accounts, register your own
-desktop client in Google Cloud Console and set the env var to its id.
-Do NOT commit the id into the repository. (Personal-account users should
-follow [`docs/connectors/google.mdx`](../connectors/google.mdx), which
-covers the same steps from the BYO-client angle.)
+desktop client in Google Cloud Console and set the env vars to its id and
+secret. Do NOT commit either into the repository. (Personal-account users
+should follow [`docs/connectors/google.mdx`](../connectors/google.mdx),
+which covers the same steps from the BYO-client angle.)
 
 ## Cloud Console setup
 

@@ -205,9 +205,12 @@ gaia connectors grants grant google installed:email \
 
 <Note>
   The Agent UI's **Connect** / **Reconnect** flow for the Email Triage
-  agent grants these scopes for you. The CLI command above is the explicit
-  equivalent for headless setups — and the fix when you hit the
-  `AGENT_NOT_GRANTED` error below.
+  agent both authorizes these scopes with Google **and** grants them to the
+  agent for you. On the CLI you do both steps yourself — authorize the
+  scopes with `gaia connectors connect google --scopes …`, then run the
+  `grants grant` above. The [Email Triage guide's CLI tab](/guides/email#setup)
+  has the full sequence; the grant is also the fix when you hit
+  `AGENT_NOT_GRANTED`.
 </Note>
 
 The default scopes a connection is established with are listed in the

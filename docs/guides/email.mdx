@@ -43,7 +43,8 @@ There are two ways to connect Google depending on how you use GAIA.
   ([#2116](https://github.com/amd/gaia/issues/2116)). The
   [Google connector walkthrough](/connectors/google) covers the full,
   verified sequence (enable APIs → add yourself as a test user → create the
-  client). Come back here for the agent-specific grant in step 3 below.
+  client). The email agent also needs a per-agent grant: the Agent UI does
+  it for you, while the CLI flow needs it as the explicit Step 3 below.
   A future release ([#2104](https://github.com/amd/gaia/issues/2104)) ships
   an AMD-managed client that removes this bring-your-own step.
 </Note>
@@ -79,21 +80,26 @@ There are two ways to connect Google depending on how you use GAIA.
 
     Both flags are required together — Google rejects token requests that omit the secret even for Desktop-app PKCE clients.
 
-    **Step 2 — Sign in and authorize:**
+    **Step 2 — Sign in and authorize the mailbox scopes.** Pass the email
+    agent's scopes explicitly with `--scopes` — the bare
+    `gaia connectors connect google` requests only the default
+    `openid`/`email`/`profile` and your mailbox calls would later fail with a
+    scope error:
 
     ```bash
-    gaia connectors connect google
+    gaia connectors connect google \
+      --scopes https://www.googleapis.com/auth/gmail.modify \
+               https://www.googleapis.com/auth/gmail.send \
+               https://www.googleapis.com/auth/calendar.events \
+               https://www.googleapis.com/auth/calendar.readonly
     ```
 
-    The command prints an authorization URL. Open it in a browser, complete the OAuth consent screen, and paste the resulting code back into the terminal. The scopes requested are the same as the Agent UI flow:
+    The command prints an authorization URL. Open it in a browser, complete the OAuth consent screen (grant every requested scope), and paste the resulting code back into the terminal.
 
-    - `gmail.modify`, `gmail.send`
-    - `calendar.events`, `calendar.readonly`
-
-    **Step 3 — Grant the scopes to the email agent.** Connecting stores the
-    credentials, but the email agent has no access until you grant it the
-    scopes explicitly. In the CLI flow this is a **separate, required step**
-    (the Agent UI does it for you):
+    **Step 3 — Grant the same scopes to the email agent.** Authorizing the
+    connection stores the credentials, but the email agent has no access
+    until you grant it those scopes explicitly. In the CLI flow this is a
+    **separate, required step** (the Agent UI does it for you):
 
     ```bash
     gaia connectors grants grant google installed:email \
