@@ -45,6 +45,17 @@ def sidecars_ledger_path() -> Path:
     return host_dir() / "sidecars.json"
 
 
+def custody_db_path() -> Path:
+    """The daemon-owned custody SQLite file (``/host/v1/*`` memory/sessions/audit/RAG).
+
+    A single store under ``host_dir()`` so custody survives a UI/browser session
+    (it belongs to the always-on daemon, not the tab) and an agent uninstall
+    (audit rows must persist — §0.19). WAL sidecar files (``-wal``/``-shm``) sit
+    alongside it.
+    """
+    return host_dir() / "custody.db"
+
+
 def ensure_host_dir() -> Path:
     """Create ``host_dir()`` if missing and return it."""
     d = host_dir()

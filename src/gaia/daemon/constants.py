@@ -48,3 +48,14 @@ BROKER_TOKEN_ENV_VAR = "GAIA_MODEL_BROKER_TOKEN"
 BROKER_TOKEN_FILE_ENV_VAR = "GAIA_MODEL_BROKER_TOKEN_FILE"
 # Optional per-caller default lease priority ("interactive"|"background").
 BROKER_PRIORITY_ENV_VAR = "GAIA_MODEL_LEASE_PRIORITY"
+
+# Supervision handshake (V2-15, #2156). The daemon sets this in a sidecar's
+# environment at spawn so the sidecar knows the daemon owns the clock and gates
+# its OWN embedded schedulers off — the daemon drives them from the single
+# reconciled clock instead. A sidecar started WITHOUT this var (a bare
+# integrator, standalone/CustodyProvider mode) keeps its embedded clocks live,
+# so scheduling never silently stops for anyone the daemon isn't supervising.
+# It is a contract STRING, safe for a hub package to import (hub -> core is
+# allowed; core never imports a hub wheel).
+DAEMON_SUPERVISION_ENV_VAR = "GAIA_DAEMON_SUPERVISED"
+DAEMON_SUPERVISION_ENABLED_VALUE = "1"

@@ -52,6 +52,7 @@ from gaia_agent_email.scopes import (
     AGENT_NAMESPACED_ID,
     ALL_SCOPES,
 )
+from gaia_agent_email.supervision import is_daemon_supervised
 from gaia_agent_email.tools.briefing_tools import BriefingToolsMixin
 from gaia_agent_email.tools.calendar_tools import CalendarToolsMixin
 from gaia_agent_email.tools.delete_tools import DeleteToolsMixin
@@ -587,8 +588,18 @@ class EmailTriageAgent(
             },
             poll_seconds=config.scheduler_poll_seconds,
         )
-        if config.start_scheduler:
+        # V2-15 (#2156): under daemon supervision the daemon drives one-shot
+        # jobs from its single reconciled clock, so the embedded polling thread
+        # stays off — two drivers over one store risks a double-fire. Standalone
+        # / bare integrator runs (no supervision env) keep the thread live.
+        if config.start_scheduler and not is_daemon_supervised():
             self._scheduler.start()
+        elif config.start_scheduler:
+            logger.info(
+                "Email agent under daemon supervision: embedded "
+                "EmailJobScheduler polling thread gated off (the daemon drives "
+                "scheduled send / snooze from its reconciled clock)."
+            )
 
     # -- Agent contract -----------------------------------------------------
 
