@@ -2157,6 +2157,26 @@ Requires the daemon extras (`fastapi`/`uvicorn`/`psutil`) — install with
 `pip install "amd-gaia[ui]"` (or `[api]`/`[dev]`). Running it on a base install
 fails loudly with that instruction.
 
+#### Model-slot serialization
+
+Lemonade is single-tenant per model slot: a second process loading a different
+model **evicts** the first. The daemon therefore runs a **model-slot broker**
+that hands out one lease at a time, so model loads queue instead of racing.
+
+When a daemon is running, `gaia` commands and the Agent UI backend attach to it
+automatically and take a lease around each model load — you may see a brief
+`⏳ switching model…` while another process finishes. Interactive chat turns
+take priority over background work (embedder warm-ups, autonomous briefs).
+
+With **no daemon running, nothing changes**: there are no sidecars, nothing else
+holds the slot, and loads proceed directly. Attaching never starts a daemon.
+
+If the daemon is running but unreachable, a model load **fails loudly** rather
+than doing a direct load that would evict another process's model — check
+`gaia daemon status`. A daemon left running at an incompatible version is
+reported as a warning and loads proceed unbrokered; `gaia daemon restart`
+restores serialization.
+
 ```bash
 gaia daemon start      # start the daemon, or attach if one is already running
 gaia daemon status     # pid, port, uptime + the supervised sidecar list

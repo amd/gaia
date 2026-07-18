@@ -3219,6 +3219,18 @@ def main():
     if hasattr(args, "logging_level"):
         log_manager.set_level("gaia", getattr(logging, args.logging_level))
 
+    # ── Model-slot broker (#2248) ────────────────────────────────────────
+    # A CLI run is host-side and not daemon-spawned, so it inherits no broker
+    # URL and its model loads would bypass the broker, race-evicting models a
+    # running sidecar just loaded. Opting in costs nothing here: it only sets a
+    # flag, and the daemon is probed lazily at the first actual model load — so
+    # commands that never load a model never probe. Discovery attaches to a LIVE
+    # daemon only and never starts one, leaving standalone `gaia llm` on a
+    # daemon-less machine exactly as it was (nothing else holds the slot).
+    from gaia.daemon.broker_client import enable_broker_discovery
+
+    enable_broker_discovery()
+
     # Apply the persistent default_model (issue #98) for model-bearing commands.
     # Precedence: explicit --model flag > config default_model > built-in default.
     # An explicit `chat --device` requests a device-specific model, so it keeps

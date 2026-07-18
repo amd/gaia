@@ -52,6 +52,38 @@ def _ensure_email_corpus():
     ensure_corpus()
 
 
+@pytest.fixture(autouse=True)
+def _reset_model_broker_state():
+    """Isolate the model-slot broker's process-global state between tests (#2248).
+
+    ``broker_client`` deliberately keeps process-global state: an entry point
+    calls ``enable_broker_discovery()`` once and it stays on for the life of the
+    process, and a discovered daemon's address is cached so later loads do not
+    re-probe. Correct in production — but in a test session it leaks: any test
+    that runs ``cli.main()`` flips discovery on for every test that follows, and
+    those then attach to whatever daemon happens to be running on the developer's
+    machine. That makes unrelated specs pass in CI and fail on a dev box.
+
+    Resetting per test keeps the suite hermetic and machine-independent.
+    """
+    try:
+        from gaia.daemon import broker_client
+    except ImportError:
+        yield
+        return
+
+    def _reset():
+        broker_client._discovery_enabled = False
+        broker_client._attached = None
+        broker_client._broker_unsupported = False
+        broker_client._held.depth = 0
+        broker_client._held.model = None
+
+    _reset()
+    yield
+    _reset()
+
+
 def pytest_addoption(parser):
     parser.addoption(
         "--hybrid",

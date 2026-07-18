@@ -502,18 +502,27 @@ class RAGSDK:
                         f"(or run `gaia init --profile rag`)."
                     )
 
-            # Scoped unload of the embedder ONLY — a global /unload would evict
-            # the co-resident chat model and trigger a ~100s cold reload (#1544).
-            # ignore_if_not_loaded: on a cold start the embedder slot is empty
-            # and Lemonade 404s "Model not loaded" — a benign no-op here, since
-            # we reload it on the next line anyway.
-            self.llm_client.unload_model(
-                self.config.embedding_model, ignore_if_not_loaded=True
-            )
-            self.llm_client.load_model(
-                self.config.embedding_model,
-                llamacpp_args="--ubatch-size 2048",
-            )
+            # Serialize the whole unload→load swap through the broker (#2248).
+            # Not an eviction guard — per #1544 the embedder is co-resident in
+            # its own slot, so a chat load will not evict it. It is a guard on
+            # the *load* itself: concurrent loads contend for GPU memory and
+            # backend startup, which is what the broker arbitrates. Background
+            # priority so a warm-up never makes an interactive turn wait.
+            from gaia.daemon.broker_client import model_lease
+
+            with model_lease(self.config.embedding_model, priority="background"):
+                # Scoped unload of the embedder ONLY — a global /unload would evict
+                # the co-resident chat model and trigger a ~100s cold reload (#1544).
+                # ignore_if_not_loaded: on a cold start the embedder slot is empty
+                # and Lemonade 404s "Model not loaded" — a benign no-op here, since
+                # we reload it on the next line anyway.
+                self.llm_client.unload_model(
+                    self.config.embedding_model, ignore_if_not_loaded=True
+                )
+                self.llm_client.load_model(
+                    self.config.embedding_model,
+                    llamacpp_args="--ubatch-size 2048",
+                )
 
             self.embedder = self.llm_client
             self.use_lemonade_embeddings = True

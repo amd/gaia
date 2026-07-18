@@ -3209,8 +3209,50 @@ class LemonadeClient:
         prompt: bool = True,
         load_retries: int = DEFAULT_MODEL_LOAD_RETRIES,
     ) -> Dict[str, Any]:
+        """Load a model on the server, holding a broker model-slot lease.
+
+        This is the single chokepoint where a load actually reaches Lemonade, so
+        it is where the lease belongs (#2248). Every direct caller — the UI
+        backend's startup preload, the per-request pre-flight, the RAG and
+        code-index embedder warm-ups, the VLM client — serializes against sidecar
+        loads without each having to remember to wrap itself.
+
+        The lease is re-entrant per thread: callers that must make a multi-step
+        sequence atomic (``unload`` → ``load``) take an outer lease themselves,
+        and the one taken here folds into it. See
+        :func:`gaia.daemon.broker_client.model_lease`. A no-op when no broker is
+        configured.
+
+        See :meth:`_load_model_leased` for the full parameter documentation.
         """
-        Load a model on the server.
+        with self._model_slot_lease(model_name):
+            return self._load_model_leased(
+                model_name,
+                timeout=timeout,
+                auto_download=auto_download,
+                _download_timeout=_download_timeout,
+                llamacpp_args=llamacpp_args,
+                ctx_size=ctx_size,
+                save_options=save_options,
+                prompt=prompt,
+                load_retries=load_retries,
+            )
+
+    def _load_model_leased(
+        self,
+        model_name: str,
+        timeout: int = DEFAULT_MODEL_LOAD_TIMEOUT,
+        auto_download: bool = False,
+        _download_timeout: int = 7200,  # Reserved for future use
+        llamacpp_args: Optional[str] = None,
+        ctx_size: Optional[int] = None,
+        save_options: bool = False,
+        prompt: bool = True,
+        load_retries: int = DEFAULT_MODEL_LOAD_RETRIES,
+    ) -> Dict[str, Any]:
+        """
+        Load a model on the server. Body of :meth:`load_model`, run while holding
+        the broker's model-slot lease.
 
         If auto_download is enabled and the model is not available:
         1. Prompts user for confirmation (with size and ETA) - unless prompt=False
