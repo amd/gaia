@@ -51,6 +51,38 @@ _OBSERVE_MODEL = os.environ.get("GAIA_AUTO_OBSERVE_MODEL", "Qwen3-4B-GGUF")
 # Timeout (seconds) for a single autonomous tick execution
 _TICK_TIMEOUT = int(os.environ.get("GAIA_AGENT_TICK_TIMEOUT", "300"))
 
+# Default agent mode. "autonomous" (observe → infer goals → execute, spec
+# docs/spec/autonomous-agent-mode.md §6.7) is not implemented yet (#2005), so
+# the honest default is "goal_driven" — which is exactly what the loop does.
+DEFAULT_AGENT_MODE = "goal_driven"
+
+# Warn once per process when a legacy-stored "autonomous" mode is normalized.
+_warned_legacy_autonomous = False
+
+
+def resolve_agent_mode(db) -> str:
+    """Return the effective agent mode: "manual" or "goal_driven".
+
+    "autonomous" mode's observation cycle is unimplemented (#2005), so a
+    legacy-stored "autonomous" value is normalized to "goal_driven" — the
+    behavior it always had — with a loud warning instead of a silent no-op
+    label. New writes of "autonomous" are rejected at the settings API.
+    """
+    global _warned_legacy_autonomous
+    mode = db.get_setting("agent_mode") or DEFAULT_AGENT_MODE
+    if mode == "autonomous":
+        if not _warned_legacy_autonomous:
+            logger.warning(
+                "agent_mode 'autonomous' is stored in settings but its "
+                "observation cycle is not implemented (see "
+                "https://github.com/amd/gaia/issues/2005); running as "
+                "'goal_driven', which is what 'autonomous' has always "
+                "effectively done."
+            )
+            _warned_legacy_autonomous = True
+        return "goal_driven"
+    return mode
+
 
 # ── Data classes ─────────────────────────────────────────────────────────────
 
@@ -230,7 +262,7 @@ class AgentLoop:
             return LoopDirective("idle")
 
         # ── Agent mode gate ───────────────────────────────────────────────
-        agent_mode = self._db.get_setting("agent_mode") or "autonomous"
+        agent_mode = resolve_agent_mode(self._db)
         if agent_mode == "manual":
             return LoopDirective("paused", reason="agent_mode=manual")
 
@@ -257,12 +289,11 @@ class AgentLoop:
             return LoopDirective("idle")
 
         # ── Goal check ───────────────────────────────────────────────────
+        # goal_driven only executes existing approved goals. The planned
+        # "autonomous" mode would run an observation cycle here instead of
+        # idling (docs/spec/autonomous-agent-mode.md §6.7, #2005).
         goals = self._get_actionable_goals()
         if not goals:
-            if agent_mode == "goal_driven":
-                return LoopDirective("idle")
-            # autonomous mode: TODO — run observation cycle (Phase 2)
-            # For now, also idle when there are no goals
             return LoopDirective("idle")
 
         # ── Execute tick ─────────────────────────────────────────────────

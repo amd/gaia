@@ -4,6 +4,13 @@
 **Status:** Draft v4 — aligned with OpenClaw Strategy
 **Date:** 2026-04-01
 
+> **Implementation status (2026-07):** `manual` and `goal_driven` are shipped
+> and `goal_driven` is the default. `autonomous` mode is **not implemented** —
+> its defining observation cycle (§6.7) has not shipped, so the settings API
+> rejects `agent_mode="autonomous"` rather than silently running it as
+> `goal_driven`. Tracked in
+> [#2005](https://github.com/amd/gaia/issues/2005).
+
 ---
 
 ## 1. Overview
@@ -35,7 +42,9 @@ The agent's behavior is controlled by a single `agent_mode` setting:
 | `goal_driven` | Executes user-approved goals in the background | Automation |
 | `autonomous` | Observes environment, infers and executes its own goals | Agent |
 
-Default: `autonomous`. Users can downgrade at any time from Settings.
+Design default: `autonomous`; users can downgrade at any time from Settings.
+(Until the observation cycle ships, the shipped default is `goal_driven` and
+`autonomous` is not selectable — see the implementation-status note above.)
 
 **What makes this genuinely autonomous (not just reactive):**
 - In `autonomous` mode the agent runs an *observation cycle* on idle ticks
