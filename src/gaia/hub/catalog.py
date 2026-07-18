@@ -266,6 +266,26 @@ def load_index(
     )
 
 
+def cached_index_agents(cache_path: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """Return the ``agents`` list from the on-disk catalog cache, or ``[]``.
+
+    Offline-only: never touches the network. Used to enrich locally-installed
+    agents (that aren't in the live registry) with the name/description/icon the
+    hub last published, so the agent picker renders a real card even when the
+    hub is unreachable. A missing or malformed cache yields ``[]`` — the caller
+    falls back to a minimal entry rather than failing.
+    """
+    cache_path = Path(cache_path) if cache_path else default_cache_path()
+    cached = _read_disk_cache(cache_path)
+    if cached is None:
+        return []
+    try:
+        return _validate_index(cached)
+    except CatalogError as exc:
+        logger.warning("catalog: cached index is malformed (%s); ignoring", exc)
+        return []
+
+
 def fetch_manifest(
     agent_id: str,
     *,
