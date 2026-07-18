@@ -45,7 +45,11 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
-from gaia.daemon.constants import RESERVED_PORT
+from gaia.daemon.constants import (
+    DAEMON_SUPERVISION_ENABLED_VALUE,
+    DAEMON_SUPERVISION_ENV_VAR,
+    RESERVED_PORT,
+)
 from gaia.daemon.sidecars import fetch
 from gaia.daemon.sidecars.errors import (
     HealthTimeoutError,
@@ -164,6 +168,13 @@ class AgentSidecarManager:
         # The leg actually used at spawn time: "file" | "env".
         self.secret_delivery: Optional[str] = None
         self._secret_path: Optional[Path] = None
+        # Delegated-custody wiring (#2153), set by the registry at mint before
+        # start(). When both are present they are injected over the private env
+        # channel so the sidecar's DelegatedCustodyProvider calls /host/v1 back
+        # into the daemon; the secret is bound to this agent id at mint, so the
+        # daemon resolves the caller's identity from it (never from the request).
+        self.custody_url: Optional[str] = None
+        self.custody_secret: Optional[str] = None
 
     @property
     def mode(self) -> str:
@@ -293,6 +304,26 @@ class AgentSidecarManager:
         # pre-spawn (#2149), before the log opens so a refusal leaks nothing.
         spawn_env = {**os.environ, **(popen_kwargs.pop("env", None) or {})}
         self._apply_secret_delivery(spawn_env)
+        # Delegated-custody channel (#2153): inject both together or neither —
+        # a URL without its secret is an un-authenticable custody wire the
+        # sidecar's selector rejects loudly. This is the reverse-contract
+        # credential (sidecar → daemon), distinct from the caller-auth token
+        # #2149 delivers; it rides the private env channel.
+        if self.custody_url and self.custody_secret:
+            from gaia.daemon.custody.constants import (
+                CUSTODY_SECRET_ENV_VAR,
+                CUSTODY_URL_ENV_VAR,
+            )
+
+            spawn_env[CUSTODY_URL_ENV_VAR] = self.custody_url
+            spawn_env[CUSTODY_SECRET_ENV_VAR] = self.custody_secret
+        # Supervision handshake (V2-15, #2156): tell the sidecar the daemon owns
+        # the clock so it gates its own embedded schedulers off — the daemon
+        # drives them from the single reconciled clock. A sidecar spawned any
+        # other way never sees this and keeps its embedded clocks (standalone
+        # parity). Must land BEFORE the idle reaper flips on, or a reaped sidecar
+        # drops a clock the daemon isn't yet driving.
+        spawn_env[DAEMON_SUPERVISION_ENV_VAR] = DAEMON_SUPERVISION_ENABLED_VALUE
         log_handle = self._open_log(port)
         try:
             self._proc = subprocess.Popen(

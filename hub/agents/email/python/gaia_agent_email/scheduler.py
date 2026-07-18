@@ -24,6 +24,13 @@ dispatcher lands, it can invoke ``fire_due_jobs()`` on its cadence instead of
 ``start()``-ing the thread. The store and executors don't change — only the
 driver does. Kept email-scoped and minimal on purpose.
 
+Daemon supervision (V2-15, #2156): under the GAIA daemon this thread is NOT
+started (see :func:`gaia_agent_email.supervision.is_daemon_supervised`); the
+daemon drives these jobs from its single reconciled clock after adopting them
+via :func:`gaia_agent_email.daemon_migration.migrate_email_clocks`. Standalone
+runs keep the thread — the seam above, realized. The atomic ``claim_job`` guard
+means even if both drivers briefly poll the same store, each job fires once.
+
 Fail-loudly contract: an executor failure marks the job ``failed`` with the
 error message persisted on the row and logs at ERROR — a firing send must
 never silently swallow a send failure. A job whose kind has no registered
