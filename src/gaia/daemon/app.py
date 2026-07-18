@@ -80,6 +80,7 @@ def create_app(
     on_shutdown: Optional[Callable[[], None]] = None,
     registry=None,
     forwarder=None,
+    broker=None,
 ):
     """Build the FastAPI app bound to this daemon's identity.
 
@@ -92,7 +93,9 @@ def create_app(
     relay (#2150); ``None`` leaves both unmounted. *forwarder* (a
     :class:`gaia.daemon.forward.ConnectionForwarder`) additionally mounts the
     ``/daemon/v1/agents/{id}/connections`` OAuth forward-out plane (#2154); it
-    requires *registry* (it resolves the target sidecar from it).
+    requires *registry* (it resolves the target sidecar from it). *broker* (a
+    :class:`gaia.daemon.broker.ModelSlotBroker`) mounts the ``/host/v1/models/*``
+    lease route (#2151 / V2-11); ``None`` leaves it unmounted.
     """
     from fastapi import Depends, FastAPI, HTTPException
 
@@ -162,5 +165,13 @@ def create_app(
             from gaia.daemon.connections_routes import build_connections_router
 
             app.include_router(build_connections_router(token, registry, forwarder))
+
+    if broker is not None:
+        # Callback plane (#2151): the model-slot broker's lease route. Auth is
+        # the daemon client token (host-side) OR a sidecar launch token (via the
+        # registry) — a different contract from the client plane above.
+        from gaia.daemon.broker_routes import build_broker_router
+
+        app.include_router(build_broker_router(token, registry, broker))
 
     return app

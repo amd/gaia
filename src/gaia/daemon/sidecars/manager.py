@@ -364,14 +364,31 @@ class AgentSidecarManager:
         )
 
     def _apply_secret_delivery(self, spawn_env: dict) -> None:
-        """Inject the launch secret into *spawn_env* via the negotiated leg."""
+        """Inject the launch secret into *spawn_env* via the negotiated leg.
+
+        The same secret doubles as the sidecar's model-slot broker credential
+        (#2151 / V2-11): the sidecar presents ``self.auth_token`` to the host
+        broker, and the registry authenticates it against this manager's token.
+        It rides the SAME delivery leg as the launch secret so file delivery
+        (#2149) is never undermined by a bare-env copy — for the file leg the
+        broker credential reuses the very same 0600 file.
+        """
+        from gaia.daemon.constants import (
+            BROKER_TOKEN_ENV_VAR,
+            BROKER_TOKEN_FILE_ENV_VAR,
+        )
+
         leg, reason = self._resolve_secret_delivery()
         self.secret_delivery = leg
         if leg == "file":
             secret_path = self._write_secret_file()
             spawn_env[self.spec.token_file_env_var] = str(secret_path)
+            # The broker credential is the same secret — point the broker client
+            # at the same 0600 file rather than leaking a bare-env copy (#2149).
+            spawn_env[BROKER_TOKEN_FILE_ENV_VAR] = str(secret_path)
             # Never let a stale inherited token env var ride into the child.
             spawn_env.pop(self.spec.token_env_var, None)
+            spawn_env.pop(BROKER_TOKEN_ENV_VAR, None)
             logger.info(
                 "%s sidecar: delivering launch secret via 0600 file %s (%s)",
                 self.spec.agent_id,
@@ -380,6 +397,10 @@ class AgentSidecarManager:
             )
         else:
             spawn_env[self.spec.token_env_var] = self.auth_token
+            # Bare-env broker credential only on the already-deprecated bare-env
+            # leg (older binaries). No new secret surface beyond the launch token.
+            spawn_env[BROKER_TOKEN_ENV_VAR] = self.auth_token
+            spawn_env.pop(BROKER_TOKEN_FILE_ENV_VAR, None)
             logger.warning(
                 "%s sidecar: DEPRECATED bare-env secret delivery via %s (%s). "
                 "The secret is visible to local process inspection "

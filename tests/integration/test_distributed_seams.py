@@ -25,16 +25,20 @@ is the cross-seam layer nothing else owns:
 Seams still in flight are marked with an explicit, loud skip reason keyed on
 whether the source module/route actually exists yet — so this suite goes green
 today and each ``pytest.skip`` flips to a real assertion the moment its issue
-merges, without editing the skip logic:
+merges, without editing the skip logic. Two of the four have since LANDED and
+now run real assertions here:
+
+- **model-slot broker** (V2-11 / #2151, LANDED) — load serialization + interactive
+  priority (``test_broker_serializes_concurrent_model_loads``).
+- **migration idempotency** (V2-13 / #2155, LANDED) — one-time ``~/.gaia`` data
+  migration that is a no-op on second run (``test_migration_is_idempotent``).
+
+Still pending merge (skip auto-flips when their source lands):
 
 - **secret-file delivery** (V2-3 / #2149) — fd/0600-file delivery of the launch
   secret (today it is a plain env var; the stronger delivery is not merged).
-- **model-slot broker** (V2-11 / #2151) — load serialization + ``/host/v1/
-  models/lease``.
 - **custody per-agent scoping** (V2-12 / #2153) — ``/host/v1/*`` with A-cannot-
   read-B scoping.
-- **migration idempotency** (V2-13 / #2155) — one-time ``~/.gaia`` data
-  migration that is a no-op on second run.
 
 Run just this suite (the CI job of AC1)::
 
@@ -45,10 +49,21 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import time
 
 import pytest
 
 pytestmark = pytest.mark.distributed_seams
+
+
+def _wait_until(predicate, timeout: float = 2.0, interval: float = 0.005) -> None:
+    """Poll *predicate* until true or raise — no arbitrary sleeps in threaded tests."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(interval)
+    raise AssertionError(f"condition not met within {timeout}s")
 
 
 # ---------------------------------------------------------------------------
@@ -351,14 +366,98 @@ def test_launch_secret_not_in_process_environ():  # pragma: no cover - pending m
         "serialize (no race-evict) and foreground jumps the queue once it lands."
     ),
 )
-def test_broker_serializes_concurrent_model_loads():  # pragma: no cover - pending merge
-    # When V2-11 lands: two concurrent lease requests for different models must
-    # serialize through the broker (never race-evict the single Lemonade slot),
-    # and an interactive lease must jump ahead of a background one.
-    raise AssertionError(
-        f"broker module {_BROKER_MODULE!r} present — implement the serialization "
-        "+ interactive-priority assertions (V2-11 / #2151)."
+def test_broker_serializes_concurrent_model_loads():
+    """Two agents requesting *different* models must serialize through the single
+    Lemonade slot (never both hold it at once → the race-evict CLAUDE.md documents),
+    and an interactive lease must jump ahead of a *queued* background one."""
+    import threading
+
+    from gaia.daemon.broker import LeasePriority, ModelSlotBroker
+
+    broker = ModelSlotBroker()
+
+    # -- Serialization: while agent A holds the slot for model-A, agent B's
+    #    request for model-B must WAIT, not evict A. One lease at a time. --
+    lease_a = broker.acquire("model-A", holder="agentA")
+    assert broker.snapshot()["active"]["model"] == "model-A"
+
+    granted_b: list = []
+    b_queued = threading.Event()
+
+    def _acquire_b():
+        granted_b.append(
+            broker.acquire(
+                "model-B",
+                holder="agentB",
+                priority=LeasePriority.INTERACTIVE,
+                on_wait=lambda _reason: b_queued.set(),
+                timeout=5.0,
+            )
+        )
+
+    tb = threading.Thread(target=_acquire_b, daemon=True)
+    tb.start()
+    assert b_queued.wait(timeout=2.0), "B's request never queued behind the held slot"
+    # A still solely holds the slot — B did not race-evict it.
+    snap = broker.snapshot()
+    assert snap["active"]["model"] == "model-A"
+    assert [w["model"] for w in snap["waiting"]] == ["model-B"]
+    assert granted_b == []
+
+    # Releasing A hands the slot to B: loads are serialized, never concurrent.
+    broker.release(lease_a.lease_id)
+    tb.join(timeout=3.0)
+    assert not tb.is_alive(), "B never acquired after A released"
+    assert len(granted_b) == 1 and granted_b[0].model == "model-B"
+    broker.release(granted_b[0].lease_id)
+
+    # -- Interactive priority: a foreground turn jumps ahead of a background job
+    #    already QUEUED for the slot (priority beats arrival order). --
+    gate = broker.acquire("model-hold", holder="host")  # occupy the slot
+    order: list = []
+    order_lock = threading.Lock()
+
+    def _worker(model, holder, priority, queued_evt):
+        lease = broker.acquire(
+            model,
+            holder=holder,
+            priority=priority,
+            on_wait=lambda _reason: queued_evt.set(),
+            timeout=5.0,
+        )
+        with order_lock:
+            order.append(holder)
+        broker.release(lease.lease_id)
+
+    bg_queued, fg_queued = threading.Event(), threading.Event()
+    bg = threading.Thread(
+        target=_worker,
+        args=("bg-model", "bg", LeasePriority.BACKGROUND, bg_queued),
+        daemon=True,
     )
+    bg.start()
+    # Background enqueues FIRST — so a FIFO broker would grant it first.
+    assert bg_queued.wait(timeout=2.0)
+    _wait_until(lambda: [w["holder"] for w in broker.snapshot()["waiting"]] == ["bg"])
+
+    fg = threading.Thread(
+        target=_worker,
+        args=("fg-model", "fg", LeasePriority.INTERACTIVE, fg_queued),
+        daemon=True,
+    )
+    fg.start()
+    assert fg_queued.wait(timeout=2.0)
+    _wait_until(
+        lambda: {w["holder"] for w in broker.snapshot()["waiting"]} == {"bg", "fg"}
+    )
+
+    # Both queued; free the slot. The interactive request must win despite the
+    # background one arriving earlier.
+    broker.release(gate.lease_id)
+    bg.join(timeout=3.0)
+    fg.join(timeout=3.0)
+    assert not bg.is_alive() and not fg.is_alive()
+    assert order == ["fg", "bg"], f"expected interactive-first, got {order}"
 
 
 # ---------------------------------------------------------------------------
@@ -396,13 +495,53 @@ def test_custody_scopes_reads_to_the_calling_agent():  # pragma: no cover - pend
         "from a real pre-v2 fixture leaves the second run a no-op once it lands."
     ),
 )
-def test_migration_is_idempotent():  # pragma: no cover - pending merge
-    # When V2-13 lands: run the migration twice against a pre-v2 ~/.gaia fixture;
-    # the second run must be a no-op (cold-state test per CLAUDE.md).
-    raise AssertionError(
-        f"migration module {_MIGRATION_MODULE!r} present — implement the "
-        "run-twice-is-a-no-op assertion (V2-13 / #2155)."
-    )
+def test_migration_is_idempotent(tmp_path, monkeypatch):
+    """Run the migration twice against a real, populated pre-v2 ``~/.gaia``
+    fixture: the first run relocates the legacy stores into custody, the second
+    is a no-op that never rewrites them (the schema stamp gates the re-run)."""
+    from gaia.agents.base.memory_store import MemoryStore
+    from gaia.daemon import migrate
+    from gaia.ui.database import ChatDatabase
+
+    # Isolate BOTH the legacy root and the v2 custody host dir under tmp so the
+    # test never touches the developer's real state (cold-state discipline).
+    legacy = tmp_path / "gaia"
+    monkeypatch.setenv("GAIA_CONFIG_DIR", str(legacy))
+    monkeypatch.setenv("GAIA_DAEMON_HOME", str(legacy / "host"))
+
+    # Seed a populated pre-v2 install with the ACTUAL store classes an upgrader
+    # has on disk — not a hand-rolled stand-in.
+    db = ChatDatabase(db_path=str(legacy / "chat" / "gaia_chat.db"))
+    try:
+        session_id = db.create_session(title="pre-v2 chat")["id"]
+        db.add_message(session_id, role="user", content="hello from before v2")
+    finally:
+        db.close()
+    store = MemoryStore(db_path=legacy / "memory.db")
+    try:
+        store.store(category="preference", content="user prefers dark mode")
+    finally:
+        store.close()
+
+    first = migrate.run_migrations()
+    assert first["status"] == migrate.MigrationState.MIGRATED
+    assert first["from_version"] == 0
+    assert first["to_version"] == migrate.SCHEMA_VERSION
+    assert migrate.custody_sessions_db().exists()
+    assert migrate.custody_memory_db().exists()
+
+    # Fingerprint the migrated custody store; a second run must not rewrite it.
+    stamp_before = migrate.schema_stamp_path().read_text(encoding="utf-8")
+    sessions_dst = migrate.custody_sessions_db()
+    mtime_before = sessions_dst.stat().st_mtime_ns
+
+    second = migrate.run_migrations()
+    assert second["status"] == migrate.MigrationState.CURRENT
+    assert second["applied"] == []
+    assert second["from_version"] == migrate.SCHEMA_VERSION
+    # Idempotent: the already-migrated store and the stamp are untouched.
+    assert sessions_dst.stat().st_mtime_ns == mtime_before
+    assert migrate.schema_stamp_path().read_text(encoding="utf-8") == stamp_before
 
 
 # ---------------------------------------------------------------------------
@@ -421,29 +560,31 @@ def test_seam_coverage_manifest_reflects_reality():
         "relay_vocabulary_coherence": True,  # always
         "relay_synthetic_error_coherence": True,  # always
         "auth_leg2_bearer_via_env": _module_exists("gaia.daemon.sidecars.manager"),
+        "model_broker_v2_11": _BROKER_MODULE is not None,
+        "migration_idempotency_v2_13": _MIGRATION_MODULE is not None,
     }
     pending = {
         "secret_file_delivery_v2_3": not _SECRET_FILE_DELIVERY,
-        "model_broker_v2_11": _BROKER_MODULE is None,
         "custody_scoping_v2_12": not _CUSTODY_MOUNTED,
-        "migration_idempotency_v2_13": _MIGRATION_MODULE is None,
     }
 
-    # Expected as of this tree: Leg-2 auth has LANDED (the sidecar manager is
-    # importable); the four V2 seams below are NOT merged, so each is still
-    # pending. Any drift is a real event — a seam merged (flip it to covered and
-    # implement its test) or the auth manager module moved (fix its probe). Do
-    # NOT soften these to make the test pass.
+    # Expected as of this tree: Leg-2 auth (LANDED #1980), the model-slot broker
+    # (LANDED V2-11 #2151), and the ~/.gaia migration (LANDED V2-13 #2155) are
+    # all covered with real assertions above. Secret-file delivery (V2-3 #2149)
+    # and custody scoping (V2-12 #2153) are NOT merged, so each is still pending.
+    # Any drift is a real event — a pending seam merged (flip it to covered and
+    # implement its test) or a landed module moved (fix its probe). Do NOT soften
+    # these to make the test pass.
     assert covered == {
         "relay_vocabulary_coherence": True,
         "relay_synthetic_error_coherence": True,
         "auth_leg2_bearer_via_env": True,
+        "model_broker_v2_11": True,
+        "migration_idempotency_v2_13": True,
     }
     assert pending == {
         "secret_file_delivery_v2_3": True,
-        "model_broker_v2_11": True,
         "custody_scoping_v2_12": True,
-        "migration_idempotency_v2_13": True,
     }
     # The manifest stays JSON-serializable so front-doors / CI can emit it.
     assert isinstance(json.dumps({"covered": covered, "pending": pending}), str)
