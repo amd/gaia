@@ -26,6 +26,7 @@ from gaia.daemon.errors import (
     DaemonLockError,
     DaemonStartError,
     DaemonVersionError,
+    MigrationError,
 )
 from gaia.daemon.instance import (
     DaemonInstance,
@@ -47,6 +48,7 @@ __all__ = [
     "DaemonLockError",
     "DaemonStartError",
     "DaemonVersionError",
+    "MigrationError",
     "DaemonInstance",
     "is_live",
     "probe",
