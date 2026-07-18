@@ -6,6 +6,7 @@ No live network, no real agent imports: health probes are injected so the tests
 assert state transitions (healthy/degraded/error/not_installed) deterministically.
 """
 
+import abc
 import hashlib
 import json
 import os
@@ -38,11 +39,12 @@ def _install_sentinel(tmp_path, agent_id="demo", version="1.0.0"):
 
 
 class _FakeRegistration:
-    def __init__(self, agent_id, source="installed"):
+    def __init__(self, agent_id, source="installed", agent_class=None):
         self.id = agent_id
         self.source = source
         self.name = agent_id
         self.models = []
+        self.agent_class = agent_class
 
 
 class _FakeRegistry:
@@ -166,6 +168,101 @@ def test_health_degraded_on_corrupt_config(tmp_path):
     )
     assert result.state == HEALTH_DEGRADED
     assert any("corrupt" in w for w in result.warnings)
+
+
+# ---------------------------------------------------------------------------
+# _default_loader: custom_python (file-based) agents (#2268)
+#
+# File-based custom agents under ~/.gaia/agents/<id>/agent.py have no entry
+# point by construction, so the wheel entry-point probe used to report EVERY
+# one as `error`. The health signal is the registry's own discovery, hardened
+# by a concrete-class check (no unimplemented abstract methods) that does NOT
+# construct the agent.
+# ---------------------------------------------------------------------------
+
+
+class _AbstractAgent(abc.ABC):
+    """Stand-in for a custom agent that never implements _register_tools."""
+
+    @abc.abstractmethod
+    def _register_tools(self):
+        raise NotImplementedError
+
+
+class _ConcreteAgent(_AbstractAgent):
+    """Stand-in for a working custom agent."""
+
+    def _register_tools(self):
+        return None
+
+
+def test_default_loader_custom_python_concrete_agent_loads():
+    reg = _FakeRegistry(
+        [
+            _FakeRegistration(
+                "jarvis", source="custom_python", agent_class=_ConcreteAgent
+            )
+        ]
+    )
+    # A concrete custom agent probes clean — no warnings, no raise.
+    assert lifecycle._default_loader("jarvis", reg) == []
+
+
+def test_default_loader_custom_python_abstract_agent_raises_named_cause():
+    reg = _FakeRegistry(
+        [_FakeRegistration("zoo", source="custom_python", agent_class=_AbstractAgent)]
+    )
+    with pytest.raises(LifecycleError) as exc:
+        lifecycle._default_loader("zoo", reg)
+    # The cause must name the real failure — the unimplemented abstract method.
+    assert "_register_tools" in str(exc.value)
+
+
+def test_default_loader_custom_python_without_class_is_discoverable():
+    # Defensive: if the class wasn't captured, discovery alone is the signal.
+    reg = _FakeRegistry(
+        [_FakeRegistration("nolass", source="custom_python", agent_class=None)]
+    )
+    assert lifecycle._default_loader("nolass", reg) == []
+
+
+def test_health_custom_python_working_agent_is_healthy(tmp_path):
+    # End-to-end through the real default loader (no injected loader).
+    reg = _FakeRegistry(
+        [
+            _FakeRegistration(
+                "jarvis", source="custom_python", agent_class=_ConcreteAgent
+            )
+        ]
+    )
+    result = health_check("jarvis", registry=reg, install_root=tmp_path)
+    assert result.state == HEALTH_HEALTHY
+    assert result.ok
+
+
+def test_health_custom_python_broken_agent_is_error_with_cause(tmp_path):
+    reg = _FakeRegistry(
+        [_FakeRegistration("zoo", source="custom_python", agent_class=_AbstractAgent)]
+    )
+    result = health_check("zoo", registry=reg, install_root=tmp_path)
+    assert result.state == HEALTH_ERROR
+    assert "_register_tools" in result.detail
+
+
+def test_default_loader_installed_wheel_path_unregressed():
+    # An installed-source agent with no matching entry point still raises the
+    # wheel "no entry point" error — the custom_python branch must not swallow
+    # or change this path.
+    reg = _FakeRegistry([_FakeRegistration("ghostwheel", source="installed")])
+    with pytest.raises(LifecycleError) as exc:
+        lifecycle._default_loader("ghostwheel", reg)
+    assert "entry point" in str(exc.value)
+
+
+def test_default_loader_builtin_path_unregressed():
+    # 'builder' is a reserved builtin id; presence in the registry is proof.
+    reg = _FakeRegistry([_FakeRegistration("builder", source="builtin")])
+    assert lifecycle._default_loader("builder", reg) == []
 
 
 def test_health_builtin_without_sentinel_is_checked(tmp_path):
