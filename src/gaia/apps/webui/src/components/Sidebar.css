@@ -610,3 +610,65 @@
 .sidebar.collapsed .sidebar-resize-handle {
     display: none;
 }
+
+/* ── Agent grouping (#2106) ───────────────────────────────────────────── */
+/* Per-agent section header: icon + agent name + session count. Builds on
+   .session-group-label (uppercase mono label) but switches to a flex row so
+   the icon and count sit inline with the name. */
+.session-agent-group-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    text-transform: none;
+    letter-spacing: 0.5px;
+}
+.session-agent-group-icon {
+    flex-shrink: 0;
+    color: var(--accent, var(--text-muted));
+}
+.session-agent-group-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-secondary, var(--text-muted));
+}
+.session-agent-group-count {
+    flex-shrink: 0;
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-sm);
+    padding: 1px 6px;
+    min-width: 16px;
+    text-align: center;
+}
+
+/* Per-row agent chip — shown in the flat/search list (no section headers). */
+.session-agent-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    flex-shrink: 0;
+    margin-left: 6px;
+    max-width: 96px;
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+    font-size: 9px;
+    font-family: var(--font-mono);
+    letter-spacing: 0.3px;
+}
+.session-agent-chip-icon {
+    flex-shrink: 0;
+    color: var(--accent, var(--text-muted));
+}
+.session-agent-chip-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
