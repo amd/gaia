@@ -514,6 +514,52 @@ class GaiaCliClient:
             sys.exit(1)
 
 
+def resolve_effective_device(
+    effective_device: str, device_was_explicit: bool, devices: dict
+) -> str:
+    """Resolve the device `gaia chat` reports/runs on, validating whichever
+    device is actually landed on.
+
+    Sequential npu -> gpu checks (not if/elif) so a non-explicit npu->gpu
+    reassignment falls through to the GPU probe in the same call, instead of
+    being reported unchecked (#2241: an if/elif chain evaluates once, so the
+    npu branch's reassignment could never trigger the gpu branch). An
+    explicit --device still fails loudly (sys.exit(1)) when unavailable
+    rather than falling back; cpu needs no availability check.
+    """
+    if effective_device == "npu":
+        npu_info = devices.get("amd_npu", {})
+        if not npu_info.get("available"):
+            if device_was_explicit:
+                print(
+                    "❌ NPU not available on this system. "
+                    "Requires Ryzen AI 300/400/Max (XDNA2). "
+                    "Run `gaia init --profile npu` to set it up, "
+                    "or choose --device gpu.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            effective_device = "gpu"
+
+    if effective_device == "gpu":
+        from gaia.llm.lemonade_manager import system_info_has_gpu
+
+        has_gpu = system_info_has_gpu(devices)
+        if not has_gpu and not device_was_explicit:
+            # No accelerator reported — describe the resulting state
+            # (Lemonade runs on CPU) rather than claiming a fallback GAIA
+            # forces; it does not send a device to Lemonade, which picks the
+            # backend itself.
+            print(
+                "No GPU detected — inference will run on CPU "
+                "(slower). Run `gaia init` to set up GPU "
+                "acceleration."
+            )
+            effective_device = "cpu"
+
+    return effective_device
+
+
 async def async_main(action, **kwargs):
     log = get_logger(__name__)
 
@@ -644,34 +690,9 @@ async def async_main(action, **kwargs):
                     _sysinfo = _dev_client.get_system_info()
                     _devices = _sysinfo.get("devices", {})
 
-                    if effective_device == "npu":
-                        npu_info = _devices.get("amd_npu", {})
-                        if not npu_info.get("available"):
-                            if device_was_explicit:
-                                print(
-                                    "❌ NPU not available on this system. "
-                                    "Requires Ryzen AI 300/400/Max (XDNA2). "
-                                    "Run `gaia init --profile npu` to set it up, "
-                                    "or choose --device gpu.",
-                                    file=sys.stderr,
-                                )
-                                sys.exit(1)
-                            effective_device = "gpu"
-                    elif effective_device == "gpu":
-                        from gaia.llm.lemonade_manager import system_info_has_gpu
-
-                        has_gpu = system_info_has_gpu(_devices)
-                        if not has_gpu and not device_was_explicit:
-                            # No accelerator reported — describe the resulting
-                            # state (Lemonade runs on CPU) rather than claiming a
-                            # fallback GAIA forces; it does not send a device to
-                            # Lemonade, which picks the backend itself.
-                            print(
-                                "No GPU detected — inference will run on CPU "
-                                "(slower). Run `gaia init` to set up GPU "
-                                "acceleration."
-                            )
-                            effective_device = "cpu"
+                    effective_device = resolve_effective_device(
+                        effective_device, device_was_explicit, _devices
+                    )
                 except LemonadeClientError as _probe_err:
                     # Only treat "server not reachable yet" (connection refused /
                     # timeout) as a soft pass. A reachable but broken server
