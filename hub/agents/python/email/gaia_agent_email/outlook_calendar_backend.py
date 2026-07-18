@@ -70,6 +70,7 @@ import httpx
 
 from gaia_agent_email.outlook_scopes import OUTLOOK_CALENDAR_SCOPES
 from gaia_agent_email.scopes import AGENT_NAMESPACED_ID
+
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.handler import get_credential_sync
 from gaia.logger import get_logger
@@ -348,14 +349,22 @@ def _get_outlook_calendar_token() -> str:
 
     Module-level (not a method) so it mirrors ``_get_outlook_token`` /
     ``_get_calendar_token`` and can be unit-tested without instantiating the
-    agent.
+    agent. In the daemon deployment (#2154) it returns the daemon-forwarded
+    'microsoft' token instead of reading the keyring.
     """
-    cred = get_credential_sync(
-        "microsoft",
-        agent_id=AGENT_NAMESPACED_ID,
-        required_scopes=list(OUTLOOK_CALENDAR_SCOPES),
+    from gaia_agent_email import forwarded_credentials
+
+    def _live() -> str:
+        cred = get_credential_sync(
+            "microsoft",
+            agent_id=AGENT_NAMESPACED_ID,
+            required_scopes=list(OUTLOOK_CALENDAR_SCOPES),
+        )
+        return cred["access_token"]
+
+    return forwarded_credentials.resolve_access_token(
+        "microsoft", list(OUTLOOK_CALENDAR_SCOPES), live_fetch=_live
     )
-    return cred["access_token"]
 
 
 __all__ = [

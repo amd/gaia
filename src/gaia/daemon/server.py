@@ -86,8 +86,9 @@ def _load_extra_specs() -> dict:
     return specs
 
 
-def _build_registry(specs, *, custody_auth=None, custody_base_url=None):
-    """The daemon's sidecar registry, wired to the crash-reap ledger.
+def _build_registry(specs, forwarder, *, custody_auth=None, custody_base_url=None):
+    """The daemon's sidecar registry, wired to the crash-reap ledger and the
+    OAuth forward-out on-spawn push (#2154).
 
     When *custody_auth* + *custody_base_url* are given, the registry mints a
     per-agent custody secret at spawn and injects the /host/v1 wiring (#2153).
@@ -105,10 +106,21 @@ def _build_registry(specs, *, custody_auth=None, custody_base_url=None):
             started_at=manager.started_at,
         )
 
+    def _on_started(agent_id, manager) -> None:
+        # Forward granted connector access tokens OUT once the sidecar is
+        # healthy (its /v1/connections intake can now answer). Best-effort per
+        # provider; the forwarder logs every failure — nothing is swallowed.
+        if not manager.base_url:
+            return
+        forwarder.forward_all(
+            agent_id, base_url=manager.base_url, bearer=manager.auth_token
+        )
+
     return SidecarRegistry(
         specs,
         on_spawn=_on_spawn,
         on_stop=ledger.remove_entry,
+        on_started=_on_started,
         custody_auth=custody_auth,
         custody_base_url=custody_base_url,
     )
@@ -136,6 +148,8 @@ def run(host: str = HOST) -> None:
     pid = os.getpid()
     started_at = time.time()
 
+    from gaia.daemon.forward import ConnectionForwarder
+
     # Custody backing (#2153): one SQLite store owned by the daemon, and the
     # in-memory secret→agent-id bindings. Constructed before the registry so the
     # registry can mint each sidecar's custody secret at spawn. The custody
@@ -145,8 +159,12 @@ def run(host: str = HOST) -> None:
     custody_base_url = f"http://{host}:{port}"
 
     specs = {**builtin_specs(), **_load_extra_specs()}
+    forwarder = ConnectionForwarder(specs)
     registry = _build_registry(
-        specs, custody_auth=custody_auth, custody_base_url=custody_base_url
+        specs,
+        forwarder,
+        custody_auth=custody_auth,
+        custody_base_url=custody_base_url,
     )
 
     from gaia.daemon.broker import ModelSlotBroker
@@ -186,6 +204,7 @@ def run(host: str = HOST) -> None:
         on_startup=_register,
         on_shutdown=_deregister,
         registry=registry,
+        forwarder=forwarder,
         broker=broker,
         custody_auth=custody_auth,
         custody_store=custody_store,

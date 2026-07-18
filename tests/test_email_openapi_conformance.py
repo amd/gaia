@@ -959,6 +959,13 @@ def test_all_documented_paths_covered(committed_spec):
         # the cancel route is covered there too.
         ("post", "/v1/email/query"),
         ("post", "/v1/email/query/{run_id}/cancel"),
+        # OAuth forward-OUT intake (schema 2.5, #2154). The daemon delivers
+        # short-lived connector tokens here; behavioral conformance (auth,
+        # unknown-provider, empty-token, metadata-only responses, withdraw)
+        # lives in hub/agents/python/email/tests/test_forwarded_credentials.py.
+        ("post", "/v1/connections/{provider}"),
+        ("get", "/v1/connections"),
+        ("delete", "/v1/connections/{provider}"),
     }
     assert documented == expected, (
         f"Spec has routes not covered by conformance tests: "
