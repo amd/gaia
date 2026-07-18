@@ -69,15 +69,29 @@ def _install_fake_pywin32(monkeypatch, *, readback_sids=(USER_SID,), null_dacl=F
 
     win32api = type(sys)("win32api")
     win32api.NameSamCompatible = 2
+    win32api.GetCurrentProcess = lambda: "FAKE-PROCESS-HANDLE"
     win32api.GetUserNameEx = lambda fmt: "FAKEDOMAIN\\fakeuser"
+
+    def _lookup_account_name(system, name):
+        # The STX runner reproduced: a service/machine account has no
+        # name->SID mapping, so deriving the SID by name breaks the daemon
+        # outright. The SID must come from the process token instead.
+        raise OSError(
+            "(1332, 'LookupAccountName', 'No mapping between account names "
+            "and security IDs was done.')"
+        )
 
     win32security = type(sys)("win32security")
     win32security.ACL = _FakeACL
     win32security.ACL_REVISION = 2
     win32security.SE_FILE_OBJECT = 1
+    win32security.TOKEN_QUERY = 0x0008
+    win32security.TokenUser = 1
     win32security.DACL_SECURITY_INFORMATION = 0x00000004
     win32security.PROTECTED_DACL_SECURITY_INFORMATION = 0x80000000
-    win32security.LookupAccountName = lambda system, name: (USER_SID, "FAKEDOMAIN", 1)
+    win32security.LookupAccountName = _lookup_account_name
+    win32security.OpenProcessToken = lambda process, access: "FAKE-TOKEN"
+    win32security.GetTokenInformation = lambda token, info_class: (USER_SID, 0)
 
     def _set_named_security_info(path, obj_type, flags, owner, group, dacl, sacl):
         calls["set"].append(
@@ -156,6 +170,21 @@ def test_lockdown_adds_exactly_one_full_control_ace_for_current_user(
     assert dacl.GetAceCount() == 1, "exactly one ACE — no extra grants"
     assert dacl.aces[0]["sid"] == USER_SID
     assert dacl.aces[0]["mask"] == FILE_ALL_ACCESS
+
+
+def test_sid_comes_from_the_process_token_not_a_name_lookup(monkeypatch, tmp_path):
+    """Regression: a daemon running as a service or machine account has no
+    name->SID mapping, so LookupAccountName fails with 1332 and — being
+    fail-loud — the daemon then refuses to spawn ANY sidecar. The fake's
+    LookupAccountName raises that exact error, so reintroducing the name
+    lookup fails here rather than only on a service-account machine."""
+    calls = _install_fake_pywin32(monkeypatch)
+    target = tmp_path / "launch-secret"
+    target.write_text("shh")
+
+    mgr._lock_down_windows_acl(target)
+
+    assert calls["set"][0]["dacl"].aces[0]["sid"] == USER_SID
 
 
 def test_lockdown_verifies_by_rereading_the_dacl(monkeypatch, tmp_path):
@@ -280,9 +309,10 @@ def _current_user_sid():
     import win32api
     import win32security
 
-    sid, _domain, _type = win32security.LookupAccountName(
-        None, win32api.GetUserNameEx(win32api.NameSamCompatible)
+    token = win32security.OpenProcessToken(
+        win32api.GetCurrentProcess(), win32security.TOKEN_QUERY
     )
+    sid, _attributes = win32security.GetTokenInformation(token, win32security.TokenUser)
     return sid
 
 

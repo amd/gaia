@@ -129,8 +129,13 @@ def _lock_down_windows_acl(path: Path) -> None:
         ) from e
 
     try:
-        user_sid, _domain, _type = win32security.LookupAccountName(
-            None, win32api.GetUserNameEx(win32api.NameSamCompatible)
+        # Read the SID from the process token, not by name: LookupAccountName
+        # fails with 1332 for the service/machine accounts a daemon runs as.
+        token = win32security.OpenProcessToken(
+            win32api.GetCurrentProcess(), win32security.TOKEN_QUERY
+        )
+        user_sid, _attributes = win32security.GetTokenInformation(
+            token, win32security.TokenUser
         )
 
         dacl = win32security.ACL()
