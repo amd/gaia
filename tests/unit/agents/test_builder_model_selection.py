@@ -89,9 +89,9 @@ class TestSelectBuilderModelFunction:
                 _select_builder_model(_BASE_URL)
         message = excinfo.value.user_message
         # Must name a concrete candidate model so the user knows what to install.
-        assert any(model in message for model in BUILDER_PREFERRED_MODELS), (
-            f"expected a concrete candidate model name in the error, got: {message!r}"
-        )
+        assert any(
+            model in message for model in BUILDER_PREFERRED_MODELS
+        ), f"expected a concrete candidate model name in the error, got: {message!r}"
         # Must give a remediation command.
         assert (
             "gaia download" in message or "gaia init" in message
@@ -213,9 +213,7 @@ class TestGetLemonadeModelsRequestShape:
 
         from gaia.agents.registry import get_lemonade_models
 
-        with patch(
-            "requests.get", side_effect=requests.exceptions.ConnectionError()
-        ):
+        with patch("requests.get", side_effect=requests.exceptions.ConnectionError()):
             result = get_lemonade_models(_BASE_URL)
         assert result is None
 

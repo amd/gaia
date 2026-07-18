@@ -879,9 +879,7 @@ class TestBuilderModelPreferences:
         callers must be able to tell them apart."""
         from gaia.agents.registry import get_lemonade_models
 
-        mock_response = SimpleNamespace(
-            status_code=200, json=lambda: {"data": []}
-        )
+        mock_response = SimpleNamespace(status_code=200, json=lambda: {"data": []})
         with patch("requests.get", return_value=mock_response):
             reachable_empty = get_lemonade_models("http://localhost:13305/api/v1")
 

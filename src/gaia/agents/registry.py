@@ -73,6 +73,55 @@ _RESERVED_BUILTIN_IDS: frozenset[str] = frozenset(
 )
 
 
+# BuilderAgent's model preference, best-to-worst. The first two entries match
+# what `gaia init` profiles actually install (`Gemma-4-E4B-it-GGUF` is the
+# default-profile model; `gemma4-it-e2b-FLM` is the npu-profile one — see
+# `INIT_PROFILES` in `gaia.installer.init_command`); no profile installs the
+# 35B, so it must not be the only entry (#2243).
+BUILDER_PREFERRED_MODELS: List[str] = [
+    "Qwen3.5-35B-A3B-GGUF",
+    "Gemma-4-E4B-it-GGUF",
+    "gemma4-it-e2b-FLM",
+]
+
+
+def resolve_preferred_model(
+    preferred_models: List[str], available_models: List[str]
+) -> Optional[str]:
+    """Return the first of *preferred_models* present in *available_models*.
+
+    Pure ordering primitive shared by ``AgentRegistry.resolve_model`` and any
+    caller (e.g. ``BuilderAgent``) that needs to pick a model from a live
+    Lemonade catalog without going through a full registry instance.
+    """
+    for model in preferred_models:
+        if model in available_models:
+            return model
+    return None
+
+
+def get_lemonade_models(base_url: str, timeout: float = 2.0) -> Optional[List[str]]:
+    """Query Lemonade's ``/models`` endpoint directly (no cache, no backoff).
+
+    Returns the list of installed model ids on a 2xx response — an empty list
+    means Lemonade is reachable but nothing is loaded/installed. Returns
+    ``None`` when the request could not be completed at all (connection
+    error, timeout, non-2xx, malformed response). Callers must not conflate
+    the two: "unreachable" and "reachable but nothing installed" call for
+    different messages and different remediation.
+    """
+    try:
+        import requests
+
+        resp = requests.get(f"{base_url}/models", timeout=timeout)
+        if resp.status_code == 200:
+            data = resp.json()
+            return [m["id"] for m in data.get("data", [])]
+    except Exception:
+        pass
+    return None
+
+
 # Session-level kwargs that constrain the agent's effective sandbox. If
 # python_factory drops one of these for a class that doesn't declare it, the
 # session-intended constraint silently relaxes to the agent's default — log
@@ -628,7 +677,7 @@ class AgentRegistry:
                         builder_factory, "builtin:builder"
                     ),
                     agent_dir=None,
-                    models=[],
+                    models=BUILDER_PREFERRED_MODELS,
                     hidden=True,
                     required_connections=[],
                     namespaced_agent_id="builtin:builder",
@@ -1220,23 +1269,19 @@ class AgentRegistry:
         if available_models is None:
             available_models = self._get_available_models()
 
-        for model in preferred_models:
-            if model in available_models:
-                logger.info(
-                    "registry: Agent %s: preferred model %s available",
-                    agent_id,
-                    model,
-                )
-                return model
+        resolved = resolve_preferred_model(preferred_models, available_models)
+        if resolved is not None:
             logger.info(
-                "registry: Agent %s: preferred model %s not available, trying next",
+                "registry: Agent %s: preferred model %s available",
                 agent_id,
-                model,
+                resolved,
             )
+            return resolved
 
         logger.warning(
-            "registry: Agent %s: no preferred models available, using server default",
+            "registry: Agent %s: no preferred models available (%s), using server default",
             agent_id,
+            preferred_models,
         )
         return None
 
@@ -1258,17 +1303,11 @@ class AgentRegistry:
         ):
             return []
 
-        try:
-            import requests
-
-            base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
-            resp = requests.get(f"{base_url}/models", timeout=2)
-            if resp.ok:
-                data = resp.json()
-                self._lemonade_models = [m["id"] for m in data.get("data", [])]
-                return self._lemonade_models
-        except Exception:
-            pass
+        base_url = os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
+        models = get_lemonade_models(base_url)
+        if models is not None:
+            self._lemonade_models = models
+            return self._lemonade_models
 
         # Record failure timestamp; do NOT cache models so we retry after the interval.
         self._lemonade_models_last_fail = time.monotonic()
