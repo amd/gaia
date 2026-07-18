@@ -166,6 +166,30 @@ class SidecarRegistry:
             )
         return manager.base_url, manager.auth_token
 
+    def authenticate_callback(self, credential: str) -> Optional[str]:
+        """Return the agent_id of the RUNNING sidecar whose launch token equals
+        *credential*, or ``None`` if no live sidecar owns it.
+
+        The daemon's callback plane (``/host/v1/*``) authenticates a sidecar by
+        the per-session launch token the manager minted for it (#1706) — the
+        same token the relay swaps in server-side. Compared in constant time so
+        a token guess cannot be timed. A stopped sidecar's token never matches
+        (its slot claim is gone), so a reaped agent cannot keep leasing.
+        """
+        import secrets
+
+        if not credential:
+            return None
+        with self._lock:
+            holders = list(self._managers.items())
+        for agent_id, (manager, _) in holders:
+            if not manager.is_running:
+                continue
+            token = manager.auth_token
+            if token and secrets.compare_digest(credential, token):
+                return agent_id
+        return None
+
     def list_agents(self) -> "list[dict]":
         """One entry per registered spec, running or not. NEVER includes tokens."""
         with self._lock:
