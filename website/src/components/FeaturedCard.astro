@@ -4,7 +4,7 @@
 
 import AgentIcon from './AgentIcon.astro';
 import AuroraBg from './AuroraBg.astro';
-import { type Agent } from '../data/catalog';
+import { type Agent, installMethods } from '../data/catalog';
 
 interface Props {
   agent: Agent;
@@ -12,6 +12,10 @@ interface Props {
 }
 
 const { agent, eyebrow = 'Featured' } = Astro.props;
+// Use the canonical primary install command (npm for npm agents, GAIA otherwise)
+// — same source as the detail page, so the card never shows a command the agent
+// can't actually be installed with.
+const installCmd = installMethods(agent)[0].command;
 ---
 
 <a
@@ -31,7 +35,7 @@ const { agent, eyebrow = 'Featured' } = Astro.props;
     <p class="text-[14px] text-g-muted max-w-md mb-6">{agent.description}</p>
     <!-- Static chip, not a copy button — the whole card is a link; nested buttons are invalid HTML. -->
     <span class="inline-flex max-w-full items-center break-all rounded-md border border-g-gold/40 px-4 py-2 font-mono text-[12px] text-g-gold-text">
-      $ gaia agent install {agent.id}
+      $ {installCmd}
     </span>
   </div>
 </a>
