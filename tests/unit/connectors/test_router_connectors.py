@@ -317,7 +317,9 @@ def _fake_registry(nsid: str, connector_id: str, scopes: list[str]):
             return self._regs
 
     cr = ConnectorRequirement(connector_id=connector_id, scopes=scopes)
-    return FakeRegistry(_regs=[FakeReg(namespaced_agent_id=nsid, required_connections=[cr])])
+    return FakeRegistry(
+        _regs=[FakeReg(namespaced_agent_id=nsid, required_connections=[cr])]
+    )
 
 
 class TestAuthorizeGrantAgents:
@@ -397,9 +399,7 @@ class TestAuthorizeGrantAgents:
             captured["config"] = config
             return {"configured": True, "flow_id": "f1"}
 
-        monkeypatch.setattr(
-            "gaia.ui.routers.connectors.configure", fake_configure
-        )
+        monkeypatch.setattr("gaia.ui.routers.connectors.configure", fake_configure)
         ui_api_client.app.state.agent_registry = _fake_registry(
             "installed:email", "google", self._SCOPES
         )
