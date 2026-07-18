@@ -209,6 +209,10 @@ class TestToolRegistry:
         # Voice/style profile from Sent mail (#1607)
         "build_voice_profile",
         "clear_voice_profile",
+        # Briefing / task extraction agent-loop tools (#2110)
+        "get_briefing",
+        "list_tasks",
+        "extract_action_items",
     }
 
     def test_every_expected_tool_is_registered(self, agent):

@@ -200,14 +200,14 @@ class LiveOutlookCalendarBackend:
             raise ConnectorsError(
                 "Microsoft Graph returned 401. The Outlook access token may "
                 "have expired or been revoked. Reconnect Microsoft in "
-                f"Settings -> Connections. (where: {where})"
+                f"Settings → Connectors. (where: {where})"
             )
         if response.status_code == 403:
             raise ConnectorsError(
                 "Microsoft Graph returned 403 (insufficient permissions). The "
                 "connected Microsoft account did not grant the calendar scope "
                 "this agent needs (Calendars.ReadWrite). Reconnect Microsoft in "
-                "Settings -> Connections and approve calendar access. "
+                "Settings → Connectors and approve calendar access. "
                 f"(where: {where}; detail: {response.text[:300]})"
             )
         raise ConnectorsError(

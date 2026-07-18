@@ -14,7 +14,7 @@ needed a real consumer to validate:
 2. ``get_credential_sync(connector_id, agent_id, required_scopes)``
    — the central entrypoint that fires the grant-ledger check before
    returning a usable credential.
-3. The Settings → Connections per-agent grants UI — the user must be
+3. The Settings → Connectors per-agent grants UI — the user must be
    able to grant scopes from inside the AgentUI.
 
 This agent ships four tools that fan out across two connector kinds:
@@ -92,9 +92,9 @@ Behavior:
 - Call exactly the tool that matches the question. Don't speculate;
   if the user asks "what's in my inbox?" call gmail_recent_subjects.
 - If a tool returns an error mentioning "AGENT_NOT_GRANTED", tell the
-  user which scope they need to grant in Settings → Connections.
+  user which scope they need to grant in Settings → Connectors.
 - If a tool returns an error mentioning "NOT_CONNECTED", tell them to
-  connect that service in Settings → Connections first.
+  connect that service in Settings → Connectors first.
 - Summarize tool output in 1–3 sentences. Don't recite raw JSON.
 - Do NOT make up data. If a tool fails, say so.
 """
@@ -146,7 +146,7 @@ def _github_pat() -> str:
     if not token:
         raise ConnectorsError(
             "GitHub MCP credential resolved but GITHUB_TOKEN was empty. "
-            "Re-run Settings → Connections → GitHub → Configure to set the "
+            "Re-run Settings → Connectors → GitHub → Configure to set the "
             "Personal Access Token."
         )
     return token

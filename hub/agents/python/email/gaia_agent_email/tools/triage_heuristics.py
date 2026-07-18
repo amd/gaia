@@ -262,6 +262,82 @@ _URGENT_SUBJECT_PATTERNS = (
 )
 
 
+# Content signals that a message carries a genuine deadline, commitment, or
+# consequence for the user — i.e. it needs ATTENTION/ACTION even when Gmail
+# filed it under a low-priority category (PROMOTIONS / SOCIAL / UPDATES).
+# #2113: a membership notice with a this-week attendance requirement and a
+# personal-finance "budget exceeded" alert were both confidently buried
+# (archive / informational) because the category label short-circuited before
+# any body read. When one of these fires we VETO the confident low-priority
+# short-circuit and escalate to the LLM (which then reads the full body).
+#
+# Precision-first: these are obligation/consequence phrases, deliberately NOT
+# marketing-urgency ("sale ends", "limited time", "last chance") — those must
+# still archive confidently. Kept narrow so routine receipts/newsletters are
+# not dragged into the LLM.
+_COMMITMENT_SIGNAL_PATTERNS = (
+    # Deadlines / required responses
+    "action required",
+    "response required",
+    "responses are required",
+    "respond by",
+    "reply by",
+    "rsvp by",
+    "register by",
+    "renew by",
+    "confirm by",
+    "due by",
+    "payment due",
+    "past due",
+    "past-due",
+    "overdue",
+    "final notice",
+    "final reminder",
+    "deadline",
+    "no later than",
+    # Attendance / mandatory commitments
+    "attendance is required",
+    "attendance required",
+    "mandatory attendance",
+    "required to attend",
+    "must attend",
+    "confirm your attendance",
+    # Consequences for non-compliance
+    "failure to",
+    "non-compliance",
+    "noncompliance",
+    "will be suspended",
+    "will be cancelled",
+    "will be canceled",
+    "will be terminated",
+    "will be revoked",
+    "will be charged",
+    "late fee",
+    "avoid a late fee",
+    "loss of access",
+    # Personal-finance alerts (budget/balance)
+    "budget exceeded",
+    "over budget",
+    "you have exceeded",
+    "you've exceeded",
+    "exceeded your",
+    "overdrawn",
+)
+
+
+def _has_commitment_signal(subject_lower: str, body_lower: str) -> bool:
+    """True when subject or body carries a deadline/commitment/consequence.
+
+    The body channel is what makes this distinct from #1266's subject-only
+    urgent veto — the #2113 misses (attendance requirement, budget alert)
+    lived in the body, invisible to a subject-only check.
+    """
+    for pattern in _COMMITMENT_SIGNAL_PATTERNS:
+        if pattern in subject_lower or pattern in body_lower:
+            return True
+    return False
+
+
 def classify_category_heuristic(
     subject: str,
     sender: str,
@@ -292,6 +368,13 @@ def classify_category_heuristic(
     label_id_set = set(label_ids)
     subject_lower = (subject or "").lower()
     sender_lower = (sender or "").lower()
+    body_lower = (body or "").lower()
+
+    # #2113: a deadline/commitment/consequence signal vetoes the confident
+    # low-priority label short-circuit below (PROMOTIONS / SOCIAL / UPDATES),
+    # so a real obligation buried under a promotions label reaches the LLM
+    # instead of being confidently archived / filed informational.
+    commitment_signal = _has_commitment_signal(subject_lower, body_lower)
 
     # Phishing is a *signal* layered on top of every category, never a
     # category itself -- compute once up front so spam/phishing can co-fire.
@@ -300,9 +383,24 @@ def classify_category_heuristic(
     is_phishing = detect_phishing(subject, sender, body)
     spam_signal = _spam_sender_signal(sender)
 
-    # 1. Promotions -- confident, label-driven.
+    # 1. Promotions -- confident, label-driven. Vetoed by a commitment
+    #    signal (#2113): a deadline/consequence in the body means the LLM
+    #    must read it rather than confidently archiving it.
     if LABEL_CATEGORY_PROMOTIONS in label_id_set:
         is_spam, spam_confident = _spam_fields(CATEGORY_PROMOTIONAL, spam_signal)
+        if commitment_signal:
+            return HeuristicResult(
+                category=CATEGORY_PROMOTIONAL,
+                is_spam=is_spam,
+                spam_confident=spam_confident,
+                is_phishing=is_phishing,
+                confident=False,
+                reason=(
+                    "Gmail CATEGORY_PROMOTIONS label set but body has a "
+                    "deadline/commitment signal -- escalating to LLM"
+                ),
+                matched_label_ids=(LABEL_CATEGORY_PROMOTIONS,),
+            )
         return HeuristicResult(
             category=CATEGORY_PROMOTIONAL,
             is_spam=is_spam,
@@ -313,9 +411,22 @@ def classify_category_heuristic(
         )
 
     # 3. Social -- confident, label-driven. Notifications, "X liked your
-    #    post", etc.
+    #    post", etc. Same commitment veto as promotions (#2113).
     if LABEL_CATEGORY_SOCIAL in label_id_set:
         is_spam, spam_confident = _spam_fields(CATEGORY_PROMOTIONAL, spam_signal)
+        if commitment_signal:
+            return HeuristicResult(
+                category=CATEGORY_PROMOTIONAL,
+                is_spam=is_spam,
+                spam_confident=spam_confident,
+                is_phishing=is_phishing,
+                confident=False,
+                reason=(
+                    "Gmail CATEGORY_SOCIAL label set but body has a "
+                    "deadline/commitment signal -- escalating to LLM"
+                ),
+                matched_label_ids=(LABEL_CATEGORY_SOCIAL,),
+            )
         return HeuristicResult(
             category=CATEGORY_PROMOTIONAL,
             is_spam=is_spam,
@@ -327,8 +438,23 @@ def classify_category_heuristic(
 
     # 4. Updates -- confident, label-driven. Receipts, shipping
     #    confirmations, calendar updates: useful context, no reply needed.
+    #    A commitment signal (e.g. a "budget exceeded" alert) vetoes the
+    #    confident=FYI short-circuit so it isn't filed informational (#2113).
     if LABEL_CATEGORY_UPDATES in label_id_set:
         is_spam, spam_confident = _spam_fields(CATEGORY_FYI, spam_signal)
+        if commitment_signal:
+            return HeuristicResult(
+                category=CATEGORY_FYI,
+                is_spam=is_spam,
+                spam_confident=spam_confident,
+                is_phishing=is_phishing,
+                confident=False,
+                reason=(
+                    "Gmail CATEGORY_UPDATES label set but body has a "
+                    "deadline/commitment signal -- escalating to LLM"
+                ),
+                matched_label_ids=(LABEL_CATEGORY_UPDATES,),
+            )
         return HeuristicResult(
             category=CATEGORY_FYI,
             is_spam=is_spam,

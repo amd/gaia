@@ -46,7 +46,8 @@ python hub/agents/python/email/packaging/capability_matrix.py
 
 ## Surface totals
 
-- Internal `@tool` agent-loop functions: **52**
+- Internal `@tool` agent-loop functions: **55**
+  - `briefing_tools`: 3
   - `calendar_tools`: 6
   - `delete_tools`: 3
   - `followup_tools`: 1
