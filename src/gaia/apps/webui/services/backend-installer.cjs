@@ -645,7 +645,8 @@ function _extraCaCertificates() {
   try {
     return [fs.readFileSync(file, "utf8")];
   } catch (err) {
-    log(`Could not read NODE_EXTRA_CA_CERTS (${file}): ${err.message}`);
+    // err.message already names the offending path — don't re-log the env value.
+    log(`Could not read NODE_EXTRA_CA_CERTS: ${err.message}`);
     return [];
   }
 }
@@ -725,7 +726,10 @@ function _probeViaProxy(target, proxy, ca, finish, setSock) {
   try {
     proxyUrl = new URL(proxy);
   } catch {
-    finish({ ok: false, kind: "connectivity", message: `${target.href}: invalid proxy URL "${proxy}"` });
+    // HTTPS_PROXY/HTTP_PROXY may embed credentials (http://user:pass@host) —
+    // strip the userinfo before the value reaches the install log.
+    const redacted = proxy.replace(/^(\w+:\/\/)[^@/]*@/, "$1***@");
+    finish({ ok: false, kind: "connectivity", message: `${target.href}: invalid proxy URL "${redacted}"` });
     return;
   }
   const headers = {};
