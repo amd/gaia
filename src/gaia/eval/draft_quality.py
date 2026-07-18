@@ -651,11 +651,15 @@ def generate_drafts(
             from gaia_agent_email.agent import EmailTriageAgent
             from gaia_agent_email.config import EmailAgentConfig
         except ImportError as exc:
+            from gaia.install_hints import agent_not_installed_message
+
             raise RuntimeError(
-                "The drafting eval needs the email agent. Install it with "
-                "`pip install gaia-agent-email` (or `pip install "
-                '"amd-gaia[agents]"`). '
-                f"Original import error: {exc}"
+                agent_not_installed_message(
+                    "email",
+                    package="email agent (needed by the drafting eval)",
+                    retry_command="gaia eval agent",
+                )
+                + f" Original import error: {exc}"
             ) from exc
 
         def agent_factory(backend: Any, db_path: str) -> Any:

@@ -159,15 +159,17 @@ class AgentRegistry:
             logger.error(f"Failed to load agent {model_id}: {e}")
             hint = ""
             if model_id == "gaia-code":
-                # gaia-code routes through the standalone gaia-agent-routing wheel
-                # (#1102), which in turn needs gaia-agent-code. Fail loudly with
-                # an install hint rather than degrading silently.
+                # gaia-code routes through RoutingAgent, which in turn needs the
+                # code agent. Both ship outside the core wheel (#1102). Fail
+                # loudly with an install hint rather than degrading silently.
+                from gaia.install_hints import agent_install_command
+
                 hint = (
                     " The 'gaia-code' model routes through RoutingAgent, which "
-                    "ships as the 'gaia-agent-routing' wheel. Install it with "
-                    "'pip install gaia-agent-routing gaia-agent-code' (or "
-                    "'pip install amd-gaia[agents]'). See "
-                    "docs/spec/agent-hub-restructure.mdx."
+                    "ships separately along with the code agent. Install both "
+                    f"with:\n  {agent_install_command('routing')}\n"
+                    f"  {agent_install_command('code')}\n"
+                    "See docs/spec/agent-hub-restructure.mdx."
                 )
             raise ValueError(f"Agent {model_id} not available: {e}.{hint}") from e
 

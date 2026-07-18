@@ -1402,10 +1402,14 @@ async def _get_chat_response(
             try:
                 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
             except ImportError as e:
+                from gaia.install_hints import agent_not_installed_message
+
                 raise RuntimeError(
-                    "The chat agent is not installed. Run "
-                    "`pip install gaia-agent-chat` (or `pip install "
-                    '"amd-gaia[agents]"`), then restart the server.'
+                    agent_not_installed_message(
+                        "chat",
+                        package="chat agent",
+                        retry_command="gaia chat --ui",
+                    )
                 ) from e
 
             logger.info(
@@ -1845,10 +1849,14 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             ChatAgentConfig,
                         )
                     except ImportError as e:
+                        from gaia.install_hints import agent_not_installed_message
+
                         raise RuntimeError(
-                            "The chat agent is not installed. Run "
-                            "`pip install gaia-agent-chat` (or `pip install "
-                            '"amd-gaia[agents]"`), then restart the server.'
+                            agent_not_installed_message(
+                                "chat",
+                                package="chat agent",
+                                retry_command="gaia chat --ui",
+                            )
                         ) from e
 
                     logger.info(

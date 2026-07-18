@@ -745,11 +745,15 @@ def generate_briefings(
         try:
             from gaia_agent_email.briefing import run_briefing_job
         except ImportError as exc:
+            from gaia.install_hints import agent_not_installed_message
+
             raise RuntimeError(
-                "The briefing eval needs the email agent. Install it with "
-                "`pip install gaia-agent-email` (or `pip install "
-                '"amd-gaia[agents]"`). '
-                f"Original import error: {exc}"
+                agent_not_installed_message(
+                    "email",
+                    package="email agent (needed by the briefing eval)",
+                    retry_command="gaia eval agent",
+                )
+                + f" Original import error: {exc}"
             ) from exc
 
         def briefing_fn(backend: Any, max_msgs: int) -> Mapping[str, Any]:

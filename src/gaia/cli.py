@@ -601,10 +601,15 @@ async def async_main(action, **kwargs):
             from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
             from gaia_agent_chat.app import interactive_mode
         except ImportError as e:
+            from gaia.install_hints import agent_not_installed_message
+
             raise RuntimeError(
-                "The chat agent is not installed. Install it with "
-                '`pip install gaia-agent-chat` (or `pip install "amd-gaia[agents]"` '
-                "for all agents), then re-run `gaia chat`."
+                agent_not_installed_message(
+                    "chat",
+                    package="chat agent",
+                    retry_command="gaia chat",
+                    also_see="gaia chat --ui",
+                )
             ) from e
 
         try:
@@ -796,7 +801,7 @@ async def async_main(action, **kwargs):
         from gaia.agents.registry import AgentRegistry
 
         agent_id = "web" if action == "browse" else "data"
-        wheel = "gaia-agent-browser" if action == "browse" else "gaia-agent-analyst"
+        hub_dir = "browser" if action == "browse" else "analyst"
         agent_config_kwargs = dict(
             use_claude=kwargs.get("use_claude", False),
             use_chatgpt=kwargs.get("use_chatgpt", False),
@@ -817,10 +822,14 @@ async def async_main(action, **kwargs):
         registry = AgentRegistry()
         registry.discover()
         if registry.get(agent_id) is None:
+            from gaia.install_hints import agent_not_installed_message
+
             raise RuntimeError(
-                f"The '{action}' agent is not installed. Install it with "
-                f'`uv pip install {wheel}` (or `uv pip install "amd-gaia[agents]"` '
-                f"for all agents), then re-run `gaia {action}`."
+                agent_not_installed_message(
+                    hub_dir,
+                    package=f"'{action}' agent",
+                    retry_command=f"gaia {action}",
+                )
             )
         agent = registry.create_agent(agent_id, **agent_config_kwargs)
 
@@ -1002,10 +1011,15 @@ def _launch_interactive_cli(log=None):
             from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
             from gaia_agent_chat.app import interactive_mode
         except ImportError as e:
+            from gaia.install_hints import agent_not_installed_message
+
             raise RuntimeError(
-                "The chat agent is not installed. Install it with "
-                '`pip install gaia-agent-chat` (or `pip install "amd-gaia[agents]"` '
-                "for all agents), then re-run `gaia chat`."
+                agent_not_installed_message(
+                    "chat",
+                    package="chat agent",
+                    retry_command="gaia chat",
+                    also_see="gaia chat --ui",
+                )
             ) from e
 
         config = ChatAgentConfig(
@@ -5034,10 +5048,14 @@ def handle_email_command(args):
         try:
             from gaia_agent_email.spec_html import write_and_open_spec
         except ImportError as e:
+            from gaia.install_hints import agent_not_installed_message
+
             raise RuntimeError(
-                "The email agent is not installed. Install it with "
-                '`pip install gaia-agent-email` (or `pip install "amd-gaia[agents]"` '
-                "for all agents), then re-run `gaia email --spec`."
+                agent_not_installed_message(
+                    "email",
+                    package="email agent",
+                    retry_command="gaia email --spec",
+                )
             ) from e
 
         dest = write_and_open_spec(getattr(args, "output", None))
@@ -5330,10 +5348,15 @@ def handle_sd_command(args):
     try:
         from gaia_agent_sd import SDAgent, SDAgentConfig
     except ImportError as e:
+        from gaia.install_hints import agent_not_installed_message
+
         raise ImportError(
-            "The sd agent is not installed. Install it with "
-            '`uv pip install gaia-agent-sd` (or `uv pip install "amd-gaia[agents]"` for '
-            "all AMD agents). See https://amd-gaia.ai/docs/guides/sd."
+            agent_not_installed_message(
+                "sd",
+                package="sd agent",
+                retry_command="gaia sd",
+            )
+            + " See https://amd-gaia.ai/docs/guides/sd."
         ) from e
 
     # Ensure Lemonade is ready with proper context size for SD agent

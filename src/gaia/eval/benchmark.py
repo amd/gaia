@@ -833,11 +833,15 @@ def run_benchmark(
                         CONTEXT_TARGET_TOKENS,
                     )
                 except ImportError as exc:
+                    from gaia.install_hints import agent_not_installed_message
+
                     raise RuntimeError(
-                        "The email throughput benchmark needs the email agent. "
-                        "Install it with `pip install gaia-agent-email` (or "
-                        '`pip install "amd-gaia[agents]"`). '
-                        f"Original import error: {exc}"
+                        agent_not_installed_message(
+                            "email",
+                            package="email agent (needed by the throughput benchmark)",
+                            retry_command="gaia eval benchmark",
+                        )
+                        + f" Original import error: {exc}"
                     ) from exc
 
                 try:
