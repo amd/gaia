@@ -529,7 +529,10 @@ function App() {
         const outgoingId = useChatStore.getState().currentSessionId;
         try {
             setPendingPrompt("Hi, I'd like to create a new custom agent.");
-            const session = await api.createSession({ title: 'New Agent', agent_type: 'builder' });
+            // Pass the active device like the normal New Task flow — otherwise the
+            // builder session silently defaults to gpu on npu-profile machines (#2243).
+            const { activeDevice } = useChatStore.getState();
+            const session = await api.createSession({ title: 'New Agent', agent_type: 'builder', device: activeDevice });
             log.chat.info(`Builder session created: id=${session.id}`);
             addSession(session);
             // Leaving an untouched "New Task" draft behind — drop it (#2119).

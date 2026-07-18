@@ -120,6 +120,38 @@ class LemonadeUpstreamTimeoutError(LemonadeError):
     )
 
 
+class LemonadeModelNotFoundError(LemonadeError):
+    """The requested model is not installed on this Lemonade Server (HTTP 404).
+
+    Distinct from :class:`LemonadeModelNotLoadedError` (the model is present
+    but not yet loaded — transient, retryable). A 404 means the model was
+    never pulled, so retrying will never help; surface the missing model id
+    and remediation instead of the generic "try again in a moment" copy (#2243).
+    """
+
+    retryable = False
+    user_message = (
+        "The model this agent needs isn't installed on the local LLM server. "
+        "Run `gaia init` to set up a profile, or `gaia download <model>` to "
+        "install it, then try again."
+    )
+
+    def __init__(
+        self,
+        model_id: Optional[str] = None,
+        payload: Optional[dict] = None,
+    ):
+        self.model_id = model_id
+        message = None
+        if model_id:
+            message = (
+                f"The model this agent needs (`{model_id}`) isn't installed on "
+                f"the local LLM server. Install it with `gaia download {model_id}`, "
+                f"or run `gaia init` to set up a profile, then try again."
+            )
+        super().__init__(user_message=message, payload=payload)
+
+
 def _classify_lemonade_response(response: dict) -> Tuple[Optional[LemonadeError], bool]:
     """Inspect a Lemonade response dict for a known error shape.
 

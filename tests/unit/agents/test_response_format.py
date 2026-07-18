@@ -279,18 +279,28 @@ class TestResponseModeSelection:
 
 
 class TestBuilderAgentFormat:
-    def test_builder_uses_conversational_mode(self):
-        with patch("gaia.agents.base.agent.AgentSDK"):
-            from gaia.agents.builder.agent import BuilderAgent
+    """Construction hits Lemonade for model selection (#2243), so the model
+    list is mocked — same patch target as test_builder_model_selection.py."""
 
-            agent = BuilderAgent()
+    @staticmethod
+    def _build_agent():
+        from gaia.agents.builder.agent import BuilderAgent
+
+        with (
+            patch("gaia.agents.base.agent.AgentSDK"),
+            patch(
+                "gaia.agents.builder.agent.get_lemonade_models",
+                return_value=["Gemma-4-E4B-it-GGUF"],
+            ),
+        ):
+            return BuilderAgent()
+
+    def test_builder_uses_conversational_mode(self):
+        agent = self._build_agent()
         assert agent.response_mode == "conversational"
 
     def test_builder_prompt_has_conversational_format(self):
-        with patch("gaia.agents.base.agent.AgentSDK"):
-            from gaia.agents.builder.agent import BuilderAgent
-
-            agent = BuilderAgent()
+        agent = self._build_agent()
         prompt = agent.system_prompt
         # BuilderAgent uses Gemma-4-E4B (tool-calling): the embedded-JSON
         # format template is not injected since the model uses native tool_calls.

@@ -156,6 +156,33 @@ class TestBuilderFailLoudly:
         assert agent.chat.send_messages.call_count == 1
 
 
+class TestBuilderSurfacesModelError:
+    """A model-load 404 must name the missing model, not hide behind a placeholder (#2243)."""
+
+    def test_model_not_found_surfaces_model_id(self, tmp_path):
+        """When the LLM call 404s on an uninstalled model, the final answer
+        must name the model and give remediation — the old generic
+        'Sorry, I ran into an unexpected problem' placeholder masked it."""
+        agent = _make_agent(tmp_path)
+        agent.console = MagicMock()
+
+        agent.chat = MagicMock()
+        agent.chat.send_messages.side_effect = RuntimeError(
+            "HTTP 404: Model 'Qwen3.5-35B-A3B-GGUF' was not found. "
+            "Available models include: gemma4-it-e2b-FLM"
+        )
+
+        result = agent._process_query_impl("create an agent named Foo")
+        answer = result["answer"]
+
+        assert (
+            "Qwen3.5-35B-A3B-GGUF" in answer
+        ), f"Answer must name the missing model, got: {answer!r}"
+        assert (
+            "unexpected problem. Please try again in a moment" not in answer
+        ), f"The masking placeholder must be gone, got: {answer!r}"
+
+
 class TestBuilderOneShotNudge:
     """A one-shot request that names the agent must not stall on a greeting.
 

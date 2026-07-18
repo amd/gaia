@@ -20,6 +20,12 @@ from typing import Any, Dict, List, Optional
 from gaia.agents.base.agent import Agent, default_max_steps
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.tools import tool
+from gaia.agents.registry import (
+    BUILDER_PREFERRED_MODELS,
+    get_lemonade_models,
+    resolve_preferred_model,
+)
+from gaia.llm.providers.lemonade import LemonadeError, LemonadeNetworkError
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -112,6 +118,47 @@ def _normalize_display_name(name: str) -> str:
     return " ".join(words)
 
 
+def _select_builder_model(base_url: str) -> str:
+    """Pick an installed model for the builder, or fail loudly.
+
+    Runs only when the caller didn't already pin an explicit ``model_id`` —
+    the normal Agent UI path resolves one upstream via
+    ``AgentRegistry.resolve_model`` before construction. This is the
+    construction-time safety net: it must not trust that an omitted
+    ``model_id`` means "the 35B default is fine" (that trust is exactly what
+    caused #2243 — the omission is deliberate per #841, not an endorsement of
+    the hardcoded fallback).
+
+    Distinguishes "Lemonade unreachable" (retryable, connectivity problem)
+    from "reachable but nothing usable is installed" (not retryable, needs a
+    model install) — the two need different remediation.
+    """
+    available = get_lemonade_models(base_url)
+    if available is None:
+        raise LemonadeNetworkError()
+
+    selected = resolve_preferred_model(BUILDER_PREFERRED_MODELS, available)
+    if selected is None:
+        candidates = ", ".join(BUILDER_PREFERRED_MODELS)
+        err = LemonadeError(
+            user_message=(
+                "No usable model is installed for the agent builder. Install "
+                f"one of: {candidates} — for example "
+                f"`gaia download {BUILDER_PREFERRED_MODELS[-1]}` — or run "
+                "`gaia init` to set up a profile, then try again."
+            )
+        )
+        logger.warning(
+            "builder: no preferred model installed (checked %s against %s)",
+            BUILDER_PREFERRED_MODELS,
+            available,
+        )
+        raise err
+
+    logger.info("builder: selected model %s", selected)
+    return selected
+
+
 @dataclass
 class BuilderAgentConfig:
     """Configuration for BuilderAgent."""
@@ -146,11 +193,18 @@ class BuilderAgent(Agent):
         config = config or BuilderAgentConfig()
         self.config = config
 
-        effective_model_id = config.model_id or "Qwen3.5-35B-A3B-GGUF"
         effective_base_url = (
             config.base_url
             if config.base_url is not None
             else os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
+        )
+        # An explicit model_id (session-resolved upstream, or pinned by a
+        # caller) is never second-guessed by a live check. Only an omitted
+        # model_id triggers the construction-time safety net (#2243) — see
+        # _select_builder_model's docstring for why this can't just default
+        # to a hardcoded model.
+        effective_model_id = config.model_id or _select_builder_model(
+            effective_base_url
         )
 
         self.response_mode = "conversational"
@@ -292,10 +346,18 @@ class BuilderAgent(Agent):
                 break
             except Exception as exc:  # pylint: disable=broad-except
                 logger.error("BuilderAgent unexpected LLM error: %s", exc)
-                final_answer = (
-                    "Sorry, I ran into an unexpected problem. "
-                    "Please try again in a moment."
-                )
+                # Surface a typed Lemonade error's actionable message (e.g. the
+                # missing model id on a 404) instead of a generic placeholder
+                # that masks a diagnosable failure — matches the base agent (#2243).
+                typed_msg = self._extract_lemonade_user_message(exc)
+                if typed_msg is not None:
+                    final_answer = typed_msg
+                else:
+                    final_answer = (
+                        "Sorry, I ran into an unexpected problem. This might be "
+                        "a temporary issue — try again in a moment.\n\n"
+                        f"*Technical details: {exc}*"
+                    )
                 break
 
             logger.debug("BuilderAgent response: %s", response[:300])

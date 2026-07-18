@@ -22,6 +22,8 @@ timeout case correctly.
 from __future__ import annotations
 
 from gaia.llm.providers.lemonade import (
+    LemonadeModelNotFoundError,
+    LemonadeModelNotLoadedError,
     LemonadeNetworkError,
     LemonadeUpstreamTimeoutError,
     _classify_lemonade_response,
@@ -136,6 +138,81 @@ def test_ui_classifier_returns_none_for_unrelated_error() -> None:
     """Non-Lemonade exceptions stay None (no false positives)."""
     exc = ValueError("some unrelated programming error")
     assert _classify_chat_exception(exc) is None
+
+
+# ── #2243: model-not-installed (HTTP 404) must surface the missing model ─
+
+
+def test_ui_classifier_routes_model_not_found_404_and_names_model() -> None:
+    """A Lemonade 404 for an uninstalled model → model-not-found, naming the model.
+
+    This is the exact failure in #2243: BuilderAgent requested
+    ``Qwen3.5-35B-A3B-GGUF`` on an ``npu``-profile box that never
+    installed it. The classifier must (a) bucket it as *not-found* (not
+    the retryable *not-loaded*) and (b) preserve the model id so the
+    user learns which model to install.
+    """
+    exc = RuntimeError(
+        "HTTP 404: Model 'Qwen3.5-35B-A3B-GGUF' was not found. "
+        "Available models include: gemma4-it-e2b-FLM"
+    )
+    classified = _classify_chat_exception(exc)
+    assert isinstance(classified, LemonadeModelNotFoundError)
+    assert not isinstance(classified, LemonadeModelNotLoadedError)
+    assert classified.retryable is False
+    assert classified.model_id == "Qwen3.5-35B-A3B-GGUF"
+    # The missing model id and a concrete remediation must both be surfaced.
+    assert "Qwen3.5-35B-A3B-GGUF" in classified.user_message
+    assert (
+        "gaia download" in classified.user_message
+        or "gaia init" in classified.user_message
+    )
+
+
+def test_ui_classifier_model_not_found_type_without_quoted_name() -> None:
+    """``model_not_found`` type still classifies even when no model name is quoted."""
+    exc = RuntimeError(
+        '{"error": {"code": "model_not_found", "message": "no such model"}}'
+    )
+    classified = _classify_chat_exception(exc)
+    assert isinstance(classified, LemonadeModelNotFoundError)
+    assert classified.model_id is None
+
+
+def test_unrelated_not_found_error_is_not_a_missing_model() -> None:
+    """A non-model 404 must not be mislabelled "model isn't installed"."""
+    exc = RuntimeError("HTTP 404: File '/tmp/report.pdf' was not found.")
+    assert _classify_chat_exception(exc) is None
+
+
+def test_model_not_loaded_still_routes_to_not_loaded_not_found() -> None:
+    """ "no model loaded" must stay the retryable not-loaded case, not 404 not-found."""
+    exc = RuntimeError("model_not_loaded: no model loaded")
+    classified = _classify_chat_exception(exc)
+    assert isinstance(classified, LemonadeModelNotLoadedError)
+    assert not isinstance(classified, LemonadeModelNotFoundError)
+
+
+def test_agent_extract_surfaces_missing_model_id() -> None:
+    """The agent loop surfaces the missing model id instead of a generic placeholder.
+
+    Pins the #2243 fix end-to-end: a 404 raised through the agent loop
+    must yield an actionable message naming the model — the old
+    "Sorry, I ran into an unexpected problem" placeholder masked it.
+    """
+    from unittest.mock import MagicMock
+
+    from gaia.agents.base.agent import Agent
+
+    agent = MagicMock(spec=Agent)
+    agent._extract_lemonade_user_message = Agent._extract_lemonade_user_message.__get__(
+        agent
+    )
+
+    exc = RuntimeError("HTTP 404: Model 'Qwen3.5-35B-A3B-GGUF' was not found.")
+    msg = agent._extract_lemonade_user_message(exc)
+    assert msg is not None
+    assert "Qwen3.5-35B-A3B-GGUF" in msg
 
 
 # ── Agent loop: typed-message surfacing (no generic "try again" wrapper) ─
