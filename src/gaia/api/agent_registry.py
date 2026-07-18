@@ -21,6 +21,7 @@ from typing import Any, Dict, List
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.api_agent import ApiAgent
+from gaia.agents.install_hints import source_install_command
 from gaia.api.sse_handler import SSEOutputHandler
 
 logger = logging.getLogger(__name__)
@@ -164,9 +165,10 @@ class AgentRegistry:
                 # an install hint rather than degrading silently.
                 hint = (
                     " The 'gaia-code' model routes through RoutingAgent, which "
-                    "ships as the 'gaia-agent-routing' wheel. Install it with "
-                    "'pip install gaia-agent-routing gaia-agent-code' (or "
-                    "'pip install amd-gaia[agents]'). See "
+                    "ships as the 'gaia-agent-routing' wheel. Neither it nor "
+                    "'gaia-agent-code' is published yet (#2240); install both "
+                    f"from source: '{source_install_command('gaia-agent-routing')}' "
+                    f"and '{source_install_command('gaia-agent-code')}'. See "
                     "docs/spec/agent-hub-restructure.mdx."
                 )
             raise ValueError(f"Agent {model_id} not available: {e}.{hint}") from e
