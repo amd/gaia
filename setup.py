@@ -14,6 +14,34 @@ with open("src/gaia/version.py", encoding="utf-8") as fp:
 
 tkml_version = "5.0.4"
 
+# Agent distributions built by publish_agents.yml's `discover` job (issues
+# #1102, #1179). Deliberately NOT an extras_require entry — see #2240: an
+# `amd-gaia[agents]` extra naming these gaia-agent-* packages before any of
+# them were published on PyPI made pip/uv treat the extra as unsatisfiable.
+# An unsatisfiable extra doesn't fail cleanly: the resolver backtracks past
+# every version that declares it and silently lands on 0.20.0 (the last
+# version without the extra), *downgrading* a working install. Re-add these
+# as extras only once the wheels are actually published (tracked by #1179 /
+# #1513); until then this list is read statically by
+# util/list_agent_packages.py, never imported.
+AGENT_PACKAGES = [
+    "gaia-agent-summarize",
+    "gaia-agent-sd",
+    "gaia-agent-fileio",
+    "gaia-agent-docker",
+    "gaia-agent-jira",
+    "gaia-agent-blender",
+    "gaia-agent-emr",
+    "gaia-agent-code",
+    "gaia-agent-connectors-demo",
+    "gaia-agent-analyst",
+    "gaia-agent-browser",
+    "gaia-agent-docqa",
+    "gaia-agent-routing",
+    "gaia-agent-email",
+    "gaia-agent-chat",
+]
+
 setup(
     name="amd-gaia",
     version=gaia_version,
@@ -270,42 +298,13 @@ setup(
             "build>=1.0.0",
             "twine>=5.0.0",
         ],
-        # Standalone AMD production agents (issues #1102, #1179). Each agent
-        # ships as a separate 'gaia-agent-<id>' wheel that depends on this
-        # framework wheel; 'amd-gaia[agents]' installs all migrated agents at
-        # once. Add an entry here when each agent's wheel is first published.
-        "agent-summarize": ["gaia-agent-summarize"],
-        "agent-sd": ["gaia-agent-sd"],
-        "agent-fileio": ["gaia-agent-fileio"],
-        "agent-docker": ["gaia-agent-docker"],
-        "agent-jira": ["gaia-agent-jira"],
-        "agent-blender": ["gaia-agent-blender"],
-        "agent-emr": ["gaia-agent-emr"],
-        "agent-code": ["gaia-agent-code"],
-        "agent-connectors-demo": ["gaia-agent-connectors-demo"],
-        "agent-analyst": ["gaia-agent-analyst"],
-        "agent-browser": ["gaia-agent-browser"],
-        "agent-docqa": ["gaia-agent-docqa"],
-        "agent-routing": ["gaia-agent-routing"],
-        "agent-email": ["gaia-agent-email"],
-        "agent-chat": ["gaia-agent-chat"],
-        "agents": [
-            "gaia-agent-summarize",
-            "gaia-agent-sd",
-            "gaia-agent-fileio",
-            "gaia-agent-docker",
-            "gaia-agent-jira",
-            "gaia-agent-blender",
-            "gaia-agent-emr",
-            "gaia-agent-code",
-            "gaia-agent-connectors-demo",
-            "gaia-agent-analyst",
-            "gaia-agent-browser",
-            "gaia-agent-docqa",
-            "gaia-agent-routing",
-            "gaia-agent-email",
-            "gaia-agent-chat",
-        ],
+        # NOTE: the `agents` / `agent-<id>` extras were removed (#2240). They
+        # named gaia-agent-* packages that are not published, which made the
+        # extra unsatisfiable — pip/uv then backtrack to 0.20.0 (the last
+        # version without the extra) and silently DOWNGRADE a working
+        # install. The publish inventory now lives in the module-level
+        # AGENT_PACKAGES constant above. Re-add these only when the wheels
+        # are actually published; publishing is tracked by #1179 / #1513.
     },
     classifiers=[
         "Development Status :: 4 - Beta",
