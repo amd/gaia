@@ -10,7 +10,7 @@ icon: "wand-magic-sparkles"
 
 ## Overview
 
-GAIA's agent registry lets you extend the Agent UI with your own custom agents. Each agent lives in its own directory under `~/.gaia/agents/` as a Python module. Once placed there, the agent appears automatically in the **agent selector** dropdown of the Gaia Agent UI.
+GAIA's agent registry lets you extend the Agent UI with your own custom agents. Each agent lives in its own directory under `~/.gaia/agents/` as a Python module. Once placed there, the agent appears automatically in the **agent selector** dropdown of the Gaia Agent UI — and can be launched from the terminal with [`gaia agent run <id>`](#run-your-agent-from-the-cli), no UI required.
 
 Custom agents can have their own:
 - **Personality and instructions** (system prompt)
@@ -189,6 +189,38 @@ is a working reference for both `oauth_pkce` (Google) and `mcp_server`
   Walks through what connectors are, how the OAuth + MCP flows differ,
   per-agent grants, and a step-by-step setup for Google and GitHub.
 </Card>
+
+---
+
+## Run your agent from the CLI
+
+The Agent UI isn't the only way to talk to a custom agent. `gaia agent run <id>`
+launches any agent GAIA can discover — a custom agent under `~/.gaia/agents/`
+or a built-in — the same way `gaia agent status` lists it:
+
+```bash
+# Interactive session
+gaia agent run my-agent
+
+# Single query, non-interactive
+gaia agent run my-agent -q "What can you help me with?"
+
+# List the agent's registered tools and exit
+gaia agent run my-agent --list-tools
+```
+
+`<id>` is the agent's `AGENT_ID` — the same id shown in the `AGENT` column of
+`gaia agent status`. An unknown id fails with the list of ids that *are*
+registered, rather than a bare traceback:
+
+```bash
+$ gaia agent run no-such-agent
+Error: Unknown agent ID: 'no-such-agent'. Registered agents: builder, my-agent
+```
+
+`run` accepts `--model`, `--stream`, `--max-steps`, and `--allowed-paths`,
+mirroring `gaia browse`/`gaia analyze`. See the
+[CLI reference](/reference/cli#agent-command) for the full flag list.
 
 ---
 

@@ -829,7 +829,7 @@ async def async_main(action, **kwargs):
         # standalone gaia-agent-browser / gaia-agent-analyst wheels (#1102);
         # resolve them through the registry so the framework doesn't hard-import
         # the external packages.
-        from gaia.agents.registry import AgentRegistry
+        from gaia import cli_agent
 
         agent_id = "web" if action == "browse" else "data"
         wheel = "gaia-agent-browser" if action == "browse" else "gaia-agent-analyst"
@@ -850,17 +850,19 @@ async def async_main(action, **kwargs):
             debug=kwargs.get("debug", False),
             allowed_paths=kwargs.get("allowed_paths", None),
         )
-        registry = AgentRegistry()
-        registry.discover()
-        if registry.get(agent_id) is None:
-            raise RuntimeError(
-                agent_not_installed_message(
-                    f"The '{action}' agent is not installed",
-                    wheel,
-                    next_step=f"Then re-run `gaia {action}`.",
-                )
-            )
-        agent = registry.create_agent(agent_id, **agent_config_kwargs)
+        # Shared discover/get/create_agent path with `gaia agent run` (#2242) —
+        # one mechanism, not a parallel copy per caller. The not-found hint is
+        # passed lazily (a callable) so it's only built — and only reads
+        # installed-package metadata — on the actual not-found path.
+        agent = cli_agent.resolve_and_create_agent(
+            agent_id,
+            agent_config_kwargs,
+            not_found_message=lambda: agent_not_installed_message(
+                f"The '{action}' agent is not installed",
+                wheel,
+                next_step=f"Then re-run `gaia {action}`.",
+            ),
+        )
 
         try:
             if kwargs.get("list_tools", False):
@@ -6889,7 +6891,7 @@ def handle_agent_command(args):
         print("❌ Error: No agent action specified")
         print(
             "Available actions: init, version, test, configure, health, status, "
-            "export, import"
+            "run, export, import"
         )
         print("Run 'gaia agent --help' for more information")
         sys.exit(1)

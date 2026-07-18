@@ -32,7 +32,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia.logger import get_logger
 from gaia.version import __version__ as GAIA_VERSION
@@ -247,6 +247,49 @@ def register_subparsers(agent_subparsers) -> None:
         help="Agent id (omit to show every discovered agent)",
     )
 
+    run_p = agent_subparsers.add_parser(
+        "run",
+        help="Run a registered agent (custom or built-in) by id",
+    )
+    run_p.add_argument(
+        "id", help="Agent id to run, e.g. 'jarvis' (custom) or 'chat' (built-in)"
+    )
+    run_p.add_argument(
+        "--query",
+        "-q",
+        type=str,
+        default=None,
+        help="Single query to execute (defaults to interactive mode if not provided)",
+    )
+    run_p.add_argument("--debug", action="store_true", help="Enable debug output")
+    run_p.add_argument(
+        "--model",
+        default=None,
+        help="Model ID to use (default: auto-selected by the agent)",
+    )
+    run_p.add_argument(
+        "--stream",
+        action="store_true",
+        help="Enable real-time streaming of LLM responses",
+    )
+    run_p.add_argument(
+        "--max-steps",
+        type=int,
+        default=None,
+        help="Maximum conversation steps (default: the agent's own default)",
+    )
+    run_p.add_argument(
+        "--allowed-paths",
+        nargs="+",
+        default=None,
+        help="Allowed directory paths for file operations",
+    )
+    run_p.add_argument(
+        "--list-tools",
+        action="store_true",
+        help="List the agent's registered tools and exit",
+    )
+
     login_p = agent_subparsers.add_parser(
         "login",
         help="Store publisher tokens (R2 Hub and/or PyPI) in the OS keyring",
@@ -291,6 +334,7 @@ def handle(args) -> bool:
         "configure": cmd_configure,
         "health": cmd_health,
         "status": cmd_status,
+        "run": cmd_run,
     }
     fn = dispatch.get(action)
     if fn is None:
@@ -1031,6 +1075,100 @@ def _build_registry():
     registry = AgentRegistry()
     registry.discover()
     return registry
+
+
+def resolve_and_create_agent(
+    agent_id: str,
+    agent_config_kwargs: Dict[str, Any],
+    *,
+    not_found_message: Optional[Callable[[], str]] = None,
+) -> Any:
+    """Discover, resolve, and construct *agent_id* through the registry.
+
+    The single discover → get → create_agent path shared by ``gaia browse``/
+    ``gaia analyze`` (``gaia.cli``) and ``gaia agent run`` (this module) — one
+    mechanism, not a parallel copy per caller (#2242).
+
+    Args:
+        agent_id: Registry id to resolve — a built-in id (e.g. ``web``), a
+            hub-installed id, or a custom agent's ``AGENT_ID``.
+        agent_config_kwargs: Forwarded to the resolved registration's factory.
+        not_found_message: Lazily-evaluated message to raise when *agent_id*
+            isn't registered. Evaluated only on the not-found path so a
+            caller-supplied hint (e.g. one that reads installed package
+            metadata to build a pip-install pointer) never runs on the happy
+            path. When omitted, a generic message lists every registered id.
+
+    Raises:
+        RuntimeError: *agent_id* is not registered (either the caller's hint
+            or the generic "unknown id" message), or it is registered but its
+            factory raised while constructing it.
+    """
+    registry = _build_registry()
+
+    if registry.get(agent_id) is None:
+        if not_found_message is not None:
+            raise RuntimeError(not_found_message())
+        available = sorted(reg.id for reg in registry.list())
+        raise RuntimeError(
+            f"Unknown agent ID: '{agent_id}'. Registered agents: "
+            f"{', '.join(available) if available else '(none discovered)'}"
+        )
+
+    try:
+        return registry.create_agent(agent_id, **agent_config_kwargs)
+    except Exception as exc:  # pylint: disable=broad-except
+        raise RuntimeError(
+            f"Agent '{agent_id}' is registered but failed to start: {exc}"
+        ) from exc
+
+
+def cmd_run(args) -> None:
+    """Run any registered agent (custom or built-in) by id.
+
+    Shares the discover/get/construct path used by ``gaia browse``/``gaia
+    analyze`` via :func:`resolve_and_create_agent`, so a user's own
+    ``~/.gaia/agents/<id>/agent.py`` runs through the exact same mechanism as
+    a built-in — there is no second, custom-only construction path (#2242).
+    """
+    agent_config_kwargs = dict(
+        model_id=args.model,
+        # None → global default (default_max_steps / env) in Agent.
+        max_steps=args.max_steps,
+        streaming=args.stream,
+        show_stats=False,
+        silent_mode=not (args.debug or args.list_tools),
+        debug=args.debug,
+        allowed_paths=args.allowed_paths,
+    )
+
+    try:
+        agent = resolve_and_create_agent(args.id, agent_config_kwargs)
+    except RuntimeError as exc:
+        raise AgentWorkflowError(str(exc)) from exc
+
+    try:
+        if args.list_tools:
+            agent.list_tools(verbose=True)
+            return
+
+        if args.query:
+            result = agent.process_query(args.query, trace=False)
+            if result.get("status") != "success":
+                sys.exit(1)
+            return
+
+        print(f"Starting {agent.__class__.__name__}. Type /quit to exit.")
+        while True:
+            user_input = input("\nYou: ").strip()
+            if not user_input:
+                continue
+            if user_input.lower() in {"/quit", "/exit"}:
+                return
+            agent.process_query(user_input, trace=False)
+    finally:
+        if hasattr(agent, "close"):
+            agent.close()
 
 
 # ---------------------------------------------------------------------------

@@ -488,6 +488,49 @@ gaia agent status            # every discovered agent
 ```
 </CodeGroup>
 
+#### Running: `run`
+
+Launch any registered agent — a custom agent under `~/.gaia/agents/<id>/` or a
+built-in — by id. Shares the same discover/construct path as `gaia browse`/
+`gaia analyze`, so any id `gaia agent status` lists can be run.
+
+```bash
+gaia agent run <id> [--query QUERY] [--debug] [--model NAME] [--stream] \
+    [--max-steps N] [--allowed-paths PATH ...] [--list-tools]
+```
+
+An unknown id fails with the ids that *are* registered, instead of a
+traceback. An agent that fails to construct reports the id and the
+underlying cause.
+
+| Option | Description |
+|--------|-------------|
+| `id` | Agent id to run (positional, required) |
+| `--query`, `-q` | Single query to run non-interactively (default: interactive mode) |
+| `--debug` | Enable debug output |
+| `--model` | Model ID to use (default: auto-selected by the agent) |
+| `--stream` | Enable real-time streaming of LLM responses |
+| `--max-steps` | Maximum conversation steps (default: the agent's own default) |
+| `--allowed-paths` | Allowed directory paths for file operations |
+| `--list-tools` | List the agent's registered tools and exit |
+
+**Examples:**
+
+<CodeGroup>
+```bash Run interactively
+gaia agent run my-agent
+```
+
+```bash Single query
+gaia agent run my-agent -q "What can you help me with?"
+```
+
+```bash Unknown id
+gaia agent run no-such-agent
+# Error: Unknown agent ID: 'no-such-agent'. Registered agents: builder, my-agent
+```
+</CodeGroup>
+
 #### Distribution: `pack`, `publish`, `login`
 
 Build a distributable wheel from a Python agent package, then dual-publish it to the Agent Hub (R2, the source for the Hub UI) **and** PyPI (the source for `pip install`).
