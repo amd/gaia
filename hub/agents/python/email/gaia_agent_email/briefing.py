@@ -291,6 +291,13 @@ class BriefingScheduler:
     A failed run (mailbox disconnected, provider outage) is logged with its
     actionable message and the schedule continues; it is never retried
     silently or downgraded to a partial briefing.
+
+    Daemon supervision (V2-15, #2156): when the GAIA daemon spawns this sidecar
+    it drives the daily brief from its single reconciled clock, so
+    ``server.py`` does NOT start this in-process timer (see
+    :func:`gaia_agent_email.supervision.is_daemon_supervised`). Standalone /
+    bare-integrator runs are unaffected and keep this timer live — the seam the
+    #1371 dispatcher note below anticipated is now realized by the daemon.
     """
 
     def __init__(
