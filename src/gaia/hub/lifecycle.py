@@ -66,8 +66,16 @@ class LifecycleError(RuntimeError):
 
 
 def config_path(agent_id: str, install_root: Optional[Path] = None) -> Path:
-    """Path of the per-agent ``config.json`` (``~/.gaia/agents/<id>/config.json``)."""
-    return installer_mod.agent_install_dir(agent_id, install_root) / CONFIG_NAME
+    """Path of the per-agent ``config.json`` (``~/.gaia/agents/<id>/config.json``).
+
+    Raises:
+        LifecycleError: If *agent_id* is not a safe single path component
+            (path-traversal shaped ids are rejected by the installer).
+    """
+    try:
+        return installer_mod.agent_install_dir(agent_id, install_root) / CONFIG_NAME
+    except installer_mod.InstallError as exc:
+        raise LifecycleError(str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------

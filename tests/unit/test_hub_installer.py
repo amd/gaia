@@ -1163,3 +1163,128 @@ def test_install_unsupported_platform_key_hits_loud_error_not_crash(tmp_path):
             install_root=tmp_path,
             platform_key="freebsd-riscv64",
         )
+
+
+# ---------------------------------------------------------------------------
+# Agent-id path safety (py/path-injection)
+# ---------------------------------------------------------------------------
+
+
+class TestAgentIdPathSafety:
+    """Traversal-shaped agent ids must fail loudly before any path is built.
+
+    Agent ids reach the installer from untrusted surfaces (the Agent UI's
+    ``POST /api/agents/install`` body, the downloaded hub catalog) and are
+    joined onto ``~/.gaia/agents/`` for rmtree/move/write operations.
+    """
+
+    @pytest.mark.parametrize(
+        "bad_id",
+        [
+            "..",
+            "../evil",
+            "..\\evil",
+            "a/b",
+            "a\\b",
+            "/etc/passwd",
+            "C:\\Windows\\evil",
+            ".hidden",
+            "",
+            "a" * 200,
+            "id with spaces",
+            "id\x00null",
+            None,
+            123,
+        ],
+    )
+    def test_traversal_ids_rejected(self, tmp_path, bad_id):
+        with pytest.raises(InstallError, match="Invalid agent id"):
+            installer.agent_install_dir(bad_id, tmp_path)
+
+    def test_valid_ids_accepted(self, tmp_path):
+        for good in ("email", "my-agent", "Agent_1.2", "a", "chat"):
+            assert installer.agent_install_dir(good, tmp_path) == tmp_path / good
+
+    def test_uninstall_rejects_traversal_id_without_touching_target(self, tmp_path):
+        victim = tmp_path / "victim"
+        victim.mkdir()
+        (victim / "data.txt").write_text("keep me")
+        with pytest.raises(InstallError, match="Invalid agent id"):
+            uninstall("../victim", install_root=tmp_path / "agents")
+        assert (victim / "data.txt").read_text() == "keep me"
+
+    def test_backup_dir_rejects_traversal_id(self, tmp_path):
+        with pytest.raises(InstallError, match="Invalid agent id"):
+            installer._backup_dir("../../evil", tmp_path)
+
+    def test_lifecycle_configure_rejects_traversal_id(self, tmp_path):
+        from gaia.hub import lifecycle
+
+        with pytest.raises(lifecycle.LifecycleError, match="Invalid agent id"):
+            lifecycle.configure("../evil", {"model": "x"}, install_root=tmp_path)
+        assert not (tmp_path.parent / "evil").exists()
+
+    def test_sentinel_with_unsafe_executable_is_ignored(self, tmp_path, caplog):
+        agent_dir = tmp_path / "demo"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / installer.SENTINEL_NAME).write_text(
+            json.dumps(
+                {
+                    "id": "demo",
+                    "version": "1.0.0",
+                    "language": "cpp",
+                    "installed_at": "now",
+                    "artifact_kind": "binary",
+                    "executable": "../../../usr/bin/env",
+                }
+            )
+        )
+        with caplog.at_level("WARNING"):
+            assert read_sentinel("demo", tmp_path) is None
+        assert "unsafe executable" in caplog.text
+
+    def test_sentinel_with_non_string_executable_is_ignored(self, tmp_path, caplog):
+        """A corrupt/malicious sentinel with a non-string executable (e.g. a
+        JSON list) must degrade to "not installed", not crash Path(...)."""
+        agent_dir = tmp_path / "demo"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / installer.SENTINEL_NAME).write_text(
+            json.dumps(
+                {
+                    "id": "demo",
+                    "version": "1.0.0",
+                    "language": "cpp",
+                    "installed_at": "now",
+                    "artifact_kind": "binary",
+                    "executable": ["not", "a", "string"],
+                }
+            )
+        )
+        with caplog.at_level("WARNING"):
+            assert read_sentinel("demo", tmp_path) is None
+        assert "unsafe executable" in caplog.text
+
+    def test_sentinel_with_bare_executable_is_kept(self, tmp_path):
+        agent_dir = tmp_path / "demo"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / installer.SENTINEL_NAME).write_text(
+            json.dumps(
+                {
+                    "id": "demo",
+                    "version": "1.0.0",
+                    "language": "cpp",
+                    "installed_at": "now",
+                    "artifact_kind": "binary",
+                    "executable": "gaia-email-agent.exe",
+                }
+            )
+        )
+        sentinel = read_sentinel("demo", tmp_path)
+        assert sentinel is not None
+        assert sentinel.executable == "gaia-email-agent.exe"
+
+    def test_list_installed_skips_non_agent_directories(self, tmp_path):
+        junk = tmp_path / "weird name!"
+        junk.mkdir()
+        (junk / installer.SENTINEL_NAME).write_text("{}")
+        assert list_installed(tmp_path) == {}
