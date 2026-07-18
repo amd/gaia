@@ -111,6 +111,22 @@ jobs:
           echo "docs=$docs" >> "$GITHUB_OUTPUT"
           echo "Resolved docs: $docs"
 
+          {
+            echo "## 📋 Doc walkthrough — scope for this run"
+            echo ""
+            if [ -n "$DOC_FILTER" ]; then
+              echo "Filter: \`$DOC_FILTER\`"
+              echo ""
+            fi
+            count=$(echo "$docs" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))")
+            echo "**$count doc(s) in scope:**"
+            echo "$docs" | python3 -c "
+          import json, sys
+          for d in json.load(sys.stdin):
+              print(f\"- \`{d['path']}\`\")
+          "
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # One matrix entry per doc, each acting as a real user/developer walking
   # that guide on real hardware. Serialized (max-parallel: 1) -- same
   # one-model-slot-at-a-time discipline the eval workflows already use
@@ -151,6 +167,11 @@ jobs:
           New-Item -ItemType Directory -Path $runDir | Out-Null
           echo "RUN_DIR=$runDir" >> $env:GITHUB_ENV
           echo "GAIA_HOME=$runDir\gaia_home" >> $env:GITHUB_ENV
+          Write-Host "RUN_DIR=$runDir"
+          Write-Host "GAIA_HOME=$runDir\gaia_home"
+          "### 🚶 ${{ matrix.doc.path }}" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          "" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          "- **Start:** $(Get-Date -Format o), clean run dir: ``$runDir``" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
 
       - name: Fresh venv, real-user install (no -e install, no hub packages)
         shell: powershell
@@ -162,16 +183,23 @@ jobs:
           # hub/agents/python/* package alongside it. This is the property
           # that would have caught #2260 -- do not "fix" a resulting
           # ImportError by installing a hub package here; that IS the bug.
+          Write-Host "Creating venv at $env:RUN_DIR\venv ..."
           python -m venv "$env:RUN_DIR\venv"
           & "$env:RUN_DIR\venv\Scripts\python.exe" -m pip install --upgrade pip build
+          Write-Host "Building wheel from the checkout ..."
           & "$env:RUN_DIR\venv\Scripts\python.exe" -m build --wheel --outdir "$env:RUN_DIR\dist" .
           $wheel = Get-ChildItem "$env:RUN_DIR\dist\amd_gaia-*.whl" | Select-Object -First 1
           if (-not $wheel) {
             Write-Host "::error::No wheel built -- 'python -m build' did not produce amd_gaia-*.whl"
+            "- **Environment:** ❌ wheel build failed" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
             exit 1
           }
+          Write-Host "Built: $($wheel.Name)"
+          Write-Host "Installing $($wheel.Name) into the fresh venv (no -e, no hub packages) ..."
           & "$env:RUN_DIR\venv\Scripts\pip.exe" install $wheel.FullName
-          & "$env:RUN_DIR\venv\Scripts\gaia.exe" --version
+          $gaiaVersion = & "$env:RUN_DIR\venv\Scripts\gaia.exe" --version
+          Write-Host "Installed: $gaiaVersion"
+          "- **Environment:** ✅ $($wheel.Name) installed, ``gaia --version`` -> $gaiaVersion" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
 
       - name: Start an isolated Lemonade instance on the dedicated port
         shell: powershell
@@ -189,10 +217,12 @@ jobs:
           } catch {}
           if ($alreadyHealthy) {
             Write-Host "Dedicated-port Lemonade already healthy (leftover from a prior run) -- reusing it."
+            "- **Lemonade:** ✅ reused an already-healthy instance on port $env:WALKTHROUGH_LEMONADE_PORT" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           } else {
             Write-Host "Dedicated port not yet serving -- starting a fresh instance."
             $proc = Start-Process -FilePath "LemonadeServer.exe" -ArgumentList "serve --port $env:WALKTHROUGH_LEMONADE_PORT" -PassThru
             $proc.Id | Out-File "$env:RUN_DIR\lemonade.pid"
+            Write-Host "Started LemonadeServer.exe pid=$($proc.Id) on port $env:WALKTHROUGH_LEMONADE_PORT, polling for health ..."
             $deadline = (Get-Date).AddSeconds(60)
             $healthy = $false
             do {
@@ -204,8 +234,11 @@ jobs:
             } while ((Get-Date) -lt $deadline)
             if (-not $healthy) {
               Write-Host "::error::Dedicated-port Lemonade did not become healthy within 60s"
+              "- **Lemonade:** ❌ did not become healthy within 60s (pid=$($proc.Id))" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
               exit 1
             }
+            Write-Host "Lemonade healthy on port $env:WALKTHROUGH_LEMONADE_PORT after $((Get-Date) - ($deadline.AddSeconds(-60))) "
+            "- **Lemonade:** ✅ started fresh (pid=$($proc.Id)), healthy on port $env:WALKTHROUGH_LEMONADE_PORT" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           }
 
       - name: "Executor (Sonnet): walk ${{ matrix.doc.path }}"
@@ -284,6 +317,49 @@ jobs:
             --model ${{ env.WALKTHROUGH_EXECUTOR_MODEL }}
             --allowedTools Read,Grep,Glob,Bash
 
+      # continue-on-error above means a crashed executor still lets cleanup
+      # run -- which is correct -- but it also means the job can look green
+      # in the Actions UI while the executor actually failed. Surface that
+      # explicitly: check the action's own execution_file (same technique
+      # claude-weekly-audit.yml's synthesis job uses), and independently
+      # confirm the transcript the judge depends on actually exists.
+      - name: Report executor status
+        if: always()
+        shell: powershell
+        env:
+          EXEC_FILE: ${{ steps.executor.outputs.execution_file }}
+        run: |
+          # PowerShell-native JSON parsing (ConvertFrom-Json), not jq -- jq's
+          # presence on this self-hosted Windows runner is not a confirmed
+          # dependency (the ubuntu-hosted synthesis job below uses jq safely,
+          # since GH-hosted runners guarantee it; this job cannot assume that).
+          # execution_file is JSONL (one object per line); walk every line and
+          # keep the LAST one that has an is_error key, matching the bash
+          # `jq -s '[.. | objects | select(has("is_error")) | .is_error] | .[-1]'`
+          # claude-weekly-audit.yml uses on ubuntu.
+          $ok = $false
+          $isErr = $null
+          if ($env:EXEC_FILE -and (Test-Path $env:EXEC_FILE)) {
+            foreach ($line in Get-Content $env:EXEC_FILE) {
+              try {
+                $obj = $line | ConvertFrom-Json -ErrorAction Stop
+                if ($obj.PSObject.Properties.Name -contains "is_error") { $isErr = $obj.is_error }
+              } catch {}
+            }
+            if ($isErr -eq $false) { $ok = $true }
+          }
+          $transcriptExists = Test-Path "$env:RUN_DIR\transcript.md"
+          if ($ok -and $transcriptExists) {
+            Write-Host "✅ Executor completed and wrote a transcript."
+            "- **Executor (Sonnet):** ✅ completed, transcript written" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          } elseif ($ok -and -not $transcriptExists) {
+            Write-Host "::warning::Executor step reported success but no transcript.md was written -- the judge will file a crash finding for this."
+            "- **Executor (Sonnet):** ⚠️ reported success but wrote no transcript" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          } else {
+            Write-Host "::warning title=Executor did not complete cleanly (${{ matrix.doc.path }})::log: $env:EXEC_FILE"
+            "- **Executor (Sonnet):** ❌ did not complete cleanly" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          }
+
       - name: "Judge (Opus): verify ${{ matrix.doc.path }} against its transcript"
         id: judge
         if: always()
@@ -349,6 +425,47 @@ jobs:
             --model ${{ env.WALKTHROUGH_JUDGE_MODEL }}
             --allowedTools Read,Grep,Glob,Bash
 
+      # Same rationale as "Report executor status": continue-on-error hides a
+      # judge crash from the job's pass/fail color. Also this is the one place
+      # a human scanning the run can see, per doc, how many findings came out
+      # and at what severity -- without downloading the artifact.
+      - name: Report judge status + findings summary
+        if: always()
+        shell: powershell
+        env:
+          EXEC_FILE: ${{ steps.judge.outputs.execution_file }}
+        run: |
+          # PowerShell-native JSON parsing (ConvertFrom-Json), not jq -- see
+          # the "Report executor status" step above for why.
+          $ok = $false
+          $isErr = $null
+          if ($env:EXEC_FILE -and (Test-Path $env:EXEC_FILE)) {
+            foreach ($line in Get-Content $env:EXEC_FILE) {
+              try {
+                $obj = $line | ConvertFrom-Json -ErrorAction Stop
+                if ($obj.PSObject.Properties.Name -contains "is_error") { $isErr = $obj.is_error }
+              } catch {}
+            }
+            if ($isErr -eq $false) { $ok = $true }
+          }
+          $findingsFile = "findings-walkthrough-${{ matrix.doc.slug }}.json"
+          if ($ok) {
+            Write-Host "✅ Judge completed."
+          } else {
+            Write-Host "::warning title=Judge did not complete cleanly (${{ matrix.doc.path }})::log: $env:EXEC_FILE"
+          }
+          if (Test-Path $findingsFile) {
+            $findingsObj = Get-Content $findingsFile -Raw | ConvertFrom-Json
+            $total = @($findingsObj.findings).Count
+            $bySeverity = @($findingsObj.findings) | Group-Object severity | ForEach-Object { "$($_.Name)=$($_.Count)" }
+            $counts = if ($bySeverity) { $bySeverity -join ", " } else { "none" }
+            Write-Host "Findings for ${{ matrix.doc.path }}: $total total -- $counts"
+            "- **Judge (Opus):** $(if ($ok) { '✅' } else { '❌' }) -- **$total finding(s):** $counts" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          } else {
+            Write-Host "::warning::No findings file at $findingsFile -- judge did not write output (see executor/judge status above)"
+            "- **Judge (Opus):** $(if ($ok) { '✅ ran' } else { '❌' }) but wrote no findings file" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          }
+
       - name: Verify clean end state
         if: always()
         shell: powershell
@@ -360,8 +477,10 @@ jobs:
           Remove-Item -Recurse -Force $env:RUN_DIR -ErrorAction SilentlyContinue
           if (Test-Path $env:RUN_DIR) {
             Write-Host "::warning::Run dir did not clean up: $env:RUN_DIR"
+            "- **Cleanup:** ⚠️ run dir did not clean up" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           } else {
             Write-Host "Clean: run dir removed."
+            "- **Cleanup:** ✅ run dir removed" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           }
           # Confirm we never touched the SHARED 13305 instance other workflows
           # use -- this is a read-only health probe, never a cleanup action.
@@ -371,6 +490,7 @@ jobs:
           } catch {
             Write-Host "Shared Lemonade (13305) not reachable right now -- not this workflow's concern; confirming only that we did not kill it if it WAS up."
           }
+          "- **End:** $(Get-Date -Format o)" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
 
       - name: Upload findings
         if: always()
@@ -399,6 +519,39 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           path: walkthrough-findings
+
+      # Raw, deterministic tally -- independent of whether the Claude
+      # synthesis step below succeeds. If that step crashes, this is still on
+      # the record: how many matrix jobs actually reported in, and how many
+      # findings they carried in total, per doc. Grep-able in the job log and
+      # visible in the run's step summary either way.
+      - name: Raw findings tally (pre-synthesis)
+        run: |
+          set -euo pipefail
+          echo "## 📊 Doc walkthrough — raw tally (pre-dedup)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          total_files=0
+          total_findings=0
+          {
+            echo "| Doc | Findings |"
+            echo "|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for f in walkthrough-findings/findings-walkthrough-*/findings-walkthrough-*.json; do
+            [ -f "$f" ] || continue
+            total_files=$((total_files + 1))
+            count=$(jq '.findings | length' "$f" 2>/dev/null || echo "unreadable")
+            doc_path=$(jq -r '.findings[0].path // "unknown"' "$f" 2>/dev/null || echo "unreadable")
+            echo "$f -> path=$doc_path count=$count"
+            if [ "$count" != "unreadable" ]; then
+              total_findings=$((total_findings + count))
+              echo "| \`$doc_path\` | $count |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "| \`$f\` | ⚠️ unreadable JSON |" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**$total_files findings file(s) reported in, $total_findings raw finding(s) before dedup/verification.**" >> "$GITHUB_STEP_SUMMARY"
+          echo "Reported in: $total_files files, $total_findings raw findings before dedup"
 
       - name: Ensure labels exist
         env:
