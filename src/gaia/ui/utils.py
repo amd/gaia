@@ -453,7 +453,8 @@ def safe_open_document(
 
     Validates that the path:
     - Is not a symlink (400 if symlink — checked before resolving)
-    - Is within the user home directory (403 if not)
+    - Is within the user home directory, both lexically and after resolving
+      every symlinked component (403 if not)
     - Has an allowed extension (400 if not)
     - Exists and is a regular file (404 / 400 if not)
 
@@ -476,7 +477,19 @@ def safe_open_document(
             detail=f"Access denied: path must be within home directory ({home})",
         )
 
-    # 2. Reject symlinks before resolving — lstat doesn't follow symlinks
+    # 2. Physical containment: the lexical check above can be defeated by an
+    # intermediate symlinked directory inside home that points outside
+    # (O_NOFOLLOW below only guards the FINAL path component). realpath
+    # resolves every component; require the result to stay under home.
+    real = os.path.realpath(str(raw))
+    home_prefix = str(home).rstrip(os.sep) + os.sep
+    if not real.startswith(home_prefix):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied: path must be within home directory ({home})",
+        )
+
+    # 3. Reject symlinks before resolving — lstat doesn't follow symlinks
     try:
         lst = os.lstat(str(raw))
         if stat.S_ISLNK(lst.st_mode):
@@ -489,17 +502,17 @@ def safe_open_document(
     except OSError as exc:
         raise HTTPException(status_code=400, detail=f"Cannot stat file: {exc}")
 
-    # 3. Now resolve (safe: we already confirmed it's not a symlink)
-    resolved = raw.resolve()
+    # 4. Open exactly the path we containment-checked (fully resolved)
+    resolved = Path(real)
 
-    # 4. Extension must be allowed
+    # 5. Extension must be allowed
     if resolved.suffix.lower() not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
             detail=f"File type not allowed: {resolved.suffix}. Allowed: {sorted(ALLOWED_EXTENSIONS)}",
         )
 
-    # 5. Open safely — use O_NOFOLLOW on POSIX to reject symlinks at kernel level
+    # 6. Open safely — use O_NOFOLLOW on POSIX to reject symlinks at kernel level
     flags = os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW  # POSIX only; raises OSError(ELOOP) on symlinks
@@ -522,7 +535,7 @@ def safe_open_document(
 
     try:
         st = os.fstat(fd)
-        # 6. Must be a regular file (not dir, device, etc.)
+        # 7. Must be a regular file (not dir, device, etc.)
         if not stat.S_ISREG(st.st_mode):
             raise HTTPException(
                 status_code=400,

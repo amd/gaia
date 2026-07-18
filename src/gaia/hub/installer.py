@@ -29,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -122,17 +123,48 @@ class NotInstalledError(InstallError):
 # Paths
 # ---------------------------------------------------------------------------
 
+# Superset of the hub manifest id slug (manifest._ID_RE) that also tolerates
+# builtin/custom ids with uppercase, '.', or '_'. The security property is
+# that a valid id is exactly ONE path component: no '/', '\', ':', null, no
+# leading '.', so ``install_root / agent_id`` can never escape install_root.
+_AGENT_ID_SAFE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def _require_safe_agent_id(agent_id: str) -> str:
+    """Return *agent_id* if it is safe to use as a directory name.
+
+    Agent ids reach this module from untrusted surfaces (the Agent UI's
+    ``POST /api/agents/install`` body, the downloaded hub catalog), and are
+    joined onto ``~/.gaia/agents/`` for destructive operations (rmtree,
+    move, write). Reject anything that is not a single sane path component.
+
+    Raises:
+        InstallError: If *agent_id* could traverse outside the install root.
+    """
+    if not isinstance(agent_id, str) or not _AGENT_ID_SAFE_RE.match(agent_id):
+        raise InstallError(
+            f"Invalid agent id {agent_id!r}: agent ids must start with a letter "
+            "or digit and contain only letters, digits, '.', '_' or '-' "
+            "(max 128 chars). Check the id against the hub catalog "
+            "('gaia agent list') or the package's gaia-agent.yaml."
+        )
+    return agent_id
+
 
 def default_install_root() -> Path:
     return Path.home() / ".gaia" / "agents"
 
 
 def agent_install_dir(agent_id: str, install_root: Optional[Path] = None) -> Path:
-    return (install_root or default_install_root()) / agent_id
+    return (install_root or default_install_root()) / _require_safe_agent_id(agent_id)
 
 
 def _backup_dir(agent_id: str, install_root: Optional[Path] = None) -> Path:
-    return (install_root or default_install_root()) / BACKUP_DIRNAME / agent_id
+    return (
+        (install_root or default_install_root())
+        / BACKUP_DIRNAME
+        / _require_safe_agent_id(agent_id)
+    )
 
 
 def _sentinel_path(agent_id: str, install_root: Optional[Path] = None) -> Path:
@@ -184,6 +216,20 @@ def read_sentinel(
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning("installer: unreadable sentinel %s: %s", path, exc)
         return None
+    executable = data.get("executable", "")
+    # The sentinel is written from remote publish metadata; an executable
+    # with path separators could point health checks / the daemon outside
+    # the install dir. Treat it like any other corrupt sentinel.
+    if executable and (
+        "/" in executable or "\\" in executable or Path(executable).name != executable
+    ):
+        logger.warning(
+            "installer: sentinel %s has unsafe executable %r (must be a bare "
+            "filename); treating agent as not installed — re-install it",
+            path,
+            executable,
+        )
+        return None
     return InstalledAgent(
         id=data.get("id", agent_id),
         version=data.get("version", ""),
@@ -206,6 +252,11 @@ def list_installed(install_root: Optional[Path] = None) -> Dict[str, InstalledAg
         return result
     for child in sorted(root.iterdir()):
         if not child.is_dir() or child.name == BACKUP_DIRNAME:
+            continue
+        if not _AGENT_ID_SAFE_RE.match(child.name):
+            # Not a directory this installer could have created — skip it
+            # rather than crash the listing on stray junk in the root.
+            logger.warning("installer: ignoring non-agent directory %s", child)
             continue
         if not (child / SENTINEL_NAME).exists():
             continue

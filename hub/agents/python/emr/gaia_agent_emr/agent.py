@@ -264,7 +264,7 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
                 size_str = "?"
 
             # Compute hash for status check
-            file_hash = compute_file_hash(f)
+            file_hash = compute_file_hash(f, allowed_dir=str(self._watch_dir))
             hash_display = file_hash[:8] + "..." if file_hash else "?"
 
             if file_hash and file_hash in processed_hashes:
@@ -336,7 +336,7 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
         if new_count > 0:
             self.console.print_info(f"Processing {new_count} new file(s)...")
             for f in sorted(existing_files):
-                file_hash = compute_file_hash(f)
+                file_hash = compute_file_hash(f, allowed_dir=str(self._watch_dir))
                 if file_hash and file_hash not in processed_hashes:
                     self._on_file_created(f)
 
@@ -461,7 +461,7 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
 
             # Step 2: Check for duplicates
             self._emit_progress(filename, 2, total_steps, "Checking for duplicates")
-            file_hash = compute_file_hash(path)
+            file_hash = compute_file_hash(path, allowed_dir=str(self._watch_dir))
             if file_hash:
                 existing = self.query(
                     "SELECT id, first_name, last_name FROM patients WHERE file_hash = ?",
