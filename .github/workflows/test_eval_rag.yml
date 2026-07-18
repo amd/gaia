@@ -12,6 +12,11 @@ name: Eval RAG Quality
 on:
   workflow_dispatch:
 
+# Both jobs only check out code and run the eval — no writes to the repo,
+# issues, or checks are needed.
+permissions:
+  contents: read
+
 concurrency:
   group: lemonade-eval
   cancel-in-progress: false

@@ -1513,8 +1513,13 @@ def create_app(
                     )
                     steps[-1]["status"] = "complete"
                 except Exception as e:
+                    # Full detail stays server-side; steps are returned to the
+                    # client (CodeQL py/stack-trace-exposure).
+                    logger.error(
+                        f"Failed to load {model_type} model {model_name}: {e}"
+                    )
                     steps[-1]["status"] = "warning"
-                    steps[-1]["error"] = str(e)[:50]
+                    steps[-1]["error"] = "Model load failed — check server logs."
 
                 step_num += 1
 
