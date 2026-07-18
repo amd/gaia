@@ -1,0 +1,520 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Execution-based sibling to claude-weekly-audit.yml (see docs/plans/
+# weekly-doc-walkthrough-audit.md and docs/plans/weekly-claude-audit.md's
+# "Non-goals"). That workflow is deliberately static (read-only, never installs
+# or runs repo code) -- this one exists because that non-goal has a real blind
+# spot: #2260 (gaia chat ImportErrors on a plain PyPI install) and #2261 (seven
+# hub agents silently fall back to an uninstalled 35B model) are both only
+# observable by actually running GAIA from a real user's initial state, never
+# by reading source. This workflow acts as that user: one matrix job per doc
+# guide, each walking the guide's commands for real on the self-hosted
+# Windows/STX runner, in a fresh venv + isolated config + a dedicated-port
+# Lemonade instance -- never the runner's shared, CI-warmed install (see
+# "Execution environment" in the design doc for why that distinction matters).
+#
+# STANDALONE from claude-weekly-audit.yml on purpose: different runner
+# (self-hosted Windows vs. ubuntu-latest), different cost/runtime profile
+# (hours, not minutes -- deliberate; see design doc "Cadence"), different
+# failure modes (a live command can hang). Isolating them means a stuck
+# walkthrough never delays the fast static audit's triage issue. Shares
+# vocabulary with it (severity scale, dedup-key pattern, weekly-audit label,
+# bug-label auto-fix promotion) but files its OWN parent issue.
+#
+# MODEL SPLIT: Sonnet executes (cheap, high tool-call volume, grinding
+# sequential work); Opus (WALKTHROUGH_JUDGE_MODEL) judges (low volume -- one
+# pass per guide -- and never rubber-stamps the executor's own summary, same
+# principle the gaia-testing skill states explicitly). See design doc "Job
+# structure".
+#
+# PORT ISOLATION: runs its own Lemonade Server on a dedicated, non-13305 port
+# so it never collides with the six other workflows issue #2122 documents
+# fighting over the shared runner's Lemonade instance -- sidesteps that
+# contention by construction, not by coordination. NEEDS LIVE-RUNNER
+# VERIFICATION (flagged in the design doc): whether a second Lemonade Server
+# instance can run concurrently on this box and what it does for model-cache
+# visibility. Model-*resolution* checks (the #2261 shape) do not depend on the
+# answer -- they use a targeted Python snippet against AgentRegistry instead
+# of a live model catalog; see the executor prompt below.
+#
+# NOT VALIDATED END-TO-END AT AUTHORING TIME: this workflow was written and
+# reviewed without access to the self-hosted runner. Run it once via
+# workflow_dispatch with doc_filter scoped to a single guide (e.g.
+# "docs/quickstart.mdx") before trusting the full weekly schedule. In
+# particular: the executor/judge prompts do not assume a specific shell
+# (PowerShell vs. bash/git-bash) for claude-code-action's Bash tool on this
+# runner -- they instruct Claude to detect it at runtime, since which one the
+# action actually uses here was not confirmed at authoring time. Confirm this
+# on the first live run and hardcode the syntax if it's always the same.
+
+name: Claude Weekly Doc Walkthrough
+
+on:
+  schedule:
+    # 12:00 UTC every Monday -- offset 6h from claude-weekly-audit.yml's 06:00
+    # UTC run so the two don't compete for runner time or review attention.
+    - cron: "0 12 * * 1"
+  workflow_dispatch:
+    inputs:
+      doc_filter:
+        description: "Glob to scope this run to one or a few docs (e.g. docs/quickstart.mdx). Empty = all discovered docs."
+        default: ""
+
+permissions:
+  contents: read
+
+# Own group -- deliberately NOT the eval workflows' `lemonade-eval` group.
+# This workflow runs its own Lemonade instance on a dedicated port (see
+# header), so it does not need to serialize against workflows using the
+# shared 13305 instance; it only needs to serialize against ITSELF across
+# scheduled runs.
+concurrency:
+  group: claude-weekly-doc-walkthrough
+  cancel-in-progress: false
+
+env:
+  WALKTHROUGH_EXECUTOR_MODEL: claude-sonnet-4-6
+  WALKTHROUGH_JUDGE_MODEL: claude-opus-4-8
+  # Dedicated port for this workflow's own Lemonade instance -- never touches
+  # the shared 13305 port the other self-hosted-runner workflows use.
+  WALKTHROUGH_LEMONADE_PORT: 13405
+
+jobs:
+  # Cheap, fast, ubuntu-hosted discovery so the expensive Windows matrix below
+  # never spins up for a misconfigured or empty doc set.
+  discover:
+    if: github.repository == 'amd/gaia'
+    runs-on: ubuntu-latest
+    outputs:
+      docs: ${{ steps.discover.outputs.docs }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Discover in-scope docs
+        id: discover
+        env:
+          DOC_FILTER: ${{ github.event.inputs.doc_filter }}
+        run: |
+          set -euo pipefail
+          all_docs=$(python3 scripts/audit/discover_walkthrough_docs.py)
+          if [ -n "$DOC_FILTER" ]; then
+            docs=$(ALL_DOCS="$all_docs" DOC_FILTER="$DOC_FILTER" python3 -c "
+          import json, os, fnmatch
+          docs = json.loads(os.environ['ALL_DOCS'])
+          pattern = os.environ['DOC_FILTER']
+          print(json.dumps([d for d in docs if fnmatch.fnmatch(d['path'], pattern)]))
+          ")
+          else
+            docs="$all_docs"
+          fi
+          echo "docs=$docs" >> "$GITHUB_OUTPUT"
+          echo "Resolved docs: $docs"
+
+  # One matrix entry per doc, each acting as a real user/developer walking
+  # that guide on real hardware. Serialized (max-parallel: 1) -- same
+  # one-model-slot-at-a-time discipline the eval workflows already use
+  # (CLAUDE.md "Run agent evals SERIALLY"), and it gives natural checkpointing
+  # for a run that's allowed to take hours: one guide hanging doesn't lose the
+  # findings already captured from guides that finished first.
+  walkthrough:
+    needs: discover
+    if: github.repository == 'amd/gaia' && needs.discover.outputs.docs != '[]'
+    # Expression-wrapped 'stx' (not a bare literal) to match the rest of the repo's
+    # self-hosted-runner workflows and stay actionlint-clean (a literal label isn't
+    # in actionlint's default known-labels list; an expression sidesteps that
+    # static check the same way test_api.yml / test_lemonade_server.yml do).
+    runs-on:
+      - self-hosted
+      - Windows
+      - ${{ 'stx' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        doc: ${{ fromJson(needs.discover.outputs.docs) }}
+    # Ceiling for ONE guide, not the whole matrix -- the workflow overall may
+    # run for hours across many matrix entries, but a single stuck command
+    # must not eat the entire run silently.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Verify clean start state
+        shell: powershell
+        run: |
+          $runDir = "$env:RUNNER_TEMP\walkthrough-${{ matrix.doc.slug }}"
+          if (Test-Path $runDir) {
+            Write-Host "Stale run dir from a previous failed run -- removing: $runDir"
+            Remove-Item -Recurse -Force $runDir
+          }
+          New-Item -ItemType Directory -Path $runDir | Out-Null
+          echo "RUN_DIR=$runDir" >> $env:GITHUB_ENV
+          echo "GAIA_HOME=$runDir\gaia_home" >> $env:GITHUB_ENV
+
+      - name: Fresh venv, real-user install (no -e install, no hub packages)
+        shell: powershell
+        run: |
+          # Deliberately NOT `.github/actions/setup-venv` -- that composite
+          # action installs `.[dev,...]` from the checkout (an editable dev
+          # install). This step exists to reproduce what a real `pip install
+          # amd-gaia` user gets: a built wheel, installed normally, with no
+          # hub/agents/python/* package alongside it. This is the property
+          # that would have caught #2260 -- do not "fix" a resulting
+          # ImportError by installing a hub package here; that IS the bug.
+          python -m venv "$env:RUN_DIR\venv"
+          & "$env:RUN_DIR\venv\Scripts\python.exe" -m pip install --upgrade pip build
+          & "$env:RUN_DIR\venv\Scripts\python.exe" -m build --wheel --outdir "$env:RUN_DIR\dist" .
+          $wheel = Get-ChildItem "$env:RUN_DIR\dist\amd_gaia-*.whl" | Select-Object -First 1
+          if (-not $wheel) {
+            Write-Host "::error::No wheel built -- 'python -m build' did not produce amd_gaia-*.whl"
+            exit 1
+          }
+          & "$env:RUN_DIR\venv\Scripts\pip.exe" install $wheel.FullName
+          & "$env:RUN_DIR\venv\Scripts\gaia.exe" --version
+
+      - name: Start an isolated Lemonade instance on the dedicated port
+        shell: powershell
+        run: |
+          # Health-check first -- never assume the port is free, never
+          # force-kill whatever might already be on it. This workflow owns
+          # WALKTHROUGH_LEMONADE_PORT exclusively across its own runs; a
+          # leftover process from a prior crashed run of THIS workflow is a
+          # legitimate thing to clean up, but nothing else's.
+          $healthUrl = "http://localhost:$env:WALKTHROUGH_LEMONADE_PORT/api/v1/health"
+          $alreadyHealthy = $false
+          try {
+            $resp = Invoke-WebRequest -Uri $healthUrl -TimeoutSec 3 -ErrorAction Stop
+            if ($resp.StatusCode -eq 200) { $alreadyHealthy = $true }
+          } catch {}
+          if ($alreadyHealthy) {
+            Write-Host "Dedicated-port Lemonade already healthy (leftover from a prior run) -- reusing it."
+          } else {
+            Write-Host "Dedicated port not yet serving -- starting a fresh instance."
+            $proc = Start-Process -FilePath "LemonadeServer.exe" -ArgumentList "serve --port $env:WALKTHROUGH_LEMONADE_PORT" -PassThru
+            $proc.Id | Out-File "$env:RUN_DIR\lemonade.pid"
+            $deadline = (Get-Date).AddSeconds(60)
+            $healthy = $false
+            do {
+              Start-Sleep -Seconds 2
+              try {
+                $resp = Invoke-WebRequest -Uri $healthUrl -TimeoutSec 3 -ErrorAction Stop
+                if ($resp.StatusCode -eq 200) { $healthy = $true; break }
+              } catch {}
+            } while ((Get-Date) -lt $deadline)
+            if (-not $healthy) {
+              Write-Host "::error::Dedicated-port Lemonade did not become healthy within 60s"
+              exit 1
+            }
+          }
+
+      - name: "Executor (Sonnet): walk ${{ matrix.doc.path }}"
+        id: executor
+        continue-on-error: true
+        uses: anthropics/claude-code-action@e90deca47693f9457b72f2b53c17d7c445a87342  # v1.0.171
+        with:
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            You are the EXECUTOR half of GAIA's weekly doc walkthrough. Your only job is
+            to run commands and capture their raw output -- judging correctness is a
+            SEPARATE step that reads your transcript independently. Do not editorialize
+            or decide what's a bug; just execute faithfully and record everything.
+
+            DOC UNDER TEST: ${{ matrix.doc.path }}
+            ENVIRONMENT: two OS-level environment variables are already set for you by an
+            earlier PowerShell step in this job -- `RUN_DIR` (a per-run scratch directory)
+            and `GAIA_HOME` (an isolated GAIA config dir under it). A fresh venv is already
+            built at `<RUN_DIR>\venv` (GAIA installed from a built wheel, no -e install, no
+            hub agent packages preinstalled -- this is deliberate, do not "fix" a missing
+            hub package by installing it). A Lemonade instance is running at
+            http://localhost:${{ env.WALKTHROUGH_LEMONADE_PORT }} -- point any
+            Lemonade-aware command at that port, never the default 13305.
+            **First, confirm which shell your Bash tool actually runs on this Windows
+            runner** (e.g. `echo $SHELL` or check if `$env:RUN_DIR` resolves vs. `$RUN_DIR`)
+            and use that shell's syntax consistently for every command below -- this
+            workflow was authored without live-runner access, so the exact shell your tool
+            uses was not confirmed at authoring time; do not assume PowerShell syntax works
+            if your tool is actually a POSIX shell, or vice versa.
+
+            ## What to do
+            1. Read `${{ matrix.doc.path }}` in full.
+            2. Extract every command a reader is expected to actually run, in the order
+               the doc presents them (code fences, inline `gaia ...` examples).
+            3. Run each command for real, using the `gaia` executable from
+               `<RUN_DIR>\venv\Scripts\` explicitly (not a bare `gaia` that might resolve
+               to something else on the runner). Capture stdout, stderr, exit code, and
+               wall-clock time for each.
+            4. **Stop the guide at its first failing step whose failure blocks later
+               steps** (e.g. `gaia init` failing means don't attempt `gaia chat` after
+               it) -- report the root step, don't manufacture cascading noise from steps
+               whose precondition already failed. Steps that are independently runnable
+               (separate subcommands not depending on the failed one) still get attempted.
+            5. A step needing something this environment cannot provide (Jira/Atlassian
+               credentials, a Google OAuth connector, a Blender install, a microphone, a
+               non-Windows install path) is NOT attempted -- record it explicitly as
+               `"requires <X> -- not verifiable in this environment"` and move to the next
+               independently-runnable step.
+            6. **Model-resolution checks are a special case -- do NOT drive them through
+               a live end-to-end CLI run.** If the doc's guide involves an agent choosing
+               a model when its preferred model isn't installed (this is exactly the
+               #2261 bug shape), the runner's shared Lemonade cache may already have
+               other models downloaded from unrelated CI and would silently defeat the
+               check. Instead write and run a small, throwaway Python snippet using the
+               `python` executable from `<RUN_DIR>\venv\Scripts\` that imports the
+               relevant registry code and calls its model-resolution function with an EXPLICIT
+               `available_models` list matching only what the doc's target `gaia init`
+               profile installs (cross-reference `INIT_PROFILES` in
+               `src/gaia/installer/init_command.py` for the real list) -- then assert the
+               agent does not silently fall through to a different hardcoded model.
+               Capture the snippet's full source and output as evidence.
+            7. **A failing step must reproduce before you treat it as real.** Retry it
+               once. If it passes the second time, note it as a flake (timing, network) in
+               your transcript rather than a confirmed failure -- the judge decides what
+               to do with that note, you do not decide it's a non-issue yourself.
+
+            Write the full raw transcript (every command, its output, exit code, timing,
+            and any retry) to `<RUN_DIR>\transcript.md` (substitute the real value of the
+            `RUN_DIR` env var), structured with one section per step in doc order. This
+            transcript is the ONLY thing the judge step reads -- anything not captured
+            there does not exist for judging purposes.
+          claude_args: |
+            --max-turns 60
+            --model ${{ env.WALKTHROUGH_EXECUTOR_MODEL }}
+            --allowedTools Read,Grep,Glob,Bash
+
+      - name: "Judge (Opus): verify ${{ matrix.doc.path }} against its transcript"
+        id: judge
+        if: always()
+        continue-on-error: true
+        uses: anthropics/claude-code-action@e90deca47693f9457b72f2b53c17d7c445a87342  # v1.0.171
+        with:
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            You are the JUDGE half of GAIA's weekly doc walkthrough. Do not trust the
+            executor's framing -- read its raw transcript and the doc yourself, and reach
+            your own conclusion. This split exists because a single self-judging session
+            is a known false-negative risk (see docs/plans/weekly-doc-walkthrough-audit.md
+            "Job structure").
+
+            DOC UNDER TEST: ${{ matrix.doc.path }}
+            TRANSCRIPT: `<RUN_DIR>\transcript.md`, where `RUN_DIR` is the OS-level env var
+            set by an earlier step in this job (check your Bash tool's shell to read it --
+            `$env:RUN_DIR` in PowerShell, `$RUN_DIR` in a POSIX shell; not confirmed which
+            this runner's tool uses at authoring time). If the file is missing, the
+            executor crashed before writing it -- file ONE 🟠 finding for that, dedup_key
+            `walkthrough:${{ matrix.doc.path }}:executor-crash`, and stop.
+
+            ## What to do
+            1. Read `${{ matrix.doc.path }}` and the transcript file above, in full.
+            2. For each step in the transcript, check: does the actual captured output
+               match what the doc claims will happen? A step marked "not verifiable in
+               this environment" is not a finding by itself -- it's expected coverage,
+               unless the doc presents that exact step as something every reader can run
+               (in which case the doc itself needs a caveat -- that IS a finding).
+            3. **`docs/reference/cli.mdx` gets an extra deterministic pass:** enumerate
+               every flag from the transcript's `gaia -h` / subcommand `-h` output and
+               every flag documented in the doc's tables, and diff them explicitly,
+               flag by flag -- don't rely on a narrative skim for this file, a single
+               dropped row in a long table is easy to miss that way.
+            4. A step the executor noted as "reproduced as a flake" is NOT a finding --
+               skip it. A step that failed and did NOT reproduce cleanly on retry (i.e.
+               failed twice) IS eligible.
+            5. Write findings to `findings-walkthrough-${{ matrix.doc.slug }}.json`
+               (repo root), same shape `claude-weekly-audit.yml` uses:
+               ```json
+               {"findings": [
+                 {
+                   "severity": "🔴" | "🟠" | "🟡",
+                   "path": "${{ matrix.doc.path }}",
+                   "symbol": "the doc heading or step name -- NOT a line number",
+                   "title": "one-line statement of the problem",
+                   "why": "one sentence: the concrete impact / what breaks",
+                   "evidence": "the exact transcript excerpt (command + captured output) proving the claim",
+                   "auto_fixable": true | false,
+                   "dedup_key": "walkthrough:${{ matrix.doc.path }}:<step-heading>"
+                 }
+               ]}
+               ```
+               Write `{"findings": []}` if nothing is wrong. Severity: 🔴 a default-path
+               command in the doc fails outright; 🟠 the doc's claim about behavior is
+               false but the underlying command doesn't crash; 🟡 a cosmetic/minor gap
+               (a missing caveat, a stale example). `auto_fixable` = true only if the fix
+               is small and locatable (~1-3 files, no design call).
+          claude_args: |
+            --max-turns 25
+            --model ${{ env.WALKTHROUGH_JUDGE_MODEL }}
+            --allowedTools Read,Grep,Glob,Bash
+
+      - name: Verify clean end state
+        if: always()
+        shell: powershell
+        run: |
+          if (Test-Path "$env:RUN_DIR\lemonade.pid") {
+            $procId = Get-Content "$env:RUN_DIR\lemonade.pid"
+            Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+          }
+          Remove-Item -Recurse -Force $env:RUN_DIR -ErrorAction SilentlyContinue
+          if (Test-Path $env:RUN_DIR) {
+            Write-Host "::warning::Run dir did not clean up: $env:RUN_DIR"
+          } else {
+            Write-Host "Clean: run dir removed."
+          }
+          # Confirm we never touched the SHARED 13305 instance other workflows
+          # use -- this is a read-only health probe, never a cleanup action.
+          try {
+            $resp = Invoke-WebRequest -Uri "http://localhost:13305/api/v1/health" -TimeoutSec 3 -ErrorAction Stop
+            Write-Host "Shared Lemonade (13305) still healthy: $($resp.StatusCode)"
+          } catch {
+            Write-Host "Shared Lemonade (13305) not reachable right now -- not this workflow's concern; confirming only that we did not kill it if it WAS up."
+          }
+
+      - name: Upload findings
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: findings-walkthrough-${{ matrix.doc.slug }}
+          path: findings-walkthrough-${{ matrix.doc.slug }}.json
+          if-no-files-found: warn
+
+  # Collect every matrix job's findings, dedupe against open weekly-audit
+  # issues, and file ONE parent triage issue + per-finding child issues.
+  # Same conventions as claude-weekly-audit.yml's synthesis job (label
+  # scheme, dedup-key marker, evidence gate, cross-link-never-close
+  # lifecycle) -- see the weekly-audit-patterns skill.
+  synthesize:
+    needs: [discover, walkthrough]
+    if: github.repository == 'amd/gaia' && !cancelled() && needs.discover.outputs.docs != '[]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download all findings
+        uses: actions/download-artifact@v8
+        with:
+          path: walkthrough-findings
+
+      - name: Ensure labels exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create weekly-audit --color 5319e7 \
+            --description "Proactive weekly Claude audit finding" \
+            2>/dev/null && echo "created weekly-audit label" || echo "weekly-audit label already exists"
+          gh label create audit-wontfix --color cccccc \
+            --description "Accepted debt -- weekly audit will never re-file this finding" \
+            2>/dev/null && echo "created audit-wontfix label" || echo "audit-wontfix label already exists"
+
+      - name: Synthesize and file the triage issue
+        id: claude
+        continue-on-error: true
+        uses: anthropics/claude-code-action@e90deca47693f9457b72f2b53c17d7c445a87342  # v1.0.171
+        with:
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            You are the synthesis step of GAIA's weekly DOC WALKTHROUGH (the
+            execution-based sibling of the static weekly-audit -- see
+            docs/plans/weekly-doc-walkthrough-audit.md). Each matrix job wrote a
+            findings-walkthrough-<slug>.json. Dedupe, rank, and file the output.
+
+            REPO: ${{ github.repository }}
+            RUN LOG: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            ## First actions
+            1. Read every `findings-walkthrough-*.json` under `walkthrough-findings/`
+               (each artifact is in its own subdir). Missing/empty files are fine -- a
+               guide may have found nothing, or its job may have crashed.
+            2. Read `CLAUDE.md` -> "Issue Response Guidelines" for tone/format.
+            3. Already-filed keys:
+               `gh issue list --repo ${{ github.repository }} --label weekly-audit --state open --json number,title,body --limit 200`,
+               collect the `<!-- audit-key: KEY -->` marker from each body.
+            4. Suppressed-forever keys:
+               `gh issue list --repo ${{ github.repository }} --label weekly-audit --label audit-wontfix --state all --json body --limit 200`.
+            5. Previous parent to cross-link: the most recently created OPEN issue whose
+               title starts `Doc walkthrough —` (NOT `Weekly audit —` -- that belongs to
+               the static audit, a different lineage; do not cross-link across workflows).
+
+            ## Dedup + verify
+            1. Drop any finding whose `dedup_key` is in either key set from step 3/4 above.
+               Match the exact key string -- never line numbers or prose similarity.
+            2. Evidence gate: drop any 🔴/🟠 finding whose `evidence` doesn't actually
+               substantiate its `title` -- spot-check by reading the cited transcript
+               excerpt/doc section yourself before filing.
+            3. If zero new findings remain after the above, post NOTHING and exit
+               cleanly -- do not file a parent issue, and never touch a prior parent.
+
+            ## File child issues -- 🔴/🟠 ONLY, non-security (this workflow finds no
+            security issues -- that lens belongs to claude-weekly-audit.yml)
+            🟡 (low) findings get NO child issue -- list them in the parent only. For each
+            NEW, verified 🔴/🟠 finding, write the body to a temp file, then
+            `gh issue create --repo ${{ github.repository }} --label weekly-audit --title "<title>" --body-file <file>`
+            WITHOUT the `bug` label. Body format:
+            ```
+            <one-paragraph why-this-matters: what's wrong + the concrete impact>
+
+            **Where:** `path` · `symbol`
+            **Evidence:** <the finding's `evidence` -- the concrete transcript/doc excerpt>
+            **Severity:** 🔴 high / 🟠 medium
+            **Auto-fixable:** yes — apply `bug` to let auto-fix open the PR  |  no — needs a human
+
+            Not acting on this? Close it with the `audit-wontfix` label and the audit will
+            never re-file it. Applying `bug` instead hands it to the existing auto-fix job.
+
+            <!-- audit-key: <the finding's dedup_key> -->
+            ```
+            Capture each child issue number to reference from the parent.
+
+            ## File ONE parent issue
+            Title: `Doc walkthrough — ${{ github.run_id }}`. Label it `weekly-audit`.
+            Group findings by DOC PATH (this workflow has one detection mechanism, not
+            five dimensions like the static audit) -- most-severe-first across the whole
+            run, 🔴 before 🟠 before 🟡, each line prefixed with its severity emoji.
+            🔴/🟠 lines link their child issue (`· #<n>`); 🟡 lines have no child. Start
+            the body with a one-line tally: `New this run: N (🔴 a · 🟠 b) · low
+            (in-parent only): c · suppressed as dup/wontfix: d`.
+
+            ## Cross-link the previous parent -- NEVER close it
+            After filing the new parent, comment on the previous `Doc walkthrough —`
+            parent found in First-actions step 5 (if one exists) so readers can follow the
+            chain, but leave it OPEN:
+            `gh issue comment <prev-parent-#> --repo ${{ github.repository }} --body "Follow-up walkthrough run filed as #<new-parent-#>. This issue stays OPEN until its findings are addressed — only a maintainer should close it."`
+            Never call `gh issue close` on a parent from this workflow.
+
+            ## Rules
+            - No Claude attribution anywhere (no "Generated with", no Co-Authored-By).
+            - Do not open any PR and do not apply the `bug` label -- humans gate every
+              code change.
+            - Lead with the finding; keep each line to one sentence (CLAUDE.md issue style).
+          claude_args: |
+            --max-turns 32
+            --model ${{ env.WALKTHROUGH_JUDGE_MODEL }}
+            --allowedTools Read,Grep,Glob,Bash
+
+      - name: Verify the walkthrough filed output
+        if: always()
+        env:
+          EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # Don't trust step outcome (continue-on-error masks it; an install
+          # crash exits before it's set). Check the real artifact the action
+          # writes on completion -- same verification claude-weekly-audit.yml
+          # uses for its own synthesis step.
+          ok=false
+          if [ -n "$EXEC_FILE" ] && [ -f "$EXEC_FILE" ]; then
+            is_err=$(jq -s -r '[.. | objects | select(has("is_error")) | .is_error] | .[-1]' "$EXEC_FILE" 2>/dev/null)
+            [ "$is_err" = "false" ] && ok=true
+          fi
+          if [ "$ok" = "true" ]; then
+            echo "✅ Weekly doc walkthrough synthesis completed (log: $EXEC_FILE)"
+          else
+            echo "::warning title=Weekly doc walkthrough did not complete::The synthesis step crashed or errored before finishing. Re-run: $RUN_URL"
+          fi
