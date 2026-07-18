@@ -22,7 +22,7 @@ from gaia.security import PathValidator
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "Qwen3.5-35B-A3B-GGUF"
+DEFAULT_MODEL = "Gemma-4-E4B-it-GGUF"
 DEFAULT_PORT = 8080
 
 
@@ -46,7 +46,7 @@ class DockerAgent(MCPAgent):
         Args:
             **kwargs: Agent initialization parameters:
                 - max_steps: Maximum conversation steps (default: global default_max_steps())
-                - model_id: LLM model to use (default: Qwen3.5-35B-A3B-GGUF)
+                - model_id: LLM model to use (default: Gemma-4-E4B-it-GGUF)
                 - silent_mode: Suppress console output (default: False)
                 - debug: Enable debug logging (default: False)
                 - show_prompts: Display prompts sent to LLM (default: False)

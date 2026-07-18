@@ -37,6 +37,7 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK
+from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
 if TYPE_CHECKING:
     from gaia.agents.base.goal_store import Goal, Proposal
@@ -509,11 +510,10 @@ Do NOT wrap conversational replies in JSON.
         # Initialize AgentSDK with proper configuration
         # Note: We don't set system_prompt in config, we pass it per request
         # Note: Context size is configured when starting Lemonade server, not here
-        # Default an agent with no explicit model_id to Qwen3.5-35B-A3B — small
-        # models are too weak for complex agent tasks. (This is the *agent* default;
-        # `gaia llm` defaults to DEFAULT_MODEL_NAME / Gemma-4-E4B via a separate path.)
+        # Every agent shares DEFAULT_MODEL_NAME so switching agents never evicts
+        # and cold-reloads the resident model.
         chat_config = AgentConfig(
-            model=model_id or "Qwen3.5-35B-A3B-GGUF",
+            model=model_id or DEFAULT_MODEL_NAME,
             use_claude=use_claude,
             use_chatgpt=use_chatgpt,
             claude_model=claude_model,

@@ -116,10 +116,10 @@ def lemonade_auth_headers(api_key: Optional[str]) -> Dict[str, str]:
 # =========================================================================
 # Model Configuration Defaults
 # =========================================================================
-# Default model for simple `gaia llm` queries — intentionally lightweight (0.6B).
-# Agents use Qwen3.5-35B-A3B-GGUF via AGENT_PROFILES (see below), NOT this default.
-# Do NOT change this to 35B — it would break CI tests and force large downloads
-# in minimal setups. The UI default lives in ui/routers/system.py.
+# Default model for `gaia llm` queries AND for every agent that does not pin
+# its own model. One model everywhere is the point: a second model id would
+# make agent switching evict and cold-reload. The UI default lives in
+# ui/routers/system.py.
 DEFAULT_MODEL_NAME = "Gemma-4-E4B-it-GGUF"
 
 # Default embedding model. EmbeddingGemma 300M (768-dim) replaces
@@ -161,6 +161,27 @@ def _model_ids_match(a: Optional[str], b: Optional[str]) -> bool:
 # This is the *single* source of truth; the other module-level names are
 # thin re-exports so there's nothing to keep in sync.
 DEFAULT_CONTEXT_SIZE = 32768
+
+# Context window per device profile. A machine runs exactly one profile, so
+# pinning one ctx per profile means only one (model, ctx_size) pair is ever
+# resident and agents stop evicting each other.
+#
+# These are deliberately NOT one global number: the NPU's FLM build is
+# registered at 32768 and cannot reach 65536, so collapsing them would cap
+# GPU doc-Q&A at 32K and re-open the #1030 context overflow.
+GPU_CTX_SIZE = 65536  # GPU/CPU — Gemma-4-E4B-it-GGUF (llama.cpp)
+NPU_CTX_SIZE = 32768  # NPU — gemma4-it-e2b-FLM (FastFlowLM ceiling)
+
+
+def profile_ctx_size(device: Optional[str]) -> int:
+    """Context window for *device*'s profile.
+
+    Resolve through here rather than defaulting to ``GPU_CTX_SIZE``: the NPU's
+    FLM build cannot load above ``NPU_CTX_SIZE``, so handing it the GPU window
+    fails the load outright.
+    """
+    return NPU_CTX_SIZE if (device or "").strip().lower() == "npu" else GPU_CTX_SIZE
+
 
 # =========================================================================
 # Request Configuration Defaults
@@ -270,7 +291,7 @@ MODELS = {
         model_type=ModelType.LLM,
         model_id="Gemma-4-E4B-it-GGUF",
         display_name="Gemma 4 E4B (Multimodal)",
-        min_ctx_size=65536,
+        min_ctx_size=GPU_CTX_SIZE,
         tool_calling=True,
     ),
     # --- Gemma 4 E2B: primary on-device NPU model for email triage ---
@@ -295,7 +316,7 @@ MODELS = {
         model_type=ModelType.LLM,
         model_id="gemma4-it-e2b-FLM",
         display_name="Gemma 4 E2B (NPU/FLM)",
-        min_ctx_size=32768,
+        min_ctx_size=NPU_CTX_SIZE,
         tool_calling=False,
     ),
     # --- Legacy Qwen models: kept so existing pinned sessions/configs don't break ---
@@ -373,28 +394,28 @@ AGENT_PROFILES = {
         models=["gemma-4-e4b", "embeddinggemma"],
         # 64K so doc-Q&A (RAG retrieval + history) doesn't crush the
         # window. See ``gemma-4-e4b`` ModelRequirement note.
-        min_ctx_size=65536,
+        min_ctx_size=GPU_CTX_SIZE,
         description="Interactive chat with RAG and vision support",
     ),
     "code": AgentProfile(
         name="code",
         display_name="Code Agent",
         models=["gemma-4-e4b"],
-        min_ctx_size=32768,
+        min_ctx_size=GPU_CTX_SIZE,
         description="Autonomous coding assistant",
     ),
     "bash": AgentProfile(
         name="bash",
         display_name="Bash Agent",
         models=["gemma-4-e4b"],
-        min_ctx_size=32768,
+        min_ctx_size=GPU_CTX_SIZE,
         description="Native C++ bash scripting agent (gaia-bash binary)",
     ),
     "talk": AgentProfile(
         name="talk",
         display_name="Talk Agent",
         models=["gemma-4-e4b"],
-        min_ctx_size=32768,
+        min_ctx_size=GPU_CTX_SIZE,
         description="Voice-enabled chat",
     ),
     "rag": AgentProfile(
@@ -403,56 +424,56 @@ AGENT_PROFILES = {
         models=["gemma-4-e4b", "embeddinggemma"],
         # 64K — doc Q&A is the headline use case here; smaller windows
         # break summarize_document and large multi-chunk retrievals.
-        min_ctx_size=65536,
+        min_ctx_size=GPU_CTX_SIZE,
         description="Document Q&A with retrieval and vision",
     ),
     "blender": AgentProfile(
         name="blender",
         display_name="Blender Agent",
         models=["gemma-4-e4b"],
-        min_ctx_size=32768,
+        min_ctx_size=GPU_CTX_SIZE,
         description="3D content generation in Blender",
     ),
     "jira": AgentProfile(
         name="jira",
         display_name="Jira Agent",
         models=["gemma-4-e4b"],
-        min_ctx_size=32768,
+        min_ctx_size=GPU_CTX_SIZE,
         description="Jira issue management",
     ),
     "docker": AgentProfile(
         name="docker",
         display_name="Docker Agent",
         models=["gemma-4-e4b"],
-        min_ctx_size=32768,
+        min_ctx_size=GPU_CTX_SIZE,
         description="Docker container management",
     ),
     "vlm": AgentProfile(
         name="vlm",
         display_name="Vision Agent",
         models=["gemma-4-e4b"],
-        min_ctx_size=32768,
+        min_ctx_size=GPU_CTX_SIZE,
         description="Image understanding and analysis",
     ),
     "minimal": AgentProfile(
         name="minimal",
         display_name="Minimal (Fast)",
         models=["gemma-4-e4b"],
-        min_ctx_size=32768,
+        min_ctx_size=GPU_CTX_SIZE,
         description="Fast responses with Gemma 4 E4B",
     ),
     "mcp": AgentProfile(
         name="mcp",
         display_name="MCP Bridge",
         models=["gemma-4-e4b", "embeddinggemma"],
-        min_ctx_size=32768,
+        min_ctx_size=GPU_CTX_SIZE,
         description="Model Context Protocol bridge server with vision",
     ),
     "sd": AgentProfile(
         name="sd",
         display_name="SD Agent",
         models=["gemma-4-e4b"],
-        min_ctx_size=32768,
+        min_ctx_size=GPU_CTX_SIZE,
         description="Stable Diffusion image generation with LLM helper",
     ),
 }
@@ -2246,7 +2267,7 @@ class LemonadeClient:
         Get detailed information about a specific model.
 
         Args:
-            model_id: The model identifier (e.g., "Qwen3.5-35B-A3B-GGUF")
+            model_id: The model identifier (e.g., "Gemma-4-E4B-it-GGUF")
 
         Returns:
             Dict containing model metadata:
@@ -2262,7 +2283,7 @@ class LemonadeClient:
 
         Examples:
             # Get model checkpoint and recipe
-            model = client.get_model_details("Qwen3.5-35B-A3B-GGUF")
+            model = client.get_model_details("Gemma-4-E4B-it-GGUF")
             print(f"Checkpoint: {model['checkpoint']}")
             print(f"Recipe: {model['recipe']}")
 
@@ -3847,7 +3868,7 @@ class LemonadeClient:
             agent: Agent name or "all" for all unique models
 
         Returns:
-            List of model IDs (e.g., ["Qwen3.5-35B-A3B-GGUF", ...])
+            List of model IDs (e.g., ["Gemma-4-E4B-it-GGUF", ...])
         """
         model_ids = set()
 

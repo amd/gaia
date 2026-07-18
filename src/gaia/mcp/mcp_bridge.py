@@ -27,6 +27,9 @@ sys.path.insert(
 )
 
 from gaia.llm import create_client  # pylint: disable=wrong-import-position
+from gaia.llm.lemonade_client import (  # pylint: disable=wrong-import-position
+    DEFAULT_MODEL_NAME,
+)
 from gaia.logger import get_logger  # pylint: disable=wrong-import-position
 
 # pylint: enable=wrong-import-position
@@ -188,7 +191,7 @@ class GAIAMCPBridge:
                     "description": "Natural language Jira orchestration",
                     "capabilities": ["search", "create", "update", "bulk_operations"],
                     "init_params": {
-                        "model_id": "Qwen3.5-35B-A3B-GGUF",
+                        "model_id": DEFAULT_MODEL_NAME,
                         "silent_mode": True,
                         "debug": False,
                     },

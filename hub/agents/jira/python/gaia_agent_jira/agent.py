@@ -101,7 +101,7 @@ class JiraAgent(Agent):
                 - priorities: List of available priority names
             **kwargs: Other agent initialization parameters:
                 - max_steps: Maximum conversation steps (default: global default_max_steps())
-                - model_id: LLM model to use (default: Qwen3.5-35B-A3B-GGUF)
+                - model_id: LLM model to use (default: Gemma-4-E4B-it-GGUF)
                 - silent_mode: Suppress console output (default: False)
                 - debug: Enable debug logging (default: False)
                 - show_prompts: Display prompts sent to LLM (default: False)
@@ -125,7 +125,7 @@ class JiraAgent(Agent):
             kwargs["max_steps"] = default_max_steps()
         # Use the larger coding model by default for reliable JSON parsing
         if "model_id" not in kwargs:
-            kwargs["model_id"] = "Qwen3.5-35B-A3B-GGUF"
+            kwargs["model_id"] = "Gemma-4-E4B-it-GGUF"
 
         # Store config before calling super() so system prompt can use it
         self._jira_config = jira_config

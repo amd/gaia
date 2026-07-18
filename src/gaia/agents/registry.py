@@ -21,6 +21,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional
 import yaml
 
 from gaia.connectors.providers.base import ConnectorRequirement
+from gaia.llm.lemonade_client import GPU_CTX_SIZE, NPU_CTX_SIZE
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -300,7 +301,7 @@ class DeviceConfig:
     recipe: str
     backend: str
     verified: bool = False
-    ctx_size: int = 32768
+    ctx_size: int = GPU_CTX_SIZE
     embedding_model: str = DEFAULT_EMBEDDING_MODEL
 
 
@@ -313,7 +314,7 @@ DEFAULT_DEVICE_CONFIGS: List[DeviceConfig] = [
         recipe="llamacpp",
         backend="llamacpp:vulkan",
         verified=True,
-        ctx_size=32768,
+        ctx_size=GPU_CTX_SIZE,
     ),
     DeviceConfig(
         device="cpu",
@@ -321,7 +322,7 @@ DEFAULT_DEVICE_CONFIGS: List[DeviceConfig] = [
         recipe="llamacpp",
         backend="llamacpp:cpu",
         verified=False,
-        ctx_size=32768,
+        ctx_size=GPU_CTX_SIZE,
     ),
     DeviceConfig(
         device="npu",
@@ -329,7 +330,7 @@ DEFAULT_DEVICE_CONFIGS: List[DeviceConfig] = [
         recipe="flm",
         backend="flm:npu",
         verified=True,
-        ctx_size=32768,
+        ctx_size=NPU_CTX_SIZE,
         # FLM-native embedder so chat + embeddings stay co-resident on the NPU
         # backend and don't thrash NPU<->Vulkan every turn (#1744).
         embedding_model="embed-gemma-300m-FLM",

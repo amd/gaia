@@ -301,7 +301,7 @@ def cmd_init(args):
 
     # Required models for EMR agent
     vlm_model = args.vlm_model  # Default: Gemma-4-E4B-it-GGUF
-    llm_model = "Qwen3.5-35B-A3B-GGUF"  # For chat/query processing
+    llm_model = "Gemma-4-E4B-it-GGUF"  # For chat/query processing
     embed_model = "nomic-embed-text-v2-moe-GGUF"  # For similarity search
 
     REQUIRED_CONTEXT_SIZE = 32768
