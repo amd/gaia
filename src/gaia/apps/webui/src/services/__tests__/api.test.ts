@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { listConnectors, disconnectConnector } from '../api';
+import { listConnectors, disconnectConnector, authorizeConnector } from '../api';
 
 /**
  * Regression tests for `apiFetch`'s non-JSON handling (issue #983).
@@ -72,5 +72,43 @@ describe('apiFetch non-JSON handling', () => {
             new Response('', { status: 200 }),
         );
         await expect(disconnectConnector('google')).resolves.toBeUndefined();
+    });
+});
+
+/**
+ * #2117 — authorizeConnector forwards `grant_agents` so connecting a mailbox
+ * grants it to the email agent in the same flow.
+ */
+describe('authorizeConnector grant_agents', () => {
+    beforeEach(() => {
+        vi.stubGlobal('fetch', vi.fn());
+    });
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    function lastBody(): Record<string, unknown> {
+        const call = (fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+        return JSON.parse((call[1] as RequestInit).body as string);
+    }
+
+    it('sends the grant_agents list in the request body', async () => {
+        (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+            jsonResponse({ flow_id: 'f1', authorization_url: 'https://auth' }),
+        );
+        await authorizeConnector('google', ['openid'], ['installed:email']);
+        expect(lastBody()).toEqual({
+            scopes: ['openid'],
+            grant_agents: ['installed:email'],
+        });
+    });
+
+    it('defaults grant_agents to an empty array when omitted', async () => {
+        (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+            jsonResponse({ flow_id: 'f1', authorization_url: 'https://auth' }),
+        );
+        await authorizeConnector('google', ['openid']);
+        expect(lastBody()).toEqual({ scopes: ['openid'], grant_agents: [] });
     });
 });

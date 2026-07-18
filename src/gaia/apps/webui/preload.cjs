@@ -35,7 +35,9 @@ contextBridge.exposeInMainWorld("gaiaAPI", {
     sendRpc: (id, method, params) =>
       ipcRenderer.invoke("agent:send-rpc", id, method, params),
     getManifest: () => ipcRenderer.invoke("agent:get-manifest"),
-    install: (id) => ipcRenderer.invoke("agent:install", id),
+    // install(id, opts?) — opts: { trustNative?, version? }. Proxies to the
+    // backend install runtime; progress arrives via onInstallProgress (#1721).
+    install: (id, opts) => ipcRenderer.invoke("agent:install", id, opts),
     uninstall: (id) => ipcRenderer.invoke("agent:uninstall", id),
 
     // Event streams (return unsubscribe functions)
@@ -43,6 +45,7 @@ contextBridge.exposeInMainWorld("gaiaAPI", {
     onStderr: (cb) => onEvent("agent:stderr", cb),
     onStatusChange: (cb) => onEvent("agent:status-change", cb),
     onCrashed: (cb) => onEvent("agent:crashed", cb),
+    onInstallProgress: (cb) => onEvent("agent:install-progress", cb),
   },
 
   // ── Tray configuration (T1) ───────────────────────────────────────────

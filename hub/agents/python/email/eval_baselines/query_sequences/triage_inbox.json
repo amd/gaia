@@ -1,0 +1,7 @@
+{
+  "scenario_id": "triage_inbox",
+  "required_subsequence": ["status", "tool_call", "tool_result", "final"],
+  "terminal": "final",
+  "forbidden": ["error"],
+  "_comment": "Golden path for POST /v1/email/query (V2-2 #2016). Pins the frozen §0.2 vocabulary and its ordering, NOT an exact event count (LLM-non-deterministic). A triage run must: reach a status line, call a tool, return its result, and end in exactly one final with no error. Baselines live in the agent package so a drift shows in the email package's own review, next to the /query route it guards (issue #2180 / V2-19)."
+}

@@ -61,6 +61,9 @@ class CompatibilityReport:
     detected_platform: Optional[str] = None
     total_memory_gb: Optional[float] = None
     free_disk_gb: Optional[float] = None
+    # ``None`` means the caller supplied no hardware scan for that device.
+    detected_npu: Optional[bool] = None
+    detected_gpu_vram_gb: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -73,6 +76,8 @@ class CompatibilityReport:
             "detected_platform": self.detected_platform,
             "total_memory_gb": self.total_memory_gb,
             "free_disk_gb": self.free_disk_gb,
+            "detected_npu": self.detected_npu,
+            "detected_gpu_vram_gb": self.detected_gpu_vram_gb,
         }
 
 
@@ -176,6 +181,8 @@ def check_compatibility(
     *,
     download_size_bytes: int = 0,
     install_dir: Optional[Path] = None,
+    detected_npu: Optional[bool] = None,
+    detected_gpu_vram_gb: Optional[float] = None,
 ) -> CompatibilityReport:
     """Check whether the current machine satisfies *requirements*.
 
@@ -187,6 +194,14 @@ def check_compatibility(
             declares no explicit ``min_disk_gb``.
         install_dir: Where the agent will be installed; the disk check probes
             this volume. Defaults to ``~/.gaia/agents``.
+        detected_npu: Whether an NPU was actually detected by the caller's
+            hardware scan (e.g. the Agent UI's ``/api/system/status`` probe).
+            ``True``/``False`` turn an ``npu`` requirement into a real
+            pass/warning; ``None`` (the default) keeps the conservative
+            "cannot verify" warning for callers that have no scan.
+        detected_gpu_vram_gb: GPU VRAM (GB) reported by the caller's scan, used
+            the same way for a ``gpu_vram_gb`` requirement. ``None`` keeps the
+            "cannot verify" warning.
 
     Returns:
         A :class:`CompatibilityReport`. ``compatible`` is ``True`` only when no
@@ -258,17 +273,38 @@ def check_compatibility(
                 f"but only {free_disk:.1f} GB is free on {install_dir}."
             )
 
-    # --- NPU / GPU (best-effort, advisory) ---
+    # --- NPU / GPU (advisory) ---
+    # When the caller passes a real hardware scan (detected_npu /
+    # detected_gpu_vram_gb), turn the requirement into a concrete pass or
+    # warning instead of the blanket "cannot verify". Absent a scan we fall
+    # back to the conservative message — never silently passing (#1727).
     if reqs.npu:
-        warnings.append(
-            "This agent requests an NPU. GAIA cannot verify NPU availability "
-            "here; ensure your Ryzen AI NPU driver is installed."
-        )
+        if detected_npu is True:
+            pass  # requirement met — no warning
+        elif detected_npu is False:
+            warnings.append(
+                "This agent requests an NPU, but none was detected on this "
+                "machine. It will fall back to GPU/CPU inference, which is "
+                "slower. Ensure your Ryzen AI NPU driver is installed."
+            )
+        else:
+            warnings.append(
+                "This agent requests an NPU. GAIA cannot verify NPU availability "
+                "here; ensure your Ryzen AI NPU driver is installed."
+            )
     if reqs.gpu_vram_gb:
-        warnings.append(
-            f"This agent recommends {reqs.gpu_vram_gb:g} GB of GPU VRAM. GAIA "
-            "cannot verify GPU VRAM here."
-        )
+        if detected_gpu_vram_gb is None:
+            warnings.append(
+                f"This agent recommends {reqs.gpu_vram_gb:g} GB of GPU VRAM. GAIA "
+                "cannot verify GPU VRAM here."
+            )
+        elif detected_gpu_vram_gb < reqs.gpu_vram_gb:
+            warnings.append(
+                f"This agent recommends {reqs.gpu_vram_gb:g} GB of GPU VRAM; this "
+                f"machine has {detected_gpu_vram_gb:g} GB. It may run slowly or "
+                "fail to load its model."
+            )
+        # else: detected VRAM meets/exceeds the recommendation — no warning.
 
     return CompatibilityReport(
         compatible=len(blockers) == 0,
@@ -280,4 +316,6 @@ def check_compatibility(
         detected_platform=detected,
         total_memory_gb=round(total_mem, 2) if total_mem is not None else None,
         free_disk_gb=round(free_disk, 2) if free_disk is not None else None,
+        detected_npu=detected_npu,
+        detected_gpu_vram_gb=detected_gpu_vram_gb,
     )

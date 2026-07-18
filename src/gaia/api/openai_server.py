@@ -14,7 +14,6 @@ Endpoints:
 """
 
 import asyncio
-import importlib.util
 import json
 import logging
 import os
@@ -28,6 +27,7 @@ from fastapi.responses import StreamingResponse
 
 from gaia.agents.base.api_agent import ApiAgent
 
+from .agent_proxy import build_agent_proxy_router
 from .agent_registry import registry
 from .schemas import (
     ChatCompletionChoice,
@@ -125,26 +125,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Email Triage Agent REST surface (#1229): POST /v1/email/{triage,draft,send}.
-# Ships with the standalone ``gaia-agent-email`` wheel (#1102); mount it only
-# when that wheel is installed so the core API server still starts without it.
-# Gate on the wheel's presence via find_spec (no import side effect), then
-# import the router OUTSIDE the gate so a genuine broken import inside an
-# installed wheel fails loudly rather than being swallowed as "not installed"
-# (no-silent-fallback rule).
-if importlib.util.find_spec("gaia_agent_email") is None:
-    logger.info(
-        "Email REST routes unavailable: install the email agent "
-        "(`pip install gaia-agent-email`) to enable POST /v1/email/*."
-    )
-else:
-    from gaia_agent_email.agent_routes import router as email_agent_router
-    from gaia_agent_email.api_routes import router as email_router
-
-    app.include_router(email_router)
-    # Stateful conversational surface (/v1/email/agent/*): session-scoped agent
-    # with memory + tool-confirmation, for hosts driving the full agent over HTTP.
-    app.include_router(email_agent_router)
+# The email agent's REST surface (POST /v1/email/*) is no longer mounted
+# in-process (#2176). It was the last in-process agent mount after the v2
+# thin-host migration (#1896); the API server now reaches every agent —
+# email included — the same way the UI does: as a thin client of the
+# always-on daemon, via the /v1/<agent>/* relay mounted below (#2178 / V2-17).
+# So `gaia api` exposes /v1/email/{triage,draft,send,...} by relaying to the
+# out-of-process email sidecar, never by importing that wheel in-process.
 
 
 # Raw request logging middleware (debug mode only)
@@ -164,7 +151,14 @@ async def log_raw_requests(request: Request, call_next):
 
         # DON'T read body for streaming endpoints - it breaks ASGI message flow
         # Per FastAPI docs: "Never read the request body in middleware for streaming responses"
-        if request.url.path == "/v1/chat/completions" and request.method == "POST":
+        # Covers /v1/chat/completions AND the agent /query relay (#2178), whose
+        # POST bodies feed a StreamingResponse.
+        _p = request.url.path
+        _is_streaming_post = request.method == "POST" and (
+            _p == "/v1/chat/completions"
+            or (_p.startswith("/v1/") and _p.endswith("/query"))
+        )
+        if _is_streaming_post:
             logger.debug(
                 "Body: [Skipped for streaming endpoint - prevents ASGI message flow disruption]"
             )
@@ -616,3 +610,14 @@ async def health_check():
         ```
     """
     return {"status": "ok", "service": "gaia-api"}
+
+
+# Agent /v1/<agent>/* surface (#2178 / V2-17, #2176): the /query loop streams
+# through the always-on daemon relay (#2150); the fixed-function agent routes
+# (e.g. the email agent's /v1/email/{triage,draft,send,…}) relay buffered.
+# Mounted after the OpenAI-compatible routes are declared; the router refuses the
+# reserved chat/models ids at routing time, so it never shadows
+# /v1/chat/completions or /v1/models (nor their 404/405). The API server stays a
+# thin client — it forwards only the daemon client token, never a sidecar
+# bearer. Gated by GAIA_API_KEY (§0.33), independent of the email wheel.
+app.include_router(build_agent_proxy_router())

@@ -182,7 +182,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
             // results don't resurrect sessions the user already deleted.
             sessions: sessions.filter((s) => !state.pendingDeleteIds.includes(s.id)),
         })),
-    setCurrentSession: (id) => set({ currentSessionId: id }),
+    // Selecting a session must leave the full-screen Hub (Home sets showHub=true
+    // and nothing else cleared it, stranding the user on the Hub — #2206).
+    // Clear only for a real selection; setCurrentSession(null) is the Home path
+    // that opens the Hub, so it must not fight setShowHub(true).
+    setCurrentSession: (id) => set(id ? { currentSessionId: id, showHub: false } : { currentSessionId: id }),
     addSession: (session) =>
         set((state) => ({ sessions: [session, ...state.sessions] })),
     removeSession: (id) =>

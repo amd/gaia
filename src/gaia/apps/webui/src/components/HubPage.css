@@ -1,0 +1,217 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/* In-app Hub page (issue #1722): lane layout + install trust gate. Builds on
+   the shared AgentHub.css primitives (cards, grid, banners, spinner). */
+
+.hub-page {
+    padding-bottom: 2rem;
+}
+
+.hub-page-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+}
+
+.hub-page-title-area {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+.hub-page-title {
+    margin: 0;
+    font-size: 1.35rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+}
+
+.hub-page-subtitle {
+    margin: 0;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+/* ── Lanes ─────────────────────────────────────────────────────────────── */
+
+.hub-lane {
+    margin-top: 1.5rem;
+}
+
+.hub-lane-header {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    margin-bottom: 0.75rem;
+}
+
+.hub-lane-title {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.hub-lane-count {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0.05rem 0.45rem;
+    line-height: 1.4;
+}
+
+.hub-lane-subtitle {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+/* ── Trust gate dialog ─────────────────────────────────────────────────── */
+
+.trust-gate-modal {
+    max-width: 460px;
+}
+
+.trust-gate-icon-verified {
+    color: var(--accent, #22c55e);
+}
+
+.trust-gate-icon-community,
+.trust-gate-icon-experimental {
+    color: var(--accent-gold, #f59e0b);
+}
+
+.trust-gate-subtitle {
+    margin: 0.15rem 0 0;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.trust-gate-tier-badge {
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    padding: 0.1rem 0.4rem;
+    border-radius: var(--radius-sm);
+}
+
+.trust-gate-tier-verified {
+    color: var(--accent, #22c55e);
+    background: var(--accent-dim, rgba(34, 197, 94, 0.12));
+}
+
+.trust-gate-tier-community,
+.trust-gate-tier-experimental {
+    color: var(--accent-gold, #f59e0b);
+    background: rgba(245, 158, 11, 0.12);
+}
+
+.trust-gate-reasons {
+    list-style: none;
+    margin: 0 0 1rem;
+    padding: 0.6rem 0.75rem;
+    background: rgba(245, 158, 11, 0.08);
+    border: 1px solid rgba(245, 158, 11, 0.25);
+    border-radius: var(--radius-md);
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.trust-gate-reason {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+}
+
+.trust-gate-reason-icon {
+    flex-shrink: 0;
+    margin-top: 0.1rem;
+    color: var(--accent-gold, #f59e0b);
+}
+
+.trust-gate-section {
+    margin-bottom: 0.9rem;
+}
+
+.trust-gate-section-title {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--text-muted);
+    margin-bottom: 0.4rem;
+}
+
+.trust-gate-perm-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+
+.trust-gate-perm code {
+    font-size: 0.78rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.1rem 0.4rem;
+    color: var(--text-primary);
+}
+
+.trust-gate-empty,
+.trust-gate-requirements {
+    margin: 0;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+}
+
+.trust-gate-ack {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    font-size: 0.83rem;
+    color: var(--text-secondary);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 0.6rem 0.7rem;
+    margin: 1rem 0;
+    cursor: pointer;
+}
+
+.trust-gate-ack input {
+    margin-top: 0.15rem;
+    flex-shrink: 0;
+}
+
+.trust-gate-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.6rem;
+    margin-top: 0.5rem;
+}
+
+.trust-gate-proceed:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
