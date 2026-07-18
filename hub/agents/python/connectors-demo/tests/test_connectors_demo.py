@@ -14,6 +14,7 @@ correctly and that the registry sees it as a built-in.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from unittest.mock import patch
 
 import httpx
@@ -135,10 +136,35 @@ class TestFormatConnectorError:
 # ---------------------------------------------------------------------------
 
 
-def _stub_gmail_response(messages):
-    """Build the two-step Gmail API response shape the impl expects."""
+class _CapturingGet:
+    """Fake httpx.get that records every call's headers/params instead of
+    discarding them, so tests can assert on the OUTGOING request shape —
+    not just the parsed response.
 
-    def _fake_get(url, headers=None, params=None, timeout=None):
+    A fake that accepts headers/params and ignores them proves the code
+    path executed, but not that a dropped Authorization header or a
+    limit-that-never-reached-maxResults would be caught: the canned
+    response comes back regardless, and the test still passes (#1999).
+    """
+
+    def __init__(self, response_for_url):
+        """response_for_url: a fixed httpx.Response, OR a callable
+        url -> httpx.Response for multi-step call chains (e.g. Gmail)."""
+        self._response_for_url = response_for_url
+        self.calls = []
+
+    def __call__(self, url, headers=None, params=None, timeout=None):
+        self.calls.append({"url": url, "headers": headers, "params": params})
+        if callable(self._response_for_url):
+            return self._response_for_url(url)
+        return self._response_for_url
+
+
+def _stub_gmail_response(messages):
+    """Build the two-step Gmail API response shape the impl expects, while
+    recording every call's headers/params for assertions."""
+
+    def _response_for_url(url):
         if url.endswith("/messages"):
             return httpx.Response(
                 200, json={"messages": [{"id": m["id"]} for m in messages]}
@@ -158,7 +184,7 @@ def _stub_gmail_response(messages):
             },
         )
 
-    return _fake_get
+    return _CapturingGet(_response_for_url)
 
 
 class TestGmailRecentSubjects:
@@ -167,18 +193,45 @@ class TestGmailRecentSubjects:
             {"id": "1", "from": "alice@example.com", "subject": "Lunch?"},
             {"id": "2", "from": "bob@example.com", "subject": "Re: PR review"},
         ]
+        fake_get = _stub_gmail_response(fake_messages)
         with (
             patch(
                 "gaia_agent_connectors_demo.agent._gmail_token",
                 return_value="tok-xyz",
             ),
-            patch("httpx.get", side_effect=_stub_gmail_response(fake_messages)),
+            patch("httpx.get", side_effect=fake_get),
         ):
             result = _gmail_recent_subjects_impl(limit=5)
         assert result["ok"] is True
         assert result["count"] == 2
         assert result["messages"][0]["subject"] == "Lunch?"
         assert result["messages"][1]["from"] == "bob@example.com"
+
+        # The #1999 regression this guards against: a dropped bearer token
+        # or a limit that never reaches maxResults would still return this
+        # canned data — assert the OUTGOING request, not just the parsed
+        # result.
+        list_call = fake_get.calls[0]
+        assert list_call["headers"] == {"Authorization": "Bearer tok-xyz"}
+        assert list_call["params"] == {"maxResults": 5}
+
+    def test_limit_flows_into_max_results_param(self):
+        # A different limit than the happy-path test's default of 5 —
+        # proves maxResults tracks the caller's limit rather than being a
+        # hardcoded value that happens to match.
+        fake_get = _stub_gmail_response(
+            [{"id": "1", "from": "a@example.com", "subject": "Hi"}]
+        )
+        with (
+            patch(
+                "gaia_agent_connectors_demo.agent._gmail_token",
+                return_value="tok",
+            ),
+            patch("httpx.get", side_effect=fake_get),
+        ):
+            _gmail_recent_subjects_impl(limit=2)
+
+        assert fake_get.calls[0]["params"] == {"maxResults": 2}
 
     def test_grant_failure_returns_actionable_error(self):
         with patch(
@@ -237,12 +290,13 @@ class TestCalendarToday:
                 ]
             },
         )
+        fake_get = _CapturingGet(fake_response)
         with (
             patch(
                 "gaia_agent_connectors_demo.agent._calendar_token",
                 return_value="tok",
             ),
-            patch("httpx.get", return_value=fake_response),
+            patch("httpx.get", side_effect=fake_get),
         ):
             result = _calendar_today_impl()
         assert result["ok"] is True
@@ -251,6 +305,21 @@ class TestCalendarToday:
         # All-day events have a 'date' field rather than 'dateTime' —
         # the impl must accept both shapes.
         assert result["events"][1]["start"] == "2026-05-01"
+
+        # #1999: assert the outgoing bearer header and the intent-carrying
+        # timeMin/timeMax window params, not just the parsed result.
+        call = fake_get.calls[0]
+        assert call["headers"] == {"Authorization": "Bearer tok"}
+        params = call["params"]
+        assert params["singleEvents"] == "true"
+        assert params["orderBy"] == "startTime"
+        # timeMin/timeMax must be RFC3339 timestamps bracketing today, with
+        # timeMin < timeMax — a swapped or malformed window would silently
+        # return the wrong day's events against the real API.
+        time_min = datetime.fromisoformat(params["timeMin"])
+        time_max = datetime.fromisoformat(params["timeMax"])
+        assert time_min < time_max
+        assert time_min.date() == time_max.date() == datetime.now().date()
 
 
 # ---------------------------------------------------------------------------
@@ -274,16 +343,37 @@ class TestDriveRecentFiles:
                 ]
             },
         )
+        fake_get = _CapturingGet(fake_response)
         with (
             patch(
                 "gaia_agent_connectors_demo.agent._drive_token",
                 return_value="tok",
             ),
-            patch("httpx.get", return_value=fake_response),
+            patch("httpx.get", side_effect=fake_get),
         ):
             result = _drive_recent_files_impl(limit=5)
         assert result["ok"] is True
         assert result["files"][0]["name"] == "Q3 Plan.gdoc"
+
+        # #1999: assert the outgoing bearer header and that limit flows
+        # into pageSize, not just the parsed result.
+        call = fake_get.calls[0]
+        assert call["headers"] == {"Authorization": "Bearer tok"}
+        assert call["params"]["pageSize"] == 5
+        assert call["params"]["orderBy"] == "modifiedTime desc"
+
+    def test_limit_flows_into_page_size_param(self):
+        fake_get = _CapturingGet(httpx.Response(200, json={"files": []}))
+        with (
+            patch(
+                "gaia_agent_connectors_demo.agent._drive_token",
+                return_value="tok",
+            ),
+            patch("httpx.get", side_effect=fake_get),
+        ):
+            _drive_recent_files_impl(limit=3)
+
+        assert fake_get.calls[0]["params"]["pageSize"] == 3
 
 
 # ---------------------------------------------------------------------------
@@ -305,16 +395,43 @@ class TestGithubMyRepos:
                 }
             ],
         )
+        fake_get = _CapturingGet(fake_response)
         with (
             patch(
                 "gaia_agent_connectors_demo.agent._github_pat",
                 return_value="ghp_x",
             ),
-            patch("httpx.get", return_value=fake_response),
+            patch("httpx.get", side_effect=fake_get),
         ):
             result = _github_my_repos_impl(limit=10)
         assert result["ok"] is True
         assert result["repos"][0]["full_name"] == "octocat/Hello-World"
+
+        # #1999: assert the bearer token, the GitHub-specific Accept +
+        # API-version headers, and that limit flows into per_page — not
+        # just the parsed result. A dropped Accept header or a stale
+        # X-GitHub-Api-Version would 401/406 against the real API while
+        # this canned response still comes back.
+        call = fake_get.calls[0]
+        assert call["headers"] == {
+            "Authorization": "Bearer ghp_x",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        assert call["params"] == {"per_page": 10, "sort": "updated"}
+
+    def test_limit_flows_into_per_page_param(self):
+        fake_get = _CapturingGet(httpx.Response(200, json=[]))
+        with (
+            patch(
+                "gaia_agent_connectors_demo.agent._github_pat",
+                return_value="ghp_x",
+            ),
+            patch("httpx.get", side_effect=fake_get),
+        ):
+            _github_my_repos_impl(limit=25)
+
+        assert fake_get.calls[0]["params"]["per_page"] == 25
 
     def test_pat_missing_returns_connector_error(self):
         with patch(
