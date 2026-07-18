@@ -173,7 +173,7 @@ def _email_baseline(scenario_id: str):
     from gaia.eval.sidecar_harness import baselines_dir_for, load_baseline
 
     pkg_root = (
-        Path(__file__).resolve().parents[3] / "hub" / "agents" / "python" / "email"
+        Path(__file__).resolve().parents[3] / "hub" / "agents" / "email" / "python"
     )
     return load_baseline(baselines_dir_for(pkg_root) / f"{scenario_id}.json")
 
