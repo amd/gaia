@@ -484,6 +484,13 @@ class AgentRegistration:
     # card with a size selector instead of duplicate "… Lite" cards. Empty for
     # agents that expose only one model size.
     model_tiers: List[ModelTier] = field(default_factory=list)
+    # The concrete Agent subclass this registration resolves to, when it is
+    # already imported at registration time. Populated for file-based custom
+    # agents (`source == "custom_python"`), whose module is exec'd during
+    # discovery; left None for builtins/installed wheels that use lazy-import
+    # factories. Lets the hub health check inspect the class (e.g. unimplemented
+    # abstract methods) without re-importing or constructing the agent (#2268).
+    agent_class: Optional[type] = None
 
 
 class AgentRegistry:
@@ -1121,6 +1128,7 @@ class AgentRegistry:
                 conversation_starters=list(starters),
                 factory=_wrap_factory_with_namespaced_id(python_factory, namespaced_id),
                 agent_dir=agent_dir,
+                agent_class=agent_class,
                 models=models,
                 required_connections=required_connections,
                 consumes_mcp_servers=consumes_mcp_servers,
