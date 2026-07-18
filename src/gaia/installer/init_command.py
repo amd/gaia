@@ -12,6 +12,7 @@ Main entry point for `gaia init` command that:
 5. Verifies setup is working
 """
 
+import importlib.util
 import logging
 import os
 import subprocess
@@ -30,6 +31,7 @@ except ImportError:
     RICH_AVAILABLE = False
 
 from gaia.agents.base.console import AgentConsole
+from gaia.agents.install_hints import source_install_command
 from gaia.installer.lemonade_installer import LemonadeInfo, LemonadeInstaller
 from gaia.llm.lemonade_launcher import build_start_command, resolve_lemonade
 from gaia.version import LEMONADE_VERSION
@@ -1893,8 +1895,24 @@ class InitCommand:
             self._print_error(f"Verification failed: {e}")
             return False
 
+    @staticmethod
+    def _chat_agent_available() -> bool:
+        """Whether the standalone gaia-agent-chat wheel is importable.
+
+        ``gaia chat`` resolves through that wheel (#1102), which no init
+        profile installs (it isn't a pip extra -- #2240). Printing `gaia
+        chat` as a ready next step when it isn't installed is a false
+        promise, so completion messaging checks first.
+        """
+        return importlib.util.find_spec("gaia_agent_chat") is not None
+
     def _print_completion(self):
         """Print completion message with next steps."""
+        chat_agent_available = self._chat_agent_available()
+        chat_install_note = (
+            "Chat agent not installed yet -- run: "
+            f"{source_install_command('gaia-agent-chat')}"
+        )
         if RICH_AVAILABLE and self.console:
             self.console.print()
             self.console.print(
@@ -1929,6 +1947,8 @@ class InitCommand:
                 self.console.print(
                     "    [cyan]gaia chat --ui[/cyan]                       Launch the Agent UI (browser-based)"
                 )
+                if not chat_agent_available:
+                    self.console.print(f"    [yellow]{chat_install_note}[/yellow]")
             elif self.profile == "npu":
                 self.console.print(
                     "    [cyan]gaia chat --device npu[/cyan]             Chat using Ryzen AI NPU"
@@ -1939,6 +1959,8 @@ class InitCommand:
                 self.console.print(
                     "    [dim]Note: NPU inference is active. Use --device gpu to switch back.[/dim]"
                 )
+                if not chat_agent_available:
+                    self.console.print(f"    [yellow]{chat_install_note}[/yellow]")
             elif self.profile == "vlm":
                 self.console.print(
                     "    [cyan]gaia cache status[/cyan]      Verify VLM model is available"
@@ -1971,6 +1993,8 @@ class InitCommand:
                 self.console.print(
                     "    [cyan]gaia talk[/cyan]              Voice interaction"
                 )
+                if not chat_agent_available:
+                    self.console.print(f"    [yellow]{chat_install_note}[/yellow]")
             self.console.print()
         else:
             self._print("")
@@ -2002,6 +2026,8 @@ class InitCommand:
                 self._print(
                     "    gaia chat --ui                       # Launch the Agent UI (browser-based)"
                 )
+                if not chat_agent_available:
+                    self._print(f"    {chat_install_note}")
             elif self.profile == "npu":
                 self._print(
                     "    gaia chat --device npu             # Chat using Ryzen AI NPU"
@@ -2013,6 +2039,8 @@ class InitCommand:
                 self._print(
                     "  Note: NPU inference is active. Use --device gpu to switch back."
                 )
+                if not chat_agent_available:
+                    self._print(f"    {chat_install_note}")
             elif self.profile == "vlm":
                 self._print(
                     "    gaia cache status      # Verify VLM model is available"
@@ -2037,6 +2065,8 @@ class InitCommand:
                 )
                 self._print("    gaia llm 'Hello'       # Quick LLM query")
                 self._print("    gaia talk              # Voice interaction")
+                if not chat_agent_available:
+                    self._print(f"    {chat_install_note}")
             self._print("")
 
 

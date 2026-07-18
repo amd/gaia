@@ -63,6 +63,7 @@ const backendInstaller = require("./services/backend-installer.cjs");
 const installerProgressDialog = require("./services/backend-installer-progress-dialog.cjs");
 const autoUpdater = require("./services/auto-updater.cjs");
 const agentSeeder = require("./services/agent-seeder.cjs");
+const systemMetrics = require("./services/system-metrics.cjs");
 const {
   parseDeepLink,
   extractDeepLinkFromArgv,
@@ -608,6 +609,9 @@ function initializeServices() {
     agentProcessManager,
     trayManager
   );
+
+  // #2007: System metrics for the observability dashboard
+  systemMetrics.registerIpcHandlers();
 
   console.log("[main] Services initialized");
 }

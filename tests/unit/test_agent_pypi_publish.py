@@ -5,12 +5,16 @@
 These tests do *not* touch the network or PyPI. They assert the static
 invariants that make dual distribution (R2 + PyPI) correct and drift-proof:
 
-* the production-agent list (``setup.py[agents]``) maps cleanly to packages
-  under ``hub/agents/<id>/python/`` (via ``util/list_agent_packages.py``);
+* the production-agent list (``setup.py``'s ``AGENT_WHEEL_PACKAGES``) maps
+  cleanly to packages under ``hub/agents/<id>/python/`` (via
+  ``util/list_agent_packages.py``);
 * every such wheel declares the ``gaia-agent-<id>`` name and an ``amd-gaia``
   framework dependency (issue #1179 scope item 3);
 * the publish workflow derives its matrix from that same list, so a new agent
-  added to the extra is published automatically with no second list to sync.
+  added to ``AGENT_WHEEL_PACKAGES`` is published automatically with no second
+  list to sync. That list is a plain module-level constant rather than an
+  ``extras_require`` entry -- see #2240 and the module docstring on
+  ``util/list_agent_packages.py`` for why.
 
 The live dual-publish logic is covered by ``test_hub_publisher.py``; the CLI
 wiring by ``test_cli_agent.py``.
@@ -143,10 +147,10 @@ def test_helper_matrix_format_matches_packages(packages):
 
 
 def test_helper_rejects_missing_package(tmp_path):
-    """A dist in the extra with no on-disk package fails loudly (no silent skip)."""
+    """A dist in the list with no on-disk package fails loudly (no silent skip)."""
     fake_setup = tmp_path / "setup.py"
     fake_setup.write_text(
-        'setup(\n    extras_require={"agents": ["gaia-agent-doesnotexist"]},\n)\n',
+        'AGENT_WHEEL_PACKAGES = ["gaia-agent-doesnotexist"]\nsetup()\n',
         encoding="utf-8",
     )
     with pytest.raises(lap.AgentListError, match="no package at"):
@@ -157,7 +161,7 @@ def test_helper_rejects_bad_naming(tmp_path):
     """A dist not following gaia-agent-<id> fails loudly."""
     fake_setup = tmp_path / "setup.py"
     fake_setup.write_text(
-        'setup(\n    extras_require={"agents": ["totally-wrong-name"]},\n)\n',
+        'AGENT_WHEEL_PACKAGES = ["totally-wrong-name"]\nsetup()\n',
         encoding="utf-8",
     )
     with pytest.raises(lap.AgentListError, match="naming convention"):

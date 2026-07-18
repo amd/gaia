@@ -7,6 +7,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.agent import Agent
+from gaia.agents.install_hints import agent_not_installed_message
 from gaia.llm import create_client
 from gaia.logger import get_logger
 
@@ -490,11 +491,13 @@ Conversation:
         registry.discover()
         if registry.get("code") is None:
             raise RuntimeError(
-                "CodeAgent is not installed. RoutingAgent routes coding tasks "
-                "to the 'gaia-agent-code' package, which is not present. "
-                "Install it with 'uv pip install gaia-agent-code' (or "
-                "'uv pip install \"amd-gaia[agents]\"'), then retry. See "
-                "docs/spec/agent-hub-restructure.mdx."
+                agent_not_installed_message(
+                    "CodeAgent is not installed. RoutingAgent routes coding "
+                    "tasks to the 'gaia-agent-code' package, which is not "
+                    "present",
+                    "gaia-agent-code",
+                    next_step=("Then retry. See docs/spec/agent-hub-restructure.mdx."),
+                )
             )
 
         # Build agent kwargs, including output_handler if provided

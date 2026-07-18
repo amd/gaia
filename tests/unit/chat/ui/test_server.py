@@ -813,6 +813,42 @@ class TestDynamicToolsSetting:
         assert unlocked["dynamic_tools_locked"] is False
 
 
+class TestAgentModeSetting:
+    """/api/settings agent_mode honesty (#2005): 'autonomous' is unshipped —
+    reject it on write, default to 'goal_driven', normalize legacy values."""
+
+    def test_default_is_goal_driven(self, client):
+        assert client.get("/api/settings").json()["agent_mode"] == "goal_driven"
+
+    def test_put_goal_driven_and_manual_round_trip(self, client):
+        for mode in ("manual", "goal_driven"):
+            put = client.put("/api/settings", json={"agent_mode": mode})
+            assert put.status_code == 200
+            assert put.json()["agent_mode"] == mode
+            assert client.get("/api/settings").json()["agent_mode"] == mode
+
+    def test_put_autonomous_rejected_with_actionable_error(self, client, db):
+        resp = client.put("/api/settings", json={"agent_mode": "autonomous"})
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert "not implemented" in detail
+        assert "goal_driven" in detail
+        assert "2005" in detail
+        # Nothing was persisted
+        assert db.get_setting("agent_mode") is None
+
+    def test_put_unknown_mode_rejected(self, client):
+        resp = client.put("/api/settings", json={"agent_mode": "bogus"})
+        assert resp.status_code == 400
+        assert "goal_driven" in resp.json()["detail"]
+
+    def test_legacy_stored_autonomous_reported_as_goal_driven(self, client, db):
+        """A DB written before #2005 may hold 'autonomous'; GET must report the
+        effective mode, not the no-op label."""
+        db.set_setting("agent_mode", "autonomous")
+        assert client.get("/api/settings").json()["agent_mode"] == "goal_driven"
+
+
 class TestSessionEndpoints:
     """Tests for /api/sessions/* endpoints."""
 

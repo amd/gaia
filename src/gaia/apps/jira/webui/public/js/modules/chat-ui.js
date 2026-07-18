@@ -30,16 +30,17 @@ export class ChatUI {
         // For user/assistant messages we hand the sanitizer a live target
         // DOM node — it parses, strips dangerous elements/attrs, and
         // appends the sanitized children. We never route the sanitized
-        // HTML back through ``innerHTML = str``, which closes the final
-        // CodeQL xss-through-dom sink on line 70.
+        // HTML back through ``innerHTML = str``.
+        //
+        // Non-string payloads render as JSON via textContent — there is no
+        // caller-supplied-DOM-node branch, so nothing caller-controlled is
+        // ever appended to the document unsanitized.
         if (typeof content === 'string') {
             if (type === 'error' || type === 'system') {
                 contentEl.textContent = content;
             } else {
                 this.sanitizeInto(contentEl, this.formatMessage(content));
             }
-        } else if (content instanceof HTMLElement) {
-            contentEl.appendChild(content);
         } else {
             contentEl.textContent = JSON.stringify(content, null, 2);
         }

@@ -539,6 +539,16 @@ pip install gaia-agent-summarize          # one agent
 pip install "amd-gaia[agents]"            # every AMD production agent
 ```
 
+<Note>
+PyPI publishing for `gaia-agent-*` wheels is currently paused (tracked by
+[#2240](https://github.com/amd/gaia/issues/2240)), so the commands above don't
+resolve yet. Until publishing lands, install an agent straight from this repo:
+
+```bash From source (works today)
+uv pip install "gaia-agent-summarize @ git+https://github.com/amd/gaia.git#subdirectory=hub/agents/summarize/python"
+```
+</Note>
+
 The **Hub (R2)** path is the Agent UI's discover/install panel, which downloads
 the wheel from R2 into `~/.gaia/agents/<id>/` (`POST /api/agents/install`, backed
 by `gaia.hub.installer`). Use it when browsing the Hub UI; use `pip install` for
@@ -1272,7 +1282,10 @@ curl http://localhost:8080/health
     gaia api status
     ```
 
-    Shows whether the API server is running and displays connection information.
+    Queries the server's `/health` endpoint and reports whether the GAIA API
+    server is running, plus its endpoints. Exits non-zero when the server is
+    not running or the port is held by a different process. Use `--host` /
+    `--port` to check a non-default address.
   </Tab>
 
   <Tab title="Stop">
@@ -1954,7 +1967,7 @@ gaia schedule {add,list,show,remove,pause,resume,run,daemon} [OPTIONS]
 | `--name` | string | _required_ | Unique schedule name |
 | `--cron` | string | _required_ | Cron expression, e.g. `"0 7 * * 1-5"` |
 | `--prompt` | string | - | One-shot prompt to run on each fire (mutually exclusive with `--skill`) |
-| `--skill` | string | - | Skill to run (mutually exclusive with `--prompt`) — see note below |
+| `--skill` | string | - | Skill to run — not supported yet, rejected at add time; see note below |
 | `--sink` | string | stdout | Where output goes: `stdout` \| `file:<path>` \| `notification` \| `telegram` |
 | `--to` | string | - | Recipient for the `telegram` sink (Telegram user/chat id) |
 
@@ -2010,7 +2023,7 @@ gaia schedule add \
 ```
 
 <Note>
-`--skill` is not yet implemented — running a skill-backed schedule raises an error pending the skill format ([#888](https://github.com/amd/gaia/issues/888)). Use `--prompt` for now.
+`--skill` is not yet implemented — `gaia schedule add --skill` is rejected with an error at add time pending the skill format ([#888](https://github.com/amd/gaia/issues/888)). Use `--prompt` for now.
 </Note>
 
 ---

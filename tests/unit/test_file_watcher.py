@@ -86,6 +86,41 @@ class TestFileHashUtilities:
         finally:
             temp_path.unlink()
 
+    def test_compute_file_hash_allowed_dir_rejects_traversal(self, tmp_path):
+        """A path outside allowed_dir must be rejected, including via '../'."""
+        allowed_dir = tmp_path / "watch"
+        allowed_dir.mkdir()
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+        secret = outside_dir / "secret.txt"
+        secret.write_bytes(b"do not hash me")
+
+        # Direct outside path
+        assert compute_file_hash(str(secret), allowed_dir=str(allowed_dir)) is None
+
+        # Traversal from within allowed_dir back out to the same file
+        traversal_path = allowed_dir / ".." / "outside" / "secret.txt"
+        assert (
+            compute_file_hash(str(traversal_path), allowed_dir=str(allowed_dir)) is None
+        )
+
+    def test_compute_file_hash_allowed_dir_rejects_absolute_escape(self, tmp_path):
+        """An absolute path outside allowed_dir is rejected, not silently hashed."""
+        allowed_dir = tmp_path / "watch"
+        allowed_dir.mkdir()
+        assert compute_file_hash("/etc/passwd", allowed_dir=str(allowed_dir)) is None
+
+    def test_compute_file_hash_allowed_dir_accepts_contained_path(self, tmp_path):
+        """A path genuinely inside allowed_dir still hashes normally."""
+        allowed_dir = tmp_path / "watch"
+        allowed_dir.mkdir()
+        f = allowed_dir / "form.pdf"
+        f.write_bytes(b"intake form bytes")
+
+        result = compute_file_hash(str(f), allowed_dir=str(allowed_dir))
+        assert result is not None
+        assert len(result) == 64
+
     def test_compute_bytes_hash_returns_sha256(self):
         """Test that compute_bytes_hash returns a valid SHA-256 hash."""
         result = compute_bytes_hash(b"test bytes")

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
+from gaia.agents.install_hints import agent_not_installed_message
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.logger import get_logger
 
@@ -25,9 +26,11 @@ def _load_summarizer_agent_class():
         from gaia_agent_summarize.agent import SummarizerAgent
     except ImportError as e:
         raise ImportError(
-            "The summarize agent is not installed. Install it with "
-            '`uv pip install gaia-agent-summarize` (or `uv pip install "amd-gaia[agents]"` '
-            "for all AMD agents). See https://amd-gaia.ai/docs/guides/summarize."
+            agent_not_installed_message(
+                "The summarize agent is not installed",
+                "gaia-agent-summarize",
+                next_step="See https://amd-gaia.ai/docs/guides/summarize.",
+            )
         ) from e
     return SummarizerAgent
 

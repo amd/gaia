@@ -2,23 +2,34 @@
 # SPDX-License-Identifier: MIT
 """List the AMD production agent packages that ship as ``gaia-agent-<id>`` wheels.
 
-Single source of truth = the ``agents`` entry of ``extras_require`` in
-``setup.py`` (the same list behind ``pip install "amd-gaia[agents]"``). This
-script reads that list *statically* (``ast``, never executing ``setup.py``),
-maps each ``gaia-agent-<id>`` distribution name to its package directory under
-``hub/agents/<id>/python/``, and verifies the directory exists.
+Single source of truth = the ``AGENT_WHEEL_PACKAGES`` list in ``setup.py``.
+This script reads that list *statically* (``ast``, never executing
+``setup.py``), maps each ``gaia-agent-<id>`` distribution name to its package
+directory under ``hub/agents/<id>/python/``, and verifies the directory
+exists.
+
+``AGENT_WHEEL_PACKAGES`` deliberately lives as a plain module-level constant,
+not an ``extras_require`` entry (issue #2240): while the ``gaia-agent-*``
+wheels aren't published to PyPI, declaring them as an extra made
+``pip install "amd-gaia[agents]"`` unsatisfiable at the current release,
+which made pip/uv silently backtrack-downgrade to an older amd-gaia that
+didn't declare the extra. Keeping the list out of the package's own metadata
+avoids handing pip's resolver something it can't satisfy, while keeping a
+single place both this tool and end users (``gaia.agents.install_hints``)
+read from.
 
 Consumers:
 
 * ``.github/workflows/publish_agents.yml`` calls ``--format matrix`` to generate
-  the build/publish matrix, so adding an agent to ``setup.py[agents]`` is all it
-  takes to start publishing its wheel — no second list to keep in sync.
+  the build/publish matrix, so adding an agent to ``setup.py``'s
+  ``AGENT_WHEEL_PACKAGES`` is all it takes to start publishing its wheel — no
+  second list to keep in sync.
 * ``tests/unit/test_agent_pypi_publish.py`` calls :func:`list_agent_packages`
   to assert the published set, the on-disk packages, and their ``amd-gaia``
   dependency all agree.
 
-Per ``CLAUDE.md`` (No Silent Fallbacks): a distribution listed in the extra with
-no matching ``hub/agents/<id>/python/`` directory, or a malformed ``setup.py``,
+Per ``CLAUDE.md`` (No Silent Fallbacks): a distribution listed with no
+matching ``hub/agents/<id>/python/`` directory, or a malformed ``setup.py``,
 raises rather than silently dropping the agent from the publish set.
 """
 
@@ -57,8 +68,11 @@ class AgentPackage:
         return self.path.relative_to(REPO_ROOT).as_posix()
 
 
+AGENT_WHEEL_PACKAGES_NAME = "AGENT_WHEEL_PACKAGES"
+
+
 def _read_agents_extra(setup_py: Path) -> List[str]:
-    """Return the string list under ``extras_require["agents"]`` in *setup_py*.
+    """Return the string list assigned to ``AGENT_WHEEL_PACKAGES`` in *setup_py*.
 
     Parses statically with :mod:`ast` — ``setup.py`` is never imported or run.
     """
@@ -70,36 +84,31 @@ def _read_agents_extra(setup_py: Path) -> List[str]:
     tree = ast.parse(setup_py.read_text(encoding="utf-8"), filename=str(setup_py))
 
     for node in ast.walk(tree):
-        if not (isinstance(node, ast.keyword) and node.arg == "extras_require"):
+        if not isinstance(node, ast.Assign):
             continue
-        if not isinstance(node.value, ast.Dict):
+        if not any(
+            isinstance(target, ast.Name) and target.id == AGENT_WHEEL_PACKAGES_NAME
+            for target in node.targets
+        ):
+            continue
+        try:
+            dists = ast.literal_eval(node.value)
+        except ValueError as exc:
             raise AgentListError(
-                "setup.py: extras_require is not a dict literal — cannot derive "
-                "the production-agent list statically."
+                f"setup.py: {AGENT_WHEEL_PACKAGES_NAME} is not a literal list "
+                f"of strings: {exc}."
+            ) from exc
+        if not isinstance(dists, list) or not all(isinstance(d, str) for d in dists):
+            raise AgentListError(
+                f"setup.py: {AGENT_WHEEL_PACKAGES_NAME} must be a list of "
+                "distribution-name strings."
             )
-        for key, value in zip(node.value.keys, node.value.values):
-            if isinstance(key, ast.Constant) and key.value == "agents":
-                try:
-                    dists = ast.literal_eval(value)
-                except ValueError as exc:
-                    raise AgentListError(
-                        f"setup.py: extras_require['agents'] is not a literal "
-                        f"list of strings: {exc}."
-                    ) from exc
-                if not isinstance(dists, list) or not all(
-                    isinstance(d, str) for d in dists
-                ):
-                    raise AgentListError(
-                        "setup.py: extras_require['agents'] must be a list of "
-                        "distribution-name strings."
-                    )
-                return dists
-        raise AgentListError(
-            "setup.py: extras_require has no 'agents' key. Add it (the meta "
-            "extra behind 'pip install \"amd-gaia[agents]\"')."
-        )
+        return dists
     raise AgentListError(
-        "setup.py: no extras_require keyword found in the setup() call."
+        f"setup.py: no top-level {AGENT_WHEEL_PACKAGES_NAME} assignment found. "
+        "Add it (the list of gaia-agent-<id> wheels this repo publishes) -- "
+        "see util/list_agent_packages.py's module docstring for why it isn't "
+        "an extras_require entry (#2240)."
     )
 
 

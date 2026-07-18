@@ -6,6 +6,7 @@ Docker MCP Server Launcher
 Starts an MCP server for the Docker agent
 """
 
+from gaia.agents.install_hints import agent_not_installed_message
 from gaia.mcp.agent_mcp_server import MCP_DEFAULT_HOST, MCP_DEFAULT_PORT, AgentMCPServer
 
 
@@ -30,9 +31,9 @@ def start_docker_mcp(
         from gaia_agent_docker.agent import DockerAgent
     except ImportError as e:
         raise ImportError(
-            "The docker agent is not installed. Install it with "
-            '`uv pip install gaia-agent-docker` (or `uv pip install "amd-gaia[agents]"` '
-            "for all AMD agents)."
+            agent_not_installed_message(
+                "The docker agent is not installed", "gaia-agent-docker"
+            )
         ) from e
 
     # Prepare agent parameters

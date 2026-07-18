@@ -14,6 +14,37 @@ with open("src/gaia/version.py", encoding="utf-8") as fp:
 
 tkml_version = "5.0.4"
 
+# Standalone AMD production agent wheels (issues #1102, #1179). Each ships as
+# a separate 'gaia-agent-<id>' PyPI package depending on this framework
+# wheel. Deliberately NOT an extras_require entry: this list is read
+# statically by util/list_agent_packages.py (single source of truth for
+# .github/workflows/publish_agents.yml's build/publish matrix and
+# tests/unit/test_agent_pypi_publish.py) without ever being handed to pip's
+# resolver. An extras_require entry naming these packages made 'pip install
+# "amd-gaia[agents]"' unsatisfiable while the wheels are unpublished
+# (publish_agents.yml's publish job is paused), which made the resolver
+# silently downgrade amd-gaia itself to the newest release that didn't
+# declare the extra (#2240) -- see setup.py history / PR fixing #2240 for
+# the incident. Do not move this back into extras_require until the wheels
+# are live on PyPI.
+AGENT_WHEEL_PACKAGES = [
+    "gaia-agent-summarize",
+    "gaia-agent-sd",
+    "gaia-agent-fileio",
+    "gaia-agent-docker",
+    "gaia-agent-jira",
+    "gaia-agent-blender",
+    "gaia-agent-emr",
+    "gaia-agent-code",
+    "gaia-agent-connectors-demo",
+    "gaia-agent-analyst",
+    "gaia-agent-browser",
+    "gaia-agent-docqa",
+    "gaia-agent-routing",
+    "gaia-agent-email",
+    "gaia-agent-chat",
+]
+
 setup(
     name="amd-gaia",
     version=gaia_version,
@@ -270,42 +301,12 @@ setup(
             "build>=1.0.0",
             "twine>=5.0.0",
         ],
-        # Standalone AMD production agents (issues #1102, #1179). Each agent
-        # ships as a separate 'gaia-agent-<id>' wheel that depends on this
-        # framework wheel; 'amd-gaia[agents]' installs all migrated agents at
-        # once. Add an entry here when each agent's wheel is first published.
-        "agent-summarize": ["gaia-agent-summarize"],
-        "agent-sd": ["gaia-agent-sd"],
-        "agent-fileio": ["gaia-agent-fileio"],
-        "agent-docker": ["gaia-agent-docker"],
-        "agent-jira": ["gaia-agent-jira"],
-        "agent-blender": ["gaia-agent-blender"],
-        "agent-emr": ["gaia-agent-emr"],
-        "agent-code": ["gaia-agent-code"],
-        "agent-connectors-demo": ["gaia-agent-connectors-demo"],
-        "agent-analyst": ["gaia-agent-analyst"],
-        "agent-browser": ["gaia-agent-browser"],
-        "agent-docqa": ["gaia-agent-docqa"],
-        "agent-routing": ["gaia-agent-routing"],
-        "agent-email": ["gaia-agent-email"],
-        "agent-chat": ["gaia-agent-chat"],
-        "agents": [
-            "gaia-agent-summarize",
-            "gaia-agent-sd",
-            "gaia-agent-fileio",
-            "gaia-agent-docker",
-            "gaia-agent-jira",
-            "gaia-agent-blender",
-            "gaia-agent-emr",
-            "gaia-agent-code",
-            "gaia-agent-connectors-demo",
-            "gaia-agent-analyst",
-            "gaia-agent-browser",
-            "gaia-agent-docqa",
-            "gaia-agent-routing",
-            "gaia-agent-email",
-            "gaia-agent-chat",
-        ],
+        # NOTE: no 'agent-<id>' / 'agents' extras here -- see
+        # AGENT_WHEEL_PACKAGES above for why (#2240) and where that list
+        # actually lives now. Install an agent from source until the wheels
+        # are published:
+        #   uv pip install "gaia-agent-<id> @ git+https://github.com/amd/gaia.git#subdirectory=hub/agents/python/<id>"
+        # (see gaia.agents.install_hints.source_install_command).
     },
     classifiers=[
         "Development Status :: 4 - Beta",

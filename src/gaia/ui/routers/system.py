@@ -23,6 +23,7 @@ from gaia.llm.lemonade_client import (
     resolve_lemonade_api_key,
 )
 
+from ..agent_loop import resolve_agent_mode
 from ..database import ChatDatabase
 from ..dependencies import get_db, get_dispatch_queue
 from ..models import (
@@ -36,7 +37,9 @@ from ..models import (
     TaskResponse,
 )
 
-_VALID_AGENT_MODES = {"manual", "goal_driven", "autonomous"}
+# "autonomous" is intentionally absent: its observation cycle is unimplemented
+# (#2005) and accepting it would silently behave as "goal_driven".
+_VALID_AGENT_MODES = {"manual", "goal_driven"}
 
 logger = logging.getLogger(__name__)
 
@@ -850,7 +853,7 @@ async def get_settings(db: ChatDatabase = Depends(get_db)):
     custom_model = db.get_setting("custom_model")
     context_size_str = db.get_setting("context_size")
     context_size = int(context_size_str) if context_size_str else None
-    agent_mode = db.get_setting("agent_mode") or "autonomous"
+    agent_mode = resolve_agent_mode(db)
     dynamic_tools, dynamic_tools_locked = _resolve_dynamic_tools_setting(db)
     logger.debug(
         "Settings loaded: custom_model=%s, context_size=%s, agent_mode=%s, "
@@ -888,8 +891,10 @@ async def update_settings(
     Setting ``context_size`` to null resets to the default (32768 tokens).
     Non-null values must be >= 32768.
 
-    Setting ``agent_mode`` controls autonomous behaviour:
-    'manual' | 'goal_driven' | 'autonomous' (default).
+    Setting ``agent_mode`` controls background behaviour:
+    'manual' | 'goal_driven' (default). 'autonomous' is rejected until its
+    observation cycle ships (#2005) — it would silently behave as
+    'goal_driven'.
     """
     if request.custom_model is not None:
         value = request.custom_model.strip() if request.custom_model else None
@@ -918,6 +923,17 @@ async def update_settings(
 
     if "agent_mode" in request.model_fields_set and request.agent_mode is not None:
         mode = request.agent_mode.strip()
+        if mode == "autonomous":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "agent_mode 'autonomous' is not implemented yet: its "
+                    "observation cycle (docs/spec/autonomous-agent-mode.md "
+                    "§6.7) has not shipped, so it would behave identically "
+                    "to 'goal_driven'. Use 'goal_driven' instead. Tracked in "
+                    "https://github.com/amd/gaia/issues/2005."
+                ),
+            )
         if mode not in _VALID_AGENT_MODES:
             raise HTTPException(
                 status_code=400,
@@ -938,7 +954,7 @@ async def update_settings(
     custom_model = db.get_setting("custom_model")
     context_size_str = db.get_setting("context_size")
     context_size = int(context_size_str) if context_size_str else None
-    agent_mode = db.get_setting("agent_mode") or "autonomous"
+    agent_mode = resolve_agent_mode(db)
     dynamic_tools, dynamic_tools_locked = _resolve_dynamic_tools_setting(db)
     model_status = await _check_model_status(custom_model) if custom_model else None
     return SettingsResponse(
