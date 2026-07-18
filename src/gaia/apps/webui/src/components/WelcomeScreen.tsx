@@ -5,6 +5,7 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { Lock, Zap, FileText, DollarSign, Terminal } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import { AgentHubGrid } from './AgentHubGrid';
+import { shouldShowFirstRunTip, shouldShowNoModelTip } from '../utils/setupHints';
 import './WelcomeScreen.css';
 
 interface WelcomeScreenProps {
@@ -58,10 +59,12 @@ export function WelcomeScreen({ onNewTask, onSendPrompt, onCreateAgent }: Welcom
     const [showContent, setShowContent] = useState(false);
 
     // Determine if a setup hint should be shown to guide first-time users.
-    // Only show hints when backend is reachable (systemStatus is not null).
-    const notInitialized = systemStatus !== null && !systemStatus.initialized;
+    // Gating lives in setupHints so it stays testable and consistent — the
+    // "First time?" tip is suppressed once the live probe shows the system is
+    // ready even if the initialized marker is missing (#2119).
     const isInitializing = systemStatus?.init_state === 'initializing';
-    const noModel = systemStatus !== null && systemStatus.lemonade_running && !systemStatus.model_loaded;
+    const notInitialized = shouldShowFirstRunTip(systemStatus);
+    const noModel = shouldShowNoModelTip(systemStatus);
 
     // Title typing effect
     useEffect(() => {

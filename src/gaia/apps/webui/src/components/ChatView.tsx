@@ -11,6 +11,8 @@ import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { bugReportUrl } from './UnsupportedFeature';
 import { getAgentIcon } from './agentIcons';
+import { isAuthRequiredMessage } from './email/EmailConnectCta';
+import { ConnectorRetryBanner } from './ConnectorRetryBanner';
 import type { Message, StreamEvent, AgentStep, Attachment, Session, AgentInfo, RenderCardData } from '../types';
 
 import './ChatView.css';
@@ -1306,6 +1308,17 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
         sendMessage(text);
     }, [sessionId, isStreaming, removeMessagesFrom, setMessages, sendMessage, isStale]);
 
+    // Retry the last question after a connector was connected (#2119). Resends
+    // the last user message, which also drops the stale connector-error reply.
+    const handleRetryLast = useCallback(() => {
+        for (let i = messages.length - 1; i >= 0; i--) {
+            if (messages[i].role === 'user') {
+                handleResendMessage(messages[i]);
+                return;
+            }
+        }
+    }, [messages, handleResendMessage]);
+
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
@@ -1423,6 +1436,14 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
     };
 
     const showEmptyState = !isLoadingMessages && messages.length === 0 && !isStreaming;
+
+    // Stale connector-reply cue (#2119): when the newest reply was a connector
+    // auth-required error, offer to re-run once the account is connected.
+    const lastMessage = messages.length > 0 ? messages[messages.length - 1] : undefined;
+    const lastIsConnectorError = !isStreaming
+        && !isLoadingMessages
+        && lastMessage?.role === 'assistant'
+        && isAuthRequiredMessage(lastMessage.content);
     const emptyStateSuggestions = displayedAgent?.conversation_starters?.length
         ? displayedAgent.conversation_starters
         : EMPTY_SUGGESTIONS;
@@ -1769,6 +1790,11 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                         <span className="policy-alert-toast-missing">Receipt unavailable</span>
                     )}
                 </div>
+            )}
+
+            {/* Stale connector-reply retry cue (#2119) */}
+            {lastIsConnectorError && lastMessage && (
+                <ConnectorRetryBanner content={lastMessage.content} onRetry={handleRetryLast} />
             )}
 
             {/* Input */}

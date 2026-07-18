@@ -7,6 +7,9 @@ import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { getSessionHash } from '../utils/format';
+import { groupSessionsByAgent, resolveAgentName, resolveAgentIcon } from '../utils/sessionGrouping';
+import { cleanupAbandonedDraft } from '../utils/sessionCleanup';
+import { getAgentIcon } from './agentIcons';
 import gaiaRobot from '../assets/gaia-robot.png';
 import type { Session } from '../types';
 import './Sidebar.css';
@@ -34,7 +37,7 @@ interface SidebarProps {
 }
 
 /** Extracted session row to share between grouped and flat rendering. */
-function SessionItem({ session: s, isActive, isRunning, isPendingDelete, isDeleting, onSelect, onKeyDown, onDelete, formatTime }: {
+function SessionItem({ session: s, isActive, isRunning, isPendingDelete, isDeleting, onSelect, onKeyDown, onDelete, formatTime, agentChip }: {
     session: Session;
     isActive: boolean;
     isRunning: boolean;
@@ -44,6 +47,9 @@ function SessionItem({ session: s, isActive, isRunning, isPendingDelete, isDelet
     onKeyDown: (e: React.KeyboardEvent, id: string) => void;
     onDelete: (e: React.MouseEvent | React.KeyboardEvent, id: string) => void;
     formatTime: (iso: string) => string;
+    /** Optional agent identity chip (icon + name). Shown in the flat/search
+     *  list where there are no per-agent section headers to convey it. */
+    agentChip?: { name: string; icon?: string };
 }) {
     const [copied, setCopied] = useState(false);
 
@@ -52,6 +58,8 @@ function SessionItem({ session: s, isActive, isRunning, isPendingDelete, isDelet
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
     }, [s.id]);
+
+    const AgentChipIcon = agentChip ? getAgentIcon(agentChip.icon) : null;
 
     return (
         <div
@@ -74,6 +82,12 @@ function SessionItem({ session: s, isActive, isRunning, isPendingDelete, isDelet
                 )}
                 {s.title}
             </span>
+            {agentChip && AgentChipIcon && (
+                <span className="session-agent-chip" title={`Agent: ${agentChip.name}`}>
+                    <AgentChipIcon size={10} className="session-agent-chip-icon" />
+                    <span className="session-agent-chip-name">{agentChip.name}</span>
+                </span>
+            )}
             <a
                 className={`session-hash ${copied ? 'copied' : ''}`}
                 href={`#${getSessionHash(s.id)}`}
@@ -118,7 +132,7 @@ export function Sidebar({ onNewTask, onHome, tunnelActive, tunnelLoading, onMobi
         sidebarCollapsed, toggleSidebarCollapsed,
         sidebarWidth, setSidebarWidth,
         addPendingDelete, removePendingDelete,
-        runningSessionIds,
+        runningSessionIds, agents,
     } = useChatStore();
 
     const [search, setSearch] = useState('');
@@ -150,36 +164,20 @@ export function Sidebar({ onNewTask, onHome, tunnelActive, tunnelLoading, onMobi
         ? sessions.filter((s) => s.title.toLowerCase().includes(search.toLowerCase()))
         : sessions;
 
-    // Group sessions by time period (Today, Yesterday, Previous 7 Days, Older)
-    const groupedSessions = useMemo(() => {
-        if (search) return null; // Don't group when searching
-        const now = new Date();
-        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-        const yesterdayStart = todayStart - 86400000;
-        const weekStart = todayStart - 7 * 86400000;
-
-        const groups: { label: string; sessions: typeof filtered }[] = [
-            { label: 'Today', sessions: [] },
-            { label: 'Yesterday', sessions: [] },
-            { label: 'Previous 7 Days', sessions: [] },
-            { label: 'Older', sessions: [] },
-        ];
-
-        for (const s of filtered) {
-            const t = new Date(s.updated_at).getTime();
-            if (t >= todayStart) groups[0].sessions.push(s);
-            else if (t >= yesterdayStart) groups[1].sessions.push(s);
-            else if (t >= weekStart) groups[2].sessions.push(s);
-            else groups[3].sessions.push(s);
-        }
-
-        return groups.filter((g) => g.sessions.length > 0);
-    }, [filtered, search]);
+    // Group sessions by the agent that runs them (#2106). When searching we
+    // fall back to a flat list (each row carries an agent chip instead).
+    const agentGroups = useMemo(() => {
+        if (search) return null;
+        return groupSessionsByAgent(filtered, agents);
+    }, [filtered, search, agents]);
 
     const handleSelect = useCallback(async (id: string) => {
         if (id === currentSessionId) return;
         const title = sessions.find((s) => s.id === id)?.title || '?';
         log.nav.info(`Selecting session: "${title}" (${id})`);
+        // Drop the session we're leaving if it was an abandoned "New Task"
+        // draft, so switching away doesn't strand a phantom row (#2119).
+        void cleanupAbandonedDraft(currentSessionId);
         setCurrentSession(id);
         setMessages([]);
         setLoadingMessages(true);
@@ -402,29 +400,36 @@ export function Sidebar({ onNewTask, onHome, tunnelActive, tunnelLoading, onMobi
                         {search ? 'No results' : 'No tasks yet'}
                     </div>
                 )}
-                {groupedSessions ? (
-                    /* Render grouped sessions (Today, Yesterday, etc.) */
-                    groupedSessions.map((group) => (
-                        <div key={group.label}>
-                            <div className="session-group-label">{group.label}</div>
-                            {group.sessions.map((s) => (
-                                <SessionItem
-                                    key={s.id}
-                                    session={s}
-                                    isActive={s.id === currentSessionId}
-                                    isRunning={runningSessionIds.includes(s.id)}
-                                    isPendingDelete={pendingDeleteId === s.id}
-                                    isDeleting={deletingId === s.id}
-                                    onSelect={handleSelect}
-                                    onKeyDown={handleSessionKeyDown}
-                                    onDelete={handleDelete}
-                                    formatTime={formatTime}
-                                />
-                            ))}
-                        </div>
-                    ))
+                {agentGroups ? (
+                    /* Render sessions grouped by agent (#2106) */
+                    agentGroups.map((group) => {
+                        const GroupIcon = getAgentIcon(group.icon);
+                        return (
+                            <div key={group.agentId}>
+                                <div className="session-group-label session-agent-group-label">
+                                    <GroupIcon size={12} className="session-agent-group-icon" aria-hidden="true" />
+                                    <span className="session-agent-group-name">{group.name}</span>
+                                    <span className="session-agent-group-count">{group.sessions.length}</span>
+                                </div>
+                                {group.sessions.map((s) => (
+                                    <SessionItem
+                                        key={s.id}
+                                        session={s}
+                                        isActive={s.id === currentSessionId}
+                                        isRunning={runningSessionIds.includes(s.id)}
+                                        isPendingDelete={pendingDeleteId === s.id}
+                                        isDeleting={deletingId === s.id}
+                                        onSelect={handleSelect}
+                                        onKeyDown={handleSessionKeyDown}
+                                        onDelete={handleDelete}
+                                        formatTime={formatTime}
+                                    />
+                                ))}
+                            </div>
+                        );
+                    })
                 ) : (
-                    /* Flat list when searching */
+                    /* Flat list when searching — each row carries an agent chip */
                     filtered.map((s) => (
                         <SessionItem
                             key={s.id}
@@ -437,6 +442,7 @@ export function Sidebar({ onNewTask, onHome, tunnelActive, tunnelLoading, onMobi
                             onKeyDown={handleSessionKeyDown}
                             onDelete={handleDelete}
                             formatTime={formatTime}
+                            agentChip={{ name: resolveAgentName(s, agents), icon: resolveAgentIcon(s, agents) }}
                         />
                     ))
                 )}

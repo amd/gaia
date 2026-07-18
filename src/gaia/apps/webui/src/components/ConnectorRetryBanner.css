@@ -1,0 +1,62 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/* Stale connector-reply retry cue (#2119). Sits above the input area. */
+.connector-retry-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 16px 8px;
+    padding: 8px 12px;
+    border-radius: var(--radius-lg);
+    background: rgba(78, 201, 50, 0.08);
+    border: 1px solid rgba(78, 201, 50, 0.3);
+    font-size: 12px;
+    color: var(--text-primary, var(--text-secondary));
+}
+
+.connector-retry-banner__icon {
+    flex-shrink: 0;
+    color: var(--accent-green, #4ec932);
+}
+
+.connector-retry-banner__text {
+    flex: 1;
+    line-height: 1.4;
+}
+
+.connector-retry-banner__btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    padding: 4px 10px;
+    border-radius: var(--radius-md, 6px);
+    border: 1px solid var(--accent-green, #4ec932);
+    background: var(--accent-green, #4ec932);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 150ms var(--ease);
+}
+.connector-retry-banner__btn:hover {
+    opacity: 0.88;
+}
+
+.connector-retry-banner__dismiss {
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    line-height: 1;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 16px;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+}
+.connector-retry-banner__dismiss:hover {
+    color: var(--text-primary, var(--text-secondary));
+    background: var(--bg-hover);
+}

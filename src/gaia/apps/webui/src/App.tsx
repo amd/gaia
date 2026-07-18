@@ -23,6 +23,7 @@ import { log, logBanner } from './utils/logger';
 import { getSessionHash } from './utils/format';
 import { resolveUrlNavTarget } from './utils/sessionNav';
 import { getApiBase } from './utils/apiBase';
+import { cleanupAbandonedDraft, isAbandonedDraft } from './utils/sessionCleanup';
 
 /** Wrapper that delays unmount to allow CSS exit animations to play. */
 function AnimatedPresence({ show, children, duration = 250 }: {
@@ -409,7 +410,25 @@ function App() {
         log.chat.info('Creating new task session...');
         setCreateError(null);
         try {
-            const { activeAgentId, activeDevice, activeModelTier, agents } = useChatStore.getState();
+            const store = useChatStore.getState();
+            const { activeAgentId, activeDevice, activeModelTier, agents } = store;
+            // Don't stack phantom drafts: if we're already sitting on an empty
+            // "New Task" draft for this same agent, reuse it instead of minting
+            // another abandoned row (#2119).
+            const outgoingId = store.currentSessionId;
+            const outgoing = store.sessions.find((s) => s.id === outgoingId);
+            const outgoingIsDraft = outgoingId != null && isAbandonedDraft(outgoingId, {
+                sessions: store.sessions,
+                currentSessionId: store.currentSessionId,
+                messages: store.messages,
+                isStreaming: store.isStreaming,
+                runningSessionIds: store.runningSessionIds,
+            });
+            if (outgoingIsDraft && outgoing?.agent_type === activeAgentId) {
+                log.chat.info(`Reusing existing empty draft ${outgoingId} for agent ${activeAgentId}`);
+                if (window.innerWidth <= 768) setSidebarOpen(false);
+                return;
+            }
             // Resolve the selected model-size tier to a concrete model (#1162).
             // Only the "lite" tier pins a model; "full" defers to the agent default.
             const activeAgent = agents.find((a) => a.id === activeAgentId);
@@ -423,6 +442,9 @@ function App() {
             });
             log.chat.info(`Session created: id=${session.id}, title="${session.title}"`);
             addSession(session);
+            // Discard the draft we're leaving behind (different agent, or a
+            // stale empty draft) so it doesn't linger in the sidebar (#2119).
+            void cleanupAbandonedDraft(outgoingId);
             setCurrentSession(session.id);
             setMessages([]);
             // Auto-close sidebar on mobile
@@ -458,11 +480,14 @@ function App() {
     const handleNewBuilderTask = useCallback(async () => {
         log.chat.info('Creating builder agent session...');
         setCreateError(null);
+        const outgoingId = useChatStore.getState().currentSessionId;
         try {
             setPendingPrompt("Hi, I'd like to create a new custom agent.");
             const session = await api.createSession({ title: 'New Agent', agent_type: 'builder' });
             log.chat.info(`Builder session created: id=${session.id}`);
             addSession(session);
+            // Leaving an untouched "New Task" draft behind — drop it (#2119).
+            void cleanupAbandonedDraft(outgoingId);
             setCurrentSession(session.id);
             setMessages([]);
             if (window.innerWidth <= 768) setSidebarOpen(false);
@@ -607,7 +632,7 @@ function App() {
 
             <Sidebar
                 onNewTask={handleNewTask}
-                onHome={() => { setCurrentSession(null); setShowSettings(false); setShowMemoryDashboard(false); setShowSchedules(false); window.history.replaceState(null, '', window.location.pathname); }}
+                onHome={() => { void cleanupAbandonedDraft(currentSessionId); setCurrentSession(null); setShowSettings(false); setShowMemoryDashboard(false); setShowSchedules(false); window.history.replaceState(null, '', window.location.pathname); }}
                 tunnelActive={tunnelActive}
                 tunnelLoading={tunnelLoading}
                 onMobileToggle={handleMobileToggle}
