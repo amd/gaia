@@ -53,6 +53,33 @@ describe('chatStore streaming state', () => {
     });
 });
 
+describe('chatStore Hub navigation (#2206)', () => {
+    beforeEach(() => {
+        useChatStore.setState({ showHub: false, currentSessionId: null });
+    });
+
+    it('selecting a session leaves the Hub view (Home → session regression)', () => {
+        // Home opens the full-screen Hub.
+        useChatStore.getState().setShowHub(true);
+        expect(useChatStore.getState().showHub).toBe(true);
+
+        // Clicking a session must drop the Hub and switch to the chat view,
+        // not strand the user on the Hub (#2206).
+        useChatStore.getState().setCurrentSession('session-1');
+        expect(useChatStore.getState().showHub).toBe(false);
+        expect(useChatStore.getState().currentSessionId).toBe('session-1');
+    });
+
+    it('clearing the session (Home) does not fight setShowHub(true)', () => {
+        // Home calls setCurrentSession(null) *then* setShowHub(true); the null
+        // clear must not touch showHub or the Hub would never open.
+        useChatStore.getState().setCurrentSession(null);
+        useChatStore.getState().setShowHub(true);
+        expect(useChatStore.getState().showHub).toBe(true);
+        expect(useChatStore.getState().currentSessionId).toBeNull();
+    });
+});
+
 describe('chatStore running-sessions registry (#1580)', () => {
     beforeEach(() => {
         useChatStore.setState({ runningSessionIds: [] });

@@ -84,6 +84,53 @@ def test_report_to_dict_round_trips(monkeypatch):
     assert set(
         ["compatible", "platform_ok", "memory_ok", "disk_ok", "warnings", "blockers"]
     ).issubset(d)
+    # Detected NPU/GPU fields are always present (default None).
+    assert "detected_npu" in d
+    assert "detected_gpu_vram_gb" in d
+
+
+# ---------------------------------------------------------------------------
+# Detected NPU / GPU wiring (#1727): a real hardware scan turns the advisory
+# NPU/GPU checks into concrete pass/warning states instead of blanket
+# "cannot verify" — but never a silent pass.
+# ---------------------------------------------------------------------------
+
+
+def test_detected_npu_present_suppresses_warning(monkeypatch):
+    monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
+    report = check_compatibility({"platforms": [], "npu": True}, detected_npu=True)
+    assert report.compatible is True
+    assert not any("NPU" in w for w in report.warnings)
+    assert report.detected_npu is True
+
+
+def test_detected_npu_absent_is_named_warning(monkeypatch):
+    monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
+    report = check_compatibility({"platforms": [], "npu": True}, detected_npu=False)
+    assert report.compatible is True  # advisory, not a hard blocker
+    assert any("none was detected" in w for w in report.warnings)
+
+
+def test_unprobed_npu_keeps_cannot_verify_warning(monkeypatch):
+    monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
+    report = check_compatibility({"platforms": [], "npu": True})
+    assert any("cannot verify NPU" in w for w in report.warnings)
+
+
+def test_detected_gpu_vram_below_requirement_warns(monkeypatch):
+    monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
+    report = check_compatibility(
+        {"platforms": [], "gpu_vram_gb": 16}, detected_gpu_vram_gb=8.0
+    )
+    assert any("16 GB of GPU VRAM" in w and "8" in w for w in report.warnings)
+
+
+def test_detected_gpu_vram_meets_requirement_no_warning(monkeypatch):
+    monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
+    report = check_compatibility(
+        {"platforms": [], "gpu_vram_gb": 8}, detected_gpu_vram_gb=16.0
+    )
+    assert not any("VRAM" in w for w in report.warnings)
 
 
 # ---------------------------------------------------------------------------
