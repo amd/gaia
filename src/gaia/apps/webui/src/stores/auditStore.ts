@@ -45,6 +45,12 @@ interface AuditState {
   clearFilters: () => void;
 
   // ── Rollback Actions ────────────────────────────────────────────────
+  /**
+   * Undo the recorded action by dispatching `agent/rollback` to the agent
+   * that executed it, then mark the entry rolled back. Throws (and leaves
+   * the entry unmarked) when the entry is missing, irreversible, already
+   * rolled back, or the agent rejects/cannot be reached.
+   */
   rollbackAction: (id: string) => Promise<void>;
   setRollbackTarget: (id: string | null) => void;
 
@@ -125,23 +131,50 @@ export const useAuditStore = create<AuditState>((set, get) => ({
   rollbackAction: async (id) => {
     const { entries } = get();
     const entry = entries.find((e) => e.id === id);
-    if (!entry || !entry.reversible || entry.rolledBack) {
-      console.warn(`[auditStore] Cannot rollback entry ${id}`);
-      return;
+    if (!entry) {
+      throw new Error(`Audit entry ${id} not found — it may have been cleared.`);
+    }
+    if (!entry.reversible) {
+      throw new Error(
+        `Action "${entry.tool}" (audit entry ${id}) is not reversible — ` +
+          'the agent recorded it as irreversible, so there is nothing to undo.'
+      );
+    }
+    if (entry.rolledBack) {
+      throw new Error(`Audit entry ${id} has already been rolled back.`);
+    }
+
+    const sendRpc = window.gaiaAPI?.agent?.sendRpc;
+    if (!sendRpc) {
+      throw new Error(
+        'Rollback unavailable: window.gaiaAPI.agent is not exposed. ' +
+          'Rollback dispatches an agent/rollback RPC to the agent that ran ' +
+          'the action, which requires the GAIA desktop app (Electron).'
+      );
     }
 
     set({ rollbackTarget: id });
     try {
-      // TODO: Implement IPC call to rollback via main process
-      // For now, mark as rolled back locally
-      console.log(`[auditStore] rollbackAction(${id}): marking as rolled back`);
+      // The agent that executed the tool is the only party that can undo
+      // it — it must implement the `agent/rollback` JSON-RPC method and
+      // reject when it cannot revert the action.
+      await sendRpc(entry.agentId, 'agent/rollback', {
+        audit_id: entry.id,
+        tool: entry.tool,
+        args: entry.args,
+      });
+      // Only mark rolled back AFTER the agent confirmed the undo.
       set((state) => ({
         entries: state.entries.map((e) =>
           e.id === id ? { ...e, rolledBack: true } : e
         ),
       }));
     } catch (err) {
-      console.error(`[auditStore] Failed to rollback entry ${id}:`, err);
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Rollback of "${entry.tool}" (audit entry ${id}) failed — the entry ` +
+          `was NOT marked rolled back: ${message}`
+      );
     } finally {
       set({ rollbackTarget: null });
     }
