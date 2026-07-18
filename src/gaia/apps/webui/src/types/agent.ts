@@ -269,6 +269,9 @@ export interface GaiaElectronAPI {
     respondPermission: (id: string, action: 'allow' | 'deny', remember: boolean) => Promise<void>;
     onNotification: (cb: (data: GaiaNotification) => void) => void;
   };
+  system: {
+    getMetrics: () => Promise<SystemMetrics>;
+  };
 }
 
 // Augment Window to include gaiaAPI when running in Electron

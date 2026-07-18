@@ -144,6 +144,28 @@ class MockApp extends EventEmitter {
     return this._isReady;
   }
 
+  getAppMetrics() {
+    // Mirrors Electron's app.getAppMetrics() shape (memory sizes in KB).
+    return [
+      {
+        pid: process.pid,
+        type: 'Browser',
+        name: 'Browser',
+        creationTime: Date.now() - 5000,
+        cpu: { percentCPUUsage: 1.5, idleWakeupsPerSecond: 0 },
+        memory: { workingSetSize: 204800, peakWorkingSetSize: 262144 },
+      },
+      {
+        pid: process.pid + 1,
+        type: 'Tab',
+        name: 'GAIA Agent UI',
+        creationTime: Date.now() - 4000,
+        cpu: { percentCPUUsage: 0.4, idleWakeupsPerSecond: 0 },
+        memory: { workingSetSize: 102400, peakWorkingSetSize: 131072 },
+      },
+    ];
+  }
+
   focus() {
     this.emit('browser-window-focus');
   }
