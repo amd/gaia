@@ -134,10 +134,20 @@ def live_daemon_with_email(require_live_optin, tmp_path_factory):
 
     # Ensure the email sidecar (dev mode from source unless the operator set a
     # different mode). Blocking — run it directly; the fixture is module-scoped.
+    from gaia.daemon.sidecars.errors import (
+        BinaryNotFoundError,
+        PlatformError,
+        SidecarSpawnError,
+    )
+
     mode = os.environ.get("GAIA_EMAIL_AGENT_MODE", "dev")
     try:
         registry.ensure("email", mode=mode)
-    except Exception as exc:  # loud skip: name what failed and how to fix it
+    except (BinaryNotFoundError, SidecarSpawnError, PlatformError) as exc:
+        # Skip ONLY on an unconfigured environment (missing binary / dev deps /
+        # unsupported platform). A real startup regression — health timeout,
+        # version mismatch, integrity failure, HTTP error — is NOT one of these
+        # and MUST propagate as a failure, not hide behind a green skip.
         registry.shutdown_all()
         server.should_exit = True
         thread.join(timeout=10)

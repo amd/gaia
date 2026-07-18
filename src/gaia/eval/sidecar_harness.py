@@ -440,14 +440,41 @@ class SerialEvalLock:
             holder = self._holder_pid()
             if holder is not None and not self._pid_alive(holder):
                 # Stale lock: the previous eval process died without releasing.
+                # Reclaim it verify-at-unlink so two contenders that BOTH saw the
+                # same dead pid can't both steal it (which would run two evals in
+                # parallel against the single Lemonade slot). os.rename is atomic:
+                # only one contender can move THIS file into its own reclaim
+                # token; the loser's rename fails and it loops back to contention.
                 logger.warning(
                     "sidecar eval: reclaiming stale serial lock at %s "
                     "(holder pid %s is gone)",
                     self.path,
                     holder,
                 )
+                token = self.path.with_name(f"{self.path.name}.reclaim.{os.getpid()}")
                 try:
-                    self.path.unlink()
+                    os.rename(self.path, token)
+                except OSError:
+                    # Another contender reclaimed or a live holder recreated the
+                    # lock between our read and rename — re-contend.
+                    continue
+                # We exclusively hold the renamed file. Confirm it still carries
+                # the SAME dead pid; if it changed, a live holder recreated it
+                # first — put it back rather than steal it, then re-contend.
+                try:
+                    token_pid = int(
+                        token.read_text(encoding="utf-8").strip().split()[0]
+                    )
+                except (OSError, ValueError, IndexError):
+                    token_pid = None
+                if token_pid != holder:
+                    try:
+                        os.rename(token, self.path)
+                    except OSError:
+                        pass
+                    continue
+                try:
+                    token.unlink()
                 except FileNotFoundError:
                     pass
                 continue

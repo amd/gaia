@@ -412,8 +412,11 @@ def test_migration_is_idempotent():  # pragma: no cover - pending merge
 
 
 def test_seam_coverage_manifest_reflects_reality():
-    """Assert the documented coverage split matches the live probe results, so
-    the PR's "covered vs skipped" table can never silently drift from the code."""
+    """Pin the covered-vs-pending split to the CURRENT tree so it can never
+    silently drift: the LIVE seam probes must equal the explicit expected map
+    below. When a pending seam merges its probe flips, this assertion FAILS, and
+    whoever merged it must flip the manifest here and light up the real test —
+    exactly the forcing function a hardcoded ``True`` cannot provide."""
     covered = {
         "relay_vocabulary_coherence": True,  # always
         "relay_synthetic_error_coherence": True,  # always
@@ -425,9 +428,22 @@ def test_seam_coverage_manifest_reflects_reality():
         "custody_scoping_v2_12": not _CUSTODY_MOUNTED,
         "migration_idempotency_v2_13": _MIGRATION_MODULE is None,
     }
-    # The core cross-seam guards are unconditionally covered.
-    assert covered["relay_vocabulary_coherence"]
-    assert covered["relay_synthetic_error_coherence"]
-    # Everything not-yet-merged is honestly marked pending (this is the state at
-    # authoring time; each flips to False — i.e. covered — when its issue merges).
-    assert isinstance(json.dumps(pending), str)  # serializable manifest
+
+    # Expected as of this tree: Leg-2 auth has LANDED (the sidecar manager is
+    # importable); the four V2 seams below are NOT merged, so each is still
+    # pending. Any drift is a real event — a seam merged (flip it to covered and
+    # implement its test) or the auth manager module moved (fix its probe). Do
+    # NOT soften these to make the test pass.
+    assert covered == {
+        "relay_vocabulary_coherence": True,
+        "relay_synthetic_error_coherence": True,
+        "auth_leg2_bearer_via_env": True,
+    }
+    assert pending == {
+        "secret_file_delivery_v2_3": True,
+        "model_broker_v2_11": True,
+        "custody_scoping_v2_12": True,
+        "migration_idempotency_v2_13": True,
+    }
+    # The manifest stays JSON-serializable so front-doors / CI can emit it.
+    assert isinstance(json.dumps({"covered": covered, "pending": pending}), str)

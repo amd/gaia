@@ -334,6 +334,41 @@ def test_serial_lock_reclaims_stale_lock_of_dead_holder(tmp_path, monkeypatch):
         assert int(lock_path.read_text().split()[0]) == os.getpid()
 
 
+def test_serial_lock_reclaim_race_loser_does_not_double_acquire(tmp_path, monkeypatch):
+    """Two contenders both see the SAME dead holder pid. The one that LOSES the
+    atomic reclaim rename must NOT go on to acquire — otherwise both would run
+    evals in parallel, the exact Lemonade race-evict the lock exists to prevent."""
+    import gaia.eval.sidecar_harness as mod
+
+    lock_path = tmp_path / "eval.lock"
+    dead_pid = 999_999_999
+    lock_path.write_text(f"{dead_pid} 1.0\n")
+
+    live_winner = os.getpid()
+    # The stale holder looks dead; the winner (any other pid) looks alive.
+    monkeypatch.setattr(
+        mod.SerialEvalLock,
+        "_pid_alive",
+        staticmethod(lambda pid: pid != dead_pid),
+    )
+
+    def _racing_rename(src, dst):
+        # Simulate a second contender winning the reclaim first: it has already
+        # replaced the stale lock with its OWN live lock, so our rename of the
+        # (now-superseded) path fails and we must re-contend — never acquire.
+        Path(src).write_text(f"{live_winner} 2.0\n")
+        raise FileNotFoundError(src)
+
+    monkeypatch.setattr(mod.os, "rename", _racing_rename)
+
+    loser = SerialEvalLock(lock_path, timeout=0.3, poll=0.05)
+    with pytest.raises(SerialEvalTimeout, match="serial lock"):
+        loser.acquire()
+    assert loser._acquired is False
+    # The winner's live lock is intact — the loser never stole or removed it.
+    assert int(lock_path.read_text().split()[0]) == live_winner
+
+
 def test_serial_lock_env_override(tmp_path, monkeypatch):
     target = tmp_path / "from-env.lock"
     monkeypatch.setenv("GAIA_EVAL_LOCK_PATH", str(target))
