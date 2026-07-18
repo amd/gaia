@@ -293,6 +293,132 @@ class TestConfigureEndpoint:
 
 
 # ---------------------------------------------------------------------------
+# POST /api/connectors/{connector_id}/authorize — grant-on-connect (#2117)
+# ---------------------------------------------------------------------------
+
+
+def _fake_registry(nsid: str, connector_id: str, scopes: list[str]):
+    """Minimal AgentRegistry stand-in for the router's scope resolution."""
+    from dataclasses import dataclass, field
+    from typing import List
+
+    from gaia.connectors.providers.base import ConnectorRequirement
+
+    @dataclass
+    class FakeReg:
+        namespaced_agent_id: str
+        required_connections: List[ConnectorRequirement] = field(default_factory=list)
+
+    @dataclass
+    class FakeRegistry:
+        _regs: List[FakeReg]
+
+        def list(self):
+            return self._regs
+
+    cr = ConnectorRequirement(connector_id=connector_id, scopes=scopes)
+    return FakeRegistry(
+        _regs=[FakeReg(namespaced_agent_id=nsid, required_connections=[cr])]
+    )
+
+
+class TestAuthorizeGrantAgents:
+    _SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
+
+    def test_authorize_resolves_and_passes_grant_agents(
+        self, ui_api_client, monkeypatch
+    ):
+        mock_start = AsyncMock(
+            return_value={"flow_id": "f1", "authorization_url": "https://auth"}
+        )
+        monkeypatch.setattr("gaia.connectors.start_authorization", mock_start)
+        ui_api_client.app.state.agent_registry = _fake_registry(
+            "installed:email", "google", self._SCOPES
+        )
+
+        resp = ui_api_client.post(
+            "/api/connectors/google/authorize",
+            json={"scopes": ["openid"], "grant_agents": ["installed:email"]},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 200, resp.text
+        # The resolved {agent_id: scopes} map is threaded into the flow.
+        _, kwargs = mock_start.call_args
+        assert kwargs["grant_agents"] == {"installed:email": self._SCOPES}
+
+    def test_authorize_without_grant_agents_passes_none(
+        self, ui_api_client, monkeypatch
+    ):
+        mock_start = AsyncMock(
+            return_value={"flow_id": "f1", "authorization_url": "https://auth"}
+        )
+        monkeypatch.setattr("gaia.connectors.start_authorization", mock_start)
+
+        resp = ui_api_client.post(
+            "/api/connectors/google/authorize",
+            json={"scopes": ["openid"]},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 200, resp.text
+        _, kwargs = mock_start.call_args
+        assert kwargs["grant_agents"] is None
+
+    def test_authorize_unknown_agent_is_404(self, ui_api_client, monkeypatch):
+        monkeypatch.setattr("gaia.connectors.start_authorization", AsyncMock())
+        ui_api_client.app.state.agent_registry = _fake_registry(
+            "installed:email", "google", self._SCOPES
+        )
+        resp = ui_api_client.post(
+            "/api/connectors/google/authorize",
+            json={"scopes": ["openid"], "grant_agents": ["installed:ghost"]},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 404
+
+    def test_authorize_agent_declares_no_scopes_is_400(
+        self, ui_api_client, monkeypatch
+    ):
+        monkeypatch.setattr("gaia.connectors.start_authorization", AsyncMock())
+        # The agent declares microsoft, not google — no scopes for this connector.
+        ui_api_client.app.state.agent_registry = _fake_registry(
+            "installed:email", "microsoft", self._SCOPES
+        )
+        resp = ui_api_client.post(
+            "/api/connectors/google/authorize",
+            json={"scopes": ["openid"], "grant_agents": ["installed:email"]},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 400
+
+    def test_configure_resolves_grant_agents_into_config(
+        self, ui_api_client, monkeypatch
+    ):
+        captured = {}
+
+        async def fake_configure(connector_id, config):
+            captured["config"] = config
+            return {"configured": True, "flow_id": "f1"}
+
+        monkeypatch.setattr("gaia.ui.routers.connectors.configure", fake_configure)
+        ui_api_client.app.state.agent_registry = _fake_registry(
+            "installed:email", "google", self._SCOPES
+        )
+        resp = ui_api_client.post(
+            "/api/connectors/google/configure",
+            json={
+                "config": {
+                    "scopes": ["openid"],
+                    "grant_agents": ["installed:email"],
+                }
+            },
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 200, resp.text
+        # The list of ids is resolved to the {id: scopes} map the flow expects.
+        assert captured["config"]["grant_agents"] == {"installed:email": self._SCOPES}
+
+
+# ---------------------------------------------------------------------------
 # POST /api/connectors/{connector_id}/test
 # ---------------------------------------------------------------------------
 
