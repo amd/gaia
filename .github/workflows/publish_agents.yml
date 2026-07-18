@@ -3,12 +3,17 @@
 #
 # Publish the AMD production *Python* agent wheels (gaia-agent-<id>) to PyPI.
 # Issue #1179 (Agent Hub dual distribution): R2 is the canonical source for the
-# Hub UI; PyPI is the canonical source for `pip install gaia-agent-<id>` and the
-# `amd-gaia[agents]` meta-extra. The C++ agent binaries are handled separately
-# by build_agents.yml.
+# Hub UI; PyPI is the canonical source for `pip install gaia-agent-<id>` once
+# publishing is enabled. The C++ agent binaries are handled separately by
+# build_agents.yml.
+#
+# The `amd-gaia[agents]` meta-extra that used to accompany this was removed in
+# #2240 — naming unpublished packages made it unsatisfiable, which silently
+# downgraded users' installs. Until these wheels actually publish, agents are
+# installed from the repo (see gaia.install_hints).
 #
 # Flow:
-#   discover (read setup.py[agents] -> matrix)
+#   discover (read setup.py AGENT_PACKAGES -> matrix)
 #     -> build  (tag only: build each wheel + twine check, upload artifact)
 #       -> approve (tag only: single manual gate, "publish" environment)
 #         -> publish (tag only: gh-action-pypi-publish per agent, skip-existing)

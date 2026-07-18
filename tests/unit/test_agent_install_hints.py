@@ -7,7 +7,7 @@
 extra doesn't fail cleanly, it makes the resolver backtrack past every
 version that declares it and silently *downgrade* the user's install. A bare
 `pip install gaia-agent-<id>` fails outright for the same reason: nothing is
-published. Both phrases were copy-pasted into ~20 raised error messages
+published. Both phrases were copy-pasted into ~20 user-facing messages
 across `src/gaia/` and `hub/agents/python/`.
 
 Scope, stated explicitly so this test's coverage is unambiguous:
@@ -304,9 +304,9 @@ def test_scan_flags_an_fstring_whose_literal_segments_carry_the_bad_advice(tmp_p
     f = tmp_path / "mod.py"
     f.write_text(
         "def f(wheel):\n"
-        '    raise RuntimeError(\n'
+        "    raise RuntimeError(\n"
         '        f"install `uv pip install {wheel}` (or "\n'
-        '        f\'`uv pip install "amd-gaia[agents]"`)\'\n'
+        "        f'`uv pip install \"amd-gaia[agents]\"`)'\n"
         "    )\n",
         encoding="utf-8",
     )

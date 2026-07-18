@@ -85,7 +85,9 @@ pick one of the entry points below.
     against one host.
 
     ```bash
-    pip install gaia-agent-email        # installs the email REST routes
+    # The email agent is not on PyPI yet (#1179/#1513) — install it from the
+    # repo, pinned to the GAIA version you are running (`gaia --version`).
+    pip install "git+https://github.com/amd/gaia.git@v0.23.0#subdirectory=hub/agents/python/email"
     python -m gaia.ui.server --port 4200 --host 127.0.0.1
     ```
 

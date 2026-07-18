@@ -90,8 +90,7 @@ def _read_agent_packages_constant(setup_py: Path) -> List[str]:
             dists = ast.literal_eval(node.value)
         except ValueError as exc:
             raise AgentListError(
-                f"setup.py: AGENT_PACKAGES is not a literal list of strings: "
-                f"{exc}."
+                f"setup.py: AGENT_PACKAGES is not a literal list of strings: {exc}."
             ) from exc
         if not isinstance(dists, list) or not all(isinstance(d, str) for d in dists):
             raise AgentListError(

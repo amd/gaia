@@ -62,7 +62,7 @@ src/gaia/agents/                 src/gaia/agents/        ← framework only
 ## Key Decisions
 
 1. **Framework-only core wheel.** `pip install amd-gaia` provides `Agent`, `@tool`, `MCPAgent`, `AgentConsole`, registry, LLM clients, RAG, MCP. No production agents.
-2. **Agents are separate wheels.** `gaia-agent-chat`, `gaia-agent-jira`, `gaia-agent-code`, etc. — installable via `gaia agent install <id>`, `pip install gaia-agent-{id}`, or `amd-gaia[agents]` for all of them. One wheel per **codebase**, not per registry ID: the `chat` package ships multiple prompt profiles (`doc`, `file`, `data`, `web`) and model presets (lite variants) selectable via config — they are not separate wheels (see [#1162](https://github.com/amd/gaia/issues/1162)).
+2. **Agents are separate wheels.** `gaia-agent-chat`, `gaia-agent-jira`, `gaia-agent-code`, etc. — installable via `gaia agent install <id>` or, once published, `pip install gaia-agent-{id}`. Until then, install from the repo pinned to your core version (`gaia.install_hints` emits the exact command; the `amd-gaia[agents]` meta-extra this spec originally proposed was removed in [#2240](https://github.com/amd/gaia/issues/2240) because naming unpublished packages made it unsatisfiable and silently downgraded installs). One wheel per **codebase**, not per registry ID: the `chat` package ships multiple prompt profiles (`doc`, `file`, `data`, `web`) and model presets (lite variants) selectable via config — they are not separate wheels (see [#1162](https://github.com/amd/gaia/issues/1162)).
 3. **Shared tool mixins promoted to framework.** RAG, FileIO, Shell, CodeIndex mixins move into `src/gaia/agents/tools/` so agents don't depend on each other for tools.
 4. **Entry-point discovery.** Agents register via the `gaia.agent` entry point group. The registry discovers installed agent wheels at startup — no hardcoded agent list.
 5. **Framework-provided generic server.** `src/gaia/agents/base/server.py` wraps any Agent into an OpenAI-compatible REST API + MCP stdio server. Agents don't implement server logic.
@@ -144,7 +144,7 @@ Start with `summarize` — simplest, fewest dependencies. Proves the pattern end
 Migrate the other 15 agents. Rewrite internal imports (`gaia.agents.{name}` → `gaia_agent_{name}`). Framework imports stay. Cross-agent deps become package deps.
 </Step>
 <Step title="Strip the core wheel">
-Remove agent packages from `setup.py`. Remove `gaia-emr`/`gaia-code` console scripts. Add `amd-gaia[agents]` and per-agent extras.
+Remove agent packages from `setup.py`. Remove `gaia-emr`/`gaia-code` console scripts. (The `amd-gaia[agents]` and per-agent extras added here were later removed — see [#2240](https://github.com/amd/gaia/issues/2240).)
 </Step>
 <Step title="Update the registry">
 `_register_builtin_agents()` keeps only `builder`. Add `_discover_installed_agents()` using the `gaia.agent` entry point group.
@@ -214,7 +214,7 @@ The exploration found these agent-to-agent couplings that must be resolved:
 | Risk | Mitigation |
 |------|-----------|
 | 252 import references across the codebase break | Promote mixins first (Step 1), then migrate one agent at a time |
-| `pip install amd-gaia` no longer ships agents (breaking change) | `amd-gaia[agents]` extras preserves the "everything" install; document migration |
+| `pip install amd-gaia` no longer ships agents (breaking change) | Originally an `amd-gaia[agents]` extra; removed in [#2240](https://github.com/amd/gaia/issues/2240) (unsatisfiable → silent downgrade). Agents install from the repo until the wheels publish |
 | Editable dev workflow friction | `pip install -e hub/agents/python/{id}/` registers via entry points |
 | Registry can't find agents | Entry-point discovery + `~/.gaia/agents/` scan; fail loudly if an agent's `min_gaia_version` is unmet |
 

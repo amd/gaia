@@ -19,8 +19,8 @@ pip install -e hub/agents/python/routing    # editable, for development
 ```
 
 The API server's `gaia-code` model routes through `RoutingAgent`, which in turn
-needs the `gaia-agent-code` wheel installed. Install both (or
-`pip install amd-gaia[agents]`) to use `gaia api` for code generation.
+needs the code agent installed. Install both to use `gaia api` for code
+generation — `gaia api` prints the exact commands if either is missing.
 
 ## Develop / test
 
