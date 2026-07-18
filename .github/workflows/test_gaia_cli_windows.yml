@@ -78,6 +78,45 @@ jobs:
           python --version
           python -m pip check
 
+      # #2250: the launch-secret DACL cannot be proven off-Windows. The mocked
+      # layer of test_daemon_secret_acl.py already runs on ubuntu (test_unit.yml),
+      # but only a real NTFS volume shows whether the ACL is actually applied
+      # and whether inherited ACEs die. Runs before Lemonade: no server needed.
+      - name: Run Windows Launch-Secret DACL Tests (CMD)
+        shell: cmd
+        env:
+          PYTHONUTF8: 1
+        run: |
+          REM Activate virtual environment
+          call "%GITHUB_WORKSPACE%\.venv\Scripts\activate.bat"
+
+          echo ================================================================
+          echo         WINDOWS LAUNCH-SECRET DACL TESTS (issue #2250)
+          echo ================================================================
+          echo Virtual Environment: %VIRTUAL_ENV%
+          python --version
+          echo.
+
+          REM -rs prints skip reasons: if the win32-gated tests SKIP here, the
+          REM platform guard is misfiring and the real coverage is silently
+          REM absent -- that must be visible in the log, not swallowed.
+          python -m pytest tests\unit\test_daemon_secret_acl.py -v -rs --tb=short
+          set dacl_exit=%ERRORLEVEL%
+
+          echo.
+          echo ----------------------------------------------------------------
+          echo test_daemon_secret_acl.py exit code: %dacl_exit%
+          if %dacl_exit% equ 0 (
+              echo [SUCCESS] Launch-secret DACL tests passed
+          ) else (
+              echo [FAILURE] Launch-secret DACL tests failed
+              echo The sidecar launch secret may be readable by other local
+              echo accounts on NTFS - see issue #2250.
+          )
+          echo ----------------------------------------------------------------
+
+          exit /b %dacl_exit%
+
       - uses: FedericoCarboni/setup-ffmpeg@v3
         id: setup-ffmpeg
 

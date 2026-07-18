@@ -163,7 +163,8 @@ Trouble: "Connect button does nothing in AgentUI."
 - The keyring backend allowlist (`PlaintextKeyring`/`EncryptedKeyring`
   refused) prevents silent fallback to plaintext file storage on Linux
   without SecretService.
-- The `client_id_hash` is sha256 of the client id, NOT the client id
-  itself; it can be logged at INFO without leaking the client id.
+- The `client_id_hash` is a CRC32 fingerprint of the client id
+  (`gaia.connectors.providers.google`), NOT the client id itself; it is
+  for log correlation and the rotation tripwire only, not security.
 - The OAuth `state` parameter is a per-flow random nonce compared via
   `hmac.compare_digest`; mismatched callbacks return 400.
