@@ -17,19 +17,8 @@ def is_port_in_use(port, host="localhost"):
         return s.connect_ex((host, port)) == 0
 
 
-@pytest.fixture(scope="session", autouse=True)
-def check_mcp_server():
-    """Check if the MCP server is running before running integration tests."""
-    # Port that MCP server uses
-    mcp_port = 9876
-
-    if not is_port_in_use(mcp_port):
-        pytest.skip(
-            f"MCP server not running on port {mcp_port}. Skipping integration tests."
-        )
-
-    logger.info("MCP server is running, proceeding with integration tests")
-    return True
+# Port that the Blender MCP server uses
+MCP_PORT = 9876
 
 
 @pytest.fixture(scope="session")
@@ -47,12 +36,22 @@ def pytest_configure(config):
 
 
 def pytest_collection_modifyitems(config, items):
-    """Skip integration tests if --skip-integration flag is provided."""
+    """Skip integration tests when requested or when the MCP server is down.
+
+    Mocked unit tests always run; only ``integration``-marked tests need the
+    live Blender MCP server (test_mcp_client.py self-skips via its fixture).
+    """
     if config.getoption("--skip-integration"):
         skip_integration = pytest.mark.skip(reason="--skip-integration option provided")
-        for item in items:
-            if "integration" in item.keywords:
-                item.add_marker(skip_integration)
+    elif not is_port_in_use(MCP_PORT):
+        skip_integration = pytest.mark.skip(
+            reason=f"MCP server not running on port {MCP_PORT}"
+        )
+    else:
+        return
+    for item in items:
+        if "integration" in item.keywords:
+            item.add_marker(skip_integration)
 
 
 def pytest_addoption(parser):
