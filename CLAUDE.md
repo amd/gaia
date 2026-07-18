@@ -568,7 +568,8 @@ When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can c
 
 ### Default Models
 - `gaia llm` default: `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME` in [`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py)). ChatAgent and EmailTriageAgent explicitly use it too.
-- Agents that leave `model_id` unset fall back to `Qwen3.5-35B-A3B-GGUF` — the base `Agent.__init__` default (`model_id or "Qwen3.5-35B-A3B-GGUF"`). That covers Analyst, Browser, FileIO, plus Code/Builder/Jira/Docker/Routing/DocumentQA which also hardcode it.
+- Agents that leave `model_id` unset fall back to `Gemma-4-E4B-it-GGUF` — the base `Agent.__init__` default (`model_id or DEFAULT_MODEL_NAME`). That covers Analyst, Browser, FileIO, plus Code/Builder/Jira/Docker/Routing/DocumentQA/Blender/doc-search/connectors-demo. Every agent shares one model id so switching agents never evicts and cold-reloads the resident model.
+- Context window is pinned per device profile, not per agent: `GPU_CTX_SIZE` (65536, GPU/CPU) and `NPU_CTX_SIZE` (32768, the FLM ceiling) in [`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py). A machine runs one profile, so exactly one `(model, ctx_size)` pair is ever resident.
 - Summarizer: `Qwen3-4B-Instruct-2507-GGUF`
 - Vision: `Gemma-4-E4B-it-GGUF` is the default VLM (VLM mixin + EMR agent); `Qwen3-VL-4B-Instruct-GGUF` also supported
 - Image generation (SD): `SDXL-Turbo`
