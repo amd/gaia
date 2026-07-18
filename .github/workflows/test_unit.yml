@@ -71,8 +71,12 @@ jobs:
           # exercises the perf-vis plotting functions headlessly (Agg backend).
           # It stays out of the runtime extras on purpose — gaia.perf_analysis
           # imports it lazily and errors loudly when it is missing.
+          # pymupdf (fitz) is required by tests/unit/test_structured_vlm_extraction.py:
+          # the PDF branch of StructuredExtractor.extract() does `import fitz`, and
+          # mocker.patch("fitz.open") can only resolve that target if the module
+          # exists. It ships in the [ui]/[rag] extras, which this job does not install.
           uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pytest-timeout \
-                                  pyfakefs keyring httpx respx matplotlib
+                                  pyfakefs keyring httpx respx matplotlib pymupdf
           uv pip install --system -e ".[api]"
 
       - name: Validate packaging integrity
@@ -188,7 +192,7 @@ jobs:
       - name: Install dependencies
         run: |
           uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout \
-                                  pyfakefs keyring httpx respx matplotlib
+                                  pyfakefs keyring httpx respx matplotlib pymupdf
           uv pip install --system -e ".[api]"
 
       - name: Validate packaging integrity
