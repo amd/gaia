@@ -568,7 +568,7 @@ When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can c
 
 ### Default Models
 - `gaia llm` default: `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME` in [`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py)). ChatAgent and EmailTriageAgent explicitly use it too.
-- Agents that leave `model_id` unset fall back to `Qwen3.5-35B-A3B-GGUF` — the base `Agent.__init__` default (`model_id or "Qwen3.5-35B-A3B-GGUF"`). That covers Analyst, Browser, FileIO, plus Code/Builder/Jira/Docker/Routing/DocumentQA which also hardcode it.
+- Agents that leave `model_id` unset fall back to `Gemma-4-E4B-it-GGUF` — the base `Agent.__init__` default (`model_id or "Gemma-4-E4B-it-GGUF"`). That covers Analyst, Browser, FileIO, plus Code/Builder/Jira/Docker/Routing/DocumentQA/Blender/doc-search/connectors-demo which also hardcode it.
 - Summarizer: `Qwen3-4B-Instruct-2507-GGUF`
 - Vision: `Gemma-4-E4B-it-GGUF` is the default VLM (VLM mixin + EMR agent); `Qwen3-VL-4B-Instruct-GGUF` also supported
 - Image generation (SD): `SDXL-Turbo`

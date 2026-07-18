@@ -99,7 +99,7 @@ gaia blender [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--model` | string | auto-selected by agent | Language model ID for AI processing (not a Blender 3D model). When omitted, the Blender agent picks a model based on your installed profile — typically a Qwen3 variant. Pass e.g. `--model Qwen3.5-35B-A3B-GGUF` to pin the 35B model. |
+| `--model` | string | auto-selected by agent | Language model ID for AI processing (not a Blender 3D model). When omitted, the Blender agent picks a model based on your installed profile — typically `Gemma-4-E4B-it-GGUF`. Pass e.g. `--model Gemma-4-E4B-it-GGUF` to pin it explicitly. |
 | `--example` | int (1-6) | None | Run a specific example, if not specified run interactive mode |
 | `--steps` | int | 5 | Maximum number of steps per query |
 | `--output-dir` | string | "output" | Directory to save output files |
