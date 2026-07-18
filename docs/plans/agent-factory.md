@@ -219,6 +219,7 @@ is mostly net-new automation; **Back (ship)** cites the pipeline that *already e
 | 16 | **Publish** | cut-from-main + token gates; POST `/publish` to Hub Worker; npm publish; **redeploy catalog site** | `publish_to_r2.py` · Hub Worker · website deploy (*exists*) | governance gates |
 | 17 | **Post-publish edge verify** 🚦 | fetch **every published object via the real fetch CLI** at the CDN edge (#1655 "user's real state") — *per-object verify works; the zip-verify leg is disabled with the zip (§6)* | fetch-verify steps (*exists; zip leg off*) | real download OK |
 | 18 | **Maintain (continuous)** 🚦 | on an SDK delta that regresses the agent's eval, re-run the affected stages 1–17 for the delta (5b only when the capability surface changed, §5.5) | net-new trigger + the above | eval stays ≥ bar |
+| 19 | **Dogfood (continuous)** 🚦 | deployed agents run always-on under a live orchestrator (Claudia); every decision emits a structured trace (amd/gaia#2214); acceptance outcomes feed memory/adaptation (#2215) and become eval scenarios; an acceptance-rate regression is a maintenance trigger equal in rank to an SDK delta (§8.6) | decision-trace log + trace→scenario distiller (net-new, milestone 56) | acceptance ≥ per-agent bar |
 
 Stages 9–17 already run in CI (`release_agent_email.yml`, `build_agents.yml`,
 `publish_agents.yml`, `email_scorecard_refresh.yml`) — **the factory generalizes them
@@ -470,6 +471,54 @@ the npm tarball + R2 binaries, not one zip.
                           ┌──────── Agent Hub (§0.5) — the conveyor ─────────┐──────────────┘
                           └──────────────────────────────────────────────────┘
 ```
+
+## 8.6 The dogfooding loop — Claudia as the live validation runtime
+
+The lifecycle above ends where most SDLCs end: a verified artifact at the edge. But an
+*autonomous, always-on* agent is not validated by its release gate — it is validated by
+**weeks of real workload**. The factory's development loop therefore does not terminate
+at publish; it closes through a live orchestrator:
+
+```
+  publish (16–17) ──► daemon installs + runs agent 24/7 (local NPU, Lemonade)
+                                     │
+                        Claudia (orchestrator + testbed; the maintainer drives it
+                        8–10 h/day) spawns/observes agents via the ops-core contract:
+                        lifecycle API (#2210) · wire envelope (#2211) · resumable
+                        approvals (#2212) · run registry (#2213)
+                                     │
+                        every decision → structured trace (#2214):
+                        saw → proposed → approved/dismissed/modified → did → outcome
+                                     │
+              ┌──────────────────────┼───────────────────────────┐
+              ▼                      ▼                           ▼
+   traces → eval scenarios   acceptance outcomes →      acceptance-rate regression
+   (stage 5/7 corpus grows   memory/adaptation (#2215):  = maintenance trigger,
+   from REAL usage, not      per-user customization,     rank-equal to an SDK delta
+   only synthesis)           graduated trust promotion       (stage 18 → re-run 7)
+```
+
+Three properties make this loop the factory's strongest gate rather than an afterthought:
+
+1. **The eval corpus compounds from reality.** §5.5's synthetic generation seeds the
+   *first* release; every release after that inherits scenarios distilled from traces of
+   real accepted/rejected decisions. The held-out oracle discipline (5b) still applies —
+   trace-derived scenarios enter the *training* side unless the human curator promotes
+   them.
+2. **Acceptance is a scorecard metric.** A deployed agent's rolling acceptance rate
+   (approvals ÷ proposals, from #2214 traces) is reported next to the eval aggregate in
+   `SCORECARD.md`. An agent that scores 90 in the sandbox but 40% acceptance in
+   dogfooding is failing — and the factory knows it without waiting for a bug report.
+3. **Adaptation is shipped state, not retraining.** Per-user memory (#2215) adapts
+   thresholds/priorities/phrasing locally and reversibly; only high-confidence stable
+   patterns are candidates for the distillation flywheel (#666–668) at the *next*
+   factory pass. Learning never mutates the shipped artifact silently.
+
+Scope for the enabling contract and the first agent cohort: milestone 56
+("Local Ops Agents: Claudia-Validated Autonomy", amd/gaia#2210–#2233). Division of
+labor is deliberate: Claude Code remains the coding agent; factory-built gaia agents own
+ambient ops (inbox, task hygiene, workspace management, fleet observation) — continuous,
+low-intensity, privacy-sensitive work that must be cheap enough to never turn off.
 
 ## 9. Component inventory — exists vs net-new
 
