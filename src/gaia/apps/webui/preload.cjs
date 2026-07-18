@@ -13,6 +13,7 @@
  *   notification:*   — Desktop notifications & permission prompts (T5)
  *   install:*        — First-run backend install progress (Phase A)
  *   gaia:update:*    — Auto-update status & manual check (Phase F)
+ *   system:*         — System metrics for the observability dashboard (#2007)
  */
 
 const { contextBridge, ipcRenderer } = require("electron");
@@ -62,6 +63,11 @@ contextBridge.exposeInMainWorld("gaiaAPI", {
     respondPermission: (id, action, remember) =>
       ipcRenderer.invoke("notification:respond", id, action, remember),
     onNotification: (cb) => onEvent("notification:new", cb),
+  },
+
+  // ── System metrics for the observability dashboard (#2007) ────────────
+  system: {
+    getMetrics: () => ipcRenderer.invoke("system:get-metrics"),
   },
 });
 

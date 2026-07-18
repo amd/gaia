@@ -25,6 +25,11 @@ const url = require('url');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Deployed behind a single reverse-proxy hop; trust it so req.ip is the real
+// client address — express-rate-limit keys on req.ip and rejects
+// X-Forwarded-For from an untrusted proxy (ERR_ERL_UNEXPECTED_X_FORWARDED_FOR).
+app.set('trust proxy', 1);
+
 // Configuration
 const AUTH_ENABLED = process.env.DOCS_AUTH_ENABLED === 'true';
 const ACCESS_CODE = process.env.DOCS_ACCESS_CODE || '';
@@ -271,35 +276,19 @@ const loginLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// General per-IP rate limiter for all auth endpoints (not just /login).
-// Defined here so it can be applied to every auth route below, closing the
-// "missing rate-limiting" CodeQL alert on /auth/logout and
-// /auth/login-error which would otherwise accept unlimited requests.
-const rateLimitStore = new Map();
-const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
-const RATE_LIMIT_MAX = 100; // max requests per window per IP
-
-function rateLimiter(req, res, next) {
-  const ip = req.ip || req.connection.remoteAddress;
-  const now = Date.now();
-  const record = rateLimitStore.get(ip) || { count: 0, resetAt: now + RATE_LIMIT_WINDOW };
-
-  if (now > record.resetAt) {
-    record.count = 0;
-    record.resetAt = now + RATE_LIMIT_WINDOW;
-  }
-
-  record.count++;
-  rateLimitStore.set(ip, record);
-
-  if (record.count > RATE_LIMIT_MAX) {
-    return res.status(429).send('Too Many Requests');
-  }
-  next();
-}
+// General per-IP rate limiter for every route (auth endpoints and the
+// authorization middleware on proxied requests). Uses express-rate-limit —
+// same 100 req/min/IP budget the previous hand-rolled limiter enforced.
+const generalLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 100, // max requests per window per IP
+  message: 'Too Many Requests',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // Login handler
-app.post('/auth/login', loginLimiter, rateLimiter, (req, res) => {
+app.post('/auth/login', loginLimiter, generalLimiter, (req, res) => {
   const { code, nonce } = req.body;
 
   if (code === ACCESS_CODE) {
@@ -344,7 +333,7 @@ app.post('/auth/login', loginLimiter, rateLimiter, (req, res) => {
 });
 
 // Login error handler (uses nonce to retrieve redirect URL)
-app.get('/auth/login-error', rateLimiter, (req, res) => {
+app.get('/auth/login-error', generalLimiter, (req, res) => {
   // Retrieve redirect URL from server-side storage and re-store for the form
   const originalRedirect = consumeRedirect(req.query.nonce);
   const newNonce = storeRedirect(originalRedirect);
@@ -353,13 +342,13 @@ app.get('/auth/login-error', rateLimiter, (req, res) => {
 });
 
 // Logout handler
-app.get('/auth/logout', rateLimiter, (req, res) => {
+app.get('/auth/logout', generalLimiter, (req, res) => {
   res.clearCookie(COOKIE_NAME);
   res.redirect('/');
 });
 
 // Apply rate limiter before auth middleware for every other route
-app.use(rateLimiter);
+app.use(generalLimiter);
 
 // Apply auth middleware
 app.use(authMiddleware);

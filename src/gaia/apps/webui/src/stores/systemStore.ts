@@ -33,6 +33,8 @@ interface SystemState {
   isPolling: boolean;
   /** Polling interval in milliseconds. */
   pollInterval: number;
+  /** Last polling error (null when metrics are flowing). */
+  lastError: string | null;
 
   // ── Internal ──────────────────────────────────────────────────────────
   /** Timer ID for the polling interval (null when not polling). */
@@ -57,15 +59,20 @@ interface SystemState {
 // ── Polling Fetch Helper ─────────────────────────────────────────────────
 
 /**
- * Fetch system metrics from the Electron main process.
- * Returns null if the Electron API is not available.
+ * Fetch system metrics from the Electron main process over the
+ * `system:get-metrics` IPC channel (services/system-metrics.cjs).
+ * Throws when no metrics source is available — never returns null.
  */
-async function fetchSystemMetrics(): Promise<SystemMetrics | null> {
-  // TODO: Implement IPC call to main process for system metrics.
-  // For now this is a placeholder — the main process will expose a
-  // system:getMetrics IPC handler in a future ticket.
-  console.log('[systemStore] fetchSystemMetrics: not yet implemented (needs IPC)');
-  return null;
+async function fetchSystemMetrics(): Promise<SystemMetrics> {
+  const getMetrics = window.gaiaAPI?.system?.getMetrics;
+  if (!getMetrics) {
+    throw new Error(
+      'System metrics source unavailable: window.gaiaAPI.system is not exposed. ' +
+        'The observability dashboard requires the GAIA desktop app (Electron) — ' +
+        'browser mode has no system metrics IPC bridge.'
+    );
+  }
+  return getMetrics();
 }
 
 // ── Store Implementation ─────────────────────────────────────────────────
@@ -77,6 +84,7 @@ export const useSystemStore = create<SystemState>((set, get) => ({
   showDashboard: false,
   isPolling: false,
   pollInterval: DEFAULT_POLL_INTERVAL,
+  lastError: null,
   _timerId: null,
 
   // ── Metrics Actions ───────────────────────────────────────────────────
@@ -105,9 +113,17 @@ export const useSystemStore = create<SystemState>((set, get) => ({
     if (isPolling && _timerId !== null) return; // Already polling
 
     const tick = async () => {
-      const result = await fetchSystemMetrics();
-      if (result) {
+      try {
+        const result = await fetchSystemMetrics();
         get().updateMetrics(result);
+        if (get().lastError !== null) set({ lastError: null });
+      } catch (err) {
+        // Fail loudly: record the error and stop polling — the failure is
+        // structural (no IPC bridge / broken source), not transient.
+        const message = err instanceof Error ? err.message : String(err);
+        console.error('[systemStore] metrics poll failed — stopping polling:', message);
+        get().stopPolling();
+        set({ lastError: message });
       }
     };
 

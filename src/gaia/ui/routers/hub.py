@@ -298,14 +298,20 @@ async def set_agent_config(agent_id: str, body: ConfigRequest):
 async def agent_health(agent_id: str, request: Request):
     """Health check: does the installed agent load + its entry point resolve?"""
     registry = _registry(request)
-    return lifecycle_mod.health_check(agent_id, registry=registry).to_dict()
+    try:
+        return lifecycle_mod.health_check(agent_id, registry=registry).to_dict()
+    except (installer_mod.InstallError, lifecycle_mod.LifecycleError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/api/agents/{agent_id}/status")
 async def agent_status(agent_id: str, request: Request):
     """Aggregated status: installed version, health, config summary."""
     registry = _registry(request)
-    return lifecycle_mod.status(agent_id, registry=registry).to_dict()
+    try:
+        return lifecycle_mod.status(agent_id, registry=registry).to_dict()
+    except (installer_mod.InstallError, lifecycle_mod.LifecycleError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------

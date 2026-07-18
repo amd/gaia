@@ -122,15 +122,56 @@ def start_server(
         )
 
 
-def check_status() -> None:
+def check_status(host: str = "localhost", port: int = 8080) -> None:
     """
-    Check if API server is running.
+    Check whether the GAIA API server is running by querying its /health endpoint.
 
-    This will be implemented in a future version.
-    For now, it just prints a message.
+    Verifies the responder is actually the GAIA API server (not just any
+    process on the port). Exits 1 when the server is unreachable, unresponsive,
+    or the port is held by something else.
+
+    Args:
+        host: Host the server is expected on (default: localhost)
+        port: Port the server is expected on (default: 8080)
     """
-    print("Status check not yet implemented")
-    print("Try: curl http://localhost:8080/health")
+    import requests
+
+    url = f"http://{host}:{port}/health"
+    try:
+        response = requests.get(url, timeout=5)
+    except requests.exceptions.Timeout:
+        print(f"❌ API server at http://{host}:{port} did not respond within 5s")
+        print("Restart it with: gaia api stop && gaia api start")
+        sys.exit(1)
+    except requests.exceptions.RequestException:
+        print(f"❌ API server is not running at http://{host}:{port}")
+        print("Start it with: gaia api start")
+        sys.exit(1)
+
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+
+    if (
+        response.status_code == 200
+        and isinstance(payload, dict)
+        and payload.get("service") == "gaia-api"
+    ):
+        print(f"✅ GAIA API server is running at http://{host}:{port}")
+        print(f"   Health: {payload.get('status', 'unknown')}")
+        print("\nAvailable endpoints:")
+        print(f"  • POST http://{host}:{port}/v1/chat/completions")
+        print(f"  • GET  http://{host}:{port}/v1/models")
+        print(f"  • GET  http://{host}:{port}/health")
+        return
+
+    print(
+        f"❌ Port {port} on {host} is in use, but the responder is not the "
+        f"GAIA API server (GET /health returned HTTP {response.status_code})"
+    )
+    print("Free the port, or start GAIA on another one: gaia api start --port <PORT>")
+    sys.exit(1)
 
 
 def stop_server(port: int = 8080) -> None:
@@ -272,7 +313,13 @@ def main() -> None:
     )
 
     # Status command
-    subparsers.add_parser("status", help="Check server status")
+    status_parser = subparsers.add_parser("status", help="Check server status")
+    status_parser.add_argument(
+        "--host", default="localhost", help="Host to check (default: localhost)"
+    )
+    status_parser.add_argument(
+        "--port", type=int, default=8080, help="Port to check (default: 8080)"
+    )
 
     # Stop command
     stop_parser = subparsers.add_parser("stop", help="Stop server")
@@ -293,7 +340,7 @@ def main() -> None:
             getattr(args, "step_through", False),
         )
     elif args.command == "status":
-        check_status()
+        check_status(args.host, args.port)
     elif args.command == "stop":
         stop_server(getattr(args, "port", 8080))
     else:

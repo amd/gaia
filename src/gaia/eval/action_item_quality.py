@@ -45,6 +45,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+from gaia.agents.install_hints import agent_not_installed_message
 from gaia.eval.fixture_paths import resolve_repo_fixture
 from gaia.eval.quality_metrics import Confusion
 
@@ -814,10 +815,11 @@ def generate_extractions(
             from gaia_agent_email.config import EmailAgentConfig
         except ImportError as exc:
             raise RuntimeError(
-                "The action-item extraction eval needs the email agent. Install "
-                "it with `pip install gaia-agent-email` (or `pip install "
-                '"amd-gaia[agents]"`). '
-                f"Original import error: {exc}"
+                agent_not_installed_message(
+                    "The action-item extraction eval needs the email agent",
+                    "gaia-agent-email",
+                    next_step=f"Original import error: {exc}",
+                )
             ) from exc
 
         def agent_factory(backend: Any, db_path: str) -> Any:

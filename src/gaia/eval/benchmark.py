@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from gaia.agents.install_hints import agent_not_installed_message
 from gaia.eval import performance, quality_metrics
 from gaia.eval.fixture_paths import resolve_repo_fixture
 from gaia.llm.lemonade_client import _model_ids_match
@@ -834,10 +835,11 @@ def run_benchmark(
                     )
                 except ImportError as exc:
                     raise RuntimeError(
-                        "The email throughput benchmark needs the email agent. "
-                        "Install it with `pip install gaia-agent-email` (or "
-                        '`pip install "amd-gaia[agents]"`). '
-                        f"Original import error: {exc}"
+                        agent_not_installed_message(
+                            "The email throughput benchmark needs the email agent",
+                            "gaia-agent-email",
+                            next_step=f"Original import error: {exc}",
+                        )
                     ) from exc
 
                 try:

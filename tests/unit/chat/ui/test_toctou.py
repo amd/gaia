@@ -48,6 +48,33 @@ class TestSafeOpenDocument:
             or "symbolic" in exc_info.value.detail.lower()
         )
 
+    def test_safe_open_rejects_symlinked_directory_escape(self, home_tmp_dir):
+        """An intermediate symlinked dir inside home must not open files outside.
+
+        The lexical (abspath) home check passes for
+        ``~/.gaia_test_toctou/esc/secret.txt`` while the physical path lives
+        outside home — the realpath containment check must reject it with 403.
+        O_NOFOLLOW alone cannot catch this: it only guards the final component.
+        """
+        import tempfile
+
+        outside_dir = Path(tempfile.mkdtemp(prefix="gaia_toctou_outside_"))
+        try:
+            secret = outside_dir / "secret.txt"
+            secret.write_text("outside-home content")
+            escape_link = home_tmp_dir / "esc"
+            try:
+                escape_link.symlink_to(outside_dir, target_is_directory=True)
+            except OSError:
+                pytest.skip("Symlink creation requires elevated privileges on Windows")
+            attack_path = escape_link / "secret.txt"
+            with pytest.raises(HTTPException) as exc_info:
+                with safe_open_document(str(attack_path)):
+                    pass
+            assert exc_info.value.status_code == 403
+        finally:
+            shutil.rmtree(outside_dir, ignore_errors=True)
+
     def test_safe_open_rejects_missing_file(self, home_tmp_dir):
         """Non-existent file must return 404."""
         missing = home_tmp_dir / "nonexistent.txt"

@@ -14,13 +14,15 @@ importable so the API server can resolve it.
 ## Install
 
 ```bash
-pip install gaia-agent-routing              # from PyPI (once published)
+pip install gaia-agent-routing              # from PyPI (once published — see #2240)
 pip install -e hub/agents/python/routing    # editable, for development
+uv pip install "gaia-agent-routing @ git+https://github.com/amd/gaia.git#subdirectory=hub/agents/python/routing"  # works today without a repo checkout
 ```
 
 The API server's `gaia-code` model routes through `RoutingAgent`, which in turn
-needs the `gaia-agent-code` wheel installed. Install both (or
-`pip install amd-gaia[agents]`) to use `gaia api` for code generation.
+needs the `gaia-agent-code` wheel installed. Install both the same way (swap
+`routing` for `code` in the subdirectory) to use `gaia api` for code
+generation.
 
 ## Develop / test
 
