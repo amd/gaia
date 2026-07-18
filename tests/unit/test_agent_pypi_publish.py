@@ -18,6 +18,7 @@ wiring by ``test_cli_agent.py``.
 
 from __future__ import annotations
 
+import ast
 import re
 import sys
 from pathlib import Path
@@ -143,10 +144,16 @@ def test_helper_matrix_format_matches_packages(packages):
 
 
 def test_helper_rejects_missing_package(tmp_path):
-    """A dist in the extra with no on-disk package fails loudly (no silent skip)."""
+    """A dist in AGENT_PACKAGES with no on-disk package fails loudly (no silent skip).
+
+    Issue #2240: the source of truth moved from `extras_require["agents"]`
+    (an unsatisfiable pip/uv extra that silently downgraded installs) to a
+    plain module-level `AGENT_PACKAGES = [...]` constant. The fixture below
+    reflects that new contract.
+    """
     fake_setup = tmp_path / "setup.py"
     fake_setup.write_text(
-        'setup(\n    extras_require={"agents": ["gaia-agent-doesnotexist"]},\n)\n',
+        'AGENT_PACKAGES = ["gaia-agent-doesnotexist"]\n',
         encoding="utf-8",
     )
     with pytest.raises(lap.AgentListError, match="no package at"):
@@ -154,14 +161,78 @@ def test_helper_rejects_missing_package(tmp_path):
 
 
 def test_helper_rejects_bad_naming(tmp_path):
-    """A dist not following gaia-agent-<id> fails loudly."""
+    """A dist not following gaia-agent-<id> fails loudly (#2240: AGENT_PACKAGES)."""
     fake_setup = tmp_path / "setup.py"
     fake_setup.write_text(
-        'setup(\n    extras_require={"agents": ["totally-wrong-name"]},\n)\n',
+        'AGENT_PACKAGES = ["totally-wrong-name"]\n',
         encoding="utf-8",
     )
     with pytest.raises(lap.AgentListError, match="naming convention"):
         lap.list_agent_packages(setup_py=fake_setup)
+
+
+def test_setup_py_has_no_agents_extra_or_agent_star_extras():
+    """extras_require in the real setup.py must not declare the removed
+    keys (#2240): `agents` (an unsatisfiable pip/uv extra that silently
+    downgrades a working install) and every single-agent `agent-<id>` extra.
+    """
+    setup_py = REPO_ROOT / "setup.py"
+    tree = ast.parse(setup_py.read_text(encoding="utf-8"), filename=str(setup_py))
+
+    extras_require_dict = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.keyword) and node.arg == "extras_require":
+            extras_require_dict = node.value
+            break
+    assert isinstance(
+        extras_require_dict, ast.Dict
+    ), "setup.py: extras_require is not a dict literal"
+
+    keys = {
+        key.value
+        for key in extras_require_dict.keys
+        if isinstance(key, ast.Constant) and isinstance(key.value, str)
+    }
+    assert "agents" not in keys, "setup.py[agents] must be removed (issue #2240)"
+    bad_keys = {k for k in keys if k.startswith("agent-")}
+    assert (
+        not bad_keys
+    ), f"setup.py must not declare per-agent extras: {bad_keys} (#2240)"
+
+
+def test_setup_py_declares_module_level_agent_packages_constant():
+    """#2240: the publish/CI inventory moves to a module-level AGENT_PACKAGES
+    constant, deliberately NOT an extras_require entry (see setup.py's
+    removal comment, which must cite #1179/#1513)."""
+    setup_py = REPO_ROOT / "setup.py"
+    source = setup_py.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(setup_py))
+
+    found = None
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "AGENT_PACKAGES"
+        ):
+            found = ast.literal_eval(node.value)
+            break
+
+    assert found is not None, (
+        "setup.py must declare a module-level `AGENT_PACKAGES = [...]` "
+        "constant (issue #2240)"
+    )
+    assert isinstance(found, list) and all(isinstance(d, str) for d in found)
+    assert len(found) == 15, f"expected 15 agent packages, got {len(found)}: {found}"
+    assert all(d.startswith("gaia-agent-") for d in found)
+
+    # The removal comment must name the tracking issues so a future reader
+    # knows what re-adds the extra.
+    assert "#1179" in source and "#1513" in source, (
+        "setup.py's AGENT_PACKAGES / removed-extras comment must cite "
+        "issues #1179 and #1513 (publishing tracker)"
+    )
 
 
 # ── --only filter tests (#1598) ──────────────────────────────────────────────
