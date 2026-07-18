@@ -253,7 +253,7 @@ class TestSummarizer:
         print(f"Successfully created synthetic OCR PDF (text as images): {output_path}")
 
     # Test data lives at the repo root (data/), not in the hub package — the
-    # suite predates the move to hub/agents/python/summarize (#1992).
+    # suite predates the move to hub/agents/summarize/python (#1992).
     @pytest.fixture
     def data_txt_path(self) -> Path:
         """Path to the repo-root data/txt directory"""
