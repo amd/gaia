@@ -28,13 +28,14 @@ Task state machine:
 Thread-safe via threading.Lock.
 """
 
+import json
 import logging
 import sqlite3
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
@@ -77,10 +78,39 @@ AgentMode = Literal[
 
 Priority = Literal["low", "medium", "high"]
 
+Action = Literal[
+    "file_write",
+    "file_read",
+    "shell_exec",
+    "web_fetch",
+    "api_call",
+    "other",
+]
+
+Risk = Literal["low", "medium", "high", "critical"]
+
 
 # ---------------------------------------------------------------------------
 # Dataclasses
 # ---------------------------------------------------------------------------
+
+
+@dataclass
+class Proposal:
+    """A proactive proposal submitted by on_first_run or on_heartbeat."""
+
+    action: str
+    rationale: str
+    action_class: Action = "other"
+    risk: Risk = "medium"
+
+    def to_dict(self) -> Dict[str, str]:
+        return {
+            "action": self.action,
+            "rationale": self.rationale,
+            "action_class": self.action_class,
+            "risk": self.risk,
+        }
 
 
 @dataclass
@@ -498,6 +528,61 @@ class GoalStore:
     def get_pending_approval(self) -> List[Goal]:
         """Goals waiting for the user to approve or reject."""
         return self.list_goals(status="pending_approval")
+
+    def propose(
+        self,
+        proposal: "Proposal",
+        proposer: str = "agent",
+        source: GoalSource = "agent_inferred",
+        priority: Priority = "medium",
+    ) -> Optional[Goal]:
+        """Submit a proactive proposal to GoalStore as pending approval.
+
+        Every proposal lands in ``pending_approval`` and must be explicitly
+        approved by the user before execution, regardless of risk tier
+        (docs/spec/autonomous-agent-mode.md §6.3/§6.5). ``risk`` is stored as
+        signal for the approving user but never gates execution.
+        Returns the created Goal; DB errors propagate as ``sqlite3.Error``.
+        """
+        now = _now_iso()
+        goal_id = str(uuid4())
+
+        # Spec §6.3: agent_inferred → pending_approval is the only entry path.
+        status = "pending_approval"
+        approved = False
+
+        description = f"[{source}] {proposal.rationale}"
+        source_label = source
+
+        with self._lock:
+            conn = self._get_conn()
+            conn.execute(
+                """INSERT INTO goals
+                   (id, title, description, status, source, mode_required,
+                    approved_for_auto, priority, progress_notes, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    goal_id,
+                    f"Proposal: {proposal.action}",
+                    description,
+                    status,
+                    source_label,
+                    "goal_driven",
+                    int(approved),
+                    priority,
+                    json.dumps({**proposal.to_dict(), "proposer": proposer}),
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+        logger.debug(
+            "[GoalStore] proposal %s → goal %s (status=%s)",
+            proposal.action,
+            goal_id,
+            status,
+        )
+        return self.get_goal(goal_id)
 
     def get_actionable_goals(self) -> List[Goal]:
         """Approved goals that are queued or in-progress — ready for the agent loop.

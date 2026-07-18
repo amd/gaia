@@ -6,6 +6,32 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## 0.6.0
 
+- **The launch secret no longer sits in the sidecar's environment.** The
+  per-session auth token used to be handed to the sidecar as a bare environment
+  variable, visible to any local process that can inspect process environments.
+  A 0.6.0+ sidecar spawned by the GAIA daemon now receives it as an owner-only
+  (`0600`) file that is removed when the sidecar stops; the env channel
+  (`GAIA_EMAIL_SIDECAR_TOKEN`) keeps working for older binaries and for the npm
+  lifecycle, exactly as before.
+- **Asking "what's on my calendar?" no longer digs up years-old meetings.**
+  Listing calendar events without a date range used to return the oldest
+  instances of recurring series — events from years ago narrated as if they
+  were this week. An unbounded listing now defaults to the next 30 days
+  (starting now); passing explicit `time_min`/`time_max` bounds works exactly
+  as before.
+- **The plain-language agent loop is now part of the typed client.** 0.5.0's
+  streaming endpoint required hand-rolled `fetch` + SSE parsing; now
+  `client.query()` returns an async iterator of typed events (`status`, `token`,
+  `tool_call`, `tool_result`, `needs_confirmation`, `final`, `error` — plus a
+  visible `unknown` placeholder for event types added by a newer agent, never a
+  silent drop), and `client.cancelQuery(runId)` stops a run mid-way. You mint
+  `run_id`, so a run is cancellable from the instant you send it. A stream that
+  breaks mid-run throws instead of looking like success.
+- **The client now speaks contract 2.4.** `SCHEMA_VERSION` moved 2.3 → 2.4
+  (additive — every 2.3 request/response shape is unchanged). The startup
+  version handshake accepts any 2.x sidecar, so a 2.3-pinned client keeps
+  working against a 2.4 sidecar exactly as before; only the new `query()` /
+  `cancelQuery()` calls need a 2.4 (0.5.0+) agent binary.
 - **On NPU-capable machines, triage now runs on the NPU by default.** When
   you haven't pinned a specific model, the agent checks whether the
   Lemonade Server it's talking to has an AMD NPU and the NPU-optimized
@@ -23,6 +49,14 @@ behind any entry — API shapes, endpoints, and version semantics — see
   goes; a run can be cancelled mid-way. Anything that would actually send mail
   still stops and routes you to the explicit draft-and-confirm flow. Not yet
   wrapped by the typed client — call the endpoint directly (see `SPEC.md`).
+- **Iterate on the agent from source.** New `connectSidecar({ baseUrl })` attaches
+  the client to a server you run yourself, and `gaia-agent-email serve --reload`
+  (or `npx @amd-gaia/agent-email dev`) runs the agent's Python source with hot
+  reload — so you can fix a triage/draft bug and re-test in seconds instead of
+  waiting for a new binary. Additive — your existing calls are unchanged, and
+  shipping to production just swaps `connectSidecar` for `startSidecar`. Exports
+  the new `ConnectOptions` / `AttachedSidecar` types. Full walkthrough in
+  `SPEC.md` → *Fast local iteration*.
 - **Docs rewritten for humans.** The README, this changelog, and the evaluation
   guide now lead with what the agent does in plain language; the deep technical
   reference lives in `SPEC.md`.

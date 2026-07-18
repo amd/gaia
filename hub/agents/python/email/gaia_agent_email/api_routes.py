@@ -149,14 +149,16 @@ router.include_router(_query_router)
 async def require_caller_token(request: Request) -> None:
     """Reject a request that lacks a valid per-session bearer token (401).
 
-    Wired onto the email router ONLY by the frozen sidecar app
-    (``packaging/server.py``) — the product server and OpenAPI-export app mount
-    the same router without this dependency, so their posture is unchanged. The
+    Wired onto the email router ONLY by the sidecar app
+    (``gaia_agent_email.server``; the frozen binary freezes a re-export of it) —
+    the product server and OpenAPI-export app mount the same router without this
+    dependency, so their posture is unchanged. The
     policy is read from :mod:`gaia_agent_email.caller_auth`:
 
-    - No policy configured, or a policy with ``token is None`` (a dev running the
-      sidecar by hand without ``GAIA_EMAIL_SIDECAR_TOKEN``) → allowed. The Host/
-      Origin controls in ``HostOriginMiddleware`` still apply.
+    - No policy configured, or a policy with ``token is None`` (a dev running
+      the sidecar by hand with neither ``GAIA_EMAIL_SIDECAR_TOKEN_FILE`` nor
+      ``GAIA_EMAIL_SIDECAR_TOKEN``) → allowed. The Host/Origin controls in
+      ``HostOriginMiddleware`` still apply.
     - Liveness/version probes and the HTML pages are exempt (:data:`caller_auth.
       EXEMPT_PATHS`) so the readiness handshake works before a token is in play.
     - Otherwise a missing/malformed/wrong ``Authorization: Bearer <token>`` is a
@@ -173,10 +175,12 @@ async def require_caller_token(request: Request) -> None:
             detail=(
                 "Unauthorized: this email sidecar endpoint requires the "
                 "per-session bearer token. Send 'Authorization: Bearer "
-                "<token>' using the token the sidecar was started with "
-                f"(the parent process passes it via the {caller_auth.TOKEN_ENV_VAR} "
-                "env var on spawn). Requests without a valid token are refused so "
-                "no other local process or web page can act on your mailbox."
+                "<token>' using the token the sidecar was started with (the "
+                "parent process delivers it on spawn via the "
+                f"{caller_auth.TOKEN_FILE_ENV_VAR} secret file, or the legacy "
+                f"{caller_auth.TOKEN_ENV_VAR} env var). Requests without a "
+                "valid token are refused so no other local process or web page "
+                "can act on your mailbox."
             ),
         )
 
@@ -780,9 +784,12 @@ class EmailTriageService:
         # usage (#1540). Reuses AgentResponse.stats — no new measurement.
         call_stats: List[dict] = list(extra_call_stats) if extra_call_stats else []
 
-        if heuristic.confident:
-            category = EmailCategory(heuristic.category)
-        else:
+        # Escalate to the LLM when the heuristic is unsure of the category OR
+        # abstains on spam (spam_confident=False, where content-based spam
+        # exclusively lives). Mirrors read_tools.py so REST and the agent loop
+        # reach the same verdict on identical input (#2124).
+        llm_result: Optional[dict] = None
+        if not heuristic.confident or not heuristic.spam_confident:
             llm_result = classify_email_llm(
                 chat,
                 subject=subject,
@@ -791,7 +798,17 @@ class EmailTriageService:
                 collect_stats=call_stats,
                 context=context,
             )
+
+        if heuristic.confident:
+            category = EmailCategory(heuristic.category)
+        else:
             category = EmailCategory(llm_result["category"])
+
+        # Heuristic wins only when spam-confident; otherwise the LLM decides.
+        if heuristic.spam_confident:
+            is_spam = heuristic.is_spam
+        else:
+            is_spam = bool(llm_result.get("is_spam", heuristic.is_spam))
 
         llm_summary = summarize_email_llm(
             chat,
@@ -808,7 +825,7 @@ class EmailTriageService:
             subject=subject,
             reply_to=reply_to,
             principal=principal,
-            is_spam=heuristic.is_spam,
+            is_spam=is_spam,
             is_phishing=heuristic.is_phishing,
         )
         suggested_action = (
@@ -818,7 +835,7 @@ class EmailTriageService:
         ) or default_action_for(category.value)
         return EmailTriageResult(
             category=category,
-            is_spam=heuristic.is_spam,
+            is_spam=is_spam,
             is_phishing=heuristic.is_phishing,
             summary=summary,
             action_items=action_items,
@@ -1583,40 +1600,8 @@ def _raise_calendar_connector_http(exc: ConnectorsError) -> NoReturn:
 # ---------------------------------------------------------------------------
 
 
-def get_prescan_backend():
-    """Resolve the read-only mailbox backend for an inbox pre-scan.
-
-    Mirrors :func:`get_send_backend`'s fail-loud resolution — the pre-scan reads
-    the single connected mailbox; an absent or ambiguous mailbox is an
-    actionable error, never a silent guess:
-
-      - 0 connected → HTTP 503 (actionable: go connect a mailbox)
-      - 2+ connected → HTTP 400 (actionable: the pre-scan API can't choose)
-      - exactly 1 → build the matching live backend (list/get only)
-
-    Wired as a FastAPI ``Depends`` so tests inject a fake via
-    ``app.dependency_overrides[get_prescan_backend]`` without touching live mail.
-    """
-    providers = connected_mailbox_providers()
-    if not providers:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "No mailbox connected — connect Google or Microsoft in "
-                "Settings → Connectors before running an inbox pre-scan."
-            ),
-        )
-    if len(providers) > 1:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Multiple mailboxes connected ({', '.join(providers)}); the "
-                "pre-scan API can't choose. Disconnect one in Settings → "
-                "Connectors, or run the pre-scan from the agent/UI (which scans "
-                "every connected mailbox)."
-            ),
-        )
-    provider = providers[0]
+def _build_prescan_live_backend(provider: str):
+    """Build the read-only (list/get) live backend for one connected provider."""
     if provider == "google":
         from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
 
@@ -1637,16 +1622,81 @@ def get_prescan_backend():
     )
 
 
-def _run_prescan(backend, *, max_messages: int) -> dict:
-    """Run the agent's ``pre_scan_inbox_impl`` against ``backend``.
+class _MultiMailboxPrescanBackend:
+    """Every connected mailbox's read backend, for a consolidated pre-scan.
 
-    Reuses the agent's exact heuristic classification path (the same call the
-    agent loop makes) — no duplicated categorization — and returns its envelope
-    dict, which maps field-for-field onto :class:`EmailPreScanResult`.
+    Carries the ordered ``provider -> live backend`` map so :func:`_run_prescan`
+    fans the scan across all connected mailboxes and returns one merged envelope
+    — the multi-inbox behaviour the agent loop already ships (#1603/#1614), now
+    reachable from the REST ``/prescan`` surface as well instead of dead-ending
+    on a single-mailbox guard. It is NOT a silent pick-one: every connected
+    mailbox is scanned and merged. Send/search stay fail-loud — a write can't
+    target "all".
     """
-    from gaia_agent_email.tools.read_tools import pre_scan_inbox_impl
 
-    return pre_scan_inbox_impl(backend, max_messages=max_messages)
+    def __init__(self, backends: "dict"):
+        self.backends = backends
+
+
+def get_prescan_backend():
+    """Resolve the read-only mailbox backend(s) for an inbox pre-scan.
+
+    Pre-scan is read-only and consolidatable, so an ambiguous mailbox is not an
+    error here (unlike the send/search write-or-target surfaces): scan them all.
+
+      - 0 connected → HTTP 503 (actionable: go connect a mailbox)
+      - 2+ connected → a :class:`_MultiMailboxPrescanBackend` over every mailbox
+      - exactly 1 → the matching live backend (list/get only)
+
+    Never a silent guess-one — 2+ scans every connected mailbox and returns
+    one merged envelope. Wired as a FastAPI ``Depends`` so tests inject a
+    fake via ``app.dependency_overrides[get_prescan_backend]`` without touching
+    live mail.
+    """
+    providers = connected_mailbox_providers()
+    if not providers:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No mailbox connected — connect Google or Microsoft in "
+                "Settings → Connectors before running an inbox pre-scan."
+            ),
+        )
+    if len(providers) > 1:
+        return _MultiMailboxPrescanBackend(
+            {provider: _build_prescan_live_backend(provider) for provider in providers}
+        )
+    return _build_prescan_live_backend(providers[0])
+
+
+def _run_prescan(backend, *, max_messages: int) -> dict:
+    """Run the agent's pre-scan classification against ``backend``.
+
+    Reuses the agent's exact heuristic path (no duplicated categorization) and
+    returns its envelope dict, which maps field-for-field onto
+    :class:`EmailPreScanResult`. A :class:`_MultiMailboxPrescanBackend` fans out
+    over every connected mailbox via the shared ``merge_pre_scan_backends`` — the
+    same consolidation the agent loop runs — so the Agent UI sees one result.
+    """
+    from gaia_agent_email.tools.read_tools import (
+        merge_pre_scan_backends,
+        pre_scan_inbox_impl,
+    )
+
+    if not isinstance(backend, _MultiMailboxPrescanBackend):
+        return pre_scan_inbox_impl(backend, max_messages=max_messages)
+
+    merged = merge_pre_scan_backends(backend.backends, max_messages=max_messages)
+    # The frozen pre-scan contract (PreScanItem / EmailPreScanResult, both
+    # extra="forbid") has no per-item ``mailbox`` tag or ``mailbox_errors`` field
+    # — those belong to the agent-loop card's richer shape. Drop them at this
+    # boundary so the consolidated envelope validates; the surfaced items (from
+    # every connected mailbox) are unchanged.
+    merged.pop("mailbox_errors", None)
+    for section in ("urgent", "actionable", "suggested_archives"):
+        for item in merged.get(section, []):
+            item.pop("mailbox", None)
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -2078,7 +2128,7 @@ async def search_inbox(
 @router.post(
     "/prescan",
     response_model=EmailPreScanResponse,
-    responses={**_CONNECTOR_ERROR_RESPONSES, **_AMBIGUOUS_PROVIDER_400},
+    responses={**_CONNECTOR_ERROR_RESPONSES},
 )
 async def prescan_inbox(
     request: EmailPreScanRequest,
@@ -2086,16 +2136,18 @@ async def prescan_inbox(
 ) -> EmailPreScanResponse:
     """Pre-scan the connected inbox into the scannable triage card envelope.
 
-    Lists the ``max_messages`` most-recent inbox messages via the connected
-    mailbox backend and returns the aggregate pre-scan summary the Agent UI's
+    Lists the ``max_messages`` most-recent inbox messages via every connected
+    mailbox and returns the aggregate pre-scan summary the Agent UI's
     ``EmailPreScanCard`` renders — top urgent / actionable rows, an
     informational count, and suggested archives, each with a heuristic reason.
     Read-only: nothing is archived, marked, or sent.
 
     Classification reuses the agent's ``pre_scan_inbox_impl`` (the same
     heuristic path the agent loop runs) — categories are not re-implemented
-    here. The backend is resolved by :func:`get_prescan_backend`, which fails
-    loudly on zero or ambiguous mailboxes.
+    here. The backend is resolved by :func:`get_prescan_backend`: 503 when no
+    mailbox is connected, and with 2+ connected it consolidates every mailbox
+    into one merged envelope rather than failing on ambiguity (the frozen REST
+    contract carries no per-item mailbox tag).
     """
     try:
         out = await asyncio.to_thread(
@@ -2882,7 +2934,9 @@ async def list_calendar_events(
 ) -> CalendarEventsResponse:
     """View calendar events on the primary calendar (read-only).
 
-    ``time_min`` / ``time_max`` are optional RFC 3339 bounds. ``provider``
+    ``time_min`` / ``time_max`` are optional RFC 3339 bounds; when both are
+    omitted the listing defaults to a forward window (now → +30 days), so
+    recurring series don't surface their oldest instances. ``provider``
     (google|microsoft) is required only when more than one account is connected;
     with exactly one, it is inferred. Reaches whichever calendar the user
     connected. Fails loudly (403 + reconnect CTA) if the calendar scope is missing.

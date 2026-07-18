@@ -673,7 +673,8 @@ def render_endpoint_spec_html() -> str:
         method="GET",
         description=(
             "View events on the primary calendar (read-only). Optional RFC 3339 "
-            "query params time_min / time_max bound the window; provider "
+            "query params time_min / time_max bound the window — omitting both "
+            "defaults to a forward window (now → +30 days); provider "
             "(google|microsoft) is required only when more than one account is "
             "connected. Fails loudly (403 + reconnect CTA) if the calendar scope "
             "is missing."
@@ -869,10 +870,13 @@ def render_endpoint_spec_html() -> str:
 </p>
 <ul class="desc">
   <li><strong>Per-session bearer token.</strong> The parent process that spawns
-    the sidecar (the <code>@amd-gaia/agent-email</code> lifecycle or the GAIA UI
-    sidecar manager) generates a cryptographically-random token and hands it to
-    the sidecar over the private <code>GAIA_EMAIL_SIDECAR_TOKEN</code> env
-    channel. Every <code>/v1/email/*</code> request must carry
+    the sidecar (the <code>@amd-gaia/agent-email</code> lifecycle or the GAIA
+    daemon's sidecar manager) generates a cryptographically-random token and
+    hands it to the sidecar either as a <code>0600</code> owner-only file whose
+    path arrives in <code>GAIA_EMAIL_SIDECAR_TOKEN_FILE</code> (preferred —
+    the secret never sits in the process environment) or directly in the
+    <code>GAIA_EMAIL_SIDECAR_TOKEN</code> env var (legacy parents). Every
+    <code>/v1/email/*</code> request must carry
     <code>Authorization: Bearer &lt;token&gt;</code> or it is rejected with
     <strong>HTTP 401</strong>. Liveness/version probes
     (<code>/health</code>, <code>/version</code>) and these HTML pages are exempt.</li>

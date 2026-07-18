@@ -298,6 +298,12 @@ class LemonadeManager:
                             if k in item:
                                 detected.add(str(item[k]))
                                 break
+        # Lemonade on Apple Silicon reports the llama.cpp Metal backend as
+        # 'metal' in system_info while its health payload calls the same device
+        # 'gpu' — normalize to the generic GPU tier so a default device='gpu'
+        # request validates on macOS instead of falling through to cpu.
+        if "metal" in detected:
+            detected.add("amd_dgpu")
         # Find highest-capability detected device
         highest = None
         for dev in _DEVICE_PRIORITY:
@@ -394,6 +400,8 @@ class LemonadeManager:
 
         This is the main entry point for both CLI and SDK flows.
         Safe to call multiple times - validates context size on each call.
+        An explicit ``min_context_size=None`` (callers threading through an
+        unset config value) means "the default floor", never a crash.
 
         Args:
             min_context_size: Minimum context size required (default: 32768).
@@ -422,6 +430,10 @@ class LemonadeManager:
             The Lemonade server must be running before calling this method.
             Start it with: lemonade-server serve --ctx-size 32768
         """
+        # Callers thread config values through verbatim — an unset (None)
+        # floor means the default, never a TypeError at the ctx comparison.
+        if min_context_size is None:
+            min_context_size = DEFAULT_CONTEXT_SIZE
         # Map high-level device selector to required_min_device when the
         # caller didn't pass an explicit required_min_device.
         if device and not required_min_device:

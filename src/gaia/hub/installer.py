@@ -435,7 +435,7 @@ def _generic_binary_name(filename: str, platform_key: str) -> str:
     """Strip the platform suffix: ``email-agent-win32-x64.exe`` -> ``email-agent.exe``.
 
     Must match the executable name the sidecar's own cache uses
-    (``gaia.ui.email_sidecar.platform`` / ``binaries.lock.json``) so a
+    (``gaia.daemon.sidecars.platform`` / ``binaries.lock.json``) so a
     same-version install primes it.
     """
     suffix = f"-{platform_key}.exe"

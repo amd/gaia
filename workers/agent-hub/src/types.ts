@@ -76,6 +76,8 @@ export interface ParsedManifest {
   author: string;
   license: string;
   language: string;
+  /** Package kind: agent | app | component. Defaults to "agent" (#1716). */
+  type: string;
   category: string;
   tags: string[];
   icon: string;

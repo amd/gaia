@@ -14,7 +14,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from .._chat_helpers import evict_session_agent, resolve_device_model
-from ..database import SESSION_DEFAULT_MODEL, ChatDatabase
+from ..database import SESSION_DEFAULT_MODEL, ChatDatabase, is_placeholder_title
 from ..dependencies import get_db
 from ..models import (
     AttachDocumentRequest,
@@ -187,9 +187,18 @@ async def update_session(
             if resolved != current_model and (is_default_model or device_is_explicit):
                 device_model = resolved
 
+    # A PUT that sets the title is an explicit rename → pin it against the
+    # auto-retitler (#2165), unless the caller says otherwise (the webui's
+    # client-side auto-title sends title_is_custom=false) or the new title
+    # is itself a placeholder (renaming to "New Chat" re-enables auto-title).
+    title_is_custom = request.title_is_custom
+    if request.title is not None and title_is_custom is None:
+        title_is_custom = not is_placeholder_title(request.title)
+
     session = db.update_session(
         session_id,
         title=request.title,
+        title_is_custom=title_is_custom,
         system_prompt=request.system_prompt,
         document_ids=request.document_ids,
         private=request.private,

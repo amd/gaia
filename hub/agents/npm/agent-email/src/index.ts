@@ -35,6 +35,7 @@ export {
   checkVersion,
   shutdown,
   startSidecar,
+  connectSidecar,
   executableName,
   generateSessionToken,
 } from "./lifecycle.js";
@@ -45,6 +46,8 @@ export type {
   WaitForHealthOptions,
   VersionCheckOptions,
   StartOptions,
+  ConnectOptions,
+  AttachedSidecar,
 } from "./lifecycle.js";
 
 export {
@@ -65,6 +68,7 @@ export {
   HealthTimeoutError,
   VersionMismatchError,
   BinaryNotFoundError,
+  QueryStreamError,
 } from "./errors.js";
 
 export { SCHEMA_VERSION, MAX_BATCH_SIZE } from "./types.js";

@@ -23,6 +23,10 @@ const SEMVER_RE =
 const VALID_LANGUAGES = new Set(["python", "cpp"]);
 const VALID_SECURITY_TIERS = new Set(["verified", "community", "experimental"]);
 const DEFAULT_SECURITY_TIER = "experimental";
+// Multi-component discriminator (#1716). Defaults to "agent" so existing
+// agent-only manifests keep validating unchanged.
+const VALID_TYPES = new Set(["agent", "app", "component"]);
+const DEFAULT_TYPE = "agent";
 const VALID_PLATFORMS = new Set([
   "win-x64",
   "win-arm64",
@@ -179,6 +183,14 @@ export function parseManifest(yamlText: string): ParsedManifest {
     );
   }
 
+  const pkgType = (d.type as string) ?? DEFAULT_TYPE;
+  if (!VALID_TYPES.has(pkgType)) {
+    bad(
+      `gaia-agent.yaml: type ${JSON.stringify(pkgType)} is not a valid package type. ` +
+        `Use one of: ${[...VALID_TYPES].sort().join(", ")}, or omit it to default to 'agent'.`
+    );
+  }
+
   const securityTier = (d.security_tier as string) ?? DEFAULT_SECURITY_TIER;
   if (!VALID_SECURITY_TIERS.has(securityTier)) {
     bad(
@@ -199,6 +211,7 @@ export function parseManifest(yamlText: string): ParsedManifest {
     author: d.author as string,
     license: d.license as string,
     language,
+    type: pkgType,
     category: nonEmptyStr(d.category) ? (d.category as string) : "general",
     tags: strList(d.tags, "tags"),
     icon: nonEmptyStr(d.icon) ? (d.icon as string) : "",

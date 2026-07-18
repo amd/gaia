@@ -274,7 +274,8 @@ def make_claude_judge(model: str | None = None) -> Callable[[str], str]:
     """
     from gaia.eval.claude import ClaudeClient
 
-    client = ClaudeClient(model=model)
+    # Judge determinism: generation is temp-0, the judge must be too (#2094).
+    client = ClaudeClient(model=model, temperature=0.0)
 
     def judge(prompt: str) -> str:
         content = client.get_completion(prompt)

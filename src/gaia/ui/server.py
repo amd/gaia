@@ -59,6 +59,7 @@ from .routers import goals as goals_router_mod
 from .routers import hub as hub_router_mod
 from .routers import mcp as mcp_router_mod
 from .routers import memory as memory_router_mod
+from .routers import onboarding as onboarding_router_mod
 from .routers import schedules as schedules_router_mod
 from .routers import sessions as sessions_router_mod
 from .routers import system as system_router_mod
@@ -503,12 +504,9 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         logger.info("Memory store connection closed")
         goals_router_mod.close_store()
         logger.info("Goal store connection closed")
-        sidecar_mgr = getattr(app.state, "email_sidecar_manager", None)
-        if sidecar_mgr is not None:
-            from starlette.concurrency import run_in_threadpool
-
-            await run_in_threadpool(sidecar_mgr.shutdown)
-            logger.info("Email sidecar stopped")
+        # No email-sidecar shutdown here (#2142): the GAIA daemon owns the
+        # sidecar lifecycle — closing the UI deliberately leaves it running;
+        # `gaia daemon stop` reaps it.
 
     app = FastAPI(
         title="GAIA Agent UI API",
@@ -579,6 +577,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
     # ── Include Routers ──────────────────────────────────────────────────
     app.include_router(system_router_mod.router)
+    app.include_router(onboarding_router_mod.router)
     # Hub routes (catalog/install/...) MUST precede the agents router: that
     # router has a greedy GET /api/agents/{agent_id:path} that would otherwise
     # capture /api/agents/catalog and /api/agents/{id}/install-status.
@@ -600,23 +599,17 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     # Email REST surface (/v1/email/*) — out-of-process sidecar ONLY (#1767
     # cutover / design decision 4). The core backend never imports the email
     # wheel: it stays lightweight, crash-isolated, and dogfoods the exact binary
-    # we ship. GAIA_EMAIL_AGENT_MODE selects the backend process — user (default,
-    # frozen binary, lazy-fetched + SHA-verified) or dev (uvicorn from source);
-    # unset means user. The sidecar is the SOLE /v1/email surface — there is no
-    # in-process fallback (a missing/unpublished binary fails loudly with a
-    # remedy, never silently re-mounts the wheel).
-    from gaia.ui.email_sidecar.manager import get_shared_manager
+    # we ship. Since #2142 the GAIA daemon supervises the sidecar; each request
+    # acquires a handle via gaia.ui.email_sidecar.daemon_client (lazy — users
+    # who never use email never pay for a daemon or sidecar). The sidecar is
+    # the SOLE /v1/email surface — there is no in-process fallback (a missing/
+    # unpublished binary fails loudly with a remedy, never silently re-mounts
+    # the wheel).
     from gaia.ui.email_sidecar.router import router as email_sidecar_router
 
-    # Lazily spawned on the first /v1/email request (not at startup), so users
-    # who never use email never pay for a sidecar. The shared manager is the SAME
-    # one the in-app email chat agent (agent_type=email) drives, so the REST
-    # surface and the chat agent share one sidecar process. The contract MAJOR is
-    # pinned inside get_shared_manager() so a breaking upgrade fails loudly.
-    app.state.email_sidecar_manager = get_shared_manager()
     app.include_router(email_sidecar_router)
     logger.info(
-        "Email REST surface served by out-of-process sidecar "
+        "Email REST surface served by the daemon-supervised sidecar "
         "(GAIA_EMAIL_AGENT_MODE=%s).",
         os.environ.get("GAIA_EMAIL_AGENT_MODE", "user"),
     )

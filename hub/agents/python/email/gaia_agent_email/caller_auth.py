@@ -10,17 +10,19 @@ The existing draft→send *confirmation token* is a payload-integrity check (it
 binds a send to one exact message); it is NOT caller authentication.
 
 This module adds the missing caller-auth layer. It is wired ONLY onto the sidecar
-app (``packaging/server.py``) — the product server (``gaia.api.openai_server``)
-and the OpenAPI export app mount the same router unchanged, so their posture is
-untouched.
+app (``gaia_agent_email.server``, which the frozen binary freezes) — the product
+server (``gaia.api.openai_server``) and the OpenAPI export app mount the same
+router unchanged, so their posture is untouched.
 
 Three controls, all keyed on a single :class:`CallerAuthConfig` set at app build:
 
-1. **Per-session bearer token** — the spawning parent (npm ``lifecycle.ts`` or the
-   Python ``EmailSidecarManager``) generates a cryptographically-random token and
-   hands it to the sidecar over the private ``GAIA_EMAIL_SIDECAR_TOKEN`` env
-   channel. Every non-exempt request must present ``Authorization: Bearer
-   <token>`` or it is rejected with 401. This authenticates the *caller*.
+1. **Per-session bearer token** — the spawning parent (npm ``lifecycle.ts`` or
+   the daemon's ``AgentSidecarManager``) generates a cryptographically-random
+   token and hands it to the sidecar either as a 0600 file whose path arrives in
+   ``GAIA_EMAIL_SIDECAR_TOKEN_FILE`` (preferred, #2149 — the secret never sits
+   in the environment) or directly in ``GAIA_EMAIL_SIDECAR_TOKEN`` (legacy).
+   Every non-exempt request must present ``Authorization: Bearer <token>`` or it
+   is rejected with 401. This authenticates the *caller*.
 2. **Host allowlist** — the ``Host`` header must be a loopback host
    (127.0.0.1 / localhost / ::1). This closes DNS-rebinding, where a victim's
    browser is tricked into resolving ``evil.com`` → 127.0.0.1 and posting to the
@@ -43,6 +45,7 @@ import hmac
 import os
 import secrets
 from dataclasses import dataclass
+from pathlib import Path
 from typing import FrozenSet, Optional
 from urllib.parse import urlsplit
 
@@ -53,9 +56,18 @@ from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 
-# The private channel the spawning parent uses to hand the sidecar its token.
-# An env var (not argv) so the secret never shows up in a `ps`/Task Manager
-# process listing the way command-line arguments do.
+# Preferred channel (#2149): the spawning parent writes the token to a 0600,
+# owner-only file and passes its PATH here — the secret itself never sits in the
+# process environment (which any local process can read via /proc/<pid>/environ
+# or `ps eww`). MUST equal the daemon's mirrored literal in
+# gaia.daemon.sidecars.spec (kept as plain strings so core never imports this
+# wheel).
+TOKEN_FILE_ENV_VAR = "GAIA_EMAIL_SIDECAR_TOKEN_FILE"
+
+# Legacy channel: the token directly in the environment. Still honored for
+# older spawning parents and bare integrators; deprecated for daemon spawns
+# (#2149). An env var (not argv) so the secret at least never shows up in a
+# `ps`/Task Manager process listing the way command-line arguments do.
 TOKEN_ENV_VAR = "GAIA_EMAIL_SIDECAR_TOKEN"
 
 # Hosts the sidecar is allowed to be reached as. The sidecar only ever binds a
@@ -125,11 +137,44 @@ def get_config() -> Optional[CallerAuthConfig]:
 
 
 def config_from_env() -> CallerAuthConfig:
-    """Build a policy from the environment (``GAIA_EMAIL_SIDECAR_TOKEN``).
+    """Build a policy from the environment.
 
-    A missing/empty env var yields ``token=None`` — the token check is then
-    skipped (dev mode) but Host/Origin protection still applies.
+    Preferred (#2149): ``GAIA_EMAIL_SIDECAR_TOKEN_FILE`` names a 0600 file the
+    spawning parent wrote the token into — the secret never sits in the
+    environment. A set path var whose file is missing/unreadable/empty is a
+    LOUD startup error, never a silent auth-off skip. Legacy:
+    ``GAIA_EMAIL_SIDECAR_TOKEN`` carries the token directly. Neither set →
+    ``token=None`` — the token check is skipped (dev mode) but Host/Origin
+    protection still applies.
     """
+    token_path = os.environ.get(TOKEN_FILE_ENV_VAR) or None
+    if token_path:
+        if os.environ.get(TOKEN_ENV_VAR):
+            logger.warning(
+                "Both %s and %s are set; using the secret file (%s) and "
+                "ignoring the bare env token.",
+                TOKEN_FILE_ENV_VAR,
+                TOKEN_ENV_VAR,
+                token_path,
+            )
+        try:
+            token = Path(token_path).read_text(encoding="utf-8").strip()
+        except OSError as e:
+            raise RuntimeError(
+                f"{TOKEN_FILE_ENV_VAR} points at '{token_path}' but the "
+                f"launch-secret file cannot be read: {e}. The spawning parent "
+                "creates this file on spawn and removes it on sidecar exit — "
+                "do not set the variable by hand unless the file exists. Unset "
+                "it to run without caller auth (local development only)."
+            ) from e
+        if not token:
+            raise RuntimeError(
+                f"{TOKEN_FILE_ENV_VAR} points at '{token_path}' but the file "
+                "is empty — refusing to start with an empty caller-auth token. "
+                "Unset the variable to run without caller auth (local "
+                "development only)."
+            )
+        return CallerAuthConfig(token=token)
     token = os.environ.get(TOKEN_ENV_VAR) or None
     return CallerAuthConfig(token=token)
 
@@ -234,6 +279,7 @@ class HostOriginMiddleware:
 
 __all__ = [
     "TOKEN_ENV_VAR",
+    "TOKEN_FILE_ENV_VAR",
     "LOOPBACK_HOSTS",
     "EXEMPT_PATHS",
     "CallerAuthConfig",

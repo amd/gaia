@@ -39,6 +39,7 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.chat.sdk import AgentConfig, AgentSDK
 
 if TYPE_CHECKING:
+    from gaia.agents.base.goal_store import Goal, Proposal
     from gaia.connectors.providers.base import ConnectorRequirement
 
 # Set up logging
@@ -2574,6 +2575,59 @@ Do NOT wrap conversational replies in JSON.
             self, "AGENT_ID", None
         )
 
+    # ------------------------------------------------------------------
+    # Proactive lifecycle hooks (#1484)
+    # ------------------------------------------------------------------
+
+    def on_first_run(  # pylint: disable=unused-argument
+        self, context: Optional[Dict[str, Any]]
+    ) -> List["Proposal"]:
+        """First-run discovery: propose actions based on initial context.
+
+        Default: no-op, returns empty list. Override to implement proactive
+        discovery behavior.
+        """
+        return []
+
+    def on_heartbeat(  # pylint: disable=unused-argument
+        self, context: Optional[Dict[str, Any]]
+    ) -> List["Proposal"]:
+        """Steady-state autonomous loop: propose actions based on current context.
+
+        Default: no-op, returns empty list. Override to implement heartbeat
+        behavior. Must act within trust bounds and never exceed permissions.
+        """
+        return []
+
+    def propose(
+        self,
+        proposal: "Proposal",
+    ) -> Optional["Goal"]:
+        """Submit a proactive proposal for user approval.
+
+        Delegates to ``GoalStore.propose()``. Every proposal goes into
+        ``pending_approval`` and must be explicitly accepted by the user
+        before execution, regardless of its risk tier. DB errors propagate
+        from ``GoalStore.propose()``.
+        """
+        from gaia.agents.base.goal_store import GoalStore
+
+        store = GoalStore()
+        return store.propose(proposal)
+
+    def _agent_identity_context(self, ns_id: Optional[str]):
+        """Context manager that binds _agent_context for grant resolution.
+
+        Shared identity binding so that both process_query and
+        on_heartbeat can resolve per-agent grants via contextvars.
+        """
+        # `_agent_context` is intentionally PRIVATE (issue #915): imported via
+        # the private path so a malicious tool body can't forge an agent
+        # identity through the public gaia.connectors API.
+        from gaia.connectors.context import _agent_context
+
+        return _agent_context(ns_id) if ns_id else None
+
     def _active_mcp_servers(self, manager) -> List[str]:
         """Return MCP server names whose tools should be visible to this agent.
 
@@ -2589,6 +2643,19 @@ Do NOT wrap conversational replies in JSON.
         if ns_id is None:
             return list(manager.list_servers())
         return list(manager.servers_for_agent(ns_id))
+
+    def _console_cancelled(self) -> bool:
+        """Cooperative mid-generation cancel check for the Agent-UI path.
+
+        The Agent UI injects its ``SSEOutputHandler`` as ``self.console`` and
+        sets ``console.cancelled`` (a ``threading.Event``) when the user hits
+        Stop. Non-UI consoles (``AgentConsole`` / ``SilentConsole``) have no
+        such attribute, so this stays a no-op for them — keeping non-UI agent
+        usage unaffected. Read per streamed token so a single-shot generation
+        (no step boundaries) can be aborted promptly.
+        """
+        cancelled = getattr(self.console, "cancelled", None)
+        return cancelled is not None and cancelled.is_set()
 
     def process_query(
         self,
@@ -2610,22 +2677,11 @@ Do NOT wrap conversational replies in JSON.
         Returns:
             Dict containing the final result and operation details
         """
-        # T-X2 (issue #915): bind agent identity for the duration of the
-        # query so any tool body's `get_access_token_sync(...)` calls can
-        # resolve the per-agent grant via contextvars.
-        #
-        # `_agent_context` is intentionally PRIVATE — imported via the
-        # private path so a malicious tool body cannot import it from the
-        # public `gaia.connectors` API to forge an agent identity.
-        # See plan amendment A9.
-        from gaia.connectors.context import _agent_context
-
-        ns_id = getattr(self, "_gaia_namespaced_agent_id", None) or getattr(
-            self, "AGENT_ID", None
-        )
-        if ns_id is None:
+        ns_id = self._namespaced_agent_id()
+        identity_ctx = self._agent_identity_context(ns_id)
+        if identity_ctx is None:
             return self._process_query_impl(user_input, max_steps, trace, filename)
-        with _agent_context(ns_id):
+        with identity_ctx:
             return self._process_query_impl(user_input, max_steps, trace, filename)
 
     def _process_query_impl(
@@ -2662,6 +2718,9 @@ Do NOT wrap conversational replies in JSON.
 
         steps_taken = 0
         final_answer = None
+        # Set when the Agent-UI Stop is observed mid-generation (per-token) so
+        # the turn ends with empty text instead of a completed answer (#2157).
+        cancelled_by_console = False
         error_count = 0
         tool_call_history = []  # Track recent tool calls to detect loops (last 5 calls)
         tool_call_log = (
@@ -3111,6 +3170,22 @@ Do NOT wrap conversational replies in JSON.
                         # Process the streaming response chunks as they arrive
                         full_response = ""
                         for chunk_response in response_stream:
+                            # Cooperative cancel: the Agent UI's Stop sets
+                            # console.cancelled. Observe it per token so a
+                            # single-shot RAG/chat answer (no step boundaries)
+                            # halts promptly and the upstream Lemonade stream is
+                            # closed (GeneratorExit cascades to the llm_client
+                            # generator, which shuts the HTTP socket). #2157
+                            if self._console_cancelled():
+                                cancelled_by_console = True
+                                try:
+                                    response_stream.close()
+                                except Exception:  # noqa: BLE001 - best-effort teardown
+                                    logger.debug(
+                                        "Failed to close Lemonade stream on cancel",
+                                        exc_info=True,
+                                    )
+                                break
                             if chunk_response.is_complete:
                                 response_stats = chunk_response.stats
                                 # Non-empty complete chunk = tool_calls sentinel from
@@ -3120,6 +3195,9 @@ Do NOT wrap conversational replies in JSON.
                             else:
                                 self.console.print_streaming_text(chunk_response.text)
                                 full_response += chunk_response.text
+
+                        if cancelled_by_console:
+                            break
 
                         self.console.print_streaming_text("", end_of_stream=True)
                         response = full_response
@@ -3216,7 +3294,7 @@ Do NOT wrap conversational replies in JSON.
                                 f"*Technical details: {str(e)}*"
                             )
                         break
-                if final_answer is not None:
+                if final_answer is not None or cancelled_by_console:
                     break
             else:
                 # Use progress indicator for non-streaming mode
@@ -4561,6 +4639,25 @@ Do NOT wrap conversational replies in JSON.
                 else:
                     # Silent mode - just stop
                     break
+
+        # Cancelled mid-generation via the Agent UI Stop (#2157): end the turn
+        # with empty text so it doesn't rehydrate as a completed answer and the
+        # empty-answer classification (#2137/#2141) skips persistence. Returned
+        # before the max-steps fallback, which would otherwise substitute a
+        # non-empty "here's what I accomplished" message.
+        if cancelled_by_console:
+            logger.info("Agent run cancelled mid-generation via console.cancelled")
+            self.last_result = {
+                "status": "cancelled",
+                "result": "",
+                "system_prompt": self.system_prompt,
+                "conversation": conversation,
+                "steps_taken": steps_taken,
+                "duration": time.time() - start_time,
+                "error_count": len(self.error_history),
+                "error_history": self.error_history,
+            }
+            return self.last_result
 
         # Print completion message
         self.console.print_completion(steps_taken, steps_limit)

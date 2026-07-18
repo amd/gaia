@@ -287,6 +287,28 @@ class EmailAgentConfig:
             "Expected 'google' or 'microsoft'."
         )
 
+    def available_mailbox_providers(self) -> List[str]:
+        """Return the UNFILTERED available mailbox providers, registry order.
+
+        The eval seam rules apply exactly as in ``resolve_mail_backends``:
+        when a fake backend is injected, the injected set FULLY defines
+        availability (the live keyring is not consulted); otherwise the
+        available set is the connected mailboxes. Unlike
+        ``resolve_mail_backends``, the ``mail_provider`` filter is NOT
+        applied — callers that need to distinguish "not connected" from
+        "connected but filtered out by the session selection" (the #2164
+        provider-intent guard) read this.
+        """
+        injected = set()
+        if self.gmail_backend is not None:
+            injected.add("google")
+        if self.outlook_backend is not None:
+            injected.add("microsoft")
+        available = injected if injected else set(connected_mailbox_providers())
+        # Canonical registry order (google before microsoft) — deterministic
+        # regardless of keyring vs injection ordering.
+        return [p for p in ("google", "microsoft") if p in available]
+
     def resolve_mail_backends(self) -> List[Tuple[str, Any]]:
         """Return ``[(provider, backend), ...]`` for every admitted mailbox.
 
@@ -319,15 +341,7 @@ class EmailAgentConfig:
         # available set — the live keyring is not consulted at all, so an
         # injected-fake run stays hermetic regardless of the host's real OAuth
         # connections. Otherwise the available set is the connected mailboxes.
-        injected = set()
-        if self.gmail_backend is not None:
-            injected.add("google")
-        if self.outlook_backend is not None:
-            injected.add("microsoft")
-        available = injected if injected else set(connected_mailbox_providers())
-        # Canonical registry order (google before microsoft) — deterministic
-        # regardless of keyring vs injection ordering.
-        connected = [p for p in ("google", "microsoft") if p in available]
+        connected = self.available_mailbox_providers()
         selected_filter = (self.mail_provider or "").strip().lower()
         if selected_filter:
             selected = [p for p in connected if p == selected_filter]

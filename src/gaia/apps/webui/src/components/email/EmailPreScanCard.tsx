@@ -16,10 +16,9 @@
  * Dismiss is purely local — it removes the row from the visible list
  * without touching the backend.
  *
- * Mounted by ``RenderedContent`` in ``MessageBubble`` via a
- * ``STRUCTURED_FENCE_RE`` check that bypasses ReactMarkdown entirely
- * (ReactMarkdown/remark-gfm corrupts fence detection when the JSON
- * contains ``<email@domain>`` patterns).
+ * Mounted through the card registry (``render/registry.tsx``, key
+ * ``email_pre_scan``) from ``tool_result.render`` events — the pre-#2109
+ * fence-parsing mount in ``MessageBubble`` is retired.
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';

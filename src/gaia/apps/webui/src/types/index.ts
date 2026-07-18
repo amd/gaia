@@ -6,6 +6,9 @@
 export interface Session {
     id: string;
     title: string;
+    /** True when the title was explicitly set (rename/API) and is pinned
+     *  against auto-retitling (#2165). */
+    title_is_custom?: boolean;
     created_at: string;
     updated_at: string;
     model: string;
@@ -71,6 +74,11 @@ export interface AgentInfo {
     namespaced_agent_id?: string;
     /** Agent Hub metadata — used to render rich discovery cards. */
     category?: string;
+    /**
+     * Package kind (#1716): ``agent`` | ``app`` | ``component``. Drives the Hub
+     * page's Apps · Components · Agents lanes. Undefined = treated as ``agent``.
+     */
+    type?: 'agent' | 'app' | 'component';
     tags?: string[];
     icon?: string;
     tools_count?: number;
@@ -105,8 +113,20 @@ export interface AgentInfo {
     compatibility?: AgentCompatibility;
     /** Download size of the agent package in bytes (Available cards). */
     download_size_bytes?: number;
+    /**
+     * Declared install requirements (platforms, and future hardware/model
+     * constraints). Shown in the install trust gate. Absent for local-only
+     * agents.
+     */
+    requirements?: { platforms?: string[] };
     /** Trust tier: AMD-verified, community-published, or experimental opt-in. */
     security_tier?: 'verified' | 'community' | 'experimental';
+    /**
+     * Declared permission scopes (``<domain>:<action>``, e.g. ``fs:read``)
+     * shown in the install trust gate so the user sees what an agent can do
+     * before installing. Empty/undefined = no special permissions declared.
+     */
+    permissions?: string[];
     /**
      * True when installing this agent needs an explicit native-trust opt-in —
      * a non-verified native (C++) package that runs unsandboxed. The Hub shows
@@ -314,6 +334,15 @@ export interface Message {
     agentSteps?: AgentStep[];
     /** Inference performance stats from the LLM backend. */
     stats?: InferenceStats;
+    /** Structured cards emitted via tool_result.render during this turn
+     *  (issue #2108). Rendered by RenderCard above the markdown content. */
+    cards?: RenderCardData[];
+}
+
+/** One card instance transferred onto a finalized Message (issue #2108). */
+export interface RenderCardData {
+    render: string;
+    data: unknown;
 }
 
 export interface SourceInfo {
@@ -437,6 +466,38 @@ export interface SystemStatus {
     init_tasks?: Array<{ name: string; status: string }>;
     /** Devices detected on this system (e.g. ['cpu', 'gpu', 'npu']). */
     detected_devices?: string[];
+}
+
+/**
+ * First-run hardware pre-flight report from GET /api/onboarding/preflight
+ * (#1726, #1727). ``compatible`` is false only when there is a hard blocker
+ * (e.g. not enough disk for the model download).
+ */
+export interface PreflightReport {
+    os: string | null;
+    detected_platform: string | null;
+    ram_gb: number | null;
+    disk_free_gb: number | null;
+    /** true/false when probed; null when hardware couldn't be verified. */
+    npu_detected: boolean | null;
+    gpu_name: string | null;
+    gpu_vram_gb: number | null;
+    lemonade_running: boolean;
+    tier: 'full' | 'standard' | 'light' | 'insufficient' | 'unknown' | string;
+    recommended_profile: string;
+    recommended_model: string;
+    required_disk_gb: number;
+    required_memory_gb: number;
+    compatible: boolean;
+    blockers: string[];
+    warnings: string[];
+}
+
+/** First-run completion state from GET /api/onboarding/status. */
+export interface OnboardingStatusResponse {
+    initialized: boolean;
+    skipped: boolean;
+    completed_at: string | null;
 }
 
 // ── File Browser Types ───────────────────────────────────────────────────
@@ -628,6 +689,7 @@ export type StreamEventType =
     | 'answer'       // Final answer from agent
     | 'agent_error'  // Agent-level error (non-fatal)
     | 'permission_request' // Tool confirmation request
+    | 'needs_confirmation' // Stateless confirmation card (email /query, #2109) — informational, non-blocking
     | 'policy_alert' // Governance policy blocked a tool
     | 'mcp_status'   // MCP server connection status update
     | 'agent_created'; // New agent created — triggers agent list refresh
@@ -670,6 +732,8 @@ export interface StreamEvent {
     agent_id?: string;
     /** Confirmation ID (for tool_confirm events). */
     confirm_id?: string;
+    /** Machine tool name a confirmation is about (for needs_confirmation events). */
+    action?: string;
     /** Timeout in seconds (for tool_confirm events). */
     timeout_seconds?: number;
     /** MCP server name (for tool_start of MCP tools). */
@@ -703,4 +767,12 @@ export interface StreamEvent {
         files?: Array<Record<string, unknown>>;
         total?: number;
     };
+    /**
+     * Card render key (issue #2108, additive on `tool_result`). Non-empty
+     * string means the frontend should mount a registered card via
+     * RenderCard against `data`. Absent on every other event type.
+     */
+    render?: string;
+    /** Card payload for `render` (issue #2108, additive on `tool_result`). */
+    data?: unknown;
 }

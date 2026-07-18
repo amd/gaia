@@ -4,7 +4,7 @@
 /** Zustand store for GAIA Agent UI state. */
 
 import { create } from 'zustand';
-import type { Session, Message, Document, AgentStep, SystemStatus, AgentInfo } from '../types';
+import type { Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData } from '../types';
 
 interface ChatState {
     // Agents
@@ -12,6 +12,10 @@ interface ChatState {
     activeAgentId: string;
     setAgents: (agents: AgentInfo[]) => void;
     setActiveAgentId: (id: string) => void;
+    /** Loud, user-facing error when agent discovery (GET /api/agents) fails.
+     *  Surfaced in the Hub view so a broken discovery is never a dead button. */
+    agentsError: string | null;
+    setAgentsError: (error: string | null) => void;
 
     // Device selection (CPU / GPU / NPU)
     activeDevice: string;
@@ -72,6 +76,14 @@ interface ChatState {
     updateLastToolStep: (updates: Partial<AgentStep>) => void;
     clearAgentSteps: () => void;
 
+    // Structured cards from tool_result.render events (issue #2108).
+    // Accumulated during the stream, transferred onto the finalized
+    // Message by ChatView (onDone/handleStop), then cleared — mirroring
+    // the agentSteps lifecycle exactly.
+    cards: RenderCardData[];
+    appendCard: (card: RenderCardData) => void;
+    clearCards: () => void;
+
     // Documents
     documents: Document[];
     setDocuments: (docs: Document[]) => void;
@@ -89,6 +101,7 @@ interface ChatState {
     showSettings: boolean;
     showMemoryDashboard: boolean;
     showSchedules: boolean;
+    showHub: boolean;
     sidebarOpen: boolean;
     sidebarCollapsed: boolean;
     sidebarWidth: number;
@@ -101,6 +114,7 @@ interface ChatState {
     setShowSettings: (show: boolean) => void;
     setShowMemoryDashboard: (show: boolean) => void;
     setShowSchedules: (show: boolean) => void;
+    setShowHub: (show: boolean) => void;
     toggleSidebar: () => void;
     setSidebarOpen: (open: boolean) => void;
     toggleSidebarCollapsed: () => void;
@@ -122,6 +136,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         try { localStorage.setItem('gaia-active-agent-id', id); } catch { /* noop */ }
         set({ activeAgentId: id });
     },
+    agentsError: null,
+    setAgentsError: (error) => set({ agentsError: error }),
 
     // Device selection
     activeDevice: (() => {
@@ -166,7 +182,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
             // results don't resurrect sessions the user already deleted.
             sessions: sessions.filter((s) => !state.pendingDeleteIds.includes(s.id)),
         })),
-    setCurrentSession: (id) => set({ currentSessionId: id }),
+    // Selecting a session must leave the full-screen Hub (Home sets showHub=true
+    // and nothing else cleared it, stranding the user on the Hub — #2206).
+    // Clear only for a real selection; setCurrentSession(null) is the Home path
+    // that opens the Hub, so it must not fight setShowHub(true).
+    setCurrentSession: (id) => set(id ? { currentSessionId: id, showHub: false } : { currentSessionId: id }),
     addSession: (session) =>
         set((state) => ({ sessions: [session, ...state.sessions] })),
     removeSession: (id) =>
@@ -210,7 +230,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set((state) => ({ streamingContent: state.streamingContent + content })),
     setStreamContent: (content) => set({ streamingContent: content }),
     clearStreamContent: () => set({ streamingContent: '' }),
-    resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [] }),
+    resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [], cards: [] }),
 
     // Agent activity
     agentSteps: [],
@@ -258,6 +278,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }),
     clearAgentSteps: () => set({ agentSteps: [] }),
 
+    // Streaming cards (#2108)
+    cards: [],
+    appendCard: (card) =>
+        set((state) => ({ cards: [...state.cards, card] })),
+    clearCards: () => set({ cards: [] }),
+
     // Documents
     documents: [],
     setDocuments: (docs) => set({ documents: docs }),
@@ -278,6 +304,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     showSettings: false,
     showMemoryDashboard: false,
     showSchedules: false,
+    showHub: false,
     toggleTheme: () =>
         set((state) => {
             const next = state.theme === 'dark' ? 'light' : 'dark';
@@ -299,11 +326,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setShowDocLibrary: (show) => set({ showDocLibrary: show }),
     setShowFileBrowser: (show) => set({ showFileBrowser: show }),
     setShowSettings: (show) =>
-        set(show ? { showSettings: true, showMemoryDashboard: false, showSchedules: false } : { showSettings: false }),
+        set(show ? { showSettings: true, showMemoryDashboard: false, showSchedules: false, showHub: false } : { showSettings: false }),
     setShowMemoryDashboard: (show) =>
-        set(show ? { showMemoryDashboard: true, showSettings: false, showSchedules: false } : { showMemoryDashboard: false }),
+        set(show ? { showMemoryDashboard: true, showSettings: false, showSchedules: false, showHub: false } : { showMemoryDashboard: false }),
     setShowSchedules: (show) =>
-        set(show ? { showSchedules: true, showSettings: false, showMemoryDashboard: false } : { showSchedules: false }),
+        set(show ? { showSchedules: true, showSettings: false, showMemoryDashboard: false, showHub: false } : { showSchedules: false }),
+    setShowHub: (show) =>
+        set(show ? { showHub: true, showSettings: false, showMemoryDashboard: false, showSchedules: false } : { showHub: false }),
     toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
     setSidebarOpen: (open) => set({ sidebarOpen: open }),
     toggleSidebarCollapsed: () =>

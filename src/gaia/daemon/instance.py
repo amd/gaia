@@ -17,7 +17,6 @@ check fails, and the caller reclaims the lock.
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import asdict, dataclass, field
 from typing import Optional
 
@@ -59,37 +58,11 @@ class DaemonInstance:
 def write_instance(inst: DaemonInstance) -> None:
     """Atomically persist *inst* to instance.json at mode 0600.
 
-    Writes a uniquely-named temp file in the same directory (so ``os.replace`` is a
-    same-filesystem atomic rename), fsyncs it, then renames it over the target. The
-    temp file is created ``O_EXCL`` at 0600 so it is never briefly world-readable.
+    Delegates to :func:`gaia.daemon.paths.atomic_write_json` — the one shared
+    temp-then-rename routine (also used by the sidecar ledger).
     """
-    d = paths.ensure_host_dir()
-    target = paths.instance_path()
-    tmp = d / f".instance.{os.getpid()}.tmp"
-    payload = json.dumps(inst.to_dict(), indent=2)
-    # O_EXCL: a leftover temp from a prior crashed writer must not be reused.
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_TRUNC
-    if tmp.exists():
-        tmp.unlink()
-    fd = os.open(str(tmp), flags, 0o600)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(payload)
-            f.flush()
-            os.fsync(f.fileno())
-    except Exception:
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
-        raise
-    os.replace(str(tmp), str(target))
-    # os.replace preserves the temp's 0600 mode; re-assert defensively for
-    # platforms where the source mode is not carried across the rename.
-    try:
-        os.chmod(str(target), 0o600)
-    except OSError:
-        pass
+    paths.ensure_host_dir()
+    paths.atomic_write_json(paths.instance_path(), inst.to_dict())
 
 
 def read_instance() -> Optional[DaemonInstance]:

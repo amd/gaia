@@ -768,29 +768,7 @@ async def async_main(action, **kwargs):
 
                 return 0 if result["status"] == "success" else 1
 
-            # First-boot: if no profile entries exist, offer onboarding intro
-            from gaia.agents.base.memory_store import MemoryStore as _BootMS
-
-            _boot_store = _BootMS()
-            try:
-                _has_profile = bool(
-                    _boot_store.get_by_category("profile", context="global", limit=1)
-                )
-            finally:
-                _boot_store.close()
-            if not _has_profile:
-                print("\n" + "=" * 60)
-                print("  First time with GAIA? Let's set up your profile.")
-                print("=" * 60)
-                try:
-                    run_first_boot = (
-                        input("  Quick intro? Takes ~1 minute. [Y/n]: ").strip().lower()
-                    )
-                except (EOFError, KeyboardInterrupt):
-                    run_first_boot = "n"
-                if run_first_boot != "n":
-                    _bootstrap_chat()
-                    print()
+            _offer_first_boot_onboarding()
 
             # Interactive mode
             interactive_mode(agent)
@@ -2818,6 +2796,26 @@ Examples:
     daemon_subparsers.add_parser(
         "restart", help="Restart the daemon (stop if running, then start)"
     )
+    daemon_subparsers.add_parser(
+        "agents", help="List the sidecar agents the daemon supervises"
+    )
+    daemon_start_agent_parser = daemon_subparsers.add_parser(
+        "start-agent",
+        help="Start (or attach to) one agent's sidecar under the daemon",
+    )
+    daemon_start_agent_parser.add_argument(
+        "agent_id", help="Agent to start (e.g. email)"
+    )
+    daemon_start_agent_parser.add_argument(
+        "--mode",
+        choices=["user", "dev"],
+        default=None,
+        help="Sidecar mode: user (frozen binary, default) or dev (from source)",
+    )
+    daemon_stop_agent_parser = daemon_subparsers.add_parser(
+        "stop-agent", help="Stop one agent's sidecar (the daemon keeps running)"
+    )
+    daemon_stop_agent_parser.add_argument("agent_id", help="Agent to stop")
     daemon_logs_parser = daemon_subparsers.add_parser(
         "logs", help="Show the daemon log"
     )
@@ -5013,12 +5011,17 @@ def handle_jira_command(args):
 
 def handle_email_command(args):
     """
-    Handle the ``gaia email`` command.
+    Handle the ``gaia email`` command — a thin client over the GAIA daemon (V2-8).
 
-    Wires the Email Triage Agent (#962) to a CLI session. AC3-critical:
-    this handler does NOT pass ``--use-claude`` / ``--use-chatgpt`` to
-    the agent (the agent's config has no such field). The local-LLM-only
-    path is the only path.
+    The query path (``-q`` / ``-i``) no longer runs the email agent in-process:
+    it ensures/attaches to the always-on daemon, ensures the ``email`` sidecar,
+    and streams ``POST /v1/email/query`` through the daemon relay, presenting ONLY
+    the daemon client token — the CLI never learns the sidecar's port or bearer
+    (design §0.0 "one contract, many front-doors", #2152). Local-LLM only (AC3):
+    no ``--use-claude`` / ``--use-chatgpt`` — the sidecar rejects any non-local
+    provider.
+
+    ``--spec`` stays a fixed-function local operation (no daemon, no Lemonade).
 
     Args:
         args: Parsed command line arguments for the email command
@@ -5026,7 +5029,7 @@ def handle_email_command(args):
     log = get_logger(__name__)
 
     # --spec: generate the HTML endpoint spec and open it in a browser.
-    # No LLM, no Lemonade — short-circuit before any server check.
+    # No LLM, no Lemonade, no daemon — short-circuit before any server check.
     if getattr(args, "spec", False):
         try:
             from gaia_agent_email.spec_html import write_and_open_spec
@@ -5041,9 +5044,10 @@ def handle_email_command(args):
         print(dest)
         sys.exit(0)
 
-    # Initialize Lemonade — local LLM only. The email agent's config will
-    # also reject any non-local base_url at construction time, but the
-    # CLI manager check gives a friendlier "start Lemonade first" message.
+    # Initialize Lemonade — local LLM only. The daemon spawns the sidecar, but the
+    # sidecar's inference runs on Lemonade; this upfront check gives a friendlier
+    # "start Lemonade first" message than a mid-stream error event (AC: Lemonade
+    # down → loud actionable error).
     if not getattr(args, "no_lemonade_check", False):
         success, _ = initialize_lemonade_for_agent(
             agent="email",
@@ -5054,36 +5058,80 @@ def handle_email_command(args):
         if not success:
             sys.exit(1)
 
-    try:
-        from gaia_agent_email.cli import main as email_main
+    verbose = bool(getattr(args, "verbose", False) or getattr(args, "debug", False))
+    query = getattr(args, "query", None)
+    interactive = getattr(args, "interactive", False)
 
-        # Normalize args the agent CLI expects.
-        if not hasattr(args, "verbose"):
-            args.verbose = False
-        if not hasattr(args, "debug"):
-            args.debug = False
-        if not hasattr(args, "model"):
-            args.model = None
-        if not hasattr(args, "query"):
-            args.query = None
-        if not hasattr(args, "interactive"):
-            args.interactive = False
-
-        result = asyncio.run(email_main(args))
-        sys.exit(result)
-
-    except ImportError as e:
-        log.error(f"Failed to import Email agent: {e}")
-        print("❌ Error: Email agent components are not available")
+    if not query and not interactive:
+        # No query and not interactive — print a helpful usage hint (parity with
+        # the retired in-process CLI).
         print(
-            "Install the email agent with `pip install gaia-agent-email` "
-            '(or `pip install "amd-gaia[agents]"` for all agents).'
+            "Usage: gaia email -q '<your question>' OR gaia email -i\n"
+            "Examples:\n"
+            "  gaia email -q 'Triage my inbox'\n"
+            "  gaia email -q 'Summarize my unread emails from this week'\n"
+            "  gaia email -i\n"
         )
+        sys.exit(0)
+
+    from gaia.daemon.agent_query import ConsoleRenderer, run_query
+    from gaia.daemon.errors import DaemonError
+
+    model = getattr(args, "model", None)
+
+    try:
+        if interactive:
+            sys.exit(_email_interactive(model=model, verbose=verbose))
+        renderer = ConsoleRenderer(verbose=verbose)
+        outcome = run_query(
+            "email", query, model=model, renderer=renderer, verbose=verbose
+        )
+        sys.exit(outcome.exit_code)
+    except DaemonError as e:
+        # Daemon unreachable / relay refusal / sidecar dead → loud, actionable,
+        # no silent in-process fallback (CLAUDE.md fail-loudly rule).
+        log.error("email thin client failed: %s", e)
+        print(f"❌ {e}", file=sys.stderr)
         sys.exit(1)
-    except Exception as e:
-        log.error(f"Error running Email agent: {e}")
-        print(f"❌ Error: {e}")
-        sys.exit(1)
+
+
+def _email_interactive(*, model, verbose: bool) -> int:
+    """REPL over the daemon relay — reads queries from stdin until EOF / ``/quit``.
+
+    Maintains the transcript locally and pushes it as ``context`` on each turn
+    (the host owns the transcript; the stateless sidecar is fed the relevant
+    slice per request, spec §2.4).
+    """
+    from gaia.daemon.agent_query import ConsoleRenderer, run_query
+
+    print("Email Triage Agent — interactive. Enter a query, or '/quit' to exit.\n")
+    transcript: list = []
+    while True:
+        try:
+            query = input("email> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+        if not query:
+            continue
+        if query in ("/quit", "/exit", "/q"):
+            return 0
+        renderer = ConsoleRenderer(verbose=verbose)
+        outcome = run_query(
+            "email",
+            query,
+            context=list(transcript),
+            model=model,
+            renderer=renderer,
+            verbose=verbose,
+        )
+        # Only extend the transcript on a successful turn — a failed run must not
+        # poison the context of the next one.
+        if outcome.terminal_type == "final":
+            transcript.append({"role": "user", "content": query})
+            transcript.append(
+                {"role": "assistant", "content": outcome.final_answer or ""}
+            )
 
 
 def handle_docker_command(args):
@@ -5873,8 +5921,10 @@ def _handle_memory_bootstrap(args):
         elif getattr(args, "infer", False):
             _bootstrap_infer()
         else:
-            # Default: run both phases
-            _bootstrap_chat()
+            # Default: run both phases — but a cancelled conversation means the
+            # user wants out, not a second round of prompts from discovery.
+            if _bootstrap_chat().cancelled:
+                return
             print()
             _bootstrap_discover()
     except RuntimeError as e:
@@ -5884,87 +5934,136 @@ def _handle_memory_bootstrap(args):
 
 # ---- Bootstrap: conversational onboarding ----
 
-_BOOTSTRAP_QUESTIONS = [
-    {
-        "prompt": "What's your name?",
-        "category": "profile",
-        "template": "User's name is {answer}",
-    },
-    {
-        "prompt": "What do you do? (role, profession, or student)",
-        "category": "profile",
-        "template": "User's role/profession: {answer}",
-    },
-    {
-        "prompt": "What will you mainly use GAIA for?",
-        "category": "profile",
-        "template": "User's primary use cases for GAIA: {answer}",
-    },
-    {
-        "prompt": "What programming languages or tools do you use most?",
-        "category": "profile",
-        "template": "User's primary tools and languages: {answer}",
-    },
-    {
-        "prompt": "What are your interests or hobbies outside of work?",
-        "category": "profile",
-        "template": "User's interests and hobbies: {answer}",
-    },
-    {
-        "prompt": "How should I communicate with you? (concise/detailed, casual/formal)",
-        "category": "preference",
-        "template": "Preferred communication style: {answer}",
-    },
-    {
-        "prompt": "Anything else you'd like me to know about you?",
-        "category": "profile",
-        "template": "Additional user context: {answer}",
-    },
-]
+
+#: Marks that the user has been through the onboarding conversation, whatever
+#: they chose to store. Keyed in ~/.gaia/memory_settings.json so first-boot does
+#: not have to infer completion from the presence of a memory row.
+_ONBOARDING_COMPLETED_KEY = "onboarding_completed_at"
+
+
+def _onboarding_completed() -> bool:
+    """True once the user has finished the onboarding conversation at least once."""
+    from gaia.agents.base.memory import _load_memory_settings
+
+    return bool(_load_memory_settings().get(_ONBOARDING_COMPLETED_KEY))
+
+
+def _mark_onboarding_completed() -> None:
+    """Record that onboarding ran to the end, so first-boot stops offering it."""
+    from datetime import datetime
+
+    from gaia.agents.base.memory import _save_memory_settings
+
+    _save_memory_settings(
+        {_ONBOARDING_COMPLETED_KEY: datetime.now().astimezone().isoformat()}
+    )
+
+
+def _offer_first_boot_onboarding() -> None:
+    """Offer the onboarding intro on first `gaia chat`, at most once.
+
+    Gated on a stored profile entry OR the completion marker. Both signals are
+    needed: the review gate means a user can answer every question and approve
+    nothing, and being re-asked forever after declining is worse than not asking.
+    """
+    from gaia.agents.base.memory_store import MemoryStore
+
+    store = MemoryStore()
+    try:
+        has_profile = bool(store.get_by_category("profile", context="global", limit=1))
+    finally:
+        store.close()
+
+    if has_profile or _onboarding_completed():
+        return
+
+    print("\n" + "=" * 60)
+    print("  First time with GAIA? Let's set up your profile.")
+    print("=" * 60)
+    try:
+        answer = input("  Quick intro? Takes ~3 minutes. [Y/n]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        answer = "n"
+
+    if answer in ("n", "no"):
+        # Declining is an answer — record it so the intro is not re-offered.
+        _mark_onboarding_completed()
+        return
+
+    # Onboarding is optional; chat is not. A failure to store must not cost
+    # the user their chat session.
+    try:
+        _bootstrap_chat()
+    except RuntimeError as e:
+        print(f"⚠ Onboarding could not finish: {e}")
+        print("  Continuing to chat — run `gaia memory bootstrap` later.")
+    print()
+
+
+def _bootstrap_prompt(question: str) -> str:
+    """Ask *question* on stdio for the bootstrap conversation core.
+
+    Translates EOF / Ctrl-C into ``BootstrapCancelled`` so the core can stop
+    asking, keep what the user already approved, and report the cancellation.
+    """
+    from gaia.agents.base.bootstrap import BootstrapCancelled
+
+    try:
+        return input(f"  {question} ")
+    except (EOFError, KeyboardInterrupt) as e:
+        raise BootstrapCancelled("user cancelled onboarding") from e
 
 
 def _bootstrap_chat():
-    """Phase 1: Conversational onboarding — ask questions, store answers."""
+    """Phase 1: Conversational onboarding — adaptive questions, reviewed answers.
+
+    Drives the bootstrap core against a bare MemoryStore with no ``on_stored``
+    hook, so onboarding needs no embedding backend — the stored rows are
+    embedded at the next agent start.
+
+    Returns the BootstrapResult so callers can honour a cancellation.
+    """
+    from gaia.agents.base.bootstrap import run_bootstrap_conversation
     from gaia.agents.base.memory_store import MemoryStore
 
     print("\n=== Welcome to GAIA — Your Personal AI Assistant ===")
     print("I run locally on your AMD hardware, so everything stays private.")
     print("Let me get to know you so I can be more helpful from the start.")
-    print("(Press Enter to skip any question)\n")
+    print(
+        "(Press Enter to skip any question. Nothing is stored without your approval.)\n"
+    )
 
     try:
         store = MemoryStore()
     except Exception as e:
         raise RuntimeError(f"Error opening memory database: {e}") from e
 
-    stored_count = 0
     try:
-        for q in _BOOTSTRAP_QUESTIONS:
-            try:
-                answer = input(f"  {q['prompt']} ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print("\n\nBootstrap cancelled.")
-                return
-
-            if not answer:
-                continue
-
-            content = q["template"].format(answer=answer)
-            try:
-                store.store(
-                    category=q["category"],
-                    content=content,
-                    source="user",
-                    context="global",
-                    confidence=0.8,
-                )
-                stored_count += 1
-            except Exception as e:
-                print(f"  ⚠ Failed to store: {e}")
-
-        print(f"\n✅ Stored {stored_count} memory entries from onboarding.")
+        result = run_bootstrap_conversation(
+            store,
+            prompt_fn=_bootstrap_prompt,
+            output_fn=print,
+            on_stored=None,
+        )
     finally:
         store.close()
+
+    if result.cancelled:
+        print("\n\nBootstrap cancelled.")
+        if result.stored:
+            print(f"Kept the {result.stored} entries you already approved.")
+        return result
+
+    _mark_onboarding_completed()
+
+    summary = (
+        f"\n✅ Stored {result.stored} memory entries from onboarding "
+        f"({result.rejected} rejected, {result.skipped} skipped"
+    )
+    if result.unreviewed:
+        summary += f", {result.unreviewed} not reviewed"
+    print(summary + ").")
+    return result
 
 
 # ---- Bootstrap: LLM-assisted profile inference ----
@@ -6932,12 +7031,13 @@ def _check_daemon_deps():
 
 
 def handle_daemon_command(args):
-    """Handle `gaia daemon status|stop|restart|logs|start`."""
+    """Handle `gaia daemon status|stop|restart|logs|start|agents|start-agent|stop-agent`."""
     action = getattr(args, "daemon_action", None)
     if action is None:
         print(
             "❌ No daemon action specified. Use 'gaia daemon --help' to see "
-            "available actions (start, status, stop, restart, logs)."
+            "available actions (start, status, stop, restart, logs, agents, "
+            "start-agent, stop-agent)."
         )
         return
     _check_daemon_deps()
@@ -6951,6 +7051,12 @@ def handle_daemon_command(args):
         _handle_daemon_restart()
     elif action == "logs":
         _handle_daemon_logs(args)
+    elif action == "agents":
+        _handle_daemon_agents()
+    elif action == "start-agent":
+        _handle_daemon_start_agent(args)
+    elif action == "stop-agent":
+        _handle_daemon_stop_agent(args)
     else:
         print(f"❌ Unknown daemon action: {action}")
 
@@ -7004,6 +7110,145 @@ def _handle_daemon_status():
     print(f"  uptime:     {_fmt_uptime(body.get('uptime_seconds', 0))}")
     print(f"  api:        v{body.get('api_version')}")
     print(f"  url:        {inst.base_url}")
+    print("Sidecar agents:")
+    _print_daemon_agents(inst, indent="  ")
+
+
+def _daemon_http_detail(response) -> str:
+    """The actionable `detail` from a daemon error response (or the raw status)."""
+    try:
+        body = response.json()
+    except ValueError:
+        return f"HTTP {response.status_code}"
+    if isinstance(body, dict) and body.get("detail"):
+        return str(body["detail"])
+    return f"HTTP {response.status_code}"
+
+
+def _fetch_daemon_agents(inst) -> list:
+    """GET the daemon's supervised-agent list. Raises SystemExit on failure."""
+    import requests
+
+    try:
+        r = requests.get(
+            f"{inst.base_url}/daemon/v1/agents",
+            headers={"Authorization": f"Bearer {inst.token}"},
+            timeout=10,
+        )
+    except requests.exceptions.RequestException as e:
+        print(f"❌ could not reach the daemon at {inst.base_url}: {e}")
+        sys.exit(1)
+    if r.status_code != 200:
+        print(f"❌ the daemon refused the agents request: {_daemon_http_detail(r)}")
+        sys.exit(1)
+    return r.json().get("agents", [])
+
+
+def _print_daemon_agents(inst, indent: str = "") -> None:
+    # NEVER prints tokens — the list route does not return them and this
+    # renderer only touches the fields below.
+    for entry in _fetch_daemon_agents(inst):
+        agent_id = entry.get("agent_id")
+        state = entry.get("state")
+        if state == "running":
+            line = (
+                f"{indent}{agent_id}: running  mode: {entry.get('mode')}"
+                f"  pid: {entry.get('pid')}  port: {entry.get('port')}"
+                f"  api: v{entry.get('api_version')}"
+            )
+            if entry.get("mode") == "dev" and entry.get("dev_src_dir"):
+                line += f"  src: {entry.get('dev_src_dir')}"
+            print(line)
+        else:
+            print(f"{indent}{agent_id}: stopped")
+
+
+def _handle_daemon_agents():
+    from gaia.daemon import client
+    from gaia.daemon.errors import DaemonError
+
+    try:
+        inst = client.attach()
+    except DaemonError as e:
+        print(f"❌ {e}")
+        sys.exit(1)
+    if inst is None:
+        print("GAIA daemon: not running")
+        print(
+            "  Start it with `gaia daemon start` (or `gaia daemon start-agent <id>`)."
+        )
+        sys.exit(1)
+    _print_daemon_agents(inst)
+
+
+def _handle_daemon_start_agent(args):
+    import requests
+
+    from gaia.daemon import client
+    from gaia.daemon.errors import DaemonError
+
+    try:
+        inst = client.start_or_attach()
+    except DaemonError as e:
+        print(f"❌ {e}")
+        sys.exit(1)
+    try:
+        # Read generously: a first-run ensure may lazily fetch the binary.
+        r = requests.post(
+            f"{inst.base_url}/daemon/v1/agents/{args.agent_id}/ensure",
+            headers={"Authorization": f"Bearer {inst.token}"},
+            json={"mode": args.mode},
+            timeout=(5.0, 900.0),
+        )
+    except requests.exceptions.RequestException as e:
+        print(f"❌ could not reach the daemon at {inst.base_url}: {e}")
+        sys.exit(1)
+    if r.status_code != 200:
+        print(
+            f"❌ the daemon could not start agent '{args.agent_id}': "
+            f"{_daemon_http_detail(r)}"
+        )
+        sys.exit(1)
+    # The ensure body carries the sidecar bearer token — print ONLY these fields.
+    body = r.json()
+    print(
+        f"✅ agent '{args.agent_id}' sidecar running "
+        f"(mode: {body.get('mode')}, pid: {body.get('pid')}, "
+        f"port: {body.get('port')}, api: v{body.get('api_version')})"
+    )
+
+
+def _handle_daemon_stop_agent(args):
+    import requests
+
+    from gaia.daemon import client
+    from gaia.daemon.errors import DaemonError
+
+    try:
+        inst = client.attach()
+    except DaemonError as e:
+        print(f"❌ {e}")
+        sys.exit(1)
+    if inst is None:
+        # Attach-only by design: never start a daemon just to stop nothing.
+        print("GAIA daemon: not running (no sidecars to stop)")
+        sys.exit(1)
+    try:
+        r = requests.post(
+            f"{inst.base_url}/daemon/v1/agents/{args.agent_id}/stop",
+            headers={"Authorization": f"Bearer {inst.token}"},
+            timeout=30,
+        )
+    except requests.exceptions.RequestException as e:
+        print(f"❌ could not reach the daemon at {inst.base_url}: {e}")
+        sys.exit(1)
+    if r.status_code != 200:
+        print(
+            f"❌ the daemon failed to stop agent '{args.agent_id}': "
+            f"{_daemon_http_detail(r)}"
+        )
+        sys.exit(1)
+    print(f"✅ agent '{args.agent_id}' sidecar stopped (daemon still running)")
 
 
 def _handle_daemon_stop():

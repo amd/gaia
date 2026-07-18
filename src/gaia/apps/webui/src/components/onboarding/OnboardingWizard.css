@@ -1,0 +1,309 @@
+/* Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/* First-run onboarding wizard (#1726, #1727). Full-screen overlay that sits
+   above the app shell until first-run setup completes. */
+
+.onboarding-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-primary);
+    padding: 24px;
+    overflow-y: auto;
+}
+
+.onboarding-card {
+    width: 100%;
+    max-width: 640px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-lg);
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100vh - 48px);
+}
+
+.onboarding-progress {
+    display: flex;
+    gap: 8px;
+    padding: 20px 28px 0;
+}
+
+.onboarding-progress .dot {
+    flex: 1;
+    height: 4px;
+    border-radius: var(--radius-full);
+    background: var(--border);
+    transition: background var(--duration-fast) var(--ease);
+}
+
+.onboarding-progress .dot.active {
+    background: var(--accent);
+}
+
+.onboarding-progress .dot.done {
+    background: var(--accent-dark, var(--accent));
+}
+
+.onboarding-body {
+    padding: 24px 28px;
+    overflow-y: auto;
+}
+
+.onboarding-body h1 {
+    font-size: 1.5rem;
+    margin: 0 0 8px;
+    color: var(--text-primary);
+}
+
+.onboarding-body h2 {
+    font-size: 1.25rem;
+    margin: 0 0 6px;
+    color: var(--text-primary);
+}
+
+.onboarding-body p.lede {
+    color: var(--text-secondary);
+    margin: 0 0 18px;
+    line-height: 1.5;
+}
+
+.onboarding-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 28px;
+    border-top: 1px solid var(--border);
+}
+
+.onboarding-footer .spacer {
+    flex: 1;
+}
+
+.onboarding-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 18px;
+    border-radius: var(--radius-md);
+    font-family: var(--font-sans);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: background var(--duration-fast) var(--ease), opacity var(--duration-fast) var(--ease);
+}
+
+.onboarding-btn.primary {
+    background: var(--accent);
+    color: #fff;
+}
+
+.onboarding-btn.primary:hover:not(:disabled) {
+    background: var(--accent-dark, var(--accent));
+}
+
+.onboarding-btn.secondary {
+    background: transparent;
+    color: var(--text-secondary);
+    border-color: var(--border);
+}
+
+.onboarding-btn.secondary:hover:not(:disabled) {
+    background: var(--bg-hover);
+}
+
+.onboarding-btn.link {
+    background: transparent;
+    color: var(--text-muted);
+    border: none;
+    padding: 10px 6px;
+    font-weight: 500;
+}
+
+.onboarding-btn.link:hover:not(:disabled) {
+    color: var(--text-secondary);
+    text-decoration: underline;
+}
+
+.onboarding-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Welcome step */
+.onboarding-steps-list {
+    list-style: none;
+    margin: 0 0 8px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.onboarding-steps-list li {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--text-secondary);
+}
+
+.onboarding-steps-list .num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: var(--radius-full);
+    background: var(--bg-tertiary);
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+}
+
+/* Pre-flight rows */
+.preflight-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 4px 0 16px;
+}
+
+.preflight-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+}
+
+.preflight-row .pf-icon {
+    flex-shrink: 0;
+    display: inline-flex;
+}
+
+.preflight-row .pf-icon.ok { color: var(--terminal-green, #4ade80); }
+.preflight-row .pf-icon.warn { color: var(--accent-yellow, #eab308); }
+.preflight-row .pf-icon.bad { color: var(--danger, #ef4444); }
+
+.preflight-row .pf-label {
+    flex: 1;
+    color: var(--text-primary);
+    font-size: 0.9rem;
+}
+
+.preflight-row .pf-value {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    font-family: var(--font-mono);
+}
+
+.onboarding-banner {
+    display: flex;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: var(--radius-md);
+    margin: 8px 0;
+    font-size: 0.88rem;
+    line-height: 1.45;
+}
+
+.onboarding-banner.error {
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+    border: 1px solid var(--danger);
+    color: var(--text-primary);
+}
+
+.onboarding-banner.warn {
+    background: color-mix(in srgb, var(--accent-yellow, #eab308) 12%, transparent);
+    border: 1px solid var(--accent-yellow, #eab308);
+    color: var(--text-primary);
+}
+
+.onboarding-banner ul {
+    margin: 4px 0 0;
+    padding-left: 18px;
+}
+
+.onboarding-tier {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: var(--radius-full);
+    background: var(--bg-tertiary);
+    color: var(--accent);
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: capitalize;
+    margin-bottom: 12px;
+}
+
+/* Download progress */
+.download-model-name {
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+}
+
+.download-bar {
+    height: 10px;
+    border-radius: var(--radius-full);
+    background: var(--bg-tertiary);
+    overflow: hidden;
+    margin: 6px 0;
+}
+
+.download-bar .fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: var(--radius-full);
+    transition: width var(--duration) var(--ease);
+}
+
+.download-meta {
+    display: flex;
+    justify-content: space-between;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    font-family: var(--font-mono);
+}
+
+.download-spinner {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    margin: 8px 0;
+}
+
+/* Connector step */
+.connector-choice {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px;
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    margin: 8px 0 16px;
+}
+
+.connector-choice .cc-body { flex: 1; }
+.connector-choice .cc-title { color: var(--text-primary); font-weight: 600; }
+.connector-choice .cc-desc { color: var(--text-muted); font-size: 0.82rem; }
+.connector-choice .cc-connected { color: var(--terminal-green, #4ade80); font-size: 0.85rem; font-weight: 600; }
+
+.onboarding-spin {
+    animation: onboarding-spin 1s linear infinite;
+}
+
+@keyframes onboarding-spin {
+    to { transform: rotate(360deg); }
+}

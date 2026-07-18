@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPServerStatus, AgentMCPServerStatus, AgentInfo, DiskAgentInfo, AgentCatalogResponse, InstallStatus } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPServerStatus, AgentMCPServerStatus, AgentInfo, DiskAgentInfo, AgentCatalogResponse, InstallStatus, PreflightReport, OnboardingStatusResponse } from '../types';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 
@@ -123,6 +123,23 @@ export async function downloadModel(modelName: string, force = false): Promise<{
     return apiFetch('POST', '/system/download-model', { model_name: modelName, force });
 }
 
+// -- Onboarding (first-run wizard, #1726/#1727) --------------------------------
+
+export async function getOnboardingPreflight(): Promise<PreflightReport> {
+    return apiFetch<PreflightReport>('GET', '/onboarding/preflight');
+}
+
+export async function getOnboardingStatus(): Promise<OnboardingStatusResponse> {
+    return apiFetch<OnboardingStatusResponse>('GET', '/onboarding/status');
+}
+
+export async function completeOnboarding(skipped: boolean): Promise<OnboardingStatusResponse> {
+    return apiFetch<OnboardingStatusResponse>('POST', '/onboarding/complete', {
+        skipped,
+        completed_at: new Date().toISOString(),
+    });
+}
+
 // -- Agents --------------------------------------------------------------------
 
 export async function listAgents(): Promise<{ agents: AgentInfo[]; total: number }> {
@@ -212,8 +229,17 @@ export async function getConnector(connectorId: string): Promise<ConnectorRow> {
 export async function authorizeConnector(
     connectorId: string,
     scopes: string[],
+    grantAgents: string[] = [],
 ): Promise<{ flow_id: string; authorization_url: string }> {
-    return apiFetch('POST', `/connectors/${connectorId}/authorize`, { scopes }, UI_HEADER);
+    // `grantAgents` (#2117) — namespaced agent ids to grant this connector the
+    // moment OAuth completes, so connecting a mailbox grants it to the email
+    // agent in the same flow. The backend resolves each agent's required scopes.
+    return apiFetch(
+        'POST',
+        `/connectors/${connectorId}/authorize`,
+        { scopes, grant_agents: grantAgents },
+        UI_HEADER,
+    );
 }
 
 export async function configureConnector(
@@ -378,7 +404,7 @@ export async function getSession(id: string): Promise<Session> {
     return apiFetch('GET', `/sessions/${id}`);
 }
 
-export async function updateSession(id: string, data: { title?: string; system_prompt?: string; private?: boolean; agent_type?: string }): Promise<Session> {
+export async function updateSession(id: string, data: { title?: string; title_is_custom?: boolean; system_prompt?: string; private?: boolean; agent_type?: string }): Promise<Session> {
     return apiFetch('PUT', `/sessions/${id}`, data);
 }
 
@@ -431,7 +457,7 @@ export interface StreamCallbacks {
 const AGENT_EVENT_TYPES = new Set([
     'status', 'step', 'thinking', 'plan',
     'tool_start', 'tool_end', 'tool_result', 'tool_args', 'tool_confirm', 'agent_error',
-    'permission_request', 'policy_alert',
+    'permission_request', 'needs_confirmation', 'policy_alert',
 ]);
 
 export function sendMessageStream(

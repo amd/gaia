@@ -161,8 +161,17 @@ class OAuthPkceHandler:
         # Fail loudly here with an actionable message instead.
         _validate_provider_secret(provider_id)
 
+        # Per-agent grants to commit on OAuth success (#2117). The UI router
+        # resolves the {agent_id: scopes} map from the granted agents'
+        # REQUIRED_CONNECTORS before calling configure, so the first-run
+        # "Save & Connect" path grants the mailbox in the same flow as the
+        # plain "Connect" path.
+        grant_agents = config.get("grant_agents") or None
+
         # Start a new PKCE flow; caller will open the URL.
-        return await start_authorization(provider_id, scopes=scopes)
+        return await start_authorization(
+            provider_id, scopes=scopes, grant_agents=grant_agents
+        )
 
     async def disconnect(
         self,

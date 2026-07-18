@@ -134,6 +134,7 @@ def session_to_response(session: dict) -> SessionResponse:
     return SessionResponse(
         id=session["id"],
         title=session["title"],
+        title_is_custom=bool(session.get("title_is_custom", 0)),
         created_at=session["created_at"],
         updated_at=session["updated_at"],
         model=session["model"],

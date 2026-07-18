@@ -23,7 +23,9 @@ import time as _time
 from pathlib import Path
 from typing import Optional
 
-from .database import SESSION_DEFAULT_MODEL, ChatDatabase
+from fastapi import HTTPException
+
+from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
 from .sse_handler import (
     _ANSWER_JSON_SUB_RE,
@@ -104,6 +106,25 @@ def set_agent_registry(registry) -> None:
 def get_agent_registry():
     """Return the current AgentRegistry instance, or None if not yet initialized."""
     return _agent_registry
+
+
+# Agent types served by an out-of-process sidecar with a dedicated dispatch
+# branch below. They are never registry-loadable: a binary-only hub install
+# ships no importable wheel, so registry.get() is None even when the agent is
+# installed and healthy.
+_SIDECAR_AGENT_TYPES = frozenset({"email"})
+
+
+def _agent_type_unknown(agent_type: str, registry) -> bool:
+    """True when *agent_type* must be rejected as unknown before dispatch.
+
+    ``chat`` is the built-in default and sidecar types have their own dispatch
+    branch — neither goes through the registry. Everything else must resolve
+    in the registry or the caller returns the unavailable-agent error.
+    """
+    if agent_type == "chat" or agent_type in _SIDECAR_AGENT_TYPES:
+        return False
+    return bool(registry) and not registry.get(agent_type)
 
 
 # ── Per-session agent cache ───────────────────────────────────────────────────
@@ -257,19 +278,15 @@ def _classify_chat_exception(exc: BaseException):
 #     (≥ 25 chars) — topic-shift pass
 #
 # Skipped when:
+#   * The session's title_is_custom flag is set — an explicit user/API title
+#     is pinned forever (#2165); only auto-generated titles may be replaced
 #   * Title starts with "Eval:" — those are owned by the eval framework
 #   * Title was last updated < 30 s ago — prevents thrash mid-conversation
 #   * No agent / no Lemonade base URL available
 #
 # Throttled by a per-session timestamp dict so concurrent fire-and-forget
 # tasks don't pile up.
-_AUTO_TITLE_DEFAULTS = {
-    "new chat",
-    "new task",
-    "untitled",
-    "untitled session",
-    "chat",
-}
+_AUTO_TITLE_DEFAULTS = PLACEHOLDER_TITLES
 _AUTO_TITLE_LOCK = threading.Lock()
 _AUTO_TITLE_LAST_AT: dict[str, float] = {}  # session_id -> monotonic ts
 _AUTO_TITLE_THROTTLE_S = 30.0
@@ -283,12 +300,16 @@ def _title_word_set(s: str) -> set[str]:
     return {w for w in cleaned.split() if len(w) > 1}
 
 
-def _should_retitle(current_title: str, last_user_msg: str) -> bool:
+def _should_retitle(
+    current_title: str, last_user_msg: str, title_is_custom: bool = False
+) -> bool:
     """Decide whether the session deserves a fresh title.
 
     See module-level comment for the rule set.  Returns True/False; pure
     function so it's easy to unit-test in isolation.
     """
+    if title_is_custom:
+        return False  # explicit user/API title — pinned (#2165)
     title = (current_title or "").strip()
     title_lower = title.lower()
     if title.startswith("Eval:"):
@@ -392,7 +413,8 @@ async def _maybe_update_session_title(
     if not session:
         return
     current_title = session.get("title") or ""
-    if not _should_retitle(current_title, user_msg):
+    title_is_custom = bool(session.get("title_is_custom"))
+    if not _should_retitle(current_title, user_msg, title_is_custom):
         return
 
     # Throttle: don't re-title if we updated within the last 30 s.
@@ -950,34 +972,118 @@ def _session_mail_provider(session: dict) -> str | None:
     return session.get("mail_provider") or None
 
 
-def _build_email_proxy_agent(
-    *,
-    model_id: str,
-    device: str | None,
-    device_ctx: int,
-    mail_provider: str | None,
-    streaming: bool,
-):
-    """Construct the sidecar-backed email chat agent (#1767 cutover).
+# Minimum sidecar contract version the /query relay requires (#2109). The
+# daemon's own version gate only pins MAJOR (the spec's expected_api_major),
+# so a pre-2.4 Hub binary passes that handshake and then 404s every /query
+# call — this finer MAJOR.MINOR check catches it before the first POST.
+_EMAIL_QUERY_MIN_API_VERSION = (2, 4)
 
-    ``agent_type=email`` is served by ``EmailProxyAgent``: the local-LLM
-    tool-calling loop still runs here in the UI backend, but every tool forwards
-    to the out-of-process email sidecar over HTTP — so the UI process no longer
-    loads live Gmail/Outlook backends, and Agent UI dogfoods the shipped product.
-    Kept out of the agent registry on purpose (the registry auto-discovers the
-    in-process ``EmailTriageAgent`` wheel); this is the UI's deliberate override.
+
+def _email_query_version_supported(api_version: str | None) -> bool:
+    """True when ``api_version`` is at least the /query relay's floor (2.4)."""
+    if not api_version:
+        return False
+    parts = str(api_version).split(".")
+    try:
+        major = int(parts[0])
+        minor = int(parts[1]) if len(parts) > 1 else 0
+    except (ValueError, IndexError):
+        return False
+    return (major, minor) >= _EMAIL_QUERY_MIN_API_VERSION
+
+
+def _query_context_from_history(history_pairs: list) -> list[dict]:
+    """Flatten (user, assistant) history pairs into ``QueryContextItem``-shaped
+    dicts for the sidecar's ``/query`` request body (#2109).
+
+    Mirrors the truncation the in-process chat branches already apply, so an
+    email session's context window stays comparable: last 5 pairs, 2000 chars
+    per turn.
     """
-    from gaia.ui.email_sidecar.proxy_agent import EmailProxyAgent
+    _MAX_PAIRS = 5
+    _MAX_CHARS = 2000
+    context: list[dict] = []
+    for user_msg, assistant_msg in history_pairs[-_MAX_PAIRS:]:
+        u = user_msg[:_MAX_CHARS]
+        a = assistant_msg[:_MAX_CHARS]
+        if len(assistant_msg) > _MAX_CHARS:
+            a += "... (truncated)"
+        context.append({"role": "user", "content": u})
+        context.append({"role": "assistant", "content": a})
+    return context
 
-    return EmailProxyAgent(
+
+def _dispatch_email_query(
+    sse_handler,
+    request: ChatRequest,
+    history_pairs: list,
+    model_id: str | None,
+) -> None:
+    """Handle ``agent_type == "email"`` for the streaming chat producer (#2109).
+
+    Self-contained: every path here either relays the sidecar's ``/query``
+    loop to completion or emits a terminal SSE error and returns. The CALLER
+    (the streaming branch in ``_stream_chat_impl``) must ``return``
+    immediately after calling this — it never falls through to the shared
+    agent trunk, which assumes a constructed in-process ``agent`` and calls
+    ``agent.process_query``/``_maybe_load_expected_model``. The sidecar owns
+    its own model lifecycle; nothing about Lemonade ctx/model selection
+    happens here.
+
+    Every exception the sidecar manager/proxy can raise is caught HERE and
+    turned into a terminal SSE error — never left to reach
+    ``_classify_chat_exception``, whose substring matching would misclassify
+    a sidecar connection error as a retryable Lemonade error and trigger a
+    bogus model reload.
+    """
+    from gaia.ui.email_sidecar import daemon_client
+    from gaia.ui.email_sidecar.errors import SidecarError
+    from gaia.ui.email_sidecar.relay import (
+        EMAIL_QUERY_VERSION_UPGRADE_MESSAGE,
+        relay_query,
+    )
+
+    try:
+        handle = daemon_client.acquire_handle()
+    except SidecarError as exc:
+        sse_handler._emit({"type": "agent_error", "content": str(exc)})
+        return
+
+    if not _email_query_version_supported(handle.api_version):
+        sse_handler._emit(
+            {"type": "agent_error", "content": EMAIL_QUERY_VERSION_UPGRADE_MESSAGE}
+        )
+        return
+
+    proxy = handle.proxy()
+
+    # First-turn-per-session readiness check (#2101 lesson): a 503 from
+    # /v1/email/init is contract ("not ready yet"), not a transport failure.
+    try:
+        status_code, init_body = proxy.init()
+    except SidecarError as exc:
+        sse_handler._emit({"type": "agent_error", "content": str(exc)})
+        return
+    if status_code != 200:
+        hint = (init_body or {}).get("hint")
+        msg = (
+            "The email agent isn't ready yet"
+            + (f": {hint}." if hint else ".")
+            + " Finish setup from the Email agent card, then retry."
+        )
+        sse_handler._emit({"type": "agent_error", "content": msg})
+        return
+
+    if sse_handler.cancelled.is_set():
+        return
+
+    context = _query_context_from_history(history_pairs)
+    relay_query(
+        sse_handler,
+        proxy,
+        query=request.message,
+        context=context,
         model_id=model_id,
-        mail_provider=mail_provider,
-        device=device,
-        min_context_size=device_ctx,
-        streaming=streaming,
-        # Match the chat agent: a streaming session drives the SSE console; a
-        # non-streaming one is silent (JSON-only).
-        silent_mode=not streaming,
     )
 
 
@@ -987,6 +1093,39 @@ def _find_last_tool_step(steps: list) -> dict | None:
         if steps[i].get("type") == "tool":
             return steps[i]
     return None
+
+
+# Remediation copy for a turn that produced no answer at all — reserved for a
+# genuine backend failure, never a deliberate cancel or an intentionally-empty
+# final (see _empty_answer_outcome).
+_EMPTY_ANSWER_LEMONADE_MSG = (
+    "I wasn't able to generate a response. Please make sure Lemonade Server "
+    "is running and try again."
+)
+
+
+def _empty_answer_outcome(
+    turn_cancelled: bool, has_steps: bool
+) -> tuple[str, str, bool]:
+    """Classify a chat turn that ended with no answer text, for the shared
+    persistence tail's empty-``full_response`` branch.
+
+    Returns ``(content, sse_type, keep_steps)``:
+      * cancelled → ``("Cancelled.", "done", True)`` — a user Stop, not a
+        failure; keep the tool steps executed before the cancel and don't
+        blame Lemonade.
+      * no answer but steps/cards were produced → ``("", "done", True)`` — a
+        legitimately-empty final (e.g. the whole final turn was an echoed
+        render card the echo-guard stripped to empty); persist empty content
+        but keep the steps/cards so nothing is lost on rehydration.
+      * genuinely nothing → ``(<lemonade copy>, "error", False)`` — no answer,
+        no cancel, no steps: the only case that warrants the Lemonade copy.
+    """
+    if turn_cancelled:
+        return "Cancelled.", "done", True
+    if has_steps:
+        return "", "done", True
+    return _EMPTY_ANSWER_LEMONADE_MSG, "error", False
 
 
 # Tight timeout for pre-flight load_model. The default Lemonade
@@ -1198,8 +1337,9 @@ async def _get_chat_response(
         agent_type = request.agent_type or stored_agent_type
 
         # Validate requested agent_type exists in the registry before persisting
+        # (chat + sidecar types are exempt — they never live in the registry).
         registry = _agent_registry
-        if agent_type != "chat" and registry and not registry.get(agent_type):
+        if _agent_type_unknown(agent_type, registry):
             logger.warning(
                 "chat: Session %s requested unknown agent_type '%s'; "
                 "returning unavailable-agent error",
@@ -1292,20 +1432,20 @@ async def _get_chat_response(
             _store_agent(session_id, model_id, document_ids, agent, agent_type)
             _register_agent_memory_ops(agent)
         elif agent_type == "email":
-            # #1767 cutover: agent_type=email is the out-of-process sidecar, not
-            # the in-process EmailTriageAgent. Same chat plumbing + pre_scan card.
-            logger.info(
-                "chat: Creating new email agent (sidecar) for session %s",
-                session_id[:8],
+            # #2109: email chat is served exclusively by the sidecar's
+            # canonical /query loop, which is a streaming-only SSE contract
+            # (see the streaming branch in _stream_chat_impl). There is no
+            # non-streaming shape to relay, and zero verified callers exist
+            # today (the frontend hardcodes stream=true; ChatRequest.stream
+            # defaults True). Fail loud rather than ship a speculative,
+            # untested drained-response path.
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Email chat requires streaming (stream=true); "
+                    "non-streaming email chat is not supported."
+                ),
             )
-            agent = _build_email_proxy_agent(
-                model_id=model_id,
-                device=device,
-                device_ctx=device_ctx,
-                mail_provider=_session_mail_provider(session),
-                streaming=False,
-            )
-            _store_agent(session_id, model_id, document_ids, agent, agent_type)
         else:
             # Non-chat agent: create via registry
             registry = _agent_registry
@@ -1463,6 +1603,11 @@ async def _get_chat_response(
     except asyncio.TimeoutError:
         logger.error("Chat response timed out after 600 seconds")
         return "I took too long thinking about that one. Try breaking your question into simpler parts and I'll do my best."
+    except HTTPException:
+        # A deliberate, actionable rejection (e.g. the email non-streaming
+        # scope cut, #2109) — propagate as a real HTTP status, never
+        # flattened into a friendly chat-text fallback below.
+        raise
     except Exception as e:
         logger.error("Chat error: %s", e, exc_info=True)
         # Surface the typed Lemonade error's friendly user_message
@@ -1517,6 +1662,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         cancel_event.set()
         if sse_handler is not None:
             sse_handler.cancelled.set()
+            # #2109: force a blocked email-relay socket read to error out —
+            # the orphan-cleanup mirror of the explicit /api/chat/cancel path.
+            sse_handler.close_active_relay_response()
         _active_sse_handlers.pop(session_id, None)
         if producer is not None:
             producer.join(timeout=5.0)
@@ -1593,8 +1741,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         agent_type = request.agent_type or stored_agent_type
 
         # Validate requested agent_type exists in the registry before persisting
+        # (chat + sidecar types are exempt — they never live in the registry).
         registry = _agent_registry
-        if agent_type != "chat" and registry and not registry.get(agent_type):
+        if _agent_type_unknown(agent_type, registry):
             logger.warning(
                 "chat: Session %s requested unknown agent_type '%s' (streaming); "
                 "returning unavailable-agent error",
@@ -1797,39 +1946,24 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     )
 
                 elif agent_type == "email":
-                    # -- Cache miss: email agent backed by the sidecar (#1767) --
-                    # Same chat plumbing as before; the pre_scan_inbox tool returns
-                    # the identical email_pre_scan envelope so the card renders
-                    # unchanged. Tools forward to the out-of-process sidecar.
+                    # #2109: email chat is a SELF-CONTAINED early-exit path —
+                    # it relays the sidecar's canonical /query loop and
+                    # returns HERE, before the shared trunk below (which
+                    # assumes a constructed in-process `agent` and calls
+                    # `agent.process_query`/`_maybe_load_expected_model`).
+                    # The sidecar owns its own model lifecycle; nothing below
+                    # this branch may run for an email turn.
                     logger.info(
-                        "chat: Creating new email agent (sidecar) for session %s",
+                        "chat: relaying email query (sidecar) for session %s",
                         session_id[:8],
                     )
-                    t_construct = _time.monotonic()
-                    agent = _build_email_proxy_agent(
-                        model_id=model_id,
-                        device=device,
-                        device_ctx=device_ctx,
-                        mail_provider=_session_mail_provider(session),
-                        streaming=True,
+                    _dispatch_email_query(
+                        sse_handler,
+                        request,
+                        history_pairs,
+                        model_id,
                     )
-                    agent.console = sse_handler  # tool events flow to SSE
-                    logger.info(
-                        "chat: Invoking agent email for session %s, model=%s took=%.3fs",
-                        session_id[:8],
-                        _effective_model(agent, model_id),
-                        _time.monotonic() - t_construct,
-                    )
-                    if sse_handler.cancelled.is_set():
-                        return
-                    _store_agent(session_id, model_id, document_ids, agent, agent_type)
-                    sse_handler._emit(
-                        {
-                            "type": "status",
-                            "status": "info",
-                            "message": "Sending to model...",
-                        }
-                    )
+                    return
 
                 else:
                     # -- Cache miss: non-chat agent via registry --
@@ -2142,9 +2276,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     # while chunks include all intermediate streaming text (planning
                     # sentences, tool call noise, etc.).  Using the answer event
                     # ensures DB storage matches what the MCP client receives.
-                    answer_content = event.get("content", "")
-                    if answer_content:
-                        full_response = answer_content
+                    # Unconditionally: an empty cleaned answer (e.g. a card-echo-
+                    # only email response) is a valid answer — keeping the noisy
+                    # chunk accumulation instead would persist raw echoed JSON.
+                    full_response = event.get("content", "")
                 elif event_type == "chunk":
                     full_response += event.get("content", "")
 
@@ -2212,6 +2347,15 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                                 "files": result_data.get("files", []),
                                 "total": result_data.get("total", 0),
                             }
+                        # Persist a render-map card ONLY when the event
+                        # carries a render kind (#2109) — cards need reload
+                        # fidelity; render-less results keep today's
+                        # summary-only persistence (a deliberate retention
+                        # cap since a full tool payload can carry raw email
+                        # bodies).
+                        if event.get("render"):
+                            tool_step["render"] = event["render"]
+                            tool_step["data"] = event.get("data")
                 elif event_type == "plan":
                     step_id += 1
                     for s in captured_steps:
@@ -2309,6 +2453,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         )
                     yield status_data
                 continue
+
+        # Capture an explicit Stop BEFORE our own cleanup sets the same flag.
+        # Only run_manager.cancel() sets ``cancelled`` before this point, so a
+        # True here means the user hit Stop (not a normal completion).
+        turn_cancelled = sse_handler.cancelled.is_set()
 
         # Signal cancellation (handles client disconnect) then wait for producer.
         _cleanup_stream()
@@ -2491,8 +2640,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         else:
             # Log details to help diagnose: cold start, empty LLM response, filtered artifacts
             logger.warning(
-                "Empty response for session %s — result_holder answer=%r error=%r captured_steps=%d",
+                "Empty response for session %s — cancelled=%s result_holder answer=%r error=%r captured_steps=%d",
                 session_id[:8],
+                turn_cancelled,
                 (
                     result_holder.get("answer", "")[:80]
                     if result_holder.get("answer")
@@ -2501,10 +2651,32 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 result_holder.get("error"),
                 len(captured_steps),
             )
-            error_msg = "I wasn't able to generate a response. Please make sure Lemonade Server is running and try again."
-            db.add_message(request.session_id, "assistant", error_msg)
-            error_data = json.dumps({"type": "error", "content": error_msg})
-            yield f"data: {error_data}\n\n"
+            # Distinguish a deliberate cancel and a legitimately-empty final
+            # (e.g. a card-echo the echo-guard stripped) from a genuine backend
+            # failure — only the last warrants the Lemonade copy, and the first
+            # two must keep the steps/cards taken before the empty answer.
+            content, sse_type, keep_steps = _empty_answer_outcome(
+                turn_cancelled, bool(captured_steps)
+            )
+            steps_to_persist = (
+                captured_steps if (keep_steps and captured_steps) else None
+            )
+            if sse_type == "error":
+                db.add_message(request.session_id, "assistant", content)
+                yield f"data: {json.dumps({'type': 'error', 'content': content})}\n\n"
+            else:
+                msg_id = db.add_message(
+                    request.session_id,
+                    "assistant",
+                    content,
+                    agent_steps=steps_to_persist,
+                )
+                done_event = {
+                    "type": "done",
+                    "message_id": msg_id,
+                    "content": content,
+                }
+                yield f"data: {json.dumps(done_event)}\n\n"
 
     except Exception as e:
         logger.error("Chat streaming error: %s", e, exc_info=True)

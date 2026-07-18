@@ -24,6 +24,23 @@ DEFAULT_DB_PATH = Path.home() / ".gaia" / "chat" / "gaia_chat.db"
 # any code that reads session["model"] and falls back when the field is NULL.
 SESSION_DEFAULT_MODEL = "Gemma-4-E4B-it-GGUF"
 
+# Auto-generated placeholder titles the auto-retitler may replace (#2165).
+# Anything else is treated as explicitly chosen and pinned via title_is_custom.
+PLACEHOLDER_TITLES = {
+    "",
+    "new chat",
+    "new task",
+    "untitled",
+    "untitled session",
+    "chat",
+}
+
+
+def is_placeholder_title(title: str | None) -> bool:
+    """True when the title is an auto-generated default, not a user choice."""
+    return (title or "").strip().lower() in PLACEHOLDER_TITLES
+
+
 # Sentinel used by update_document_status to distinguish "caller passed None to clear
 # last_error" from "caller did not pass last_error at all" (leaving it unchanged).
 _UNSET = object()
@@ -50,6 +67,8 @@ CREATE TABLE IF NOT EXISTS documents (
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL DEFAULT 'New Chat',
+    -- 1 = explicitly set by the user/API caller; auto-retitler must not touch (#2165)
+    title_is_custom INTEGER NOT NULL DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
     model TEXT NOT NULL DEFAULT 'Gemma-4-E4B-it-GGUF',
@@ -294,6 +313,30 @@ class ChatDatabase:
         except Exception as e:
             logger.debug("Migration check for mail_provider column: %s", e)
 
+        # Add title_is_custom column so the auto-retitler can tell explicit
+        # titles from its own (#2165). Backfill: existing non-placeholder
+        # titles could be user-set or auto-generated — pin them all, since
+        # wrongly renaming a user's title is worse than never renaming.
+        try:
+            sess_cols = [
+                row[1]
+                for row in self._conn.execute("PRAGMA table_info(sessions)").fetchall()
+            ]
+            if "title_is_custom" not in sess_cols:
+                self._conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN title_is_custom INTEGER NOT NULL DEFAULT 0"
+                )
+                placeholders = ", ".join("?" for _ in PLACEHOLDER_TITLES)
+                self._conn.execute(
+                    f"UPDATE sessions SET title_is_custom = 1 "
+                    f"WHERE LOWER(TRIM(COALESCE(title, ''))) NOT IN ({placeholders})",
+                    tuple(PLACEHOLDER_TITLES),
+                )
+                self._conn.commit()
+                logger.info("Migrated sessions table: added title_is_custom column")
+        except Exception as e:
+            logger.debug("Migration check for title_is_custom column: %s", e)
+
     def close(self):
         """Close database connection."""
         if self._conn:
@@ -334,6 +377,9 @@ class ChatDatabase:
         session_id = str(uuid.uuid4())
         now = self._now()
         model = model or SESSION_DEFAULT_MODEL
+        # A non-placeholder title at creation is an explicit caller choice —
+        # pin it so the auto-retitler never overwrites it (#2165).
+        title_is_custom = 0 if is_placeholder_title(title) else 1
         title = title or "New Chat"
         agent_type = agent_type or "chat"
         device = device or "gpu"
@@ -342,11 +388,12 @@ class ChatDatabase:
 
         with self._transaction():
             self._conn.execute(
-                """INSERT INTO sessions (id, title, created_at, updated_at, model, system_prompt, private, agent_type, device, mail_provider)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO sessions (id, title, title_is_custom, created_at, updated_at, model, system_prompt, private, agent_type, device, mail_provider)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     title,
+                    title_is_custom,
                     now,
                     now,
                     model,
@@ -435,14 +482,23 @@ class ChatDatabase:
         device: str | None = None,
         model: str | None = None,
         mail_provider: str | None = None,
+        title_is_custom: bool | None = None,
     ) -> Optional[Dict[str, Any]]:
-        """Update session title, system prompt, agent_type, device, model, mail_provider, private flag, and/or document_ids."""
+        """Update session title, system prompt, agent_type, device, model, mail_provider, private flag, and/or document_ids.
+
+        ``title_is_custom`` pins/unpins the title against auto-retitling
+        (#2165); omit it (None) to leave the pin unchanged — the backend
+        auto-titler relies on that so its own updates never pin.
+        """
         updates: list[str] = []
         params: list[Any] = []
 
         if title is not None:
             updates.append("title = ?")
             params.append(title)
+        if title_is_custom is not None:
+            updates.append("title_is_custom = ?")
+            params.append(1 if title_is_custom else 0)
         if model is not None:
             updates.append("model = ?")
             params.append(model)

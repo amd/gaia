@@ -1,33 +1,102 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-# Email agent eval-scorecard refresh + regression gate (#1862).
+# Email agent eval-scorecard refresh + regression gate (#1862, #2094).
 #
-# Answers "how does a PR that changes the agent keep the scorecard honest?":
-# when the email agent's LLM-affecting code (or the eval corpus) changes, this
-# re-runs the REAL eval, regenerates the scorecard, and then:
-#   - score IMPROVED or held  -> commits the refreshed SCORECARD.md to the branch
-#   - score REGRESSED          -> fails the job (the worse card is NOT committed)
+# Answers "how does a change to the agent keep the published scorecard honest?":
+# re-run the REAL eval, regenerate the scorecard, then either commit a
+# refreshed card or reject a regressed/sub-bar one.
+#
+# HISTORY (#2094): this workflow had NEVER completed a single run in its first
+# 100 dispatches. Root cause: a hand-typed `timeout-minutes: 90` against a
+# measured ~2h workload (run 29433392568, limit 60): benchmark 41:24 + drafting
+# judge 21:00 + action-item judge killed at 90:00 mid-eval + briefing judge
+# never ran + gen_scorecard/gates/commit never ran. Lowering the sample count
+# does not fix this — the three judge evals cost more than the benchmark
+# itself and are fixed-size (19/21/11 cases), so the workflow died at every
+# limit ever tried. See the Budget derivation comment on the job below for the
+# real numbers this rewrite is sized against.
+#
+# The `push:` trigger is GONE (previously: push to any non-main branch
+# touching the email agent). 0/100 successes means per-push refresh coverage
+# never existed in practice, so removing it costs nothing real, and it stops
+# every push to an email branch from silently queueing for the single serial
+# `lemonade-eval` slot. Regression duty on LLM behavior remains with the
+# weekly `test_email_agent_eval.yml` (whose own last scheduled run --
+# 2026-07-13, run 29235382831 -- failed; separate and out of scope here) and
+# the release-time `scorecard-gate` job in `release_agent_email.yml` (parses
+# committed files only, no eval).
+#
+# `workflow_dispatch` now supports TWO profiles, selected by `limit` AND
+# `experiments` together:
+#   - FULL (limit >= 249 AND experiments >= the committed card's n_runs,
+#     defaults 250 / 3): reproduces the committed card's methodology
+#     (250 x 3). This is the ONLY profile allowed to commit a refreshed card.
+#     ~10.5h wall-clock -- dispatch deliberately, and check `gh run list`
+#     first (see the slot-occupancy warning below).
+#   - SUBSET (limit < 249): an end-to-end smoke/dry-run. Runs the benchmark,
+#     all three judge evals, gen_scorecard, and (skipped by `if:`, not just
+#     printed) the two regression-gate steps, then NEVER commits -- it
+#     restores the committed SCORECARD.md and prints a loud "SUBSET RUN"
+#     notice. A subset-sized card is not a valid stand-in for the published
+#     figure (at few-case samples a single flip swings the metric double
+#     digits), so it is never given the chance to overwrite the real one.
+#
+# Fail-fast basis guard (in the `pre` step, before any eval spend): a
+# full-profile run whose `ctx_size` does not match the committed card's
+# `recipe.environment.ctx_size` stamp (or where the committed card has NO
+# stamp at all -- the current state), or whose `experiments` is below the
+# committed card's `n_runs`, fails immediately naming both bases and the exact
+# re-dispatch command -- unless `rebaseline=true` (with a required
+# `rebaseline_reason`) marks the basis change deliberate. This is what stops a
+# fast/lucky run from silently overwriting the real 250x3 card with a weaker
+# one; subset runs skip this guard entirely (they can never commit). Dispatch
+# also refuses to auto-commit against `main` -- `workflow_dispatch` has no
+# `branches:` restriction, so a careless full dispatch against `main` would
+# otherwise push straight to it.
 #
 # `gaia eval benchmark` needs Lemonade on AMD hardware, so this runs on the
-# self-hosted [self-hosted, Windows, stx] pool — GitHub-hosted runners cannot run
-# it. The install-lemonade action pins the runner to the expected LEMONADE_VERSION
-# (installs if missing, reconciles if drifted) and ensure-lemonade-running.ps1
-# starts + warms the server before the eval. Serial execution across the eval
-# workflows is enforced by the shared `lemonade-eval` concurrency group (below),
-# NOT by the runner label. The release-time `scorecard-gate` job in
-# release_agent_email.yml is the hosted-CI backstop (it parses committed files
-# only, no eval).
+# self-hosted [self-hosted, Windows, stx] pool -- GitHub-hosted runners cannot
+# run it. The install-lemonade action pins the runner to the expected
+# LEMONADE_VERSION (installs if missing, reconciles if drifted) and
+# ensure-lemonade-running.ps1 starts + warms the server before the eval.
+# Serial execution across the eval workflows is enforced by the shared
+# `lemonade-eval` concurrency group (below), NOT by the runner label. The
+# release-time `scorecard-gate` job in release_agent_email.yml is the
+# hosted-CI backstop (it parses committed files only, no eval).
 #
-# Two regression checks run here:
-#   1. SAME-VERSION: fresh aggregate vs the currently-committed SCORECARD.md —
-#      stops a noisy/worse re-run from silently overwriting a good score.
-#   2. CROSS-VERSION (best-effort): fresh SCORECARD.md vs the prior version tag
-#      via --baseline-ref.
+# SLOT-OCCUPANCY WARNING: a FULL run holds the serial `lemonade-eval`
+# concurrency slot for ~10h. Six sibling workflows (test_api, test_embeddings,
+# test_lemonade_server, test_rag, build_cpp, test_examples) share the same
+# [self-hosted, Windows, stx] runner LABEL *outside* that concurrency group --
+# they are not blocked by it, but most of them run
+# installer/scripts/cleanup-lemonade.ps1, which force-kills whatever owns port
+# 13305. That means an unrelated PR landing mid-run can kill a 10h eval, and
+# conversely those six workflows queue behind a full run for hours if it grabs
+# the box first. Before dispatching a FULL run: check `gh run list` for
+# in-flight/queued stx work, and expect (do not "fix" by restarting the
+# runner) hours of queuing elsewhere. Widening the concurrency group to cover
+# those six workflows is the right structural fix but is out of scope here --
+# file a follow-up issue rather than silently absorbing it.
 #
-# Auto-commit needs `contents: write` and only works on the repo's own branches;
-# a fork PR's GITHUB_TOKEN is read-only — for forks, run the eval locally / on AMD
-# hardware and commit the scorecard by hand (the release gate still enforces it).
+# Two regression checks run here (FULL profile only):
+#   1. SAME-VERSION: fresh aggregate vs the currently-committed SCORECARD.md,
+#      via gaia.eval.scorecard_gate --baseline-file (variance-aware,
+#      ctx-comparability-aware -- do not hand-roll this comparison).
+#   2. CROSS-VERSION (best-effort): fresh SCORECARD.md vs the prior version
+#      tag via --baseline-ref. Both gate calls also enforce the absolute
+#      acceptance bar / urgent-recall floor from
+#      tests/fixtures/email/quality_gate_thresholds.json (mirrors
+#      release_agent_email.yml's derivation) -- a sub-bar card must never
+#      reach the published surface, even from a "clean" refresh.
+#
+# Auto-commit needs `contents: write` and only works on the repo's own
+# branches; a fork PR's GITHUB_TOKEN is read-only -- for forks, run the eval
+# locally / on AMD hardware and commit the scorecard by hand (the release gate
+# still enforces it).
+#
+# KNOWN RESIDUAL GAP: this workflow can only govern what IT commits. A human
+# hand-editing SCORECARD.md in an unrelated PR bypasses every guard here.
 
 name: Email Agent Eval — scorecard refresh
 
@@ -35,32 +104,34 @@ on:
   workflow_dispatch:
     inputs:
       limit:
-        description: 'Messages to triage (smaller = faster; regen a card at this sample size)'
+        description: >-
+          Messages to triage. full profile (>=249, with experiments >=
+          the committed card's n_runs) reproduces the committed card's
+          methodology (~10.5h serial-slot occupancy -- dispatch
+          deliberately); smaller = smoke run that never commits.
         required: false
-        # Stays at 25 even though #2087's ctx overflow is fixed: the 60-email
-        # limit had TWO independent blockers and this PR only removes one.
-        # The ctx one is gone (condense_triage_result keeps the envelope in
-        # budget at any batch size — measured at 300). The other is this job's
-        # 90-minute budget: at 60 the benchmark + judge evals overrun it (run
-        # 29433392568 was killed mid-action-item eval at exactly 90:00). Raise
-        # the limit when #2063's per-email speedups land, not before.
-        default: '25'
+        default: '250'
+      experiments:
+        description: 'Repeated full-eval runs (matches the committed card''s n_runs methodology; must be >= the committed n_runs for a full-profile run to be allowed to commit)'
+        required: false
+        default: '3'
       model:
         description: 'Lemonade model id'
         required: false
         default: 'Gemma-4-E4B-it-GGUF'
-  push:
-    branches-ignore:
-      - main
-    paths:
-      - 'hub/agents/python/email/**'
-      # Publishing/upload plumbing is not LLM- or eval-affecting, so a change to
-      # it must NOT re-run the 90-min real eval. publish_to_r2.py only POSTs the
-      # already-built artifacts + docs to the Hub Worker.
-      - '!hub/agents/python/email/packaging/publish_to_r2.py'
-      - 'tests/fixtures/email/**'
-      - 'src/gaia/eval/release_scorecard.py'
-      - 'src/gaia/eval/scorecard_gate.py'
+      ctx_size:
+        description: 'Context window to pin the benchmark run at (the card records the window it was measured under, #1892)'
+        required: false
+        default: '16384'
+      rebaseline:
+        description: 'Commit a card whose basis (ctx_size or experiments/n_runs) differs from the committed card''s; skips the numeric regression comparison for this one deliberate run (absolute bars still enforced)'
+        type: boolean
+        default: false
+      rebaseline_reason:
+        description: 'REQUIRED when rebaseline=true -- why this basis change is deliberate (threaded into the commit message so git history can tell an approved migration from a careless flip)'
+        required: false
+        type: string
+        default: ''
 
 concurrency:
   # Share the single Lemonade backend slot with the other self-hosted evals so two
@@ -74,10 +145,17 @@ permissions:
 env:
   SCORECARD: hub/agents/npm/agent-email/SCORECARD.md
   MANIFEST: hub/agents/python/email/gaia-agent.yaml
-  # 25, not 60 — bounded by this job's 90-min budget, not by ctx (#2087 fixed
-  # that). See the workflow_dispatch input above.
-  LIMIT: ${{ github.event.inputs.limit || '25' }}
-  MODEL: ${{ github.event.inputs.model || 'Gemma-4-E4B-it-GGUF' }}
+  THRESHOLDS: tests/fixtures/email/quality_gate_thresholds.json
+  LIMIT: ${{ inputs.limit || '250' }}
+  EXPERIMENTS: ${{ inputs.experiments || '3' }}
+  MODEL: ${{ inputs.model || 'Gemma-4-E4B-it-GGUF' }}
+  CTX_SIZE: ${{ inputs.ctx_size || '16384' }}
+  REBASELINE: ${{ inputs.rebaseline }}
+  REBASELINE_REASON: ${{ inputs.rebaseline_reason || '' }}
+  # Single source of truth for the full/subset split (#2094, Reflection A1/S1)
+  # -- every downstream ternary and the `pre` step read THIS, never re-derive
+  # the >=249 threshold themselves.
+  IS_FULL: ${{ fromJSON(inputs.limit || '250') >= 249 }}
   PYTHONIOENCODING: "utf-8"
   # JOB-WIDE so EVERY eval step (benchmark AND the drafting eval) can import the
   # tests.fixtures.email FakeGmailBackend — eval_drafting_report.py died with
@@ -104,13 +182,30 @@ jobs:
     # 'powershell: command not found'. fromJSON(...) yields a label ARRAY so the
     # runner must have Windows AND the stx/stx-test label.
     runs-on: ${{ fromJSON(contains(github.event.pull_request.labels.*.name, 'stx-test') && '["self-hosted","Windows","stx-test"]' || '["self-hosted","Windows","stx"]') }}
-    # The refresh triages ~25 emails in one call (~38s/email -> ~16min), then
-    # runs three judge evals; that whole chain has to fit the budget below.
-    # History: 220 (~2.3h) hogged the serial lemonade-eval slot -> 60 -> 25
-    # (#2089) when 60 overflowed the pinned 16384 ctx window. #2087 fixed the
-    # ctx half, but 60 still overruns this budget (run 29433392568 died at
-    # 90:00 mid-judge-eval), so 25 stands. Per-email speedups: #2063.
-    timeout-minutes: 90
+    # Budget derivation (#2094) — measured against run 29433392568 (limit 60,
+    # killed at the old flat 90-min job timeout mid action-item judge eval).
+    # Judge-step ceilings are profile-independent: their corpora are fixed
+    # size (drafting 19, action-item 21, briefing 11 cases) regardless of the
+    # triage `limit`.
+    #   benchmark full:    3 experiments x 249 emails x 45s (41.4 measured
+    #                        + margin) ~= 560min                          -> 620
+    #   benchmark subset:  25 emails x 45s ~= 19min + model-load variance -> 45
+    #   drafting judge:    measured 21:00 (19 cases ~= 66s/case)          -> 35
+    #   action-item judge: measured >=27:05 (21 cases)                   -> 45
+    #   briefing judge:    est. 11 cases x ~75s ~= 14min                 -> 25
+    #   setup (checkout + venv + install-lemonade + start; the "start" step
+    #     already carries its own 15-min cap)                            -> 35
+    #   FIVE short steps (pre, gen_scorecard, same-version gate,
+    #     cross-version gate, commit) @ 10 each                          -> 50
+    #   job full:   620+35+45+25+35+50 = 810 -> timeout-minutes 840 (margin)
+    #   job subset:  45+35+45+25+35+50 = 235 -> timeout-minutes 240 (margin)
+    # These are CEILINGS, not expectations — expected wall-clock is ~10.5h
+    # full, ~100min subset. The job timeout is only the backstop: every step
+    # above the "short steps" bucket carries its OWN timeout-minutes so an
+    # overrun fails at a NAMED step, never a silent job-level `cancelled`
+    # (this is the root fix for #2094 — the old value, 90, wasn't even
+    # derived from a measurement).
+    timeout-minutes: ${{ fromJSON(inputs.limit || '250') >= 249 && 840 || 240 }}
     steps:
       - name: Checkout (the pushed branch)
         uses: actions/checkout@v7
@@ -147,8 +242,9 @@ jobs:
           powershell -ExecutionPolicy Bypass -File installer\scripts\ensure-lemonade-running.ps1 -WarmModel "$env:MODEL"
           if ($LASTEXITCODE -ne 0) { throw "Lemonade server not ready" }
 
-      - name: Resolve version + capture currently-committed aggregate
+      - name: Resolve version, committed basis, and fail fast on a basis mismatch
         id: pre
+        timeout-minutes: 10
         run: |
           $ErrorActionPreference = "Stop"
 
@@ -156,8 +252,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "could not read version from $env:MANIFEST" }
           "version=$VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-          # Aggregate of the SCORECARD.md as committed on this branch (empty if new).
+          # Read the committed card's basis (aggregate, ctx_size, n_runs,
+          # limit) BEFORE any eval spend, so a basis-incompatible dispatch can
+          # be rejected cheaply. ctx_size lives at recipe.environment.ctx_size,
+          # NOT recipe.config -- reuse the existing reference implementation
+          # (env_ctx_size) rather than re-deriving the path.
           $COMMITTED = ""
+          $COMMITTED_CTX = ""
+          $COMMITTED_N = ""
+          $COMMITTED_LIMIT = ""
+          $committedPath = ""
           git cat-file -e "HEAD:$env:SCORECARD" 2>$null
           if ($LASTEXITCODE -eq 0) {
             $committedPath = Join-Path $env:RUNNER_TEMP "committed_scorecard.md"
@@ -165,48 +269,118 @@ jobs:
             [System.IO.File]::WriteAllLines($committedPath, (git show "HEAD:$env:SCORECARD"))
             $committedForPy = $committedPath -replace '\\', '/'
             $COMMITTED = python -c "from gaia.eval.release_scorecard import parse_scorecard; import pathlib; print(parse_scorecard(pathlib.Path('$committedForPy'))['aggregate']['value'])"
-            if ($LASTEXITCODE -ne 0) { throw "could not parse committed scorecard" }
+            if ($LASTEXITCODE -ne 0) { throw "could not parse committed scorecard aggregate" }
+            $COMMITTED_CTX = python -c "from gaia.eval.release_scorecard import parse_scorecard; from gaia.eval.scorecard_gate import env_ctx_size; import pathlib; v = env_ctx_size(parse_scorecard(pathlib.Path('$committedForPy'))); print('' if v is None else v)"
+            if ($LASTEXITCODE -ne 0) { throw "could not read committed ctx_size" }
+            $COMMITTED_N = python -c "from gaia.eval.release_scorecard import parse_scorecard; import pathlib; v = parse_scorecard(pathlib.Path('$committedForPy'))['recipe']['config'].get('n_runs'); print('' if v is None else v)"
+            if ($LASTEXITCODE -ne 0) { throw "could not read committed n_runs" }
+            $COMMITTED_LIMIT = python -c "from gaia.eval.release_scorecard import parse_scorecard; import pathlib; v = parse_scorecard(pathlib.Path('$committedForPy'))['recipe']['config'].get('limit'); print('' if v is None else v)"
+            if ($LASTEXITCODE -ne 0) { throw "could not read committed limit" }
           }
           "committed=$COMMITTED" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "committed_ctx=$COMMITTED_CTX" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "committed_n=$COMMITTED_N" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "committed_limit=$COMMITTED_LIMIT" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "committed_path=$committedPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
           # Resolve the previous release tag for the cross-version check.
           $PREV = (git describe --tags --abbrev=0 --match 'agent-pkg-email-*' "HEAD^" 2>$null)
           if (-not $PREV) { $PREV = "" }
           "prev_tag=$PREV" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-          Write-Host "Version $VERSION; committed aggregate: $(if ($COMMITTED) { $COMMITTED } else { '<none>' }); prev tag: $(if ($PREV) { $PREV } else { '<none>' })"
+          # Absolute acceptance bar + urgent-recall floor (#1437), data-driven
+          # from the same thresholds manifest release_agent_email.yml reads --
+          # never hardcode 80.0/0.90 here.
+          $ENFORCE = python -c "import json; print(json.load(open('$env:THRESHOLDS')).get('acceptance_enforce', False))"
+          $MINAGG = ""
+          $MINURGENT = ""
+          if ($ENFORCE -eq "True") {
+            $TARGET = python -c "import json; print(json.load(open('$env:THRESHOLDS'))['acceptance_target'])"
+            $FLOOR = python -c "import json; print(json.load(open('$env:THRESHOLDS'))['urgent_recall_floor'])"
+            $MINAGG = python -c "print(round(float('$TARGET') * 100, 2))"
+            $MINURGENT = $FLOOR
+          }
+          "min_aggregate=$MINAGG" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "min_urgent_recall=$MINURGENT" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+          "is_full=$env:IS_FULL" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          # commit_allowed == is_full: a subset run can never commit; a full
+          # run that fails one of the checks below exits 1 and never reaches
+          # the commit step at all.
+          "commit_allowed=$env:IS_FULL" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+          # Display-only fallbacks (computed unconditionally so the PROFILE
+          # banner below is correct on BOTH profiles, not just full).
+          $committedCtxDisplay = if ($COMMITTED_CTX) { $COMMITTED_CTX } else { "<unstamped>" }
+          $committedAggDisplay = if ($COMMITTED) { $COMMITTED } else { "<none>" }
+
+          # --- Fail-fast basis guard (full profile only; subset can't commit) ---
+          if ($env:IS_FULL -eq "true") {
+            # Refuse to auto-commit to a protected branch. workflow_dispatch has
+            # no branches: restriction, and github.head_ref is empty on
+            # dispatch, so both checkout and push resolve to the dispatched
+            # ref -- including main.
+            if ($env:GITHUB_REF_NAME -eq "main") {
+              Write-Host "::error::Refuse to auto-commit to main via workflow_dispatch. Dispatch this workflow against a feature branch and open a PR with the refreshed card instead."
+              exit 1
+            }
+
+            if ($env:REBASELINE -eq "true" -and [string]::IsNullOrWhiteSpace($env:REBASELINE_REASON)) {
+              Write-Host "::error::rebaseline=true requires a non-empty rebaseline_reason -- it is recorded in the commit message so git history can tell an approved basis migration from a careless flip."
+              exit 1
+            }
+
+            $ctxMismatch = ($COMMITTED_CTX -eq "") -or ($COMMITTED_CTX -ne $env:CTX_SIZE)
+            if ($ctxMismatch -and ($env:REBASELINE -ne "true")) {
+              Write-Host "::error::Basis mismatch -- committed card ctx_size=$committedCtxDisplay vs requested ctx_size=$env:CTX_SIZE. Re-dispatch at the committed ctx_size to compare apples-to-apples, or pass rebaseline=true with a rebaseline_reason to move the basis deliberately. Re-dispatch command: gh workflow run email_scorecard_refresh.yml --ref $env:GITHUB_REF_NAME -f limit=$env:LIMIT -f experiments=$env:EXPERIMENTS -f ctx_size=$env:CTX_SIZE -f rebaseline=true -f rebaseline_reason=`"...`""
+              exit 1
+            }
+
+            if (($COMMITTED_N -ne "") -and ([int]$env:EXPERIMENTS -lt [int]$COMMITTED_N) -and ($env:REBASELINE -ne "true")) {
+              Write-Host "::error::Basis mismatch -- committed card n_runs=$COMMITTED_N vs requested experiments=$env:EXPERIMENTS. A lower experiments count would silently downgrade the published sample-size basis. Re-dispatch with experiments >= $COMMITTED_N, or pass rebaseline=true with a rebaseline_reason to move the basis deliberately. Re-dispatch command: gh workflow run email_scorecard_refresh.yml --ref $env:GITHUB_REF_NAME -f limit=$env:LIMIT -f experiments=$COMMITTED_N -f ctx_size=$env:CTX_SIZE -f rebaseline=true -f rebaseline_reason=`"...`""
+              exit 1
+            }
+          }
+
+          $profileName = if ($env:IS_FULL -eq "true") { "FULL" } else { "SUBSET" }
+          Write-Host "PROFILE: $profileName -- limit=$env:LIMIT experiments=$env:EXPERIMENTS ctx_size=$env:CTX_SIZE rebaseline=$env:REBASELINE | committed: limit=$COMMITTED_LIMIT n_runs=$COMMITTED_N ctx_size=$committedCtxDisplay aggregate=$committedAggDisplay | prev_tag=$PREV"
 
       - name: Run the email-triage benchmark (real eval)
+        timeout-minutes: ${{ fromJSON(inputs.limit || '250') >= 249 && 620 || 45 }}
         env:
           # The agent's calendar-connector resolution blocks on the OS keyring in
           # a headless context — disable it so construction doesn't hang.
           PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
-          # Triage of the ~25-email corpus is ONE tool call at ~38s/email
-          # (measured on the stx pool for Gemma-4-E4B) -> ~16min. A too-low
-          # timeout abandons it mid-run -> 0 triage results -> Category acc 0.0.
-          # 3600s (1h) covers it with margin. Per-email speedups: #2063.
-          GAIA_AGENT_TOOL_TIMEOUT: '3600'
+          # Bounds ONE tool call (agent.py _call_tool_bounded), and benchmark.py
+          # builds a fresh agent per experiment, so this need only cover a
+          # single experiment's triage call, not the whole run. Full-corpus:
+          # ~249 emails x 41.4s measured -> ~2h52m per experiment -> 14400s (4h)
+          # margin. Subset (~25 emails): 3600s (1h) covers it with margin.
+          GAIA_AGENT_TOOL_TIMEOUT: ${{ fromJSON(inputs.limit || '250') >= 249 && '14400' || '3600' }}
           PYTHONPATH: ${{ github.workspace }}
         run: |
           Remove-Item -Recurse -Force eval-out -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force eval-out | Out-Null
-          # mbox + ground_truth are generated artifacts (not committed) — build
+          # mbox + ground_truth are generated artifacts (not committed) -- build
           # them from the committed seed before the eval reads them.
           python tests/fixtures/email/generate_mbox.py
           if ($LASTEXITCODE -ne 0) { throw "generate_mbox failed" }
-          # --ctx-size 16384: pin the run to the #1892 envelope target so the
-          # refreshed card records the window it was measured under
-          # (gen_scorecard.py refuses to build an unstamped card).
+          # --ctx-size / --experiments come from the dispatch inputs (job env)
+          # so the refreshed card records the window and repeat-count it was
+          # actually measured under (gen_scorecard.py refuses to build an
+          # unstamped card).
           gaia eval benchmark `
             --model "$env:MODEL" `
             --mbox-path tests/fixtures/email/synthetic_inbox.mbox `
             --ground-truth tests/fixtures/email/ground_truth.json `
             --limit "$env:LIMIT" `
-            --ctx-size 16384 `
+            --experiments "$env:EXPERIMENTS" `
+            --ctx-size "$env:CTX_SIZE" `
             --output-dir eval-out
           if ($LASTEXITCODE -ne 0) { throw "gaia eval benchmark failed" }
 
       - name: Voice-drafting quality eval (judge-scored) — for the scorecard metric
+        timeout-minutes: 35
         env:
           # eval_drafting_report.py reads EMAIL_EVAL_MODEL; reuse the refresh model.
           EMAIL_EVAL_MODEL: ${{ env.MODEL }}
@@ -221,6 +395,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "drafting eval failed" }
 
       - name: Action-item extraction eval (judge-scored) — for the scorecard metric
+        timeout-minutes: 45
         env:
           EMAIL_EVAL_MODEL: ${{ env.MODEL }}
           # Judge credential — REQUIRED (fail-loudly, no silent skip), same as
@@ -231,6 +406,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "action-item eval failed" }
 
       - name: Briefing quality eval (judge-scored) — for the scorecard metric
+        timeout-minutes: 25
         env:
           EMAIL_EVAL_MODEL: ${{ env.MODEL }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -239,6 +415,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "briefing eval failed" }
 
       - name: Regenerate SCORECARD.md from the real run
+        timeout-minutes: 10
         run: |
           # Fold every capability's judged result into the card as report-only
           # metrics: drafting -> draft_approval_rate (weight-0 metric); spam (from
@@ -250,36 +427,63 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "gen_scorecard failed" }
 
       - name: Same-version regression check (reject a worse re-run)
+        # Subset runs can never commit, so comparing them is not just
+        # unnecessary but actively misleading (#2094, Reflection A2): an
+        # "informational" printed comparison at 25 emails still reads as
+        # signal to a human. Skip the step entirely for subset.
+        if: steps.pre.outputs.is_full == 'true'
+        timeout-minutes: 10
         run: |
-          $inv = [System.Globalization.CultureInfo]::InvariantCulture
-          $COMMITTED = "${{ steps.pre.outputs.committed }}"
-          $scorecardForPy = "$env:SCORECARD" -replace '\\', '/'
-          $FRESH = python -c "from gaia.eval.release_scorecard import parse_scorecard; import pathlib; print(parse_scorecard(pathlib.Path('$scorecardForPy'))['aggregate']['value'])"
-          if ($LASTEXITCODE -ne 0) { throw "could not parse fresh scorecard" }
-          Write-Host "fresh aggregate: $FRESH | committed: $(if ($COMMITTED) { $COMMITTED } else { '<none>' })"
-          if ($COMMITTED) {
-            $freshVal = [double]::Parse($FRESH, $inv)
-            $committedVal = [double]::Parse($COMMITTED, $inv)
-            if ($freshVal -lt $committedVal) {
-              Write-Host "::error::Scorecard regression: re-run scored $FRESH < committed $COMMITTED. Not committing the worse card. Investigate, or override intentionally via --allow-regression in a manual commit."
-              git checkout -- "$env:SCORECARD"
-              exit 1
-            }
+          # Reuse gaia.eval.scorecard_gate instead of hand-rolling this
+          # comparison (#2094, Reflection C4) -- it is already tested and
+          # already implements the variance-aware regression band
+          # (--regression-k) that a strict '<' lacks (it would reject a fresh
+          # 0.833 against a committed 0.834 despite stdev 0.0116).
+          $gateArgs = @("--scorecard", "$env:SCORECARD")
+          if ("${{ steps.pre.outputs.committed_path }}") {
+            $gateArgs += @("--baseline-file", "${{ steps.pre.outputs.committed_path }}")
           }
-          Write-Host "No same-version regression -- fresh score is >= committed."
+          if ("${{ steps.pre.outputs.min_aggregate }}") {
+            $gateArgs += @("--min-aggregate", "${{ steps.pre.outputs.min_aggregate }}")
+          }
+          if ("${{ steps.pre.outputs.min_urgent_recall }}") {
+            $gateArgs += @("--min-urgent-recall", "${{ steps.pre.outputs.min_urgent_recall }}")
+          }
+          if ("$env:REBASELINE" -eq "true") {
+            $gateArgs += "--allow-ctx-mismatch"
+          }
+          python -m gaia.eval.scorecard_gate @gateArgs
+          if ($LASTEXITCODE -ne 0) { throw "scorecard_gate (same-version) failed" }
 
       - name: Cross-version gate (fresh SCORECARD.md vs prior version tag, best-effort)
+        if: steps.pre.outputs.is_full == 'true'
+        timeout-minutes: 10
         run: |
           $PREV = "${{ steps.pre.outputs.prev_tag }}"
+          $gateArgs = @("--scorecard", "$env:SCORECARD")
           if ($PREV) {
-            python -m gaia.eval.scorecard_gate --scorecard "$env:SCORECARD" --baseline-ref "$PREV"
-          } else {
-            python -m gaia.eval.scorecard_gate --scorecard "$env:SCORECARD"
+            $gateArgs += @("--baseline-ref", "$PREV")
           }
-          if ($LASTEXITCODE -ne 0) { throw "scorecard_gate failed" }
+          if ("${{ steps.pre.outputs.min_aggregate }}") {
+            $gateArgs += @("--min-aggregate", "${{ steps.pre.outputs.min_aggregate }}")
+          }
+          if ("${{ steps.pre.outputs.min_urgent_recall }}") {
+            $gateArgs += @("--min-urgent-recall", "${{ steps.pre.outputs.min_urgent_recall }}")
+          }
+          if ("$env:REBASELINE" -eq "true") {
+            $gateArgs += "--allow-ctx-mismatch"
+          }
+          python -m gaia.eval.scorecard_gate @gateArgs
+          if ($LASTEXITCODE -ne 0) { throw "scorecard_gate (cross-version) failed" }
 
-      - name: Commit the refreshed SCORECARD.md (only if it changed for the better/equal)
+      - name: Commit the refreshed SCORECARD.md (full profile only)
+        timeout-minutes: 10
         run: |
+          if ("${{ steps.pre.outputs.commit_allowed }}" -ne "true") {
+            Write-Host "SUBSET RUN -- card NOT committed (basis limit=$env:LIMIT experiments=$env:EXPERIMENTS is smaller than the committed limit=${{ steps.pre.outputs.committed_limit }} n_runs=${{ steps.pre.outputs.committed_n }} basis). Restoring the committed SCORECARD.md."
+            git checkout -- "$env:SCORECARD"
+            exit 0
+          }
           git diff --quiet -- "$env:SCORECARD"
           if ($LASTEXITCODE -eq 0) {
             Write-Host "SCORECARD.md unchanged -- nothing to commit."
@@ -288,7 +492,11 @@ jobs:
           git config user.name  "${{ github.actor }}"
           git config user.email "${{ github.actor }}@users.noreply.github.com"
           git add "$env:SCORECARD"
-          git commit -m "eval(email): refresh v${{ steps.pre.outputs.version }} scorecard from benchmark run"
+          $commitMsg = "eval(email): refresh v${{ steps.pre.outputs.version }} scorecard from benchmark run"
+          if ("$env:REBASELINE" -eq "true") {
+            $commitMsg = "eval(email): re-baseline v${{ steps.pre.outputs.version }} scorecard at ctx=$env:CTX_SIZE from full-corpus run`n`n$env:REBASELINE_REASON"
+          }
+          git commit -m "$commitMsg"
           if ($LASTEXITCODE -ne 0) { throw "git commit failed" }
           git push origin "HEAD:${{ github.head_ref || github.ref_name }}"
           if ($LASTEXITCODE -ne 0) { throw "git push failed" }

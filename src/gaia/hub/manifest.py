@@ -57,6 +57,11 @@ VALID_LANGUAGES = frozenset({"python", "cpp"})
 
 VALID_SECURITY_TIERS = frozenset({"verified", "community", "experimental"})
 
+# Multi-component discriminator (#1716). Defaults to "agent" so the existing
+# agent-only manifests keep validating unchanged.
+VALID_TYPES = frozenset({"agent", "app", "component"})
+DEFAULT_TYPE = "agent"
+
 # Least-privileged default for an unspecified tier — an unknown package is
 # treated as untrusted until a maintainer promotes it.
 DEFAULT_SECURITY_TIER = "experimental"
@@ -182,6 +187,9 @@ class AgentManifest:
     # Technical
     language: str
 
+    # Package kind: agent | app | component (defaults to agent, #1716).
+    type: str = DEFAULT_TYPE
+
     # Hub display
     category: str = "general"
     tags: List[str] = field(default_factory=list)
@@ -262,6 +270,14 @@ class AgentManifest:
                 f"Use one of: {_sorted(VALID_LANGUAGES)}."
             )
 
+        pkg_type = data.get("type", DEFAULT_TYPE)
+        if pkg_type not in VALID_TYPES:
+            raise ManifestError(
+                f"gaia-agent.yaml{where}: type {pkg_type!r} is not a valid "
+                f"package type. Use one of: {_sorted(VALID_TYPES)}, or omit it "
+                f"to default to 'agent'. See {_SPEC_URL}."
+            )
+
         security_tier = data.get("security_tier", DEFAULT_SECURITY_TIER)
         if security_tier not in VALID_SECURITY_TIERS:
             raise ManifestError(
@@ -295,6 +311,7 @@ class AgentManifest:
             author=data["author"],
             license=data["license"],
             language=language,
+            type=pkg_type,
             category=data.get("category", "general") or "general",
             tags=_str_list(data.get("tags"), "tags", where),
             icon=data.get("icon", "") or "",

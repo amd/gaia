@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: MIT
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_PLAYGROUND_CACHE, resolvePlaygroundPort } from "../src/cli.js";
+import {
+  cmdDev,
+  DEFAULT_PLAYGROUND_CACHE,
+  resolveDevCommand,
+  resolvePlaygroundPort,
+} from "../src/cli.js";
 
 describe("playground --port validation", () => {
   it("defaults to 8131 when no value is given", () => {
@@ -29,6 +34,59 @@ describe("playground --port validation", () => {
     expect(resolvePlaygroundPort("4001")).toEqual({
       error: expect.stringContaining("4001"),
     });
+  });
+});
+
+describe("dev launcher command resolution", () => {
+  it("defaults to the gaia-agent-email console script with serve --reload", () => {
+    const { cmd, args } = resolveDevCommand({}, "127.0.0.1", 8131);
+    expect(cmd).toBe("gaia-agent-email");
+    expect(args).toEqual(["serve", "--reload", "--host", "127.0.0.1", "--port", "8131"]);
+  });
+
+  it("uses the module form when --python is given (venv-friendly)", () => {
+    const { cmd, args } = resolveDevCommand({ python: "/venv/bin/python" }, "127.0.0.1", 9000);
+    expect(cmd).toBe("/venv/bin/python");
+    expect(args).toEqual([
+      "-m",
+      "gaia_agent_email.server",
+      "serve",
+      "--reload",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "9000",
+    ]);
+  });
+
+  it("honors a --cmd launcher override", () => {
+    const { cmd, args } = resolveDevCommand({ cmd: "/opt/bin/gaia-agent-email" }, "127.0.0.1", 8131);
+    expect(cmd).toBe("/opt/bin/gaia-agent-email");
+    expect(args[0]).toBe("serve");
+  });
+
+  it("--python takes precedence over --cmd", () => {
+    const { cmd } = resolveDevCommand(
+      { python: "/venv/bin/python", cmd: "/opt/bin/gaia-agent-email" },
+      "127.0.0.1",
+      8131,
+    );
+    expect(cmd).toBe("/venv/bin/python");
+  });
+});
+
+describe("dev fails fast on a bad launcher", () => {
+  it("returns 1 quickly (does not hang on the health timeout) when spawn fails", async () => {
+    // A launcher that can't be spawned (ENOENT) must fail via the early-exit race,
+    // not wait out connectSidecar's 60s health poll. If the abort wiring regressed,
+    // this test would hang until the suite timeout.
+    const start = Date.now();
+    const rc = await cmdDev({
+      _: ["dev"],
+      flags: { cmd: "amd-gaia-nonexistent-launcher-xyz", port: "8923" },
+    });
+    expect(rc).toBe(1);
+    expect(Date.now() - start).toBeLessThan(10_000);
   });
 });
 

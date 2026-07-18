@@ -14,11 +14,13 @@ RESERVED_PORT = 4001
 # the freed port after a crash cannot impersonate the daemon.
 SERVICE_ID = "gaia-daemon"
 
-# MAJOR contract version of the UI/CLI <-> daemon boundary (design §0.25 skew
-# rule). An app update replaces the client while an old daemon keeps running; a
-# differing MAJOR means the client cannot speak the running daemon's API and must
-# restart it rather than silently attach to a stale host.
-DAEMON_API_VERSION = "1"
+# MAJOR.MINOR contract version of the UI/CLI <-> daemon boundary (design §0.25
+# skew rule). An app update replaces the client while an old daemon keeps
+# running; a differing MAJOR means the client cannot speak the running daemon's
+# API and must restart it rather than silently attach to a stale host. MINOR 1
+# added the /daemon/v1/agents control plane (#2142) — clients that need it
+# floor-check MINOR >= 1 so a pre-#2142 daemon fails loudly instead of 404ing.
+DAEMON_API_VERSION = "1.1"
 
 # Client-token auth: header name and scheme.
 AUTH_SCHEME = "Bearer"

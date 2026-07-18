@@ -52,7 +52,13 @@ from unittest.mock import patch
 
 import pytest
 
-from gaia.llm.lemonade_client import LemonadeClient, LemonadeStatus
+from gaia.llm.lemonade_client import (
+    InsufficientDiskSpaceError,
+    LemonadeClient,
+    LemonadeClientError,
+    LemonadeStatus,
+    ModelDownloadCancelledError,
+)
 
 
 def _status(entries):
@@ -398,6 +404,116 @@ class TestWaitModelStateTreatsFailedProbeAsUnknown:
         assert result is None
         assert mock_status.call_count == 2
         mock_sleep.assert_called_once()
+
+
+class TestLoadFailureIsLoud:
+    """Fixed contract (#2053): on the non-override (floor) path, a
+    ``load_model`` failure must PROPAGATE as an actionable
+    ``LemonadeClientError`` naming the model id and the server URL — never be
+    swallowed by the historical best-effort debug-swallow. Best-effort PROBE
+    steps (status/ctx pre-check) stay tolerant; only the actual load is loud.
+    """
+
+    @patch.object(LemonadeClient, "list_models")
+    @patch.object(LemonadeClient, "get_status")
+    @patch.object(LemonadeClient, "load_model")
+    def test_load_failure_propagates_with_model_and_url(
+        self, mock_load, mock_status, mock_list
+    ):
+        model = "Gemma-4-E4B-it-GGUF"
+        client = LemonadeClient(host="localhost", port=13305)
+        assert client.ctx_size_override is None
+
+        mock_status.return_value = _absent()  # model not loaded
+        mock_list.return_value = {"data": [{"id": model, "downloaded": True}]}
+        # Present-but-unloadable model: bad recipe / OOM / corrupt checkpoint.
+        mock_load.side_effect = LemonadeClientError(
+            f"Failed to load {model}: llama-server failed to start"
+        )
+
+        with pytest.raises(LemonadeClientError) as excinfo:
+            client._ensure_model_loaded(model, auto_download=True)
+
+        msg = str(excinfo.value)
+        assert model in msg
+        assert client.base_url in msg
+        # Actionable remediation is present.
+        assert "gaia init" in msg or "server log" in msg
+
+    @patch.object(LemonadeClient, "list_models")
+    @patch.object(LemonadeClient, "get_status")
+    @patch.object(LemonadeClient, "load_model")
+    def test_status_probe_failure_does_not_block_load(
+        self, mock_load, mock_status, mock_list
+    ):
+        """A failed pre-flight probe is UNKNOWN, not fatal — the load still
+        runs (best-effort probe preserved, no NEW failure on healthy paths)."""
+        model = "Gemma-4-E4B-it-GGUF"
+        client = LemonadeClient(host="localhost", port=13305)
+
+        mock_status.side_effect = RuntimeError("transient /health hiccup")
+        mock_list.return_value = {"data": [{"id": model, "downloaded": True}]}
+        mock_load.return_value = {"status": "success"}
+
+        # Must not raise — the probe failure is swallowed, the load proceeds.
+        client._ensure_model_loaded(model, auto_download=True)
+
+        mock_load.assert_called_once()
+
+    @patch.object(LemonadeClient, "list_models")
+    @patch.object(LemonadeClient, "get_status")
+    @patch.object(LemonadeClient, "load_model")
+    def test_download_cancelled_propagates_unwrapped(
+        self, mock_load, mock_status, mock_list
+    ):
+        """``ModelDownloadCancelledError`` / ``InsufficientDiskSpaceError`` are
+        already specific + actionable — they must propagate with their own
+        type, not be re-wrapped into a generic ``LemonadeClientError``."""
+        model = "Gemma-4-E4B-it-GGUF"
+        client = LemonadeClient(host="localhost", port=13305)
+
+        mock_status.return_value = _absent()
+        mock_list.return_value = {"data": [{"id": model, "downloaded": False}]}
+        mock_load.side_effect = ModelDownloadCancelledError(
+            f"User declined download of {model}"
+        )
+
+        with pytest.raises(ModelDownloadCancelledError):
+            client._ensure_model_loaded(model, auto_download=True)
+
+    @patch.object(LemonadeClient, "list_models")
+    @patch.object(LemonadeClient, "get_status")
+    @patch.object(LemonadeClient, "load_model")
+    def test_disk_space_error_propagates_unwrapped(
+        self, mock_load, mock_status, mock_list
+    ):
+        model = "Gemma-4-E4B-it-GGUF"
+        client = LemonadeClient(host="localhost", port=13305)
+
+        mock_status.return_value = _absent()
+        mock_list.return_value = {"data": [{"id": model, "downloaded": False}]}
+        mock_load.side_effect = InsufficientDiskSpaceError("not enough disk space")
+
+        with pytest.raises(InsufficientDiskSpaceError):
+            client._ensure_model_loaded(model, auto_download=True)
+
+    @patch.object(LemonadeClient, "list_models")
+    @patch.object(LemonadeClient, "get_status")
+    @patch.object(LemonadeClient, "load_model")
+    def test_healthy_path_unchanged_when_already_loaded(
+        self, mock_load, mock_status, mock_list
+    ):
+        """No behavior change on the healthy path: a model already loaded at a
+        sufficient ctx is a no-op — no load, no raise (#2053 constraint)."""
+        model = "Gemma-4-E4B-it-GGUF"
+        client = LemonadeClient(host="localhost", port=13305)
+
+        mock_status.return_value = _present(model, 65536)
+
+        client._ensure_model_loaded(model, auto_download=True)
+
+        mock_load.assert_not_called()
+        mock_list.assert_not_called()
 
 
 if __name__ == "__main__":

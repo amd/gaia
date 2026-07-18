@@ -193,6 +193,35 @@ def test_merge_registered_catalog_agent_is_installed():
     assert merged[0]["status"] == "installed"
 
 
+def test_merge_propagates_type_and_permissions_for_hub_lanes():
+    # #1722: the Hub page's Apps/Components/Agents lanes and install trust gate
+    # read `type` and `permissions` off the merged entry. They must survive the
+    # registry merge from the catalog index (#1716 discriminator).
+    merged = merge_with_registry(
+        [
+            _entry("studio", type="app", permissions=["fs:read", "net:fetch"]),
+            _entry("rag-kit", type="component"),
+            _entry("weather"),  # no type -> defaults to "agent"
+        ],
+        _FakeReg([]),
+        {},
+    )
+    by_id = {a["id"]: a for a in merged}
+    assert by_id["studio"]["type"] == "app"
+    assert by_id["studio"]["permissions"] == ["fs:read", "net:fetch"]
+    assert by_id["rag-kit"]["type"] == "component"
+    assert by_id["weather"]["type"] == "agent"
+    assert by_id["weather"]["permissions"] == []
+
+
+def test_merge_registry_only_agent_defaults_to_agent_type():
+    # Builtins / custom agents are always the "agent" kind with no declared
+    # permissions — apps and components exist only as published hub packages.
+    merged = merge_with_registry([], _FakeReg([_Reg("chat")]), {})
+    assert merged[0]["type"] == "agent"
+    assert merged[0]["permissions"] == []
+
+
 def test_build_catalog_degrades_to_registry_when_offline_no_cache(tmp_path):
     # Hub unreachable AND no on-disk cache: the unified catalog must still
     # return the local registry (builtins stay usable) flagged offline, rather

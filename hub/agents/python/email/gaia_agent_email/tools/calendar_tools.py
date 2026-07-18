@@ -29,7 +29,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
@@ -632,9 +632,27 @@ def detect_calendar_conflicts_impl(
         }
 
 
+DEFAULT_LIST_WINDOW_DAYS = 30
+
+
 def list_calendar_events_impl(
-    cal, *, time_min: Optional[str], time_max: Optional[str], debug: bool = False
+    cal,
+    *,
+    time_min: Optional[str],
+    time_max: Optional[str],
+    debug: bool = False,
+    now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
+    """List events; explicit bounds pass through unchanged.
+
+    When BOTH bounds are absent, defaults to a forward window of
+    ``now → +DEFAULT_LIST_WINDOW_DAYS`` — an unbounded listing makes the
+    backend expand recurring series from their first-ever instance (#2162).
+    """
+    if time_min is None and time_max is None:
+        now_dt = now if now is not None else datetime.now(timezone.utc)
+        time_min = now_dt.isoformat()
+        time_max = (now_dt + timedelta(days=DEFAULT_LIST_WINDOW_DAYS)).isoformat()
     with log_tool_call(
         "list_calendar_events",
         {"time_min": time_min, "time_max": time_max},
@@ -824,7 +842,9 @@ class CalendarToolsMixin:
         def list_calendar_events(
             time_min: Optional[str] = None, time_max: Optional[str] = None
         ) -> str:
-            """List calendar events between two RFC 3339 timestamps."""
+            """List calendar events between two RFC 3339 timestamps.
+
+            Omit both to list the next 30 days (starting now)."""
             try:
                 return _envelope_ok(
                     list_calendar_events_impl(

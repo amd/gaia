@@ -100,7 +100,9 @@ def init_memory(
 9. Generate session UUID
 
 <Warning>
-  Embedding is a hard requirement in v2. If the Lemonade embedding service is unavailable, `init_memory()` raises `RuntimeError("Lemonade embedding service required for memory system")`. There is no silent degradation to keyword-only search.
+  Embedding is a hard requirement in v2 — there is no silent degradation to keyword-only search. If the Lemonade embedding service is unreachable at startup, `init_memory()` logs a warning and disables memory for that session (`memory_store` becomes `None`) rather than running with a half-built index. It does **not** raise: an agent must still start on a machine where Lemonade is not installed yet. `GAIA_MEMORY_DISABLED=1` disables memory the same way.
+
+  Callers that need a live store must check `memory_store is None` and fail with an actionable message — `run_bootstrap_conversation()` does exactly that.
 </Warning>
 
 ### get_memory_system_prompt()
@@ -204,6 +206,54 @@ def set_memory_context(self, context: str) -> None
 agent.set_memory_context("work")      # Switch to work context
 agent.set_memory_context("personal")  # Switch to personal context
 ```
+
+### run_bootstrap_conversation()
+
+Run the adaptive day-zero onboarding conversation and store the approved answers. This is the entry point for populating an empty memory — the CLI's `gaia memory bootstrap --chat-only` runs the same engine.
+
+```python
+def run_bootstrap_conversation(
+    self,
+    *,
+    prompt_fn: Callable[[str], str],
+    output_fn: Callable[[str], None],
+) -> BootstrapResult
+```
+
+All IO is injected, so the same flow works over stdio, a chat transport, or a test script:
+
+```python
+from gaia.agents.base.bootstrap import BootstrapCancelled
+
+def ask(question: str) -> str:
+    try:
+        return input(f"  {question} ")
+    except (EOFError, KeyboardInterrupt) as e:
+        raise BootstrapCancelled("user cancelled onboarding") from e
+
+result = agent.run_bootstrap_conversation(prompt_fn=ask, output_fn=print)
+print(f"{result.stored} stored, {result.rejected} rejected, {result.skipped} skipped")
+```
+
+The questions branch on the role answer (a student is asked about coursework, an engineer about their deployment workflow). Every entry the answers produce is shown for approval (`[Y/n/q]`) before it is written, with `source="user"` and `confidence=0.8` — identity answers as `profile`/`global`, work answers as `fact`/`work` with an `entity` link (e.g. `app:vscode`). Only `Y` or a bare Enter stores an entry; an answer that is not `Y`, `n`, or `q` is re-asked rather than treated as approval. Each stored entry is embedded immediately on this path.
+
+Returns a `BootstrapResult`:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `stored` | `int` | Rows written. Can be below the number of approvals — `store()` dedups near-identical content within the same category/context/entity |
+| `skipped` | `int` | Questions answered with an empty line |
+| `rejected` | `int` | Entries declined at review |
+| `unreviewed` | `int` | Entries never shown (the user quit the review or cancelled) |
+| `cancelled` | `bool` | The user aborted; entries approved before the abort are still stored |
+| `answers` | `dict[str, str]` | Question id → the user's raw answer |
+| `knowledge_ids` | `list[str]` | Ids of the stored rows, in approval order |
+
+Raises `RuntimeError` if memory is disabled for the session (embedding service unreachable, or `GAIA_MEMORY_DISABLED=1`) — use `gaia memory bootstrap --chat-only`, which onboards without an embedder — or if an approved entry cannot be stored or embedded. A `prompt_fn` may raise `BootstrapCancelled` to abort; entries approved before the abort remain stored.
+
+<Note>
+  The engine lives in `gaia.agents.base.bootstrap` as a pure function over an injected `MemoryStore` plus injected IO — no LLM, no console. `run_bootstrap_conversation(store, prompt_fn=..., output_fn=..., on_stored=None)` is how the CLI drives onboarding on a machine with no embedding backend.
+</Note>
 
 ### reset_memory_session()
 
@@ -921,7 +971,7 @@ These map to CRUD operations: `remember` = create, `recall` = read, `update_memo
 | `tool` | LLM called `remember()` | 0.5 |
 | `llm_extract` | Auto-extracted by LLM from conversation, Mem0-style | 0.4 |
 | `error_auto` | Auto-stored from tool failure | 0.5 |
-| `user` | Manually created via dashboard | 0.8 |
+| `user` | Manually created via dashboard, or answered during bootstrap onboarding | 0.8 |
 | `discovery` | System scan during bootstrap | 0.4 |
 | `consolidation` | Distilled from old conversation sessions | 0.5 |
 
@@ -941,6 +991,7 @@ These map to CRUD operations: `remember` = create, `recall` = read, `update_memo
 | `get_memory_system_prompt()` | Stable frozen prefix for system prompt (includes Skills section) |
 | `get_memory_dynamic_context()` | Per-turn time + upcoming items |
 | `register_memory_tools()` | Register 5 LLM-facing tools |
+| `run_bootstrap_conversation(prompt_fn, output_fn)` | Adaptive day-zero onboarding; stores approved answers as `source="user"` |
 | `set_memory_context(context)` | Switch active context |
 | `reset_memory_session()` | New session ID + confidence decay |
 | `_get_embedder()` | Lazy-init Lemonade embedding provider |

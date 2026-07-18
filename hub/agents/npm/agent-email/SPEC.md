@@ -49,6 +49,13 @@ binds a send to one exact message but does not identify the caller.
   `generateSessionToken()` is exported for advanced flows. Exempt: `/health`,
   `/version`, `/v1/email/health`, `/v1/email/version`, `/v1/email/spec`,
   `/v1/email/playground`.
+  Sidecar binaries **0.6.0+** also accept `GAIA_EMAIL_SIDECAR_TOKEN_FILE` — the
+  path of a `0600`, owner-only file holding the token, so the secret never sits
+  in the process environment (readable via `/proc/<pid>/environ` / `ps eww`).
+  The GAIA daemon delivers the secret this way and treats the env channel as a
+  logged, deprecated compatibility leg for older binaries; a set path var whose
+  file is missing or empty fails sidecar startup loudly. The npm lifecycle
+  currently uses the env channel.
 - **Host allowlist** — non-loopback `Host` → **400** (DNS-rebinding).
 - **Origin rejection** — non-loopback browser `Origin` → **403** (drive-by page).
   Non-browser clients send no `Origin` and are unaffected. No CORS is ever sent.
@@ -91,12 +98,12 @@ result.
 | `POST /v1/email/unarchive` | `unarchive()` | **Connector** | A connected mailbox + the `batch_id`. **Ungated** (it restores). Window expired / unknown handle → `409`. |
 | `POST /v1/email/quarantine` | `quarantine()` | **Connector (Gmail)** | A valid `confirm` token (`action="quarantine"`) **and** a connected **Gmail** mailbox. Applies `GAIA_PHISHING_QUARANTINE` + archives; refuses `is_phishing: false` → `400`; refuses an Outlook mailbox → `400` (label-undo can't reverse a folder move, #1738). |
 | `POST /v1/email/unquarantine` | `unquarantine()` | **Connector** | A connected mailbox + the `action_id`. **Ungated** (it restores prior labels). Window expired / unknown → `409`. |
-| `GET /v1/email/calendar/events` | `listCalendarEvents()` | **Connector** | A connected mailbox whose **calendar scope** was granted. Read-only view of the primary calendar; `403` (reconnect CTA) if the scope is missing. Optional `time_min`/`time_max`; `provider` only when 2+ accounts. |
+| `GET /v1/email/calendar/events` | `listCalendarEvents()` | **Connector** | A connected mailbox whose **calendar scope** was granted. Read-only view of the primary calendar; `403` (reconnect CTA) if the scope is missing. Optional `time_min`/`time_max` — omitting both defaults to a forward window (now → +30 days); `provider` only when 2+ accounts. |
 | `POST /v1/email/calendar/events/preview` | `previewCalendarEvent()` | **Standalone** | Nothing external — mints a single-use confirmation token bound to the event (calendar analogue of `draft`). |
 | `POST /v1/email/calendar/events` | `createCalendarEvent()` | **Connector** | A valid `preview` token **and** a connected calendar. Token gate fires first: no/invalid token → `403`; then the calendar-scope / account checks. |
 | `POST /v1/email/calendar/events/respond` | `respondToCalendarEvent()` | **Connector** | A connected calendar. RSVPs `accepted`/`declined`/`tentative` to an existing invite. |
-| `POST /v1/email/query` | — (SSE; no wrapper yet) | **Connector** | Canonical agent-loop query (schema 2.4, #2016). NL request in, seven canonical SSE event types out (`status`/`token`/`tool_call`/`tool_result`/`needs_confirmation`/`final`/`error`), terminated by one `final`/`error`. Host mints `run_id`; context is pushed. See "Canonical agent-loop query" below. |
-| `POST /v1/email/query/{run_id}/cancel` | — (no wrapper yet) | **Standalone** | Cancel an in-flight `/query` run — stops tool execution between steps. `404` if no run with that id is in flight. |
+| `POST /v1/email/query` | `query()` | **Connector** | Canonical agent-loop query (schema 2.4, #2016). NL request in, seven canonical SSE event types out (`status`/`token`/`tool_call`/`tool_result`/`needs_confirmation`/`final`/`error`), terminated by one `final`/`error`. `query()` returns an async iterator of typed `QueryEvent`s. Host mints `run_id`; context is pushed. See "Canonical agent-loop query" below. |
+| `POST /v1/email/query/{run_id}/cancel` | `cancelQuery()` | **Standalone** | Cancel an in-flight `/query` run — stops tool execution between steps. `404` if no run with that id is in flight. |
 | `GET /v1/email/init` | `init()` | **Standalone** | **Readiness preflight** (#1795): probes the whole triage stack — Lemonade reachable **and** version-compatible **and** the triage model downloaded. Returns `200` when ready, `503` when not, with an actionable `hint` either way (same `InitResponse` envelope). Read-only — no model pull. Unlike `/health` (liveness only), this verifies "ready to triage," not just "process up." |
 | `POST /v1/email/init` | — (streaming; no wrapper yet) | **Standalone** | **Provisioning** (#1795): tells the *running* local Lemonade to download the configured triage model, streaming `text/plain` progress line-by-line. Lemonade unreachable → real `503` (pulls nothing); once a pull starts the `200` is committed, so the trailing `✓`/`✗` line carries the true outcome. Not in the OpenAPI JSON — a streaming operational verb (like `GET /spec`), so `include_in_schema=False`. |
 | `GET /health` | `health()` | **Standalone** | Liveness only — does **not** check Lemonade/model. |
@@ -153,8 +160,42 @@ The stream ends with **exactly one `final` or `error`**.
 destructive/external tool such as `send_now`) emits `needs_confirmation` and then the run
 ends with a `final` refusal pointing at the deterministic fixed-function route — mint a
 token via `draft()`/`POST /v1/email/draft`, then `send()`/`POST /v1/email/send`.
-Server-side resume is not wired yet, so `confirm_url` is omitted. Not wrapped by the typed
-npm client yet — call it directly (e.g. `fetch` with `Accept: text/event-stream`).
+Server-side resume is not wired yet, so `confirm_url` is omitted.
+
+**Typed client:** `query()` wraps the stream as an async iterator of typed `QueryEvent`s
+(discriminated on `type`); `cancelQuery(runId)` wraps the cancel route.
+
+```ts
+const runId = crypto.randomUUID(); // host-minted (spec §2.3); also the cancel handle
+for await (const ev of sidecar.client.query({
+  query: "Triage my inbox and draft replies to anything urgent.",
+  run_id: runId,
+  context: [], // pushed transcript slice; [] for a fresh conversation
+})) {
+  switch (ev.type) {
+    case "status":       spinner.text = ev.message; break;
+    case "token":        answer += ev.delta; break;
+    case "tool_call":    console.log(`→ ${ev.tool}`, ev.args); break;
+    case "tool_result":  renderCard(ev.render, ev.data); break;
+    case "needs_confirmation": /* run then ends with a final refusal (D1) */ break;
+    case "final":        console.log(ev.answer); break;        // terminal
+    case "error":        console.error(ev.detail); break;      // terminal, verbatim
+    default:             console.warn("unsupported event", ev); // additive future type
+  }
+}
+// Mid-run, from anywhere that knows runId:
+// await sidecar.client.cancelQuery(runId);
+```
+
+Semantics: exactly one terminal `final`/`error` ends the iterator — a terminal `error`
+event is **yielded** (its `detail` is the actionable message), while transport/contract
+failures **throw** (`HttpError` on a non-2xx; `QueryStreamError` on a non-SSE response,
+a malformed event, or a stream that closes with no terminal event). An event `type`
+outside the frozen seven is yielded as `{ type: "unknown", eventType, raw }` — surfaced,
+never silently dropped (contract §7). The client's `timeoutMs` bounds time-to-first-response
+only; a healthy run streams as long as the agent works (pass an `AbortSignal` via
+`query(req, { signal })` to abort the transport — and also call `cancelQuery` so the
+sidecar stops the loop, not just the socket).
 
 ### Stateful agent surface (`/v1/email/agent/*`, 0.4.0)
 
@@ -425,6 +466,37 @@ control, the steps are exported individually:
 - `checkVersion(client, { expectedApiVersion })` → throws `VersionMismatchError` if the sidecar's apiVersion **MAJOR** differs (a higher MINOR is accepted).
 - `verifySha256(buf, expected, label)` → throws `IntegrityError` on mismatch.
 - `shutdown(sidecar)` → kill the **whole process tree** (`taskkill /F /T` on Windows; detached process-group kill on POSIX). The default auto-reaper does the same on process exit/crash/signal, so only a hard `SIGKILL` of the host can still orphan the child.
+- `connectSidecar({ baseUrl, authToken?, timeoutMs?, healthTimeoutMs?, verifyVersion?, expectedApiVersion?, signal? })` → **attach mode**: `waitForHealth` + (default) `checkVersion` against a server this package did **not** spawn, returning an `AttachedSidecar` (`{ host, port, baseUrl, client, authToken? }` — no `child`). Spawns nothing and owns no lifecycle, so there is nothing to `shutdown()`. Pass an `AbortSignal` as `signal` to cancel the health wait early (e.g. the server process you're waiting on died). This is the client half of the fast dev loop — pair it with the Python source server (`gaia-agent-email serve --reload`), which serves an identical contract to the frozen binary. See [Fast local iteration](#fast-local-iteration-dev-mode).
+
+### Fast local iteration (dev mode)
+
+The published flow fetches and spawns a **frozen** binary — there is no source to
+edit when you hit a bug. To iterate on the agent, run its **Python source** and
+attach this client instead. The frozen binary is that source frozen (PyInstaller
+freezes `packaging/server.py`, a thin re-export of `gaia_agent_email.server`), so
+the `/v1/email/*` contract is byte-for-byte identical — **only the base URL
+differs from production.**
+
+```bash
+pip install -e hub/agents/python/email     # editable: your edits take effect live
+gaia-agent-email serve --reload            # source server, auto-reload, token off for dev
+```
+
+```ts
+import { connectSidecar } from "@amd-gaia/agent-email";
+const dev = await connectSidecar({ baseUrl: "http://127.0.0.1:8131" });
+await dev.client.triage({ payload: { /* … */ } });
+// edit Python → auto-reload → re-run. `npx @amd-gaia/agent-email dev` launches the
+// serve process for you (`--python <path>` to use a specific venv).
+```
+
+The `serve` CLI (`gaia_agent_email.server:main`) accepts `--host`, `--port`
+(rejects the reserved 4001), `--reload` (import-string app + watches the package
+dir; add `--reload-dir` for your core checkout), `--dev` (implies `--reload`), and
+`--print-openapi`. Running without `GAIA_EMAIL_SIDECAR_TOKEN` disables the caller
+token (local dev only, logged loudly); Host/Origin protection still applies.
+Auto-reload resets in-process `/v1/email/agent/*` sessions — irrelevant to the
+stateless `triage`/`draft`/`send` surface.
 
 ## CLI
 
@@ -528,11 +600,15 @@ TypeScript types in `src/types.ts` mirror two Python sources of truth:
 - `contract.py` — the triage request/response contract plus the schema-2.1
   additions (inbox search, mailbox actions, calendar, pre-scan), the schema-2.2
   attachment models (`AttachmentMeta` / `OutgoingAttachment`), and the schema-2.3
-  triage draft scaffold (`DraftScaffold`; `SCHEMA_VERSION = "2.3"`).
+  triage draft scaffold (`DraftScaffold`; `SCHEMA_VERSION = "2.4"`).
 - `api_routes.py` — the local draft/send confirmation handshake models, the
   readiness-preflight envelope (`InitResponse` / `InitLemonadeStatus` /
   `InitModelStatus`, #1795), and the scheduled-briefing response
   (`EmailBriefingResponse`, #1608).
+- `query_routes.py` + the frozen `/query` SSE contract
+  (`docs/spec/agent-ui-query-sse-contract.md`) — the schema-2.4 agent-loop query:
+  `EmailQueryRequest` / `QueryContextItem`, the seven `QueryEvent` shapes (plus
+  the `unknown` placeholder for additive future types), and `QueryCancelResponse`.
 
 They are hand-written (vs. generated from `/openapi.json`) because the contract is
 small and version-gated, keeping the published package free of a typegen build
