@@ -22,6 +22,7 @@ from gaia.llm.lemonade_client import (
     lemonade_auth_headers,
     resolve_lemonade_api_key,
 )
+from gaia.llm.lemonade_manager import gpu_display_info
 
 from ..agent_loop import resolve_agent_mode
 from ..database import ChatDatabase
@@ -618,16 +619,17 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                         # works on both via cpu/vulkan backends. NPU requires
                         # explicit hardware detection.
                         detected = ["cpu", "gpu"]
+                        status.gpu_name, status.gpu_vram_gb = gpu_display_info(devices)
                         for key, dev in devices.items():
-                            if "gpu" in key.lower() and isinstance(dev, dict):
-                                status.gpu_name = dev.get("name")
-                                status.gpu_vram_gb = dev.get("vram_gb")
                             if "npu" in key.lower() and isinstance(dev, dict):
                                 if dev.get("available"):
                                     detected.append("npu")
                         status.detected_devices = detected
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Supplementary info — a failure must not fail the whole
+                    # status call, but log it so a payload shape change is
+                    # visible instead of silently blanking the GPU row.
+                    logger.debug("system status: device probe failed: %s", exc)
             else:
                 # Fall back to /models if /health isn't available
                 resp = await client.get(f"{base_url}/models", headers=_auth)
