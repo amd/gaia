@@ -1,0 +1,18 @@
+{
+  "devices": {
+    "amd_gpu": [
+      { "available": true, "family": "", "name": "AMD Radeon(TM) Graphics" },
+      {
+        "available": true,
+        "driver_version": "32.0.31021.5001",
+        "family": "gfx110X",
+        "name": "AMD Radeon RX 7900 XTX"
+      }
+    ],
+    "amd_npu": { "available": false, "error": "No XDNA NPU hardware detected" },
+    "cpu": { "available": true, "cores": 16, "threads": 32 },
+    "nvidia_gpu": [
+      { "available": false, "error": "No NVIDIA discrete GPU found", "name": "" }
+    ]
+  }
+}
