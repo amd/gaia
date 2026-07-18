@@ -18,10 +18,49 @@ the ``run`` subcommand does not exist yet.
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _repair_closed_root_logger_streams():
+    """Repair any root-logger ``StreamHandler`` left pointed at a dead stream.
+
+    ``gaia.logger.GaiaLogger`` is a module-level singleton: its console
+    ``StreamHandler`` is created once, at first import, bound to whatever
+    ``sys.stdout`` object was current at that moment. If this test file is
+    run on its own (rather than as part of the full suite, where some
+    earlier-collected module imports ``gaia.logger`` before any test's
+    ``capsys`` fixture activates), that first import can happen *inside*
+    an earlier test's ``capsys``-captured context. ``capsys`` then closes
+    its captured stream when that test ends, leaving the handler holding a
+    stale reference — and the next ``logger.warning()``/``.error()`` call
+    from *any* test crashes ``emit()`` with "I/O operation on closed
+    file", which logging reports by dumping a raw traceback to the
+    now-current ``sys.stderr``. Several tests below assert no raw
+    traceback leaks into `gaia agent run`'s own output, so this file's
+    correctness must not depend on which test (in this file or another)
+    happens to import ``gaia.logger`` first.
+
+    Only handlers whose *current* stream is already closed are touched —
+    pytest's own ``_pytest.logging`` handlers are also plain
+    ``StreamHandler`` instances (bound to a live, open ``CaptureIO``), and
+    reassigning those unconditionally corrupts pytest's own log capture.
+    Checking ``.closed`` first keeps this scoped to the one broken handler.
+    """
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers:
+        if isinstance(handler, logging.StreamHandler) and not isinstance(
+            handler, logging.FileHandler
+        ):
+            stream = getattr(handler, "stream", None)
+            if stream is not None and getattr(stream, "closed", False):
+                handler.stream = sys.stdout
+    yield
+
 
 # ---------------------------------------------------------------------------
 # Fixture helpers — write a real ~/.gaia/agents/<id>/agent.py to disk so
