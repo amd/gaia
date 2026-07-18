@@ -12,6 +12,7 @@ Main entry point for `gaia init` command that:
 5. Verifies setup is working
 """
 
+import importlib.util
 import logging
 import os
 import subprocess
@@ -1893,6 +1894,24 @@ class InitCommand:
             self._print_error(f"Verification failed: {e}")
             return False
 
+    def _chat_agent_install_step(self) -> Optional[str]:
+        """Return the install command if the chat agent is missing, else None.
+
+        `gaia init` installs models and Lemonade, never the chat agent, so
+        every profile whose banner recommends `gaia chat` can complete and
+        still dead-end on the very next command (#2240). Surface the missing
+        step instead of promising one that fails.
+
+        Uses find_spec rather than importing: importing gaia_agent_chat pulls
+        in the RAG/SD/VLM/MCP mixins, which is slow here and would misreport a
+        broken transitive dependency (faiss, torch) as "chat agent missing".
+        """
+        if importlib.util.find_spec("gaia_agent_chat") is not None:
+            return None
+        from gaia.install_hints import agent_install_command
+
+        return agent_install_command("chat")
+
     def _print_completion(self):
         """Print completion message with next steps."""
         if RICH_AVAILABLE and self.console:
@@ -1917,6 +1936,16 @@ class InitCommand:
                     "    [cyan]gaia sd -i[/cyan]                                        Interactive mode"
                 )
             elif self.profile == "chat":
+                install_step = self._chat_agent_install_step()
+                if install_step:
+                    self.console.print(
+                        "    [yellow]The chat agent is not installed yet — "
+                        "install it first:[/yellow]"
+                    )
+                    self.console.print(
+                        f"    [cyan]{install_step}[/cyan]", soft_wrap=True
+                    )
+                    self.console.print()
                 self.console.print(
                     "    [cyan]gaia chat[/cyan]                            Start interactive chat with RAG"
                 )
@@ -1930,6 +1959,16 @@ class InitCommand:
                     "    [cyan]gaia chat --ui[/cyan]                       Launch the Agent UI (browser-based)"
                 )
             elif self.profile == "npu":
+                install_step = self._chat_agent_install_step()
+                if install_step:
+                    self.console.print(
+                        "    [yellow]The chat agent is not installed yet — "
+                        "install it first:[/yellow]"
+                    )
+                    self.console.print(
+                        f"    [cyan]{install_step}[/cyan]", soft_wrap=True
+                    )
+                    self.console.print()
                 self.console.print(
                     "    [cyan]gaia chat --device npu[/cyan]             Chat using Ryzen AI NPU"
                 )
@@ -1959,6 +1998,16 @@ class InitCommand:
                 self.console.print("    [cyan]gaia init --profile chat[/cyan]")
             else:
                 # Default commands for other profiles
+                install_step = self._chat_agent_install_step()
+                if install_step:
+                    self.console.print(
+                        "    [yellow]The chat agent is not installed yet — "
+                        "install it first:[/yellow]"
+                    )
+                    self.console.print(
+                        f"    [cyan]{install_step}[/cyan]", soft_wrap=True
+                    )
+                    self.console.print()
                 self.console.print(
                     "    [cyan]gaia chat[/cyan]              Start interactive chat"
                 )
@@ -1990,6 +2039,13 @@ class InitCommand:
                     "    gaia sd -i                                        # Interactive mode"
                 )
             elif self.profile == "chat":
+                install_step = self._chat_agent_install_step()
+                if install_step:
+                    self._print(
+                        "    The chat agent is not installed yet — install it first:"
+                    )
+                    self._print(f"    {install_step}")
+                    self._print("")
                 self._print(
                     "    gaia chat                            # Start interactive chat with RAG"
                 )
@@ -2003,6 +2059,13 @@ class InitCommand:
                     "    gaia chat --ui                       # Launch the Agent UI (browser-based)"
                 )
             elif self.profile == "npu":
+                install_step = self._chat_agent_install_step()
+                if install_step:
+                    self._print(
+                        "    The chat agent is not installed yet — install it first:"
+                    )
+                    self._print(f"    {install_step}")
+                    self._print("")
                 self._print(
                     "    gaia chat --device npu             # Chat using Ryzen AI NPU"
                 )
@@ -2031,6 +2094,13 @@ class InitCommand:
                 self._print("    gaia init --profile chat")
             else:
                 # Default commands for other profiles
+                install_step = self._chat_agent_install_step()
+                if install_step:
+                    self._print(
+                        "    The chat agent is not installed yet — install it first:"
+                    )
+                    self._print(f"    {install_step}")
+                    self._print("")
                 self._print("    gaia chat              # Start interactive chat")
                 self._print(
                     "    gaia chat --ui         # Launch the Agent UI (browser-based)"
