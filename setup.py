@@ -31,6 +31,7 @@ setup(
         "gaia.schedule",
         "gaia.daemon",
         "gaia.daemon.custody",
+        "gaia.daemon.scheduler",
         "gaia.daemon.sidecars",
         "gaia.ui",
         "gaia.ui.routers",

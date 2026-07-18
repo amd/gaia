@@ -45,7 +45,11 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
-from gaia.daemon.constants import RESERVED_PORT
+from gaia.daemon.constants import (
+    DAEMON_SUPERVISION_ENABLED_VALUE,
+    DAEMON_SUPERVISION_ENV_VAR,
+    RESERVED_PORT,
+)
 from gaia.daemon.sidecars import fetch
 from gaia.daemon.sidecars.errors import (
     HealthTimeoutError,
@@ -313,6 +317,13 @@ class AgentSidecarManager:
 
             spawn_env[CUSTODY_URL_ENV_VAR] = self.custody_url
             spawn_env[CUSTODY_SECRET_ENV_VAR] = self.custody_secret
+        # Supervision handshake (V2-15, #2156): tell the sidecar the daemon owns
+        # the clock so it gates its own embedded schedulers off — the daemon
+        # drives them from the single reconciled clock. A sidecar spawned any
+        # other way never sees this and keeps its embedded clocks (standalone
+        # parity). Must land BEFORE the idle reaper flips on, or a reaped sidecar
+        # drops a clock the daemon isn't yet driving.
+        spawn_env[DAEMON_SUPERVISION_ENV_VAR] = DAEMON_SUPERVISION_ENABLED_VALUE
         log_handle = self._open_log(port)
         try:
             self._proc = subprocess.Popen(

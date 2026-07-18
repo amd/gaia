@@ -81,6 +81,7 @@ def build_app():
     from gaia_agent_email.briefing import BriefingScheduleConfig, BriefingScheduler
     from gaia_agent_email.connector_routes import router as connector_router
     from gaia_agent_email.contract import SCHEMA_VERSION
+    from gaia_agent_email.supervision import is_daemon_supervised
 
     # Daily inbox briefing (#1608) — env config is read at build time so an
     # invalid value aborts startup loudly, not at the first scheduled fire.
@@ -89,6 +90,18 @@ def build_app():
 
     @asynccontextmanager
     async def lifespan(_app):
+        # V2-15 (#2156): under daemon supervision the daemon drives the brief
+        # from its single reconciled clock, so the embedded clock stays dark —
+        # running both over one store is a double-run. Standalone / bare
+        # integrator runs (no supervision env) keep the embedded clock live.
+        if is_daemon_supervised():
+            log.info(
+                "Email sidecar under daemon supervision: embedded "
+                "BriefingScheduler gated off (the daemon drives the daily "
+                "brief from its reconciled clock)."
+            )
+            yield
+            return
         scheduler = BriefingScheduler(briefing_config)
         scheduler.start()
         try:
