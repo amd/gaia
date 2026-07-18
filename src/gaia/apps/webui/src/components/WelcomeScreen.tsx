@@ -4,7 +4,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { Lock, Zap, FileText, DollarSign, Terminal } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
-import { AgentHubGrid } from './AgentHubGrid';
+import { HubPage } from './HubPage';
 import { shouldShowFirstRunTip, shouldShowNoModelTip } from '../utils/setupHints';
 import './WelcomeScreen.css';
 
@@ -162,7 +162,7 @@ export function WelcomeScreen({ onNewTask, onSendPrompt, onCreateAgent }: Welcom
                 </div>
 
                 {agents.length > 0 && (
-                    <AgentHubGrid
+                    <HubPage
                         agents={agents}
                         activeAgentId={activeAgentId}
                         onSelect={setActiveAgentId}

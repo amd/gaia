@@ -5011,12 +5011,17 @@ def handle_jira_command(args):
 
 def handle_email_command(args):
     """
-    Handle the ``gaia email`` command.
+    Handle the ``gaia email`` command — a thin client over the GAIA daemon (V2-8).
 
-    Wires the Email Triage Agent (#962) to a CLI session. AC3-critical:
-    this handler does NOT pass ``--use-claude`` / ``--use-chatgpt`` to
-    the agent (the agent's config has no such field). The local-LLM-only
-    path is the only path.
+    The query path (``-q`` / ``-i``) no longer runs the email agent in-process:
+    it ensures/attaches to the always-on daemon, ensures the ``email`` sidecar,
+    and streams ``POST /v1/email/query`` through the daemon relay, presenting ONLY
+    the daemon client token — the CLI never learns the sidecar's port or bearer
+    (design §0.0 "one contract, many front-doors", #2152). Local-LLM only (AC3):
+    no ``--use-claude`` / ``--use-chatgpt`` — the sidecar rejects any non-local
+    provider.
+
+    ``--spec`` stays a fixed-function local operation (no daemon, no Lemonade).
 
     Args:
         args: Parsed command line arguments for the email command
@@ -5024,7 +5029,7 @@ def handle_email_command(args):
     log = get_logger(__name__)
 
     # --spec: generate the HTML endpoint spec and open it in a browser.
-    # No LLM, no Lemonade — short-circuit before any server check.
+    # No LLM, no Lemonade, no daemon — short-circuit before any server check.
     if getattr(args, "spec", False):
         try:
             from gaia_agent_email.spec_html import write_and_open_spec
@@ -5039,9 +5044,10 @@ def handle_email_command(args):
         print(dest)
         sys.exit(0)
 
-    # Initialize Lemonade — local LLM only. The email agent's config will
-    # also reject any non-local base_url at construction time, but the
-    # CLI manager check gives a friendlier "start Lemonade first" message.
+    # Initialize Lemonade — local LLM only. The daemon spawns the sidecar, but the
+    # sidecar's inference runs on Lemonade; this upfront check gives a friendlier
+    # "start Lemonade first" message than a mid-stream error event (AC: Lemonade
+    # down → loud actionable error).
     if not getattr(args, "no_lemonade_check", False):
         success, _ = initialize_lemonade_for_agent(
             agent="email",
@@ -5052,36 +5058,80 @@ def handle_email_command(args):
         if not success:
             sys.exit(1)
 
-    try:
-        from gaia_agent_email.cli import main as email_main
+    verbose = bool(getattr(args, "verbose", False) or getattr(args, "debug", False))
+    query = getattr(args, "query", None)
+    interactive = getattr(args, "interactive", False)
 
-        # Normalize args the agent CLI expects.
-        if not hasattr(args, "verbose"):
-            args.verbose = False
-        if not hasattr(args, "debug"):
-            args.debug = False
-        if not hasattr(args, "model"):
-            args.model = None
-        if not hasattr(args, "query"):
-            args.query = None
-        if not hasattr(args, "interactive"):
-            args.interactive = False
-
-        result = asyncio.run(email_main(args))
-        sys.exit(result)
-
-    except ImportError as e:
-        log.error(f"Failed to import Email agent: {e}")
-        print("❌ Error: Email agent components are not available")
+    if not query and not interactive:
+        # No query and not interactive — print a helpful usage hint (parity with
+        # the retired in-process CLI).
         print(
-            "Install the email agent with `pip install gaia-agent-email` "
-            '(or `pip install "amd-gaia[agents]"` for all agents).'
+            "Usage: gaia email -q '<your question>' OR gaia email -i\n"
+            "Examples:\n"
+            "  gaia email -q 'Triage my inbox'\n"
+            "  gaia email -q 'Summarize my unread emails from this week'\n"
+            "  gaia email -i\n"
         )
+        sys.exit(0)
+
+    from gaia.daemon.agent_query import ConsoleRenderer, run_query
+    from gaia.daemon.errors import DaemonError
+
+    model = getattr(args, "model", None)
+
+    try:
+        if interactive:
+            sys.exit(_email_interactive(model=model, verbose=verbose))
+        renderer = ConsoleRenderer(verbose=verbose)
+        outcome = run_query(
+            "email", query, model=model, renderer=renderer, verbose=verbose
+        )
+        sys.exit(outcome.exit_code)
+    except DaemonError as e:
+        # Daemon unreachable / relay refusal / sidecar dead → loud, actionable,
+        # no silent in-process fallback (CLAUDE.md fail-loudly rule).
+        log.error("email thin client failed: %s", e)
+        print(f"❌ {e}", file=sys.stderr)
         sys.exit(1)
-    except Exception as e:
-        log.error(f"Error running Email agent: {e}")
-        print(f"❌ Error: {e}")
-        sys.exit(1)
+
+
+def _email_interactive(*, model, verbose: bool) -> int:
+    """REPL over the daemon relay — reads queries from stdin until EOF / ``/quit``.
+
+    Maintains the transcript locally and pushes it as ``context`` on each turn
+    (the host owns the transcript; the stateless sidecar is fed the relevant
+    slice per request, spec §2.4).
+    """
+    from gaia.daemon.agent_query import ConsoleRenderer, run_query
+
+    print("Email Triage Agent — interactive. Enter a query, or '/quit' to exit.\n")
+    transcript: list = []
+    while True:
+        try:
+            query = input("email> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+        if not query:
+            continue
+        if query in ("/quit", "/exit", "/q"):
+            return 0
+        renderer = ConsoleRenderer(verbose=verbose)
+        outcome = run_query(
+            "email",
+            query,
+            context=list(transcript),
+            model=model,
+            renderer=renderer,
+            verbose=verbose,
+        )
+        # Only extend the transcript on a successful turn — a failed run must not
+        # poison the context of the next one.
+        if outcome.terminal_type == "final":
+            transcript.append({"role": "user", "content": query})
+            transcript.append(
+                {"role": "assistant", "content": outcome.final_answer or ""}
+            )
 
 
 def handle_docker_command(args):

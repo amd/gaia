@@ -1,0 +1,102 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Distributed-seams suite (V2-19 / #2180): the consolidated, deterministic
+# contract guard for the daemon<->sidecar boundaries the Agent UI v2 introduces
+# (relay vocabulary/crash coherence, the daemon->sidecar auth leg). Seams still
+# in flight (broker #2151, custody #2153, secret-file #2149, migration #2155)
+# self-skip with a named reason and flip to real assertions the moment their
+# source lands — no edit to this job needed.
+#
+# Runs on Ubuntu: every assertion here is deterministic (no Lemonade, no
+# hardware). The on-hardware golden path (UI -> daemon -> sidecar -> Lemonade)
+# lives in tests/integration/eval/test_sidecar_eval.py and runs on the
+# self-hosted strix-halo runner (see Agent Behavior E2E), not here.
+
+name: Distributed Seams
+
+on:
+  workflow_call:
+  push:
+    branches: [ main ]
+    paths:
+      - 'src/gaia/daemon/**'
+      - 'src/gaia/eval/sidecar_harness.py'
+      - 'hub/agents/python/email/gaia_agent_email/sse_translation.py'
+      - 'hub/agents/python/email/gaia_agent_email/query_routes.py'
+      - 'hub/agents/python/email/eval_baselines/**'
+      - 'tests/integration/test_distributed_seams.py'
+      - 'tests/unit/test_sidecar_harness.py'
+      - '.github/workflows/test_distributed_seams.yml'
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'src/gaia/daemon/**'
+      - 'src/gaia/eval/sidecar_harness.py'
+      - 'hub/agents/python/email/gaia_agent_email/sse_translation.py'
+      - 'hub/agents/python/email/gaia_agent_email/query_routes.py'
+      - 'hub/agents/python/email/eval_baselines/**'
+      - 'tests/integration/test_distributed_seams.py'
+      - 'tests/unit/test_sidecar_harness.py'
+      - '.github/workflows/test_distributed_seams.yml'
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  distributed-seams:
+    name: Distributed Seams (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.12']
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install dependencies
+        run: |
+          # Core [api] carries fastapi/httpx (relay + harness); the email hub
+          # package makes gaia_agent_email.sse_translation importable so the
+          # cross-seam VOCABULARY coherence assertions run for real (not skipped).
+          uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout \
+                                  pyfakefs keyring httpx respx
+          uv pip install --system -e ".[api]" -e hub/agents/python/email
+
+      - name: Run harness core unit tests
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          echo "=== Sidecar eval harness core (pure, no Lemonade) ==="
+          python -m pytest tests/unit/test_sidecar_harness.py -v --tb=short
+
+      - name: Run distributed-seams suite
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          echo "=== Distributed-seams contract suite (V2-19 / #2180) ==="
+          echo "Covered now: relay vocabulary + synthetic-error coherence, auth leg 2."
+          echo "Skipped-pending-merge: broker #2151, custody #2153, secret-file #2149, migration #2155."
+          echo ""
+          # -rs prints the skip reasons so the covered-vs-pending split is visible
+          # in the job log. Target the file directly (all its tests carry the
+          # distributed_seams marker) so the job never scans the whole tree.
+          python -m pytest tests/integration/test_distributed_seams.py \
+            -m distributed_seams -v -rs --tb=short

@@ -1188,12 +1188,16 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
             },
         };
 
+        // Dispatch to the agent pinned to THIS session (its persisted
+        // agent_type), not the globally-active one — otherwise two sessions
+        // pinned to different agents would both route to whichever was last
+        // selected in the store (#2179).
         const controller = attach
             ? api.attachToRun(sessionId, streamCallbacks)
-            : api.sendMessageStream(sessionId, messageText, streamCallbacks, undefined, undefined, activeAgentId);
+            : api.sendMessageStream(sessionId, messageText, streamCallbacks, undefined, undefined, displayedAgentId);
 
         abortRef.current = controller;
-    }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, appendCard, clearCards, activeAgentId, addNotification, isStale]);
+    }, [input, attachments, isStreaming, sessionId, session, addMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, appendCard, clearCards, displayedAgentId, addNotification, isStale]);
 
     // Keep ref in sync so event listeners always call the latest sendMessage
     sendMessageRef.current = sendMessage;

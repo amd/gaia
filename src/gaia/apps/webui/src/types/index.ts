@@ -74,6 +74,11 @@ export interface AgentInfo {
     namespaced_agent_id?: string;
     /** Agent Hub metadata — used to render rich discovery cards. */
     category?: string;
+    /**
+     * Package kind (#1716): ``agent`` | ``app`` | ``component``. Drives the Hub
+     * page's Apps · Components · Agents lanes. Undefined = treated as ``agent``.
+     */
+    type?: 'agent' | 'app' | 'component';
     tags?: string[];
     icon?: string;
     tools_count?: number;
@@ -108,8 +113,20 @@ export interface AgentInfo {
     compatibility?: AgentCompatibility;
     /** Download size of the agent package in bytes (Available cards). */
     download_size_bytes?: number;
+    /**
+     * Declared install requirements (platforms, and future hardware/model
+     * constraints). Shown in the install trust gate. Absent for local-only
+     * agents.
+     */
+    requirements?: { platforms?: string[] };
     /** Trust tier: AMD-verified, community-published, or experimental opt-in. */
     security_tier?: 'verified' | 'community' | 'experimental';
+    /**
+     * Declared permission scopes (``<domain>:<action>``, e.g. ``fs:read``)
+     * shown in the install trust gate so the user sees what an agent can do
+     * before installing. Empty/undefined = no special permissions declared.
+     */
+    permissions?: string[];
     /**
      * True when installing this agent needs an explicit native-trust opt-in —
      * a non-verified native (C++) package that runs unsandboxed. The Hub shows
@@ -449,6 +466,38 @@ export interface SystemStatus {
     init_tasks?: Array<{ name: string; status: string }>;
     /** Devices detected on this system (e.g. ['cpu', 'gpu', 'npu']). */
     detected_devices?: string[];
+}
+
+/**
+ * First-run hardware pre-flight report from GET /api/onboarding/preflight
+ * (#1726, #1727). ``compatible`` is false only when there is a hard blocker
+ * (e.g. not enough disk for the model download).
+ */
+export interface PreflightReport {
+    os: string | null;
+    detected_platform: string | null;
+    ram_gb: number | null;
+    disk_free_gb: number | null;
+    /** true/false when probed; null when hardware couldn't be verified. */
+    npu_detected: boolean | null;
+    gpu_name: string | null;
+    gpu_vram_gb: number | null;
+    lemonade_running: boolean;
+    tier: 'full' | 'standard' | 'light' | 'insufficient' | 'unknown' | string;
+    recommended_profile: string;
+    recommended_model: string;
+    required_disk_gb: number;
+    required_memory_gb: number;
+    compatible: boolean;
+    blockers: string[];
+    warnings: string[];
+}
+
+/** First-run completion state from GET /api/onboarding/status. */
+export interface OnboardingStatusResponse {
+    initialized: boolean;
+    skipped: boolean;
+    completed_at: string | null;
 }
 
 // ── File Browser Types ───────────────────────────────────────────────────

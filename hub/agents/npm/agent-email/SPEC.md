@@ -49,6 +49,13 @@ binds a send to one exact message but does not identify the caller.
   `generateSessionToken()` is exported for advanced flows. Exempt: `/health`,
   `/version`, `/v1/email/health`, `/v1/email/version`, `/v1/email/spec`,
   `/v1/email/playground`.
+  Sidecar binaries **0.6.0+** also accept `GAIA_EMAIL_SIDECAR_TOKEN_FILE` — the
+  path of a `0600`, owner-only file holding the token, so the secret never sits
+  in the process environment (readable via `/proc/<pid>/environ` / `ps eww`).
+  The GAIA daemon delivers the secret this way and treats the env channel as a
+  logged, deprecated compatibility leg for older binaries; a set path var whose
+  file is missing or empty fails sidecar startup loudly. The npm lifecycle
+  currently uses the env channel.
 - **Host allowlist** — non-loopback `Host` → **400** (DNS-rebinding).
 - **Origin rejection** — non-loopback browser `Origin` → **403** (drive-by page).
   Non-browser clients send no `Origin` and are unaffected. No CORS is ever sent.

@@ -11,11 +11,13 @@ import { FileBrowser } from './components/FileBrowser';
 import { MemoryDashboard } from './components/MemoryDashboard';
 import { ScheduleManager } from './components/ScheduleManager';
 import { SettingsPage } from './components/SettingsPage';
+import { HubPage } from './components/HubPage';
 import { MobileAccessModal } from './components/MobileAccessModal';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { UpdateIndicator } from './components/UpdateIndicator';
 import { PermissionPrompt } from './components/PermissionPrompt';
 import { NotificationCenter } from './components/NotificationCenter';
+import { OnboardingWizard } from './components/onboarding/OnboardingWizard';
 import { useChatStore } from './stores/chatStore';
 import { useNotificationStore } from './stores/notificationStore';
 import * as api from './services/api';
@@ -60,6 +62,9 @@ function AnimatedPresence({ show, children, duration = 250 }: {
 
 function App() {
     const {
+        agents,
+        activeAgentId,
+        setActiveAgentId,
         currentSessionId,
         setSessions,
         setCurrentSession,
@@ -76,6 +81,8 @@ function App() {
         setShowMemoryDashboard,
         showSchedules,
         setShowSchedules,
+        showHub,
+        setShowHub,
         sidebarOpen,
         toggleSidebar,
         setSidebarOpen,
@@ -83,6 +90,7 @@ function App() {
         setSystemStatus,
         setBackendConnected,
         setAgents,
+        setAgentsError,
         setRunningSessions,
     } = useChatStore();
     const showNotificationPanel = useNotificationStore((s) => s.showPanel);
@@ -102,14 +110,39 @@ function App() {
                 lastAgentFingerprintRef.current = fp;
                 setAgents(agents);
             }
-        } catch { /* ignore -- agents list is non-critical */ }
-    }, [setAgents]);
+            setAgentsError(null);
+        } catch (err) {
+            // Fail loudly: agent discovery powering the Hub/picker must never be
+            // a silent dead button (#2118). The error surfaces in the Hub view;
+            // the poll keeps retrying so a transient blip self-heals.
+            const msg = err instanceof Error ? err.message : 'agent discovery failed';
+            log.api.warn('[App] agent list load failed', err);
+            setAgentsError(msg);
+        }
+    }, [setAgents, setAgentsError]);
 
     useEffect(() => {
         loadAgents();
         const interval = setInterval(loadAgents, 30_000);
         return () => clearInterval(interval);
     }, [loadAgents]);
+
+    // ── First-run onboarding (#1726/#1727) ───────────────────────────
+    // Show the wizard until the ``initialized`` marker exists. Checked once on
+    // mount via a dedicated endpoint so the gate doesn't depend on the heavier
+    // system-status poll or its lemonade-fail debounce.
+    const [showOnboarding, setShowOnboarding] = useState(false);
+    useEffect(() => {
+        let cancelled = false;
+        api.getOnboardingStatus()
+            .then((s) => { if (!cancelled) setShowOnboarding(!s.initialized); })
+            .catch((err) => {
+                // Can't tell — default to NOT blocking an existing user behind a
+                // wizard on a transient error; they can re-run `gaia init`.
+                log.system.warn('Onboarding status check failed', err);
+            });
+        return () => { cancelled = true; };
+    }, []);
 
     // Mobile gateway state
     const [showMobileAccess, setShowMobileAccess] = useState(false);
@@ -474,6 +507,19 @@ function App() {
         await handleNewTask();
     }, [handleNewTask, setPendingPrompt]);
 
+    // Launch a task with an explicitly-chosen agent (from the Agent Hub). Pins
+    // the agent for the new session and leaves the Hub view. The chosen agent
+    // becomes the session's persisted agent_type via handleNewTask (#2179).
+    const handleStartAgentTask = useCallback(async (agentId: string, prompt?: string) => {
+        useChatStore.getState().setActiveAgentId(agentId);
+        setShowHub(false);
+        if (prompt) {
+            await handleNewTaskWithPrompt(prompt);
+        } else {
+            await handleNewTask();
+        }
+    }, [handleNewTask, handleNewTaskWithPrompt, setShowHub]);
+
     // Launch the Gaia Builder Agent in a new session.
     // Uses a dedicated agent_type so the session always gets the builder,
     // regardless of the user's currently selected agent.
@@ -632,7 +678,7 @@ function App() {
 
             <Sidebar
                 onNewTask={handleNewTask}
-                onHome={() => { void cleanupAbandonedDraft(currentSessionId); setCurrentSession(null); setShowSettings(false); setShowMemoryDashboard(false); setShowSchedules(false); window.history.replaceState(null, '', window.location.pathname); }}
+                onHome={() => { void cleanupAbandonedDraft(currentSessionId); setCurrentSession(null); setShowSettings(false); setShowMemoryDashboard(false); setShowSchedules(false); setShowHub(true); window.history.replaceState(null, '', window.location.pathname); }}
                 tunnelActive={tunnelActive}
                 tunnelLoading={tunnelLoading}
                 onMobileToggle={handleMobileToggle}
@@ -645,6 +691,14 @@ function App() {
                     <MemoryDashboard />
                 ) : showSchedules ? (
                     <ScheduleManager />
+                ) : showHub ? (
+                    <HubPage
+                        agents={agents}
+                        activeAgentId={activeAgentId}
+                        onSelect={setActiveAgentId}
+                        onStartChat={handleStartAgentTask}
+                        onCreateAgent={handleNewBuilderTask}
+                    />
                 ) : (
                     <>
                         {/* Connection / LLM status banner */}
@@ -699,6 +753,11 @@ function App() {
             {/* Session creation error toast */}
             {createError && (
                 <div className="toast" role="alert">{createError}</div>
+            )}
+
+            {/* First-run onboarding wizard — overlays the app until setup completes */}
+            {showOnboarding && (
+                <OnboardingWizard onComplete={() => { setShowOnboarding(false); checkSystemStatus(); }} />
             )}
         </div>
     );

@@ -35,6 +35,20 @@ The Email Triage Agent connects to your Gmail account through GAIA's connectors 
 
 There are two ways to connect Google depending on how you use GAIA.
 
+<Note>
+  **First time connecting a personal Google account?** You need to create
+  your own OAuth client in the Google Cloud Console and — crucially —
+  **enable the Gmail and Calendar APIs on that project** first, or the
+  first mailbox call 403s even though the connection looks healthy
+  ([#2116](https://github.com/amd/gaia/issues/2116)). The
+  [Google connector walkthrough](/connectors/google) covers the full,
+  verified sequence (enable APIs → add yourself as a test user → create the
+  client). The email agent also needs a per-agent grant: the Agent UI does
+  it for you, while the CLI flow needs it as the explicit Step 3 below.
+  A future release ([#2104](https://github.com/amd/gaia/issues/2104)) ships
+  an AMD-managed client that removes this bring-your-own step.
+</Note>
+
 <Tabs>
   <Tab title="Agent UI (recommended)">
     The Agent UI is the primary way to connect Google. It walks you through the OAuth consent screen and stores your credentials securely in the OS keyring.
@@ -47,12 +61,14 @@ There are two ways to connect Google depending on how you use GAIA.
        - `calendar.events` / `calendar.readonly` — read and update calendar events
     4. After approval, the browser redirects back and the connector shows as **Connected**.
 
+    The Agent UI's **Connect** / **Reconnect** flow grants the Email Triage agent these scopes for you, so no separate grant step is needed here.
+
     If you have an existing Google connection that predates GAIA v0.23, click **Reconnect** to grant the additional Gmail and Calendar scopes.
   </Tab>
   <Tab title="CLI (developer flow)">
     The CLI connector flow is fully self-contained — you do **not** need to open the Agent UI to set your OAuth client credentials. It is intended for developers and headless environments.
 
-    First, create an OAuth **Desktop-app** client in the Google Cloud Console and note its Client ID and Client Secret. See the [Google OAuth client runbook](https://github.com/amd/gaia/blob/main/docs/runbooks/google-oauth-client.md) for step-by-step instructions.
+    First, create an OAuth **Desktop-app** client in the Google Cloud Console and note its Client ID and Client Secret, **and enable the Gmail + Calendar APIs on the project** — see the [Google connector walkthrough](/connectors/google) for the full step-by-step (the [runbook](https://github.com/amd/gaia/blob/main/docs/runbooks/google-oauth-client.md) covers the AMD-internal client instead).
 
     **Step 1 — Configure the OAuth client credentials** (persists them to your OS keyring, encrypted at rest):
 
@@ -64,16 +80,38 @@ There are two ways to connect Google depending on how you use GAIA.
 
     Both flags are required together — Google rejects token requests that omit the secret even for Desktop-app PKCE clients.
 
-    **Step 2 — Sign in and authorize:**
+    **Step 2 — Sign in and authorize the mailbox scopes.** Pass the email
+    agent's scopes explicitly with `--scopes` — the bare
+    `gaia connectors connect google` requests only the default
+    `openid`/`email`/`profile` and your mailbox calls would later fail with a
+    scope error:
 
     ```bash
-    gaia connectors connect google
+    gaia connectors connect google \
+      --scopes https://www.googleapis.com/auth/gmail.modify \
+               https://www.googleapis.com/auth/gmail.send \
+               https://www.googleapis.com/auth/calendar.events \
+               https://www.googleapis.com/auth/calendar.readonly
     ```
 
-    The command prints an authorization URL. Open it in a browser, complete the OAuth consent screen, and paste the resulting code back into the terminal. The scopes requested are the same as the Agent UI flow:
+    The command prints an authorization URL. Open it in a browser, complete the OAuth consent screen (grant every requested scope), and paste the resulting code back into the terminal.
 
-    - `gmail.modify`, `gmail.send`
-    - `calendar.events`, `calendar.readonly`
+    **Step 3 — Grant the same scopes to the email agent.** Authorizing the
+    connection stores the credentials, but the email agent has no access
+    until you grant it those scopes explicitly. In the CLI flow this is a
+    **separate, required step** (the Agent UI does it for you):
+
+    ```bash
+    gaia connectors grants grant google installed:email \
+      --scopes https://www.googleapis.com/auth/gmail.modify \
+               https://www.googleapis.com/auth/gmail.send \
+               https://www.googleapis.com/auth/calendar.events \
+               https://www.googleapis.com/auth/calendar.readonly
+    ```
+
+    Skip this and the first email tool call fails with
+    `AGENT_NOT_GRANTED` — see [Troubleshooting](#troubleshooting).
+    This explicit grant step is required until [#2117](https://github.com/amd/gaia/issues/2117) lands.
 
     If you connected Google before GAIA v0.23, run `gaia connectors connect google --force` to trigger a fresh consent screen with the updated scope list.
 
@@ -425,7 +463,18 @@ contract yet.
 
 ### "AGENT_NOT_GRANTED — Email agent needs additional Google permissions"
 
-Your Google connection predates the email agent and lacks `gmail.modify`. Open Settings → Connections → Google → Reconnect to grant the missing scopes.
+The email agent hasn't been granted the mailbox scopes on your Google connection — either you connected Google without granting the agent (common on the CLI flow), or your connection predates the email agent and lacks `gmail.modify`.
+
+- **Agent UI:** open Settings → Connections → Google → **Reconnect** to grant the missing scopes.
+- **CLI:** run the explicit grant (required until [#2117](https://github.com/amd/gaia/issues/2117) lands):
+
+  ```bash
+  gaia connectors grants grant google installed:email \
+    --scopes https://www.googleapis.com/auth/gmail.modify \
+             https://www.googleapis.com/auth/gmail.send \
+             https://www.googleapis.com/auth/calendar.events \
+             https://www.googleapis.com/auth/calendar.readonly
+  ```
 
 ### "NOT_CONNECTED: microsoft is not currently connected"
 
