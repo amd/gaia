@@ -42,11 +42,18 @@ class SidecarRegistry:
         *,
         on_spawn: Optional[Callable[[str, AgentSidecarManager], None]] = None,
         on_stop: Optional[Callable[[str], None]] = None,
+        on_started: Optional[Callable[[str, AgentSidecarManager], None]] = None,
     ):
         self._specs = dict(specs)
         self.max_live = max_live
         self._on_spawn = on_spawn
         self._on_stop = on_stop
+        # Fires AFTER a fresh start() succeeds (sidecar healthy + version-gated),
+        # NOT on attach to an already-running sidecar. The daemon wires this to
+        # the OAuth forward-out on-spawn push (#2154) — forwarding must happen
+        # once the sidecar's intake route can answer, i.e. post-health, unlike
+        # ``on_spawn`` which fires at Popen for the crash-reap ledger.
+        self._on_started = on_started
         # agent_id -> (manager, per-agent lock). The registry lock guards this
         # map (atomic get-or-create); the per-agent lock serializes the slow
         # is_running-check + start() so N concurrent first ensures spawn ONE
@@ -136,10 +143,34 @@ class SidecarRegistry:
                     with self._lock:
                         self._managers[agent_id] = (manager, agent_lock)
                 manager.start()
+                self._fire_started(agent_id, manager)
                 return self._entry(agent_id, manager, include_token=True)
             finally:
                 with self._lock:
                     self._starting.discard(agent_id)
+
+    def _fire_started(self, agent_id: str, manager) -> None:
+        """Run the post-start hook (OAuth forward-out push, #2154).
+
+        Best-effort by design: the sidecar is already healthy, so a forwarding
+        hiccup must not fail an otherwise-good spawn. It is NOT silent — an
+        unexpected failure is logged loudly with context, and the sidecar's own
+        credential resolver raises a loud, actionable error at mailbox-use time
+        if no token ever arrived. The forwarder handles its own per-provider
+        grant/mint errors internally; this guard only catches the unexpected.
+        """
+        if self._on_started is None:
+            return
+        try:
+            self._on_started(agent_id, manager)
+        except Exception:  # noqa: BLE001 - never fail a healthy spawn on a hook
+            logger.warning(
+                "registry: post-start hook for '%s' raised; the sidecar is "
+                "healthy but credential forward-out may be incomplete — it will "
+                "surface loudly at mailbox-use time",
+                agent_id,
+                exc_info=True,
+            )
 
     @staticmethod
     def _manager_mode(manager) -> str:

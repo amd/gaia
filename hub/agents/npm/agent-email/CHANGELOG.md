@@ -4,6 +4,20 @@ What's new in `@amd-gaia/agent-email`, in plain language. For the technical deta
 behind any entry — API shapes, endpoints, and version semantics — see
 [`SPEC.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.5.0/hub/agents/npm/agent-email/SPEC.md).
 
+## Unreleased
+
+- **In the GAIA daemon deployment, the sidecar no longer holds long-lived OAuth
+  secrets.** Previously a sidecar read the mailbox connection straight from the
+  machine keyring. Now, under the Agent UI daemon, the daemon (the custody home)
+  owns the refresh token and forwards only **short-lived access tokens** to a new
+  sidecar intake (`POST /v1/connections/{provider}`, plus `GET`/`DELETE`) — the
+  sidecar never sees the refresh token, the daemon re-forwards on expiry and
+  withdraws on revocation, and only connectors **granted** to the email agent are
+  forwarded. Added as sidecar contract **2.5** (additive over 2.4; every 2.4
+  request/response shape is unchanged). This is **daemon-managed** — a standalone
+  integrator using this package is unaffected and keeps resolving the mailbox from
+  the local GAIA connector store exactly as before (#2154).
+
 ## 0.6.0
 
 - **Asking "what's on my calendar?" no longer digs up years-old meetings.**

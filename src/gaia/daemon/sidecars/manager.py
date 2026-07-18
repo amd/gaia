@@ -268,6 +268,14 @@ class AgentSidecarManager:
         # popen_kwargs — never clobber them.
         spawn_env = {**os.environ, **(popen_kwargs.pop("env", None) or {})}
         spawn_env[self.spec.token_env_var] = self.auth_token
+        # OAuth forward-out (#2154): when the spec declares a forwarded-mode
+        # channel, boot the sidecar reading DAEMON-forwarded access tokens
+        # instead of the machine keyring/grants store. The daemon forwards the
+        # first token once the sidecar is healthy (registry on_started hook); the
+        # sidecar's credential resolver raises loudly until then rather than
+        # silently reading a long-lived refresh token it must never hold.
+        if self.spec.forwarded_mode_env_var:
+            spawn_env[self.spec.forwarded_mode_env_var] = "1"
         try:
             self._proc = subprocess.Popen(
                 argv,

@@ -79,6 +79,7 @@ def create_app(
     on_startup: Optional[Callable[[], None]] = None,
     on_shutdown: Optional[Callable[[], None]] = None,
     registry=None,
+    forwarder=None,
 ):
     """Build the FastAPI app bound to this daemon's identity.
 
@@ -88,7 +89,10 @@ def create_app(
     on startup (once the port is bound) and deregisters on shutdown. *registry*
     (a :class:`gaia.daemon.sidecars.registry.SidecarRegistry`) mounts the
     ``/daemon/v1/agents`` control plane and the ``/v1/<agent>/*`` streaming
-    relay (#2150); ``None`` leaves both unmounted.
+    relay (#2150); ``None`` leaves both unmounted. *forwarder* (a
+    :class:`gaia.daemon.forward.ConnectionForwarder`) additionally mounts the
+    ``/daemon/v1/agents/{id}/connections`` OAuth forward-out plane (#2154); it
+    requires *registry* (it resolves the target sidecar from it).
     """
     from fastapi import Depends, FastAPI, HTTPException
 
@@ -151,5 +155,12 @@ def create_app(
         # Data plane (#2150): ANY /v1/<agent>/* relays to the agent's sidecar
         # behind the SAME client-token guard as the control plane above.
         app.include_router(build_relay_router(token, registry))
+
+        if forwarder is not None:
+            # OAuth forward-out plane (#2154): forwards granted connector access
+            # tokens OUT to the sidecar's /v1/connections intake.
+            from gaia.daemon.connections_routes import build_connections_router
+
+            app.include_router(build_connections_router(token, registry, forwarder))
 
     return app

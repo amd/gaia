@@ -78,6 +78,9 @@ def build_app():
     from gaia_agent_email.api_routes import require_caller_token
     from gaia_agent_email.api_routes import router as email_router
     from gaia_agent_email.briefing import BriefingScheduleConfig, BriefingScheduler
+    from gaia_agent_email.connection_intake_routes import (
+        router as connection_intake_router,
+    )
     from gaia_agent_email.connector_routes import router as connector_router
     from gaia_agent_email.contract import SCHEMA_VERSION
 
@@ -145,6 +148,10 @@ def build_app():
     token_gate = [Depends(require_caller_token)]
     app.include_router(email_router, dependencies=token_gate)
     app.include_router(connector_router, dependencies=token_gate)
+    # OAuth forward-out intake (#2154): the daemon POSTs short-lived access
+    # tokens here. Token-gated like every mailbox-touching router — only the
+    # daemon holding the sidecar bearer can forward a credential.
+    app.include_router(connection_intake_router, dependencies=token_gate)
     # Stateful agent surface (/v1/email/agent/*): hosts a session-scoped
     # EmailTriageAgent with memory + tool-confirmation so the Agent UI can drive
     # the full conversational agent over HTTP instead of importing it in-process.

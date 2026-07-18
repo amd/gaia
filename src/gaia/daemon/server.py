@@ -86,8 +86,9 @@ def _load_extra_specs() -> dict:
     return specs
 
 
-def _build_registry(specs):
-    """The daemon's sidecar registry, wired to the crash-reap ledger."""
+def _build_registry(specs, forwarder):
+    """The daemon's sidecar registry, wired to the crash-reap ledger and the
+    OAuth forward-out on-spawn push (#2154)."""
     from gaia.daemon.sidecars import ledger
     from gaia.daemon.sidecars.registry import SidecarRegistry
 
@@ -101,7 +102,22 @@ def _build_registry(specs):
             started_at=manager.started_at,
         )
 
-    return SidecarRegistry(specs, on_spawn=_on_spawn, on_stop=ledger.remove_entry)
+    def _on_started(agent_id, manager) -> None:
+        # Forward granted connector access tokens OUT once the sidecar is
+        # healthy (its /v1/connections intake can now answer). Best-effort per
+        # provider; the forwarder logs every failure — nothing is swallowed.
+        if not manager.base_url:
+            return
+        forwarder.forward_all(
+            agent_id, base_url=manager.base_url, bearer=manager.auth_token
+        )
+
+    return SidecarRegistry(
+        specs,
+        on_spawn=_on_spawn,
+        on_stop=ledger.remove_entry,
+        on_started=_on_started,
+    )
 
 
 def run(host: str = HOST) -> None:
@@ -116,8 +132,11 @@ def run(host: str = HOST) -> None:
     pid = os.getpid()
     started_at = time.time()
 
+    from gaia.daemon.forward import ConnectionForwarder
+
     specs = {**builtin_specs(), **_load_extra_specs()}
-    registry = _build_registry(specs)
+    forwarder = ConnectionForwarder(specs)
+    registry = _build_registry(specs, forwarder)
 
     def _register() -> None:
         # Reap identity-confirmed sidecar survivors of a previous daemon that
@@ -145,6 +164,7 @@ def run(host: str = HOST) -> None:
         on_startup=_register,
         on_shutdown=_deregister,
         registry=registry,
+        forwarder=forwarder,
     )
 
     config = uvicorn.Config(
