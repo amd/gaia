@@ -826,3 +826,90 @@ class TestModelResolution:
         registry = AgentRegistry()
         result = registry.resolve_model("nonexistent", available_models=["ModelA"])
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Builder model-preference contract (#2243)
+#
+# BuilderAgent currently hardcodes model_id="Qwen3.5-35B-A3B-GGUF" and fails
+# outright on any machine that hasn't installed that specific 35B model.
+# These tests are written against the accepted interface contract for the
+# fix, which is not yet implemented — they are expected to fail red
+# (ImportError/AttributeError on missing names), not to pass.
+# ---------------------------------------------------------------------------
+
+
+class TestBuilderModelPreferences:
+    def test_resolve_preferred_model_returns_first_match_in_order(self):
+        from gaia.agents.registry import resolve_preferred_model
+
+        preferred = ["Qwen3.5-35B-A3B-GGUF", "Gemma-4-E4B-it-GGUF", "gemma4-it-e2b-FLM"]
+        result = resolve_preferred_model(
+            preferred, available_models=["gemma4-it-e2b-FLM", "Gemma-4-E4B-it-GGUF"]
+        )
+        assert result == "Gemma-4-E4B-it-GGUF"
+
+    def test_resolve_preferred_model_returns_none_when_no_match(self):
+        from gaia.agents.registry import resolve_preferred_model
+
+        result = resolve_preferred_model(
+            ["Qwen3.5-35B-A3B-GGUF"], available_models=["Something-Else"]
+        )
+        assert result is None
+
+    def test_resolve_preferred_model_returns_none_for_empty_available(self):
+        from gaia.agents.registry import resolve_preferred_model
+
+        result = resolve_preferred_model(
+            ["Qwen3.5-35B-A3B-GGUF", "gemma4-it-e2b-FLM"], available_models=[]
+        )
+        assert result is None
+
+    def test_builder_preferred_models_constant_order(self):
+        from gaia.agents.registry import BUILDER_PREFERRED_MODELS
+
+        assert BUILDER_PREFERRED_MODELS == [
+            "Qwen3.5-35B-A3B-GGUF",
+            "Gemma-4-E4B-it-GGUF",
+            "gemma4-it-e2b-FLM",
+        ]
+
+    def test_get_lemonade_models_none_means_unreachable_not_empty(self):
+        """None (unreachable) and [] (reachable, zero models) are distinct —
+        callers must be able to tell them apart."""
+        from gaia.agents.registry import get_lemonade_models
+
+        mock_response = SimpleNamespace(
+            status_code=200, json=lambda: {"data": []}
+        )
+        with patch("requests.get", return_value=mock_response):
+            reachable_empty = get_lemonade_models("http://localhost:13305/api/v1")
+
+        with patch("requests.get", side_effect=ConnectionError("refused")):
+            unreachable = get_lemonade_models("http://localhost:13305/api/v1")
+
+        assert reachable_empty == []
+        assert unreachable is None
+        assert reachable_empty is not unreachable
+
+    def test_builder_registration_models_is_builder_preferred_models(self):
+        """The real builtin 'builder' registration must carry the new
+        preference list, not the old empty models=[] placeholder."""
+        from gaia.agents.registry import BUILDER_PREFERRED_MODELS
+
+        registry = AgentRegistry()
+        registry.discover()
+        reg = registry.get("builder")
+        assert reg is not None
+        assert reg.models == BUILDER_PREFERRED_MODELS
+        assert reg.models != []
+
+    def test_builder_registration_resolves_to_installed_fallback_model(self):
+        """resolve_model('builder', ...) picks the FLM fallback when that's
+        the only preferred model actually installed."""
+        registry = AgentRegistry()
+        registry.discover()
+        resolved = registry.resolve_model(
+            "builder", available_models=["gemma4-it-e2b-FLM"]
+        )
+        assert resolved == "gemma4-it-e2b-FLM"
