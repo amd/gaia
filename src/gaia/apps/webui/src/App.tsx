@@ -11,6 +11,7 @@ import { FileBrowser } from './components/FileBrowser';
 import { MemoryDashboard } from './components/MemoryDashboard';
 import { ScheduleManager } from './components/ScheduleManager';
 import { SettingsPage } from './components/SettingsPage';
+import { AgentHubView } from './components/AgentHubView';
 import { MobileAccessModal } from './components/MobileAccessModal';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { UpdateIndicator } from './components/UpdateIndicator';
@@ -75,6 +76,8 @@ function App() {
         setShowMemoryDashboard,
         showSchedules,
         setShowSchedules,
+        showHub,
+        setShowHub,
         sidebarOpen,
         toggleSidebar,
         setSidebarOpen,
@@ -82,6 +85,7 @@ function App() {
         setSystemStatus,
         setBackendConnected,
         setAgents,
+        setAgentsError,
         setRunningSessions,
     } = useChatStore();
     const showNotificationPanel = useNotificationStore((s) => s.showPanel);
@@ -101,8 +105,16 @@ function App() {
                 lastAgentFingerprintRef.current = fp;
                 setAgents(agents);
             }
-        } catch { /* ignore -- agents list is non-critical */ }
-    }, [setAgents]);
+            setAgentsError(null);
+        } catch (err) {
+            // Fail loudly: agent discovery powering the Hub/picker must never be
+            // a silent dead button (#2118). The error surfaces in the Hub view;
+            // the poll keeps retrying so a transient blip self-heals.
+            const msg = err instanceof Error ? err.message : 'agent discovery failed';
+            log.api.warn('[App] agent list load failed', err);
+            setAgentsError(msg);
+        }
+    }, [setAgents, setAgentsError]);
 
     useEffect(() => {
         loadAgents();
@@ -452,6 +464,19 @@ function App() {
         await handleNewTask();
     }, [handleNewTask, setPendingPrompt]);
 
+    // Launch a task with an explicitly-chosen agent (from the Agent Hub). Pins
+    // the agent for the new session and leaves the Hub view. The chosen agent
+    // becomes the session's persisted agent_type via handleNewTask (#2179).
+    const handleStartAgentTask = useCallback(async (agentId: string, prompt?: string) => {
+        useChatStore.getState().setActiveAgentId(agentId);
+        setShowHub(false);
+        if (prompt) {
+            await handleNewTaskWithPrompt(prompt);
+        } else {
+            await handleNewTask();
+        }
+    }, [handleNewTask, handleNewTaskWithPrompt, setShowHub]);
+
     // Launch the Gaia Builder Agent in a new session.
     // Uses a dedicated agent_type so the session always gets the builder,
     // regardless of the user's currently selected agent.
@@ -607,7 +632,7 @@ function App() {
 
             <Sidebar
                 onNewTask={handleNewTask}
-                onHome={() => { setCurrentSession(null); setShowSettings(false); setShowMemoryDashboard(false); setShowSchedules(false); window.history.replaceState(null, '', window.location.pathname); }}
+                onHome={() => { setCurrentSession(null); setShowSettings(false); setShowMemoryDashboard(false); setShowSchedules(false); setShowHub(true); window.history.replaceState(null, '', window.location.pathname); }}
                 tunnelActive={tunnelActive}
                 tunnelLoading={tunnelLoading}
                 onMobileToggle={handleMobileToggle}
@@ -620,6 +645,12 @@ function App() {
                     <MemoryDashboard />
                 ) : showSchedules ? (
                     <ScheduleManager />
+                ) : showHub ? (
+                    <AgentHubView
+                        onStartChat={handleStartAgentTask}
+                        onCreateAgent={handleNewBuilderTask}
+                        onRetryAgents={loadAgents}
+                    />
                 ) : (
                     <>
                         {/* Connection / LLM status banner */}
