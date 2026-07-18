@@ -212,9 +212,11 @@ def _classify_chat_exception(exc: BaseException):
     # Model genuinely not installed (Lemonade HTTP 404 / model_not_found) — the
     # model was never pulled, so this is NOT retryable and NOT the same as
     # "not loaded". Naming the missing model is actionable (#2243).
+    # "was not found" is anchored to a nearby "model" token so an unrelated
+    # 404 ("file X was not found") isn't mislabelled as a missing model.
     if (
         "model_not_found" in text
-        or "was not found" in text
+        or _re.search(r"\bmodel\b[^\n]{0,80}?\bwas not found\b", text)
         or ("model not found" in text and "not loaded" not in text)
     ):
         m = _re.search(r"[Mm]odel ['\"]([^'\"]+)['\"]", raw)

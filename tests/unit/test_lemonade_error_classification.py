@@ -179,6 +179,12 @@ def test_ui_classifier_model_not_found_type_without_quoted_name() -> None:
     assert classified.model_id is None
 
 
+def test_unrelated_not_found_error_is_not_a_missing_model() -> None:
+    """A non-model 404 must not be mislabelled "model isn't installed"."""
+    exc = RuntimeError("HTTP 404: File '/tmp/report.pdf' was not found.")
+    assert _classify_chat_exception(exc) is None
+
+
 def test_model_not_loaded_still_routes_to_not_loaded_not_found() -> None:
     """ "no model loaded" must stay the retryable not-loaded case, not 404 not-found."""
     exc = RuntimeError("model_not_loaded: no model loaded")
