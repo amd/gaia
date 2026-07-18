@@ -6,6 +6,13 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## 0.6.0
 
+- **The launch secret no longer sits in the sidecar's environment.** The
+  per-session auth token used to be handed to the sidecar as a bare environment
+  variable, visible to any local process that can inspect process environments.
+  A 0.6.0+ sidecar spawned by the GAIA daemon now receives it as an owner-only
+  (`0600`) file that is removed when the sidecar stops; the env channel
+  (`GAIA_EMAIL_SIDECAR_TOKEN`) keeps working for older binaries and for the npm
+  lifecycle, exactly as before.
 - **Asking "what's on my calendar?" no longer digs up years-old meetings.**
   Listing calendar events without a date range used to return the oldest
   instances of recurring series — events from years ago narrated as if they

@@ -245,7 +245,10 @@ identify who is calling.
 - **Per-session bearer token.** Every `/v1/email/*` request to the sidecar must
   carry `Authorization: Bearer <token>` or it is rejected with **HTTP 401**. The
   token is a cryptographically-random per-session secret the spawning parent hands
-  to the sidecar over the private `GAIA_EMAIL_SIDECAR_TOKEN` env channel.
+  to the sidecar — preferably as a `0600` owner-only file whose path arrives in
+  `GAIA_EMAIL_SIDECAR_TOKEN_FILE` (the GAIA daemon does this for 0.6.0+ binaries,
+  so the secret never sits in the process environment), or directly in the
+  `GAIA_EMAIL_SIDECAR_TOKEN` env var (npm lifecycle and older binaries).
 - **Host / Origin allowlist.** A non-loopback `Host` header → **HTTP 400**
   (DNS-rebinding); a non-loopback browser `Origin` → **HTTP 403** (drive-by web
   page). No permissive CORS is ever sent.
@@ -264,9 +267,12 @@ How this maps to the entry points above:
   after the backend exits; stop it with `gaia daemon stop-agent email` or
   `gaia daemon stop`.
 - **Direct-to-sidecar for local dev** — if you launch the frozen binary yourself,
-  set `GAIA_EMAIL_SIDECAR_TOKEN` and send the matching bearer header. Running it
-  **without** the env var disables the token check (local development only, logged
-  loudly) — the Host/Origin controls still apply.
+  set `GAIA_EMAIL_SIDECAR_TOKEN` (or point `GAIA_EMAIL_SIDECAR_TOKEN_FILE` at a
+  file holding the token) and send the matching bearer header. Running it with
+  **neither** variable disables the token check (local development only, logged
+  loudly) — the Host/Origin controls still apply. A set
+  `GAIA_EMAIL_SIDECAR_TOKEN_FILE` whose file is missing or empty fails startup
+  loudly rather than silently disabling auth.
 
 ```ts
 // npm path — the bound client carries the token for you.

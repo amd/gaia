@@ -72,6 +72,9 @@ class FetchResult:
     sha256: str
     url: str
     cached: bool
+    # Installed binary version (hub sentinel / lock agentVersion). The manager
+    # negotiates secret delivery off this BEFORE spawn (#2149).
+    version: Optional[str] = None
 
 
 def _join_url(base: str, name: str) -> str:
@@ -116,7 +119,14 @@ def _hub_installed_binary(cache: Path, platform_key: str) -> Optional[FetchResul
         binary_path,
         sentinel.version,
     )
-    return FetchResult(binary_path, platform_key, actual, url="", cached=True)
+    return FetchResult(
+        binary_path,
+        platform_key,
+        actual,
+        url="",
+        cached=True,
+        version=sentinel.version or None,
+    )
 
 
 def fetch_binary(
@@ -173,7 +183,14 @@ def fetch_binary(
         existing = file_sha256(binary_path)
         if existing and existing.lower() == entry.sha256.lower():
             logger.info("sidecar fetch: cache hit %s matches lock sha256", binary_path)
-            return FetchResult(binary_path, key, existing, url, cached=True)
+            return FetchResult(
+                binary_path,
+                key,
+                existing,
+                url,
+                cached=True,
+                version=lock.agent_version or None,
+            )
 
     if session is None:
         import requests
@@ -206,4 +223,11 @@ def fetch_binary(
             binary_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
         )
     logger.info("sidecar fetch: installed verified binary -> %s", binary_path)
-    return FetchResult(binary_path, key, sha, url, cached=False)
+    return FetchResult(
+        binary_path,
+        key,
+        sha,
+        url,
+        cached=False,
+        version=lock.agent_version or None,
+    )
