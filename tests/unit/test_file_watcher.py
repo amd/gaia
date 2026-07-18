@@ -29,7 +29,7 @@ class TestFileHashUtilities:
             temp_path = f.name
 
         try:
-            result = compute_file_hash(temp_path)
+            result = compute_file_hash(temp_path, allowed_dir=tempfile.gettempdir())
             assert result is not None
             # SHA-256 produces 64 hex characters
             assert len(result) == 64
@@ -44,8 +44,9 @@ class TestFileHashUtilities:
             temp_path = f.name
 
         try:
-            hash1 = compute_file_hash(temp_path)
-            hash2 = compute_file_hash(temp_path)
+            tmp_root = tempfile.gettempdir()
+            hash1 = compute_file_hash(temp_path, allowed_dir=tmp_root)
+            hash2 = compute_file_hash(temp_path, allowed_dir=tmp_root)
             assert hash1 == hash2
         finally:
             Path(temp_path).unlink()
@@ -61,8 +62,9 @@ class TestFileHashUtilities:
             path2 = f2.name
 
         try:
-            hash1 = compute_file_hash(path1)
-            hash2 = compute_file_hash(path2)
+            tmp_root = tempfile.gettempdir()
+            hash1 = compute_file_hash(path1, allowed_dir=tmp_root)
+            hash2 = compute_file_hash(path2, allowed_dir=tmp_root)
             assert hash1 != hash2
         finally:
             Path(path1).unlink()
@@ -70,7 +72,9 @@ class TestFileHashUtilities:
 
     def test_compute_file_hash_nonexistent_file(self):
         """Test that nonexistent file returns None."""
-        result = compute_file_hash("/nonexistent/path/file.txt")
+        result = compute_file_hash(
+            "/nonexistent/path/file.txt", allowed_dir="/nonexistent/path"
+        )
         assert result is None
 
     def test_compute_file_hash_with_path_object(self):
@@ -80,11 +84,34 @@ class TestFileHashUtilities:
             temp_path = Path(f.name)
 
         try:
-            result = compute_file_hash(temp_path)
+            result = compute_file_hash(temp_path, allowed_dir=tempfile.gettempdir())
             assert result is not None
             assert len(result) == 64
         finally:
             temp_path.unlink()
+
+    def test_compute_file_hash_requires_allowed_dir(self, tmp_path):
+        """Omitting allowed_dir must fail loudly, not hash an arbitrary path.
+
+        The containment check used to be opt-in (``allowed_dir=None`` skipped
+        it entirely), so a caller could hash any file on disk. The guard sits
+        outside the try/except because that handler catches ValueError and
+        would otherwise swallow it into a ``None`` return.
+        """
+        f = tmp_path / "form.pdf"
+        f.write_bytes(b"intake form bytes")
+
+        with pytest.raises(ValueError, match="requires allowed_dir"):
+            compute_file_hash(str(f))
+
+        # Explicitly passing None is the same mistake, not a bypass.
+        with pytest.raises(ValueError, match="requires allowed_dir"):
+            compute_file_hash(str(f), allowed_dir=None)
+
+    def test_compute_file_hash_unguarded_call_cannot_read_etc_passwd(self):
+        """The pre-fix traversal capability must stay closed."""
+        with pytest.raises(ValueError, match="requires allowed_dir"):
+            compute_file_hash("/etc/passwd")
 
     def test_compute_file_hash_allowed_dir_rejects_traversal(self, tmp_path):
         """A path outside allowed_dir must be rejected, including via '../'."""
@@ -143,7 +170,7 @@ class TestFileHashUtilities:
             temp_path = f.name
 
         try:
-            file_hash = compute_file_hash(temp_path)
+            file_hash = compute_file_hash(temp_path, allowed_dir=tempfile.gettempdir())
             bytes_hash = compute_bytes_hash(content)
             assert file_hash == bytes_hash
         finally:
@@ -159,11 +186,12 @@ class TestFileHashUtilities:
             temp_path = f.name
 
         try:
-            result = compute_file_hash(temp_path)
+            tmp_root = tempfile.gettempdir()
+            result = compute_file_hash(temp_path, allowed_dir=tmp_root)
             assert result is not None
             assert len(result) == 64
             # Verify consistency
-            assert result == compute_file_hash(temp_path)
+            assert result == compute_file_hash(temp_path, allowed_dir=tmp_root)
         finally:
             Path(temp_path).unlink()
 
