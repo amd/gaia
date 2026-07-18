@@ -1980,7 +1980,9 @@ def build_parser():
     s_add_what = s_add.add_mutually_exclusive_group(required=True)
     s_add_what.add_argument("--prompt", help="One-shot prompt to run on each fire")
     s_add_what.add_argument(
-        "--skill", help="Skill to run (pending skill-format support, #888)"
+        "--skill",
+        help="Skill to run — not supported yet (blocked on #888); "
+        "rejected at add time. Use --prompt instead.",
     )
     s_add.add_argument(
         "--sink",
@@ -2428,37 +2430,6 @@ Examples:
         default=1,
         metavar="N",
         help="Run each scenario N times for reliability measurement (default: 1)",
-    )
-    # NOTE: --reset-between-scenarios / --lemonade-model / --lemonade-ctx-size
-    # are NOT YET IMPLEMENTED. They are accepted by the parser so a future
-    # commit can wire them into AgentEvalRunner without changing the user-
-    # facing surface, but passing a non-None value today raises
-    # NotImplementedError (see the eval-agent handler). Driver scripts that
-    # want clean-state reliability runs should restart Lemonade/Agent UI
-    # externally between iterations until this lands.
-    agent_eval_parser.add_argument(
-        "--reset-between-scenarios",
-        choices=["fast", "full"],
-        default=None,
-        metavar="MODE",
-        help="[NOT YET IMPLEMENTED] Will reset services between scenarios "
-        "for clean-state reliability testing. Passing this flag today "
-        "raises NotImplementedError; restart Lemonade / Agent UI from a "
-        "driver script in the meantime.",
-    )
-    agent_eval_parser.add_argument(
-        "--lemonade-model",
-        metavar="MODEL",
-        help="[NOT YET IMPLEMENTED] Will pair with --reset-between-scenarios "
-        "to reload a specific Lemonade model between scenarios. Today the "
-        "Lemonade model is whatever the running server has loaded.",
-    )
-    agent_eval_parser.add_argument(
-        "--lemonade-ctx-size",
-        type=int,
-        metavar="SIZE",
-        help="[NOT YET IMPLEMENTED] Will pair with --lemonade-model to "
-        "reload the model at this ctx size between scenarios.",
     )
     agent_eval_parser.add_argument(
         "--corpus-dir",
@@ -3120,6 +3091,20 @@ def _handle_schedule(args):
     store = TomlScheduleStore()
 
     if action == "add":
+        # --skill schedules would register fine but raise on every fire
+        # (skill-format resolution is blocked on #888) — reject up front.
+        if getattr(args, "skill", None):
+            print(
+                f"❌ Cannot add schedule {args.name!r}: --skill is not supported yet "
+                "(skill-format resolution is blocked on #888), so a skill-backed "
+                "schedule would never produce output.\n"
+                "Use --prompt instead, e.g.:\n"
+                f'  gaia schedule add --name {args.name} --cron "{args.cron}" '
+                '--prompt "<text>"\n'
+                "Track progress: https://github.com/amd/gaia/issues/888",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         sink_args = {}
         if getattr(args, "to", None):
             sink_args["to"] = args.to
@@ -4315,25 +4300,6 @@ Let me know your answer!
                     sys.exit(1)
                 # compare handled; no further action
 
-            # --reset-between-scenarios / --lemonade-model / --lemonade-ctx-size
-            # are accepted by the parser but not yet wired into
-            # AgentEvalRunner. Fail loudly rather than silently no-op.
-            reset = getattr(args, "reset_between_scenarios", None)
-            lemonade_model = getattr(args, "lemonade_model", None)
-            lemonade_ctx = getattr(args, "lemonade_ctx_size", None)
-            if (
-                reset is not None
-                or lemonade_model is not None
-                or lemonade_ctx is not None
-            ):
-                raise NotImplementedError(
-                    "--reset-between-scenarios / --lemonade-model / "
-                    "--lemonade-ctx-size are reserved for a future commit "
-                    "and are not yet wired into AgentEvalRunner. Restart "
-                    "Lemonade and the Agent UI from your driver script "
-                    "between iterations to get the same effect."
-                )
-
             iterations = getattr(args, "iterations", 1)
             fix_mode = getattr(args, "fix", False)
 
@@ -5277,22 +5243,11 @@ def handle_api_command(args):
             sys.exit(1)
 
     elif args.subcommand == "status":
-        # Check if server is running
-        import socket
+        # /health check that verifies the responder is actually the GAIA API
+        # server — a bare socket probe can't tell it from any process on the port.
+        from gaia.api.app import check_status
 
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            result = sock.connect_ex((args.host, args.port))
-            sock.close()
-
-            if result == 0:
-                print(f"✅ API server is running at http://{args.host}:{args.port}")
-            else:
-                print(f"❌ API server is not running at http://{args.host}:{args.port}")
-                sys.exit(1)
-        except Exception as e:
-            print(f"❌ Error checking server status: {e}")
-            sys.exit(1)
+        check_status(args.host, args.port)
 
     elif args.subcommand == "stop":
         print(f"🛑 Stopping API server on port {args.port}...")
