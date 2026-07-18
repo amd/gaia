@@ -16,19 +16,58 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 logger = logging.getLogger(__name__)
 
 
-def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
+def _extract_balanced_json(
+    text: str, start: int, open_ch: str, close_ch: str
+) -> Optional[Union[Dict[str, Any], List[Any]]]:
+    """Parse the balanced JSON value opening at ``text[start]``.
+
+    Counts only the outer bracket type (inner brackets of the same type are
+    themselves balanced), ignoring brackets inside JSON string values and
+    handling escaped characters within them.
     """
-    Extract a JSON object from text that may contain surrounding content.
+    depth = 0
+    in_string = False
+    escaped = False
+    for i, char in enumerate(text[start:], start):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == open_ch:
+            depth += 1
+        elif char == close_ch:
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(  # type: ignore[no-any-return]
+                        text[start : i + 1]
+                    )
+                except json.JSONDecodeError as e:
+                    logger.debug(f"JSON decode error: {e}")
+                    return None
+    logger.debug(f"Failed to find matching {close_ch!r} in text: {text[:200]}...")
+    return None
+
+
+def extract_json_from_text(text: str) -> Optional[Union[Dict[str, Any], List[Any]]]:
+    """
+    Extract a JSON object or array from text that may contain surrounding content.
 
     LLMs often return JSON embedded in explanatory text. This function
-    handles nested JSON objects correctly using balanced brace counting,
+    handles nested JSON correctly using balanced bracket counting,
     unlike simple regex approaches.
 
     Args:
-        text: Text potentially containing a JSON object.
+        text: Text potentially containing a JSON object or array.
 
     Returns:
-        Parsed JSON as a dict, or None if no valid JSON found.
+        Parsed JSON as a dict or list, or None if no valid JSON found.
 
     Example:
         from gaia.utils import extract_json_from_text
@@ -50,45 +89,22 @@ def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
     except json.JSONDecodeError:
         pass
 
-    # Look for JSON object in response (handles nested braces properly)
-    try:
-        # Find first {
-        start = text.find("{")
-        if start == -1:
-            logger.debug("No JSON object found in text")
-            return None
-
-        # Count braces to find matching close, ignoring braces inside JSON
-        # string values (and handling escaped characters within them) so a "}"
-        # in a string does not terminate the object prematurely.
-        brace_count = 0
-        in_string = False
-        escaped = False
-        for i, char in enumerate(text[start:], start):
-            if in_string:
-                if escaped:
-                    escaped = False
-                elif char == "\\":
-                    escaped = True
-                elif char == '"':
-                    in_string = False
-                continue
-            if char == '"':
-                in_string = True
-            elif char == "{":
-                brace_count += 1
-            elif char == "}":
-                brace_count -= 1
-                if brace_count == 0:
-                    json_str = text[start : i + 1]
-                    return json.loads(json_str)  # type: ignore[no-any-return]
-
-        logger.debug(f"Failed to find matching brace in text: {text[:200]}...")
+    # Look for a JSON object or array in the response, trying whichever
+    # opens first (a top-level array's first "{" is an inner row object —
+    # scanning only "{" would silently drop every row after the first).
+    candidates = sorted(
+        (text.find(open_ch), open_ch, close_ch)
+        for open_ch, close_ch in (("{", "}"), ("[", "]"))
+        if text.find(open_ch) != -1
+    )
+    if not candidates:
+        logger.debug("No JSON object or array found in text")
         return None
-
-    except json.JSONDecodeError as e:
-        logger.debug(f"JSON decode error: {e}")
-        return None
+    for start, open_ch, close_ch in candidates:
+        parsed = _extract_balanced_json(text, start, open_ch, close_ch)
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def pdf_page_to_image(
