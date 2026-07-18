@@ -129,6 +129,9 @@ setup(
             "fastapi>=0.115.0",
             "uvicorn>=0.32.0",
             "python-multipart>=0.0.9",
+            # Async client for the /v1/<agent>/query daemon relay (#2178): the
+            # API server streams SSE from the daemon unbuffered via httpx.
+            "httpx>=0.27.0",
             # [api] auto-mounts the gaia-agent-email REST router (openai_server.py),
             # whose import chain reaches gaia.connectors.store -> `import keyring`
             # at module load AND at request time (connected_mailbox_providers).

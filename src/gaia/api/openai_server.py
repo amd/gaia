@@ -164,7 +164,14 @@ async def log_raw_requests(request: Request, call_next):
 
         # DON'T read body for streaming endpoints - it breaks ASGI message flow
         # Per FastAPI docs: "Never read the request body in middleware for streaming responses"
-        if request.url.path == "/v1/chat/completions" and request.method == "POST":
+        # Covers /v1/chat/completions AND the agent /query relay (#2178), whose
+        # POST bodies feed a StreamingResponse.
+        _p = request.url.path
+        _is_streaming_post = request.method == "POST" and (
+            _p == "/v1/chat/completions"
+            or (_p.startswith("/v1/") and _p.endswith("/query"))
+        )
+        if _is_streaming_post:
             logger.debug(
                 "Body: [Skipped for streaming endpoint - prevents ASGI message flow disruption]"
             )
@@ -616,3 +623,14 @@ async def health_check():
         ```
     """
     return {"status": "ok", "service": "gaia-api"}
+
+
+# Agent /query surface (#2178 / V2-17): POST /v1/<agent>/query streams the
+# agentic loop through the always-on daemon relay (#2150). Mounted LAST so the
+# OpenAI-compatible routes (/v1/chat/completions, /v1/models) declared above win
+# on match order; the catch-all only claims /v1/<agent>/<path> pairs. The API
+# server stays a thin client — it forwards only the daemon client token, never a
+# sidecar bearer. Gated by GAIA_API_KEY (§0.33), independent of the email wheel.
+from .agent_proxy import build_agent_proxy_router  # noqa: E402
+
+app.include_router(build_agent_proxy_router())
