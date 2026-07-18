@@ -63,7 +63,11 @@ const backendInstaller = require("./services/backend-installer.cjs");
 const installerProgressDialog = require("./services/backend-installer-progress-dialog.cjs");
 const autoUpdater = require("./services/auto-updater.cjs");
 const agentSeeder = require("./services/agent-seeder.cjs");
-const { parseDeepLink, extractDeepLinkFromArgv } = require("./services/deep-link.cjs");
+const {
+  parseDeepLink,
+  extractDeepLinkFromArgv,
+  dispatchDeepLink,
+} = require("./services/deep-link.cjs");
 
 // ── F7: Ozone hint (issue #782) ─────────────────────────────────────────────
 // Electron-recommended switch for distro-agnostic Linux behaviour: picks
@@ -801,35 +805,60 @@ function handleDeepLink(rawUrl) {
     return;
   }
 
-  void dispatchDeepLink(command);
+  void runDeepLink(command);
 }
 
-/** Act on a parsed deep-link command. */
-async function dispatchDeepLink(command) {
-  // Surface the window so the user sees install progress.
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    if (!mainWindow.isVisible()) mainWindow.show();
-    mainWindow.focus();
-  }
+/**
+ * Explicit per-agent confirmation for a web-triggered install. This is the
+ * security gate: the user must confirm the SPECIFIC agent before any download
+ * happens (issue #2196 review). Defaults to the safe (Cancel) option.
+ * @returns {Promise<boolean>}
+ */
+async function confirmDeepLinkInstall(command) {
+  const choice = await dialog.showMessageBox(
+    mainWindow && !mainWindow.isDestroyed() ? mainWindow : null,
+    {
+      type: "question",
+      buttons: ["Install", "Cancel"],
+      defaultId: 1, // Enter selects the safe option
+      cancelId: 1,
+      title: "Install agent from the web?",
+      message: `Install the "${command.agentId}" agent?`,
+      detail:
+        `A website asked GAIA to install "${command.agentId}". ` +
+        "Only continue if you trust this source — installing downloads and " +
+        "runs third-party code on your machine.",
+      noLink: true,
+    }
+  );
+  return !!choice && choice.response === 0;
+}
 
-  if (command.action === "install") {
-    console.log(`[main] Deep-link install request: ${command.agentId}`);
+/** Wire the injected deep-link dispatcher to this process's runtime effects. */
+async function runDeepLink(command) {
+  console.log(`[main] Deep-link install request: ${command.agentId}`);
+  try {
+    await dispatchDeepLink(command, {
+      confirm: confirmDeepLinkInstall,
+      installAgent: (agentId) => agentProcessManager.installAgent(agentId),
+      focusWindow: () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          if (mainWindow.isMinimized()) mainWindow.restore();
+          if (!mainWindow.isVisible()) mainWindow.show();
+          mainWindow.focus();
+        }
+      },
+      logger: { log: console.log.bind(console), error: console.error.bind(console) },
+    });
+  } catch (err) {
+    const message = err && err.message ? err.message : String(err);
+    console.error(
+      `[main] Deep-link install of "${command.agentId}" failed: ${message}`
+    );
     try {
-      await agentProcessManager.installAgent(command.agentId);
-    } catch (err) {
-      const message = err && err.message ? err.message : String(err);
-      console.error(
-        `[main] Deep-link install of "${command.agentId}" failed: ${message}`
-      );
-      try {
-        dialog.showErrorBox(
-          `Could not install "${command.agentId}"`,
-          message
-        );
-      } catch {
-        /* best-effort */
-      }
+      dialog.showErrorBox(`Could not install "${command.agentId}"`, message);
+    } catch {
+      /* best-effort */
     }
   }
 }

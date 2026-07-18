@@ -98,4 +98,52 @@ function extractDeepLinkFromArgv(argv) {
   return null;
 }
 
-module.exports = { parseDeepLink, extractDeepLinkFromArgv };
+/**
+ * Act on a parsed deep-link command, with every Electron/runtime effect
+ * injected so the security-critical control flow is unit-testable.
+ *
+ * SECURITY (issue #2196 review): a `gaia://hub/install/<id>` link comes from an
+ * untrusted web page, so the install MUST be gated behind an explicit per-agent
+ * confirmation — the same trust bar the in-app install enforces (#2201). A bare
+ * OS "Open GAIA?" prompt is NOT consent to download and run a specific agent.
+ * If `confirm` does not return true, no install is attempted.
+ *
+ * @param {{ action: string, agentId: string }} command
+ * @param {{
+ *   confirm: (command: {action: string, agentId: string}) => Promise<boolean>,
+ *   installAgent: (agentId: string) => Promise<any>,
+ *   focusWindow?: () => void,
+ *   logger?: { log?: (...a: any[]) => void, error?: (...a: any[]) => void },
+ * }} deps
+ * @returns {Promise<{ installed: boolean, reason?: string }>}
+ */
+async function dispatchDeepLink(command, deps) {
+  const { confirm, installAgent, focusWindow, logger } = deps || {};
+  const log = (logger && logger.log) || (() => {});
+
+  if (!command || command.action !== "install") {
+    throw new Error(
+      `Unsupported deep-link action "${command && command.action}".`
+    );
+  }
+  if (typeof confirm !== "function" || typeof installAgent !== "function") {
+    throw new Error(
+      "dispatchDeepLink requires confirm() and installAgent() dependencies"
+    );
+  }
+
+  // Surface the app first so the confirmation dialog is clearly GAIA's.
+  if (typeof focusWindow === "function") focusWindow();
+
+  const approved = await confirm(command);
+  if (approved !== true) {
+    log(`[deep-link] User declined install of "${command.agentId}"`);
+    return { installed: false, reason: "declined" };
+  }
+
+  log(`[deep-link] Confirmed — installing "${command.agentId}"`);
+  await installAgent(command.agentId);
+  return { installed: true };
+}
+
+module.exports = { parseDeepLink, extractDeepLinkFromArgv, dispatchDeepLink };

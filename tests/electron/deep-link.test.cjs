@@ -12,6 +12,7 @@
 const {
   parseDeepLink,
   extractDeepLinkFromArgv,
+  dispatchDeepLink,
 } = require("../../src/gaia/apps/webui/services/deep-link.cjs");
 
 describe("parseDeepLink()", () => {
@@ -98,5 +99,88 @@ describe("extractDeepLinkFromArgv()", () => {
   test("returns null for a non-array input", () => {
     expect(extractDeepLinkFromArgv(undefined)).toBeNull();
     expect(extractDeepLinkFromArgv(null)).toBeNull();
+  });
+});
+
+describe("dispatchDeepLink() — install confirmation gate (security)", () => {
+  const command = { action: "install", agentId: "summarize" };
+
+  test("installs only AFTER the user confirms the specific agent", async () => {
+    const confirm = jest.fn().mockResolvedValue(true);
+    const installAgent = jest.fn().mockResolvedValue({ status: "completed" });
+    const focusWindow = jest.fn();
+
+    const result = await dispatchDeepLink(command, {
+      confirm,
+      installAgent,
+      focusWindow,
+    });
+
+    // Confirmation happened before install, and for THIS agent.
+    expect(confirm).toHaveBeenCalledWith(command);
+    expect(installAgent).toHaveBeenCalledWith("summarize");
+    expect(confirm.mock.invocationCallOrder[0]).toBeLessThan(
+      installAgent.mock.invocationCallOrder[0]
+    );
+    expect(result).toEqual({ installed: true });
+  });
+
+  test("does NOT install when the user declines — the core security guarantee", async () => {
+    const confirm = jest.fn().mockResolvedValue(false);
+    const installAgent = jest.fn();
+
+    const result = await dispatchDeepLink(command, { confirm, installAgent });
+
+    expect(installAgent).not.toHaveBeenCalled();
+    expect(result).toEqual({ installed: false, reason: "declined" });
+  });
+
+  test("treats a non-true confirm result as a decline (no install)", async () => {
+    const installAgent = jest.fn();
+    // A dialog that resolves undefined/null (e.g. dismissed) must not install.
+    await dispatchDeepLink(command, {
+      confirm: jest.fn().mockResolvedValue(undefined),
+      installAgent,
+    });
+    expect(installAgent).not.toHaveBeenCalled();
+  });
+
+  test("focuses the window before prompting", async () => {
+    const calls = [];
+    const focusWindow = jest.fn(() => calls.push("focus"));
+    const confirm = jest.fn(() => {
+      calls.push("confirm");
+      return Promise.resolve(false);
+    });
+
+    await dispatchDeepLink(command, {
+      confirm,
+      installAgent: jest.fn(),
+      focusWindow,
+    });
+
+    expect(calls).toEqual(["focus", "confirm"]);
+  });
+
+  test("propagates an install failure so the caller can surface it", async () => {
+    const confirm = jest.fn().mockResolvedValue(true);
+    const installAgent = jest
+      .fn()
+      .mockRejectedValue(new Error("checksum mismatch"));
+
+    await expect(
+      dispatchDeepLink(command, { confirm, installAgent })
+    ).rejects.toThrow(/checksum mismatch/);
+  });
+
+  test("rejects an unsupported action without installing", async () => {
+    const installAgent = jest.fn();
+    await expect(
+      dispatchDeepLink(
+        { action: "uninstall", agentId: "x" },
+        { confirm: jest.fn().mockResolvedValue(true), installAgent }
+      )
+    ).rejects.toThrow(/Unsupported deep-link action/);
+    expect(installAgent).not.toHaveBeenCalled();
   });
 });
