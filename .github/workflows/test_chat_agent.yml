@@ -84,6 +84,21 @@ jobs:
           echo ""
           python -m pytest hub/agents/python/chat/tests/ -v --tb=short
 
+      - name: Run Framework Registry Discovery Tests
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          echo "================================================================"
+          echo "           FRAMEWORK REGISTRY DISCOVERY TESTS"
+          echo "================================================================"
+          # tests/unit/agents/test_registry.py::TestBuiltinRegistration has
+          # chat-specific cases that importorskip("gaia_agent_chat") -- this
+          # is the only CI job that installs that wheel, so it's the only
+          # place these actually run instead of silently skipping (#2240).
+          echo "Verifying AgentRegistry actually resolves the installed gaia-agent-chat wheel..."
+          echo ""
+          python -m pytest tests/unit/agents/test_registry.py -v --tb=short
+
       - name: Run Chat Agent Unit Tests
         env:
           # Skip memory init — Lemonade isn't available in this CI job; the

@@ -231,3 +231,55 @@ class TestBaseDependencies:
                 "not in setup.py install_requires (only extras). A plain "
                 "`pip install amd-gaia` would ship a broken gaia-mcp entry point."
             )
+
+
+def _parse_extras_require_block():
+    """Extract the raw text inside extras_require={...} from setup.py."""
+    content = SETUP_PY.read_text()
+    match = re.search(
+        r"extras_require\s*=\s*\{(.*?)\n    \},\n    classifiers=", content, re.DOTALL
+    )
+    assert match, "Could not find extras_require={} in setup.py"
+    return match.group(1)
+
+
+class TestAgentWheelExtras:
+    """Regression guard for #2240.
+
+    The gaia-agent-* wheels (chat, email, code, ...) aren't published to
+    PyPI yet (publish_agents.yml's publish job is gated off). An 'agents'
+    extra -- or any 'agent-<id>' extra -- naming one of those packages
+    makes that *whole* amd-gaia release unsatisfiable, so pip/uv silently
+    backtrack past it to the newest older release that doesn't declare the
+    extra. That's what turned `pip install "amd-gaia[agents]"` into a
+    silent downgrade from 0.22.0 to 0.20.0. Don't re-add these extras until
+    the wheels are actually live on PyPI.
+    """
+
+    def test_no_agents_extra_declared(self):
+        extras_keys = re.findall(
+            r'"([a-zA-Z0-9_-]+)"\s*:', _parse_extras_require_block()
+        )
+        broken = {k for k in extras_keys if k == "agents" or k.startswith("agent-")}
+        assert not broken, (
+            f"setup.py declares extras {sorted(broken)} -- this is exactly "
+            "the shape that caused #2240's silent amd-gaia downgrade. Don't "
+            "re-add until the gaia-agent-* wheels are live on PyPI."
+        )
+
+    def test_no_extras_reference_unpublished_agent_wheels(self):
+        # Drop comment lines first -- e.g. the "install from source" hint
+        # left in place of the removed extras legitimately mentions
+        # gaia-agent-* as a string, not as a live dependency spec.
+        code_lines = (
+            line
+            for line in _parse_extras_require_block().splitlines()
+            if not line.strip().startswith("#")
+        )
+        extras_block = "\n".join(code_lines)
+        assert "gaia-agent-" not in extras_block, (
+            "An extras_require value references a gaia-agent-* wheel; those "
+            "aren't published to PyPI yet (#2240), so any extra naming one "
+            "makes amd-gaia unsatisfiable at that version and pip/uv "
+            "silently backtrack-downgrade to an older release instead."
+        )

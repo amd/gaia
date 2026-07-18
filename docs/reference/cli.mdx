@@ -539,6 +539,16 @@ pip install gaia-agent-summarize          # one agent
 pip install "amd-gaia[agents]"            # every AMD production agent
 ```
 
+<Note>
+PyPI publishing for `gaia-agent-*` wheels is currently paused (tracked by
+[#2240](https://github.com/amd/gaia/issues/2240)), so the commands above don't
+resolve yet. Until publishing lands, install an agent straight from this repo:
+
+```bash From source (works today)
+uv pip install "gaia-agent-summarize @ git+https://github.com/amd/gaia.git#subdirectory=hub/agents/python/summarize"
+```
+</Note>
+
 The **Hub (R2)** path is the Agent UI's discover/install panel, which downloads
 the wheel from R2 into `~/.gaia/agents/<id>/` (`POST /api/agents/install`, backed
 by `gaia.hub.installer`). Use it when browsing the Hub UI; use `pip install` for

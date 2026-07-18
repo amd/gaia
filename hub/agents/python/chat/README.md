@@ -8,8 +8,9 @@ framework wheel.
 ## Install
 
 ```bash
-pip install gaia-agent-chat              # from PyPI (once published)
+pip install gaia-agent-chat              # from PyPI (once published — see #2240)
 pip install -e hub/agents/python/chat    # editable, for development
+uv pip install "gaia-agent-chat @ git+https://github.com/amd/gaia.git#subdirectory=hub/agents/python/chat"  # works today without a repo checkout
 ```
 
 Installing registers the `chat`, `doc`, and `file` agents via the `gaia.agent`

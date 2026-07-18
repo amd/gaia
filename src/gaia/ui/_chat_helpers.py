@@ -25,6 +25,8 @@ from typing import Optional
 
 from fastapi import HTTPException
 
+from gaia.agents.install_hints import agent_not_installed_message
+
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
 from .sse_handler import (
@@ -1403,9 +1405,11 @@ async def _get_chat_response(
                 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
             except ImportError as e:
                 raise RuntimeError(
-                    "The chat agent is not installed. Run "
-                    "`pip install gaia-agent-chat` (or `pip install "
-                    '"amd-gaia[agents]"`), then restart the server.'
+                    agent_not_installed_message(
+                        "The chat agent is not installed",
+                        "gaia-agent-chat",
+                        next_step="Then restart the server.",
+                    )
                 ) from e
 
             logger.info(
@@ -1846,9 +1850,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         )
                     except ImportError as e:
                         raise RuntimeError(
-                            "The chat agent is not installed. Run "
-                            "`pip install gaia-agent-chat` (or `pip install "
-                            '"amd-gaia[agents]"`), then restart the server.'
+                            agent_not_installed_message(
+                                "The chat agent is not installed",
+                                "gaia-agent-chat",
+                                next_step="Then restart the server.",
+                            )
                         ) from e
 
                     logger.info(

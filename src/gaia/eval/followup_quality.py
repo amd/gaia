@@ -52,6 +52,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from gaia.agents.install_hints import agent_not_installed_message
 from gaia.eval.fixture_paths import resolve_repo_fixture
 from gaia.eval.quality_metrics import Confusion
 
@@ -554,10 +555,11 @@ def _default_detector(
         from gaia_agent_email.tools.followup_tools import check_followups_impl
     except ImportError as exc:
         raise RuntimeError(
-            "The follow-up detection eval needs the email agent. Install it with "
-            "`pip install gaia-agent-email` (or `pip install "
-            '"amd-gaia[agents]"`). '
-            f"Original import error: {exc}"
+            agent_not_installed_message(
+                "The follow-up detection eval needs the email agent",
+                "gaia-agent-email",
+                next_step=f"Original import error: {exc}",
+            )
         ) from exc
     return check_followups_impl(backend, window_days=window_days, now_ms=now_ms)
 

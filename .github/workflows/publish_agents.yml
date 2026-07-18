@@ -3,12 +3,18 @@
 #
 # Publish the AMD production *Python* agent wheels (gaia-agent-<id>) to PyPI.
 # Issue #1179 (Agent Hub dual distribution): R2 is the canonical source for the
-# Hub UI; PyPI is the canonical source for `pip install gaia-agent-<id>` and the
-# `amd-gaia[agents]` meta-extra. The C++ agent binaries are handled separately
-# by build_agents.yml.
+# Hub UI; PyPI is the canonical source for `pip install gaia-agent-<id>`. The
+# C++ agent binaries are handled separately by build_agents.yml.
+#
+# NOTE (#2240): there is deliberately no `amd-gaia[agents]` meta-extra. While
+# these wheels aren't live on PyPI (publishing is paused below), declaring
+# them as an extras_require entry made the extra unsatisfiable at the
+# current amd-gaia release, which made pip/uv silently backtrack-downgrade
+# to an older release that didn't declare it. The agent list instead lives
+# as a plain constant, setup.py's AGENT_WHEEL_PACKAGES.
 #
 # Flow:
-#   discover (read setup.py[agents] -> matrix)
+#   discover (read setup.py's AGENT_WHEEL_PACKAGES -> matrix)
 #     -> build  (tag only: build each wheel + twine check, upload artifact)
 #       -> approve (tag only: single manual gate, "publish" environment)
 #         -> publish (tag only: gh-action-pypi-publish per agent, skip-existing)
@@ -54,9 +60,9 @@ permissions:
 
 jobs:
 
-  # ── Discover: derive the agent matrix from setup.py[agents] ──────────
-  # Single source of truth — adding an agent to the meta-extra auto-includes
-  # it here. No hand-maintained second list to drift.
+  # ── Discover: derive the agent matrix from setup.py's AGENT_WHEEL_PACKAGES ──
+  # Single source of truth — adding an agent to that list auto-includes it
+  # here. No hand-maintained second list to drift.
   discover:
     name: Discover Agent Packages
     runs-on: ubuntu-latest
