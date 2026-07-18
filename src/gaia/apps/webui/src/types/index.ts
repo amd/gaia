@@ -451,6 +451,38 @@ export interface SystemStatus {
     detected_devices?: string[];
 }
 
+/**
+ * First-run hardware pre-flight report from GET /api/onboarding/preflight
+ * (#1726, #1727). ``compatible`` is false only when there is a hard blocker
+ * (e.g. not enough disk for the model download).
+ */
+export interface PreflightReport {
+    os: string | null;
+    detected_platform: string | null;
+    ram_gb: number | null;
+    disk_free_gb: number | null;
+    /** true/false when probed; null when hardware couldn't be verified. */
+    npu_detected: boolean | null;
+    gpu_name: string | null;
+    gpu_vram_gb: number | null;
+    lemonade_running: boolean;
+    tier: 'full' | 'standard' | 'light' | 'insufficient' | 'unknown' | string;
+    recommended_profile: string;
+    recommended_model: string;
+    required_disk_gb: number;
+    required_memory_gb: number;
+    compatible: boolean;
+    blockers: string[];
+    warnings: string[];
+}
+
+/** First-run completion state from GET /api/onboarding/status. */
+export interface OnboardingStatusResponse {
+    initialized: boolean;
+    skipped: boolean;
+    completed_at: string | null;
+}
+
 // ── File Browser Types ───────────────────────────────────────────────────
 
 /** A single file or folder entry returned by the browse endpoint. */

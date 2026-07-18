@@ -16,6 +16,7 @@ import { ConnectionBanner } from './components/ConnectionBanner';
 import { UpdateIndicator } from './components/UpdateIndicator';
 import { PermissionPrompt } from './components/PermissionPrompt';
 import { NotificationCenter } from './components/NotificationCenter';
+import { OnboardingWizard } from './components/onboarding/OnboardingWizard';
 import { useChatStore } from './stores/chatStore';
 import { useNotificationStore } from './stores/notificationStore';
 import * as api from './services/api';
@@ -109,6 +110,23 @@ function App() {
         const interval = setInterval(loadAgents, 30_000);
         return () => clearInterval(interval);
     }, [loadAgents]);
+
+    // ── First-run onboarding (#1726/#1727) ───────────────────────────
+    // Show the wizard until the ``initialized`` marker exists. Checked once on
+    // mount via a dedicated endpoint so the gate doesn't depend on the heavier
+    // system-status poll or its lemonade-fail debounce.
+    const [showOnboarding, setShowOnboarding] = useState(false);
+    useEffect(() => {
+        let cancelled = false;
+        api.getOnboardingStatus()
+            .then((s) => { if (!cancelled) setShowOnboarding(!s.initialized); })
+            .catch((err) => {
+                // Can't tell — default to NOT blocking an existing user behind a
+                // wizard on a transient error; they can re-run `gaia init`.
+                log.system.warn('Onboarding status check failed', err);
+            });
+        return () => { cancelled = true; };
+    }, []);
 
     // Mobile gateway state
     const [showMobileAccess, setShowMobileAccess] = useState(false);
@@ -674,6 +692,11 @@ function App() {
             {/* Session creation error toast */}
             {createError && (
                 <div className="toast" role="alert">{createError}</div>
+            )}
+
+            {/* First-run onboarding wizard — overlays the app until setup completes */}
+            {showOnboarding && (
+                <OnboardingWizard onComplete={() => { setShowOnboarding(false); checkSystemStatus(); }} />
             )}
         </div>
     );
