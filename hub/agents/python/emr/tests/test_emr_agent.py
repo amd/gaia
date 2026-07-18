@@ -180,6 +180,96 @@ class TestPatientDataParsing(unittest.TestCase):
             finally:
                 agent.stop()
 
+    def test_parse_single_object_wrapped_in_array(self):
+        """A VLM that wraps the patient object in an array is unwrapped, not crashed."""
+        with temp_directory() as tmp_dir:
+            from gaia_agent_emr import MedicalIntakeAgent
+
+            agent = MedicalIntakeAgent(
+                watch_dir=str(tmp_dir / "intake"),
+                db_path=str(tmp_dir / "patients.db"),
+                skip_lemonade=True,
+                silent_mode=True,
+                auto_start_watching=False,
+            )
+
+            try:
+                wrapped = json.dumps([{"first_name": "Ada", "last_name": "Lovelace"}])
+
+                result = agent._parse_extraction(wrapped)
+
+                self.assertIsNotNone(result)
+                self.assertIsInstance(result, dict)
+                self.assertEqual(result["first_name"], "Ada")
+                self.assertEqual(result["last_name"], "Lovelace")
+            finally:
+                agent.stop()
+
+    def test_parse_multi_element_array_returns_none(self):
+        """A multi-row array is ambiguous for a single patient — reject it loudly."""
+        with temp_directory() as tmp_dir:
+            from gaia_agent_emr import MedicalIntakeAgent
+
+            agent = MedicalIntakeAgent(
+                watch_dir=str(tmp_dir / "intake"),
+                db_path=str(tmp_dir / "patients.db"),
+                skip_lemonade=True,
+                silent_mode=True,
+                auto_start_watching=False,
+            )
+
+            try:
+                multi = json.dumps(
+                    [{"first_name": "Ada"}, {"first_name": "Grace"}],
+                )
+
+                result = agent._parse_extraction(multi)
+
+                self.assertIsNone(result)
+            finally:
+                agent.stop()
+
+    def test_parse_array_in_surrounding_text_does_not_crash(self):
+        """Top-level array embedded in prose hits the same guard, no AttributeError."""
+        with temp_directory() as tmp_dir:
+            from gaia_agent_emr import MedicalIntakeAgent
+
+            agent = MedicalIntakeAgent(
+                watch_dir=str(tmp_dir / "intake"),
+                db_path=str(tmp_dir / "patients.db"),
+                skip_lemonade=True,
+                silent_mode=True,
+                auto_start_watching=False,
+            )
+
+            try:
+                text = 'Here you go: [{"first_name": "Ada", "phone": ""}] done'
+
+                result = agent._parse_extraction(text)
+
+                self.assertIsNotNone(result)
+                self.assertEqual(result["first_name"], "Ada")
+            finally:
+                agent.stop()
+
+    def test_parse_scalar_json_returns_none(self):
+        """A bare JSON scalar is not a patient object — reject instead of crashing."""
+        with temp_directory() as tmp_dir:
+            from gaia_agent_emr import MedicalIntakeAgent
+
+            agent = MedicalIntakeAgent(
+                watch_dir=str(tmp_dir / "intake"),
+                db_path=str(tmp_dir / "patients.db"),
+                skip_lemonade=True,
+                silent_mode=True,
+                auto_start_watching=False,
+            )
+
+            try:
+                self.assertIsNone(agent._parse_extraction("42"))
+            finally:
+                agent.stop()
+
     def test_parse_json_with_nested_objects_in_text(self):
         """Test parsing nested JSON embedded in text."""
         with temp_directory() as tmp_dir:
