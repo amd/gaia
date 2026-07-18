@@ -12,6 +12,10 @@ interface ChatState {
     activeAgentId: string;
     setAgents: (agents: AgentInfo[]) => void;
     setActiveAgentId: (id: string) => void;
+    /** Loud, user-facing error when agent discovery (GET /api/agents) fails.
+     *  Surfaced in the Hub view so a broken discovery is never a dead button. */
+    agentsError: string | null;
+    setAgentsError: (error: string | null) => void;
 
     // Device selection (CPU / GPU / NPU)
     activeDevice: string;
@@ -97,6 +101,7 @@ interface ChatState {
     showSettings: boolean;
     showMemoryDashboard: boolean;
     showSchedules: boolean;
+    showHub: boolean;
     sidebarOpen: boolean;
     sidebarCollapsed: boolean;
     sidebarWidth: number;
@@ -109,6 +114,7 @@ interface ChatState {
     setShowSettings: (show: boolean) => void;
     setShowMemoryDashboard: (show: boolean) => void;
     setShowSchedules: (show: boolean) => void;
+    setShowHub: (show: boolean) => void;
     toggleSidebar: () => void;
     setSidebarOpen: (open: boolean) => void;
     toggleSidebarCollapsed: () => void;
@@ -130,6 +136,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         try { localStorage.setItem('gaia-active-agent-id', id); } catch { /* noop */ }
         set({ activeAgentId: id });
     },
+    agentsError: null,
+    setAgentsError: (error) => set({ agentsError: error }),
 
     // Device selection
     activeDevice: (() => {
@@ -292,6 +300,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     showSettings: false,
     showMemoryDashboard: false,
     showSchedules: false,
+    showHub: false,
     toggleTheme: () =>
         set((state) => {
             const next = state.theme === 'dark' ? 'light' : 'dark';
@@ -313,11 +322,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setShowDocLibrary: (show) => set({ showDocLibrary: show }),
     setShowFileBrowser: (show) => set({ showFileBrowser: show }),
     setShowSettings: (show) =>
-        set(show ? { showSettings: true, showMemoryDashboard: false, showSchedules: false } : { showSettings: false }),
+        set(show ? { showSettings: true, showMemoryDashboard: false, showSchedules: false, showHub: false } : { showSettings: false }),
     setShowMemoryDashboard: (show) =>
-        set(show ? { showMemoryDashboard: true, showSettings: false, showSchedules: false } : { showMemoryDashboard: false }),
+        set(show ? { showMemoryDashboard: true, showSettings: false, showSchedules: false, showHub: false } : { showMemoryDashboard: false }),
     setShowSchedules: (show) =>
-        set(show ? { showSchedules: true, showSettings: false, showMemoryDashboard: false } : { showSchedules: false }),
+        set(show ? { showSchedules: true, showSettings: false, showMemoryDashboard: false, showHub: false } : { showSchedules: false }),
+    setShowHub: (show) =>
+        set(show ? { showHub: true, showSettings: false, showMemoryDashboard: false, showSchedules: false } : { showHub: false }),
     toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
     setSidebarOpen: (open) => set({ sidebarOpen: open }),
     toggleSidebarCollapsed: () =>
