@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import threading
+import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -24,6 +25,17 @@ from ..dependencies import get_db
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["memory"])
+
+
+def _log_server_error(context: str, exc: Exception) -> str:
+    """Log full exception detail server-side and return a short correlation id.
+
+    Responses carry only a generic message plus the id so exception
+    internals never reach the client (CodeQL py/stack-trace-exposure).
+    """
+    correlation_id = uuid.uuid4().hex[:8]
+    logger.error("[memory router] %s (id=%s)", context, correlation_id, exc_info=exc)
+    return correlation_id
 
 
 def _require_ui_header(request: Request) -> None:
@@ -1216,14 +1228,28 @@ def stream_discovery():
                     else:
                         yield _sse({"type": "log", "message": "  Nothing found"})
                 except Exception as e:
+                    cid = _log_server_error(
+                        f"discovery scanner '{source_key}' failed", e
+                    )
                     yield _sse(
-                        {"type": "error", "source": source_key, "message": str(e)}
+                        {
+                            "type": "error",
+                            "source": source_key,
+                            "message": f"Scanner failed — see server logs (id={cid}).",
+                        }
                     )
 
             yield _sse({"type": "done", "total": total})
 
         except Exception as exc:
-            yield _sse({"type": "error", "source": "discovery", "message": str(exc)})
+            cid = _log_server_error("discovery stream failed", exc)
+            yield _sse(
+                {
+                    "type": "error",
+                    "source": "discovery",
+                    "message": f"Discovery failed — see server logs (id={cid}).",
+                }
+            )
             yield _sse({"type": "done", "total": 0})
 
     return StreamingResponse(
@@ -1274,10 +1300,14 @@ def stream_inference(include_browser: bool = Query(False)):
                             }
                         )
                 except Exception as e:
+                    cid = _log_server_error("browser history scan failed", e)
                     yield _sse(
                         {
                             "type": "log",
-                            "message": f"  Browser history unavailable: {e}",
+                            "message": (
+                                "  Browser history unavailable — "
+                                f"see server logs (id={cid})"
+                            ),
                         }
                     )
 
@@ -1413,10 +1443,14 @@ def stream_inference(include_browser: bool = Query(False)):
                 ):
                     raw_response = "".join(raw_response)
             except Exception as e:
+                cid = _log_server_error("inference LLM call failed", e)
                 yield _sse(
                     {
                         "type": "error",
-                        "message": f"LLM call failed: {e}. Is Lemonade Server running?",
+                        "message": (
+                            "LLM call failed. Is Lemonade Server running? "
+                            f"See server logs (id={cid})."
+                        ),
                     }
                 )
                 yield _sse({"type": "done", "total": 0})
@@ -1440,8 +1474,15 @@ def stream_inference(include_browser: bool = Query(False)):
                     and i["content"].strip()
                 ]
             except Exception as e:
+                cid = _log_server_error("failed to parse LLM inference response", e)
                 yield _sse(
-                    {"type": "error", "message": f"Failed to parse LLM response: {e}"}
+                    {
+                        "type": "error",
+                        "message": (
+                            "Failed to parse LLM response — "
+                            f"see server logs (id={cid})."
+                        ),
+                    }
                 )
                 yield _sse({"type": "done", "total": 0})
                 return
@@ -1460,8 +1501,13 @@ def stream_inference(include_browser: bool = Query(False)):
             yield _sse({"type": "done", "total": len(insights)})
 
         except Exception as exc:
-            logger.error("[memory router] stream-inference failed: %s", exc)
-            yield _sse({"type": "error", "message": str(exc)})
+            cid = _log_server_error("stream-inference failed", exc)
+            yield _sse(
+                {
+                    "type": "error",
+                    "message": f"Inference failed — see server logs (id={cid}).",
+                }
+            )
             yield _sse({"type": "done", "total": 0})
 
     return StreamingResponse(
@@ -1637,10 +1683,10 @@ def update_memory_settings(
                 result["system_context_refresh"] = refresh_result
                 return result
             except Exception as exc:
-                logger.warning(
-                    "[memory router] system discovery after consent failed: %s", exc
-                )
+                cid = _log_server_error("system discovery after consent failed", exc)
                 result = _get_memory_settings_dict(db)
-                result["system_context_error"] = str(exc)
+                result["system_context_error"] = (
+                    f"System discovery failed — see server logs (id={cid})."
+                )
                 return result
     return _get_memory_settings_dict(db)
