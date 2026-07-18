@@ -347,12 +347,13 @@ class TestResolveDeviceModelUI:
         assert model == "gemma4-it-e2b-FLM"
         assert ctx == 32768
 
-    def test_gpu_resolves_to_gguf_model_and_32k_ctx(self):
+    def test_gpu_resolves_to_gguf_model_and_profile_ctx(self):
+        from gaia.llm.lemonade_client import GPU_CTX_SIZE
         from gaia.ui._chat_helpers import resolve_device_model
 
         model, ctx = resolve_device_model("chat", "gpu", None)
         assert model == "Gemma-4-E4B-it-GGUF"
-        assert ctx == 32768
+        assert ctx == GPU_CTX_SIZE
 
     def test_cpu_resolves_to_gguf_model(self):
         from gaia.ui._chat_helpers import resolve_device_model
