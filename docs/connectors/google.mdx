@@ -151,6 +151,14 @@ This is the credential GAIA uses.
 4. Paste the **Client ID** and **Client Secret** from Step 4.
 5. Click **Save & Connect**.
 
+Already past first-time setup (client came from env vars, or you need to
+rotate it)? Expand the tile's collapsible **OAuth client** section — it
+shows which client GAIA currently resolves (saved / environment / none)
+and accepts a replacement Client ID + Secret at any time. **Save client**
+persists to the OS keyring without starting a sign-in; saved credentials
+take precedence over `GAIA_GOOGLE_CLIENT_ID` / `GAIA_GOOGLE_CLIENT_SECRET`,
+exactly like `gaia connectors configure google`.
+
 GAIA will:
 
 1. Store the credentials in your OS keyring (macOS Keychain on Mac,
@@ -180,10 +188,14 @@ completes.
 
 ## Step 6 — Grant scopes to specific agents
 
-Connecting Google doesn't automatically give every agent access to
-your inbox. **Each agent must be granted the specific scopes it needs** —
-connecting alone is not enough. You can do this in the UI (open the Google
-tile → **Per-agent grants**) or the CLI.
+Each agent must be granted the specific scopes it needs — a connection
+alone is not enough. In the Agent UI this happens **during connect**: the
+Google tile's connect panel shows **"Grant access to these agents when
+you connect"** with a default-on checkbox per installed agent that
+declares Google access, and checked agents receive their declared scopes
+the moment the OAuth flow completes. Uncheck an agent to withhold its
+grant, and adjust or revoke any grant later under the tile's
+**Per-agent grants** section. On the CLI you grant explicitly:
 
 **Chat agent — read-only Gmail:**
 

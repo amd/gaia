@@ -721,3 +721,38 @@
     border-top: 1px solid var(--border-light);
     margin-top: 4px;
 }
+
+/* OAuth client editor (#2104) — collapsible bring-your-own-client section */
+.oauth-client-editor {
+    margin: 6px 0 8px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+}
+
+.oauth-client-editor__toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 6px 8px;
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    font-size: 12px;
+    cursor: pointer;
+    text-align: left;
+}
+
+.oauth-client-editor__status {
+    margin-left: auto;
+    color: var(--text-muted);
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 60%;
+}
+
+.oauth-client-editor .oauth-setup-form {
+    padding: 0 8px 8px;
+}

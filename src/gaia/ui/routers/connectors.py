@@ -77,7 +77,7 @@ from gaia.connectors.mcp_server import (
     is_mcp_server_configured,
 )
 from gaia.connectors.registry import REGISTRY
-from gaia.connectors.store import peek_connection
+from gaia.connectors.store import peek_connection, peek_provider_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -370,6 +370,7 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
     scopes: list = []
     configurable = True
     config_error: Optional[str] = None
+    oauth_client: Optional[Dict[str, Any]] = None
 
     # TODO: when a 3rd connector type lands, push this if/elif into a
     # Handler.summary(spec) method so this becomes a single polymorphic
@@ -406,6 +407,27 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
             configured = True
             account_id = blob.get("account_email")
             scopes = list(blob.get("scopes", []))
+
+        # OAuth *client* status (#2104): which client the provider would
+        # resolve, so Settings can render/rotate it. client_id is not a
+        # secret (it ships inside desktop apps); the secret itself is
+        # NEVER included — only whether one is stored.
+        _env_prefix = f"GAIA_{provider_ref.upper()}"
+        stored_creds = peek_provider_credentials(provider_ref) or {}
+        if stored_creds.get("client_id"):
+            oauth_client = {
+                "source": "keyring",
+                "client_id": stored_creds["client_id"],
+                "has_secret": bool(stored_creds.get("client_secret")),
+            }
+        elif os.environ.get(f"{_env_prefix}_CLIENT_ID"):
+            oauth_client = {
+                "source": "env",
+                "client_id": os.environ[f"{_env_prefix}_CLIENT_ID"],
+                "has_secret": bool(os.environ.get(f"{_env_prefix}_CLIENT_SECRET")),
+            }
+        else:
+            oauth_client = {"source": None, "client_id": None, "has_secret": False}
 
     # ``enabled`` is meaningful only for ``mcp_server`` connectors. We
     # default to ``True`` for both not-configured connectors AND OAuth so
@@ -451,6 +473,7 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
         "configured": configured,
         "configurable": configurable,
         "config_error": config_error,
+        "oauth_client": oauth_client,
         "account_id": account_id,
         "scopes": scopes,
         "enabled": enabled,

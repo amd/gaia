@@ -14,7 +14,7 @@ Example:
 
     def on_new_file(path: str):
         print(f"New file: {path}")
-        file_hash = compute_file_hash(path)
+        file_hash = compute_file_hash(path, allowed_dir="./data")
         print(f"Hash: {file_hash}")
 
     watcher = FileWatcher(
@@ -80,33 +80,47 @@ def compute_file_hash(
         algorithm: Hash algorithm to use (default: sha256).
                    Supports any algorithm from hashlib.
         chunk_size: Size of chunks to read at a time (default: 64KB).
-        allowed_dir: If provided, validates that the resolved file path
-                     is within this directory (prevents path traversal).
+        allowed_dir: Directory the file must be contained in. Required —
+                     the containment check is not opt-in, so no caller can
+                     hash a path outside the root it meant to scan.
 
     Returns:
-        Hex-encoded hash string, or None if file cannot be read.
+        Hex-encoded hash string, or None if the file cannot be read or
+        lies outside *allowed_dir*.
+
+    Raises:
+        ValueError: If *allowed_dir* is not supplied.
 
     Example:
         from gaia.utils import compute_file_hash
 
         # Check if file was already processed
-        file_hash = compute_file_hash("intake_form.pdf")
+        file_hash = compute_file_hash("intake_form.pdf", allowed_dir=watch_dir)
         if file_hash in processed_hashes:
             print("Already processed")
         else:
             process_file("intake_form.pdf")
             processed_hashes.add(file_hash)
     """
+    # Outside the try: the handler below catches ValueError, which would
+    # otherwise swallow this guard and return None.
+    if allowed_dir is None:
+        raise ValueError(
+            "compute_file_hash() requires allowed_dir: the directory the file "
+            "must be contained in. Pass the already-validated root you are "
+            "scanning (e.g. str(self._watch_dir)). Omitting it leaves the hash "
+            "target unconstrained, which is a path-traversal sink."
+        )
+
     try:
         # Resolve to canonical absolute path
         file_path = os.path.realpath(str(path))
 
-        # Validate path is within allowed directory
-        if allowed_dir is not None:
-            real_base = os.path.realpath(str(allowed_dir))
-            if not file_path.startswith(real_base + os.sep) and file_path != real_base:
-                logger.warning("Path is outside allowed directory")
-                return None
+        # Containment is unconditional — allowed_dir is guaranteed non-None.
+        real_base = os.path.realpath(str(allowed_dir))
+        if not file_path.startswith(real_base + os.sep) and file_path != real_base:
+            logger.warning("Path is outside allowed directory")
+            return None
 
         if not os.path.isfile(file_path):
             return None

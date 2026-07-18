@@ -99,4 +99,8 @@ ranks by severity (**🔴 high · 🟠 medium · 🟡 low** — no green; green 
 
 - ❌ Auto-merging anything, or opening PRs directly (promotion via `bug` → `auto-fix`).
 - ❌ Running `gaia eval agent` / Lemonade-dependent checks (this is static analysis).
+  Execution-based verification now lives in the sibling workflow
+  `.github/workflows/claude-weekly-doc-walkthrough.yml` — see
+  `docs/plans/weekly-doc-walkthrough-audit.md`. That workflow exists precisely because
+  this one's static-only scope let #2260 and #2261 both ship undetected.
 - ❌ Replacing per-PR review — it complements `claude.yml`, doesn't duplicate it.

@@ -207,6 +207,13 @@ gaia connectors grants grant google builtin:chat \
 gaia connectors grants list google
 gaia connectors grants revoke google builtin:chat
 
+# NOTE: the Agent UI grants on connect (#2117): POST
+# /api/connectors/{id}/authorize accepts grant_agents (namespaced agent
+# ids); the router resolves each agent's REQUIRED_CONNECTORS scopes and
+# the OAuth callback commits the grants the moment the token exchange
+# succeeds. Explicit CLI grants remain the path for scripts and headless
+# setups.
+
 # Per-agent activations — gate which agents see this MCP server's tools.
 # Activations apply to mcp_server connectors only; OAuth connectors are
 # rejected with exit 3 (use per-scope grants above instead).

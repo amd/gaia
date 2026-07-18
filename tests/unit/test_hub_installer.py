@@ -1288,3 +1288,62 @@ class TestAgentIdPathSafety:
         junk.mkdir()
         (junk / installer.SENTINEL_NAME).write_text("{}")
         assert list_installed(tmp_path) == {}
+
+    @pytest.mark.parametrize(
+        "sink",
+        [
+            "read_sentinel",
+            "uninstall",
+            "rollback",
+            "read_config",
+            "configure",
+            "health_check",
+        ],
+    )
+    def test_every_path_sink_rejects_traversal_id(self, tmp_path, sink):
+        """Each CodeQL-flagged path sink must reject a traversal id.
+
+        CodeQL reports py/path-injection at the *sinks* in these functions
+        (``rmtree``/``move``/``read_text``/``write_text``) because its
+        dataflow engine does not follow ``_require_safe_agent_id`` through
+        the ``agent_install_dir``/``_backup_dir`` helpers. This test pins
+        the property CodeQL cannot see: no sink is reachable with a
+        traversal-shaped id. If a future refactor bypasses the helper, this
+        fails rather than silently reopening the traversal.
+        """
+        from gaia.hub import lifecycle
+
+        bad_id = "../../../../../../tmp/gaia-traversal-probe"
+        calls = {
+            "read_sentinel": lambda: installer.read_sentinel(bad_id, tmp_path),
+            "uninstall": lambda: uninstall(bad_id, install_root=tmp_path),
+            "rollback": lambda: rollback(bad_id, install_root=tmp_path),
+            "read_config": lambda: lifecycle.read_config(bad_id, tmp_path),
+            "configure": lambda: lifecycle.configure(
+                bad_id, {"model": "x"}, install_root=tmp_path
+            ),
+            "health_check": lambda: lifecycle.health_check(
+                bad_id, install_root=tmp_path
+            ),
+        }
+        with pytest.raises(
+            (InstallError, lifecycle.LifecycleError), match="Invalid agent id"
+        ):
+            calls[sink]()
+
+    def test_traversal_id_never_creates_anything_outside_install_root(self, tmp_path):
+        """The rejected id must leave no trace outside the install root."""
+        from gaia.hub import lifecycle
+
+        install_root = tmp_path / "agents"
+        install_root.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "keep.txt").write_text("untouched")
+
+        with pytest.raises(lifecycle.LifecycleError):
+            lifecycle.configure("../outside", {"model": "x"}, install_root=install_root)
+
+        assert (outside / "keep.txt").read_text() == "untouched"
+        assert not (outside / "config.json").exists()
+        assert list(install_root.iterdir()) == []
