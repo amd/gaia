@@ -1,4 +1,5 @@
 {
+  "_comment": "Legacy/synthetic shape (dict-keyed amd_igpu) — real Lemonade 11 reports amd_gpu as a list. Kept only for the ensure_ready tier-comparison tests that consume it; see the lemonade11_*.json fixtures for real payload shapes.",
   "devices": {
     "amd_igpu": { "memory_mb": 4096 },
     "cpu": { "cores": 8 }
