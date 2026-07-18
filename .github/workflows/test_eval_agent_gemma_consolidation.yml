@@ -1,0 +1,455 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Agent eval gate for the Gemma-4-E4B consolidation.
+#
+# Every agent is moving onto `Gemma-4-E4B-it-GGUF`; agents that previously left
+# `model_id` unset fell back to `Qwen3.5-35B-A3B-GGUF`. That is an LLM-affecting
+# change, and CLAUDE.md requires `gaia eval agent` runs against the committed
+# baselines before such a change lands. Unit tests cover code paths, not model
+# behavior — this job is the only thing that catches a behavioral regression.
+#
+# Runner-only by construction. `gaia eval agent` drives the real GAIA UI backend
+# against a real Lemonade Server on AMD hardware; a GitHub-hosted runner has
+# neither. Hence [self-hosted, lemonade-eval], the same pool as
+# email_scorecard_refresh.yml and test_email_agent_eval.yml, and the same shared
+# `lemonade-eval` concurrency group so this queues BEHIND them instead of
+# race-evicting their loaded model (CLAUDE.md: at most one `gaia eval agent`
+# process at a time, period).
+#
+# WHY THIS REPORTS BY DEFAULT INSTEAD OF HARD-FAILING (`enforce`, default false)
+# ---------------------------------------------------------------------------
+# `gaia eval agent --compare BASELINE CURRENT` already exits 2 on any status /
+# score / time regression and 0 otherwise (src/gaia/cli.py). Wiring that exit
+# code straight to the step result would make this job PERMANENTLY RED, because
+# some regressions here are EXPECTED and accepted: code-generation and
+# data-analysis scenarios are dropping from a 35B MoE to a ~4B dense model. A
+# gate that is always red gates nothing — people stop reading it.
+#
+# So the default posture is REPORT: every category is compared, the full diff is
+# printed, the scorecards are uploaded as an artifact, and a regression surfaces
+# as a `::warning::` annotation. Make it blocking either by dispatching with
+# `enforce: true`, or — since workflow_dispatch is only offered for workflows
+# already on the default branch — by putting `[eval-enforce]` in the commit
+# message, which works on a branch before this file has merged.
+#
+# This mirrors how intentional regressions are handled elsewhere: the
+# `--allow-regression` flag in src/gaia/eval/scorecard_gate.py prints a
+# `::warning::` and returns 0 rather than pretending the regression did not
+# happen, and test_email_agent_eval.yml ships its gates in report mode until the
+# bars are trustworthy. Same idea, inverted default: report unless asked to
+# enforce.
+#
+# REPORT MODE SOFTENS "WORSE", NEVER "DIDN'T MEASURE". `--compare` scores only
+# scenarios present on BOTH sides: scenarios that vanish from the current run land
+# in an `only_in_baseline` bucket that is NOT part of its exit-2 verdict
+# (runner.py::compare_scorecards). Verified: dropping 6 of 7 rag_quality scenarios
+# still exits 0. So a broken harness would otherwise sail through as "no
+# regression". The integrity gate below therefore runs UNCONDITIONALLY — ignoring
+# `enforce` entirely — and fails the job if a baseline scenario is missing or any
+# scenario failed to produce a measurement (infra_error / errored / timeout /
+# blocked / budget_exceeded). Report mode is for "we measured and it got worse",
+# never for "we did not measure".
+#
+# TIME REGRESSIONS ARE NOT COMPARABLE TO THIS BASELINE. `--compare` folds a >2x
+# per-scenario wall-clock delta into the same exit 2 as a quality regression, but
+# the committed baseline was captured against a REMOTE Lemonade over ngrok
+# (see meta.json) on different hardware and an older Lemonade. Treat a time-only
+# regression here as a hardware artifact, not a defect, until the baselines are
+# regenerated on the runner itself.
+#
+# SEQUENCING. `--compare` only DIFFS two scorecards — it does NOT run an eval.
+# So each category is evaluated first, the ABSOLUTE run directory is parsed from
+# the eval's own `Output: <run-dir>` line, and `<run-dir>/scorecard.json` is then
+# compared against the committed Gemma baseline. Never glob by mtime — a fresh
+# clone stamps every file with the checkout time.
+#
+# PREREQUISITES ON THE RUNNER. Lemonade Server is expected to be already running
+# on the lemonade-eval pool as a persistent service (email_scorecard_refresh.yml
+# and test_email_agent_eval.yml both assume this and neither starts it). The GAIA
+# UI backend is NOT persistent, so this workflow starts it itself — in the SAME
+# shell session as the evals, because a backgrounded child does not survive a
+# GitHub Actions step boundary (see the single-session note in
+# test_agent_behavior_e2e.yml). Both are preflight-checked and fail loudly with
+# an actionable message rather than degrading into a misleading skip.
+#
+# FORKS. There is no `pull_request` trigger, so a fork PR never runs this in the
+# base repo (and the fork has no lemonade-eval runner). ANTHROPIC_API_KEY — the
+# eval judge — is therefore always available for the branches that do trigger it;
+# if it is missing the preflight fails with instructions instead of running a
+# judge-less eval that would produce a meaningless scorecard.
+
+name: Agent Eval — Gemma-4-E4B consolidation
+
+on:
+  workflow_dispatch:
+    inputs:
+      enforce:
+        description: 'Fail the build on a regression (false = report as ::warning:: only)'
+        required: false
+        type: boolean
+        default: false
+      eval_model:
+        description: 'Judge model for the eval harness'
+        required: false
+        default: 'claude-sonnet-4-6'
+  push:
+    branches-ignore:
+      - main
+    paths:
+      # The consolidation itself.
+      - 'src/gaia/agents/base/agent.py'
+      - 'src/gaia/agents/registry.py'
+      - 'src/gaia/llm/lemonade_client.py'
+      - 'src/gaia/llm/factory.py'
+      - 'hub/agents/python/**'
+      - 'tests/fixtures/eval_baselines/**'
+      - '.github/workflows/test_eval_agent_gemma_consolidation.yml'
+      # In-core agents that carry their own model_id, plus the prompt/tool
+      # surfaces CLAUDE.md lists as eval-requiring — a tool docstring edit
+      # changes the JSON tool schema and is exactly what tool_selection scores.
+      # (ChatAgent is not listed: it now lives under hub/agents/python/chat/,
+      # already covered above.)
+      - 'src/gaia/agents/builder/**'
+      - 'src/gaia/agents/tools/**'
+      - 'src/gaia/chat/**'
+
+concurrency:
+  # Share the single Lemonade backend slot with the other self-hosted evals so two
+  # runs never race-evict each other's model (CLAUDE.md: evals run serially).
+  group: lemonade-eval
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  BASELINE_DIR: tests/fixtures/eval_baselines/gemma-4-e4b-d71cd914
+  BACKEND_URL: http://127.0.0.1:4200
+  # A dispatch input always wins. On a plain push, `[eval-enforce]` in the commit
+  # message opts in — workflow_dispatch is not offered until this file is on the
+  # default branch, so without this there is no way to enforce pre-merge.
+  ENFORCE: ${{ github.event.inputs.enforce || (contains(github.event.head_commit.message, '[eval-enforce]') && 'true') || 'false' }}
+  EVAL_MODEL: ${{ github.event.inputs.eval_model || 'claude-sonnet-4-6' }}
+  # Loopback services — bypass any runner proxy so curl/httpx reach them.
+  NO_PROXY: 'localhost,127.0.0.1'
+
+jobs:
+  agent-eval:
+    name: rag_quality + context_retention + tool_selection vs Gemma baselines
+    runs-on: [self-hosted, lemonade-eval]
+    # NOT 90 like its siblings, deliberately. Summing elapsed_s across the three
+    # committed baselines is already ~55 min of pure scenario time (22.4 + 18.4 +
+    # 14.4), before install, backend boot and judge latency, on hardware that is
+    # not the baseline's. A timeout CANCELS the job, which can lose the artifact
+    # upload too — so an overrun costs an hour of runner time AND the evidence.
+    # 150 buys real headroom; drop it once a few runs establish the true wall time.
+    timeout-minutes: 150
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies in isolated venv
+        run: |
+          python -m venv .venv-agent-eval
+          source .venv-agent-eval/bin/activate
+          python -m pip install --upgrade pip
+          # [dev] + [eval] for the eval harness and the Anthropic judge deps;
+          # [ui] for fastapi/uvicorn + the RAG deps gaia.ui.server imports at boot
+          # ([dev] alone fails at import), [api] for the connectors layer.
+          pip install -e ".[dev,eval,ui,api]"
+          # Make the venv bin available to subsequent workflow steps.
+          echo "$PWD/.venv-agent-eval/bin" >> "$GITHUB_PATH"
+
+      - name: Preflight — judge key, baselines, Lemonade
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "::error::ANTHROPIC_API_KEY is not set. The eval judge (src/gaia/eval/claude.py) reads it from the environment; without it every scenario scores as an infra error and the scorecard is meaningless. Add the ANTHROPIC_API_KEY repository secret, or run the eval locally on AMD hardware."
+            exit 1
+          fi
+
+          for CATEGORY in rag_quality context_retention tool_selection; do
+            BASELINE="${BASELINE_DIR}/scorecard_${CATEGORY}.json"
+            if [ ! -f "${BASELINE}" ]; then
+              echo "::error::Missing baseline ${BASELINE}. Pick the baseline matching the model under test; do not substitute another directory."
+              exit 1
+            fi
+            echo "baseline ok: ${BASELINE}"
+          done
+
+          # Lemonade is a persistent service on this pool — verify, don't start.
+          # Resolve the URL through the client's own config helper rather than
+          # hardcoding a port here: the default already moved once (8000 -> 13305
+          # in Lemonade v10.1.0) and a stale literal would fail a healthy runner.
+          LEMONADE_URL="$(python -c 'from gaia.llm.lemonade_client import _get_lemonade_config; print(_get_lemonade_config()[2])')"
+          if ! curl -sf --max-time 10 "${LEMONADE_URL}/health" > /dev/null; then
+            echo "::error::Lemonade Server not reachable at ${LEMONADE_URL}. The lemonade-eval runner is expected to keep it running; start it on the runner (lemonade-server serve) or set LEMONADE_BASE_URL to a reachable instance."
+            exit 1
+          fi
+          echo "Lemonade reachable at ${LEMONADE_URL}"
+
+      - name: Run the three eval categories serially
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Persistent runner — keep long-term memory out of the loop so state
+          # cannot bleed between the three chained categories or across runs.
+          # Established convention (test_chat_agent.yml, test_email_agent_eval.yml).
+          GAIA_MEMORY_DISABLED: '1'
+        run: |
+          set -euo pipefail
+          mkdir -p eval-out
+
+          # A leftover backend from a cancelled run still holds :4200 on this
+          # persistent runner, and the trap below does not fire on job cancellation.
+          # Without this check the wait loop can get 200 from that STALE server and
+          # evaluate the previous checkout while reporting green.
+          if curl -sf --max-time 3 "${BACKEND_URL}/api/health" > /dev/null; then
+            echo "::error::${BACKEND_URL} is already serving — a stale GAIA backend is running on this runner. Kill it (gaia kill) and re-run; otherwise this eval measures the previous checkout, not this one."
+            exit 1
+          fi
+
+          # The GAIA UI backend must live in the SAME shell session as the evals:
+          # a backgrounded child does not survive a step boundary, which is why
+          # test_agent_behavior_e2e.yml starts its server and runs its harness in
+          # one session. Hence backend start + all three categories in one step.
+          python -m gaia.ui.server --port 4200 --host 127.0.0.1 > eval-out/backend.log 2>&1 &
+          BACKEND_PID=$!
+          trap 'kill "${BACKEND_PID}" 2>/dev/null || true' EXIT
+
+          echo "Waiting up to ~10 min for the GAIA UI backend on ${BACKEND_URL} (pid ${BACKEND_PID})..."
+          READY=0
+          for _ in $(seq 1 60); do
+            if ! kill -0 "${BACKEND_PID}" 2>/dev/null; then
+              echo "::error::gaia.ui.server exited during startup. Backend log follows."
+              cat eval-out/backend.log
+              exit 1
+            fi
+            if curl -sf --max-time 5 "${BACKEND_URL}/api/health" > /dev/null; then
+              READY=1
+              break
+            fi
+            sleep 5
+          done
+          if [ "${READY}" -ne 1 ]; then
+            echo "::error::GAIA UI backend did not become healthy at ${BACKEND_URL}/api/health in time. Backend log follows."
+            cat eval-out/backend.log
+            exit 1
+          fi
+          echo "Backend healthy."
+
+          # Serial by construction: chained with && in a single step, never
+          # backgrounded with &. Two concurrent `gaia eval agent` runs race-evict
+          # each other's model out of the single Lemonade slot (CLAUDE.md).
+          #
+          # `gaia eval agent --category X` exits 0 whatever the scenarios score —
+          # it writes the scorecard and returns. So the && chain only short-
+          # circuits on a real harness crash, never on a regression; the
+          # regression verdict comes from the --compare step below.
+          #
+          # No --agent-type: the committed baselines were produced against the
+          # backend default (their `config` records only backend_url/model/budget),
+          # so passing one here would compare against a different agent.
+          run_category() {
+            CATEGORY="$1"
+            echo "=================================================================="
+            echo "  gaia eval agent --category ${CATEGORY}"
+            echo "=================================================================="
+            gaia eval agent \
+              --category "${CATEGORY}" \
+              --backend "${BACKEND_URL}" \
+              --model "${EVAL_MODEL}" \
+              2>&1 | tee "eval-out/${CATEGORY}.log"
+          }
+
+          run_category rag_quality \
+            && run_category context_retention \
+            && run_category tool_selection
+
+      - name: Collect scorecards from the printed run directories
+        # Not always(): on a timeout or concurrency cancel this would pile
+        # misleading "missing scorecard" errors on top of the cancellation.
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          MISSING=0
+          for CATEGORY in rag_quality context_retention tool_selection; do
+            LOG="eval-out/${CATEGORY}.log"
+            if [ ! -f "${LOG}" ]; then
+              echo "::error::No log for ${CATEGORY} — the chain stopped before it ran."
+              MISSING=1
+              continue
+            fi
+            # The runner prints an ABSOLUTE `Output: <run-dir>` line
+            # (src/gaia/eval/runner.py::_print_summary). Parse it; take the last
+            # match so a re-run inside one invocation wins. Never glob by mtime.
+            RUN_DIR="$(sed -n 's/^Output:[[:space:]]*//p' "${LOG}" | tail -n 1 | sed 's#/*[[:space:]]*$##')"
+            if [ -z "${RUN_DIR}" ] || [ ! -f "${RUN_DIR}/scorecard.json" ]; then
+              echo "::error::Could not resolve a scorecard for ${CATEGORY} (parsed run dir: '${RUN_DIR:-<none>}'). The eval did not print an 'Output:' line, or it did not write scorecard.json — see eval-out/${CATEGORY}.log."
+              MISSING=1
+              continue
+            fi
+            mkdir -p "eval-out/${CATEGORY}"
+            cp "${RUN_DIR}/scorecard.json" "eval-out/${CATEGORY}/scorecard.json"
+            # Traces are what you actually read to triage a regression — a bare
+            # scorecard tells you a score moved, not why.
+            if [ -d "${RUN_DIR}/traces" ]; then
+              cp -R "${RUN_DIR}/traces" "eval-out/${CATEGORY}/traces"
+            fi
+            echo "${CATEGORY}: ${RUN_DIR}"
+          done
+          exit "${MISSING}"
+
+      - name: Integrity gate — did we actually measure? (ignores `enforce`)
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          # UNCONDITIONAL. `--compare` only scores scenarios present on both sides,
+          # so a run whose scenarios vanished exits 0 and would pass as "no
+          # regression" (verified: 6 of 7 dropped -> exit 0). `enforce` decides
+          # whether a WORSE result blocks; it must never decide whether a
+          # NON-EXISTENT result blocks.
+          python - <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          BASELINE_DIR = Path("tests/fixtures/eval_baselines/gemma-4-e4b-d71cd914")
+          # Statuses that mean "no measurement was produced", as distinct from
+          # "measured and failed" (FAIL is a legitimate, comparable outcome).
+          NO_MEASUREMENT = (
+              "infra_error",
+              "errored",
+              "timeout",
+              "blocked",
+              "budget_exceeded",
+          )
+
+          problems = []
+          for category in ("rag_quality", "context_retention", "tool_selection"):
+              current = Path(f"eval-out/{category}/scorecard.json")
+              if not current.is_file():
+                  problems.append(f"{category}: no scorecard produced")
+                  continue
+
+              card = json.loads(current.read_text(encoding="utf-8"))
+              baseline = json.loads(
+                  (BASELINE_DIR / f"scorecard_{category}.json").read_text(encoding="utf-8")
+              )
+
+              got = {s["scenario_id"] for s in card.get("scenarios", [])}
+              want = {s["scenario_id"] for s in baseline.get("scenarios", [])}
+              if want - got:
+                  problems.append(
+                      f"{category}: {len(want - got)} baseline scenario(s) missing "
+                      f"from the run: {sorted(want - got)}"
+                  )
+
+              summary = card.get("summary", {})
+              unmeasured = {k: summary.get(k, 0) for k in NO_MEASUREMENT if summary.get(k)}
+              if unmeasured:
+                  problems.append(f"{category}: scenarios without a measurement: {unmeasured}")
+
+              print(
+                  f"{category}: {len(got)} scenario(s) run, "
+                  f"{len(want)} in baseline, unmeasured={unmeasured or 'none'}"
+              )
+
+          if problems:
+              for p in problems:
+                  print(f"::error::Integrity: {p}")
+              print(
+                  "\nThe eval did not produce a complete set of measurements, so the "
+                  "baseline comparison below is not trustworthy. This fails regardless "
+                  "of `enforce` — report mode softens a WORSE score, never a MISSING "
+                  "one. Check the backend/Lemonade logs in the artifact, then re-run."
+              )
+              sys.exit(1)
+          print("\nIntegrity OK — every baseline scenario ran and produced a measurement.")
+          PY
+
+      - name: Compare each category against its committed Gemma baseline
+        if: ${{ !cancelled() }}
+        run: |
+          set -uo pipefail
+          REGRESSED=""
+          FAILED_COMPARE=0
+
+          for CATEGORY in rag_quality context_retention tool_selection; do
+            CURRENT="eval-out/${CATEGORY}/scorecard.json"
+            BASELINE="${BASELINE_DIR}/scorecard_${CATEGORY}.json"
+            echo ""
+            echo "=================================================================="
+            echo "  ${CATEGORY}: ${BASELINE}  ->  ${CURRENT}"
+            echo "=================================================================="
+            if [ ! -f "${CURRENT}" ]; then
+              echo "::warning::${CATEGORY}: no scorecard produced — nothing to compare."
+              FAILED_COMPARE=1
+              continue
+            fi
+            # `--compare` exits 2 on status/score/time regressions, 0 otherwise
+            # (src/gaia/cli.py). It only DIFFS — the eval above already ran.
+            gaia eval agent --compare "${BASELINE}" "${CURRENT}"
+            RC=$?
+            case "${RC}" in
+              0) echo "${CATEGORY}: no regression vs baseline." ;;
+              2) echo "::warning::${CATEGORY}: regression detected vs ${BASELINE} (see the diff above)."
+                 REGRESSED="${REGRESSED} ${CATEGORY}" ;;
+              *) echo "::error::${CATEGORY}: compare failed with exit ${RC} (not a regression verdict — a harness/IO error)."
+                 FAILED_COMPARE=1 ;;
+            esac
+          done
+
+          echo ""
+          echo "=================================================================="
+          echo "  SUMMARY — enforce=${ENFORCE}"
+          echo "=================================================================="
+          if [ -n "${REGRESSED}" ]; then
+            echo "Regressed categories:${REGRESSED}"
+          else
+            echo "Regressed categories: none"
+          fi
+          echo "Baselines: ${BASELINE_DIR}"
+          echo "Scorecards uploaded as the 'agent-eval-gemma-consolidation' artifact."
+          echo ""
+          echo "Code-generation and data-analysis scenarios are EXPECTED to regress on"
+          echo "this consolidation (35B MoE -> ~4B dense) and that tradeoff is accepted."
+          echo "Read the per-scenario diff above before treating a regression as a bug."
+          echo ""
+          echo "TIME regressions (>2x per-scenario wall clock) count toward the same"
+          echo "verdict but are NOT comparable to this baseline: it was captured against"
+          echo "a remote Lemonade over ngrok on different hardware. Treat a time-only"
+          echo "regression as a hardware artifact until the baselines are regenerated"
+          echo "on this runner."
+          echo "=================================================================="
+
+          # A harness/IO error is never tolerated — it means we did not actually measure.
+          if [ "${FAILED_COMPARE}" -ne 0 ]; then
+            echo "::error::One or more comparisons could not be performed. Failing regardless of enforce."
+            exit 1
+          fi
+          if [ -n "${REGRESSED}" ]; then
+            if [ "${ENFORCE}" = "true" ]; then
+              echo "::error::Regressions in:${REGRESSED}. enforce=true — failing the build. Fix the prompt/tooling and re-run, or (if the regression is intentional) regenerate the baseline with --save-baseline and call it out in the PR description."
+              exit 1
+            fi
+            echo "Report mode (enforce=false): regressions logged as warnings, build stays green."
+            echo "Re-dispatch this workflow with enforce=true to make them blocking."
+          fi
+
+      - name: Upload scorecards + eval logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-eval-gemma-consolidation
+          path: eval-out/
+          if-no-files-found: warn
