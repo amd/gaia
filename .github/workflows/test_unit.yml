@@ -67,8 +67,12 @@ jobs:
           # keyring + httpx + respx are required by tests/unit/connections/
           # (issue #915). The in-memory keyring backend in tests/conftest.py
           # avoids the SecretService daemon prerequisite on Linux runners.
+          # matplotlib is required by tests/unit/test_perf_analysis.py, which
+          # exercises the perf-vis plotting functions headlessly (Agg backend).
+          # It stays out of the runtime extras on purpose — gaia.perf_analysis
+          # imports it lazily and errors loudly when it is missing.
           uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pytest-timeout \
-                                  pyfakefs keyring httpx respx
+                                  pyfakefs keyring httpx respx matplotlib
           uv pip install --system -e ".[api]"
 
       - name: Validate packaging integrity
@@ -184,7 +188,7 @@ jobs:
       - name: Install dependencies
         run: |
           uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout \
-                                  pyfakefs keyring httpx respx
+                                  pyfakefs keyring httpx respx matplotlib
           uv pip install --system -e ".[api]"
 
       - name: Validate packaging integrity
