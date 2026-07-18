@@ -352,17 +352,17 @@ def test_calendar_events_get_forwards_query_params():
     or importlib.util.find_spec("uvicorn") is None,
     reason="email agent + uvicorn required for live proxy round-trip",
 )
-def test_live_proxy_health_and_version_roundtrip(monkeypatch):
+def test_live_proxy_health_and_version_roundtrip():
     # Boundary check (mocks prove 'we called it', not 'the call is valid'): spawn
     # a real dev-mode sidecar and round-trip /health + /version through the proxy
     # over real HTTP to prove the wire contract holds.
-    from gaia.ui.email_sidecar.manager import EmailSidecarManager
+    from gaia.daemon.sidecars.manager import AgentSidecarManager
+    from gaia.daemon.sidecars.spec import builtin_specs
 
-    monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
-    m = EmailSidecarManager(health_timeout=60.0)
+    m = AgentSidecarManager(builtin_specs()["email"], mode="dev", health_timeout=60.0)
     base = m.start()
     try:
-        proxy = EmailSidecarProxy(base, timeout=10.0)
+        proxy = EmailSidecarProxy(base, auth_token=m.auth_token, timeout=10.0)
         assert proxy.health()["status"] == "ok"
         version = proxy.version()
         assert "apiVersion" in version and "agentVersion" in version
@@ -387,11 +387,12 @@ def _lemonade_up() -> bool:
     or importlib.util.find_spec("uvicorn") is None,
     reason="email agent + uvicorn required for live triage round-trip",
 )
-def test_live_triage_roundtrip_through_manager_proxy(monkeypatch):
-    # End-to-end 'the call is valid' proof: real dev sidecar + the manager-owned
-    # proxy + the FROZEN triage contract. With Lemonade up we get a structured
-    # result; with it down we get the sidecar's actionable 502 surfaced verbatim
-    # via SidecarHTTPError. Either outcome proves the wire + error path, not a mock.
+def test_live_triage_roundtrip_through_manager_proxy():
+    # End-to-end 'the call is valid' proof: real dev sidecar + a proxy bound to
+    # the manager's sidecar + the FROZEN triage contract. With Lemonade up we get
+    # a structured result; with it down we get the sidecar's actionable 502
+    # surfaced verbatim via SidecarHTTPError. Either outcome proves the wire +
+    # error path, not a mock.
     from gaia_agent_email.contract import (
         EmailAddress,
         EmailMessage,
@@ -399,8 +400,9 @@ def test_live_triage_roundtrip_through_manager_proxy(monkeypatch):
         SingleEmailInput,
     )
 
+    from gaia.daemon.sidecars.manager import AgentSidecarManager
+    from gaia.daemon.sidecars.spec import builtin_specs
     from gaia.ui.email_sidecar.errors import SidecarHTTPError
-    from gaia.ui.email_sidecar.manager import EmailSidecarManager
 
     payload = SingleEmailInput(
         message=EmailMessage(
@@ -413,9 +415,10 @@ def test_live_triage_roundtrip_through_manager_proxy(monkeypatch):
     )
     body = EmailTriageRequest(payload=payload).model_dump(by_alias=True, mode="json")
 
-    monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
-    with EmailSidecarManager(health_timeout=60.0) as m:
-        proxy = m.proxy(timeout=180.0)
+    with AgentSidecarManager(
+        builtin_specs()["email"], mode="dev", health_timeout=60.0
+    ) as m:
+        proxy = EmailSidecarProxy(m.base_url, auth_token=m.auth_token, timeout=180.0)
         if _lemonade_up():
             result = proxy.triage(body)
             assert result["request_kind"] == "single"

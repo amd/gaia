@@ -242,6 +242,32 @@ function OAuthConfigureBody({
     const [err, setErr] = useState<string | null>(null);
     const [setupValues, setSetupValues] = useState<Record<string, string>>({});
 
+    // #2117 — agents that declare this connector as a requirement. Connecting
+    // grants the selected agents in the same flow (default-on), so a mailbox
+    // connected here is usable immediately instead of hitting a "no grant"
+    // dead end that only a CLI command could fix.
+    const { agents } = useChatStore();
+    const grantableAgents = agents.filter(
+        (a) =>
+            a.namespaced_agent_id &&
+            a.required_connections?.some((rc) => rc.connector_id === connector.id),
+    );
+    const grantableKey = grantableAgents
+        .map((a) => a.namespaced_agent_id)
+        .join(',');
+    const [grantSel, setGrantSel] = useState<Set<string>>(() => new Set());
+    // Default every declaring agent ON once the agent list resolves.
+    useEffect(() => {
+        setGrantSel(new Set(grantableAgents.map((a) => a.namespaced_agent_id!)));
+    }, [grantableKey]); // eslint-disable-line react-hooks/exhaustive-deps
+    const toggleGrant = (nsid: string) =>
+        setGrantSel((prev) => {
+            const next = new Set(prev);
+            next.has(nsid) ? next.delete(nsid) : next.add(nsid);
+            return next;
+        });
+    const selectedGrantAgents = () => [...grantSel];
+
     // Refresh the tile when the user returns to the window after completing OAuth.
     useEffect(() => {
         const handleFocus = () => { onChanged(); };
@@ -272,6 +298,7 @@ function OAuthConfigureBody({
                 connector.available_scopes?.length
                     ? connector.available_scopes
                     : connector.default_scopes,
+                selectedGrantAgents(),
             );
             openAuthUrl(r.authorization_url);
             // onChanged is called via the 'focus' listener when the user returns.
@@ -316,6 +343,7 @@ function OAuthConfigureBody({
             const result = await api.configureConnector(connector.id, {
                 ...setupValues,
                 scopes,
+                grant_agents: selectedGrantAgents(),
             });
             const url =
                 typeof result.authorization_url === 'string'
@@ -377,6 +405,29 @@ function OAuthConfigureBody({
                             )}
                         </label>
                     ))}
+                </div>
+            )}
+            {!connector.configured && grantableAgents.length > 0 && (
+                <div className="oauth-grant-onconnect">
+                    <p className="oauth-grant-onconnect-label">
+                        Grant access to these agents when you connect:
+                    </p>
+                    {grantableAgents.map((a) => (
+                        <label
+                            key={a.namespaced_agent_id}
+                            className="oauth-grant-onconnect-item"
+                        >
+                            <input
+                                type="checkbox"
+                                checked={grantSel.has(a.namespaced_agent_id!)}
+                                onChange={() => toggleGrant(a.namespaced_agent_id!)}
+                            />
+                            <span>{a.name}</span>
+                        </label>
+                    ))}
+                    <p className="oauth-grant-onconnect-help">
+                        You can change these any time under Per-agent grants below.
+                    </p>
                 </div>
             )}
             {err && (

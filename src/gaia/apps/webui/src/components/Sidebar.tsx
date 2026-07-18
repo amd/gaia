@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Plus, Search, Settings, Sun, Moon, Trash2, PanelLeftClose, PanelLeftOpen, Smartphone, Brain, EyeOff, Clock, Loader2 } from 'lucide-react';
+import { Plus, Search, Settings, Sun, Moon, Trash2, PanelLeftClose, PanelLeftOpen, Smartphone, Brain, EyeOff, Clock, Loader2, LayoutGrid } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -113,7 +113,7 @@ function SessionItem({ session: s, isActive, isRunning, isPendingDelete, isDelet
 export function Sidebar({ onNewTask, onHome, tunnelActive, tunnelLoading, onMobileToggle }: SidebarProps) {
     const {
         sessions, currentSessionId, setCurrentSession, removeSession, addSession,
-        setMessages, theme, toggleTheme, setShowSettings, setShowMemoryDashboard, setShowSchedules,
+        setMessages, theme, toggleTheme, setShowSettings, setShowMemoryDashboard, setShowSchedules, setShowHub,
         sidebarOpen, setSidebarOpen, setLoadingMessages,
         sidebarCollapsed, toggleSidebarCollapsed,
         sidebarWidth, setSidebarWidth,
@@ -461,6 +461,9 @@ export function Sidebar({ onNewTask, onHome, tunnelActive, tunnelLoading, onMobi
                             <Smartphone size={17} />
                         </button>
                     )}
+                    <button className="btn-icon" onClick={() => setShowHub(true)} title="Agent Hub" aria-label="Open Agent Hub">
+                        <LayoutGrid size={17} />
+                    </button>
                     <button className="btn-icon" onClick={() => setShowMemoryDashboard(true)} title="Memory Dashboard" aria-label="Memory Dashboard">
                         <Brain size={17} />
                     </button>

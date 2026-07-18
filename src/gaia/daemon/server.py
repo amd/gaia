@@ -124,8 +124,15 @@ def run(host: str = HOST) -> None:
     """Start the daemon and serve until shutdown. Blocks."""
     import uvicorn
 
+    from gaia.daemon.migrate import run_migrations
     from gaia.daemon.sidecars import ledger
     from gaia.daemon.sidecars.spec import builtin_specs
+
+    # One-time versioned state migration (§0.10 step 0). Runs before the port is
+    # bound so a corrupt/unknown-newer custody schema refuses loudly (MigrationError
+    # propagates and the daemon exits) rather than serving over ambiguous state.
+    result = run_migrations()
+    logger.info("daemon: custody schema %s", result)
 
     port = _find_free_port(host)
     token = secrets.token_urlsafe(32)

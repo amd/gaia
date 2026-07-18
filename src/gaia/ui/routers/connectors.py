@@ -141,6 +141,12 @@ def _require_mcp_server(connector_id: str) -> None:
 
 class AuthorizeRequest(BaseModel):
     scopes: List[str] = Field(default_factory=list)
+    # #2117 — namespaced agent ids to grant this connector once OAuth
+    # completes, so connecting a mailbox grants it to the email agent in the
+    # same flow. The router resolves each agent's required scopes from its
+    # REQUIRED_CONNECTORS declaration (single source of truth) before handing
+    # the map to the flow.
+    grant_agents: List[str] = Field(default_factory=list)
 
 
 class GrantRequest(BaseModel):
@@ -288,6 +294,52 @@ def _raise_http_for(exc: ConnectorsError) -> HTTPException:
 # ─────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────
+
+
+def _resolve_grant_scopes(
+    request: Request, connector_id: str, agent_ids: List[str]
+) -> Dict[str, List[str]]:
+    """Resolve ``[namespaced_agent_id]`` → ``{agent_id: required_scopes}`` (#2117).
+
+    Each agent's scopes come from its ``REQUIRED_CONNECTORS`` declaration for
+    ``connector_id`` — the same single source of truth the forwarded-connection
+    route uses. Fails loudly (no silent skips): an unknown agent → 404; an
+    agent that declares no requirement for this connector → 400. Both would
+    otherwise produce a connect that silently grants nothing — the exact
+    dead-end this flow removes.
+    """
+    if not agent_ids:
+        return {}
+    registry = getattr(request.app.state, "agent_registry", None)
+    if registry is None:
+        raise HTTPException(status_code=503, detail="Agent registry not initialized")
+
+    by_nsid = {reg.namespaced_agent_id: reg for reg in registry.list()}
+    unknown = [nsid for nsid in agent_ids if nsid not in by_nsid]
+    if unknown:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "unknown_agent", "agent_ids": unknown},
+        )
+
+    resolved: Dict[str, List[str]] = {}
+    for nsid in agent_ids:
+        reg = by_nsid[nsid]
+        scopes: set[str] = set()
+        for cr in reg.required_connections:
+            if cr.connector_id == connector_id:
+                scopes.update(cr.scopes)
+        if not scopes:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "agent_declares_no_scopes",
+                    "agent_id": nsid,
+                    "connector_id": connector_id,
+                },
+            )
+        resolved[nsid] = sorted(scopes)
+    return resolved
 
 
 def _connector_summary(connector_id: str) -> Dict[str, Any]:
@@ -619,11 +671,23 @@ async def get_connector(connector_id: str) -> Dict[str, Any]:
 
 @router.post("/{connector_id}/configure", dependencies=[Depends(_require_ui_header)])
 async def configure_connector(
-    connector_id: str, body: ConfigureRequest
+    request: Request, connector_id: str, body: ConfigureRequest
 ) -> Dict[str, Any]:
-    """Configure a connector — stores credentials and (for MCP servers) writes mcp_servers.json."""
+    """Configure a connector — stores credentials and (for MCP servers) writes mcp_servers.json.
+
+    For the first-run OAuth "Save & Connect" path, ``config.grant_agents`` (a
+    list of namespaced agent ids) is resolved to a ``{agent_id: scopes}`` map so
+    the mailbox is granted to those agents when the flow completes (#2117) — the
+    same behaviour as the plain ``authorize`` path.
+    """
+    config = dict(body.config)
+    raw_grant_agents = config.get("grant_agents")
+    if raw_grant_agents:
+        config["grant_agents"] = _resolve_grant_scopes(
+            request, connector_id, list(raw_grant_agents)
+        )
     try:
-        result = await configure(connector_id, body.config)
+        result = await configure(connector_id, config)
     except KeyError:
         raise HTTPException(
             status_code=404, detail=f"Unknown connector: {connector_id!r}"
@@ -741,10 +805,22 @@ async def disable_connector(connector_id: str) -> Dict[str, Any]:
 
 
 @router.post("/{connector_id}/authorize", dependencies=[Depends(_require_ui_header)])
-async def authorize(connector_id: str, body: AuthorizeRequest) -> Dict[str, Any]:
-    """Start an OAuth PKCE flow. Returns {flow_id, authorization_url}."""
+async def authorize(
+    request: Request, connector_id: str, body: AuthorizeRequest
+) -> Dict[str, Any]:
+    """Start an OAuth PKCE flow. Returns {flow_id, authorization_url}.
+
+    When ``grant_agents`` is present, the named agents are granted this
+    connector (with their declared REQUIRED_CONNECTORS scopes) the moment the
+    OAuth exchange succeeds — connecting a mailbox grants it to the email agent
+    in the same flow (#2117). Scope resolution happens up front so an unknown
+    or non-declaring agent fails the request before any browser step.
+    """
+    grant_map = _resolve_grant_scopes(request, connector_id, body.grant_agents)
     try:
-        return await connections.start_authorization(connector_id, scopes=body.scopes)
+        return await connections.start_authorization(
+            connector_id, scopes=body.scopes, grant_agents=grant_map or None
+        )
     except ConnectorsError as e:
         raise _raise_http_for(e) from e
 
