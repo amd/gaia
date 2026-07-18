@@ -212,8 +212,17 @@ export async function getConnector(connectorId: string): Promise<ConnectorRow> {
 export async function authorizeConnector(
     connectorId: string,
     scopes: string[],
+    grantAgents: string[] = [],
 ): Promise<{ flow_id: string; authorization_url: string }> {
-    return apiFetch('POST', `/connectors/${connectorId}/authorize`, { scopes }, UI_HEADER);
+    // `grantAgents` (#2117) — namespaced agent ids to grant this connector the
+    // moment OAuth completes, so connecting a mailbox grants it to the email
+    // agent in the same flow. The backend resolves each agent's required scopes.
+    return apiFetch(
+        'POST',
+        `/connectors/${connectorId}/authorize`,
+        { scopes, grant_agents: grantAgents },
+        UI_HEADER,
+    );
 }
 
 export async function configureConnector(

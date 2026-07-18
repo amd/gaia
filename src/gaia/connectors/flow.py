@@ -37,8 +37,8 @@ import logging
 import secrets
 import uuid
 import webbrowser
-from dataclasses import dataclass
-from typing import Any, Dict, Iterable, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, Iterable, Mapping, Optional
 
 import httpx
 from aiohttp import web
@@ -96,6 +96,10 @@ class _PendingFlow:
     redirect_uri: str
     runner: web.AppRunner
     future: "asyncio.Future[Dict[str, Any]]"
+    # Per-agent grants to commit atomically with a successful token exchange
+    # (#2117). Maps a namespaced agent id → the scopes to grant for this
+    # connector. Empty means "connect only" — the legacy behaviour.
+    grant_agents: Dict[str, list[str]] = field(default_factory=dict)
 
 
 # v1 single-flow constraint per the plan: only one flow can be pending at
@@ -136,6 +140,7 @@ def _decode_email_from_id_token(id_token: str) -> Optional[str]:
 async def start_authorization(
     provider_id: str,
     scopes: Iterable[str],
+    grant_agents: Optional[Mapping[str, Iterable[str]]] = None,
 ) -> Dict[str, Any]:
     """
     Begin the OAuth flow for ``provider_id`` with the requested scopes.
@@ -147,6 +152,15 @@ async def start_authorization(
 
     The caller is expected to await ``complete_authorization(flow_id)``
     to wait for the redirect.
+
+    ``grant_agents`` (#2117) maps a namespaced agent id → the scopes to
+    grant that agent for ``provider_id`` once the token exchange succeeds.
+    This makes the grant part of the same connect flow: connecting a
+    mailbox from the email surface hands the email agent access without a
+    separate CLI step. The grants are committed in
+    ``_exchange_code_for_tokens`` — a grant that cannot be written fails
+    the whole flow loudly rather than leaving a connected-but-ungranted
+    dead end.
     """
     if _pending:
         # User re-clicking Connect signals the previous flow is dead.
@@ -209,6 +223,10 @@ async def start_authorization(
         redirect_uri=redirect_uri,
         runner=runner,
         future=future,
+        grant_agents={
+            agent_id: list(agent_scopes)
+            for agent_id, agent_scopes in (grant_agents or {}).items()
+        },
     )
 
     # Fire-and-forget the browser launch — A8: do not block the event
@@ -229,8 +247,9 @@ async def start_authorization(
     asyncio.ensure_future(_open_browser())
 
     logger.info(
-        "flow: started scopes=%d flow_id=%s",
+        "flow: started scopes=%d grant_agents=%d flow_id=%s",
         len(scopes_list),
+        len(_pending[flow_id].grant_agents),
         flow_id,
     )
     return {"flow_id": flow_id, "authorization_url": authorization_url}
@@ -328,6 +347,53 @@ async def _handle_callback(request: web.Request, flow_id: str) -> web.Response:
     return web.Response(text=_SUCCESS_HTML, content_type="text/html")
 
 
+async def _commit_grants(flow: _PendingFlow) -> None:
+    """Write the per-agent grants requested at ``start_authorization`` time.
+
+    Called only after the connection is persisted. Each grant is written
+    through the same ledger the CLI/SDK/Settings panel use, so it is
+    immediately visible and revocable there. Emits ``connector.grant.changed``
+    per agent so subscribed UIs refresh the grants panel without a reload.
+
+    Fails loudly: a grant that cannot be written raises ``ConnectorsError``,
+    which propagates to ``_handle_callback`` and surfaces on the flow future.
+    Connecting-without-granting is the bug this flow exists to prevent, so a
+    grant failure must not be swallowed.
+    """
+    if not flow.grant_agents:
+        return
+
+    # Local import mirrors the lazy-keyring contract in connectors/__init__.py
+    # and keeps flow.py's module-load dependency graph unchanged.
+    from gaia.connectors.grants import grant_agent
+
+    for agent_id, agent_scopes in flow.grant_agents.items():
+        try:
+            grant_agent(flow.provider_id, agent_id, list(agent_scopes))
+        except Exception as e:
+            raise ConnectorsError(
+                f"Connected {flow.provider_id!r} but failed to grant it to "
+                f"agent {agent_id!r}: {e}. The connection was saved; grant the "
+                f"agent manually from Settings → Connectors, or via "
+                f"`gaia connectors grants grant {flow.provider_id} {agent_id} "
+                f"--scopes {' '.join(agent_scopes)}`."
+            ) from e
+        await emit(
+            "connector.grant.changed",
+            {
+                "connector_id": flow.provider_id,
+                "agent_id": agent_id,
+                "scopes": list(agent_scopes),
+            },
+        )
+        logger.info(
+            "flow: granted connector_id=%s agent_id=%s scopes=%d on connect",
+            flow.provider_id,
+            agent_id,
+            len(agent_scopes),
+        )
+
+
 async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, Any]:
     """Run the token-exchange step and persist the connection."""
     provider = get_provider(flow.provider_id)
@@ -367,6 +433,14 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
     # No separate state-cache write needed — the keyring blob written
     # above is the source of truth for "configured / account / scopes",
     # and the router reads it via ``store.peek_connection`` for the UI.
+
+    # #2117 — commit the per-agent grants requested at connect time, in the
+    # same flow as the connection. This is what closes the consumer-breaking
+    # dead end: a mailbox connected from the email surface now hands the
+    # email agent access without a follow-up CLI grant. Fail loudly — a
+    # connection that persisted but whose grant could not be written is the
+    # exact silent half-success the connect flow must not produce.
+    await _commit_grants(flow)
 
     # Google's token endpoint does not return a ``connected_at`` field
     # (RFC 6749 has no such concept) — record the local wall-clock at

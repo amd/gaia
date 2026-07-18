@@ -24,6 +24,7 @@
 import { useCallback, useState } from 'react';
 import { AlertCircle, ExternalLink, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
+import { useChatStore } from '../../stores/chatStore';
 import './EmailConnectCta.css';
 
 // ── Detection ────────────────────────────────────────────────────────────────
@@ -99,11 +100,14 @@ function openAuthUrl(url: string): void {
 function ProviderButton({
     connectorId,
     label,
+    grantAgents,
     done,
     onDone,
 }: {
     connectorId: string;
     label: string;
+    /** Namespaced agent ids to grant this connector when OAuth completes (#2117). */
+    grantAgents: string[];
     done: boolean;
     onDone: () => void;
 }) {
@@ -119,7 +123,9 @@ function ProviderButton({
                 connector.available_scopes && connector.available_scopes.length > 0
                     ? connector.available_scopes
                     : connector.default_scopes;
-            const r = await api.authorizeConnector(connectorId, scopes);
+            // Grant the connecting agent(s) in the same flow — this CTA is
+            // email-initiated, so triage works right after consent with no CLI.
+            const r = await api.authorizeConnector(connectorId, scopes, grantAgents);
             openAuthUrl(r.authorization_url);
             onDone();
         } catch (e) {
@@ -127,7 +133,7 @@ function ProviderButton({
         } finally {
             setBusy(false);
         }
-    }, [connectorId, onDone]);
+    }, [connectorId, grantAgents, onDone]);
 
     return (
         <div className="email-connect-cta__provider-slot">
@@ -171,6 +177,23 @@ export function EmailConnectCta({
     const [googleDone, setGoogleDone] = useState(false);
     const [microsoftDone, setMicrosoftDone] = useState(false);
 
+    // #2117 — resolve the namespaced ids of agents that declare each mailbox
+    // connector so connecting grants them in the same flow. This CTA is
+    // email-initiated, so the email agent is granted the moment consent
+    // completes — no follow-up CLI grant, no "no grant for google" dead end.
+    const { agents } = useChatStore();
+    const grantAgentsFor = useCallback(
+        (cid: string): string[] =>
+            agents
+                .filter(
+                    (a) =>
+                        a.namespaced_agent_id &&
+                        a.required_connections?.some((rc) => rc.connector_id === cid),
+                )
+                .map((a) => a.namespaced_agent_id!),
+        [agents],
+    );
+
     // Resolve which provider(s) to surface. Honor an explicit google/microsoft
     // override; any other value (or none) falls back to content detection so we
     // never render zero connect buttons (no silent dead-end).
@@ -203,6 +226,7 @@ export function EmailConnectCta({
                     <ProviderButton
                         connectorId="google"
                         label="Google"
+                        grantAgents={grantAgentsFor('google')}
                         done={googleDone}
                         onDone={() => setGoogleDone(true)}
                     />
@@ -211,6 +235,7 @@ export function EmailConnectCta({
                     <ProviderButton
                         connectorId="microsoft"
                         label="Microsoft"
+                        grantAgents={grantAgentsFor('microsoft')}
                         done={microsoftDone}
                         onDone={() => setMicrosoftDone(true)}
                     />
