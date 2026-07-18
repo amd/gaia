@@ -21,7 +21,7 @@ _ALLOWLIST = {
     "https://amd-gaia.ai/install.ps1",
     "https://amd-gaia.ai/install.sh",
 }
-_SCAN_EXTENSIONS = {".py", ".tsx", ".ts", ".js", ".json", ".md"}
+_SCAN_EXTENSIONS = {".py", ".tsx", ".ts", ".js", ".cjs", ".mjs", ".json", ".md"}
 _SKIP_PATH_PARTS = {"node_modules", "dist", ".turbo"}
 
 

@@ -81,7 +81,7 @@ Logs: ~/.gaia/electron-install.log
 Update:   npm install -g @amd-gaia/agent-ui@latest
 Uninstall: npm uninstall -g @amd-gaia/agent-ui && rm -rf ~/.gaia
 
-Documentation: https://amd-gaia.ai/guides/agent-ui
+Documentation: https://amd-gaia.ai/docs/guides/agent-ui
 `);
 }
 
