@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPServerStatus, AgentMCPServerStatus, AgentInfo, DiskAgentInfo, AgentCatalogResponse, InstallStatus } from '../types';
+import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerInfo, MCPServerStatus, AgentMCPServerStatus, AgentInfo, DiskAgentInfo, AgentCatalogResponse, InstallStatus, PreflightReport, OnboardingStatusResponse } from '../types';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 
@@ -121,6 +121,23 @@ export async function loadModel(modelName: string, ctxSize?: number): Promise<{ 
 
 export async function downloadModel(modelName: string, force = false): Promise<{ status: string; model: string }> {
     return apiFetch('POST', '/system/download-model', { model_name: modelName, force });
+}
+
+// -- Onboarding (first-run wizard, #1726/#1727) --------------------------------
+
+export async function getOnboardingPreflight(): Promise<PreflightReport> {
+    return apiFetch<PreflightReport>('GET', '/onboarding/preflight');
+}
+
+export async function getOnboardingStatus(): Promise<OnboardingStatusResponse> {
+    return apiFetch<OnboardingStatusResponse>('GET', '/onboarding/status');
+}
+
+export async function completeOnboarding(skipped: boolean): Promise<OnboardingStatusResponse> {
+    return apiFetch<OnboardingStatusResponse>('POST', '/onboarding/complete', {
+        skipped,
+        completed_at: new Date().toISOString(),
+    });
 }
 
 // -- Agents --------------------------------------------------------------------
