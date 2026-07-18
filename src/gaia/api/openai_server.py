@@ -14,7 +14,6 @@ Endpoints:
 """
 
 import asyncio
-import importlib.util
 import json
 import logging
 import os
@@ -126,26 +125,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Email Triage Agent REST surface (#1229): POST /v1/email/{triage,draft,send}.
-# Ships with the standalone ``gaia-agent-email`` wheel (#1102); mount it only
-# when that wheel is installed so the core API server still starts without it.
-# Gate on the wheel's presence via find_spec (no import side effect), then
-# import the router OUTSIDE the gate so a genuine broken import inside an
-# installed wheel fails loudly rather than being swallowed as "not installed"
-# (no-silent-fallback rule).
-if importlib.util.find_spec("gaia_agent_email") is None:
-    logger.info(
-        "Email REST routes unavailable: install the email agent "
-        "(`pip install gaia-agent-email`) to enable POST /v1/email/*."
-    )
-else:
-    from gaia_agent_email.agent_routes import router as email_agent_router
-    from gaia_agent_email.api_routes import router as email_router
-
-    app.include_router(email_router)
-    # Stateful conversational surface (/v1/email/agent/*): session-scoped agent
-    # with memory + tool-confirmation, for hosts driving the full agent over HTTP.
-    app.include_router(email_agent_router)
+# The email agent's REST surface (POST /v1/email/*) is no longer mounted
+# in-process (#2176). It was the last in-process agent mount after the v2
+# thin-host migration (#1896); the API server now reaches every agent —
+# email included — the same way the UI does: as a thin client of the
+# always-on daemon, via the /v1/<agent>/* relay mounted below (#2178 / V2-17).
+# So `gaia api` exposes /v1/email/{triage,draft,send,...} by relaying to the
+# out-of-process email sidecar, never by importing that wheel in-process.
 
 
 # Raw request logging middleware (debug mode only)

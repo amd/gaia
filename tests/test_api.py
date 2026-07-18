@@ -1261,11 +1261,26 @@ class TestErrorResponseFormat:
 # =============================================================================
 #
 # These exercise the /v1/email/* endpoints exposed by the gaia-agent-email
-# wheel (gaia_agent_email.api_routes), mounted conditionally by openai_server.
+# wheel (gaia_agent_email.api_routes). The email agent is no longer mounted
+# in-process on the core API server (#2176) — `gaia api` reaches it via the
+# daemon relay. So these contract tests run against the wheel's OWN app (the
+# same standalone app the OpenAPI exporter builds), decoupled from `gaia api`.
 # The triage endpoint accepts / returns the FROZEN #1262 contract
 # (gaia_agent_email.contract). The send endpoint enforces the confirmation
 # gate (#1264) at the API boundary: a send without a valid confirmation token
 # is rejected with a 4xx — never silently auto-confirmed.
+
+
+def _email_test_app():
+    """Standalone FastAPI app mounting only the email wheel's REST router.
+
+    Post-#2176 the core API server holds no email routes, so these tests build
+    the email surface directly from the wheel — the exact app its OpenAPI
+    exporter and freeze/sidecar servers mount.
+    """
+    from gaia_agent_email.export_openapi import build_app
+
+    return build_app()
 
 
 def _single_email_payload(
@@ -1373,7 +1388,7 @@ class TestEmailTriageEndpoint:
         task_store.init_schema(task_db)
         monkeypatch.setattr(email_routes, "resolve_action_db", lambda: task_db)
 
-        self.client = TestClient(app)
+        self.client = TestClient(_email_test_app())
 
     def test_single_email_in_structured_out(self):
         """A single email in returns a contract-valid structured result."""
@@ -1499,7 +1514,7 @@ class TestEmailSendConfirmationGate:
         monkeypatch.setattr(
             email_routes, "resolve_send_backend", lambda: self.fake_backend
         )
-        self.client = TestClient(app)
+        self.client = TestClient(_email_test_app())
 
     def test_send_without_confirmation_token_is_4xx(self):
         """No confirmation token → server-side rejection in the 4xx range."""
@@ -1685,7 +1700,7 @@ class TestEmailSendOffLoop:
 
         monkeypatch.setattr(email_routes, "resolve_send_backend", _LoopAssertingBackend)
 
-        client = TestClient(app)
+        client = TestClient(_email_test_app())
         # Get a valid token first
         draft_resp = client.post(
             "/v1/email/draft",
@@ -1744,7 +1759,7 @@ class TestEmailSendOutlook502Fix:
                 return {"id": "", "sent": True, "to": to, "subject": subject}
 
         monkeypatch.setattr(email_routes, "resolve_send_backend", _OutlookLikeBackend)
-        client = TestClient(app)
+        client = TestClient(_email_test_app())
         draft = client.post(
             "/v1/email/draft",
             json={
@@ -1787,7 +1802,7 @@ class TestEmailSendOutlook502Fix:
                 return {"id": ""}  # No 'sent' key — unknown failure
 
         monkeypatch.setattr(email_routes, "resolve_send_backend", _SilentNoOpBackend)
-        client = TestClient(app)
+        client = TestClient(_email_test_app())
         draft = client.post(
             "/v1/email/draft",
             json={
