@@ -138,6 +138,14 @@ MOCKED_RESPONSES = {
     """,
 }
 
+# Skip: these tests pre-date the BlenderAgent/base-Agent refactor — the
+# ``agent.llm`` mock seam is no longer the LLM boundary (they'd hit a live
+# Lemonade server) and patched internals (_get_domain_patterns,
+# _create_fallback_response) were removed. Rewrite tracked in #1992.
+_STALE_REFACTOR_SKIP = pytest.mark.skip(
+    reason="stale: pre-dates BlenderAgent refactor; needs rewrite (#1992)"
+)
+
 # ----- Fixtures -----
 
 
@@ -247,7 +255,6 @@ def agent(mock_llm_client, mock_mcp_client, mock_console):
     """Create a Blender agent with mock clients for testing."""
     agent = BlenderAgent(
         mcp=mock_mcp_client,
-        max_retries=3,
         debug_prompts=False,
         max_steps=10,
     )
@@ -286,6 +293,7 @@ class TestJSONValidation:
         assert parsed["plan"][0]["tool"] == "clear_scene"
         assert parsed["tool"] == "clear_scene"
 
+    @_STALE_REFACTOR_SKIP
     def test_json_extraction_from_invalid_response(self, agent):
         """Test extraction of JSON from invalid response with markdown and text."""
         parsed = agent._parse_llm_response(INVALID_JSON_RESPONSE)
@@ -296,6 +304,7 @@ class TestJSONValidation:
         assert parsed["tool"] == "create_object"
         assert "tool_args" in parsed
 
+    @_STALE_REFACTOR_SKIP
     def test_json_correction_for_single_quotes(self, agent):
         """Test correction of JSON with single quotes instead of double quotes."""
         # Configure the mock to return a corrected response
@@ -309,6 +318,7 @@ class TestJSONValidation:
         assert "tool" in parsed
         assert "tool_args" in parsed
 
+    @_STALE_REFACTOR_SKIP
     def test_natural_language_fallback(self, agent):
         """Test fallback mechanism for natural language responses."""
         # Mock domain pattern detection with a specific return value
@@ -336,6 +346,7 @@ class TestJSONValidation:
                 assert parsed["tool"] == "create_object"
                 assert parsed["tool_args"]["type"] == "CUBE"
 
+    @_STALE_REFACTOR_SKIP
     def test_retry_mechanism(self, agent):
         """Test the retry mechanism for invalid JSON responses."""
         # Configure mock to return valid JSON on second try
@@ -354,6 +365,7 @@ class TestJSONValidation:
             assert "goal" in parsed
             assert "tool" in parsed
 
+    @_STALE_REFACTOR_SKIP
     def test_graduated_retry_escalation(self, agent):
         """Test that retry prompts escalate in strictness."""
         # Configure to return valid JSON on second try
@@ -373,6 +385,7 @@ class TestJSONValidation:
                 # Check that the correction prompt was called
                 mock_create_prompt.assert_called_once()
 
+    @_STALE_REFACTOR_SKIP
     def test_blender_domain_patterns(self, agent):
         """Test Blender-specific domain patterns for natural language responses."""
         # Get the domain patterns
@@ -390,6 +403,7 @@ class TestJSONValidation:
         assert match is not None
         assert match.group(1) == "cube"
 
+    @_STALE_REFACTOR_SKIP
     def test_fallback_response(self, agent):
         """Test the fallback response mechanism."""
         fallback = agent._create_fallback_response(
@@ -432,6 +446,7 @@ class TestAgentIntegration:
     @pytest.mark.parametrize(
         "example", [EXAMPLE_TASKS[0]]
     )  # Test just the first example for speed
+    @_STALE_REFACTOR_SKIP
     def test_example_tasks(self, agent, example):
         """Test processing example tasks with the agent."""
         # Configure a simple success response based on the example
@@ -463,6 +478,7 @@ class TestAgentIntegration:
         assert parsed["tool"] == "set_material_color"
         assert parsed["tool_args"]["color"] == [0, 0, 1, 1]
 
+    @_STALE_REFACTOR_SKIP
     def test_natural_language_intent_detection(self, agent):
         """Test detection of intentions from natural language."""
         # Create a specific return value for the fallback
@@ -495,6 +511,7 @@ class TestAgentIntegration:
                     assert parsed["goal"] == "Create a complex scene"
                     assert parsed["tool"] == "create_object"
 
+    @_STALE_REFACTOR_SKIP
     def test_retry_mechanism_integration(self, agent):
         """Test the complete retry mechanism with JSON correction."""
         # Configure specific responses for the test

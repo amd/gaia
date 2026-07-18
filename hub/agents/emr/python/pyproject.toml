@@ -10,7 +10,7 @@ authors = [{ name = "AMD" }]
 license = { text = "MIT" }
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["amd-gaia>=0.20.0"]
+dependencies = ["amd-gaia[api]>=0.20.0"]
 
 [project.scripts]
 gaia-emr = "gaia_agent_emr.cli:main"
