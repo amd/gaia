@@ -615,14 +615,25 @@ async def async_main(action, **kwargs):
             use_silent_mode = not debug_mode  # Hide processing steps unless debugging
 
             # Resolve device to model_id when --device is set and --model is not.
-            # GPU is the default when no --device is specified.
+            # No --device: fall back to the persisted config default (GPU out of
+            # the box; `gaia init --profile npu` records NPU), so the write of
+            # config.default_device is honoured at runtime rather than ignored.
             # Fallback policy:
             #   - Explicit --device: fail loudly if unavailable (no fallback)
-            #   - Default (no --device): GPU default, fallback to CPU with warning
+            #   - Default (no --device): config default, fallback to CPU with warning
             explicit_model = kwargs.get("model", None)
             device = kwargs.get("device", None)
             device_was_explicit = device is not None
-            effective_device = device or "gpu"
+            if device_was_explicit:
+                effective_device = device
+            else:
+                from gaia.config import GaiaConfig, GaiaConfigError
+
+                try:
+                    effective_device = GaiaConfig.load().default_device
+                except GaiaConfigError as _cfg_err:
+                    print(f"❌ {_cfg_err}", file=sys.stderr)
+                    sys.exit(1)
 
             # Check device availability when Lemonade is reachable
             if not explicit_model:
@@ -647,19 +658,18 @@ async def async_main(action, **kwargs):
                                 sys.exit(1)
                             effective_device = "gpu"
                     elif effective_device == "gpu":
-                        has_gpu = any(
-                            "gpu" in k.lower()
-                            and isinstance(v, dict)
-                            and v.get("available")
-                            for k, v in _devices.items()
-                        )
+                        from gaia.llm.lemonade_manager import system_info_has_gpu
+
+                        has_gpu = system_info_has_gpu(_devices)
                         if not has_gpu and not device_was_explicit:
-                            # Default GPU target unavailable — announce the
-                            # *reason* for the CPU fallback so it doesn't read
-                            # like a deliberate user choice.
+                            # No accelerator reported — describe the resulting
+                            # state (Lemonade runs on CPU) rather than claiming a
+                            # fallback GAIA forces; it does not send a device to
+                            # Lemonade, which picks the backend itself.
                             print(
-                                "No GPU detected; falling back to CPU (slower). "
-                                "Run `gaia init` to set up GPU acceleration."
+                                "No GPU detected — inference will run on CPU "
+                                "(slower). Run `gaia init` to set up GPU "
+                                "acceleration."
                             )
                             effective_device = "cpu"
                 except LemonadeClientError as _probe_err:

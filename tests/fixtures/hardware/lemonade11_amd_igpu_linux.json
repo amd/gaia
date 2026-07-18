@@ -1,0 +1,19 @@
+{
+  "devices": {
+    "amd_gpu": [
+      {
+        "available": true,
+        "family": "gfx1151",
+        "integrated": true,
+        "name": "110501",
+        "vram_gb": 0.5,
+        "virtual_mem_gb": 62.5
+      }
+    ],
+    "amd_npu": { "available": true, "family": "XDNA2", "tops_max_int": 58 },
+    "cpu": { "available": true, "cores": 16, "threads": 32 },
+    "nvidia_gpu": [
+      { "available": false, "error": "No NVIDIA discrete GPU found", "name": "" }
+    ]
+  }
+}

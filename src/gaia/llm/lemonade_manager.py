@@ -83,6 +83,41 @@ def _device_is_available(info) -> bool:
     return True
 
 
+def _is_gpu_device_key(key: str) -> bool:
+    """Whether a ``devices`` key names a GPU accelerator.
+
+    Matches any key containing ``"gpu"`` (``amd_gpu``/``nvidia_gpu`` and the
+    legacy ``amd_igpu``/``amd_dgpu``) plus ``"metal"`` — Apple Silicon reports
+    its GPU under ``metal``, which has no ``"gpu"`` substring.
+    """
+    k = key.lower()
+    return "gpu" in k or k == "metal"
+
+
+def system_info_has_gpu(devices) -> bool:
+    """Whether a ``get_system_info()`` ``devices`` payload reports a usable GPU.
+
+    Availability is delegated to :func:`_device_is_available`, so list-shaped
+    entries are handled — live Lemonade returns ``amd_gpu``/``nvidia_gpu`` as
+    *lists*, and a present-but-``available: false`` GPU (e.g. an absent discrete
+    NVIDIA card) is correctly not counted. Reuses the single availability check
+    rather than re-implementing it inline.
+    """
+    if isinstance(devices, dict):
+        return any(
+            _is_gpu_device_key(k) and _device_is_available(v)
+            for k, v in devices.items()
+        )
+    if isinstance(devices, list):
+        for item in devices:
+            if not isinstance(item, dict) or not _device_is_available(item):
+                continue
+            for k in ("device_type", "type", "id", "name"):
+                if k in item and _is_gpu_device_key(str(item[k])):
+                    return True
+    return False
+
+
 def _format_device_error(
     device: Optional[str], required_min_device: Optional[str], detected
 ) -> str:
