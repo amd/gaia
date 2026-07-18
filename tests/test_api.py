@@ -448,6 +448,85 @@ class TestApiUnitValidation:
         assert "detail" in error_data
 
 
+class TestApiCorsPolicy:
+    """CORS must never allow wildcard origins together with credentials."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        if not API_AVAILABLE:
+            pytest.skip(f"API dependencies not available: {IMPORT_ERROR}")
+        self.client = TestClient(app)
+
+    def _cors_kwargs(self):
+        from fastapi.middleware.cors import CORSMiddleware
+
+        return next(m.kwargs for m in app.user_middleware if m.cls is CORSMiddleware)
+
+    def test_no_wildcard_origin_with_credentials(self):
+        """The installed middleware must not combine '*' origins with credentials."""
+        kwargs = self._cors_kwargs()
+        if "*" in kwargs.get("allow_origins", []):
+            assert kwargs.get("allow_credentials") is not True
+
+    def test_default_origins_are_localhost_only(self):
+        kwargs = self._cors_kwargs()
+        assert "*" not in kwargs.get("allow_origins", [])
+        assert kwargs.get("allow_origin_regex")
+
+    def test_non_local_origin_is_not_allowed(self):
+        """A random website must not receive CORS approval."""
+        response = self.client.options(
+            "/v1/models",
+            headers={
+                "Origin": "https://evil.example",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        assert response.headers.get("access-control-allow-origin") is None
+
+    def test_localhost_origin_is_allowed(self):
+        """Local browser clients (any port) keep working."""
+        for origin in ("http://localhost:3000", "http://127.0.0.1:4200"):
+            response = self.client.options(
+                "/v1/models",
+                headers={
+                    "Origin": origin,
+                    "Access-Control-Request-Method": "GET",
+                },
+            )
+            assert response.status_code == 200
+            assert response.headers.get("access-control-allow-origin") == origin
+
+    def test_env_var_adds_explicit_origin(self, monkeypatch):
+        from gaia.api.openai_server import _cors_config
+
+        monkeypatch.setenv(
+            "GAIA_API_CORS_ORIGINS", "https://myapp.example.com, https://other.example"
+        )
+        cfg = _cors_config()
+        assert cfg["allow_origins"] == [
+            "https://myapp.example.com",
+            "https://other.example",
+        ]
+        assert cfg["allow_credentials"] is True
+
+    def test_blank_env_var_does_not_become_wildcard(self, monkeypatch):
+        from gaia.api.openai_server import _cors_config
+
+        monkeypatch.setenv("GAIA_API_CORS_ORIGINS", "")
+        cfg = _cors_config()
+        assert cfg["allow_origins"] == []
+        assert cfg["allow_origin_regex"]
+
+    def test_explicit_wildcard_disables_credentials(self, monkeypatch):
+        from gaia.api.openai_server import _cors_config
+
+        monkeypatch.setenv("GAIA_API_CORS_ORIGINS", "*")
+        cfg = _cors_config()
+        assert cfg["allow_origins"] == ["*"]
+        assert cfg["allow_credentials"] is False
+
+
 # =============================================================================
 # INTEGRATION TESTS (Require running API server and/or Lemonade)
 # =============================================================================
