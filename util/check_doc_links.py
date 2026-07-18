@@ -60,6 +60,7 @@ SKIP_DOMAINS = {
     "platform.openai.com",  # Rate-limits CI bots
     "www.npmjs.com",  # Returns 403 to automated requests
     "support.microsoft.com",  # Intermittently 400s/429s datacenter IPs
+    "www.xda-developers.com",  # Drops connections from datacenter IPs
 }
 
 # URL patterns to skip

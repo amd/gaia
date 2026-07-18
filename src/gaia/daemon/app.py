@@ -87,7 +87,8 @@ def create_app(
     *on_shutdown* run inside the app lifespan — the daemon registers instance.json
     on startup (once the port is bound) and deregisters on shutdown. *registry*
     (a :class:`gaia.daemon.sidecars.registry.SidecarRegistry`) mounts the
-    ``/daemon/v1/agents`` control plane; ``None`` leaves it unmounted.
+    ``/daemon/v1/agents`` control plane and the ``/v1/<agent>/*`` streaming
+    relay (#2150); ``None`` leaves both unmounted.
     """
     from fastapi import Depends, FastAPI, HTTPException
 
@@ -143,8 +144,12 @@ def create_app(
         return {"service": SERVICE_ID, "status": "stopping", "pid": pid}
 
     if registry is not None:
+        from gaia.daemon.relay import build_relay_router
         from gaia.daemon.sidecars.routes import build_agents_router
 
         app.include_router(build_agents_router(token, registry))
+        # Data plane (#2150): ANY /v1/<agent>/* relays to the agent's sidecar
+        # behind the SAME client-token guard as the control plane above.
+        app.include_router(build_relay_router(token, registry))
 
     return app

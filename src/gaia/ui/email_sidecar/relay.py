@@ -315,6 +315,13 @@ def _dispatch_one(handler: Any, event: Dict[str, Any]) -> bool:
     return False
 
 
+def _best_effort_cancel(proxy: Any, rid: str) -> None:
+    try:
+        proxy.cancel_query(rid)
+    except SidecarError as exc:
+        logger.info("email relay: cancel_query for run_id=%s: %s", rid, exc)
+
+
 def relay_query(
     handler: Any,
     proxy: Any,
@@ -407,19 +414,13 @@ def relay_query(
         handler.active_relay_response = None
 
     if handler.cancelled.is_set():
-        try:
-            proxy.cancel_query(rid)
-        except SidecarError as exc:
-            logger.info("email relay: cancel_query for run_id=%s: %s", rid, exc)
+        _best_effort_cancel(proxy, rid)
         if not terminated:
             handler._emit({"type": "status", "message": "Cancelled."})
     elif crashed or not terminated:
         # No terminal event arrived — the sidecar generation is still decoding
         # on the single GPU slot; stop it or later queries death-spiral.
-        try:
-            proxy.cancel_query(rid)
-        except SidecarError as exc:
-            logger.info("email relay: cancel_query for run_id=%s: %s", rid, exc)
+        _best_effort_cancel(proxy, rid)
         handler._emit({"type": "agent_error", "content": crash_message})
 
 

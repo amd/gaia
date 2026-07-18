@@ -10,9 +10,9 @@ The existing draft→send *confirmation token* is a payload-integrity check (it
 binds a send to one exact message); it is NOT caller authentication.
 
 This module adds the missing caller-auth layer. It is wired ONLY onto the sidecar
-app (``packaging/server.py``) — the product server (``gaia.api.openai_server``)
-and the OpenAPI export app mount the same router unchanged, so their posture is
-untouched.
+app (``gaia_agent_email.server``, which the frozen binary freezes) — the product
+server (``gaia.api.openai_server``) and the OpenAPI export app mount the same
+router unchanged, so their posture is untouched.
 
 Three controls, all keyed on a single :class:`CallerAuthConfig` set at app build:
 

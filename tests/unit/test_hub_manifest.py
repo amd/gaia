@@ -301,6 +301,35 @@ def test_invalid_language_raises():
         AgentManifest.from_dict(data)
 
 
+def test_type_defaults_to_agent():
+    data = dict(VALID_PYTHON_MANIFEST)
+    assert "type" not in data
+    assert AgentManifest.from_dict(data).type == "agent"
+
+
+@pytest.mark.parametrize("pkg_type", ["agent", "app", "component"])
+def test_valid_type_accepted(pkg_type):
+    data = dict(VALID_PYTHON_MANIFEST, type=pkg_type)
+    assert AgentManifest.from_dict(data).type == pkg_type
+
+
+def test_invalid_type_raises():
+    data = dict(VALID_PYTHON_MANIFEST, type="plugin")
+    with pytest.raises(ManifestError, match="agent, app, component"):
+        AgentManifest.from_dict(data)
+
+
+def test_non_string_type_raises():
+    data = dict(VALID_PYTHON_MANIFEST, type=3)
+    with pytest.raises(ManifestError, match="type"):
+        AgentManifest.from_dict(data)
+
+
+def test_type_parses_from_yaml_file(tmp_path):
+    data = dict(VALID_PYTHON_MANIFEST, type="app")
+    assert parse(write_manifest(tmp_path, data)).type == "app"
+
+
 @pytest.mark.parametrize("tier", ["verified", "community", "experimental"])
 def test_valid_security_tier_accepted(tier):
     data = dict(VALID_PYTHON_MANIFEST, security_tier=tier)

@@ -466,6 +466,37 @@ control, the steps are exported individually:
 - `checkVersion(client, { expectedApiVersion })` → throws `VersionMismatchError` if the sidecar's apiVersion **MAJOR** differs (a higher MINOR is accepted).
 - `verifySha256(buf, expected, label)` → throws `IntegrityError` on mismatch.
 - `shutdown(sidecar)` → kill the **whole process tree** (`taskkill /F /T` on Windows; detached process-group kill on POSIX). The default auto-reaper does the same on process exit/crash/signal, so only a hard `SIGKILL` of the host can still orphan the child.
+- `connectSidecar({ baseUrl, authToken?, timeoutMs?, healthTimeoutMs?, verifyVersion?, expectedApiVersion?, signal? })` → **attach mode**: `waitForHealth` + (default) `checkVersion` against a server this package did **not** spawn, returning an `AttachedSidecar` (`{ host, port, baseUrl, client, authToken? }` — no `child`). Spawns nothing and owns no lifecycle, so there is nothing to `shutdown()`. Pass an `AbortSignal` as `signal` to cancel the health wait early (e.g. the server process you're waiting on died). This is the client half of the fast dev loop — pair it with the Python source server (`gaia-agent-email serve --reload`), which serves an identical contract to the frozen binary. See [Fast local iteration](#fast-local-iteration-dev-mode).
+
+### Fast local iteration (dev mode)
+
+The published flow fetches and spawns a **frozen** binary — there is no source to
+edit when you hit a bug. To iterate on the agent, run its **Python source** and
+attach this client instead. The frozen binary is that source frozen (PyInstaller
+freezes `packaging/server.py`, a thin re-export of `gaia_agent_email.server`), so
+the `/v1/email/*` contract is byte-for-byte identical — **only the base URL
+differs from production.**
+
+```bash
+pip install -e hub/agents/python/email     # editable: your edits take effect live
+gaia-agent-email serve --reload            # source server, auto-reload, token off for dev
+```
+
+```ts
+import { connectSidecar } from "@amd-gaia/agent-email";
+const dev = await connectSidecar({ baseUrl: "http://127.0.0.1:8131" });
+await dev.client.triage({ payload: { /* … */ } });
+// edit Python → auto-reload → re-run. `npx @amd-gaia/agent-email dev` launches the
+// serve process for you (`--python <path>` to use a specific venv).
+```
+
+The `serve` CLI (`gaia_agent_email.server:main`) accepts `--host`, `--port`
+(rejects the reserved 4001), `--reload` (import-string app + watches the package
+dir; add `--reload-dir` for your core checkout), `--dev` (implies `--reload`), and
+`--print-openapi`. Running without `GAIA_EMAIL_SIDECAR_TOKEN` disables the caller
+token (local dev only, logged loudly); Host/Origin protection still applies.
+Auto-reload resets in-process `/v1/email/agent/*` sessions — irrelevant to the
+stateless `triage`/`draft`/`send` surface.
 
 ## CLI
 

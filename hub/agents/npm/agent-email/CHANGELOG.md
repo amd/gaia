@@ -49,6 +49,14 @@ behind any entry — API shapes, endpoints, and version semantics — see
   goes; a run can be cancelled mid-way. Anything that would actually send mail
   still stops and routes you to the explicit draft-and-confirm flow. Not yet
   wrapped by the typed client — call the endpoint directly (see `SPEC.md`).
+- **Iterate on the agent from source.** New `connectSidecar({ baseUrl })` attaches
+  the client to a server you run yourself, and `gaia-agent-email serve --reload`
+  (or `npx @amd-gaia/agent-email dev`) runs the agent's Python source with hot
+  reload — so you can fix a triage/draft bug and re-test in seconds instead of
+  waiting for a new binary. Additive — your existing calls are unchanged, and
+  shipping to production just swaps `connectSidecar` for `startSidecar`. Exports
+  the new `ConnectOptions` / `AttachedSidecar` types. Full walkthrough in
+  `SPEC.md` → *Fast local iteration*.
 - **Docs rewritten for humans.** The README, this changelog, and the evaluation
   guide now lead with what the agent does in plain language; the deep technical
   reference lives in `SPEC.md`.
