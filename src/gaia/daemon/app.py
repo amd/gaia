@@ -81,6 +81,8 @@ def create_app(
     registry=None,
     forwarder=None,
     broker=None,
+    custody_auth=None,
+    custody_store=None,
 ):
     """Build the FastAPI app bound to this daemon's identity.
 
@@ -96,6 +98,14 @@ def create_app(
     requires *registry* (it resolves the target sidecar from it). *broker* (a
     :class:`gaia.daemon.broker.ModelSlotBroker`) mounts the ``/host/v1/models/*``
     lease route (#2151 / V2-11); ``None`` leaves it unmounted.
+
+    *custody_auth* + *custody_store* mount the ``/host/v1/*`` custody reverse
+    contract (#2153): the secret→agent-id resolver and the SQLite backing. Both
+    must be provided together; either ``None`` leaves the custody API unmounted
+    (so a skeleton/test daemon can run without it). The custody API is guarded by
+    its OWN per-spawn secrets (bound at mint), NOT the client ``token`` — it is a
+    separate surface with its own MAJOR (§0.31), so it is not behind
+    ``require_token``.
     """
     from fastapi import Depends, FastAPI, HTTPException
 
@@ -173,5 +183,19 @@ def create_app(
         from gaia.daemon.broker_routes import build_broker_router
 
         app.include_router(build_broker_router(token, registry, broker))
+
+    if custody_auth is not None and custody_store is not None:
+        from gaia.daemon.custody.routes import (
+            build_custody_router,
+            install_custody_exception_handler,
+        )
+
+        install_custody_exception_handler(app)
+        app.include_router(build_custody_router(custody_auth, custody_store))
+    elif custody_auth is not None or custody_store is not None:
+        raise ValueError(
+            "create_app requires custody_auth AND custody_store together to "
+            "mount /host/v1; got only one. Pass both, or neither."
+        )
 
     return app

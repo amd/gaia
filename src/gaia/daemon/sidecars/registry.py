@@ -43,6 +43,8 @@ class SidecarRegistry:
         on_spawn: Optional[Callable[[str, AgentSidecarManager], None]] = None,
         on_stop: Optional[Callable[[str], None]] = None,
         on_started: Optional[Callable[[str, AgentSidecarManager], None]] = None,
+        custody_auth=None,
+        custody_base_url: Optional[str] = None,
     ):
         self._specs = dict(specs)
         self.max_live = max_live
@@ -54,6 +56,14 @@ class SidecarRegistry:
         # once the sidecar's intake route can answer, i.e. post-health, unlike
         # ``on_spawn`` which fires at Popen for the crash-reap ledger.
         self._on_started = on_started
+        # Delegated-custody wiring (#2153). When both are set, the registry mints
+        # a per-agent custody secret at manager construction (the mint point) and
+        # hands the manager the /host/v1 URL + secret to inject on spawn. The
+        # binding is revoked when the sidecar stops/reaps so a rotated-out secret
+        # stops resolving. Left None → sidecars run without delegated custody
+        # (they fall back to their own embedded provider).
+        self._custody_auth = custody_auth
+        self._custody_base_url = custody_base_url
         # agent_id -> (manager, per-agent lock). The registry lock guards this
         # map (atomic get-or-create); the per-agent lock serializes the slow
         # is_running-check + start() so N concurrent first ensures spawn ONE
@@ -94,9 +104,29 @@ class SidecarRegistry:
             manager.on_process_spawned = (
                 lambda pid, port, argv, _m=manager: self._on_spawn(agent_id, _m)
             )
-        if self._on_stop is not None:
-            manager.on_process_reaped = lambda: self._on_stop(agent_id)
+
+        # A single reaped hook fires both the ledger removal and the custody
+        # revoke so a crashed/killed sidecar's secret stops resolving the moment
+        # its process is confirmed gone.
+        def _on_reaped(_aid=agent_id) -> None:
+            if self._on_stop is not None:
+                self._on_stop(_aid)
+            self._revoke_custody(_aid)
+
+        manager.on_process_reaped = _on_reaped
+        # Mint the custody secret at construction (the mint point) and hand the
+        # manager the wiring it injects on spawn (#2153). Binding it here — not
+        # per-request — is what makes the daemon resolve the caller's identity
+        # from the secret rather than trusting a request-supplied agent id.
+        if self._custody_auth is not None and self._custody_base_url:
+            manager.custody_url = self._custody_base_url
+            manager.custody_secret = self._custody_auth.mint(agent_id)
         return manager
+
+    def _revoke_custody(self, agent_id: str) -> None:
+        """Drop *agent_id*'s custody secret binding (idempotent)."""
+        if self._custody_auth is not None:
+            self._custody_auth.revoke(agent_id)
 
     def ensure(self, agent_id: str, mode: Optional[str] = None) -> dict:
         """Spawn-or-attach *agent_id*'s sidecar; return its fields + token."""
