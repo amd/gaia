@@ -59,17 +59,41 @@ const STDERR_BUFFER_MAX = 10000;
 /** Max bytes kept in stdout buffer per agent (protects against malformed output without newlines) */
 const STDOUT_BUFFER_MAX = 1024 * 1024; // 1 MB
 
+/** Poll interval while waiting on the backend install-status endpoint (ms) */
+const INSTALL_POLL_INTERVAL = 750;
+
+/**
+ * Hard ceiling on a single install poll loop (ms). A `uv pip install` of a
+ * large wheel over a slow link can legitimately take minutes; we cap at 15 to
+ * turn a wedged backend into a loud timeout instead of an infinite spinner.
+ */
+const INSTALL_TIMEOUT = 15 * 60 * 1000;
+
+/** Header the UI backend requires on state-changing hub routes (see hub.py). */
+const UI_HEADER = { "X-Gaia-UI": "1" };
+
 // ── AgentProcessManager ──────────────────────────────────────────────────
 
 class AgentProcessManager extends EventEmitter {
   /**
    * @param {Electron.BrowserWindow} mainWindow — for sending IPC events to renderer
+   * @param {{ getBackendPort?: () => (number | null) }} [options]
+   *   getBackendPort resolves the live Python-backend port. The install/uninstall
+   *   handlers proxy to that backend's `/api/agents/*` routes (the real install
+   *   runtime), so without a resolver those handlers fail loudly rather than
+   *   duplicating download/verify/uv logic in the main process (issue #1721).
    */
-  constructor(mainWindow) {
+  constructor(mainWindow, options = {}) {
     super();
 
     /** @type {Electron.BrowserWindow} */
     this.mainWindow = mainWindow;
+
+    /** @type {(() => (number | null)) | null} */
+    this._getBackendPort =
+      typeof options.getBackendPort === "function"
+        ? options.getBackendPort
+        : null;
 
     /**
      * Running processes keyed by agentId.
@@ -249,6 +273,219 @@ class AgentProcessManager extends EventEmitter {
   async restartAgent(agentId) {
     await this.stopAgent(agentId);
     return this.startAgent(agentId);
+  }
+
+  // ── Public API: Install / Uninstall (issue #1721) ────────────────────
+  //
+  // The install RUNTIME lives in the Python backend (src/gaia/hub/installer.py,
+  // exposed by src/gaia/ui/routers/hub.py): R2 download, SHA-256 verify,
+  // `uv pip install` into ~/.gaia/agents/<id>/, hot-register, backup/rollback,
+  // and the native-trust gate. Rather than reimplement that in the main
+  // process, these handlers proxy to those routes so there is exactly one
+  // tested install path. Progress streams to the renderer over the existing
+  // `agent:install-progress` channel.
+
+  /**
+   * Resolve the live backend base URL, or throw an actionable error.
+   * @returns {string}
+   */
+  _backendBaseUrl() {
+    const port = this._getBackendPort ? this._getBackendPort() : null;
+    if (!port) {
+      throw new Error(
+        "GAIA backend is not running — cannot install or uninstall agents. " +
+          "The Python backend exposes the install runtime at /api/agents/install; " +
+          "wait for it to finish starting, or restart GAIA if this persists."
+      );
+    }
+    // 127.0.0.1 (not localhost) matches the backend's _require_localhost allowlist
+    // and avoids a DNS/IPv6 hop on Windows.
+    return `http://127.0.0.1:${port}`;
+  }
+
+  /**
+   * Install a published agent via the backend runtime, streaming progress.
+   *
+   * @param {string} agentId
+   * @param {{ trustNative?: boolean, version?: string | null }} [opts]
+   * @returns {Promise<{ id: string, status: string, version: string | null }>}
+   */
+  async installAgent(agentId, opts = {}) {
+    if (typeof agentId !== "string" || !agentId.trim()) {
+      throw new Error("installAgent requires a non-empty agent id");
+    }
+    const base = this._backendBaseUrl();
+    const trustNative = opts.trustNative === true;
+    const version =
+      typeof opts.version === "string" && opts.version ? opts.version : null;
+
+    this._emitInstallProgress(agentId, {
+      status: "queued",
+      phase: "queued",
+      percent: 0,
+    });
+
+    // ── Kick off the background install (202) ──
+    let resp;
+    try {
+      resp = await fetch(`${base}/api/agents/install`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...UI_HEADER },
+        body: JSON.stringify({ id: agentId, trust_native: trustNative, version }),
+      });
+    } catch (err) {
+      throw new Error(
+        `Could not reach the GAIA backend to install "${agentId}": ${err.message}`
+      );
+    }
+
+    if (!resp.ok) {
+      const detail = await this._readErrorDetail(resp);
+      if (resp.status === 409) {
+        throw new Error(`An install for "${agentId}" is already in progress.`);
+      }
+      if (resp.status === 403) {
+        // Native agents require explicit trust — surface the backend's reason.
+        throw new Error(
+          `Install of "${agentId}" was refused: ${detail} ` +
+            `(pass trustNative once the user accepts the trust prompt).`
+        );
+      }
+      throw new Error(
+        `Install request for "${agentId}" failed (HTTP ${resp.status}): ${detail}`
+      );
+    }
+
+    // ── Poll install-status until terminal ──
+    const deadline = Date.now() + INSTALL_TIMEOUT;
+    let lastState = null;
+    while (Date.now() < deadline) {
+      await this._sleep(INSTALL_POLL_INTERVAL);
+
+      let statusResp;
+      try {
+        statusResp = await fetch(
+          `${base}/api/agents/${encodeURIComponent(agentId)}/install-status`,
+          { headers: { ...UI_HEADER } }
+        );
+      } catch (err) {
+        throw new Error(
+          `Lost contact with the GAIA backend while installing "${agentId}": ${err.message}`
+        );
+      }
+
+      // A brief 404 window is possible between the 202 and the worker seeding
+      // progress; keep polling until the deadline rather than failing early.
+      if (statusResp.status === 404) continue;
+      if (!statusResp.ok) {
+        const detail = await this._readErrorDetail(statusResp);
+        throw new Error(
+          `Install-status poll for "${agentId}" failed (HTTP ${statusResp.status}): ${detail}`
+        );
+      }
+
+      lastState = await statusResp.json();
+      this._emitInstallProgress(agentId, {
+        status: lastState.status,
+        phase: lastState.phase,
+        percent: lastState.percent,
+        version: lastState.version,
+        error: lastState.error,
+      });
+
+      if (lastState.status === "completed") {
+        // Hot-register already happened backend-side; refresh our manifest so
+        // getAgentStatus / startAgent see the new binary paths.
+        this.reloadManifest();
+        return {
+          id: agentId,
+          status: "completed",
+          version: lastState.version || null,
+        };
+      }
+      if (lastState.status === "failed") {
+        throw new Error(
+          `Install of "${agentId}" failed: ${lastState.error || "unknown error"}`
+        );
+      }
+    }
+
+    throw new Error(
+      `Install of "${agentId}" timed out after ${Math.round(
+        INSTALL_TIMEOUT / 1000
+      )}s (last phase: ${lastState ? lastState.phase : "unknown"}).`
+    );
+  }
+
+  /**
+   * Uninstall a hub-installed agent: stop any running sidecar, then delegate
+   * removal + de-registration to the backend runtime.
+   *
+   * @param {string} agentId
+   * @returns {Promise<{ id: string, status: string }>}
+   */
+  async uninstallAgent(agentId) {
+    if (typeof agentId !== "string" || !agentId.trim()) {
+      throw new Error("uninstallAgent requires a non-empty agent id");
+    }
+    const base = this._backendBaseUrl();
+
+    // Stop a running sidecar first so its dir/executable isn't held open.
+    if (this.processes[agentId]) {
+      await this.stopAgent(agentId);
+    }
+
+    let resp;
+    try {
+      resp = await fetch(`${base}/api/agents/${encodeURIComponent(agentId)}`, {
+        method: "DELETE",
+        headers: { ...UI_HEADER },
+      });
+    } catch (err) {
+      throw new Error(
+        `Could not reach the GAIA backend to uninstall "${agentId}": ${err.message}`
+      );
+    }
+
+    if (!resp.ok) {
+      const detail = await this._readErrorDetail(resp);
+      if (resp.status === 404) {
+        throw new Error(`"${agentId}" is not installed.`);
+      }
+      if (resp.status === 400) {
+        // e.g. refusing to remove a builtin — surface the backend's reason.
+        throw new Error(`Cannot uninstall "${agentId}": ${detail}`);
+      }
+      throw new Error(
+        `Uninstall of "${agentId}" failed (HTTP ${resp.status}): ${detail}`
+      );
+    }
+
+    this.reloadManifest();
+    return { id: agentId, status: "uninstalled" };
+  }
+
+  /** Read a FastAPI-style `{detail}` error body without throwing. */
+  async _readErrorDetail(resp) {
+    try {
+      const body = await resp.json();
+      if (body && typeof body.detail === "string") return body.detail;
+      return JSON.stringify(body);
+    } catch {
+      return resp.statusText || `HTTP ${resp.status}`;
+    }
+  }
+
+  _emitInstallProgress(agentId, progress) {
+    this._sendToRenderer("agent:install-progress", {
+      agentId,
+      ...progress,
+      timestamp: Date.now(),
+    });
+  }
+
+  _sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   // ── Public API: Monitoring ───────────────────────────────────────────
@@ -803,14 +1040,12 @@ class AgentProcessManager extends EventEmitter {
       return this.getManifest();
     });
 
-    ipcMain.handle("agent:install", async (_event, agentId) => {
-      // TODO: T7 — agent installer integration
-      throw new Error("Agent installation not yet implemented");
+    ipcMain.handle("agent:install", async (_event, agentId, opts) => {
+      return this.installAgent(agentId, opts || {});
     });
 
     ipcMain.handle("agent:uninstall", async (_event, agentId) => {
-      // TODO: T7 — agent uninstaller integration
-      throw new Error("Agent uninstallation not yet implemented");
+      return this.uninstallAgent(agentId);
     });
   }
 }

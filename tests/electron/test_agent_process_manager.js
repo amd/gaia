@@ -1475,20 +1475,123 @@ describe("AgentProcessManager", () => {
       expect(result).toEqual(SAMPLE_MANIFEST);
     });
 
-    it("should register agent:install handler that throws not-implemented", async () => {
-      createManager();
+    it("should redirect agent:install to the backend install runtime and resolve on completion", async () => {
+      ipcMain._handlers.clear();
+      const mainWindow = new BrowserWindow();
+      const manager = new AgentProcessManager(mainWindow, {
+        getBackendPort: () => 4321,
+      });
+      _activeManagers.push(manager);
+
+      const calls = [];
+      global.fetch = jest.fn(async (url, opts) => {
+        calls.push({ url, opts });
+        if (url.endsWith("/api/agents/install")) {
+          return {
+            ok: true,
+            status: 202,
+            json: async () => ({ id: "test-agent", status: "queued" }),
+          };
+        }
+        if (url.includes("/install-status")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              id: "test-agent",
+              status: "completed",
+              phase: "done",
+              percent: 100,
+              version: "1.2.3",
+              error: null,
+            }),
+          };
+        }
+        throw new Error(`unexpected url ${url}`);
+      });
+
+      const result = await ipcMain.simulateInvoke("agent:install", "test-agent");
+      expect(result).toMatchObject({ id: "test-agent", status: "completed" });
+
+      // POST hits the real backend route with the required UI header + body shape.
+      const post = calls.find((c) => c.url.endsWith("/api/agents/install"));
+      expect(post.url).toBe("http://127.0.0.1:4321/api/agents/install");
+      expect(post.opts.method).toBe("POST");
+      expect(post.opts.headers["X-Gaia-UI"]).toBe("1");
+      expect(JSON.parse(post.opts.body)).toEqual({
+        id: "test-agent",
+        trust_native: false,
+        version: null,
+      });
+
+      delete global.fetch;
+    });
+
+    it("should surface a failed backend install as a thrown error", async () => {
+      ipcMain._handlers.clear();
+      const manager = new AgentProcessManager(new BrowserWindow(), {
+        getBackendPort: () => 4321,
+      });
+      _activeManagers.push(manager);
+
+      global.fetch = jest.fn(async (url) => {
+        if (url.endsWith("/api/agents/install")) {
+          return { ok: true, status: 202, json: async () => ({ status: "queued" }) };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            status: "failed",
+            phase: "failed",
+            percent: 0,
+            error: "checksum mismatch",
+          }),
+        };
+      });
+
+      await expect(
+        ipcMain.simulateInvoke("agent:install", "bad-agent")
+      ).rejects.toThrow(/checksum mismatch/);
+
+      delete global.fetch;
+    });
+
+    it("should fail loudly on install when no backend port is available", async () => {
+      ipcMain._handlers.clear();
+      const manager = new AgentProcessManager(new BrowserWindow());
+      _activeManagers.push(manager);
 
       await expect(
         ipcMain.simulateInvoke("agent:install", "test-agent")
-      ).rejects.toThrow("Agent installation not yet implemented");
+      ).rejects.toThrow(/backend is not running/i);
     });
 
-    it("should register agent:uninstall handler that throws not-implemented", async () => {
-      createManager();
+    it("should redirect agent:uninstall to the backend DELETE route", async () => {
+      ipcMain._handlers.clear();
+      const manager = new AgentProcessManager(new BrowserWindow(), {
+        getBackendPort: () => 4321,
+      });
+      _activeManagers.push(manager);
 
-      await expect(
-        ipcMain.simulateInvoke("agent:uninstall", "test-agent")
-      ).rejects.toThrow("Agent uninstallation not yet implemented");
+      const calls = [];
+      global.fetch = jest.fn(async (url, opts) => {
+        calls.push({ url, opts });
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: "test-agent", status: "uninstalled" }),
+        };
+      });
+
+      const result = await ipcMain.simulateInvoke("agent:uninstall", "test-agent");
+      expect(result).toMatchObject({ id: "test-agent", status: "uninstalled" });
+
+      expect(calls[0].url).toBe("http://127.0.0.1:4321/api/agents/test-agent");
+      expect(calls[0].opts.method).toBe("DELETE");
+      expect(calls[0].opts.headers["X-Gaia-UI"]).toBe("1");
+
+      delete global.fetch;
     });
   });
 
