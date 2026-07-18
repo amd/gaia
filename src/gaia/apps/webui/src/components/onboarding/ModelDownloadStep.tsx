@@ -39,7 +39,8 @@ export function ModelDownloadStep({ modelName, onGuardChange }: ModelDownloadSte
         if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     }, []);
 
-    const poll = useCallback(async () => {
+    // Returns true while a download is still in flight (so callers can keep polling).
+    const poll = useCallback(async (): Promise<boolean> => {
         try {
             const status = await api.getSystemStatus();
             setProgress(status.download_progress);
@@ -52,19 +53,33 @@ export function ModelDownloadStep({ modelName, onGuardChange }: ModelDownloadSte
                 setDownloaded(true);
                 onGuardChange(false);
                 stopPolling();
+                return false;
             }
+            const state = status.download_progress?.state;
+            return state === 'downloading' || state === 'starting';
         } catch (err) {
             log.system.warn('Model download poll failed', err);
+            return false;
         }
     }, [modelName, onGuardChange, stopPolling]);
 
+    // Start the polling loop, guarded so we never stack two intervals.
+    const beginPolling = useCallback(() => {
+        if (pollRef.current) return;
+        pollRef.current = setInterval(poll, POLL_MS);
+    }, [poll]);
+
     // On mount: guard until we know the model exists, then poll once to detect
-    // an already-downloaded model (repeat runs of the wizard shouldn't re-pull).
+    // an already-downloaded model. If a download is already in flight (the wizard
+    // remounted mid-pull — refresh or Back nav), resume the loop so progress keeps
+    // advancing instead of freezing on the first frame.
     useEffect(() => {
         onGuardChange(true);
-        poll();
+        poll().then((active) => {
+            if (active) beginPolling();
+        });
         return stopPolling;
-    }, [onGuardChange, poll, stopPolling]);
+    }, [onGuardChange, poll, beginPolling, stopPolling]);
 
     const startDownload = useCallback(async (force: boolean) => {
         setStarting(true);
@@ -73,8 +88,7 @@ export function ModelDownloadStep({ modelName, onGuardChange }: ModelDownloadSte
         try {
             await api.downloadModel(modelName, force);
             log.system.info(`Onboarding download started: ${modelName} (force=${force})`);
-            stopPolling();
-            pollRef.current = setInterval(poll, POLL_MS);
+            beginPolling();
         } catch (err) {
             const message = err instanceof Error ? err.message : 'Failed to start download.';
             log.system.error('Onboarding download failed to start', err);
@@ -82,7 +96,7 @@ export function ModelDownloadStep({ modelName, onGuardChange }: ModelDownloadSte
         } finally {
             setStarting(false);
         }
-    }, [modelName, onGuardChange, poll, stopPolling]);
+    }, [modelName, onGuardChange, beginPolling]);
 
     if (downloaded) {
         return (
