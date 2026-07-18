@@ -54,6 +54,9 @@ def build_app():
     """
     from fastapi import FastAPI
     from gaia_agent_email.api_routes import router as email_router
+    from gaia_agent_email.connection_intake_routes import (
+        router as connection_intake_router,
+    )
 
     app = FastAPI(
         title=OPENAPI_TITLE,
@@ -61,6 +64,10 @@ def build_app():
         description=OPENAPI_DESCRIPTION,
     )
     app.include_router(email_router)
+    # OAuth forward-out intake (#2154) — part of the frozen sidecar contract
+    # (schema 2.5), so it belongs in the published artifact, unlike the
+    # playground-only connector routes (include_in_schema=False).
+    app.include_router(connection_intake_router)
     return app
 
 

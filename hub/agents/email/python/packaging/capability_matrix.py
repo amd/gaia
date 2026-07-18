@@ -102,7 +102,7 @@ TOOLS_COUNT_DEFINITION = (
 
 _NO_EVAL_SENTINEL = "no quality eval (contract-tested only)"
 
-# The 22 exposed ops (18 REST functional + 4 MCP) -> the eval suite that
+# The 25 exposed ops (21 REST functional + 4 MCP) -> the eval suite that
 # actually exercises them for quality, or the sentinel meaning "only
 # contract/shape-tested, no judged quality bar". Op names mirror
 # ``_derive_rest_ops``'s naming scheme: the REST path suffix after
@@ -129,6 +129,12 @@ OP_EVAL_COVERAGE: Dict[str, str] = {
     # judged quality bar of their own -- contract/shape-tested only.
     "query": _NO_EVAL_SENTINEL,
     "query/{run_id}/cancel": _NO_EVAL_SENTINEL,
+    # #2154 OAuth forward-OUT intake: the daemon delivers short-lived connector
+    # tokens here; a credential-plumbing surface with no judged quality bar --
+    # contract/shape-tested only.
+    "/v1/connections": _NO_EVAL_SENTINEL,
+    "/v1/connections/{provider} (POST)": _NO_EVAL_SENTINEL,
+    "/v1/connections/{provider} (DELETE)": _NO_EVAL_SENTINEL,
     "triage_email": "quality",
     "triage_email_batch": "quality",
     "draft_reply": "drafting",

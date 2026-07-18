@@ -9,9 +9,9 @@ get added as this generalizes beyond email.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -29,6 +29,21 @@ class AgentSidecarSpec:
     whose binary reads that file; older installed binaries keep the (deprecated,
     loudly logged) bare-env leg. Both unset → the spec has no file contract and
     delivery stays env-based.
+
+    OAuth forward-out (#2154) fields — all optional, so an agent that needs no
+    forwarded connectors is unaffected:
+
+    - ``grant_agent_id`` — the namespaced agent id the connectors grant ledger
+      keys by (e.g. ``installed:email``). The daemon (custody home) resolves
+      grants and mints tokens under THIS id; it differs from the daemon's own
+      ``agent_id`` ("email"). A literal, not imported from the hub wheel.
+    - ``forward_providers`` — the connector providers whose short-lived access
+      tokens the daemon may forward OUT to this sidecar (granted ones only).
+    - ``forwarded_mode_env_var`` — private env channel the manager sets to ``1``
+      on spawn so the sidecar boots reading forwarded credentials instead of the
+      machine keyring/grants store (the whole point of forward-out: the sidecar
+      never holds a long-lived refresh token). MUST equal the hub package's
+      ``gaia_agent_email.forwarded_credentials.FORWARDED_MODE_ENV_VAR``.
     """
 
     agent_id: str
@@ -44,6 +59,9 @@ class AgentSidecarSpec:
     dev_app_dir: str = "packaging"
     dev_module: str = "server:app"
     health_timeout: float = 30.0
+    grant_agent_id: Optional[str] = None
+    forward_providers: Tuple[str, ...] = field(default_factory=tuple)
+    forwarded_mode_env_var: Optional[str] = None
 
 
 # The email agent's caller-auth token channel (#1706). MUST equal
@@ -58,6 +76,15 @@ _EMAIL_TOKEN_FILE_ENV_VAR = "GAIA_EMAIL_SIDECAR_TOKEN_FILE"
 # First gaia-agent-email version whose binary reads the token file. Keep in
 # lock-step with the release cut that first ships caller_auth's file leg.
 _EMAIL_SECRET_FILE_MIN_VERSION = "0.6.0"
+
+# The email agent's grant-ledger identity (mirrors gaia-agent.yaml ``id: email``
+# → ``installed:email``, and ``connector_routes.EMAIL_AGENT_ID``). Kept a literal
+# so core never imports the hub wheel.
+_EMAIL_GRANT_AGENT_ID = "installed:email"
+
+# The email sidecar's forwarded-credentials mode switch (#2154). MUST equal
+# gaia_agent_email.forwarded_credentials.FORWARDED_MODE_ENV_VAR — a literal.
+_EMAIL_FORWARDED_MODE_ENV_VAR = "GAIA_EMAIL_FORWARDED_CREDENTIALS"
 
 
 def _default_email_src_dir() -> Path:
@@ -79,5 +106,8 @@ def builtin_specs() -> "dict[str, AgentSidecarSpec]":
             mode_env_var="GAIA_EMAIL_AGENT_MODE",
             cache_dir_name="email",
             dev_src_dir=_default_email_src_dir(),
+            grant_agent_id=_EMAIL_GRANT_AGENT_ID,
+            forward_providers=("google", "microsoft"),
+            forwarded_mode_env_var=_EMAIL_FORWARDED_MODE_ENV_VAR,
         ),
     }

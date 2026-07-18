@@ -626,9 +626,10 @@ class MedicalIntakeAgent(Agent, DatabaseMixin, FileWatcherMixin):
                 )
 
                 status = "NEW" if is_new_patient else "RETURNING"
+                # Keep PII (patient name) out of the plain-text success log;
+                # the details panel below displays identity fields on-screen.
                 self.console.print_success(
-                    f"[{status}] Patient record: {patient_data.get('first_name')} "
-                    f"{patient_data.get('last_name')} (ID: {patient_id})"
+                    f"[{status}] Patient record saved (ID: {patient_id})"
                 )
 
                 # Display extracted patient details

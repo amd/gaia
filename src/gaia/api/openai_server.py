@@ -116,14 +116,45 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# CORS middleware - allow all origins for development
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Browser origins allowed by default: localhost/127.0.0.1 on any port.
+_LOCAL_ORIGIN_REGEX = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+
+
+def _cors_config() -> dict:
+    """Build the CORS policy: localhost-only by default.
+
+    ``GAIA_API_CORS_ORIGINS`` (comma-separated) adds extra allowed origins,
+    e.g. ``https://myapp.example.com``. A literal ``*`` opts into open CORS
+    for all origins, which the Fetch spec forbids combining with credentials
+    — so the wildcard also disables credentialed requests. Wildcard origins
+    WITH credentials are never configured: Starlette would reflect any
+    request Origin, letting any website the user visits call this local,
+    unauthenticated API with credentials.
+    """
+    raw = os.environ.get("GAIA_API_CORS_ORIGINS", "")
+    origins = [o.strip() for o in raw.split(",") if o.strip()]
+    if "*" in origins:
+        logger.warning(
+            "GAIA_API_CORS_ORIGINS='*': allowing all origins WITHOUT "
+            "credentials. To allow credentialed cross-origin calls, list "
+            "explicit origins instead of '*'."
+        )
+        return {
+            "allow_origins": ["*"],
+            "allow_credentials": False,
+            "allow_methods": ["*"],
+            "allow_headers": ["*"],
+        }
+    return {
+        "allow_origins": origins,
+        "allow_origin_regex": _LOCAL_ORIGIN_REGEX,
+        "allow_credentials": True,
+        "allow_methods": ["*"],
+        "allow_headers": ["*"],
+    }
+
+
+app.add_middleware(CORSMiddleware, **_cors_config())
 
 # The email agent's REST surface (POST /v1/email/*) is no longer mounted
 # in-process (#2176). It was the last in-process agent mount after the v2

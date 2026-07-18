@@ -53,6 +53,11 @@ from gaia_agent_email.scopes import (
     GMAIL_SCOPES,
 )
 
+from gaia_agent_email.google_errors import (
+    access_not_configured_message,
+    access_not_configured_url,
+)
+
 from gaia.connectors.api import get_access_token_sync
 from gaia.connectors.errors import ConnectorsError
 from gaia.logger import get_logger
@@ -434,6 +439,11 @@ class LiveGmailBackend:
                 "scopes were revoked. Reconnect Google in Settings → "
                 "Connectors. (where: " + where + ")"
             )
+        enable_url = access_not_configured_url(response)
+        if enable_url:
+            raise ConnectorsError(
+                access_not_configured_message("Gmail API", enable_url)
+            )
         raise ConnectorsError(
             f"Gmail API {where} returned {response.status_code}: "
             f"{response.text[:300]}"
@@ -709,19 +719,28 @@ def _build_rfc822(
 
 
 def _get_gmail_token() -> str:
-    """Return a Gmail access token via the standard grant-checked path.
+    """Return a Gmail access token, honoring the sidecar's runtime mode.
 
-    Module-level (not a method) so it mirrors ``connectors_demo`` and can
-    be unit-tested without instantiating the agent. The token cache in
-    ``connectors.tokens`` makes per-request invocation cheap.
+    Forwarded mode (daemon deployment, #2154): the daemon-forwarded access token
+    — the sidecar never reads the keyring/grants store. Standalone mode: the
+    normal grant-checked connectors path (``get_access_token_sync``). Both raise
+    loudly on no-grant / missing-scope / expiry — never a silent empty token.
 
-    Requests ``GMAIL_SCOPES`` (a NARROWER set than ``ALL_SCOPES``), so a
-    user who declines calendar can still use Gmail tools.
+    Module-level (not a method) so it mirrors ``connectors_demo`` and can be
+    unit-tested without instantiating the agent. Requests ``GMAIL_SCOPES`` (a
+    NARROWER set than ``ALL_SCOPES``), so a user who declines calendar can still
+    use Gmail tools.
     """
-    return get_access_token_sync(
-        provider="google",
-        agent_id=AGENT_NAMESPACED_ID,
-        scopes=list(GMAIL_SCOPES),
+    from gaia_agent_email import forwarded_credentials
+
+    return forwarded_credentials.resolve_access_token(
+        "google",
+        list(GMAIL_SCOPES),
+        live_fetch=lambda: get_access_token_sync(
+            provider="google",
+            agent_id=AGENT_NAMESPACED_ID,
+            scopes=list(GMAIL_SCOPES),
+        ),
     )
 
 

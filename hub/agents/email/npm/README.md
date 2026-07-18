@@ -105,7 +105,10 @@ for await (const ev of sidecar.client.query({
 Triage classifies and drafts using only the local model — no mailbox connection
 needed. Reading or acting on a live inbox (search, send, archive, calendar) uses
 the **Google or Microsoft connector** you set up in GAIA under
-*Settings → Connectors*.
+*Settings → Connectors*. (Inside the full GAIA Agent UI daemon the connector token
+is forwarded to the agent by the daemon — sidecar contract 2.5, #2154; a standalone
+integrator using this package is unaffected and resolves the mailbox from the local
+GAIA connector store.)
 
 Want to try it without writing code? Run `npx @amd-gaia/agent-email playground`
 for a local page to test triage, drafting, and a live send.

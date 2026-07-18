@@ -22,6 +22,7 @@ from gaia.ui.scheduler import (
     ScheduledTask,
     Scheduler,
     parse_interval,
+    parse_schedule_input,
 )
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -459,6 +460,45 @@ class TestParseIntervalExtended:
         """'every minute' (no number, not a day name) should raise ValueError."""
         with pytest.raises(ValueError, match="Cannot parse interval"):
             parse_interval("every minute")
+
+
+# ── ReDoS hardening tests (input bounds + unambiguous regexes) ──────────────
+
+
+class TestScheduleInputBounds:
+    """Hostile/oversized schedule strings must be rejected up front, and the
+    window regex must stay linear on whitespace-heavy input."""
+
+    def test_parse_interval_rejects_oversized_input(self):
+        with pytest.raises(ValueError, match="too long"):
+            parse_interval("every " + "0" * 10_000 + "m")
+
+    def test_parse_interval_rejects_absurd_digit_runs(self):
+        # Bounded quantifier: >9-digit values no longer parse.
+        with pytest.raises(ValueError, match="Cannot parse interval"):
+            parse_interval("1234567890s")
+
+    def test_parse_schedule_input_rejects_oversized_input(self):
+        config = parse_schedule_input("from 9" + "\t" * 10_000 + "to 5")
+        assert config.interval_seconds == 0
+        assert "too long" in config.description
+
+    def test_window_parsing_still_works(self):
+        config = parse_schedule_input("every hour from 8am to 6pm")
+        assert config.interval_seconds == 3600
+        assert config.start_hour == 8
+        assert config.end_hour == 18
+
+    def test_window_with_minutes_and_spaces(self):
+        config = parse_schedule_input("every 30m from 9:30 am to 5 pm")
+        assert config.interval_seconds == 1800
+        assert config.start_hour == 9
+        assert config.end_hour == 17
+
+    def test_time_of_day_parsing_still_works(self):
+        config = parse_schedule_input("daily at 9 pm")
+        assert config.interval_seconds == 86400
+        assert config.time_of_day == "21:00"
 
 
 # ── ScheduleConfig fail-loudly tests ─────────────────────────────────────────

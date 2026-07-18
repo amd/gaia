@@ -43,6 +43,10 @@ _DAY_ABBR = {
 }
 _ALL_DAY_NAMES = {**_DAY_FULL, **_DAY_ABBR}
 
+# Upper bound on schedule/interval input length before regex parsing —
+# keeps user-provided strings from driving pathological regex backtracking.
+_MAX_SCHEDULE_INPUT_LEN = 256
+
 
 def parse_interval(interval_str: str) -> int:
     """Parse a human-readable interval string into seconds.
@@ -67,6 +71,11 @@ def parse_interval(interval_str: str) -> int:
     Raises:
         ValueError: If the interval string cannot be parsed.
     """
+    if len(interval_str) > _MAX_SCHEDULE_INPUT_LEN:
+        raise ValueError(
+            f"Interval string is too long ({len(interval_str)} chars, "
+            f"max {_MAX_SCHEDULE_INPUT_LEN}). Use a short form like 'every 6h'."
+        )
     s = interval_str.strip().lower()
 
     # Handle aliases
@@ -93,7 +102,7 @@ def parse_interval(interval_str: str) -> int:
 
     # Try "every Xunit" pattern
     match = re.match(
-        r"every\s+(\d+)\s*(s|sec|seconds?|m|min|minutes?|h|hr|hours?|d|days?|w|wk|weeks?)",
+        r"every\s+(\d{1,9})\s*(s|sec|seconds?|m|min|minutes?|h|hr|hours?|d|days?|w|wk|weeks?)",
         s,
     )
     if match:
@@ -111,7 +120,7 @@ def parse_interval(interval_str: str) -> int:
             return value * 604800
 
     # Try bare "Xh", "Xm", etc.
-    match = re.match(r"(\d+)\s*(s|m|h|d|w)", s)
+    match = re.match(r"(\d{1,9})\s*(s|m|h|d|w)", s)
     if match:
         value = int(match.group(1))
         unit = match.group(2)
@@ -315,6 +324,14 @@ def parse_schedule_input(text: str) -> ScheduleConfig:
         interval_seconds will be 0 and description will indicate the error.
     """
     config = ScheduleConfig(raw_input=text)
+
+    if len(text) > _MAX_SCHEDULE_INPUT_LEN:
+        config.description = (
+            f"Could not parse schedule: input too long ({len(text)} chars, "
+            f"max {_MAX_SCHEDULE_INPUT_LEN})"
+        )
+        return config
+
     s = text.strip().lower()
 
     if not s:
@@ -323,7 +340,8 @@ def parse_schedule_input(text: str) -> ScheduleConfig:
 
     # ── 1. Extract time-of-day: "at HH:MM", "at Ham/pm", "at noon" ──
     time_match = re.search(
-        r"\bat\s+(noon|midnight|\d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d{1,2}:\d{2})\b", s
+        r"\bat\s+(noon|midnight|\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?|\d{1,2}:\d{2})\b",
+        s,
     )
     if time_match:
         parsed_time = _parse_time(time_match.group(1))
@@ -333,9 +351,11 @@ def parse_schedule_input(text: str) -> ScheduleConfig:
         s = s[: time_match.start()] + s[time_match.end() :]
 
     # ── 2. Extract window: "from Ham/pm to Ham/pm" ──
+    # NOTE: "(?:\s*(?:am|pm))?" (not "\s*(?:am|pm)?") — an unconditional \s*
+    # next to the following \s+ makes whitespace runs ambiguous → ReDoS.
     window_match = re.search(
-        r"\bfrom\s+(noon|midnight|\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s+"
-        r"to\s+(noon|midnight|\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b",
+        r"\bfrom\s+(noon|midnight|\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)\s+"
+        r"to\s+(noon|midnight|\d{1,2}(?::\d{2})?(?:\s*(?:am|pm))?)\b",
         s,
     )
     if window_match:
@@ -439,7 +459,7 @@ def parse_schedule_input(text: str) -> ScheduleConfig:
         config.interval_seconds = 604800
     else:
         # Try bare "Xh", "Xm" patterns
-        bare_match = re.match(r"(\d+)\s*(s|m|h|d|w)", s)
+        bare_match = re.match(r"(\d{1,9})\s*(s|m|h|d|w)", s)
         if bare_match:
             value = int(bare_match.group(1))
             unit = bare_match.group(2)

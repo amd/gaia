@@ -540,9 +540,29 @@ connector** (OAuth), configured in GAIA under *Settings → Connectors*.
 `send` resolves its OAuth token from the **local GAIA connector store**
 (`gaia.connectors`) on the host — `EmailSendRequest` has **no `access_token`
 field** (`provider` is only a routing hint). There is **no way to pass or forward a
-connection through this package's API**, so connector-backed calls only work on a
-machine where the mailbox is already connected in GAIA. Triage and draft, which
+connection through this package's client API**, so connector-backed calls only work
+on a machine where the mailbox is already connected in GAIA. Triage and draft, which
 need no connector, work anywhere.
+
+### OAuth forward-out (GAIA daemon deployment, sidecar contract 2.5)
+
+In the **GAIA Agent UI daemon** deployment (not this standalone client), the
+daemon is the custody home for OAuth: it owns the long-lived refresh token and
+forwards **short-lived access tokens** to the sidecar's intake — `POST
+/v1/connections/{provider}` (with `GET /v1/connections` and `DELETE
+/v1/connections/{provider}`), added additively as sidecar contract **2.5** (#2154).
+The sidecar answers mailbox calls with the forwarded token and **never receives
+the refresh token or the OAuth client secret**; the daemon re-forwards on expiry
+and withdraws on revocation/uninstall. Forwarding honors the per-agent grant model
+— only connectors granted to the email agent are forwarded, and a
+missing/expired/scope-short credential is a loud, actionable error, never a silent
+empty token.
+
+These routes are **daemon-managed**: a standalone integrator using this package
+does not call them, and the "no way to forward through the client API" rule above
+is unchanged. A sidecar boots into forwarded mode only when the daemon sets the
+private `GAIA_EMAIL_FORWARDED_CREDENTIALS` env channel on spawn; otherwise it uses
+the local connector store exactly as before.
 
 As of `SCHEMA_VERSION` 2.2 this package's REST API exposes the read-only inbox
 **search** and **pre-scan** (`search` / `prescan`), the **archive** and

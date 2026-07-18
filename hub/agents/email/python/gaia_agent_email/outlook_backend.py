@@ -319,14 +319,14 @@ class LiveOutlookBackend:
             raise ConnectorsError(
                 "Microsoft Graph returned 401. The Outlook access token may "
                 "have expired or been revoked. Reconnect Microsoft in "
-                f"Settings -> Connections. (where: {where})"
+                f"Settings → Connectors. (where: {where})"
             )
         if response.status_code == 403:
             raise ConnectorsError(
                 "Microsoft Graph returned 403 (insufficient permissions). The "
                 "connected Microsoft account did not grant the mail scopes this "
                 "agent needs (Mail.ReadWrite / Mail.Send). Reconnect Microsoft "
-                "in Settings -> Connections and approve mail access. "
+                "in Settings → Connectors and approve mail access. "
                 f"(where: {where}; detail: {response.text[:300]})"
             )
         raise ConnectorsError(
@@ -616,14 +616,23 @@ def _get_outlook_token() -> str:
     prompt the user — never swallowed into an empty token / empty inbox.
 
     Module-level (not a method) so it mirrors ``_get_gmail_token`` and can be
-    unit-tested without instantiating the agent.
+    unit-tested without instantiating the agent. In the daemon deployment
+    (#2154) it returns the daemon-forwarded 'microsoft' token instead of reading
+    the keyring; loud on no-grant / missing-scope / expiry either way.
     """
-    cred = get_credential_sync(
-        "microsoft",
-        agent_id=AGENT_NAMESPACED_ID,
-        required_scopes=list(OUTLOOK_MAIL_SCOPES),
+    from gaia_agent_email import forwarded_credentials
+
+    def _live() -> str:
+        cred = get_credential_sync(
+            "microsoft",
+            agent_id=AGENT_NAMESPACED_ID,
+            required_scopes=list(OUTLOOK_MAIL_SCOPES),
+        )
+        return cred["access_token"]
+
+    return forwarded_credentials.resolve_access_token(
+        "microsoft", list(OUTLOOK_MAIL_SCOPES), live_fetch=_live
     )
-    return cred["access_token"]
 
 
 __all__ = [

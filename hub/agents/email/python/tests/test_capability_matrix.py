@@ -8,9 +8,9 @@ REST verbs, MCP tools, eval-gate coverage), renders a committed
 ``CAPABILITY_MATRIX.md``, and asserts nothing drifts silently:
 
 - AC1: the committed matrix doc is byte-identical to a freshly regenerated one.
-- AC2: ``tools_count`` (52) is identical across ``gaia-agent.yaml``,
+- AC2: ``tools_count`` (55) is identical across ``gaia-agent.yaml``,
   ``gaia_agent_email.__init__.build_registration()``, and an AST-derived count.
-- AC3: every one of the 22 exposed ops (18 REST + 4 MCP) is annotated with an
+- AC3: every one of the 25 exposed ops (21 REST + 4 MCP) is annotated with an
   eval suite name or the "no quality eval" sentinel — closed-set, bidirectional.
 - AC4: the MCP-scope decision (4 tools + rationale) is pinned and current.
 - AC5: every eval suite has a non-trivial follow-up plan, and ``followups`` is
@@ -59,7 +59,7 @@ _spec.loader.exec_module(capability_matrix)
 # see the plan for issue #2013 §1 for the derivation of every number below).
 # ---------------------------------------------------------------------------
 
-# 12 mixins in gaia_agent_email/tools/, keyed by module stem, 52 tools total.
+# 13 mixins in gaia_agent_email/tools/, keyed by module stem, 55 tools total.
 _EXPECTED_TOOLS_BY_MIXIN = {
     "read_tools": 8,
     "organize_tools": 15,
@@ -67,6 +67,7 @@ _EXPECTED_TOOLS_BY_MIXIN = {
     "calendar_tools": 6,
     "schedule_tools": 4,
     "preference_tools": 4,
+    "briefing_tools": 3,
     "delete_tools": 3,
     "phishing_tools": 2,
     "voice_tools": 2,
@@ -74,13 +75,13 @@ _EXPECTED_TOOLS_BY_MIXIN = {
     "profile_tools": 1,
     "summarize_tools": 1,
 }
-_EXPECTED_TOOLS_TOTAL = 52
+_EXPECTED_TOOLS_TOTAL = 55
 assert sum(_EXPECTED_TOOLS_BY_MIXIN.values()) == _EXPECTED_TOOLS_TOTAL
 
 _EXPECTED_MCP_COUNT = 4
 _EXPECTED_EVAL_SUITE_COUNT = 6
-_EXPECTED_REST_FUNCTIONAL_COUNT = 18
-_EXPECTED_REST_IN_CONTRACT_COUNT = 21
+_EXPECTED_REST_FUNCTIONAL_COUNT = 21
+_EXPECTED_REST_IN_CONTRACT_COUNT = 24
 
 # The 6 eval suites are the *_gate_thresholds.json fixture stems at the repo
 # root (NOT under hub/agents/email/python/tests/ — this package ships no such
@@ -126,6 +127,11 @@ _EXPECTED_REST_OP_NAMES = {
     # #2016 streaming agent-loop surface: POST /v1/email/query and its cancel.
     "query",
     "query/{run_id}/cancel",
+    # #2154 OAuth forward-OUT intake. These live under /v1/connections (NOT
+    # /v1/email/), so the naming scheme keeps their full path.
+    "/v1/connections",
+    "/v1/connections/{provider} (POST)",
+    "/v1/connections/{provider} (DELETE)",
 }
 assert len(_EXPECTED_REST_OP_NAMES) == _EXPECTED_REST_FUNCTIONAL_COUNT
 _EXPECTED_OP_NAMES = _EXPECTED_REST_OP_NAMES | set(_EXPECTED_MCP_TOOL_NAMES)
@@ -156,7 +162,7 @@ def test_committed_capability_matrix_is_up_to_date(matrix):
 
 
 # ---------------------------------------------------------------------------
-# AC2 — tools_count defined + asserted (52, 3 independent sources)
+# AC2 — tools_count defined + asserted (55, 3 independent sources)
 # ---------------------------------------------------------------------------
 
 
@@ -342,7 +348,7 @@ class FakeMCPAgent:
 
 
 # ---------------------------------------------------------------------------
-# AC3 — eval coverage per exposed op (22 ops, closed-set + bidirectional)
+# AC3 — eval coverage per exposed op (25 ops, closed-set + bidirectional)
 # ---------------------------------------------------------------------------
 
 

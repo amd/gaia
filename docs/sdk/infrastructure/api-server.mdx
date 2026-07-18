@@ -39,6 +39,24 @@ different port (e.g. `gaia api start --port 8081`) if you need both alive at
 the same time.
 </Note>
 
+### CORS
+
+Browser (cross-origin) access is limited to `localhost` / `127.0.0.1` origins
+by default. Non-browser clients (the OpenAI SDK, curl, VSCode) are unaffected —
+CORS only gates requests made from web pages.
+
+To let a web app on another origin call the API, list its origin in
+`GAIA_API_CORS_ORIGINS` (comma-separated):
+
+```bash
+GAIA_API_CORS_ORIGINS="https://myapp.example.com" gaia api start
+```
+
+Setting the variable to `*` opens the API to all origins but disables
+credentialed requests — wildcard origins combined with credentials are
+forbidden by the Fetch spec and would let any website the user visits call
+the local API.
+
 ---
 
 ## 7.2 Custom API Agent
