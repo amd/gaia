@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
+from typing import Union
 
 _ENV_HOME = "GAIA_DAEMON_HOME"
 
@@ -84,5 +86,42 @@ def atomic_write_json(path: Path, payload, mode: int = 0o600) -> None:
     # where the source mode is not carried across the rename.
     try:
         os.chmod(str(path), mode)
+    except OSError:
+        pass
+
+
+def atomic_copy_file(
+    src: Union[str, Path], dst: Union[str, Path], mode: int = 0o600
+) -> None:
+    """Atomically copy *src* to *dst* — same temp-then-rename discipline as
+    :func:`atomic_write_json`, but for arbitrary (binary) files.
+
+    Used by the one-time state migration to relocate SQLite stores: the copy is
+    written to a uniquely-named temp file in *dst*'s directory, fsynced, then
+    ``os.replace``-d over the target, so a crash mid-copy never leaves a
+    half-written (and therefore corrupt) database at *dst*. *src* is never
+    modified — the migration is non-destructive by construction.
+    """
+    src = Path(src)
+    dst = Path(dst)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.parent / f".{dst.name}.{os.getpid()}.tmp"
+    if tmp.exists():
+        tmp.unlink()
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_TRUNC, mode)
+    try:
+        with open(src, "rb") as fsrc, os.fdopen(fd, "wb") as fdst:
+            shutil.copyfileobj(fsrc, fdst)
+            fdst.flush()
+            os.fsync(fdst.fileno())
+    except Exception:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+    os.replace(str(tmp), str(dst))
+    try:
+        os.chmod(str(dst), mode)
     except OSError:
         pass
