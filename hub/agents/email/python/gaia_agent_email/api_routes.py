@@ -149,14 +149,16 @@ router.include_router(_query_router)
 async def require_caller_token(request: Request) -> None:
     """Reject a request that lacks a valid per-session bearer token (401).
 
-    Wired onto the email router ONLY by the frozen sidecar app
-    (``packaging/server.py``) — the product server and OpenAPI-export app mount
-    the same router without this dependency, so their posture is unchanged. The
+    Wired onto the email router ONLY by the sidecar app
+    (``gaia_agent_email.server``; the frozen binary freezes a re-export of it) —
+    the product server and OpenAPI-export app mount the same router without this
+    dependency, so their posture is unchanged. The
     policy is read from :mod:`gaia_agent_email.caller_auth`:
 
-    - No policy configured, or a policy with ``token is None`` (a dev running the
-      sidecar by hand without ``GAIA_EMAIL_SIDECAR_TOKEN``) → allowed. The Host/
-      Origin controls in ``HostOriginMiddleware`` still apply.
+    - No policy configured, or a policy with ``token is None`` (a dev running
+      the sidecar by hand with neither ``GAIA_EMAIL_SIDECAR_TOKEN_FILE`` nor
+      ``GAIA_EMAIL_SIDECAR_TOKEN``) → allowed. The Host/Origin controls in
+      ``HostOriginMiddleware`` still apply.
     - Liveness/version probes and the HTML pages are exempt (:data:`caller_auth.
       EXEMPT_PATHS`) so the readiness handshake works before a token is in play.
     - Otherwise a missing/malformed/wrong ``Authorization: Bearer <token>`` is a
@@ -173,10 +175,12 @@ async def require_caller_token(request: Request) -> None:
             detail=(
                 "Unauthorized: this email sidecar endpoint requires the "
                 "per-session bearer token. Send 'Authorization: Bearer "
-                "<token>' using the token the sidecar was started with "
-                f"(the parent process passes it via the {caller_auth.TOKEN_ENV_VAR} "
-                "env var on spawn). Requests without a valid token are refused so "
-                "no other local process or web page can act on your mailbox."
+                "<token>' using the token the sidecar was started with (the "
+                "parent process delivers it on spawn via the "
+                f"{caller_auth.TOKEN_FILE_ENV_VAR} secret file, or the legacy "
+                f"{caller_auth.TOKEN_ENV_VAR} env var). Requests without a "
+                "valid token are refused so no other local process or web page "
+                "can act on your mailbox."
             ),
         )
 

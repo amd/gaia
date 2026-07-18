@@ -38,6 +38,16 @@ logger = get_logger(__name__)
 
 _START_TIMEOUT = 30.0
 
+# The daemon MINOR that introduced the /daemon/v1/agents control plane + the
+# /v1/<agent>/* relay (#2142 / #2150). A pre-#2142 daemon passes the MAJOR gate
+# but would 404 every agents/relay route — fail loudly instead. A stale daemon
+# surviving an app auto-update is the EXPECTED path, not an edge case.
+_REQUIRED_AGENTS_MINOR = 1
+
+# Ensure: connect fast; read generously — a first-run ensure may lazily fetch the
+# sidecar binary before answering (mirrors gaia.ui.email_sidecar.daemon_client).
+_ENSURE_TIMEOUT = (5.0, 900.0)
+
 
 def _major(version: str) -> int:
     try:
@@ -146,6 +156,81 @@ def _spawn_and_wait(timeout: float) -> DaemonInstance:
         f"the daemon did not become healthy within {timeout}s. It may be stuck "
         f"binding a port or importing. Inspect the daemon log at {paths.log_path()}."
     )
+
+
+def _check_agents_floor(inst: DaemonInstance) -> None:
+    """Fail loudly if the running daemon predates the agents/relay control plane."""
+    parts = str(inst.api_version).split(".")
+    try:
+        minor = int(parts[1]) if len(parts) > 1 else 0
+    except ValueError:
+        minor = 0
+    if minor < _REQUIRED_AGENTS_MINOR:
+        raise DaemonVersionError(
+            f"the running daemon (host API v{inst.api_version}) predates the "
+            "sidecar control plane + relay (needs v1.1+) — it would 404 every "
+            "agents route. Run `gaia daemon restart`, then retry."
+        )
+
+
+def _error_detail(response) -> str:
+    """The actionable ``detail`` from a daemon error response (or raw status)."""
+    try:
+        body = response.json()
+    except ValueError:
+        return f"HTTP {response.status_code}"
+    if isinstance(body, dict) and body.get("detail"):
+        return str(body["detail"])
+    return f"HTTP {response.status_code}"
+
+
+def ensure_agent(
+    agent_id: str,
+    *,
+    mode: Optional[str] = None,
+    timeout=_ENSURE_TIMEOUT,
+) -> DaemonInstance:
+    """Start-or-attach the daemon and ensure *agent_id*'s sidecar is running.
+
+    Returns the :class:`DaemonInstance` — ``base_url`` + the DAEMON client token —
+    which a thin client drives the sidecar through, exclusively via the daemon
+    relay (``ANY /v1/<agent>/*``). The sidecar's own port/bearer in the ensure
+    response are deliberately DISCARDED here so a thin client never holds sidecar
+    credentials (design §0.0 "one contract, many front-doors"): it presents only
+    the daemon client token, and the daemon swaps it for the sidecar bearer
+    server-side.
+
+    Blocking (daemon start + sidecar spawn + possible first-run binary fetch) —
+    call it off any event loop. Every failure raises :class:`DaemonError` with an
+    actionable remedy; there is no silent in-process fallback.
+    """
+    import requests
+
+    inst = start_or_attach()
+    _check_agents_floor(inst)
+    url = f"{inst.base_url}{API_PREFIX}/agents/{agent_id}/ensure"
+    payload = {} if mode is None else {"mode": mode}
+    try:
+        r = requests.post(
+            url,
+            headers={"Authorization": f"{AUTH_SCHEME} {inst.token}"},
+            json=payload,
+            timeout=timeout,
+        )
+    except requests.exceptions.RequestException as e:
+        raise DaemonError(
+            f"could not reach the daemon at {inst.base_url} to ensure the "
+            f"'{agent_id}' sidecar: {e}. Check `gaia daemon status` and the "
+            f"daemon log at {paths.log_path()}."
+        ) from e
+    if r.status_code != 200:
+        raise DaemonError(
+            f"the daemon refused to ensure the '{agent_id}' sidecar: "
+            f"{_error_detail(r)}"
+        )
+    # Deliberately DO NOT read/return the response body — it carries the sidecar
+    # bearer token, which a thin client must never learn or hold.
+    return inst
 
 
 def request_shutdown(inst: DaemonInstance, timeout: float = 5.0) -> bool:

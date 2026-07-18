@@ -36,8 +36,10 @@ import atexit
 import os
 import secrets
 import socket
+import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -71,6 +73,20 @@ def find_free_port(host: str = _HOST) -> int:
         if port != RESERVED_PORT:
             return port
     raise SidecarSpawnError("could not find a free ephemeral port for the sidecar")
+
+
+def _version_tuple(version: str) -> tuple:
+    """Parse a dotted version into a comparable int tuple; loud on garbage."""
+    parts = str(version).strip().lstrip("v").split(".")
+    try:
+        return tuple(int(p) for p in parts)
+    except ValueError as e:
+        raise SidecarSpawnError(
+            f"cannot parse sidecar binary version '{version}' for secret-delivery "
+            "negotiation. Expected a dotted numeric version (e.g. '0.6.0') — "
+            "reinstall the agent from the Agent Hub if its install metadata is "
+            "corrupt."
+        ) from e
 
 
 def _major(version: str) -> int:
@@ -138,9 +154,16 @@ class AgentSidecarManager:
         # already running" must compare against this, not a moving target.
         self.resolved_mode: Optional[str] = None
         # Per-session caller-auth token handed to the sidecar on spawn (#1706).
-        # Generated once per manager instance and passed over the private env
-        # channel; the proxy replays it as a bearer token on every request.
+        # Generated once per manager instance; the proxy replays it as a bearer
+        # token on every request. Delivered via a 0600 file (#2149) when the
+        # sidecar supports it, else the deprecated bare-env leg.
         self.auth_token: str = secrets.token_urlsafe(32)
+        # Installed binary version captured by build_spawn_command (user mode) —
+        # the pre-spawn key for secret-delivery negotiation (#2149).
+        self.installed_binary_version: Optional[str] = None
+        # The leg actually used at spawn time: "file" | "env".
+        self.secret_delivery: Optional[str] = None
+        self._secret_path: Optional[Path] = None
 
     @property
     def mode(self) -> str:
@@ -183,9 +206,11 @@ class AgentSidecarManager:
                     f"mode: {e} Set {self.spec.mode_env_var}=dev to run from "
                     "source, or publish the agent so the binary + real SHA exist."
                 ) from e
+            self.installed_binary_version = result.version
             argv = [str(result.binary_path), "--host", self.host, "--port", str(port)]
             return argv, {}
         # dev mode — load packaging/server.py as the top-level module `server`.
+        self.installed_binary_version = None
         if self.spec.dev_src_dir is None:
             raise SidecarSpawnError(
                 f"dev mode needs a source dir but {self.spec.agent_id}'s spec has "
@@ -262,12 +287,13 @@ class AgentSidecarManager:
             creationflags = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
         else:
             start_new_session = True  # own process group for tree-kill
-        log_handle = self._open_log(port)
-        # Hand the sidecar its per-session caller-auth token over the private env
-        # channel (#1706). Merge over the inherited env / any cwd already in
-        # popen_kwargs — never clobber them.
+        # Hand the sidecar its per-session caller-auth token (#1706). Merge over
+        # the inherited env / any cwd already in popen_kwargs — never clobber
+        # them. Delivery leg (0600 file vs deprecated bare env) is negotiated
+        # pre-spawn (#2149), before the log opens so a refusal leaks nothing.
         spawn_env = {**os.environ, **(popen_kwargs.pop("env", None) or {})}
-        spawn_env[self.spec.token_env_var] = self.auth_token
+        self._apply_secret_delivery(spawn_env)
+        log_handle = self._open_log(port)
         try:
             self._proc = subprocess.Popen(
                 argv,
@@ -280,6 +306,7 @@ class AgentSidecarManager:
             )
         except OSError as e:
             self._close_log()
+            self._cleanup_secret_file()
             raise SidecarSpawnError(
                 f"failed to launch the {self.spec.agent_id} sidecar ({argv[0]}): {e}"
             ) from e
@@ -293,6 +320,133 @@ class AgentSidecarManager:
         if not self._atexit_registered:
             atexit.register(self.shutdown)
             self._atexit_registered = True
+
+    def _resolve_secret_delivery(self) -> "tuple[str, str]":
+        """Pick the delivery leg ("file" | "env") BEFORE spawn, plus the reason.
+
+        Keyed off what the parent already knows — the resolved mode and the
+        installed binary's version from the install manifest / lock. NOT the
+        runtime /version probe: that answers only after spawn, which is too late
+        to choose how the secret is delivered (#2149).
+        """
+        spec = self.spec
+        if not spec.token_file_env_var or not spec.secret_file_min_version:
+            return "env", f"the {spec.agent_id} spec declares no file-delivery contract"
+        mode = self.resolved_mode or self.mode
+        if mode == "dev":
+            return "file", "dev mode runs from source, which reads the secret file"
+        version = self.installed_binary_version
+        if not version:
+            raise SidecarSpawnError(
+                f"cannot negotiate secret delivery for the {spec.agent_id} "
+                "sidecar: the installed binary's version is unknown (no version "
+                "in the hub install sentinel or binaries.lock.json). Refusing to "
+                "guess which leg the binary understands — reinstall the agent "
+                "from the Agent Hub so its install metadata records a version."
+            )
+        if _version_tuple(version) >= _version_tuple(spec.secret_file_min_version):
+            return (
+                "file",
+                f"installed binary {version} >= {spec.secret_file_min_version}",
+            )
+        return (
+            "env",
+            f"installed binary {version} predates file delivery "
+            f"(< {spec.secret_file_min_version})",
+        )
+
+    def _apply_secret_delivery(self, spawn_env: dict) -> None:
+        """Inject the launch secret into *spawn_env* via the negotiated leg."""
+        leg, reason = self._resolve_secret_delivery()
+        self.secret_delivery = leg
+        if leg == "file":
+            secret_path = self._write_secret_file()
+            spawn_env[self.spec.token_file_env_var] = str(secret_path)
+            # Never let a stale inherited token env var ride into the child.
+            spawn_env.pop(self.spec.token_env_var, None)
+            logger.info(
+                "%s sidecar: delivering launch secret via 0600 file %s (%s)",
+                self.spec.agent_id,
+                secret_path,
+                reason,
+            )
+        else:
+            spawn_env[self.spec.token_env_var] = self.auth_token
+            logger.warning(
+                "%s sidecar: DEPRECATED bare-env secret delivery via %s (%s). "
+                "The secret is visible to local process inspection "
+                "(/proc/<pid>/environ, ps eww); upgrade the installed sidecar "
+                "binary to get 0600-file delivery. Removal of this leg is "
+                "tracked in #2149.",
+                self.spec.agent_id,
+                self.spec.token_env_var,
+                reason,
+            )
+
+    def _write_secret_file(self) -> Path:
+        """Create the owner-only launch-secret file; loud error, no env fallback.
+
+        A fresh ``mkdtemp`` dir (0700) + ``O_CREAT|O_EXCL`` at 0600 means the
+        secret never exists on disk with looser permissions, even mid-write.
+        """
+        secret_dir: Optional[Path] = None
+        try:
+            secret_dir = Path(
+                tempfile.mkdtemp(prefix=f"gaia-{self.spec.agent_id}-secret-")
+            )
+            path = secret_dir / "launch-secret"
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            try:
+                os.write(fd, self.auth_token.encode("utf-8"))
+            finally:
+                os.close(fd)
+            if os.name != "nt":
+                mode = stat.S_IMODE(os.stat(path).st_mode)
+                if mode != 0o600:
+                    raise SidecarSpawnError(
+                        f"launch-secret file {path} came out mode {oct(mode)}, "
+                        "not 0600 — refusing to spawn with a secret other local "
+                        "users could read. The temp filesystem is ignoring POSIX "
+                        "permissions; point TMPDIR at one that honors them."
+                    )
+        except OSError as e:
+            self._remove_secret_dir(secret_dir)
+            raise SidecarSpawnError(
+                f"could not create the {self.spec.agent_id} sidecar's 0600 "
+                f"launch-secret file: {e}. There is no env fallback — fix the "
+                "temp directory (TMPDIR) permissions/space and retry."
+            ) from e
+        except SidecarSpawnError:
+            self._remove_secret_dir(secret_dir)
+            raise
+        self._secret_path = path
+        return path
+
+    @staticmethod
+    def _remove_secret_dir(secret_dir: Optional[Path]) -> None:
+        if secret_dir is None:
+            return
+        try:
+            (secret_dir / "launch-secret").unlink(missing_ok=True)
+            secret_dir.rmdir()
+        except OSError:
+            pass
+
+    def _cleanup_secret_file(self) -> None:
+        path = self._secret_path
+        if path is None:
+            return
+        self._secret_path = None
+        try:
+            path.unlink(missing_ok=True)
+            path.parent.rmdir()
+        except OSError as e:
+            logger.warning(
+                "%s sidecar: could not remove launch-secret file %s: %s",
+                self.spec.agent_id,
+                path,
+                e,
+            )
 
     def start(self, max_attempts: int = 3) -> str:
         """Spawn + health-check + version-handshake the sidecar; return base_url.
@@ -461,10 +615,12 @@ class AgentSidecarManager:
         proc = self._proc
         if proc is None:
             self._close_log()
+            self._cleanup_secret_file()
             return
         if proc.poll() is not None:
             self._proc = None
             self._close_log()
+            self._cleanup_secret_file()
             self._fire_reaped()
             return
         pid = proc.pid
@@ -501,6 +657,7 @@ class AgentSidecarManager:
         leader_gone = proc.poll() is not None
         self._proc = None
         self._close_log()
+        self._cleanup_secret_file()
         if leader_gone:
             self._fire_reaped()
         logger.info("%s sidecar: shut down", self.spec.agent_id)

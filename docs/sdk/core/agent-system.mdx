@@ -869,6 +869,90 @@ walkthrough of the registry entry.
 
 ---
 
+## Proactive Lifecycle Hooks
+
+Beyond responding to a user prompt, an agent can act **proactively** — proposing
+work on first run or during a steady-state loop. The base `Agent` exposes three
+methods for this (issue #1484):
+
+| Method | When it runs | Returns |
+|--------|--------------|---------|
+| `on_first_run(context)` | Once, on initial discovery | `List[Proposal]` |
+| `on_heartbeat(context)` | Each steady-state tick | `List[Proposal]` |
+| `propose(proposal)` | Called by your hook to submit a proposal | `Goal` |
+
+All three are **no-ops by default** — a plain agent never acts on its own, and
+`process_query()` never triggers them. You opt in by overriding the hooks.
+
+**Every proposal requires explicit user approval before anything runs.**
+`propose()` parks the proposal in `pending_approval`; nothing executes until the
+user accepts it. Proposals also carry a **risk tier** (`low` / `medium` / `high`
+/ `critical`) — it's stored as signal to help the approving user prioritize, but
+it never gates execution: even `risk="low"` proposals wait for approval, per the
+[autonomous agent spec](https://github.com/amd/gaia/blob/main/docs/spec/autonomous-agent-mode.md).
+
+### Example: a proactive workspace agent
+
+```python
+from typing import Any, Dict, List, Optional
+
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.console import SilentConsole
+from gaia.agents.base.goal_store import Proposal
+
+
+class WorkspaceAgent(Agent):
+    def _get_system_prompt(self) -> str:
+        return "You help keep a project workspace tidy."
+
+    def _create_console(self):
+        return SilentConsole()
+
+    def _register_tools(self):
+        pass
+
+    def on_first_run(self, context: Optional[Dict[str, Any]]) -> List[Proposal]:
+        # Reading a directory is safe -> low risk, but still needs approval.
+        return [
+            Proposal(
+                action="index_workspace",
+                rationale="No index found; build one for fast retrieval.",
+                action_class="file_read",
+                risk="low",
+            )
+        ]
+
+    def on_heartbeat(self, context: Optional[Dict[str, Any]]) -> List[Proposal]:
+        # Deleting files is destructive -> needs explicit approval.
+        return [
+            Proposal(
+                action="archive_stale_logs",
+                rationale="12 log files older than 30 days.",
+                action_class="file_write",
+                risk="high",
+            )
+        ]
+
+
+agent = WorkspaceAgent(silent_mode=True, skip_lemonade=True)
+
+for proposal in agent.on_first_run(context=None):
+    goal = agent.propose(proposal)          # low risk -> still awaits the user
+    print(goal.status)                       # "pending_approval"
+
+for proposal in agent.on_heartbeat(context=None):
+    goal = agent.propose(proposal)          # high risk -> awaits the user
+    print(goal.status)                       # "pending_approval"
+```
+
+<Warning>
+`propose()` does not swallow failures — a `GoalStore` database error propagates
+so the caller sees it, per GAIA's no-silent-fallbacks rule (see
+[`docs/reference/dev`](https://amd-gaia.ai/docs/reference/dev)).
+</Warning>
+
+---
+
 ## Key Takeaways
 
 <CardGroup cols={2}>

@@ -263,6 +263,31 @@ session — an overlapping `/query` returns **409**. See `SPEC.md` for the full 
   exit/crash/signal. Call `shutdown` for a graceful stop, or `autoCleanup: false` to
   wire signals yourself. The package does not restart a crashed sidecar.
 
+## Fast local iteration (when you need to fix the agent, not just call it)
+
+The steps above spawn a **frozen** binary — you can't edit it. To debug or improve
+the agent, run its **Python source** and attach the same client. The frozen binary
+is that source frozen, so the contract is identical; only the base URL changes.
+
+```bash
+pip install -e hub/agents/email/python     # editable install
+gaia-agent-email serve --reload            # source server on 127.0.0.1:8131, auto-reload
+```
+
+```ts
+import { connectSidecar } from "@amd-gaia/agent-email";
+// Attaches (health + version check), spawns nothing, token off in dev:
+const dev = await connectSidecar({ baseUrl: "http://127.0.0.1:8131" });
+await dev.client.triage({ payload: { /* … */ } });
+// Edit the Python under gaia_agent_email/, save → reload → re-run. Seconds.
+```
+
+`npx @amd-gaia/agent-email dev` launches the `serve` process for you
+(`--python <path>` to use a specific venv). There's no `child` on the returned
+handle and nothing to `shutdown()` — you own the `serve` process (Ctrl+C). Switch
+back to production by using `startSidecar` (frozen binary) instead of
+`connectSidecar`; the client calls are unchanged.
+
 ## Prerequisites — the agent needs a local model
 
 The sidecar runs the LLM via **Lemonade Server**, which this package does **not**

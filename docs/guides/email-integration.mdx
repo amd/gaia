@@ -177,6 +177,64 @@ the endpoint returns **503** with a `hint` naming exactly what to fix.
   reports as `model.id` (`user.`-prefixed registrations match tolerantly).
 </Note>
 
+## Fast local iteration (dev mode)
+
+The frozen sidecar ships for production — but it's opaque, so when you hit a
+triage or draft bug there's nothing to edit. To iterate on the agent, run its
+**Python source** instead and drive it with the **same client**. The frozen
+binary is that source frozen, so the contract is identical — **only the base URL
+changes.**
+
+**Set up once** — install the Python package editable so your edits take effect live:
+
+```bash
+pip install -e hub/agents/email/python
+```
+
+**The loop:**
+
+1. Start the source agent with auto-reload (caller token off for local dev):
+
+   ```bash
+   gaia-agent-email serve --reload            # http://127.0.0.1:8131
+   # editing core too? watch it as well:
+   # gaia-agent-email serve --reload --reload-dir path/to/gaia/src
+   ```
+
+2. Attach your app. `connectSidecar` health- and version-checks the running
+   server, spawns nothing, and returns a bound client — same API as production:
+
+   ```ts
+   import { connectSidecar } from "@amd-gaia/agent-email";
+
+   const dev = await connectSidecar({ baseUrl: "http://127.0.0.1:8131" });
+   const res = await dev.client.triage({ payload: { /* … */ } });
+   ```
+
+3. Edit the Python under `gaia_agent_email/`, save — it reloads in ~a second — and
+   re-run your call. That's the whole loop.
+
+Prefer one command? `npx @amd-gaia/agent-email dev` starts the source server for
+you (`--python <path>` to pick a venv, `--port <n>` to rebind).
+
+**Going to production** changes one line: swap `connectSidecar` for `startSidecar`
+(which fetches + spawns the frozen binary). The calls are identical.
+
+<Note>
+  - The server starts (and `connectSidecar` succeeds) **before** Lemonade is up —
+    `/health` is liveness-only. Live `triage` returns **502** until a local
+    Lemonade Server is running with the model pulled (`lemonade-server serve`;
+    `gaia init` to provision). You can still iterate on non-LLM code paths first.
+  - You own the `serve` process — there's no `child` on the returned handle and
+    nothing to `shutdown()`; Ctrl+C the terminal running `serve`.
+  - Auto-reload restarts the server, so conversational `/v1/email/agent/*`
+    sessions reset on reload. The stateless `triage`/`draft`/`send` calls are
+    unaffected (each request is self-contained).
+  - Running `serve` without `GAIA_EMAIL_SIDECAR_TOKEN` disables the caller token
+    (dev only, logged loudly). Set it — and pass `authToken` to `connectSidecar` —
+    to exercise the authenticated path.
+</Note>
+
 ## Authentication
 
 The frozen sidecar binds `127.0.0.1` and can **send mail as the user**, so it
@@ -187,7 +245,10 @@ identify who is calling.
 - **Per-session bearer token.** Every `/v1/email/*` request to the sidecar must
   carry `Authorization: Bearer <token>` or it is rejected with **HTTP 401**. The
   token is a cryptographically-random per-session secret the spawning parent hands
-  to the sidecar over the private `GAIA_EMAIL_SIDECAR_TOKEN` env channel.
+  to the sidecar — preferably as a `0600` owner-only file whose path arrives in
+  `GAIA_EMAIL_SIDECAR_TOKEN_FILE` (the GAIA daemon does this for 0.6.0+ binaries,
+  so the secret never sits in the process environment), or directly in the
+  `GAIA_EMAIL_SIDECAR_TOKEN` env var (npm lifecycle and older binaries).
 - **Host / Origin allowlist.** A non-loopback `Host` header → **HTTP 400**
   (DNS-rebinding); a non-loopback browser `Origin` → **HTTP 403** (drive-by web
   page). No permissive CORS is ever sent.
@@ -206,9 +267,12 @@ How this maps to the entry points above:
   after the backend exits; stop it with `gaia daemon stop-agent email` or
   `gaia daemon stop`.
 - **Direct-to-sidecar for local dev** — if you launch the frozen binary yourself,
-  set `GAIA_EMAIL_SIDECAR_TOKEN` and send the matching bearer header. Running it
-  **without** the env var disables the token check (local development only, logged
-  loudly) — the Host/Origin controls still apply.
+  set `GAIA_EMAIL_SIDECAR_TOKEN` (or point `GAIA_EMAIL_SIDECAR_TOKEN_FILE` at a
+  file holding the token) and send the matching bearer header. Running it with
+  **neither** variable disables the token check (local development only, logged
+  loudly) — the Host/Origin controls still apply. A set
+  `GAIA_EMAIL_SIDECAR_TOKEN_FILE` whose file is missing or empty fails startup
+  loudly rather than silently disabling auth.
 
 ```ts
 // npm path — the bound client carries the token for you.

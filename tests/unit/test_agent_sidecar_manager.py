@@ -7,6 +7,9 @@ mechanics (#2142 T1)."""
 
 import dataclasses
 import importlib.util
+import logging
+import os
+import stat as _stat
 import sys
 import threading
 import time as _t
@@ -54,6 +57,23 @@ def test_builtin_email_spec_token_env_var_matches_the_hub_wheel_contract():
     # Never silently drift — this env var is how the daemon hands the sidecar
     # its per-session auth token.
     assert builtin_specs()["email"].token_env_var == "GAIA_EMAIL_SIDECAR_TOKEN"
+
+
+def test_builtin_email_spec_token_file_env_var_matches_the_hub_wheel_contract():
+    # File-delivery leg (#2149): same mirror rule as the token env var — must
+    # equal gaia_agent_email.caller_auth.TOKEN_FILE_ENV_VAR.
+    email = builtin_specs()["email"]
+    assert email.token_file_env_var == "GAIA_EMAIL_SIDECAR_TOKEN_FILE"
+    assert email.secret_file_min_version == "0.6.0"
+
+
+def test_email_spec_literals_match_the_installed_caller_auth_module():
+    # When the hub wheel is importable, assert the mirrored literals for real —
+    # the drift the plain-string contract cannot catch by itself.
+    caller_auth = pytest.importorskip("gaia_agent_email.caller_auth")
+    email = builtin_specs()["email"]
+    assert email.token_env_var == caller_auth.TOKEN_ENV_VAR
+    assert email.token_file_env_var == caller_auth.TOKEN_FILE_ENV_VAR
 
 
 def test_builtin_email_spec_mode_env_var():
@@ -163,6 +183,7 @@ def test_user_mode_spawn_command_uses_fetched_binary(monkeypatch, tmp_path):
 
     class _Res:
         binary_path = fake_binary
+        version = "0.6.0"
 
     monkeypatch.setattr(mgr.fetch, "fetch_binary", lambda **kw: _Res())
     m = mgr.AgentSidecarManager(builtin_specs()["email"])
@@ -352,19 +373,140 @@ def test_start_registers_atexit_reaper(monkeypatch, tmp_path):
     assert m.shutdown in captured["atexit"]
 
 
-def test_spawn_passes_per_session_token_via_env(monkeypatch, tmp_path):
-    # #1706: the sidecar's caller-auth token is handed over the private env
-    # channel on spawn (never argv), so no other local process sees it in a
-    # process listing. Now keyed by spec.token_env_var, not a hardcoded literal.
+def test_dev_mode_delivers_secret_via_0600_file_never_env(monkeypatch, tmp_path):
+    # #2149: dev mode runs from source (which reads the secret file), so the
+    # token reaches the sidecar as a 0600 owner-only file — its PATH is in the
+    # env, the secret itself is not, and it never appears on the command line.
+    spec = builtin_specs()["email"]
+    monkeypatch.delenv(spec.token_env_var, raising=False)
     m, captured = _install_fake_spawn(monkeypatch, tmp_path)
     m.start()
     env = captured["popen_kwargs"]["env"]
-    assert m.auth_token  # a real random token was generated
-    assert env[builtin_specs()["email"].token_env_var] == m.auth_token
+    assert m.secret_delivery == "file"
+    secret_path = Path(env[spec.token_file_env_var])
+    assert secret_path.read_text(encoding="utf-8") == m.auth_token
+    if os.name != "nt":
+        assert _stat.S_IMODE(secret_path.stat().st_mode) == 0o600
+        assert _stat.S_IMODE(secret_path.parent.stat().st_mode) == 0o700
+    # The secret VALUE is absent from the spawn env and argv.
+    assert spec.token_env_var not in env
+    assert m.auth_token not in env.values()
+    assert all(m.auth_token not in str(a) for a in captured["argv"])
     # The inherited environment is preserved (merged, not replaced).
     assert "PATH" in env or "Path" in env
-    # The token must never appear on the command line.
-    assert all(m.auth_token not in str(a) for a in captured["argv"])
+    m.shutdown()
+
+
+def test_secret_file_is_removed_on_shutdown(monkeypatch, tmp_path):
+    # The 0600 file must not outlive the sidecar — removal hangs off the same
+    # shutdown/reap path that tree-kills the process (atexit covers crashes).
+    spec = builtin_specs()["email"]
+    m, captured = _install_fake_spawn(monkeypatch, tmp_path)
+    m.start()
+    secret_path = Path(captured["popen_kwargs"]["env"][spec.token_file_env_var])
+    assert secret_path.exists()
+    m.shutdown()
+    assert not secret_path.exists()
+    assert not secret_path.parent.exists()  # the private 0700 dir goes too
+
+
+def _install_fake_user_spawn(monkeypatch, tmp_path, *, version):
+    """User-mode twin of _install_fake_spawn: fake fetched binary at *version*."""
+    monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "user")
+    fake_binary = tmp_path / "email-agent"
+    fake_binary.write_bytes(b"x")
+
+    class _Res:
+        binary_path = fake_binary
+
+    _Res.version = version
+    monkeypatch.setattr(mgr.fetch, "fetch_binary", lambda **kw: _Res())
+    captured = {}
+
+    def _fake_popen(argv, **kwargs):
+        captured["popen_kwargs"] = kwargs
+        captured["argv"] = argv
+        return _FakeProc()
+
+    monkeypatch.setattr(mgr.subprocess, "Popen", _fake_popen)
+    monkeypatch.setattr(mgr.atexit, "register", lambda fn: None)
+    monkeypatch.setattr(mgr.atexit, "unregister", lambda fn: None)
+    m = mgr.AgentSidecarManager(
+        builtin_specs()["email"], cache_dir=tmp_path, log_dir=tmp_path / "logs"
+    )
+    monkeypatch.setattr(
+        m,
+        "_http_get",
+        lambda url, timeout: _FakeResp(
+            {"status": "ok", "service": "gaia-agent-email"}
+            if url.endswith("/health")
+            else {"apiVersion": "2.0", "agentVersion": version or "?"}
+        ),
+    )
+    return m, captured
+
+
+def test_user_mode_new_binary_negotiates_file_delivery(monkeypatch, tmp_path):
+    # Negotiation is keyed off the INSTALLED binary's version (known pre-spawn),
+    # not the runtime /version probe (which answers only after spawn).
+    m, captured = _install_fake_user_spawn(monkeypatch, tmp_path, version="0.6.0")
+    m.start()
+    spec = builtin_specs()["email"]
+    env = captured["popen_kwargs"]["env"]
+    assert m.secret_delivery == "file"
+    assert spec.token_file_env_var in env
+    assert spec.token_env_var not in env
+    m.shutdown()
+
+
+def test_user_mode_old_binary_keeps_env_leg_with_loud_deprecation(
+    monkeypatch, tmp_path, caplog
+):
+    # Explicit, versioned compatibility: a published binary that predates file
+    # delivery still spawns and authenticates via the env leg — loudly.
+    m, captured = _install_fake_user_spawn(monkeypatch, tmp_path, version="0.5.0")
+    with caplog.at_level(logging.WARNING, logger="gaia.daemon.sidecars.manager"):
+        m.start()
+    spec = builtin_specs()["email"]
+    env = captured["popen_kwargs"]["env"]
+    assert m.secret_delivery == "env"
+    assert env[spec.token_env_var] == m.auth_token
+    assert spec.token_file_env_var not in env
+    assert any("DEPRECATED" in r.getMessage() for r in caplog.records)
+    m.shutdown()
+
+
+def test_user_mode_unknown_binary_version_fails_loudly(monkeypatch, tmp_path):
+    # No version in the install metadata → the manager cannot know which leg
+    # the binary understands. Refuse loudly; never guess a delivery channel.
+    m, captured = _install_fake_user_spawn(monkeypatch, tmp_path, version=None)
+    with pytest.raises(SidecarSpawnError, match="version is unknown"):
+        m.start()
+    assert captured.get("popen_kwargs") is None  # never spawned
+
+
+def test_secret_file_creation_failure_is_spawn_error_not_env_fallback(
+    monkeypatch, tmp_path
+):
+    # Fail-loudly rule: if the 0600 file cannot be created, that is a startup
+    # error — the manager must NOT quietly fall back to bare-env delivery.
+    m, captured = _install_fake_spawn(monkeypatch, tmp_path)
+
+    def _boom(prefix=None):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(mgr.tempfile, "mkdtemp", _boom)
+    with pytest.raises(SidecarSpawnError, match="launch-secret"):
+        m.start()
+    assert captured.get("popen_kwargs") is None  # never spawned, no env leg
+
+
+def test_version_tuple_parses_and_rejects_garbage():
+    assert mgr._version_tuple("0.6.0") == (0, 6, 0)
+    assert mgr._version_tuple("v1.2") == (1, 2)
+    assert mgr._version_tuple("0.10.0") > mgr._version_tuple("0.6.0")
+    with pytest.raises(SidecarSpawnError, match="cannot parse"):
+        mgr._version_tuple("not-a-version")
 
 
 def test_start_captures_version(monkeypatch, tmp_path):
@@ -667,6 +809,7 @@ def test_resolved_mode_captures_spawn_time_mode_not_live_env(monkeypatch, tmp_pa
 )
 def test_dev_mode_real_spawn_health_and_treekill(monkeypatch):
     monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
+    monkeypatch.delenv("GAIA_EMAIL_SIDECAR_TOKEN", raising=False)
     m = mgr.AgentSidecarManager(builtin_specs()["email"], health_timeout=60.0)
     base = m.start()
     try:
@@ -674,6 +817,32 @@ def test_dev_mode_real_spawn_health_and_treekill(monkeypatch):
 
         assert requests.get(f"{base}/health", timeout=5).json()["status"] == "ok"
         assert m.is_running
+        # #2149: the secret must be absent from the live child's environment.
+        # Linux exposes the real spawn-time record via /proc.
+        if sys.platform.startswith("linux"):
+            environ = Path(f"/proc/{m.pid}/environ").read_bytes()
+            assert m.auth_token.encode() not in environ
+        # Real HTTP boundary (no mocks): the file-delivered token gates the
+        # surface — missing/wrong bearer → 401, the delivered token → 200.
+        draft = {"to": [{"email": "a@b.com"}], "subject": "x", "body": "y"}
+        url = f"{base}/v1/email/draft"
+        assert requests.post(url, json=draft, timeout=10).status_code == 401
+        assert (
+            requests.post(
+                url,
+                json=draft,
+                timeout=10,
+                headers={"Authorization": "Bearer wrong"},
+            ).status_code
+            == 401
+        )
+        ok = requests.post(
+            url,
+            json=draft,
+            timeout=10,
+            headers={"Authorization": f"Bearer {m.auth_token}"},
+        )
+        assert ok.status_code == 200
     finally:
         m.shutdown()
     assert not m.is_running

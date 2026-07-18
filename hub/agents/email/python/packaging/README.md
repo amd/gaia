@@ -60,14 +60,24 @@ if there is none it returns **HTTP 502 (`local LLM triage failed`)**.
 
 ### Caller authentication (#1706)
 
-The sidecar can send mail as the user, so it authenticates its caller. Set
-`GAIA_EMAIL_SIDECAR_TOKEN` in the environment (the `@amd-gaia/agent-email`
-lifecycle and the GAIA UI sidecar manager do this automatically on spawn) and
-every `/v1/email/*` request must send `Authorization: Bearer <token>` or it is
+The sidecar can send mail as the user, so it authenticates its caller. The
+spawning parent hands over a per-session token through one of two channels:
+
+- **`GAIA_EMAIL_SIDECAR_TOKEN_FILE`** (preferred) — the path of a `0600`,
+  owner-only file holding the token. The GAIA daemon's sidecar manager writes
+  it on spawn and removes it on sidecar exit, so the secret never sits in the
+  process environment. If the variable is set but the file is missing or
+  empty, startup fails loudly (never a silent auth-off).
+- **`GAIA_EMAIL_SIDECAR_TOKEN`** (legacy) — the token directly in the
+  environment. Still honored for older spawning parents (e.g. the
+  `@amd-gaia/agent-email` lifecycle) and bare integrators; if both are set,
+  the file wins.
+
+Every `/v1/email/*` request must send `Authorization: Bearer <token>` or it is
 rejected with **401**. A non-loopback `Host` → **400** (DNS-rebinding) and a
 non-loopback browser `Origin` → **403** (drive-by page); `/health`, `/version`,
 `/v1/email/spec`, and `/v1/email/playground` are exempt from the token. Launching
-by hand without the env var disables the token check (local dev only, logged
+by hand with neither variable disables the token check (local dev only, logged
 loudly) — Host/Origin protection still applies.
 
 ## Smoke test

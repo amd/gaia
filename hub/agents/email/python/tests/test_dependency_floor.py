@@ -24,7 +24,8 @@ REQUIRED_FLOOR = (0, 22, 0)
 
 
 def _floor_tuple(version: str) -> tuple[int, ...]:
-    return tuple(int(p) for p in version.strip().split(".")[:3])
+    parts = tuple(int(p) for p in version.strip().split(".")[:3])
+    return (parts + (0, 0, 0))[:3]
 
 
 def test_agent_module_imports_and_registry_symbol_exists():

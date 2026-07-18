@@ -1,0 +1,143 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""
+The in-package runnable server (``gaia_agent_email.server``) and its ``serve``
+CLI — the fast dev-iteration entry point.
+
+Guards:
+- **Parity**: the ``packaging/server.py`` freeze shim serves the exact same
+  routes as the in-package ``build_app()`` (the shim re-exports it), so the
+  frozen binary and a source ``uvicorn gaia_agent_email.server:app`` can't drift.
+- **CLI**: ``serve`` is the default subcommand, ``--print-openapi`` emits the
+  contract, ``--port 4001`` is rejected (reserved), and ``--reload`` / ``--dev``
+  drive uvicorn's reloader with an import-string app (never a pre-built object).
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+from pathlib import Path
+
+import pytest
+
+pytest.importorskip("gaia_agent_email")
+pytest.importorskip("fastapi")
+
+from gaia_agent_email import server  # noqa: E402
+
+
+def _load_packaging_shim():
+    """Load ``packaging/server.py`` by path, exactly as the freeze + test_caller_auth do."""
+    path = Path(__file__).resolve().parents[1] / "packaging" / "server.py"
+    spec = importlib.util.spec_from_file_location("email_sidecar_shim_under_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_shim_serves_identical_routes_to_in_package_builder():
+    # NOTE: no app.routes path introspection here — older Starlette versions
+    # expose _IncludedRouter objects without a .path attribute, so router-mounted
+    # paths would all read as None. Contract parity (OpenAPI) + HTTP reachability
+    # are the robust cross-version assertions.
+    from fastapi.testclient import TestClient
+
+    shim = _load_packaging_shim()
+    # The shim re-exports the very same builder, not a fork.
+    assert shim.build_app is server.build_app
+    # Parity: both entry points serve an identical OpenAPI contract.
+    assert shim.build_app().openapi() == server.build_app().openapi()
+    # Sanity: the canonical surfaces are reachable (anything but 404 proves the
+    # route is mounted; 422 on the empty triage body is expected).
+    client = TestClient(server.build_app(), raise_server_exceptions=False)
+    assert client.get("/health").status_code != 404
+    assert client.get("/version").status_code != 404
+    assert client.post("/v1/email/triage", json={}).status_code != 404
+
+
+def test_print_openapi_emits_the_contract(capsys):
+    rc = server.main(["serve", "--print-openapi"])
+    assert rc == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert "/v1/email/triage" in doc["paths"]
+
+
+def test_serve_is_the_default_subcommand(capsys):
+    # No subcommand → treated as `serve`, so bare flags still work.
+    rc = server.main(["--print-openapi"])
+    assert rc == 0
+    assert "openapi" in capsys.readouterr().out
+
+
+def test_port_4001_is_rejected():
+    # 4001 is reserved; the parser must refuse it (SystemExit from parser.error).
+    with pytest.raises(SystemExit):
+        server.main(["serve", "--port", "4001"])
+
+
+def test_plain_serve_runs_the_prebuilt_app_object(monkeypatch):
+    captured = {}
+
+    def fake_run(app_arg, **kwargs):
+        captured["app"] = app_arg
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr("uvicorn.run", fake_run)
+    rc = server.main(["serve", "--host", "127.0.0.1", "--port", "8131"])
+    assert rc == 0
+    # Non-reload path hands uvicorn the pre-built app object, not an import string.
+    assert captured["app"] is server.app
+    assert captured["kwargs"].get("reload") in (None, False)
+
+
+def test_reload_uses_import_string_and_watches_the_package(monkeypatch):
+    captured = {}
+
+    def fake_run(app_arg, **kwargs):
+        captured["app"] = app_arg
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr("uvicorn.run", fake_run)
+    rc = server.main(["serve", "--reload", "--reload-dir", "/tmp/core-src"])
+    assert rc == 0
+    # Reload REQUIRES an import-string app so the worker can re-import on edit.
+    assert captured["app"] == "gaia_agent_email.server:app"
+    assert captured["kwargs"]["reload"] is True
+    reload_dirs = captured["kwargs"]["reload_dirs"]
+    pkg_dir = str(Path(server.__file__).resolve().parent)
+    assert pkg_dir in reload_dirs
+    assert "/tmp/core-src" in reload_dirs
+
+
+def test_dev_implies_reload(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "uvicorn.run", lambda app_arg, **kw: captured.update(app=app_arg, kw=kw)
+    )
+    rc = server.main(["serve", "--dev"])
+    assert rc == 0
+    assert captured["app"] == "gaia_agent_email.server:app"
+    assert captured["kw"]["reload"] is True
+
+
+def test_frozen_binary_argv_shape_boots_without_serve_token(monkeypatch):
+    # The frozen binary is spawned as `email-agent --host H --port P` (no `serve`
+    # token) — see spawnSidecar (npm) and packaging/smoke_test.py. main() must
+    # normalize that into a serve run of the pre-built app object.
+    captured = {}
+    monkeypatch.setattr(
+        "uvicorn.run", lambda app_arg, **kw: captured.update(app=app_arg, kw=kw)
+    )
+    rc = server.main(["--host", "127.0.0.1", "--port", "8199"])
+    assert rc == 0
+    assert captured["app"] is server.app
+    assert captured["kw"]["host"] == "127.0.0.1"
+    assert captured["kw"]["port"] == 8199
+
+
+def test_reload_is_refused_in_a_frozen_binary(monkeypatch):
+    # No source tree to watch when frozen — fail loud instead of re-exec'ing the exe.
+    monkeypatch.setattr(server.sys, "frozen", True, raising=False)
+    with pytest.raises(SystemExit):
+        server.main(["serve", "--reload"])

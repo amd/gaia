@@ -13,12 +13,30 @@ description: "Connect GAIA to Gmail, Calendar, Drive, and other Google Workspace
 Google requires every desktop app — including GAIA running locally — to
 identify itself with an **OAuth client** that you create in your own
 Google Cloud project. This sounds heavy, but for a single-developer
-machine it takes about three minutes and is free.
+machine it takes about five minutes and is free.
 
-You will create one OAuth client and paste two values into the GAIA
-Agent UI: a **Client ID** and a **Client Secret**. After that, GAIA
-stores them encrypted in your OS keyring and you never need to think
-about them again.
+You will do three things in the Google Cloud Console — **enable the APIs**
+you want GAIA to call, **register yourself as a test user**, and **create
+an OAuth client** — then paste two values into the GAIA Agent UI: a
+**Client ID** and a **Client Secret**. After that, GAIA stores them
+encrypted in your OS keyring and you never need to think about them again.
+
+<Note>
+  **Bringing your own OAuth client is a temporary step.** A future GAIA
+  release ([#2104](https://github.com/amd/gaia/issues/2104)) ships a
+  verified AMD-managed client so end users skip the Cloud Console entirely
+  and just click **Connect**. Until then, the steps below are required for
+  personal accounts.
+</Note>
+
+<Warning>
+  **Google restructured this console in 2024–2025.** The OAuth settings
+  that used to live under **APIs & Services → OAuth consent screen** and
+  **→ Credentials** now live under **Google Auth Platform**, split across
+  three tabs: **Branding**, **Audience**, and **Clients**. This guide uses
+  the new layout with direct links; the old menu path is noted only as a
+  fallback in case Google shifts the UI again.
+</Warning>
 
 ## Step 1 — Create a Google Cloud project
 
@@ -28,51 +46,86 @@ Otherwise:
 1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
 2. Click the project dropdown at the top → **New project**.
 3. Name it something like `gaia-personal` and click **Create**.
+4. Make sure the new project is selected in the dropdown before
+   continuing — every step below applies to the **selected** project.
 
 ## Step 2 — Enable the APIs you want to use
 
-GAIA only sees the Google APIs you explicitly enable on the project.
-For a typical setup enable at least:
+<Warning>
+  **This step is mandatory, not optional.** GAIA can only call the Google
+  APIs you have explicitly enabled on the project. If you skip it, the
+  OAuth flow still succeeds — but the **first mailbox call fails** with a
+  raw Google `403` (`Gmail API has not been used in project … or it is
+  disabled`), which is confusing because the connection looks healthy
+  ([#2116](https://github.com/amd/gaia/issues/2116)).
+</Warning>
 
-- **Gmail API** — to read/send mail
-- **Google Calendar API** — to read/create events
-- **Google Drive API** — to read/manage files
+Enable each API you plan to use:
 
-In the Cloud Console, go to **APIs & Services → Library**, search for
-each API by name, click it, and click **Enable**.
+- **[Gmail API](https://console.cloud.google.com/apis/library/gmail.googleapis.com)** — to read/send mail (required for the Email Triage agent)
+- **[Google Calendar API](https://console.cloud.google.com/apis/library/calendar-json.googleapis.com)** — to read/create events
+- **[Google Drive API](https://console.cloud.google.com/apis/library/drive.googleapis.com)** — to read/manage files
 
-## Step 3 — Configure the OAuth consent screen
+For each one, open the link (with your project selected), then click
+**Enable**. You can also reach these from **APIs & Services → Library**
+and search by name.
+
+<Tip>
+  Enabling an API takes **1–2 minutes to propagate**. If your first
+  request 403s right after enabling, wait a minute and retry before
+  assuming something else is wrong.
+</Tip>
+
+## Step 3 — Configure the consent screen (Branding + Audience)
 
 Google requires you to fill in a consent-screen form before it will
-issue OAuth credentials, even for personal-use apps.
+issue OAuth credentials, even for personal-use apps. In the new console
+this is the **Google Auth Platform**.
 
-1. Go to **APIs & Services → OAuth consent screen**.
-2. Pick **External** as the user type and click **Create**.
-3. Fill in the required fields:
+1. Go to [**Google Auth Platform**](https://console.cloud.google.com/auth/overview)
+   (old path: **APIs & Services → OAuth consent screen**). On a fresh
+   project you'll see a **Get started** button — click it to enter the
+   short setup wizard.
+2. **Branding** — fill in the required fields:
    - **App name**: `GAIA Personal` (or whatever)
    - **User support email**: your email
    - **Developer contact email**: your email
-4. Click **Save and Continue** through the Scopes and Test users
-   pages — leave them empty for now. You'll add yourself as a test
-   user in the next step.
+3. **Audience** — pick **External**.
+
+<Note>
+  A personal `@gmail.com` account has **no "Internal" option** — Internal
+  is only available to Google Workspace organizations. **External** is the
+  correct (and only) choice for a personal account. An External app starts
+  in **Testing** publishing status, which is exactly what you want for
+  personal use.
+</Note>
 
 ### Add yourself as a test user
 
 While the app is in **Testing** publishing status (the default), only
-test users can authenticate. Add your own Google account:
+listed test users can authenticate. Add your own Google account:
 
-1. **OAuth consent screen → Test users → Add users**.
+1. On the **Google Auth Platform → Audience** tab, scroll to
+   **Test users → Add users**.
 2. Enter your Google email and **Save**.
 
 You can stay in Testing mode indefinitely if you only use this for
 yourself — there's no need to verify the app for personal use.
 
+<Warning>
+  **Test-mode refresh tokens expire after ~7 days.** While the app stays
+  in Testing status, Google expires the refresh token roughly a week after
+  consent, so GAIA will eventually prompt you to reconnect. This is a
+  Google policy for unverified test apps, not a GAIA bug — just reconnect
+  when it happens (see [Common issues](#error-400-invalid_grant-after-a-long-while)).
+</Warning>
+
 ## Step 4 — Create the OAuth client
 
 This is the credential GAIA uses.
 
-1. Go to **APIs & Services → Credentials → Create credentials → OAuth
-   client ID**.
+1. Go to [**Google Auth Platform → Clients**](https://console.cloud.google.com/auth/clients)
+   (old path: **APIs & Services → Credentials**) → **Create client**.
 2. **Application type**: **Desktop app**. <Tooltip tip="GAIA is a
    desktop application that runs a temporary loopback web server on
    127.0.0.1 to receive the OAuth callback. The 'Desktop app' type is
@@ -107,26 +160,87 @@ GAIA will:
 4. Exchange the auth code for a refresh token (also stored in the
    keyring).
 
+<Note>
+  During authorization you'll hit a **"Google hasn't verified this app"**
+  interstitial. This is expected for a personal test app — click
+  **Advanced → Continue** (or **Go to GAIA Personal (unsafe)**) to
+  proceed. The warning only appears because your app is unverified, not
+  because anything is wrong.
+</Note>
+
 The tile flips to **Connected as your.email@gmail.com** once the flow
 completes.
+
+<Note>
+  **Prefer the CLI?** The whole flow works headless without opening the
+  Agent UI — `gaia connectors configure google --client-id … --client-secret …`
+  then `gaia connectors connect google`. See the [Email Triage guide's CLI
+  tab](/guides/email#setup) for the exact commands.
+</Note>
 
 ## Step 6 — Grant scopes to specific agents
 
 Connecting Google doesn't automatically give every agent access to
-your inbox. Each agent must be granted the specific scopes it needs.
-You can do this in the UI or the CLI:
+your inbox. **Each agent must be granted the specific scopes it needs** —
+connecting alone is not enough. You can do this in the UI (open the Google
+tile → **Per-agent grants**) or the CLI.
+
+**Chat agent — read-only Gmail:**
 
 ```bash
-# Grant the chat agent read-only Gmail access
 gaia connectors grants grant google builtin:chat \
   --scopes https://www.googleapis.com/auth/gmail.readonly
 ```
+
+**Email Triage agent — the full mailbox + calendar scope set** it needs
+to read, organize, draft/send, and manage events:
+
+```bash
+gaia connectors grants grant google installed:email \
+  --scopes https://www.googleapis.com/auth/gmail.modify \
+           https://www.googleapis.com/auth/gmail.send \
+           https://www.googleapis.com/auth/calendar.events \
+           https://www.googleapis.com/auth/calendar.readonly
+```
+
+<Note>
+  The Agent UI's **Connect** / **Reconnect** flow for the Email Triage
+  agent both authorizes these scopes with Google **and** grants them to the
+  agent for you. On the CLI you do both steps yourself — authorize the
+  scopes with `gaia connectors connect google --scopes …`, then run the
+  `grants grant` above. The [Email Triage guide's CLI tab](/guides/email#setup)
+  has the full sequence; the grant is also the fix when you hit
+  `AGENT_NOT_GRANTED`.
+</Note>
 
 The default scopes a connection is established with are listed in the
 spec at
 [`src/gaia/connectors/catalog/google.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/catalog/google.py).
 
 ## Common issues
+
+### `Gmail API has not been used in project … or it is disabled` (403)
+
+You skipped **Step 2**, or the enablement hasn't propagated yet. Enable
+the [Gmail API](https://console.cloud.google.com/apis/library/gmail.googleapis.com)
+(and [Calendar API](https://console.cloud.google.com/apis/library/calendar-json.googleapis.com)
+if you use calendar) on the **selected** project, wait 1–2 minutes, and
+retry. The OAuth connection itself is fine — only the API call is blocked
+([#2116](https://github.com/amd/gaia/issues/2116)).
+
+### `AGENT_NOT_GRANTED` — an agent can't use your connection
+
+Connecting Google is not the same as granting a specific agent access to
+it (**Step 6**). Until the per-agent grant lands, the agent surfaces:
+
+```
+AGENT_NOT_GRANTED: this agent isn't granted these scopes on google: …
+Open Settings → Connections → google → Per-agent grants and grant them.
+```
+
+Fix it in the UI (Google tile → **Per-agent grants**) or run the
+`gaia connectors grants grant google installed:email …` command from
+Step 6.
 
 ### `redirect_uri_mismatch`
 
@@ -167,6 +281,8 @@ Two places — both work:
 ## See also
 
 - [Connectors overview](/connectors)
-- [Google Cloud Console — OAuth 2.0 credentials](https://cloud.google.com/docs/authentication/provide-credentials-adc)
-- [Google APIs Explorer](https://developers.google.com/apis-explorer)
+- [Email Triage agent](/guides/email) — the agent that uses these Gmail scopes
+- [Google OAuth client runbook](https://github.com/amd/gaia/blob/main/docs/runbooks/google-oauth-client.md) — the AMD-internal client + rotation procedure (maintainers)
+- [Manage OAuth Clients — Google Cloud Console Help](https://support.google.com/cloud/answer/15549257)
+- [Get started with the Google Auth Platform — Google Cloud Console Help](https://support.google.com/cloud/answer/15544987)
 - [Connectors security model](/security/connections)

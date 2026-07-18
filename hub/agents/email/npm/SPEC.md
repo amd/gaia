@@ -49,6 +49,13 @@ binds a send to one exact message but does not identify the caller.
   `generateSessionToken()` is exported for advanced flows. Exempt: `/health`,
   `/version`, `/v1/email/health`, `/v1/email/version`, `/v1/email/spec`,
   `/v1/email/playground`.
+  Sidecar binaries **0.6.0+** also accept `GAIA_EMAIL_SIDECAR_TOKEN_FILE` — the
+  path of a `0600`, owner-only file holding the token, so the secret never sits
+  in the process environment (readable via `/proc/<pid>/environ` / `ps eww`).
+  The GAIA daemon delivers the secret this way and treats the env channel as a
+  logged, deprecated compatibility leg for older binaries; a set path var whose
+  file is missing or empty fails sidecar startup loudly. The npm lifecycle
+  currently uses the env channel.
 - **Host allowlist** — non-loopback `Host` → **400** (DNS-rebinding).
 - **Origin rejection** — non-loopback browser `Origin` → **403** (drive-by page).
   Non-browser clients send no `Origin` and are unaffected. No CORS is ever sent.
@@ -459,6 +466,37 @@ control, the steps are exported individually:
 - `checkVersion(client, { expectedApiVersion })` → throws `VersionMismatchError` if the sidecar's apiVersion **MAJOR** differs (a higher MINOR is accepted).
 - `verifySha256(buf, expected, label)` → throws `IntegrityError` on mismatch.
 - `shutdown(sidecar)` → kill the **whole process tree** (`taskkill /F /T` on Windows; detached process-group kill on POSIX). The default auto-reaper does the same on process exit/crash/signal, so only a hard `SIGKILL` of the host can still orphan the child.
+- `connectSidecar({ baseUrl, authToken?, timeoutMs?, healthTimeoutMs?, verifyVersion?, expectedApiVersion?, signal? })` → **attach mode**: `waitForHealth` + (default) `checkVersion` against a server this package did **not** spawn, returning an `AttachedSidecar` (`{ host, port, baseUrl, client, authToken? }` — no `child`). Spawns nothing and owns no lifecycle, so there is nothing to `shutdown()`. Pass an `AbortSignal` as `signal` to cancel the health wait early (e.g. the server process you're waiting on died). This is the client half of the fast dev loop — pair it with the Python source server (`gaia-agent-email serve --reload`), which serves an identical contract to the frozen binary. See [Fast local iteration](#fast-local-iteration-dev-mode).
+
+### Fast local iteration (dev mode)
+
+The published flow fetches and spawns a **frozen** binary — there is no source to
+edit when you hit a bug. To iterate on the agent, run its **Python source** and
+attach this client instead. The frozen binary is that source frozen (PyInstaller
+freezes `packaging/server.py`, a thin re-export of `gaia_agent_email.server`), so
+the `/v1/email/*` contract is byte-for-byte identical — **only the base URL
+differs from production.**
+
+```bash
+pip install -e hub/agents/email/python     # editable: your edits take effect live
+gaia-agent-email serve --reload            # source server, auto-reload, token off for dev
+```
+
+```ts
+import { connectSidecar } from "@amd-gaia/agent-email";
+const dev = await connectSidecar({ baseUrl: "http://127.0.0.1:8131" });
+await dev.client.triage({ payload: { /* … */ } });
+// edit Python → auto-reload → re-run. `npx @amd-gaia/agent-email dev` launches the
+// serve process for you (`--python <path>` to use a specific venv).
+```
+
+The `serve` CLI (`gaia_agent_email.server:main`) accepts `--host`, `--port`
+(rejects the reserved 4001), `--reload` (import-string app + watches the package
+dir; add `--reload-dir` for your core checkout), `--dev` (implies `--reload`), and
+`--print-openapi`. Running without `GAIA_EMAIL_SIDECAR_TOKEN` disables the caller
+token (local dev only, logged loudly); Host/Origin protection still applies.
+Auto-reload resets in-process `/v1/email/agent/*` sessions — irrelevant to the
+stateless `triage`/`draft`/`send` surface.
 
 ## CLI
 

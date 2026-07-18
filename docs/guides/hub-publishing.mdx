@@ -140,6 +140,7 @@ never write by hand, like `versions`). A real example is the
 ```yaml
 id: my-agent                 # the short name used in URLs (/hub/my-agent); lowercase + hyphens
 name: My Agent               # the display name shown to people
+type: agent                  # agent | app | component — omit it and it defaults to agent
 version: 0.1.0               # the release number (see "Versioning" — once published it can't change)
 description: "One-line summary shown on the hub card"
 author: your-name-or-org     # YOUR identity — shown on the hub; must match your token's scope (Step 6)

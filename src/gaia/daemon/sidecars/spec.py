@@ -21,6 +21,14 @@ class AgentSidecarSpec:
     ``token_env_var`` is a cross-repo literal contract: for the email spec it
     MUST equal ``gaia_agent_email.caller_auth.TOKEN_ENV_VAR``. Kept as a plain
     string (not imported from the hub wheel) so the daemon never depends on it.
+
+    ``token_file_env_var`` is the file-delivery leg of the same contract
+    (#2149): the manager writes the launch secret to a 0600 file and hands the
+    sidecar its PATH via this variable, so the secret itself never sits in the
+    child's environment. ``secret_file_min_version`` is the first agent version
+    whose binary reads that file; older installed binaries keep the (deprecated,
+    loudly logged) bare-env leg. Both unset → the spec has no file contract and
+    delivery stays env-based.
     """
 
     agent_id: str
@@ -30,6 +38,8 @@ class AgentSidecarSpec:
     token_env_var: str
     mode_env_var: str
     cache_dir_name: str
+    token_file_env_var: Optional[str] = None
+    secret_file_min_version: Optional[str] = None
     dev_src_dir: Optional[Path] = None
     dev_app_dir: str = "packaging"
     dev_module: str = "server:app"
@@ -40,6 +50,14 @@ class AgentSidecarSpec:
 # gaia_agent_email.caller_auth.TOKEN_ENV_VAR — kept a literal so core never
 # imports the hub wheel.
 _EMAIL_TOKEN_ENV_VAR = "GAIA_EMAIL_SIDECAR_TOKEN"
+
+# File-delivery leg (#2149). MUST equal
+# gaia_agent_email.caller_auth.TOKEN_FILE_ENV_VAR — literal for the same reason.
+_EMAIL_TOKEN_FILE_ENV_VAR = "GAIA_EMAIL_SIDECAR_TOKEN_FILE"
+
+# First gaia-agent-email version whose binary reads the token file. Keep in
+# lock-step with the release cut that first ships caller_auth's file leg.
+_EMAIL_SECRET_FILE_MIN_VERSION = "0.6.0"
 
 
 def _default_email_src_dir() -> Path:
@@ -56,6 +74,8 @@ def builtin_specs() -> "dict[str, AgentSidecarSpec]":
             display_name="Email",
             expected_api_major="2",
             token_env_var=_EMAIL_TOKEN_ENV_VAR,
+            token_file_env_var=_EMAIL_TOKEN_FILE_ENV_VAR,
+            secret_file_min_version=_EMAIL_SECRET_FILE_MIN_VERSION,
             mode_env_var="GAIA_EMAIL_AGENT_MODE",
             cache_dir_name="email",
             dev_src_dir=_default_email_src_dir(),

@@ -2132,6 +2132,14 @@ daemon *client*: it asks the daemon to ensure a sidecar and talks to the
 sidecar directly, so **closing the UI leaves the sidecar running** — stopping
 is a daemon command.
 
+The daemon also serves a streaming **data plane**: `ANY /v1/<agent>/*` (e.g.
+`POST /v1/email/query`) is reverse-proxied to that agent's running sidecar,
+SSE relayed unbuffered, with cancel propagated on client disconnect and a
+synthetic terminal `error` event if the sidecar crashes mid-stream. Clients
+authenticate every route — control plane and data plane alike — with the
+daemon client token from `~/.gaia/host/instance.json`; the per-sidecar bearer
+is injected by the daemon and never leaves it for relayed traffic.
+
 Requires the daemon extras (`fastapi`/`uvicorn`/`psutil`) — install with
 `pip install "amd-gaia[ui]"` (or `[api]`/`[dev]`). Running it on a base install
 fails loudly with that instruction.
