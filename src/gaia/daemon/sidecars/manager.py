@@ -103,6 +103,82 @@ def _major(version: str) -> int:
         ) from e
 
 
+def _lock_down_windows_acl(path: Path) -> None:
+    """Restrict *path*'s DACL to the current user only — the NTFS analog of
+    ``chmod 0600`` (#2250: the POSIX mode bits below are a no-op on Windows).
+
+    Builds a fresh, non-inherited DACL with a single ACE granting the current
+    user full control, then re-reads it to confirm no other SID has access —
+    mirroring the ``mode != 0o600`` guard on POSIX. Any failure (missing
+    pywin32, a SetNamedSecurityInfo error, a foreign SID surviving the
+    lockdown) raises loudly; there is no fallback that leaves the secret
+    readable by other local users.
+    """
+    try:
+        import ntsecuritycon
+        import win32api
+        import win32security
+    except ImportError as e:
+        raise SidecarSpawnError(
+            f"cannot lock down {path} to the current user: pywin32 is not "
+            "installed. There is no fallback — a launch secret without an "
+            'owner-only ACL is world-readable on NTFS. Install it via `pip '
+            'install "amd-gaia[ui]"` (or `pip install pywin32`) and retry.'
+        ) from e
+
+    try:
+        user_sid, _domain, _type = win32security.LookupAccountName(
+            None, win32api.GetUserNameEx(win32api.NameSamCompatible)
+        )
+
+        dacl = win32security.ACL()
+        dacl.AddAccessAllowedAce(
+            win32security.ACL_REVISION, ntsecuritycon.FILE_ALL_ACCESS, user_sid
+        )
+        # PROTECTED_DACL strips inherited ACEs — without it the parent temp
+        # dir's (looser) grants would survive alongside the new ACE.
+        win32security.SetNamedSecurityInfo(
+            str(path),
+            win32security.SE_FILE_OBJECT,
+            win32security.DACL_SECURITY_INFORMATION
+            | win32security.PROTECTED_DACL_SECURITY_INFORMATION,
+            None,
+            None,
+            dacl,
+            None,
+        )
+
+        sd = win32security.GetNamedSecurityInfo(
+            str(path),
+            win32security.SE_FILE_OBJECT,
+            win32security.DACL_SECURITY_INFORMATION,
+        )
+        result_dacl = sd.GetSecurityDescriptorDacl()
+        if result_dacl is None:
+            raise SidecarSpawnError(
+                f"{path} has no DACL after lockdown (a null DACL grants "
+                "everyone access on Windows) — refusing to spawn with an "
+                "unprotected secret."
+            )
+        for i in range(result_dacl.GetAceCount()):
+            _ace_type_flags, _mask, ace_sid = result_dacl.GetAce(i)
+            if ace_sid != user_sid:
+                raise SidecarSpawnError(
+                    f"{path} DACL still grants access to a SID other than the "
+                    "current user after lockdown — refusing to spawn with a "
+                    "secret other local users could read."
+                )
+    except SidecarSpawnError:
+        raise
+    except Exception as e:
+        # pywin32 raises pywintypes.error (not OSError) on API failures.
+        raise SidecarSpawnError(
+            f"could not lock down {path} to the current user via a Windows "
+            f"DACL: {e}. There is no fallback — fix the ACL/permissions on "
+            "the temp directory and retry."
+        ) from e
+
+
 class AgentSidecarManager:
     def __init__(
         self,
@@ -448,12 +524,18 @@ class AgentSidecarManager:
 
         A fresh ``mkdtemp`` dir (0700) + ``O_CREAT|O_EXCL`` at 0600 means the
         secret never exists on disk with looser permissions, even mid-write.
+        On Windows the 0700/0600 mode bits are inert on NTFS, so the dir and
+        file each get an explicit owner-only DACL instead (#2250).
         """
         secret_dir: Optional[Path] = None
         try:
             secret_dir = Path(
                 tempfile.mkdtemp(prefix=f"gaia-{self.spec.agent_id}-secret-")
             )
+            if os.name == "nt":
+                # mkdtemp's 0700 mode is a no-op on NTFS too — lock the dir
+                # down before anything is written into it.
+                _lock_down_windows_acl(secret_dir)
             path = secret_dir / "launch-secret"
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             try:
@@ -469,6 +551,8 @@ class AgentSidecarManager:
                         "users could read. The temp filesystem is ignoring POSIX "
                         "permissions; point TMPDIR at one that honors them."
                     )
+            else:
+                _lock_down_windows_acl(path)
         except OSError as e:
             self._remove_secret_dir(secret_dir)
             raise SidecarSpawnError(
