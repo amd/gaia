@@ -164,6 +164,13 @@ class AgentSidecarManager:
         # The leg actually used at spawn time: "file" | "env".
         self.secret_delivery: Optional[str] = None
         self._secret_path: Optional[Path] = None
+        # Delegated-custody wiring (#2153), set by the registry at mint before
+        # start(). When both are present they are injected over the private env
+        # channel so the sidecar's DelegatedCustodyProvider calls /host/v1 back
+        # into the daemon; the secret is bound to this agent id at mint, so the
+        # daemon resolves the caller's identity from it (never from the request).
+        self.custody_url: Optional[str] = None
+        self.custody_secret: Optional[str] = None
 
     @property
     def mode(self) -> str:
@@ -293,6 +300,19 @@ class AgentSidecarManager:
         # pre-spawn (#2149), before the log opens so a refusal leaks nothing.
         spawn_env = {**os.environ, **(popen_kwargs.pop("env", None) or {})}
         self._apply_secret_delivery(spawn_env)
+        # Delegated-custody channel (#2153): inject both together or neither —
+        # a URL without its secret is an un-authenticable custody wire the
+        # sidecar's selector rejects loudly. This is the reverse-contract
+        # credential (sidecar → daemon), distinct from the caller-auth token
+        # #2149 delivers; it rides the private env channel.
+        if self.custody_url and self.custody_secret:
+            from gaia.daemon.custody.constants import (
+                CUSTODY_SECRET_ENV_VAR,
+                CUSTODY_URL_ENV_VAR,
+            )
+
+            spawn_env[CUSTODY_URL_ENV_VAR] = self.custody_url
+            spawn_env[CUSTODY_SECRET_ENV_VAR] = self.custody_secret
         log_handle = self._open_log(port)
         try:
             self._proc = subprocess.Popen(

@@ -86,8 +86,12 @@ def _load_extra_specs() -> dict:
     return specs
 
 
-def _build_registry(specs):
-    """The daemon's sidecar registry, wired to the crash-reap ledger."""
+def _build_registry(specs, *, custody_auth=None, custody_base_url=None):
+    """The daemon's sidecar registry, wired to the crash-reap ledger.
+
+    When *custody_auth* + *custody_base_url* are given, the registry mints a
+    per-agent custody secret at spawn and injects the /host/v1 wiring (#2153).
+    """
     from gaia.daemon.sidecars import ledger
     from gaia.daemon.sidecars.registry import SidecarRegistry
 
@@ -101,14 +105,23 @@ def _build_registry(specs):
             started_at=manager.started_at,
         )
 
-    return SidecarRegistry(specs, on_spawn=_on_spawn, on_stop=ledger.remove_entry)
+    return SidecarRegistry(
+        specs,
+        on_spawn=_on_spawn,
+        on_stop=ledger.remove_entry,
+        custody_auth=custody_auth,
+        custody_base_url=custody_base_url,
+    )
 
 
 def run(host: str = HOST) -> None:
     """Start the daemon and serve until shutdown. Blocks."""
     import uvicorn
 
+    from gaia.daemon.custody.auth import CustodyAuth
+    from gaia.daemon.custody.store import CustodyStore
     from gaia.daemon.migrate import run_migrations
+    from gaia.daemon.paths import custody_db_path
     from gaia.daemon.sidecars import ledger
     from gaia.daemon.sidecars.spec import builtin_specs
 
@@ -123,8 +136,18 @@ def run(host: str = HOST) -> None:
     pid = os.getpid()
     started_at = time.time()
 
+    # Custody backing (#2153): one SQLite store owned by the daemon, and the
+    # in-memory secret→agent-id bindings. Constructed before the registry so the
+    # registry can mint each sidecar's custody secret at spawn. The custody
+    # callback URL is the daemon's own loopback address.
+    custody_store = CustodyStore(custody_db_path())
+    custody_auth = CustodyAuth()
+    custody_base_url = f"http://{host}:{port}"
+
     specs = {**builtin_specs(), **_load_extra_specs()}
-    registry = _build_registry(specs)
+    registry = _build_registry(
+        specs, custody_auth=custody_auth, custody_base_url=custody_base_url
+    )
 
     from gaia.daemon.broker import ModelSlotBroker
     from gaia.daemon.constants import BROKER_URL_ENV_VAR
@@ -151,6 +174,7 @@ def run(host: str = HOST) -> None:
 
     def _deregister() -> None:
         registry.shutdown_all()
+        custody_store.close()
         remove_instance(only_pid=pid)
         logger.info("daemon: deregistered instance pid=%s", pid)
 
@@ -163,6 +187,8 @@ def run(host: str = HOST) -> None:
         on_shutdown=_deregister,
         registry=registry,
         broker=broker,
+        custody_auth=custody_auth,
+        custody_store=custody_store,
     )
 
     config = uvicorn.Config(
