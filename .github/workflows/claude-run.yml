@@ -189,7 +189,7 @@ jobs:
       # not red-X a contributor's PR CI. Visibility comes from the verification step.
       - name: Run Claude (attempt 1)
         id: a1
-        uses: anthropics/claude-code-action@e90deca47693f9457b72f2b53c17d7c445a87342  # v1.0.171
+        uses: anthropics/claude-code-action@3553f84341b92da26052e28acf1aa898f9511f32  # v1.0.177
         continue-on-error: true
         with:
           # Prefer subscription OAuth, fall back to API key — see claude.yml "Authentication".
@@ -212,7 +212,7 @@ jobs:
       - name: Run Claude (attempt 2 — retry install-phase crash)
         id: a2
         if: "!cancelled() && steps.a1.outcome == 'failure' && steps.a1.outputs.execution_file == ''"
-        uses: anthropics/claude-code-action@e90deca47693f9457b72f2b53c17d7c445a87342  # v1.0.171
+        uses: anthropics/claude-code-action@3553f84341b92da26052e28acf1aa898f9511f32  # v1.0.177
         continue-on-error: true
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
