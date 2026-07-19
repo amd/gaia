@@ -37,6 +37,7 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK
+from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, GPU_CTX_SIZE
 
 if TYPE_CHECKING:
     from gaia.agents.base.goal_store import Goal, Proposal
@@ -509,11 +510,10 @@ Do NOT wrap conversational replies in JSON.
         # Initialize AgentSDK with proper configuration
         # Note: We don't set system_prompt in config, we pass it per request
         # Note: Context size is configured when starting Lemonade server, not here
-        # Default an agent with no explicit model_id to Qwen3.5-35B-A3B — small
-        # models are too weak for complex agent tasks. (This is the *agent* default;
-        # `gaia llm` defaults to DEFAULT_MODEL_NAME / Gemma-4-E4B via a separate path.)
+        # Every agent shares DEFAULT_MODEL_NAME so switching agents never evicts
+        # and cold-reloads the resident model.
         chat_config = AgentConfig(
-            model=model_id or "Qwen3.5-35B-A3B-GGUF",
+            model=model_id or DEFAULT_MODEL_NAME,
             use_claude=use_claude,
             use_chatgpt=use_chatgpt,
             claude_model=claude_model,
@@ -2201,7 +2201,8 @@ Do NOT wrap conversational replies in JSON.
 
     def _is_loaded_ctx_too_small(self) -> bool:
         """Probe Lemonade's health endpoint to see whether the active LLM is
-        loaded with a context size smaller than GAIA's expected 32K.
+        loaded with a context size smaller than GAIA's expected 64K (the
+        chat/rag profile default, ``65536``).
 
         Used when a context-overflow error fires but ``str(exception)`` no
         longer carries the raw ``n_ctx`` value (typical when AgentSDK
@@ -2234,10 +2235,9 @@ Do NOT wrap conversational replies in JSON.
             for m in data.get("all_models_loaded", []):
                 if m.get("type") in ("llm", "vlm"):
                     ctx = m.get("recipe_options", {}).get("ctx_size") or 0
-                    # Threshold tracks the chat / rag profile default
-                    # (65536); any loaded ctx below that is "too small"
-                    # for doc-Q&A flows and should trigger a reload.
-                    if 0 < ctx < 65536:
+                    # Threshold tracks the GPU/CPU profile window; anything
+                    # below it is too small for doc-Q&A and needs a reload.
+                    if 0 < ctx < GPU_CTX_SIZE:
                         return True
             return False
         except Exception:  # pylint: disable=broad-except

@@ -55,7 +55,7 @@ def build_registration():
         ],
         factory=factory,
         agent_dir=None,
-        models=["Qwen3.5-35B-A3B-GGUF"],
+        models=["Gemma-4-E4B-it-GGUF"],
         namespaced_agent_id="installed:doc-search",
         category="examples",
         tags=["example", "reference", "rag", "documents", "starter"],

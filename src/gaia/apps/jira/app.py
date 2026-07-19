@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from gaia.agents.install_hints import agent_not_installed_message
+from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,7 @@ class JiraApp:
         """
         self.verbose = verbose
         self.debug = debug
-        self.model = model or "Qwen3.5-35B-A3B-GGUF"
+        self.model = model or DEFAULT_MODEL_NAME
         self.step_mode = step_mode
         self.base_url = base_url
         # In demo/debug mode, never use silent mode so we see all agent steps

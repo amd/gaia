@@ -119,7 +119,7 @@ def configure(
 
     Args:
         agent_id: Agent to configure (hub-installed, builtin, or custom).
-        config: Settings to store (e.g. ``{"model": "Qwen3.5-35B-A3B-GGUF"}``).
+        config: Settings to store (e.g. ``{"model": "Gemma-4-E4B-it-GGUF"}``).
         install_root: Override the install root (tests pass a tmp dir).
         merge: When True (default) merge into the existing config; when False
             replace it wholesale.

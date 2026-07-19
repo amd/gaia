@@ -43,7 +43,7 @@ class DocumentQAAgent(
         try:
             from gaia.rag.sdk import RAGSDK, RAGConfig
 
-            rag_config = RAGConfig(model=config.model_id or "Qwen3.5-35B-A3B-GGUF")
+            rag_config = RAGConfig(model=config.model_id or "Gemma-4-E4B-it-GGUF")
             self.rag = RAGSDK(rag_config)
         except ImportError:
             # Optional dependency not installed in test environments

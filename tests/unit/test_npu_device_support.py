@@ -16,6 +16,7 @@ class TestDeviceConfig:
 
     def test_defaults(self):
         from gaia.agents.registry import DeviceConfig
+        from gaia.llm.lemonade_client import GPU_CTX_SIZE
 
         dc = DeviceConfig(
             device="gpu",
@@ -28,7 +29,7 @@ class TestDeviceConfig:
         assert dc.recipe == "llamacpp"
         assert dc.backend == "llamacpp:vulkan"
         assert dc.verified is False
-        assert dc.ctx_size == 32768
+        assert dc.ctx_size == GPU_CTX_SIZE
 
     def test_npu_config(self):
         from gaia.agents.registry import DeviceConfig
@@ -386,3 +387,43 @@ class TestUIModels:
         )
         assert hasattr(info, "device_configs")
         assert info.device_configs == []
+
+
+class TestProfileCtxSize:
+    """One context window per device profile (agent consolidation).
+
+    Every agent requests the same window so a single (model, ctx_size) pair
+    stays resident and switching agents never reloads. The NPU is the reason
+    this is keyed on device rather than collapsed to one global number: its
+    FLM build cannot load above ``NPU_CTX_SIZE``.
+    """
+
+    def test_gpu_and_cpu_get_the_gpu_window(self):
+        from gaia.llm.lemonade_client import GPU_CTX_SIZE, profile_ctx_size
+
+        assert profile_ctx_size("gpu") == GPU_CTX_SIZE
+        assert profile_ctx_size("cpu") == GPU_CTX_SIZE
+
+    def test_npu_is_capped_at_the_flm_ceiling(self):
+        from gaia.llm.lemonade_client import (
+            GPU_CTX_SIZE,
+            NPU_CTX_SIZE,
+            profile_ctx_size,
+        )
+
+        assert profile_ctx_size("npu") == NPU_CTX_SIZE
+        # The whole point of keeping two constants: handing the FLM build the
+        # GPU window fails the load outright.
+        assert NPU_CTX_SIZE < GPU_CTX_SIZE
+
+    def test_device_string_is_normalised(self):
+        from gaia.llm.lemonade_client import NPU_CTX_SIZE, profile_ctx_size
+
+        assert profile_ctx_size("NPU") == NPU_CTX_SIZE
+        assert profile_ctx_size("  npu  ") == NPU_CTX_SIZE
+
+    def test_unknown_or_missing_device_defaults_to_gpu(self):
+        from gaia.llm.lemonade_client import GPU_CTX_SIZE, profile_ctx_size
+
+        assert profile_ctx_size(None) == GPU_CTX_SIZE
+        assert profile_ctx_size("") == GPU_CTX_SIZE

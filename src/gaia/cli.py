@@ -93,6 +93,22 @@ def check_lemonade_health(host=None, port=None):
         return False
 
 
+def _configured_device() -> str:
+    """The user's configured inference device ('cpu', 'gpu', 'npu')."""
+    from gaia.config import GaiaConfig, GaiaConfigError
+
+    try:
+        return GaiaConfig.load().default_device
+    except GaiaConfigError as e:
+        # A corrupt config must not silently pick a device — the wrong one
+        # loads the model at a context size the backend can't serve.
+        raise GaiaConfigError(
+            f"Cannot resolve the inference device from the GAIA config: {e}. "
+            f"Fix or delete {GaiaConfig.config_path()}, or run `gaia config set "
+            "default_device gpu`."
+        ) from e
+
+
 def initialize_lemonade_for_agent(
     agent: str,
     quiet: bool = False,
@@ -132,6 +148,7 @@ def initialize_lemonade_for_agent(
         if not success:
             sys.exit(1)
     """
+    from gaia.llm.lemonade_client import profile_ctx_size
     from gaia.llm.lemonade_manager import LemonadeManager
 
     log = get_logger(__name__)
@@ -149,28 +166,13 @@ def initialize_lemonade_for_agent(
     if skip_if_external and (use_claude or use_chatgpt):
         return True, base_url or env_base_url
 
-    # Map agent names to context size requirements.
-    # `chat` and `rag` need 64K so doc-Q&A flows (system prompt + RAG
-    # retrieval + tool result + history) don't crush the window —
-    # `summarize_document` was hitting context overflow on 1-2 MB PDFs
-    # at the previous 32K default (#1030 follow-up). Users on tight RAM
-    # can override with the ``GAIA_CTX_SIZE`` env var.
-    agent_context_sizes = {
-        "code": 32768,
-        "chat": 65536,
-        "code_index": 32768,
-        "jira": 32768,
-        "blender": 32768,
-        "docker": 32768,
-        "talk": 32768,
-        "rag": 65536,
-        "email": 32768,  # email agent (#962) — needs room for body + thread context
-        "sd": 8192,  # SD agent needs 8K for image + story workflow
-        "mcp": 4096,
-        "minimal": 4096,
-        "vlm": 8192,
-    }
-    required_ctx = agent_context_sizes.get(agent.lower(), 32768)
+    # One context size per device profile, never a per-agent literal: every
+    # agent asking for the same window is what keeps a single
+    # (model, ctx_size) pair resident, so switching agents never reloads.
+    # Keyed on device, not agent, because the NPU's FLM build caps below the
+    # GPU window and would fail to load at it.
+    # Users on tight RAM can override with the ``GAIA_CTX_SIZE`` env var.
+    required_ctx = profile_ctx_size(_configured_device())
 
     # Env-var override: lets users on lower-memory hardware dial back
     # (or, in advanced cases, push higher up to the model's 128K max).
@@ -3004,7 +3006,7 @@ Examples:
     config_get_parser.add_argument("key", help="Config key to read")
     config_set_parser = config_subparsers.add_parser(
         "set",
-        help="Set a config value, e.g. `gaia config set default_model Qwen3.5-35B-A3B-GGUF`",
+        help="Set a config value, e.g. `gaia config set default_model Gemma-4-E4B-it-GGUF`",
         parents=[config_path_parser],
     )
     config_set_parser.add_argument("key", help="Config key to set")

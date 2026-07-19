@@ -59,11 +59,23 @@ class TestSelectBuilderModelFunction:
         assert result == "gemma4-it-e2b-FLM"
         mock_get.assert_called_once_with(_BASE_URL)
 
-    def test_prefers_35b_when_multiple_available(self):
-        """Best-to-worst tier order: 35B wins over the FLM/e4b fallbacks."""
+    def test_prefers_gemma_even_when_the_35b_is_installed(self):
+        """Gemma wins so the builder lands on the same model as every other
+        agent. Preferring the 35B here would evict and cold-reload the resident
+        model on exactly the machines that still have it installed."""
         with patch(
             _GET_MODELS_PATCH_TARGET,
-            return_value=["Qwen3.5-35B-A3B-GGUF", "gemma4-it-e2b-FLM"],
+            return_value=["Qwen3.5-35B-A3B-GGUF", "Gemma-4-E4B-it-GGUF"],
+        ):
+            result = _select_builder_model(_BASE_URL)
+        assert result == "Gemma-4-E4B-it-GGUF"
+
+    def test_falls_back_to_the_35b_when_it_is_the_only_option(self):
+        """The 35B stays last rather than removed, so an existing install that
+        has nothing else still works."""
+        with patch(
+            _GET_MODELS_PATCH_TARGET,
+            return_value=["Qwen3.5-35B-A3B-GGUF"],
         ):
             result = _select_builder_model(_BASE_URL)
         assert result == "Qwen3.5-35B-A3B-GGUF"
@@ -139,14 +151,14 @@ class TestBuilderAgentModelSelectionOnConstruction:
         assert agent.model_id == "gemma4-it-e2b-FLM"
         assert agent.model_id != "Qwen3.5-35B-A3B-GGUF"
 
-    def test_construction_prefers_35b_when_available(self, tmp_path):
+    def test_construction_prefers_gemma_when_available(self, tmp_path):
         config = BuilderAgentConfig(base_url=_BASE_URL, model_id=None)
         with patch(
             _GET_MODELS_PATCH_TARGET,
-            return_value=["Qwen3.5-35B-A3B-GGUF", "gemma4-it-e2b-FLM"],
+            return_value=["Qwen3.5-35B-A3B-GGUF", "Gemma-4-E4B-it-GGUF"],
         ):
             agent = _make_agent(config, tmp_path)
-        assert agent.model_id == "Qwen3.5-35B-A3B-GGUF"
+        assert agent.model_id == "Gemma-4-E4B-it-GGUF"
 
     def test_construction_raises_when_nothing_usable_installed(self, tmp_path):
         config = BuilderAgentConfig(base_url=_BASE_URL, model_id=None)

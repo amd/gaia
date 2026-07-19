@@ -868,10 +868,13 @@ class TestBuilderModelPreferences:
     def test_builder_preferred_models_constant_order(self):
         from gaia.agents.registry import BUILDER_PREFERRED_MODELS
 
+        # Gemma first: the builder must resolve to the same model as every
+        # other agent, or switching to it evicts and cold-reloads. The 35B is
+        # kept last so an existing install still has something to fall back to.
         assert BUILDER_PREFERRED_MODELS == [
-            "Qwen3.5-35B-A3B-GGUF",
             "Gemma-4-E4B-it-GGUF",
             "gemma4-it-e2b-FLM",
+            "Qwen3.5-35B-A3B-GGUF",
         ]
 
     def test_get_lemonade_models_none_means_unreachable_not_empty(self):

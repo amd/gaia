@@ -79,7 +79,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--model-id",
-        help="LLM model ID to use (default: Qwen3.5-35B-A3B-GGUF)",
+        help="LLM model ID to use (default: Gemma-4-E4B-it-GGUF)",
     )
 
     args = parser.parse_args()
