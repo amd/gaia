@@ -73,7 +73,7 @@ class TestRoutingAgentInit:
         assert hasattr(RoutingAgent, "process_query")
 
     def test_default_routing_model(self, router):
-        assert router.routing_model == "Qwen3.5-35B-A3B-GGUF"
+        assert router.routing_model == "Gemma-4-E4B-it-GGUF"
 
     def test_custom_routing_model_via_env(self, _patch_create_client, monkeypatch):
         monkeypatch.setenv("AGENT_ROUTING_MODEL", "custom-model")

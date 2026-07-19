@@ -43,7 +43,7 @@ except Exception:  # pylint: disable=broad-except
     faiss = None
 
 from gaia.chat.sdk import AgentConfig, AgentSDK
-from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL
+from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL, DEFAULT_MODEL_NAME
 from gaia.logger import get_logger
 from gaia.security import PathValidator
 
@@ -87,7 +87,7 @@ class EmptyPDFError(PDFExtractionError):
 class RAGConfig:
     """Configuration for RAG SDK."""
 
-    model: str = "Qwen3.5-35B-A3B-GGUF"
+    model: str = DEFAULT_MODEL_NAME
     max_tokens: int = 1024
     chunk_size: int = 500
     chunk_overlap: int = 100  # Increased to 20% overlap for better context preservation

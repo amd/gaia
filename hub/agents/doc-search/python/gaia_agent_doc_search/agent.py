@@ -56,7 +56,7 @@ class DocSearchAgent(Agent, RAGToolsMixin):
     ]
 
     # RAG benefits from a stronger model than the trivial examples.
-    DEFAULT_MODEL = "Qwen3.5-35B-A3B-GGUF"
+    DEFAULT_MODEL = "Gemma-4-E4B-it-GGUF"
 
     def __init__(self, model_id: Optional[str] = None, **kwargs):
         from gaia.rag.sdk import RAGSDK, RAGConfig

@@ -40,7 +40,7 @@ def parse_args():
         "--model-id",
         type=str,
         default=None,
-        help="Model ID for local LLM (default: Qwen3.5-35B-A3B-GGUF)",
+        help="Model ID for local LLM (default: Gemma-4-E4B-it-GGUF)",
     )
 
     # Agent configuration

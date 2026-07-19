@@ -7,7 +7,7 @@ export const MIN_CONTEXT_SIZE = 32768;
 
 /** Default model name used by GAIA Chat when no custom override is set.
  *  Must match backend `_DEFAULT_MODEL_NAME` in `gaia.ui.routers.system`. */
-export const DEFAULT_MODEL_NAME = 'Qwen3.5-35B-A3B-GGUF';
+export const DEFAULT_MODEL_NAME = 'Gemma-4-E4B-it-GGUF';
 
 /** Max spinner duration (ms) for model load operations (5 min safety reset). */
 export const LOAD_SPINNER_TIMEOUT_MS = 300_000;

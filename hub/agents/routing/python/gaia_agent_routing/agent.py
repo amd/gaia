@@ -66,7 +66,7 @@ class RoutingAgent:
         self.agent_kwargs = agent_kwargs  # Store for passing to created agents
 
         # Model to use for routing analysis (configurable via env var)
-        self.routing_model = os.getenv("AGENT_ROUTING_MODEL", "Qwen3.5-35B-A3B-GGUF")
+        self.routing_model = os.getenv("AGENT_ROUTING_MODEL", "Gemma-4-E4B-it-GGUF")
 
     def process_query(
         self,

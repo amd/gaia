@@ -30,7 +30,7 @@ class TestDockerAgentInit(unittest.TestCase):
 
     def test_default_model_is_coding_model(self):
         agent = self._make()
-        self.assertEqual(agent.model_id, "Qwen3.5-35B-A3B-GGUF")
+        self.assertEqual(agent.model_id, "Gemma-4-E4B-it-GGUF")
 
     def test_system_prompt_is_docker_focused(self):
         agent = self._make()

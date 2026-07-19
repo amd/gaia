@@ -21,7 +21,7 @@ def test_build_registration_metadata():
     assert reg.category == "examples"
     assert reg.tools_count == 10
     assert reg.namespaced_agent_id == "installed:doc-search"
-    assert reg.models == ["Qwen3.5-35B-A3B-GGUF"]
+    assert reg.models == ["Gemma-4-E4B-it-GGUF"]
 
 
 def test_agent_composes_rag_mixin():

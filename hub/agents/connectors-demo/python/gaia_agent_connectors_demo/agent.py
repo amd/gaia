@@ -46,6 +46,7 @@ from gaia.agents.base.agent import Agent, default_max_steps
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.tools import tool
 from gaia.connectors.errors import ConnectorsError
+from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 from gaia.connectors.formatting import format_connector_error as _format_connector_error
 from gaia.connectors.handler import get_credential_sync
 from gaia.connectors.providers.base import ConnectorRequirement
@@ -336,7 +337,7 @@ class ConnectorsDemoAgent(Agent):
         config = config or ConnectorsDemoAgentConfig()
         self.config = config
 
-        effective_model_id = config.model_id or "Qwen3.5-35B-A3B-GGUF"
+        effective_model_id = config.model_id or DEFAULT_MODEL_NAME
         effective_base_url = (
             config.base_url
             if config.base_url is not None

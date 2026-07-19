@@ -1301,7 +1301,7 @@ def create_app(
 
         # Required models for EMR agent
         vlm_model = "Qwen3-VL-4B-Instruct-GGUF"
-        llm_model = "Qwen3.5-35B-A3B-GGUF"
+        llm_model = "Gemma-4-E4B-it-GGUF"
         embed_model = "nomic-embed-text-v2-moe-GGUF"
 
         try:
@@ -1457,7 +1457,7 @@ def create_app(
 
             # Required models for EMR agent
             vlm_model = "Qwen3-VL-4B-Instruct-GGUF"
-            llm_model = "Qwen3.5-35B-A3B-GGUF"
+            llm_model = "Gemma-4-E4B-it-GGUF"
             embed_model = "nomic-embed-text-v2-moe-GGUF"
 
             required_models = [

@@ -911,7 +911,7 @@ def _coerce_setting(raw: str):
     """Parse a ``KEY=VALUE`` pair, JSON-decoding the value when possible.
 
     ``--set temperature=0.2`` stores a float; ``--set verbose=true`` a bool;
-    ``--set model=Qwen3.5-35B-A3B-GGUF`` a string. Anything that is not valid
+    ``--set model=Gemma-4-E4B-it-GGUF`` a string. Anything that is not valid
     JSON is kept as the raw string.
     """
     import json
