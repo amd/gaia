@@ -256,6 +256,38 @@ class TestInitCommand(unittest.TestCase):
         InitCommand(profile="chat", yes=True)
         mock_installer_class.assert_called_once()
 
+    @patch("gaia.installer.init_command.LemonadeInstaller")
+    def test_bracketed_text_not_eaten_by_rich_markup(self, _mock_installer_class):
+        """Bracketed tokens like '[rag]' must survive Rich rendering (issue #2339).
+
+        The success/warning/error/step helpers embed the message inside Rich
+        markup, so an unescaped '[rag]' was parsed as a style tag and dropped,
+        leaving users a broken 'uv pip install "amd-gaia"' instruction.
+        """
+        import io
+
+        from gaia.installer import init_command as ic
+
+        if not ic.RICH_AVAILABLE:
+            self.skipTest("rich not installed")
+
+        cmd = ic.InitCommand(profile="rag", yes=True)
+
+        for helper in ("_print_success", "_print_warning", "_print_error"):
+            buf = io.StringIO()
+            cmd.console = ic.Console(file=buf, force_terminal=False, width=200)
+            getattr(cmd, helper)(
+                'Could not install [rag] extras. Run: uv pip install "amd-gaia[rag]"'
+            )
+            out = buf.getvalue()
+            self.assertIn("[rag]", out, f"{helper} dropped bracketed token")
+            self.assertIn('"amd-gaia[rag]"', out, f"{helper} dropped install spec")
+
+        buf = io.StringIO()
+        cmd.console = ic.Console(file=buf, force_terminal=False, width=200)
+        cmd._print_step(4, 5, "Installing [rag] dependencies")
+        self.assertIn("[rag]", buf.getvalue())
+
 
 class TestRunInit(unittest.TestCase):
     """Test run_init entry point function."""

@@ -24,6 +24,7 @@ from typing import Callable, Optional
 # Rich imports for better CLI formatting
 try:
     from rich.console import Console
+    from rich.markup import escape as rich_escape
     from rich.panel import Panel
 
     RICH_AVAILABLE = True
@@ -283,28 +284,32 @@ class InitCommand:
     def _print_step(self, step: int, total: int, message: str):
         """Print step header."""
         if RICH_AVAILABLE and self.console:
-            self.console.print(f"[bold blue]Step {step}/{total}:[/bold blue] {message}")
+            # Escape the message so brackets in it (e.g. "[rag]") aren't eaten
+            # as Rich markup tags.
+            self.console.print(
+                f"[bold blue]Step {step}/{total}:[/bold blue] {rich_escape(message)}"
+            )
         else:
             self._print(f"Step {step}/{total}: {message}")
 
     def _print_success(self, message: str):
         """Print success message."""
         if RICH_AVAILABLE and self.console:
-            self.console.print(f"   [green]✓[/green] {message}")
+            self.console.print(f"   [green]✓[/green] {rich_escape(message)}")
         else:
             self._print(f"   ✓ {message}")
 
     def _print_warning(self, message: str):
         """Print warning message."""
         if RICH_AVAILABLE and self.console:
-            self.console.print(f"   [yellow]⚠️  {message}[/yellow]")
+            self.console.print(f"   [yellow]⚠️  {rich_escape(message)}[/yellow]")
         else:
             self._print(f"   ⚠️  {message}")
 
     def _print_error(self, message: str):
         """Print error message."""
         if RICH_AVAILABLE and self.console:
-            self.console.print(f"   [red]❌ {message}[/red]")
+            self.console.print(f"   [red]❌ {rich_escape(message)}[/red]")
         else:
             self._print(f"   ❌ {message}")
 
