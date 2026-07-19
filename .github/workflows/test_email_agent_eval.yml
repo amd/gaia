@@ -152,7 +152,9 @@ jobs:
     # steps + LemonadeServer.exe) — landing on Linux dies instantly with
     # 'powershell: command not found'. fromJSON(...) yields a label ARRAY so the
     # runner must have Windows AND the stx/stx-test label.
-    runs-on: ${{ fromJSON(contains(github.event.pull_request.labels.*.name, 'stx-test') && '["self-hosted","Windows","stx-test"]' || '["self-hosted","Windows","stx"]') }}
+    # The event_name guard keeps the pull_request dereference off schedule /
+    # workflow_dispatch / workflow_call runs, where that context is absent.
+    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'stx-test') && '["self-hosted","Windows","stx-test"]' || '["self-hosted","Windows","stx"]') }}
     timeout-minutes: 90
     steps:
       - name: Checkout

@@ -7,9 +7,10 @@
 # logs is escalated into the tracker once a week instead of scrolling past.
 #
 # This calls the SAME reusable workflow the nightly and the release gates use
-# (test_email_agent_eval.yml), so there is one eval definition, not a fork. The
-# shared `lemonade-eval` concurrency group keeps it strictly serial with the
-# nightly/refresh/release runs on the single Lemonade slot.
+# (test_email_agent_eval.yml), so there is one eval definition, not a fork. That
+# callee owns the `lemonade-eval` concurrency group, which is what keeps every
+# eval serial on the single Lemonade slot — this caller MUST NOT also claim it
+# (see the concurrency block below).
 #
 # "Failure" here is a real signal, never a silent skip: the action-item eval
 # REQUIRES the Claude judge (no fuzzy fallback), so a missing/broken judge, a
@@ -19,14 +20,21 @@
 name: Weekly Eval
 
 on:
-  # Sundays 08:17 UTC — off the nightly's 07:00 slot; the concurrency group
-  # serializes them if they ever overlap.
+  # Sundays 08:17 UTC — off the nightly's 07:00 slot; the callee's concurrency
+  # group serializes them if they ever overlap.
   schedule:
     - cron: '17 8 * * 0'
   workflow_dispatch:
 
 concurrency:
-  group: lemonade-eval
+  # MUST NOT be `lemonade-eval`. A called reusable workflow's concurrency is
+  # evaluated in the caller's context, so if this caller held the same group the
+  # callee could never acquire it — it would die before a job record was ever
+  # created, and `needs.email-eval.result` would report 'failure' for an eval
+  # that never ran (the phantom-job bug: every Weekly Eval run 2026-07-09..19
+  # ended in <60s with only the notify job, filing issue #2026 on a no-op).
+  # Serialization on the Lemonade slot belongs to the callee, which owns it.
+  group: weekly-eval
   cancel-in-progress: false
 
 permissions:
