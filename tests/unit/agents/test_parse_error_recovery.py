@@ -148,6 +148,11 @@ class TestProcessQueryRecoversOnContextOverflow:
     def test_context_overflow_triggers_trim_and_retry(self, agent):
         """First call raises overflow, second succeeds → final_answer set."""
         agent.streaming = False
+        # Stub the live Lemonade health probe: the trim-and-retry path this
+        # test asserts is only taken when the loaded ctx is NOT "too small".
+        # Without this the test's outcome depends on whatever model a dev's
+        # local Lemonade happens to have loaded (issue #2287).
+        agent._is_loaded_ctx_too_small = lambda: False
         good = json.dumps({"thought": "ok", "answer": "Here you go."})
         chat = self._stub_chat_with_exception_then_answer(
             agent,
@@ -167,6 +172,9 @@ class TestProcessQueryRecoversOnContextOverflow:
     def test_context_overflow_after_retry_gives_friendly_fallback(self, agent):
         """When trim+retry STILL fails, final message is friendly."""
         agent.streaming = False
+        # See test above: stub the probe so this exercises the trim-then-fallback
+        # path deterministically rather than the reload re-raise (issue #2287).
+        agent._is_loaded_ctx_too_small = lambda: False
         responses = [
             RuntimeError("exceeds the available context size"),
             RuntimeError("exceeds the available context size"),
@@ -184,6 +192,33 @@ class TestProcessQueryRecoversOnContextOverflow:
             # No raw exception leaked
             assert "exceeds the available context size" not in text
             assert "Traceback" not in text
+
+    def test_wrong_ctx_loaded_reraises_for_model_reload(self, agent):
+        """When the probe reports a too-small loaded ctx, the overflow is
+        re-raised so the chat helper can reload the model — instead of being
+        trimmed in-loop. This branch is unreachable on CI (no Lemonade), so
+        stubbing the probe is the only way to cover it (issue #2287)."""
+        agent.streaming = False
+        # Probe reports the loaded model has a ctx smaller than GAIA expects.
+        agent._is_loaded_ctx_too_small = lambda: True
+        chat = MagicMock()
+
+        def _send(*_, **__):
+            raise RuntimeError("exceeds the available context size")
+
+        chat.send_messages = MagicMock(side_effect=_send)
+        agent.chat = chat
+
+        # The overflow must propagate so an outer helper can reload the model.
+        with pytest.raises(RuntimeError, match="exceeds the available context size"):
+            agent.process_query("x", max_steps=5)
+        # The re-raise path (not the trim path) was taken.
+        assert any(
+            e.get("type") == "llm_wrong_ctx_loaded_reraise" for e in agent.error_history
+        )
+        assert not any(
+            e.get("type") == "llm_context_overflow_trimmed" for e in agent.error_history
+        )
 
 
 class TestRepairInvalidJsonEscapes:

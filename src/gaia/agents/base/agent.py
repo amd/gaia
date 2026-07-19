@@ -2201,7 +2201,8 @@ Do NOT wrap conversational replies in JSON.
 
     def _is_loaded_ctx_too_small(self) -> bool:
         """Probe Lemonade's health endpoint to see whether the active LLM is
-        loaded with a context size smaller than GAIA's expected 32K.
+        loaded with a context size smaller than GAIA's expected 64K (the
+        chat/rag profile default, ``65536``).
 
         Used when a context-overflow error fires but ``str(exception)`` no
         longer carries the raw ``n_ctx`` value (typical when AgentSDK
