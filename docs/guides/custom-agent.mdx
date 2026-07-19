@@ -408,9 +408,10 @@ agent and publish it through the curated PR route:
 
 <Steps>
   <Step title="Package it">
-    `gaia agent init <id>` scaffolds a publishable package under
-    `hub/agents/<id>/python/` — a `gaia-agent.yaml` manifest, your agent code, a
-    README, and `pyproject.toml`. Move your `agent.py` logic in and fill the manifest.
+    `gaia agent init <id> -o hub/agents/ --layout hub` scaffolds a publishable
+    package under `hub/agents/<id>/python/` — a `gaia-agent.yaml` manifest, your
+    agent code, a README, and `pyproject.toml`. Move your `agent.py` logic in and
+    fill the manifest.
   </Step>
   <Step title="Validate it">
     `gaia agent test --lint` checks the manifest and that the agent loads. Add tests

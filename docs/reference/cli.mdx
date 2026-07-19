@@ -396,7 +396,7 @@ Author, version, validate, and share GAIA agents.
 Scaffold a new agent package, bump its version, and run the quality gates that publishing requires. The scaffold mirrors the canonical hub package layout (`hub/agents/summarize/python/`).
 
 ```bash
-gaia agent init <name> [--language python|cpp] [--output DIR] [--force]
+gaia agent init <name> [--language python|cpp] [--output DIR] [--layout flat|hub] [--force]
 gaia agent version <patch|minor|major> [--path DIR]
 gaia agent test [--lint | --live] [--path DIR] [--timeout SECONDS]
 ```
@@ -411,7 +411,10 @@ gaia agent test [--lint | --live] [--path DIR] [--timeout SECONDS]
 | `name` | string | Agent id/name — lowercase, hyphens allowed (positional, required) |
 | `--language` | choice | `python` (default) or `cpp` |
 | `--output, -o` | string | Parent directory to create the package in (default: current dir) |
+| `--layout` | choice | `flat` (default) creates `<output>/<id>/`; `hub` creates `<output>/<id>/<language>/` to match the hub tree |
 | `--force` | flag | Overwrite an existing package directory |
+
+Use `--layout hub` when authoring a package for this repo's `hub/agents/` tree, which nests the implementation under a language directory (`hub/agents/<id>/python/`). Standalone packages outside the repo want the default `flat` layout.
 
 **`version`** bumps the SemVer in `gaia-agent.yaml` and keeps `pyproject.toml` / `__init__.py` in sync.
 
@@ -430,6 +433,12 @@ The publish workflow requires `--lint` to pass; `--live` is recommended but not 
 ```bash Scaffold and validate
 gaia agent init my-agent
 cd my-agent
+gaia agent test --lint
+```
+
+```bash Scaffold into the hub tree
+gaia agent init my-agent -o hub/agents/ --layout hub
+cd hub/agents/my-agent/python
 gaia agent test --lint
 ```
 

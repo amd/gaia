@@ -31,10 +31,11 @@ guided reading order.
 ## Creating a new agent
 
 ```bash
-gaia agent init my-agent --language python
+gaia agent init my-agent --language python -o agents/ --layout hub
 ```
 
-…or copy one of the examples above. See
+That lands the package at `agents/my-agent/python/`, matching the layout of every
+agent in this tree. …or copy one of the examples above. See
 [docs/plans/agent-hub-ui.mdx](../docs/plans/agent-hub-ui.mdx) for the full Agent
 Hub platform plan and
 [docs/spec/agent-hub-restructure.mdx](../docs/spec/agent-hub-restructure.mdx)
