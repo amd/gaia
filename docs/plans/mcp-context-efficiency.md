@@ -52,7 +52,7 @@ selection and tool-wrapper layers — not the mechanism.
   `"{name}: {description}"` (`tool_loader.py:271-278`), so MCP tools are *already
   scoreable* once the loader runs.
 - Wiring lives only in ChatAgent (chat wheel,
-  `hub/agents/python/chat/gaia_agent_chat/agent.py`): `_maybe_build_tool_loader`
+  `hub/agents/chat/python/gaia_agent_chat/agent.py`): `_maybe_build_tool_loader`
   (`gaia_agent_chat/agent.py:455`) gates it to the **`doc` profile** with the
   toggle on, and `_dynamic_tools_active` (`gaia_agent_chat/agent.py:520`)
   additionally requires an active memory store.
@@ -167,7 +167,7 @@ tokens drop ≥60% vs. eager registration, with no recall regression.
   no change to registration (tools stay in the global registry, loader gates
   rendering only).
 - `src/gaia/agents/base/tool_loader.py` — MCP-aware `validate_registry`.
-- `hub/agents/python/chat/gaia_agent_chat/agent.py` — additional activation
+- `hub/agents/chat/python/gaia_agent_chat/agent.py` — additional activation
   trigger in `_maybe_build_tool_loader` / `_dynamic_tools_active`.
 - Base `Agent` — no interface change; `_select_tools_for_turn` already the hook.
 

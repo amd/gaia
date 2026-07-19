@@ -83,7 +83,7 @@ already running `install-lemonade`-managed Lemonade Server for other scheduled w
 1. **A real user's install, not a dev checkout.** Fresh Python venv per run; GAIA
    installed via `pip install` against a **built wheel** — never `pip install -e
    .[dev,...]` and never an explicit hub-agent-package install alongside it. Existing CI
-   (`test_chat_agent.yml`) always installs `hub/agents/python/chat` explicitly before
+   (`test_chat_agent.yml`) always installs `hub/agents/chat/python` explicitly before
    testing ChatAgent, so this environment is genuinely novel — it is what would have
    caught #2260.
 2. **A real user's config, not accumulated runner state.** `GAIA_HOME` set to a per-run

@@ -16,7 +16,7 @@ on:
       - '.github/actions/setup-venv/**'
       - '.github/workflows/test_sd.yml'
       - "src/gaia/sd/**"  # SD mixin and tools
-      - "hub/agents/python/sd/**"  # SD agent (standalone wheel #1102)
+      - "hub/agents/sd/python/**"  # SD agent (standalone wheel #1102)
       - "src/gaia/llm/lemonade_client.py"
       - "src/gaia/cli.py"
       - "tests/integration/test_sd_integration.py"
@@ -30,7 +30,7 @@ on:
       - '.github/actions/setup-venv/**'
       - '.github/workflows/test_sd.yml'
       - "src/gaia/sd/**"  # SD mixin and tools
-      - "hub/agents/python/sd/**"  # SD agent (standalone wheel #1102)
+      - "hub/agents/sd/python/**"  # SD agent (standalone wheel #1102)
       - "src/gaia/llm/lemonade_client.py"
       - "src/gaia/cli.py"
       - "tests/integration/test_sd_integration.py"

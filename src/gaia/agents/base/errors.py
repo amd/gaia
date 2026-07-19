@@ -23,8 +23,8 @@ FRAMEWORK_PATHS: Set[str] = {
     "gaia/agents/jira",
     "gaia/agents/tools",
     # Hub-migrated agents (#1102): wheel installs land under site-packages
-    # (covered below); editable hub checkouts show as hub/agents/python/<id>.
-    "hub/agents/python/",
+    # (covered below); editable hub checkouts show as hub/agents/<id>/python/.
+    "hub/agents/",
     "gaia_agent_chat",
     "site-packages/",
 }

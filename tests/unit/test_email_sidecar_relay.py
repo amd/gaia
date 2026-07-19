@@ -15,7 +15,7 @@ control flow.
 Part 3 (integration): a REAL uvicorn server hosting the REAL
 ``gaia_agent_email`` FastAPI app (via ``export_openapi.build_app()``) with the
 ``query_routes.build_query_agent`` seam swapped for a scripted fake agent —
-the same pattern ``hub/agents/python/email/tests/test_query_route.py`` uses.
+the same pattern ``hub/agents/email/python/tests/test_query_route.py`` uses.
 This proves the render-map card payload (``pretty_print_json`` ->
 ``SSEOutputHandler._render_card_payload`` -> the real
 ``CanonicalTranslator`` -> real HTTP -> ``EmailSidecarProxy.query_stream``)
@@ -760,7 +760,7 @@ def _free_port() -> int:
 def live_email_app():
     """Boot the REAL ``gaia_agent_email`` FastAPI app on a real TCP port.
 
-    Mirrors ``hub/agents/python/email/tests/test_query_route.py``'s
+    Mirrors ``hub/agents/email/python/tests/test_query_route.py``'s
     ``export_openapi.build_app()`` pattern, but run for real over HTTP via
     uvicorn in a background thread rather than FastAPI's in-process
     ``TestClient`` -- this is what proves the wire (SSE framing, socket

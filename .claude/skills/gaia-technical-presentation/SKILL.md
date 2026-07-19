@@ -81,7 +81,7 @@ prose.
 ## Worked example
 
 `reference/example-technical.html` — generated from the GAIA email agent hub package
-(`hub/agents/python/email/`): 12 slides covering architecture, the request/response contract,
+(`hub/agents/email/python/`): 12 slides covering architecture, the request/response contract,
 the packaging table, the token-usage schema, and code blocks. Its benchmark slide
 intentionally shows labeled `⚠ PLACEHOLDER` values because no eval results existed in the
 source at generation time — a demonstration of the credibility contract.

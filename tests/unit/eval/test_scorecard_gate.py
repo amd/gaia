@@ -610,7 +610,7 @@ class TestEnvCtxSizePublicHelper:
         assert env_ctx_size(parsed) == 16384
 
     def test_legacy_unstamped_card_returns_none(self, tmp_path):
-        # The current real state of hub/agents/npm/agent-email/SCORECARD.md
+        # The current real state of hub/agents/email/npm/SCORECARD.md
         # (#2094): committed before #1892's ctx envelope landed, so it carries
         # no recipe.environment.ctx_size at all.
         cand = _make_acceptance_card(

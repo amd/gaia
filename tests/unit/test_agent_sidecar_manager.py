@@ -83,7 +83,7 @@ def test_builtin_email_spec_mode_env_var():
 def test_email_spec_dev_src_dir_resolves_under_repo_root():
     # tests/unit/test_agent_sidecar_manager.py -> repo root is parents[2].
     repo_root = Path(__file__).resolve().parents[2]
-    expected = repo_root / "hub" / "agents" / "python" / "email"
+    expected = repo_root / "hub" / "agents" / "email" / "python"
     assert builtin_specs()["email"].dev_src_dir == expected
 
 

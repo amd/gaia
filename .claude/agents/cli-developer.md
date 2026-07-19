@@ -37,12 +37,12 @@ You own the GAIA CLI. The entire user surface for `gaia <subcommand>` lives in `
 | `gaia` / `gaia-cli` | `gaia.cli:main` | Main dispatcher |
 | `gaia-mcp` | `gaia.mcp.mcp_bridge:main` | Standalone MCP bridge |
 
-**Hub-package binaries** (NOT core `setup.py` entries — they ship from their own hub wheels under `hub/agents/python/<id>/`):
+**Hub-package binaries** (NOT core `setup.py` entries — they ship from their own hub wheels under `hub/agents/<id>/python/`):
 
 | Script | Entry | Hub package |
 |--------|-------|-------------|
-| `gaia-code` | `gaia_agent_code.cli:main` | `gaia-agent-code` (`hub/agents/python/code/`) |
-| `gaia-emr` | `gaia_agent_emr.cli:main` | `gaia-agent-emr` (`hub/agents/python/emr/`) |
+| `gaia-code` | `gaia_agent_code.cli:main` | `gaia-agent-code` (`hub/agents/code/python/`) |
+| `gaia-emr` | `gaia_agent_emr.cli:main` | `gaia-agent-emr` (`hub/agents/emr/python/`) |
 
 ## Current top-level subcommands
 

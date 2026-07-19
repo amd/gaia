@@ -89,22 +89,22 @@ permissions:
   contents: read
 
 env:
-  PKG_DIR: hub/agents/npm/agent-email
-  MANIFEST: hub/agents/python/email/gaia-agent.yaml
+  PKG_DIR: hub/agents/email/npm
+  MANIFEST: hub/agents/email/python/gaia-agent.yaml
   # Single canonical README for the agent: the npm client README (architecture
   # diagram, install/usage, ./client) is the richer, actively-maintained one, so
   # it's what gets published to the hub AND npm. The python-side README is being
   # retired with the agent-structure reorg. (Takes effect on the NEXT release —
   # the catalog snapshots the README at publish time.)
-  README: hub/agents/npm/agent-email/README.md
+  README: hub/agents/email/npm/README.md
   # Same canonical-doc story for the changelog: the npm CHANGELOG.md is what the
   # hub renders as the agent's Changelog section (and ships in the npm tarball).
-  CHANGELOG: hub/agents/npm/agent-email/CHANGELOG.md
+  CHANGELOG: hub/agents/email/npm/CHANGELOG.md
   # SPEC.md (technical reference) + SKILL.md (AI-integration playbook) are rendered
   # as their own doc tabs on the hub page (catalog entry's `spec` / `skill`).
-  SPEC: hub/agents/npm/agent-email/SPEC.md
-  SKILL: hub/agents/npm/agent-email/SKILL.md
-  FREEZE_DIST: hub/agents/python/email/packaging/dist
+  SPEC: hub/agents/email/npm/SPEC.md
+  SKILL: hub/agents/email/npm/SKILL.md
+  FREEZE_DIST: hub/agents/email/python/packaging/dist
   # Hub key prefix (mirrors the Worker's agents/<id> layout). The Worker owns the
   # bucket binding; CI never talks to R2 directly — it POSTs to /publish.
   HUB_PREFIX: agents/email
@@ -174,21 +174,21 @@ jobs:
         run: |
           set -euo pipefail
           uv venv .venv-freeze --python 3.12
-          uv pip install --python .venv-freeze -e ".[api]" -e hub/agents/python/email pyinstaller
+          uv pip install --python .venv-freeze -e ".[api]" -e hub/agents/email/python pyinstaller
 
       - name: Freeze one-file binary
         shell: bash
         run: |
           set -euo pipefail
           PY=.venv-freeze/$([ "$RUNNER_OS" = "Windows" ] && echo Scripts || echo bin)/python
-          "$PY" hub/agents/python/email/packaging/freeze.py --onefile
+          "$PY" hub/agents/email/python/packaging/freeze.py --onefile
 
       - name: Smoke-test the frozen binary
         shell: bash
         run: |
           set -euo pipefail
           PY=.venv-freeze/$([ "$RUNNER_OS" = "Windows" ] && echo Scripts || echo bin)/python
-          "$PY" hub/agents/python/email/packaging/smoke_test.py \
+          "$PY" hub/agents/email/python/packaging/smoke_test.py \
             "${FREEZE_DIST}/${{ matrix.frozen }}"
 
       - name: Stage artifact + compute SHA-256 / size
@@ -265,7 +265,7 @@ jobs:
             exit 0
           fi
           chmod +x "$BIN"
-          if python hub/agents/python/email/packaging/smoke_test.py "$BIN"; then
+          if python hub/agents/email/python/packaging/smoke_test.py "$BIN"; then
             echo "darwin-x64 binary (built on macos-26-intel) runs on macOS 15 ✓"
             echo "ok=true" >> "$GITHUB_OUTPUT"
           else
@@ -352,11 +352,11 @@ jobs:
           CTX="${{ steps.ctx.outputs.args }}"
           if [ -n "${PREV}" ]; then
             python -m gaia.eval.scorecard_gate \
-              --scorecard hub/agents/npm/agent-email/SCORECARD.md \
+              --scorecard hub/agents/email/npm/SCORECARD.md \
               --baseline-ref "${PREV}" ${BARS} ${CTX}
           else
             python -m gaia.eval.scorecard_gate \
-              --scorecard hub/agents/npm/agent-email/SCORECARD.md ${BARS} ${CTX}
+              --scorecard hub/agents/email/npm/SCORECARD.md ${BARS} ${CTX}
           fi
 
   # ── Stage 1c: email eval suite (release gate, self-hosted) ─────────
@@ -443,7 +443,7 @@ jobs:
       # version's hub directory). Mirrors the UI's bump-ui-version.mjs --check gate.
       - name: Verify version references are in sync (single source of truth)
         shell: bash
-        run: python hub/agents/python/email/packaging/stamp_version.py --check
+        run: python hub/agents/email/python/packaging/stamp_version.py --check
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -586,7 +586,7 @@ jobs:
           done
           VER="${{ steps.ver.outputs.version }}"
           scorecard_args=()
-          SCORECARD="hub/agents/npm/agent-email/SCORECARD.md"
+          SCORECARD="hub/agents/email/npm/SCORECARD.md"
           if [ -f "${SCORECARD}" ]; then
             scorecard_args+=(--eval-scorecard "${SCORECARD}")
           fi
@@ -594,7 +594,7 @@ jobs:
           # only lands with PR #1989 — guard on presence so releases cut before it
           # merges still publish cleanly.
           evaluation_args=()
-          EVALUATION="hub/agents/npm/agent-email/EVALUATION.md"
+          EVALUATION="hub/agents/email/npm/EVALUATION.md"
           if [ -f "${EVALUATION}" ]; then
             evaluation_args+=(--evaluation "${EVALUATION}")
           fi
@@ -605,11 +605,11 @@ jobs:
           # #2044 — guard on presence so releases cut before it merges still
           # publish cleanly.
           capability_matrix_args=()
-          CAPABILITY_MATRIX="hub/agents/python/email/CAPABILITY_MATRIX.md"
+          CAPABILITY_MATRIX="hub/agents/email/python/CAPABILITY_MATRIX.md"
           if [ -f "${CAPABILITY_MATRIX}" ]; then
             capability_matrix_args+=(--capability-matrix "${CAPABILITY_MATRIX}")
           fi
-          python hub/agents/python/email/packaging/publish_to_r2.py \
+          python hub/agents/email/python/packaging/publish_to_r2.py \
             --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
             --manifest "${MANIFEST}" \
             --readme "${README}" \
@@ -630,7 +630,7 @@ jobs:
           set -euo pipefail
           # The summary from POST /publish is the post-publish source of truth
           # (each sha256 was verified against the Worker-computed value).
-          python hub/agents/python/email/packaging/gen_binaries_lock.py \
+          python hub/agents/email/python/packaging/gen_binaries_lock.py \
             --base-url "${{ steps.ver.outputs.base_url }}" \
             --version "${{ steps.ver.outputs.version }}" \
             --lock "${PKG_DIR}/binaries.lock.json" \
@@ -688,10 +688,10 @@ jobs:
           # Deterministic zip (sorted, no extra metadata).
           ( cd "${STAGE}/.." && zip -rX "agent-email-${VER}.zip" "agent-email-${VER}" >/dev/null )
           # File listing for the hub's package file-list display.
-          python hub/agents/python/email/packaging/gen_package_files.py "${STAGE}" package-files.json
+          python hub/agents/email/python/packaging/gen_package_files.py "${STAGE}" package-files.json
           echo "=== package contents ===" && (cd "${STAGE}" && find . -type f | sort)
           # Publish the zip as the version's package artifact + its file listing.
-          python hub/agents/python/email/packaging/publish_to_r2.py \
+          python hub/agents/email/python/packaging/publish_to_r2.py \
             --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
             --manifest "${MANIFEST}" \
             --artifact "agent-email-${VER}.zip=package" \

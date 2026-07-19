@@ -31,7 +31,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SETUP_PY = REPO_ROOT / "setup.py"
 OPENAI_SERVER = REPO_ROOT / "src" / "gaia" / "api" / "openai_server.py"
-EMAIL_PYPROJECT = REPO_ROOT / "hub" / "agents" / "python" / "email" / "pyproject.toml"
+EMAIL_PYPROJECT = REPO_ROOT / "hub" / "agents" / "email" / "python" / "pyproject.toml"
 
 
 def _parse_extra(name: str) -> list[str]:

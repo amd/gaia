@@ -6,7 +6,7 @@ These tests do *not* touch the network or PyPI. They assert the static
 invariants that make dual distribution (R2 + PyPI) correct and drift-proof:
 
 * the production-agent list (``setup.py``'s ``AGENT_WHEEL_PACKAGES``) maps
-  cleanly to packages under ``hub/agents/python/<id>/`` (via
+  cleanly to packages under ``hub/agents/<id>/python/`` (via
   ``util/list_agent_packages.py``);
 * every such wheel declares the ``gaia-agent-<id>`` name and an ``amd-gaia``
   framework dependency (issue #1179 scope item 3);
@@ -57,10 +57,10 @@ def test_production_agent_list_nonempty(packages):
 
 
 def test_dist_name_and_directory_convention(packages):
-    """Each entry follows gaia-agent-<id> and lives at hub/agents/python/<id>."""
+    """Each entry follows gaia-agent-<id> and lives at hub/agents/<id>/python."""
     for p in packages:
         assert p.dist_name == f"gaia-agent-{p.agent_id}"
-        assert p.path == lap.PYTHON_AGENTS_DIR / p.agent_id
+        assert p.path == lap.AGENTS_DIR / p.agent_id / "python"
         assert (p.path / "pyproject.toml").exists()
 
 
@@ -216,7 +216,7 @@ def test_only_filter_matrix_single_entry():
     entry = matrix["include"][0]
     assert entry["id"] == "email"
     assert entry["dist"] == "gaia-agent-email"
-    assert entry["path"].endswith("hub/agents/python/email")
+    assert entry["path"].endswith("hub/agents/email/python")
 
 
 def test_only_filter_unknown_id_fails():

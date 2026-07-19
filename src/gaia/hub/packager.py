@@ -3,7 +3,7 @@
 """Build a distributable Python wheel from a hub agent package.
 
 Phase 2 of the Agent Hub restructure (``docs/spec/agent-hub-restructure.mdx``):
-a community/AMD agent lives in ``hub/agents/python/<id>/`` with its own
+a community/AMD agent lives in ``hub/agents/<id>/python/`` with its own
 ``pyproject.toml`` (declaring the ``gaia.agent`` entry point and an
 ``amd-gaia>={min_gaia_version}`` dependency). :func:`pack` turns that source
 package into ``dist/gaia_agent_<id>-<version>-py3-none-any.whl`` via

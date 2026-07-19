@@ -204,7 +204,7 @@ jobs:
           # action installs `.[dev,...]` from the checkout (an editable dev
           # install). This step exists to reproduce what a real `pip install
           # amd-gaia` user gets: a built wheel, installed normally, with no
-          # hub/agents/python/* package alongside it. This is the property
+          # hub/agents/*/python package alongside it. This is the property
           # that would have caught #2260 -- do not "fix" a resulting
           # ImportError by installing a hub package here; that IS the bug.
           Write-Host "Creating venv at $env:RUN_DIR\venv ..."

@@ -311,7 +311,7 @@ setup(
         # AGENT_WHEEL_PACKAGES above for why (#2240) and where that list
         # actually lives now. Install an agent from source until the wheels
         # are published:
-        #   uv pip install "gaia-agent-<id> @ git+https://github.com/amd/gaia.git#subdirectory=hub/agents/python/<id>"
+        #   uv pip install "gaia-agent-<id> @ git+https://github.com/amd/gaia.git#subdirectory=hub/agents/<id>/python"
         # (see gaia.agents.install_hints.source_install_command).
     },
     classifiers=[

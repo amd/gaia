@@ -69,7 +69,7 @@ def default_lock_path() -> Path:
     """Locate the repo's binaries.lock.json (npm package ships the canonical one)."""
     # src/gaia/daemon/sidecars/platform.py -> repo root is parents[4].
     repo_root = Path(__file__).resolve().parents[4]
-    return repo_root / "hub" / "agents" / "npm" / "agent-email" / "binaries.lock.json"
+    return repo_root / "hub" / "agents" / "email" / "npm" / "binaries.lock.json"
 
 
 def load_lock(lock_path: Optional[Path] = None) -> BinaryLock:

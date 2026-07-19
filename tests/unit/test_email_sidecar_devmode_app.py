@@ -18,13 +18,13 @@ from pathlib import Path
 
 import pytest
 
-EMAIL_PKG = Path(__file__).resolve().parents[2] / "hub" / "agents" / "python" / "email"
+EMAIL_PKG = Path(__file__).resolve().parents[2] / "hub" / "agents" / "email" / "python"
 PACKAGING_DIR = EMAIL_PKG / "packaging"
 
 
 @pytest.mark.skipif(
     importlib.util.find_spec("gaia_agent_email") is None,
-    reason="email agent wheel not installed (uv pip install -e hub/agents/python/email)",
+    reason="email agent wheel not installed (uv pip install -e hub/agents/email/python)",
 )
 def test_server_app_dir_import_string_resolves_to_fastapi_app():
     # Mirror `uvicorn server:app --app-dir <email>/packaging`: put the packaging

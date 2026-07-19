@@ -639,13 +639,13 @@ class TestStampBuiltinChatIdentity:
         from pathlib import Path as _Path
 
         # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102); its
-        # source now lives under hub/agents/python/chat/.
+        # source now lives under hub/agents/chat/python/.
         src = (
             _Path(__file__).parents[4]
             / "hub"
             / "agents"
-            / "python"
             / "chat"
+            / "python"
             / "gaia_agent_chat"
             / "agent.py"
         ).read_text(encoding="utf-8")

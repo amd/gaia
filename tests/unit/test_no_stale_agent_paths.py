@@ -3,7 +3,7 @@
 """Guard against stale agent-path references in the AI-instruction surfaces.
 
 Most agents migrated out of ``src/gaia/agents/<id>/`` into standalone hub packages
-at ``hub/agents/python/<id>/gaia_agent_<id>/``. The instruction files that steer
+at ``hub/agents/<id>/python/gaia_agent_<id>/``. The instruction files that steer
 Claude (``CLAUDE.md`` and ``.claude/agents``/``.claude/skills``) repeatedly drifted
 out of date by still pointing at the old in-core locations — sending agents to dead
 paths. This test fails loudly the moment a migrated-agent path reappears in one of
@@ -21,7 +21,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Agents that moved to hub/agents/python/<id>/ — their src/gaia/agents/<id>/ path is dead.
+# Agents that moved to hub/agents/<id>/python/ — their src/gaia/agents/<id>/ path is dead.
 MIGRATED_AGENTS = (
     "code",
     "analyst",
@@ -66,7 +66,7 @@ def test_no_stale_migrated_agent_paths():
 
     assert not violations, (
         "Stale migrated-agent paths found in AI-instruction surfaces. These agents "
-        "moved to hub/agents/python/<id>/gaia_agent_<id>/ — update the reference "
+        "moved to hub/agents/<id>/python/gaia_agent_<id>/ — update the reference "
         "(or, for in-core agents like chat/docqa/builder/routing, this guard does not "
         "apply):\n  " + "\n  ".join(violations)
     )

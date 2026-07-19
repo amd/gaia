@@ -41,8 +41,8 @@ Published agents are the project's shop window: an integrator installs them and 
 by them. In **both** modes, each lens double-checks any published agent explicitly and
 **bumps a gap up one severity** (never 🟡; a default-path break is 🔴). Published agents are
 detected by a `release_agent_<id>.yml` workflow, a shipped `SCORECARD.md`, or a released
-`version:` in `gaia-agent.yaml` — currently the **email agent** (`hub/agents/python/email/`
-+ `hub/agents/npm/agent-email/`). The bar, per lens:
+`version:` in `gaia-agent.yaml` — currently the **email agent** (`hub/agents/email/python/`
++ `hub/agents/email/npm/`). The bar, per lens:
 
 - **docs** — README (integrator-facing, high quality), `SPEC.md` (full reference), `SKILL.md`
   (AI-integration playbook), `CHANGELOG.md`, and any shipped contract spec, all present,

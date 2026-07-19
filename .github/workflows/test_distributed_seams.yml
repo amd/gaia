@@ -22,9 +22,9 @@ on:
     paths:
       - 'src/gaia/daemon/**'
       - 'src/gaia/eval/sidecar_harness.py'
-      - 'hub/agents/python/email/gaia_agent_email/sse_translation.py'
-      - 'hub/agents/python/email/gaia_agent_email/query_routes.py'
-      - 'hub/agents/python/email/eval_baselines/**'
+      - 'hub/agents/email/python/gaia_agent_email/sse_translation.py'
+      - 'hub/agents/email/python/gaia_agent_email/query_routes.py'
+      - 'hub/agents/email/python/eval_baselines/**'
       - 'tests/integration/test_distributed_seams.py'
       - 'tests/unit/test_sidecar_harness.py'
       - '.github/workflows/test_distributed_seams.yml'
@@ -34,9 +34,9 @@ on:
     paths:
       - 'src/gaia/daemon/**'
       - 'src/gaia/eval/sidecar_harness.py'
-      - 'hub/agents/python/email/gaia_agent_email/sse_translation.py'
-      - 'hub/agents/python/email/gaia_agent_email/query_routes.py'
-      - 'hub/agents/python/email/eval_baselines/**'
+      - 'hub/agents/email/python/gaia_agent_email/sse_translation.py'
+      - 'hub/agents/email/python/gaia_agent_email/query_routes.py'
+      - 'hub/agents/email/python/eval_baselines/**'
       - 'tests/integration/test_distributed_seams.py'
       - 'tests/unit/test_sidecar_harness.py'
       - '.github/workflows/test_distributed_seams.yml'
@@ -78,7 +78,7 @@ jobs:
           # cross-seam VOCABULARY coherence assertions run for real (not skipped).
           uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout \
                                   pyfakefs keyring httpx respx
-          uv pip install --system -e ".[api]" -e hub/agents/python/email
+          uv pip install --system -e ".[api]" -e hub/agents/email/python
 
       - name: Run harness core unit tests
         env:

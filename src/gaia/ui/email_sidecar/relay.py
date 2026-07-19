@@ -13,7 +13,7 @@ consumer (``gaia.ui._chat_helpers``'s streaming trunk) speaks a different,
 older vocabulary (``status`` / ``chunk`` / ``tool_start`` / ``tool_args`` /
 ``tool_result`` / ``answer`` / ``agent_error`` / ...). This module is the
 translation layer between the two — the mirror image of
-# mirrors hub/agents/python/email/gaia_agent_email/sse_translation.py
+# mirrors hub/agents/email/python/gaia_agent_email/sse_translation.py
 (which translates the in-process agent-loop vocabulary INTO the canonical
 one; this module translates the canonical vocabulary back OUT to the UI's own
 wire, one hop further downstream).

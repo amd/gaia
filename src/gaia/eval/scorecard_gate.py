@@ -16,16 +16,16 @@ Usage::
 
     # Presence-only (first adoption):
     python -m gaia.eval.scorecard_gate \\
-        --scorecard hub/agents/npm/agent-email/SCORECARD.md
+        --scorecard hub/agents/email/npm/SCORECARD.md
 
     # With a baseline from a file (unit tests):
     python -m gaia.eval.scorecard_gate \\
-        --scorecard hub/agents/npm/agent-email/SCORECARD.md \\
+        --scorecard hub/agents/email/npm/SCORECARD.md \\
         --baseline-file /tmp/prev-SCORECARD.md
 
     # With a baseline resolved from a git ref (CI):
     python -m gaia.eval.scorecard_gate \\
-        --scorecard hub/agents/npm/agent-email/SCORECARD.md \\
+        --scorecard hub/agents/email/npm/SCORECARD.md \\
         --baseline-ref agent-pkg-email-v0.2.3
 
 Exit codes:
@@ -183,7 +183,7 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--scorecard",
         required=True,
-        help="Path to the candidate SCORECARD.md (e.g. hub/agents/npm/agent-email/SCORECARD.md).",
+        help="Path to the candidate SCORECARD.md (e.g. hub/agents/email/npm/SCORECARD.md).",
     )
     baseline_group = parser.add_mutually_exclusive_group()
     baseline_group.add_argument(

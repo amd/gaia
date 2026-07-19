@@ -38,7 +38,7 @@ from gaia.eval.sidecar_harness import (
 # The email package's committed baselines — used to prove the loader reads the
 # real files the /query route is pinned against.
 _EMAIL_PKG_ROOT = (
-    Path(__file__).resolve().parents[2] / "hub" / "agents" / "python" / "email"
+    Path(__file__).resolve().parents[2] / "hub" / "agents" / "email" / "python"
 )
 
 

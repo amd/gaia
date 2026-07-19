@@ -64,14 +64,14 @@ packages:
     channels: [npm, binary]          # pypi added later when #1179 un-pauses
     npm:
       name: "@amd-gaia/agent-email"
-      dir: hub/agents/npm/agent-email
+      dir: hub/agents/email/npm
     binary:
-      freeze: hub/agents/python/email/packaging/freeze.py
-      smoke:  hub/agents/python/email/packaging/smoke_test.py
-      lock:   hub/agents/npm/agent-email/binaries.lock.json
-      manifest: hub/agents/python/email/gaia-agent.yaml
+      freeze: hub/agents/email/python/packaging/freeze.py
+      smoke:  hub/agents/email/python/packaging/smoke_test.py
+      lock:   hub/agents/email/npm/binaries.lock.json
+      manifest: hub/agents/email/python/gaia-agent.yaml
       platforms: [win32-x64, darwin-arm64, darwin-x64, linux-x64]
-    version_source: hub/agents/python/email/gaia-agent.yaml   # canonical version
+    version_source: hub/agents/email/python/gaia-agent.yaml   # canonical version
 
   agent-ui:
     channels: [npm]
@@ -103,7 +103,7 @@ idempotently:
 
 - `binary` channel → matrix-freeze on the declared platforms (no cross-compile),
   smoke-test, SHA-256 + size, `rclone copyto` to
-  `R2:amd-gaia/hub/agents/python/<id>/<ver>/`, regenerate the lock with real
+  `R2:amd-gaia/hub/agents/<id>/python/<ver>/`, regenerate the lock with real
   hashes, **fetch-verify every platform via the real `fetch` CLI** before
   publishing the npm client that points at them.
 - `npm` channel → `npm ci && npm run build`, then `npm publish --access public

@@ -89,7 +89,7 @@ _EMAIL_FORWARDED_MODE_ENV_VAR = "GAIA_EMAIL_FORWARDED_CREDENTIALS"
 
 def _default_email_src_dir() -> Path:
     # src/gaia/daemon/sidecars/spec.py -> repo root is parents[4].
-    return Path(__file__).resolve().parents[4] / "hub" / "agents" / "python" / "email"
+    return Path(__file__).resolve().parents[4] / "hub" / "agents" / "email" / "python"
 
 
 def builtin_specs() -> "dict[str, AgentSidecarSpec]":

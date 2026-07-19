@@ -5,7 +5,7 @@ icon: "ticket"
 ---
 
 <Info>
-  **Source Code:** [`hub/agents/python/jira/gaia_agent_jira/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/python/jira/gaia_agent_jira/agent.py) · [`src/gaia/apps/jira/app.py`](https://github.com/amd/gaia/blob/main/src/gaia/apps/jira/app.py)
+  **Source Code:** [`hub/agents/jira/python/gaia_agent_jira/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/jira/python/gaia_agent_jira/agent.py) · [`src/gaia/apps/jira/app.py`](https://github.com/amd/gaia/blob/main/src/gaia/apps/jira/app.py)
 </Info>
 
 ## Overview
@@ -76,7 +76,7 @@ The agent was developed and tested against a dummy Jira project. Real instances 
 
 ## Architecture
 
-The CLI (`gaia jira`) wraps **JiraApp** (`src/gaia/apps/jira/app.py`), which drives the **JiraAgent** (`hub/agents/python/jira/gaia_agent_jira/agent.py`):
+The CLI (`gaia jira`) wraps **JiraApp** (`src/gaia/apps/jira/app.py`), which drives the **JiraAgent** (`hub/agents/jira/python/gaia_agent_jira/agent.py`):
 
 - **JiraAgent** — processes natural language, auto-discovers your instance configuration, translates queries to JQL, and registers three tools: `jira_search`, `jira_create`, `jira_update`.
 - **JiraApp** — high-level wrapper that handles interactive mode and formats output for display.

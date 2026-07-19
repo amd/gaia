@@ -27,12 +27,12 @@ import publish_agents_to_hub as pub  # noqa: E402  (path set above)
 PKG_A = lap.AgentPackage(
     dist_name="gaia-agent-hello-world",
     agent_id="hello-world",
-    path=lap.PYTHON_AGENTS_DIR / "hello-world",
+    path=lap.AGENTS_DIR / "hello-world" / "python",
 )
 PKG_B = lap.AgentPackage(
     dist_name="gaia-agent-word-count",
     agent_id="word-count",
-    path=lap.PYTHON_AGENTS_DIR / "word-count",
+    path=lap.AGENTS_DIR / "word-count" / "python",
 )
 
 
@@ -40,13 +40,15 @@ class FakeRunner:
     """Records CLI invocations and replays scripted (rc, output) results."""
 
     def __init__(self, results):
-        # results: {("pack"|"publish", agent_dir_name): (rc, output)}
+        # results: {("pack"|"publish", agent_id): (rc, output)}
         self.results = results
         self.calls = []
 
     def __call__(self, cmd):
         action = cmd[2]  # [gaia, "agent", <action>, <path>, ...]
-        agent_dir = Path(cmd[3]).name
+        # Agent-first layout: path is hub/agents/<id>/python, so the id is the
+        # parent dir name (the leaf is always "python").
+        agent_dir = Path(cmd[3]).parent.name
         self.calls.append((action, agent_dir, cmd))
         return self.results[(action, agent_dir)]
 

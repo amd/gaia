@@ -9,7 +9,7 @@ You own the GAIA Jira integration: the `JiraAgent`, its JQL templates, the stand
 
 ## When to use
 
-- Editing `hub/agents/python/jira/gaia_agent_jira/agent.py` or `jql_templates.py`
+- Editing `hub/agents/jira/python/gaia_agent_jira/agent.py` or `jql_templates.py`
 - Editing the Jira standalone app under `src/gaia/apps/jira/`
 - Adding JQL generation, field mapping, bulk-update, or sprint-planning tools
 - Wiring or debugging Atlassian MCP servers
@@ -25,8 +25,8 @@ You own the GAIA Jira integration: the `JiraAgent`, its JQL templates, the stand
 
 | File | Purpose |
 |------|---------|
-| `hub/agents/python/jira/gaia_agent_jira/agent.py` | `JiraAgent` implementation |
-| `hub/agents/python/jira/gaia_agent_jira/jql_templates.py` | JQL template library |
+| `hub/agents/jira/python/gaia_agent_jira/agent.py` | `JiraAgent` implementation |
+| `hub/agents/jira/python/gaia_agent_jira/jql_templates.py` | JQL template library |
 | `src/gaia/apps/jira/` | Standalone Jira app (webui + app.py) |
 | `scripts/jira_smoke.py` | Jira agent smoke tests (manual, not pytest) |
 | `docs/guides/jira.mdx` | User guide |

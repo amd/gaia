@@ -37,7 +37,7 @@ that proves you're allowed to publish. There are two routes, and they decide
 whether *you* need a token:
 
 1. **Contribute via a Pull Request — no token needed (recommended).** You add your
-   agent's folder under `hub/agents/python/<id>/` and open a PR to
+   agent's folder under `hub/agents/<id>/python/` and open a PR to
    [`amd/gaia`](https://github.com/amd/gaia). Automated checks run, a maintainer
    reviews your code, and after it's merged a maintainer publishes it for you using
    AMD's credentials. **You never touch a token.** This is the path for community
@@ -103,14 +103,14 @@ folder.
 commented agents made to be **copy-pasted** — read them in order; each adds exactly
 one new idea:
 
-- [`hello-world/`](https://github.com/amd/gaia/tree/main/hub/agents/python/hello-world) — the smallest agent possible (a system prompt, no tools).
-- [`word-count/`](https://github.com/amd/gaia/tree/main/hub/agents/python/word-count) — adds one tool with the `@tool` decorator.
-- [`doc-search/`](https://github.com/amd/gaia/tree/main/hub/agents/python/doc-search) — reuses a built-in toolset (`RAGToolsMixin`) for document Q&A.
+- [`hello-world/`](https://github.com/amd/gaia/tree/main/hub/agents/hello-world/python) — the smallest agent possible (a system prompt, no tools).
+- [`word-count/`](https://github.com/amd/gaia/tree/main/hub/agents/word-count/python) — adds one tool with the `@tool` decorator.
+- [`doc-search/`](https://github.com/amd/gaia/tree/main/hub/agents/doc-search/python) — reuses a built-in toolset (`RAGToolsMixin`) for document Q&A.
 
 Each is a complete, publishable package (manifest + code + README + tests that fake
 the model, so they run without a model server). See the
-[examples index](https://github.com/amd/gaia/tree/main/hub/agents/python#readme).
-The [email agent](https://github.com/amd/gaia/tree/main/hub/agents/python/email) is
+[examples index](https://github.com/amd/gaia/tree/main/hub/agents#readme).
+The [email agent](https://github.com/amd/gaia/tree/main/hub/agents/email/python) is
 a full-featured, real-world reference.
 </Note>
 
@@ -135,7 +135,7 @@ parser; the
 [`manifest.schema.json`](https://github.com/amd/gaia/blob/main/workers/agent-hub/schemas/manifest.schema.json)
 in the repo is the Hub's *server-side* aggregate schema and includes fields you
 never write by hand, like `versions`). A real example is the
-[email agent's manifest](https://github.com/amd/gaia/blob/main/hub/agents/python/email/gaia-agent.yaml).
+[email agent's manifest](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia-agent.yaml).
 
 ```yaml
 id: my-agent                 # the short name used in URLs (/hub/my-agent); lowercase + hyphens
@@ -267,7 +267,7 @@ gaia agent health my-agent # confirm it loads and its entry point resolves
 ### Step 8 — Publish
 
 **Path 1 — via PR (no token):** commit your package under
-`hub/agents/python/<id>/` and open a PR to `amd/gaia`. Once the automated checks
+`hub/agents/<id>/python/` and open a PR to `amd/gaia`. Once the automated checks
 pass and a maintainer approves and merges it, a maintainer publishes it for you.
 You're done — jump to [Verify](#step-9-verify).
 
@@ -364,7 +364,7 @@ extra (the example agents do this):
 dependencies = ["amd-gaia[api]>=0.20.0"]   # add ,rag / ,etc. for extra capabilities
 ```
 
-The [email agent](https://github.com/amd/gaia/tree/main/hub/agents/python/email)
+The [email agent](https://github.com/amd/gaia/tree/main/hub/agents/email/python)
 goes one step further and ships a **frozen native binary** plus an npm package
 (`@amd-gaia/agent-email`) so JavaScript apps can run it with no Python installed.
 That packaging is currently hand-built per agent; reusable tooling to make any agent

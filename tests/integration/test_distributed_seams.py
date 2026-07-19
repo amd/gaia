@@ -7,7 +7,7 @@ Design §0.17: ``/query`` is the most LLM-affecting surface v2 adds, and the
 relay / broker / auth / custody seams each have deterministic failure modes unit
 tests must pin *before* third-party agents amplify them. Individual issues ship
 their own tests (the relay's live suite is ``tests/unit/test_daemon_relay.py``;
-``/query`` is ``hub/agents/python/email/tests/test_query_route.py``); THIS suite
+``/query`` is ``hub/agents/email/python/tests/test_query_route.py``); THIS suite
 is the cross-seam layer nothing else owns:
 
 - **cross-seam vocabulary coherence** — the frozen §0.2 seven-event set must be

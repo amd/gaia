@@ -5,7 +5,7 @@ icon: "book-open-reader"
 ---
 
 <Info>
-  **Source Code:** [`hub/agents/python/chat/gaia_agent_chat/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/python/chat/gaia_agent_chat/agent.py) | [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py)
+  **Source Code:** [`hub/agents/chat/python/gaia_agent_chat/agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/chat/python/gaia_agent_chat/agent.py) | [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py)
 </Info>
 
 <Badge text="development" color="orange" />
@@ -116,11 +116,11 @@ Get a working agent running to understand the basic flow.
         uv venv .venv
         source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
         uv pip install -e ".[rag]"
-        uv pip install -e hub/agents/python/chat   # ChatAgent ships as a separate hub wheel
+        uv pip install -e hub/agents/chat/python   # ChatAgent ships as a separate hub wheel
         ```
 
         <Info>
-        Use this path if you want to modify GAIA source code or contribute to the project. `ChatAgent` lives in the standalone `gaia-agent-chat` package under `hub/agents/python/chat/`, so install it as a second editable wheel.
+        Use this path if you want to modify GAIA source code or contribute to the project. `ChatAgent` lives in the standalone `gaia-agent-chat` package under `hub/agents/chat/python/`, so install it as a second editable wheel.
         </Info>
       </Tab>
     </Tabs>

@@ -16,8 +16,8 @@ on:
       - 'src/gaia/api/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/llm/**'
-      - 'hub/agents/python/routing/**'
-      - 'hub/agents/python/code/**'
+      - 'hub/agents/routing/python/**'
+      - 'hub/agents/code/python/**'
       - 'tests/test_api.py'
       - 'setup.py'
       - '.github/workflows/test_api.yml'
@@ -30,8 +30,8 @@ on:
       - 'src/gaia/api/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/llm/**'
-      - 'hub/agents/python/routing/**'
-      - 'hub/agents/python/code/**'
+      - 'hub/agents/routing/python/**'
+      - 'hub/agents/code/python/**'
       - 'tests/test_api.py'
       - 'setup.py'
       - '.github/workflows/test_api.yml'
@@ -74,12 +74,12 @@ jobs:
           # both local hub packages (routing first, since gaia-agent-code
           # depends on it and it isn't on PyPI) so the gaia-code streaming
           # tests exercise the real agent instead of the missing-wheel error.
-          uv pip install -e hub/agents/python/routing --python .venv\Scripts\python.exe
-          uv pip install -e hub/agents/python/code --python .venv\Scripts\python.exe
+          uv pip install -e hub/agents/routing/python --python .venv\Scripts\python.exe
+          uv pip install -e hub/agents/code/python --python .venv\Scripts\python.exe
           # The email REST router only mounts when gaia-agent-email is
           # importable; without it every /v1/email test in tests/test_api.py
           # 404s (red on main since the email agent moved to a hub wheel).
-          uv pip install -e hub/agents/python/email --python .venv\Scripts\python.exe
+          uv pip install -e hub/agents/email/python --python .venv\Scripts\python.exe
 
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade

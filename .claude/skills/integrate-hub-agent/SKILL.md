@@ -16,18 +16,17 @@ never trust a hardcoded list.
 
 ## Step 1 — Discover the current agents
 
-Hub agents are grouped by runtime: `hub/agents/<runtime>/<name>/`. **List the tree
-now** rather than assuming — the set changes:
+Hub agents are one directory per agent, with a runtime subdir inside:
+`hub/agents/<name>/<runtime>/`. **List the tree now** rather than assuming — the set
+changes:
 
 ```bash
-ls hub/agents/                 # the runtimes (currently: npm, python, cpp)
-ls hub/agents/npm/             # npm agents (e.g. agent-email)
-ls hub/agents/python/          # python agents (e.g. analyst, code, jira, summarize, …)
-ls hub/agents/cpp/             # cpp agents (may be empty)
+ls hub/agents/                 # one dir per agent (e.g. analyst, code, email, jira, …)
+ls hub/agents/email/           # an agent's runtimes (e.g. python, npm; cpp when present)
 ```
 
-Treat whatever the listing returns as authoritative. An empty runtime directory just
-means no agents of that shape ship today. `hub/agents/python/README.md` is a useful
+Treat whatever the listing returns as authoritative. A missing runtime subdir just
+means the agent doesn't ship that shape today. `hub/agents/README.md` is a useful
 catalog of the python set and the example agents (`hello-world`, `word-count`,
 `doc-search`) if the developer is unsure what's available.
 
@@ -52,7 +51,7 @@ Pin down a single `<runtime>/<name>` before integrating:
 They are genuinely different. Use the shape to set expectations, but the agent's own
 docs (Step 4) are the source of truth for exact calls.
 
-### npm agents (`hub/agents/npm/<name>/`)
+### npm agents (`hub/agents/<name>/npm/`)
 
 The package is a **client for a local native sidecar**. Shape:
 
@@ -67,7 +66,7 @@ usually serves **same-origin only**, so an Electron renderer drives it via main-
 IPC, not a cross-origin fetch. The agent still needs a local model backend (Lemonade
 Server) for inference. Reference example: npm `agent-email`.
 
-### python agents (`hub/agents/python/<name>/`)
+### python agents (`hub/agents/<name>/python/`)
 
 The package is a **GAIA framework plugin**, not a sidecar. Shape:
 

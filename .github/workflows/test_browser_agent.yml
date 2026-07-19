@@ -11,7 +11,7 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'hub/agents/python/browser/**'
+      - 'hub/agents/browser/python/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
       - 'setup.py'
@@ -20,7 +20,7 @@ on:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      - 'hub/agents/python/browser/**'
+      - 'hub/agents/browser/python/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
       - 'setup.py'
@@ -56,8 +56,8 @@ jobs:
         run: |
           uv pip install --system -e .[dev]
           # BrowserAgent ships as the standalone gaia-agent-browser wheel (#1102)
-          uv pip install --system -e hub/agents/python/browser
+          uv pip install --system -e hub/agents/browser/python
 
       - name: Run Browser Agent Tests
         run: |
-          python -m pytest hub/agents/python/browser/tests/ -v --tb=short
+          python -m pytest hub/agents/browser/python/tests/ -v --tb=short

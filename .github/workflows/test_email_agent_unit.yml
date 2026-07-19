@@ -16,8 +16,8 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'hub/agents/python/email/**'
-      - 'hub/agents/npm/agent-email/**'
+      - 'hub/agents/email/python/**'
+      - 'hub/agents/email/npm/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/connectors/**'
       - 'src/gaia/eval/**'
@@ -40,8 +40,8 @@ on:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      - 'hub/agents/python/email/**'
-      - 'hub/agents/npm/agent-email/**'
+      - 'hub/agents/email/python/**'
+      - 'hub/agents/email/npm/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/connectors/**'
       - 'src/gaia/eval/**'
@@ -97,7 +97,7 @@ jobs:
       # reference (manifest/pyproject/package.json/lock baseUrl+agentVersion/README
       # images/architecture.html badge) disagrees. Stdlib-only — no install needed.
       - name: Verify version references are in sync (single source of truth)
-        run: python hub/agents/python/email/packaging/stamp_version.py --check
+        run: python hub/agents/email/python/packaging/stamp_version.py --check
 
       - name: Install dependencies
         run: |
@@ -109,10 +109,10 @@ jobs:
           # hub package is installed so the REST-contract + OpenAPI-conformance
           # tests can import gaia_agent_email (they build the app in-process and
           # mock Lemonade — no server needed).
-          uv pip install --system -e ".[dev,api]" -e hub/agents/python/email
+          uv pip install --system -e ".[dev,api]" -e hub/agents/email/python
 
       - name: Run email-agent unit tests
-        # NOTE: do NOT set GAIA_MEMORY_DISABLED here. The hub/agents/python/email
+        # NOTE: do NOT set GAIA_MEMORY_DISABLED here. The hub/agents/email/python
         # memory / inbox-profiling / behavioral-learning / preferences suites DO
         # exercise memory: they mock the Lemonade embedder per-test (so no server
         # is needed) and toggle GAIA_MEMORY_DISABLED themselves where a test wants
@@ -129,7 +129,7 @@ jobs:
           echo "  - tests/unit/email/                gmail client, triage heuristics, corpus integrity"
           echo "  - tests/unit/connectors/           OAuth/MCP connector plumbing (email uses it)"
           echo "  - tests/unit/eval/                 benchmark / quality + perf gate machinery"
-          echo "  - hub/agents/python/email/tests/   REST sidecar contract"
+          echo "  - hub/agents/email/python/tests/   REST sidecar contract"
           echo "  - tests/test_email_openapi_conformance.py  OpenAPI spec conformance"
           echo "  - tests/unit/test_email_sidecar_devmode_app.py + _server_wiring.py"
           echo "      Agent UI dev-mode contract (packaging/server.py shim + build_app)"
@@ -139,7 +139,7 @@ jobs:
             tests/unit/email/ \
             tests/unit/connectors/ \
             tests/unit/eval/ \
-            hub/agents/python/email/tests/ \
+            hub/agents/email/python/tests/ \
             tests/test_email_openapi_conformance.py \
             tests/unit/test_email_sidecar_devmode_app.py \
             tests/unit/test_email_sidecar_server_wiring.py \

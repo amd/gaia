@@ -225,7 +225,7 @@ jobs:
             - **docs**: a new/changed feature with no `docs/` page or no `docs.json` nav entry;
               `docs/reference/cli.mdx` drift from the real `gaia` flags; any `amd-gaia.ai` URL in
               `src/gaia/` missing the `/docs/` prefix (CI rule, issue #1058); a hub agent under
-              `hub/agents/python/<id>/` whose README/SPEC/SKILL/CHANGELOG contradict each other.
+              `hub/agents/<id>/python/` whose README/SPEC/SKILL/CHANGELOG contradict each other.
               A feature **documented as working whose implementation is a stub/NotImplementedError
               is a DOCS finding** (doc-vs-code drift) — claim it here, not under features.
             - **tests**: code paths with no test, or assertions that only prove a mock was called,
@@ -246,13 +246,13 @@ jobs:
             gap up one severity level** (a gap here is never 🟡; a user-facing break on the
             default path is 🔴).
             - **Which agents are published:** currently the **email agent** — code at
-              `hub/agents/python/email/`, npm client at `hub/agents/npm/agent-email/`. Detect
+              `hub/agents/email/python/`, npm client at `hub/agents/email/npm/`. Detect
               any *other* published agent generally: it has a `.github/workflows/release_agent_<id>.yml`
               OR a shipped `hub/agents/**/SCORECARD.md` OR a released `version:` in its
               `hub/agents/**/<id>/gaia-agent.yaml`. Apply this bar to every one you find.
             - **What each lens checks on a published agent** (apply only YOUR lens):
               - **docs**: the canonical README (the npm client README for npm agents, e.g.
-                `hub/agents/npm/agent-email/README.md`) is high-quality and integrator-facing;
+                `hub/agents/email/npm/README.md`) is high-quality and integrator-facing;
                 `SPEC.md` is a complete technical reference; `SKILL.md` is a real AI-integration
                 playbook; `CHANGELOG.md` accurately names each version's change; any shipped
                 contract spec (`spec_html.py` / `specification.html` / `openapi.*.json`) matches

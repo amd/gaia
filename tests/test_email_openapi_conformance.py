@@ -10,7 +10,7 @@ schema.  No live mailbox, no live LLM — the LLM-backed triage path is covered 
 patching ``EmailTriageService.triage_request`` to return a valid canned result.
 
 This is distinct from the static-analysis tests in
-``hub/agents/python/email/tests/test_rest_contract.py``:
+``hub/agents/email/python/tests/test_rest_contract.py``:
 
 - ``test_rest_contract.py`` checks that the committed artifact matches a freshly
   generated spec (drift detection) and that ``version.py`` constants agree with
@@ -954,7 +954,7 @@ def test_all_documented_paths_covered(committed_spec):
         ("post", "/v1/email/calendar/events/respond"),
         # SSE agent-loop surface (schema 2.4, #2016). /query streams
         # text/event-stream (not a JSON body schema), so its behavioral
-        # conformance lives in hub/agents/python/email/tests/test_query_route.py
+        # conformance lives in hub/agents/email/python/tests/test_query_route.py
         # + test_sse_translation.py rather than the body-schema pattern above;
         # the cancel route is covered there too.
         ("post", "/v1/email/query"),
@@ -962,7 +962,7 @@ def test_all_documented_paths_covered(committed_spec):
         # OAuth forward-OUT intake (schema 2.5, #2154). The daemon delivers
         # short-lived connector tokens here; behavioral conformance (auth,
         # unknown-provider, empty-token, metadata-only responses, withdraw)
-        # lives in hub/agents/python/email/tests/test_forwarded_credentials.py.
+        # lives in hub/agents/email/python/tests/test_forwarded_credentials.py.
         ("post", "/v1/connections/{provider}"),
         ("get", "/v1/connections"),
         ("delete", "/v1/connections/{provider}"),

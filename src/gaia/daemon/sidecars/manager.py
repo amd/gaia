@@ -315,7 +315,7 @@ class AgentSidecarManager:
             raise SidecarSpawnError(
                 f"dev mode needs the {self.spec.agent_id} source at {app_dir} but "
                 "it is missing. Run from a source checkout, or install it: "
-                "`uv pip install -e hub/agents/python/email`."
+                "`uv pip install -e hub/agents/email/python`."
             )
         argv = [
             sys.executable,

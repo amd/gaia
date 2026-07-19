@@ -3,7 +3,7 @@
 """Shared "agent wheel not installed" messaging.
 
 The ``gaia-agent-*`` wheels (chat, email, code, sd, docker, ...) are built
-and packaged (``hub/agents/python/<id>/``) but publishing them to PyPI is
+and packaged (``hub/agents/<id>/python/``) but publishing them to PyPI is
 still paused (see ``.github/workflows/publish_agents.yml``, tracked by
 #1179 / #1513). Until that lands, ``pip install gaia-agent-<id>`` and
 ``pip install "amd-gaia[agents]"`` both fail on a clean environment (#2240)
@@ -12,8 +12,8 @@ install path that actually resolves today: pip installing straight from the
 package's subdirectory in this repo.
 """
 
-# hub/agents/python/<subdir> for each wheel this module has a hint for. Keep
-# in sync with the directories under hub/agents/python/ (ls hub/agents/python/).
+# hub/agents/<subdir>/python for each wheel this module has a hint for. Keep
+# in sync with the directories under hub/agents/ (ls hub/agents/).
 _AGENT_SOURCE_SUBDIRS = {
     "gaia-agent-analyst": "analyst",
     "gaia-agent-blender": "blender",
@@ -45,7 +45,7 @@ def source_install_command(wheel: str) -> str:
     subdir = _AGENT_SOURCE_SUBDIRS[wheel]
     return (
         f'uv pip install "{wheel} @ git+{_REPO_URL}#subdirectory='
-        f'hub/agents/python/{subdir}"'
+        f'hub/agents/{subdir}/python"'
     )
 
 

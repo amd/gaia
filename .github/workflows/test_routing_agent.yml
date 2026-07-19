@@ -11,7 +11,7 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'hub/agents/python/routing/**'
+      - 'hub/agents/routing/python/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/registry.py'
       - 'src/gaia/api/agent_registry.py'
@@ -21,7 +21,7 @@ on:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      - 'hub/agents/python/routing/**'
+      - 'hub/agents/routing/python/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/registry.py'
       - 'src/gaia/api/agent_registry.py'
@@ -58,8 +58,8 @@ jobs:
         run: |
           uv pip install --system -e .[dev]
           # RoutingAgent ships as the standalone gaia-agent-routing wheel (#1102)
-          uv pip install --system -e hub/agents/python/routing
+          uv pip install --system -e hub/agents/routing/python
 
       - name: Run Routing Agent Tests
         run: |
-          python -m pytest hub/agents/python/routing/tests/ -v --tb=short
+          python -m pytest hub/agents/routing/python/tests/ -v --tb=short

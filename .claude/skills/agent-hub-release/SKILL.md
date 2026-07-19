@@ -7,8 +7,8 @@ description: "Cut or wire a frozen-binary + npm sidecar release for a GAIA agent
 
 How to ship a **sidecar agent** — a frozen, no-Python REST binary plus a thin npm
 client — to the GAIA Agent Hub and npm, via the tag-triggered CI release. The
-**email agent is the reference**: `hub/agents/python/email/` +
-`hub/agents/npm/agent-email/` + `.github/workflows/release_agent_email.yml`.
+**email agent is the reference**: `hub/agents/email/python/` +
+`hub/agents/email/npm/` + `.github/workflows/release_agent_email.yml`.
 
 This is a **phased process with one hard human gate** (the `agent-publish`
 environment). Stop and confirm before anything irreversible — pushing a release
@@ -16,7 +16,7 @@ tag, approving the publish gate. Publishes are **immutable per filename**: a bad
 release is fixed by a new version, never an overwrite.
 
 > **Status — the email pipeline has not yet cut a real release.**
-> `hub/agents/npm/agent-email/binaries.lock.json` still carries placeholder
+> `hub/agents/email/npm/binaries.lock.json` still carries placeholder
 > `PENDING-1648` hashes and **#1648 is open**, so the freeze→publish→fetch-verify
 > path has never run end-to-end. Treat this skill as the design of record, not a
 > paved road, until the first real release lands and fills the lock. Likewise the
@@ -63,11 +63,11 @@ per the guide), a sidecar agent adds:
 
 | Path | Role |
 |------|------|
-| `hub/agents/python/<id>/packaging/` | `freeze.py`, `smoke_test.py`, `server.py`, `gen_binaries_lock.py`, `publish_to_r2.py`, `HUB-UPLOAD.md` (manual fallback) |
-| `hub/agents/npm/agent-<id>/package.json` | ESM-only client; `exports` `.` (Node) and `./client` (browser-safe, client-only — landed in **#1773**) |
-| `hub/agents/npm/agent-<id>/binaries.lock.json` | platform → artifact + **sha256** + size + `baseUrl` (placeholders until the first release) |
-| `hub/agents/npm/agent-<id>/README.md` (+ `CHANGELOG.md`) | client docs; CHANGELOG is recommended (Keep a Changelog), **not** required by publish |
-| `hub/agents/npm/agent-<id>/src/` | `client.ts`, `client-entry.ts` (browser entry, landed in #1773), `fetch.ts`, lifecycle, `types.ts`, `errors.ts`, `cli.ts` |
+| `hub/agents/<id>/python/packaging/` | `freeze.py`, `smoke_test.py`, `server.py`, `gen_binaries_lock.py`, `publish_to_r2.py`, `HUB-UPLOAD.md` (manual fallback) |
+| `hub/agents/<id>/npm/package.json` | ESM-only client; `exports` `.` (Node) and `./client` (browser-safe, client-only — landed in **#1773**) |
+| `hub/agents/<id>/npm/binaries.lock.json` | platform → artifact + **sha256** + size + `baseUrl` (placeholders until the first release) |
+| `hub/agents/<id>/npm/README.md` (+ `CHANGELOG.md`) | client docs; CHANGELOG is recommended (Keep a Changelog), **not** required by publish |
+| `hub/agents/<id>/npm/src/` | `client.ts`, `client-entry.ts` (browser entry, landed in #1773), `fetch.ts`, lifecycle, `types.ts`, `errors.ts`, `cli.ts` |
 | `.github/workflows/release_agent_<id>.yml` | the tag-triggered release (copy of `release_agent_email.yml`) |
 
 Notes:
@@ -93,8 +93,8 @@ The `Resolve + validate release version` step fails loudly unless all three are
 identical:
 
 1. the **tag** (or `workflow_dispatch` input) — `agent-pkg-<id>-v<version>` → `<version>`
-2. `hub/agents/npm/agent-<id>/package.json` → `.version`
-3. `hub/agents/python/<id>/gaia-agent.yaml` → `version`
+2. `hub/agents/<id>/npm/package.json` → `.version`
+3. `hub/agents/<id>/python/gaia-agent.yaml` → `version`
 
 Bump the Python side with **`gaia agent version patch|minor|major`** (it rewrites
 `gaia-agent.yaml` + `pyproject.toml` + `__init__.py` together — bumping **from the
@@ -111,7 +111,7 @@ matching `CHANGELOG.md` entry too if the agent keeps one (recommended, not requi
 1. **Version-bump PR → main.** `gaia agent version <bump>`, sync the npm
    `package.json`, add the CHANGELOG entry, merge to `main` (the workflow asserts the
    release commit is a `main` ancestor — publishing is allowed only from main).
-2. **Pre-flight** in `hub/agents/npm/agent-<id>/`: `npm ci && npm run build && npm
+2. **Pre-flight** in `hub/agents/<id>/npm/`: `npm ci && npm run build && npm
    test`, and `npm pack --dry-run` to confirm `README.md` ships (and `CHANGELOG.md`, if you keep one).
 3. **Tag from main** (or `workflow_dispatch` with the version):
    ```bash
@@ -136,7 +136,7 @@ exists; `/publish` is a verified 409 no-op for identical bytes.
 ## Onboarding a NEW sidecar agent (one-time)
 
 1. **Scaffold** the normal agent first (`gaia agent init`, per the guide), then add
-   `packaging/` and the `hub/agents/npm/agent-<id>/` client. Mirror email.
+   `packaging/` and the `hub/agents/<id>/npm/` client. Mirror email.
 2. **Adapt the packaging scripts.** `freeze.py` (its `NAME = "email-agent"` constant)
    and `publish_to_r2.py` (the executable name + the `email-agent-` filename prefix it
    parses) **hardcode `email-agent`** — copy + parameterize them for `<id>`.
@@ -201,7 +201,7 @@ Per the workflow header (`release_agent_email.yml`), these are **maintainer setu
 - **Website is rebuilt, not patched.** Hub pages build from live `index.json`; the
   publish job triggers `deploy_website.yml` on `main`. (A generic per-agent
   auto-redeploy is still being wired — see the guide's Verify step.)
-- **Manual fallback:** `hub/agents/python/<id>/packaging/HUB-UPLOAD.md` documents the
+- **Manual fallback:** `hub/agents/<id>/python/packaging/HUB-UPLOAD.md` documents the
   by-hand rclone path to the `gaia-hub` bucket — identical objects + lock as CI.
 
 ## Reference files
@@ -210,10 +210,10 @@ Per the workflow header (`release_agent_email.yml`), these are **maintainer setu
   header comments document the whole contract).
 - `docs/guides/hub-publishing.mdx` — the author guide (manifest, versioning, wheel +
   PR publish routes). The overlap's source of truth.
-- `hub/agents/python/email/gaia-agent.yaml` — manifest reference.
-- `hub/agents/npm/agent-email/{package.json,binaries.lock.json,README.md}` —
+- `hub/agents/email/python/gaia-agent.yaml` — manifest reference.
+- `hub/agents/email/npm/{package.json,binaries.lock.json,README.md}` —
   client package reference.
-- `hub/agents/python/email/packaging/{freeze,smoke_test,publish_to_r2,gen_binaries_lock}.py`,
+- `hub/agents/email/python/packaging/{freeze,smoke_test,publish_to_r2,gen_binaries_lock}.py`,
   `HUB-UPLOAD.md` — packaging + publish tooling.
 - `workers/agent-hub/{README.md,schemas/manifest.schema.json,src/}` — the Worker, the
   `/publish` contract, and the server-side aggregate schema.

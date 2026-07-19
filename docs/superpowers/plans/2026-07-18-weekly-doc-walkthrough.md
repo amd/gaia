@@ -22,7 +22,7 @@ issues for 🔴/🟠 only) files one `Doc walkthrough — <run_id>` parent issue
 
 - Runner: `[self-hosted, Windows, stx]` for every step that installs/runs GAIA or Lemonade.
 - Never call `cleanup-lemonade.ps1` or force-kill any process this run didn't start.
-- Never install GAIA editable (`-e`) or install any `hub/agents/python/*` package
+- Never install GAIA editable (`-e`) or install any `hub/agents/*/python` package
   alongside core — the fresh-venv, real-user-install property is load-bearing (#2260).
 - Model-resolution-shaped checks (does an agent 404 on an uninstalled preferred model) use
   a targeted Python snippet against `AgentRegistry`, never a live CLI run against a

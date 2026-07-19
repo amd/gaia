@@ -8,7 +8,7 @@ This is the on-hardware acceptance path the design's §0.17 calls for: a thin
 client (the :class:`SidecarEvalHarness`, standing in for the CLI / UI front-door)
 posts to the DAEMON's streaming relay; the daemon spawns/attaches the real email
 sidecar and relays its agent loop; the sidecar runs local Lemonade inference. The
-committed baseline (``hub/agents/python/email/eval_baselines/query_sequences/``)
+committed baseline (``hub/agents/email/python/eval_baselines/query_sequences/``)
 pins the §0.2 event *shape*, not a brittle final string.
 
 It is deliberately gated and NOT part of normal CI (it needs a real model + a
@@ -173,7 +173,7 @@ def _email_baseline(scenario_id: str):
     from gaia.eval.sidecar_harness import baselines_dir_for, load_baseline
 
     pkg_root = (
-        Path(__file__).resolve().parents[3] / "hub" / "agents" / "python" / "email"
+        Path(__file__).resolve().parents[3] / "hub" / "agents" / "email" / "python"
     )
     return load_baseline(baselines_dir_for(pkg_root) / f"{scenario_id}.json")
 

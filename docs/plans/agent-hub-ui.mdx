@@ -18,7 +18,7 @@ The Agent Hub is a centralized platform for discovering, installing, and managin
 
 ## Key Design Decisions
 
-1. **Production agents live in `hub/agents/`.** All production agents (chat, doc, file, data, web, email, jira, blender, etc.) are standalone packages in `hub/agents/python/` and `hub/agents/cpp/`. They `import gaia` from the **published PyPI package** (`amd-gaia`), not from the source tree. Third-party contributors follow the identical pattern. `src/gaia/agents/` retains only the framework: base classes, shared tool mixins, and the registry.
+1. **Production agents live in `hub/agents/`.** All production agents (chat, doc, file, data, web, email, jira, blender, etc.) are standalone packages under `hub/agents/<id>/` (a `python/` or `cpp/` runtime subdir per agent). They `import gaia` from the **published PyPI package** (`amd-gaia`), not from the source tree. Third-party contributors follow the identical pattern. `src/gaia/agents/` retains only the framework: base classes, shared tool mixins, and the registry.
 
 2. **`pip install amd-gaia` ships the framework only.** The core wheel provides `Agent`, `@tool`, `MCPAgent`, `AgentConsole`, LLM clients, RAG, MCP, etc. Production agents are separate wheels (`gaia-agent-chat`, `gaia-agent-doc`, etc.) published to the Hub. A meta-package `amd-gaia[agents]` installs all AMD production agents for convenience.
 
@@ -35,7 +35,7 @@ The Agent Hub is a centralized platform for discovering, installing, and managin
 ## Phase 0: Restructure — `hub/agents/` Directory
 
 <Note>
-✅ **Shipped.** Production agents (chat, doc, file, code, analyst, browser, email, jira, docker, sd, emr, docqa, routing, …) already live as standalone packages under `hub/agents/python/<id>/`; `src/gaia/agents/` retains only the framework (base classes, shared tool mixins, registry). The remainder of this document is the still-in-progress hub platform plan.
+✅ **Shipped.** Production agents (chat, doc, file, code, analyst, browser, email, jira, docker, sd, emr, docqa, routing, …) already live as standalone packages under `hub/agents/<id>/python/`; `src/gaia/agents/` retains only the framework (base classes, shared tool mixins, registry). The remainder of this document is the still-in-progress hub platform plan.
 </Note>
 
 ### Directory structure
@@ -86,7 +86,7 @@ src/gaia/agents/
 
 ### Migration strategy
 
-1. Move agent code from `src/gaia/agents/<name>/` to `hub/agents/python/<name>/gaia_agent_<name>/`
+1. Move agent code from `src/gaia/agents/<name>/` to `hub/agents/<name>/python/gaia_agent_<name>/`
 2. Rewrite imports — agents import from the installed `amd-gaia` package
 3. Add `pyproject.toml` per agent with `dependencies = ["amd-gaia>={min_gaia_version}"]`
 4. Add `gaia-agent.yaml` per agent — every agent starts at `version: 0.1.0`

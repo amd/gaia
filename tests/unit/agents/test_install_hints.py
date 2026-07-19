@@ -21,7 +21,7 @@ from gaia.agents.install_hints import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-PYTHON_AGENTS_DIR = REPO_ROOT / "hub" / "agents" / "python"
+AGENTS_DIR = REPO_ROOT / "hub" / "agents"
 
 
 class TestSourceInstallCommand:
@@ -30,7 +30,7 @@ class TestSourceInstallCommand:
         assert cmd == (
             'uv pip install "gaia-agent-chat @ '
             "git+https://github.com/amd/gaia.git#subdirectory="
-            'hub/agents/python/chat"'
+            'hub/agents/chat/python"'
         )
 
     def test_unknown_wheel_raises(self):
@@ -39,10 +39,10 @@ class TestSourceInstallCommand:
 
     @pytest.mark.parametrize("wheel", sorted(_AGENT_SOURCE_SUBDIRS))
     def test_every_registered_subdir_exists_on_disk(self, wheel):
-        """Guards against the map drifting from hub/agents/python/ (#2240)."""
+        """Guards against the map drifting from hub/agents/<id>/python (#2240)."""
         subdir = _AGENT_SOURCE_SUBDIRS[wheel]
-        assert (PYTHON_AGENTS_DIR / subdir).is_dir(), (
-            f"{wheel} maps to hub/agents/python/{subdir}, which doesn't "
+        assert (AGENTS_DIR / subdir / "python").is_dir(), (
+            f"{wheel} maps to hub/agents/{subdir}/python, which doesn't "
             "exist -- update _AGENT_SOURCE_SUBDIRS in install_hints.py."
         )
 

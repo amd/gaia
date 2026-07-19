@@ -4,7 +4,7 @@
 ``TestClient`` against the full vendor-derived corpus (#1897).
 
 Every REST-contract test in
-``hub/agents/python/email/tests/test_rest_contract.py`` proves the *shape* of
+``hub/agents/email/python/tests/test_rest_contract.py`` proves the *shape* of
 the wire contract against small, hand-built fixtures. None of them drive the
 endpoints against the full corpus, so a bug that only manifests at corpus
 scale (label filtering across hundreds of messages, an archive that silently

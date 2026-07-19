@@ -116,7 +116,7 @@ pick one of the entry points below.
     the connection on the GAIA backend (left tab) or via the `gaia connectors` CLI — the
     connection is stored in a **machine-global keyring shared by every GAIA surface**, so
     the sidecar's `send` reads it from that shared store. See the package
-    [SPEC.md](https://github.com/amd/gaia/blob/main/hub/agents/npm/agent-email/SPEC.md).
+    [SPEC.md](https://github.com/amd/gaia/blob/main/hub/agents/email/npm/SPEC.md).
 
     <Note>
       The frozen sidecar requires a **per-session bearer token** on every
@@ -188,7 +188,7 @@ changes.**
 **Set up once** — install the Python package editable so your edits take effect live:
 
 ```bash
-pip install -e hub/agents/python/email
+pip install -e hub/agents/email/python
 ```
 
 **The loop:**
@@ -364,7 +364,7 @@ token, the forwarded client credentials, and every per-agent grant.
 *(#1262, frozen at `SCHEMA_VERSION` 2.3)* `POST /v1/email/triage` takes an email or a full
 thread and returns structured analysis. **No mail is read or sent** — it analyzes only the
 payload in the request, so you can build and verify triage with **zero connector setup**.
-See the full schema in the [Email Triage Contract](https://github.com/amd/gaia/blob/main/hub/agents/python/email/CONTRACT.md).
+See the full schema in the [Email Triage Contract](https://github.com/amd/gaia/blob/main/hub/agents/email/python/CONTRACT.md).
 
 Triage always uses the **local Lemonade LLM** (there is no `engine` toggle; a
 high-confidence spam/promotional heuristic may skip the classify call internally, but the
@@ -562,5 +562,5 @@ Tools exposed: `triage_email`, `triage_email_batch`, `draft_reply`, `send_email`
 ## Related
 
 - [Email Triage](/guides/email) — the Agent UI / `gaia email` flow (GAIA owns the UX).
-- [Email Triage Contract](https://github.com/amd/gaia/blob/main/hub/agents/python/email/CONTRACT.md) — the full #1262 request/response schema.
-- [`@amd-gaia/agent-email`](https://github.com/amd/gaia/tree/main/hub/agents/npm/agent-email) — the JS/TS client + frozen sidecar.
+- [Email Triage Contract](https://github.com/amd/gaia/blob/main/hub/agents/email/python/CONTRACT.md) — the full #1262 request/response schema.
+- [`@amd-gaia/agent-email`](https://github.com/amd/gaia/tree/main/hub/agents/email/npm) — the JS/TS client + frozen sidecar.

@@ -17,7 +17,7 @@ the in-process decision in epic #1767** — see "Relationship to #1767" — and 
 maintainer + @itomek sign-off before build.
 **Related:** #1767 (epic), #1768 (`/v1/email/*` REST surface), #1778/#1779/#1780/#1781
 (REST capability build-out), npm pkg `@amd-gaia/agent-email`, Python agent
-`hub/agents/python/email`
+`hub/agents/email/python`
 
 ## Problem
 
@@ -160,7 +160,7 @@ Hot-reload needs uvicorn's import-string form, which needs a **module-level app*
 that does not exist today (it lives inside `build_app()`/`main()`):
 
 ```python
-# hub/agents/python/email/packaging/server.py — add at module scope:
+# hub/agents/email/python/packaging/server.py — add at module scope:
 app = build_app()        # build_app also mounts /v1/email/connectors/* — fine for dev
 ```
 ```bash
@@ -168,7 +168,7 @@ python -m uvicorn packaging.server:app --reload --host 127.0.0.1 --port <port>
 ```
 Edit any `.py` / prompt / tool → uvicorn reloads in ~1s → next chat action hits new
 code. Dev mode assumes the source env is set up; if uvicorn/the package can't be
-imported, fail loudly with `uv pip install -e hub/agents/python/email` — no silent
+imported, fail loudly with `uv pip install -e hub/agents/email/python` — no silent
 auto-install, no fallback. Dev mode is source-checkout only.
 
 ## Lifecycle, port & ownership (review fixes)

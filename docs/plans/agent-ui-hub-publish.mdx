@@ -180,7 +180,7 @@ Two things follow that the email pipeline does **not** have to handle:
 - Author the manifest for agent-ui (id, version `0.21.x`, platforms,
   `type: app`, installers/update-channel block — see the multi-component model).
   Agent-UI is **not** a Python freeze, so it
-  does **not** belong in `hub/agents/python/`. Proposed home:
+  does **not** belong in `hub/agents/`. Proposed home:
   `hub/agents/desktop/agent-ui/` (manifest + lock + packaging scripts) or colocated
   with `src/gaia/apps/webui/`.
 - **Do NOT add agent-ui to `setup.py[agents]`** — that list drives `gaia-agent-*`
@@ -236,7 +236,7 @@ Two things follow that the email pipeline does **not** have to handle:
     `gaia-ui` bin fetches the installer from R2, verifies vs lock, launches.
   - Alternative: wrapper takes a new name (`@amd-gaia/agent-ui-launcher`) — diverges from "mirror exactly."
 - Wrapper TS (`cli.ts`, `fetch.ts`, `platform.ts`, `lifecycle.ts`, `errors.ts`)
-  templated from `hub/agents/npm/agent-email/`, adapted for installer-launch and
+  templated from `hub/agents/email/npm/`, adapted for installer-launch and
   the multi-file lock.
 
 ### 6. Catalog, website, docs, tests
@@ -391,7 +391,7 @@ its **Python backend** finishes a cold bootstrap: `backend-installer.cjs` runs
 - **Highest-leverage fix:** ship a **frozen/prebuilt backend** instead of a
   runtime pip install, so first-run is seconds and the PyPI/network failure mode
   is gone. **Caveat (verify first):** the email freeze
-  (`hub/agents/python/email/packaging/freeze.py`) gets to &lt;90 MB by *excluding*
+  (`hub/agents/email/python/packaging/freeze.py`) gets to &lt;90 MB by *excluding*
   torch/transformers/faiss — but the UI backend can't, because `[ui]` directly
   declares `faiss-cpu` + `sentence-transformers` + `torch` and
   `gaia.ui.server` **boots faiss + sentence_transformers eagerly** (`setup.py:143`,
@@ -558,8 +558,8 @@ Every gap surfaced during this investigation, in one checklist. Severity:
 - Public Hub website (mirror target): `website/src/pages/hub/`, `website/src/data/catalog.ts`, `website/src/components/{AgentRow,FeaturedCard}.astro`
 - Agent Hub plan: `docs/plans/agent-hub.mdx`
 - Email release pipeline: `.github/workflows/release_agent_email.yml`
-- Email packaging scripts: `hub/agents/python/email/packaging/{publish_to_r2,gen_binaries_lock,freeze,smoke_test}.py`
-- Email npm wrapper: `hub/agents/npm/agent-email/` (`binaries.lock.json`, `src/{cli,fetch,platform,lifecycle}.ts`)
+- Email packaging scripts: `hub/agents/email/python/packaging/{publish_to_r2,gen_binaries_lock,freeze,smoke_test}.py`
+- Email npm wrapper: `hub/agents/email/npm/` (`binaries.lock.json`, `src/{cli,fetch,platform,lifecycle}.ts`)
 - Agent Hub Worker: `workers/agent-hub/` (`src/{index,publish,auth,manifest,catalog,storage}.ts`)
 - Agent UI app: `src/gaia/apps/webui/{package.json,electron-builder.yml,bin/gaia-ui.cjs,services/auto-updater.cjs}`
 - Current installer/publish CI: `.github/workflows/{build-installers,publish}.yml`

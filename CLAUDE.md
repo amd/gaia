@@ -195,7 +195,7 @@ self-contradicting lifecycle docs.
 
 **Before creating new functionality:**
 1. Check if similar functionality exists in `src/gaia/agents/base/`
-2. Check existing mixins in agent packages (e.g., `hub/agents/python/chat/gaia_agent_chat/tools/`)
+2. Check existing mixins in agent packages (e.g., `hub/agents/chat/python/gaia_agent_chat/tools/`)
 3. Extract shared logic into base classes or mixins when patterns repeat
 
 ### Code Comments — Short or Skip
@@ -429,11 +429,11 @@ gaia/
 │   ├── agents/         # Agent framework + in-core agents
 │   │   ├── base/       # Base Agent class, MCPAgent, ApiAgent mixins
 │   │   ├── tools/      # Cross-agent tool mixins (rag, file, shell, browser, scratchpad, screenshot…)
-│   │   ├── builder/    # in-core agent (ChatAgent moved to hub/agents/python/chat/)
+│   │   ├── builder/    # in-core agent (ChatAgent moved to hub/agents/chat/python/)
 │   │   ├── code_index/ # CodeIndexToolsMixin — semantic code search (FAISS)
 │   │   └── registry.py # Agent registry + KNOWN_TOOLS map
 │   │   #   Packaged agents (code, analyst, browser, fileio, email, summarize, jira,
-│   │   #   blender, docker, sd, emr, connectors-demo, docqa, routing) live in hub/agents/python/<id>/.
+│   │   #   blender, docker, sd, emr, connectors-demo, docqa, routing) live in hub/agents/<id>/python/.
 │   ├── api/            # OpenAI-compatible REST API server
 │   ├── apps/           # Standalone applications
 │   │   ├── webui/      # Agent UI frontend (React/Vite/Electron)
@@ -491,9 +491,9 @@ Defined in [`setup.py`](setup.py) under `console_scripts`:
 | `gaia` / `gaia-cli` | `gaia.cli:main` | Main CLI — all `gaia <subcommand>` |
 | `gaia-mcp` | `gaia.mcp.mcp_bridge:main` | Standalone MCP bridge binary |
 
-The `gaia-emr` console script now ships with the standalone `gaia-agent-emr` hub package (`hub/agents/python/emr/`), not the core wheel.
+The `gaia-emr` console script now ships with the standalone `gaia-agent-emr` hub package (`hub/agents/emr/python/`), not the core wheel.
 
-`gaia-code` is no longer a core `console_scripts` entry — it ships with the standalone `gaia-agent-code` wheel (`hub/agents/python/code/`, entry point `gaia_agent_code.cli:main`).
+`gaia-code` is no longer a core `console_scripts` entry — it ships with the standalone `gaia-agent-code` wheel (`hub/agents/code/python/`, entry point `gaia_agent_code.cli:main`).
 
 ## Architecture
 
@@ -521,7 +521,7 @@ The `gaia-emr` console script now ships with the standalone `gaia-agent-emr` hub
 ### Agent Implementations
 
 In-core agents live under `src/gaia/agents/`; the rest have moved to standalone hub
-packages under `hub/agents/python/<id>/`. The authoritative registry is
+packages under `hub/agents/<id>/python/`. The authoritative registry is
 [`src/gaia/agents/registry.py`](src/gaia/agents/registry.py); each agent's default model
 is set in its own `agent.py` (see [Default Models](#default-models)).
 
@@ -541,10 +541,10 @@ is set in its own `agent.py` (see [Default Models](#default-models)).
 | **BlenderAgent** | 3D scene automation |
 | **DockerAgent** | Container management |
 | **SDAgent** | Stable Diffusion image generation |
-| **MedicalIntakeAgent** | Medical form processing (VLM) — `hub/agents/python/emr/` |
+| **MedicalIntakeAgent** | Medical form processing (VLM) — `hub/agents/emr/python/` |
 | **ConnectorsDemoAgent** | Per-agent connector activation demo |
 
-`gaia browse` and `gaia analyze` invoke BrowserAgent and AnalystAgent (see [`src/gaia/cli.py`](src/gaia/cli.py)); `gaia telegram` is a messaging adapter, not an agent. DocumentQAAgent, FileIOAgent, and ConnectorsDemoAgent are internal building-block agents (not standalone CLI commands). DocumentQAAgent and RoutingAgent now ship as standalone `gaia-agent-docqa` / `gaia-agent-routing` hub wheels (`hub/agents/python/`).
+`gaia browse` and `gaia analyze` invoke BrowserAgent and AnalystAgent (see [`src/gaia/cli.py`](src/gaia/cli.py)); `gaia telegram` is a messaging adapter, not an agent. DocumentQAAgent, FileIOAgent, and ConnectorsDemoAgent are internal building-block agents (not standalone CLI commands). DocumentQAAgent and RoutingAgent now ship as standalone `gaia-agent-docqa` / `gaia-agent-routing` hub wheels (`hub/agents/`).
 
 ### Agent Registry & Tool Mixins
 
@@ -619,8 +619,8 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia perf-vis` - Visualize performance results
 
 **Standalone binaries** (separate `console_scripts`, not subcommands):
-- `gaia-code` - CodeAgent entry, from the `gaia-agent-code` wheel (`hub/agents/python/code/gaia_agent_code/cli.py`)
-- `gaia-emr` - Medical intake entry (ships with the `gaia-agent-emr` hub package, `hub/agents/python/emr/gaia_agent_emr/cli.py`)
+- `gaia-code` - CodeAgent entry, from the `gaia-agent-code` wheel (`hub/agents/code/python/gaia_agent_code/cli.py`)
+- `gaia-emr` - Medical intake entry (ships with the `gaia-agent-emr` hub package, `hub/agents/emr/python/gaia_agent_emr/cli.py`)
 - `gaia-mcp` - Standalone MCP bridge binary
 
 ## Documentation Index
@@ -642,7 +642,7 @@ agent-hub, skill-format, OEM bundling, desktop-installer, MCP, CUA, Docker, and 
 Browse the directory rather than a partial list here.
 
 **Key architectural decisions (April 2026):**
-- **GaiaAgent** rename planned (#696) — not yet landed; the chat agent class is still `ChatAgent` (`hub/agents/python/chat/gaia_agent_chat/agent.py`)
+- **GaiaAgent** rename planned (#696) — not yet landed; the chat agent class is still `ChatAgent` (`hub/agents/chat/python/gaia_agent_chat/agent.py`)
 - Voice-first is P0 enabling technology (#702)
 - No context compaction — memory + RAG handles long conversations
 - Configuration dashboard + Observability dashboard as separate Agent UI panels
@@ -683,7 +683,7 @@ The documentation is organized in [`docs/docs.json`](docs/docs.json) with the fo
 2. **Check for duplicates:** Search existing issues/PRs to avoid redundant responses
 
 3. **Reference specific files:** Use precise file references with line numbers when possible
-   - Agent implementations: `src/gaia/agents/` (in-core: base/, tools/, builder/, code_index/, registry.py) and `hub/agents/python/<id>/` (packaged agents: chat, code, analyst, browser, email, jira, docker, sd, emr, docqa, routing, …)
+   - Agent implementations: `src/gaia/agents/` (in-core: base/, tools/, builder/, code_index/, registry.py) and `hub/agents/<id>/python/` (packaged agents: chat, code, analyst, browser, email, jira, docker, sd, emr, docqa, routing, …)
    - CLI commands: `src/gaia/cli.py`
    - MCP integration: `src/gaia/mcp/`
    - LLM backend: `src/gaia/llm/` (+ `providers/` for Claude/OpenAI)
@@ -817,7 +817,7 @@ Interesting idea! GAIA doesn't currently have built-in Slack integration, but yo
 
 1. The Agent SDK (docs/sdk/sdks/chat.mdx) for message handling
 2. The MCP protocol (docs/sdk/infrastructure/mcp.mdx) for Slack connectivity
-3. Similar pattern to our Jira agent (hub/agents/python/jira/)
+3. Similar pattern to our Jira agent (hub/agents/jira/python/)
 
 For AMD optimization: Consider using the local LLM backend (src/gaia/llm/) to keep conversations private and leverage Ryzen AI NPU acceleration.
 

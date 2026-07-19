@@ -1059,7 +1059,7 @@ Single-scenario run: ~$0.10-0.15.
       "root_cause": "Smart Discovery workflow uses query keywords as file search patterns. Needs to extract likely document names, not just topic keywords.",
       "recommended_fix": {
         "target": "system_prompt",
-        "file": "hub/agents/python/chat/gaia_agent_chat/agent.py",
+        "file": "hub/agents/chat/python/gaia_agent_chat/agent.py",
         "description": "In Smart Discovery section, instruct agent to search for common document names related to the topic, not just the exact query terms."
       }
     }

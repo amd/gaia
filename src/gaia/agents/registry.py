@@ -190,7 +190,7 @@ def _accepted_init_params(klass: type) -> Optional[set[str]]:
 def class_factory(agent_class: type) -> Callable[..., Any]:
     """Return a kwarg-filtering factory for a plain ``Agent`` subclass.
 
-    Standalone agent packages (``hub/agents/python/<id>/``) call this from
+    Standalone agent packages (``hub/agents/<id>/python/``) call this from
     their ``build_registration()`` to wire a registry factory without
     re-implementing the kwarg-filtering dance. Session-level kwargs injected
     by the registry/UI host (``namespaced_agent_id``, ``allowed_paths``,
@@ -409,7 +409,7 @@ def build_model_tiers(full_label: str) -> List[ModelTier]:
     The ``full`` tier carries no model list — the agent's own ``__init__``
     default governs — so full-size behaviour is unchanged. The ``lite`` tier
     pins the ~4B preset. Promoted to module level so standalone hub agent
-    packages (``hub/agents/python/<id>/``) can declare the same tiers in their
+    packages (``hub/agents/<id>/python/``) can declare the same tiers in their
     ``build_registration()`` without re-deriving the preset list.
     """
     return [
@@ -719,7 +719,7 @@ class AgentRegistry:
         Scans the ``gaia.agent`` / ``gaia.agents`` entry-point groups. Each
         entry point loads either an :class:`AgentRegistration`, a zero-argument
         callable returning one (the ``build_registration()`` convention used by
-        ``hub/agents/python/<id>/``), or an ``Agent`` subclass. This is how the
+        ``hub/agents/<id>/python/``), or an ``Agent`` subclass. This is how the
         framework-only core wheel finds the production agents once they ship as
         separate ``gaia-agent-<id>`` packages (issue #1102).
         """

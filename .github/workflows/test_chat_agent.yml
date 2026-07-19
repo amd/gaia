@@ -12,7 +12,7 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'hub/agents/python/chat/**'
+      - 'hub/agents/chat/python/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
       - 'src/gaia/rag/**'
@@ -25,7 +25,7 @@ on:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      - 'hub/agents/python/chat/**'
+      - 'hub/agents/chat/python/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
       - 'src/gaia/rag/**'
@@ -71,7 +71,7 @@ jobs:
           # Install pytest-mock for mocking tests
           uv pip install --system pytest-mock
           # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102)
-          uv pip install --system -e hub/agents/python/chat
+          uv pip install --system -e hub/agents/chat/python
 
       - name: Run Chat Agent Package Tests
         env:
@@ -82,7 +82,7 @@ jobs:
           echo "================================================================"
           echo "Testing registration shapes, lazy re-exports, and discovery..."
           echo ""
-          python -m pytest hub/agents/python/chat/tests/ -v --tb=short
+          python -m pytest hub/agents/chat/python/tests/ -v --tb=short
 
       - name: Run Framework Registry Discovery Tests
         env:

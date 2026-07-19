@@ -83,7 +83,7 @@ prose. Executive does not mean vague — every claim must still be concrete and 
 ## Worked example
 
 `reference/example-executive.html` — generated from the GAIA email agent hub package
-(`hub/agents/python/email/`): 7 leadership-framed slides (problem/compliance risk, business
+(`hub/agents/email/python/`): 7 leadership-framed slides (problem/compliance risk, business
 value, deployment footprint, timeline, KPIs, close) — no code, no architecture diagrams, no
 methodology. Its KPI and timeline-date values intentionally show labeled `⚠ PLACEHOLDER`
 because no benchmark/date data existed in the source at generation time — a demonstration of

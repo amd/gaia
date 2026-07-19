@@ -53,7 +53,7 @@ This milestone delivers that path: the email agent distributed through **npm** a
 | Agent UI email integration | ⚠️ Today the UI backend imports the `gaia-agent-email` **Python wheel** (`amd-gaia[api]` auto-mounts its router); the React UI talks to it via the backend. Phase 6 migrates this to the npm sidecar. |
 | npm client | ❌ Does not exist — **this milestone** |
 | Frozen Python binary (no-interpreter) | ❌ Does not exist — **this milestone** |
-| C++ implementation + binary | ❌ `hub/agents/cpp/` is an empty placeholder — **this milestone** |
+| C++ implementation + binary | ❌ no `cpp/` subdir under `hub/agents/email/` yet — **this milestone** |
 | Build-time fetch CLI + SHA-256 manifest | ❌ Does not exist — **this milestone** |
 | Signed/notarized binaries | ❌ Does not exist — **this milestone** |
 | Sidecar lifecycle contract | ❌ Not specified — **this milestone** |
@@ -194,7 +194,7 @@ A single **OpenAPI spec** is the source of truth for the REST surface. The Pytho
 
 **Goal:** a second implementation of the **same contract**, distributed identically.
 
-- Stand up the C++ email agent server under `hub/agents/cpp/email/`, implementing the Phase 1 OpenAPI contract (same routes, same `/version` `apiVersion`).
+- Stand up the C++ email agent server under `hub/agents/email/cpp/`, implementing the Phase 1 OpenAPI contract (same routes, same `/version` `apiVersion`).
 - Build static / dependency-bundled binaries for the four platforms via the existing C++ build infrastructure (`build_cpp.yml`, `cpp/packaging/`).
 - Distribute via the **same R2 + thin-package mechanism** — upload to the same R2 key layout, pin SHA-256 in the manifest; the host install + fetch path is unchanged, only the binary's provenance differs.
 - Conformance test: the C++ binary passes the **same contract test suite** as the Python binary (identical request/response behavior).
@@ -233,7 +233,7 @@ A single **OpenAPI spec** is the source of truth for the REST surface. The Pytho
 
 ## Versioning & Contract Governance
 
-`apiVersion` is the host-facing contract version (SemVer), advertised on `GET /version` and defined as a single constant — `SCHEMA_VERSION` in `hub/agents/python/email/gaia_agent_email/contract.py`, aliased as `API_VERSION` in `version.py`. Bumping the contract automatically bumps the API version; they cannot drift.
+`apiVersion` is the host-facing contract version (SemVer), advertised on `GET /version` and defined as a single constant — `SCHEMA_VERSION` in `hub/agents/email/python/gaia_agent_email/contract.py`, aliased as `API_VERSION` in `version.py`. Bumping the contract automatically bumps the API version; they cannot drift.
 
 ### `apiVersion` bump policy
 
@@ -250,7 +250,7 @@ A single **OpenAPI spec** is the source of truth for the REST surface. The Pytho
 
 **Clients must reject a server whose `apiVersion` major is higher than what they support** — fail loudly with an actionable error, never fall back to best-effort parsing against an incompatible schema.  Clients may accept any minor version equal to or greater than their compiled-against minor.
 
-**How to apply a bump:** update `SCHEMA_VERSION` in `contract.py`, regenerate the spec (`python -m gaia_agent_email.export_openapi`), and run `python -m pytest hub/agents/python/email/tests/test_rest_contract.py tests/test_email_openapi_conformance.py` to confirm no drift.
+**How to apply a bump:** update `SCHEMA_VERSION` in `contract.py`, regenerate the spec (`python -m gaia_agent_email.export_openapi`), and run `python -m pytest hub/agents/email/python/tests/test_rest_contract.py tests/test_email_openapi_conformance.py` to confirm no drift.
 
 - **Package version** tracks the agent build; the npm package, the R2 binary version (`agents/email/<version>/…`), and the pinned `binaries.lock.json` manifest always publish in lockstep — the manifest references the matching R2 version, never a floating one.
 - The **OpenAPI spec (`openapi.email.json`) is the single source of truth** — client, Python server, and C++ server are all validated against it in CI. A change to the contract that isn't reflected in the committed artifact fails CI (`test_rest_contract.py::test_committed_openapi_artifact_is_up_to_date`), and a running server that doesn't conform to the spec fails the conformance suite (`tests/test_email_openapi_conformance.py`).

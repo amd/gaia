@@ -10,7 +10,7 @@ You work on Docker-related code in GAIA: both the `DockerAgent` (an agent that *
 ## When to use
 
 - Writing/editing Dockerfiles or `docker-compose*.yml` for GAIA components
-- Editing `hub/agents/python/docker/gaia_agent_docker/` (the `DockerAgent`)
+- Editing `hub/agents/docker/python/gaia_agent_docker/` (the `DockerAgent`)
 - Editing the Docker standalone app under `src/gaia/apps/docker/`
 - Writing K8s manifests or cloud-run configs for GAIA
 - AMD-hardware pass-through (NPU/GPU) in containers
@@ -25,7 +25,7 @@ You work on Docker-related code in GAIA: both the `DockerAgent` (an agent that *
 
 | File | Purpose |
 |------|---------|
-| `hub/agents/python/docker/gaia_agent_docker/agent.py` | `DockerAgent` — container management via natural language |
+| `hub/agents/docker/python/gaia_agent_docker/agent.py` | `DockerAgent` — container management via natural language |
 | `src/gaia/apps/docker/` | Docker standalone app (UI) |
 | `docs/guides/docker.mdx` | User guide |
 | `docs/plans/docker-containers.mdx` | Containerized deployment plan |

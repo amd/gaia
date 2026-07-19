@@ -5,7 +5,7 @@ icon: "code"
 ---
 
 <Info>
-  **Source Code:** [`hub/agents/python/code/`](https://github.com/amd/gaia/blob/main/hub/agents/python/code/)
+  **Source Code:** [`hub/agents/code/python/`](https://github.com/amd/gaia/blob/main/hub/agents/code/python/)
 </Info>
 
 <Info>
@@ -322,11 +322,11 @@ Let's see GAIA Code in action:
         uv venv .venv
         source .venv/bin/activate  # On Windows: .\.venv\Scripts\Activate.ps1
         uv pip install -e ".[dev]"
-        uv pip install -e hub/agents/python/code   # provides the gaia-code command
+        uv pip install -e hub/agents/code/python   # provides the gaia-code command
         ```
 
         <Info>
-        Use this path if you want to modify GAIA source code or contribute to the project. The Code agent lives in the standalone `gaia-agent-code` package under `hub/agents/python/code/`, so install it as a second editable wheel to get the `gaia-code` command.
+        Use this path if you want to modify GAIA source code or contribute to the project. The Code agent lives in the standalone `gaia-agent-code` package under `hub/agents/code/python/`, so install it as a second editable wheel to get the `gaia-code` command.
         </Info>
       </Tab>
     </Tabs>
