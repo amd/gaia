@@ -16,12 +16,26 @@ jobs:
   heartbeat:
     strategy:
       matrix:
-        runner: 
+        # SINGLE SOURCE for which runners are monitored — monitor_selfhosted_runners.yml
+        # parses this list, so adding a runner here is all that is needed to
+        # start alerting on it. Only list runners that are actually registered:
+        # an unregistered name is never picked up and its job sits queued until
+        # GitHub cancels it at the 24h limit, which marks the whole run
+        # `cancelled` and buries the healthy runners' results.
+        #
+        # sjlab-stx-2 removed: last successful heartbeat 2026-03-22, offline from
+        # 2026-03-30 onward, so it made every run `cancelled` for ~4 months. Its
+        # removal here is a bookkeeping fix, NOT a decision that the box is gone —
+        # re-add the line if it is brought back.
+        runner:
           - sjlab-stx-1
-          - sjlab-stx-2
           - sjlab-stx-3
       fail-fast: false  # Continue even if one runner fails
     runs-on: [self-hosted, "${{ matrix.runner }}"]
+    # Fail fast if a runner is offline. Without this the job waits the full 24h
+    # queue timeout, so an outage surfaces a day late and reports `cancelled`
+    # (ambiguous) instead of a clean failure.
+    timeout-minutes: 10
     steps:
       - name: Create heartbeat file (Windows)
         if: runner.os == 'Windows'
