@@ -273,7 +273,7 @@ jobs:
       - name: "Executor (Sonnet): walk ${{ matrix.doc.path }}"
         id: executor
         continue-on-error: true
-        uses: anthropics/claude-code-action@e90deca47693f9457b72f2b53c17d7c445a87342  # v1.0.171
+        uses: anthropics/claude-code-action@3553f84341b92da26052e28acf1aa898f9511f32  # v1.0.177
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -393,7 +393,7 @@ jobs:
         id: judge
         if: always()
         continue-on-error: true
-        uses: anthropics/claude-code-action@e90deca47693f9457b72f2b53c17d7c445a87342  # v1.0.171
+        uses: anthropics/claude-code-action@3553f84341b92da26052e28acf1aa898f9511f32  # v1.0.177
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -596,7 +596,7 @@ jobs:
       - name: Synthesize and file the triage issue
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@e90deca47693f9457b72f2b53c17d7c445a87342  # v1.0.171
+        uses: anthropics/claude-code-action@3553f84341b92da26052e28acf1aa898f9511f32  # v1.0.177
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
