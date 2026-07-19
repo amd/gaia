@@ -79,10 +79,15 @@ _RESERVED_BUILTIN_IDS: frozenset[str] = frozenset(
 # default-profile model; `gemma4-it-e2b-FLM` is the npu-profile one — see
 # `INIT_PROFILES` in `gaia.installer.init_command`); no profile installs the
 # 35B, so it must not be the only entry (#2243).
+#
+# Gemma leads so the builder resolves to the same model every other agent uses.
+# Preferring the 35B would reintroduce the evict-and-reload this consolidation
+# removed, on the machines that happen to still have it installed. The 35B stays
+# last so an existing install keeps working.
 BUILDER_PREFERRED_MODELS: List[str] = [
-    "Qwen3.5-35B-A3B-GGUF",
     "Gemma-4-E4B-it-GGUF",
     "gemma4-it-e2b-FLM",
+    "Qwen3.5-35B-A3B-GGUF",
 ]
 
 

@@ -37,7 +37,7 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK
-from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, GPU_CTX_SIZE
 
 if TYPE_CHECKING:
     from gaia.agents.base.goal_store import Goal, Proposal
@@ -2234,10 +2234,9 @@ Do NOT wrap conversational replies in JSON.
             for m in data.get("all_models_loaded", []):
                 if m.get("type") in ("llm", "vlm"):
                     ctx = m.get("recipe_options", {}).get("ctx_size") or 0
-                    # Threshold tracks the chat / rag profile default
-                    # (65536); any loaded ctx below that is "too small"
-                    # for doc-Q&A flows and should trigger a reload.
-                    if 0 < ctx < 65536:
+                    # Threshold tracks the GPU/CPU profile window; anything
+                    # below it is too small for doc-Q&A and needs a reload.
+                    if 0 < ctx < GPU_CTX_SIZE:
                         return True
             return False
         except Exception:  # pylint: disable=broad-except
