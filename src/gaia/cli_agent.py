@@ -93,6 +93,16 @@ def register_subparsers(agent_subparsers) -> None:
         help="Parent directory to create the package in (default: current dir)",
     )
     init_p.add_argument(
+        "--layout",
+        choices=["flat", "hub"],
+        default="flat",
+        help=(
+            "Package layout: 'flat' creates <output>/<id>/ (default, for "
+            "standalone packages); 'hub' creates <output>/<id>/<language>/ to "
+            "match the hub tree (e.g. -o hub/agents/ --layout hub)"
+        ),
+    )
+    init_p.add_argument(
         "--force",
         action="store_true",
         help="Overwrite an existing package directory if it exists",
@@ -338,6 +348,8 @@ def cmd_init(args) -> None:
     names = _Names(args.name)
     parent = Path(args.output).expanduser().resolve()
     pkg_dir = parent / names.id
+    if args.layout == "hub":
+        pkg_dir = pkg_dir / args.language
 
     if pkg_dir.exists():
         if not args.force:
@@ -345,7 +357,7 @@ def cmd_init(args) -> None:
                 f"directory already exists: {pkg_dir}. Re-run with --force to "
                 f"overwrite, or choose a different name/--output."
             )
-    parent.mkdir(parents=True, exist_ok=True)
+    pkg_dir.parent.mkdir(parents=True, exist_ok=True)
 
     if args.language == "python":
         _scaffold_python(pkg_dir, names)

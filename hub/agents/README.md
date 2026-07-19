@@ -50,9 +50,10 @@ The GAIA registry discovers installed agents automatically through the
 ## Build your own
 
 ```bash
-gaia agent init my-agent --language python
+gaia agent init my-agent --language python -o . --layout hub
 ```
 
+That lands the package at `my-agent/python/`, matching every other agent here.
 …or copy `hello-world/python/`, rename the package + class, and edit the prompt. See
 [docs/guides/custom-agent.mdx](../../docs/guides/custom-agent.mdx) and the
 [Agent Hub restructure spec](../../docs/spec/agent-hub-restructure.mdx).

@@ -26,10 +26,15 @@ the publish skill).
 
 ## Steps
 
-1. **Scaffold.** `gaia agent init my-agent` generates a starter package. For a
-   publishable hub package, scaffold into the hub tree —
-   so the package lands at `hub/agents/<id>/python/` — and mirror an existing one
-   (e.g. `analyst`, `browser`).
+1. **Scaffold.** `gaia agent init my-agent` generates a starter package at
+   `./my-agent/`. For a publishable hub package in this repo, add `--layout hub`
+   so it lands at `hub/agents/<id>/python/`:
+
+   ```bash
+   gaia agent init my-agent -o hub/agents/ --layout hub
+   ```
+
+   Then mirror an existing package (e.g. `analyst`, `browser`) for structure.
 
 2. **Write the `Agent` subclass.** Inherit from `Agent` (or a closer base like the
    chat/docqa agents). Set the model with `model_id` — omit it only if the

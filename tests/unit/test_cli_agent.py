@@ -20,13 +20,14 @@ from gaia.hub import manifest as hub_manifest
 # ---------------------------------------------------------------------------
 
 
-def _init_args(name, output, language="python", force=False):
+def _init_args(name, output, language="python", force=False, layout="flat"):
     return Namespace(
         agent_action="init",
         name=name,
         language=language,
         output=str(output),
         force=force,
+        layout=layout,
     )
 
 
@@ -121,6 +122,29 @@ def test_init_force_overwrites(tmp_path):
     cli_agent.cmd_init(_init_args("demo-agent", tmp_path))
     # Should not raise with force=True.
     cli_agent.cmd_init(_init_args("demo-agent", tmp_path, force=True))
+
+
+def test_init_flat_layout_is_the_default(tmp_path):
+    cli_agent.cmd_init(_init_args("demo-agent", tmp_path))
+    assert (tmp_path / "demo-agent" / "gaia-agent.yaml").exists()
+    assert not (tmp_path / "demo-agent" / "python").exists()
+
+
+def test_init_hub_layout_nests_language_under_id(tmp_path):
+    cli_agent.cmd_init(_init_args("demo-agent", tmp_path, layout="hub"))
+    pkg = tmp_path / "demo-agent" / "python"
+    assert (pkg / "gaia-agent.yaml").exists()
+    assert (pkg / "pyproject.toml").exists()
+    assert (pkg / "gaia_agent_demo_agent" / "agent.py").exists()
+    # The id must stay the agent's own id, not the language leaf.
+    assert hub_manifest.parse(pkg).id == "demo-agent"
+
+
+def test_init_hub_layout_cpp_uses_cpp_leaf(tmp_path):
+    cli_agent.cmd_init(
+        _init_args("native-demo", tmp_path, language="cpp", layout="hub")
+    )
+    assert (tmp_path / "native-demo" / "cpp" / "CMakeLists.txt").exists()
 
 
 def test_init_cpp_scaffold(tmp_path):

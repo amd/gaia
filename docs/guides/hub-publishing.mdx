@@ -95,8 +95,17 @@ cd my-agent
 
 This creates a folder with the four parts above already wired together. Flags:
 `--language python|cpp` (default `python`), `--output <dir>` / `-o` to choose where
-it's created (default: current folder), and `--force` to overwrite an existing
-folder.
+it's created (default: current folder), `--layout flat|hub` (default `flat`), and
+`--force` to overwrite an existing folder.
+
+If you're contributing the agent to the `amd/gaia` repo rather than shipping it
+standalone, scaffold straight into the hub tree with `--layout hub`, which nests
+the code under a language directory the way every hub package is arranged:
+
+```bash
+gaia agent init my-agent -o hub/agents/ --layout hub
+cd hub/agents/my-agent/python
+```
 
 <Note>
 **Prefer to learn from a working example?** The repo ships tiny, heavily
