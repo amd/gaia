@@ -17,9 +17,13 @@ on:
 permissions:
   contents: read
 
-# Group concurrent runs but don't cancel - child workflows have their own concurrency
+# Group concurrent runs but don't cancel - child workflows have their own concurrency.
+# The -aggregate suffix keeps this distinct from called workflows' groups: inside a
+# reusable workflow github.workflow is the CALLER's name, so a bare
+# "${{ github.workflow }}-${{ github.ref }}" collides with lint.yml's group whenever
+# github.head_ref is empty (push / dispatch / merge_group) and the lint job never starts.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-aggregate-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
