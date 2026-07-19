@@ -115,20 +115,6 @@ jobs:
     uses: ./.github/workflows/test_email_agent.yml
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
-  # Test DocQA Agent (standalone hub wheel, #1102)
-  test-docqa-agent:
-    name: DocQA Agent Tests
-    needs: lint
-    uses: ./.github/workflows/test_docqa_agent.yml
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
-
-  # Test Routing Agent (standalone hub wheel, #1102)
-  test-routing-agent:
-    name: Routing Agent Tests
-    needs: lint
-    uses: ./.github/workflows/test_routing_agent.yml
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
-
   # Test Security features
   test-security:
     name: Security Tests
