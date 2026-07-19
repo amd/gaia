@@ -49,10 +49,22 @@ in the 2026-07 fleet audit it was wrong for most agents, in both directions.
 
 - Does every advertised verb have a reachable tool? (An agent advertising CSV
   analysis that composes no file mixin cannot open a file.)
-- Does `tools_count` match the real `@tool` surface plus composed mixins?
+- **Does every `conversation_starter` have a tool behind it?** Agent UI shows
+  these as first-run prompts, so a starter for a missing capability means the
+  user's *first click* fails. Worse than a stale description — check these first.
+- Does `tools_count` match the real `@tool` surface plus composed mixins? It
+  lives in **two** places — `gaia-agent.yaml` *and* the `build_registration()`
+  call in `__init__.py`. Check both; the registry copy is what the UI reads.
 - Do the agent's **own defaults** work end to end? (A `language="python"` default
   that fails a TypeScript-only validator is a mis-scope, not a bug.)
-- Does `interfaces:` claim a mode nothing serves?
+- Does `interfaces:` claim a mode nothing serves — **and is the dependency for
+  that mode even declared?** `api_server`/`mcp_server` need `amd-gaia[api]` in
+  both `pyproject.toml` and the manifest's `python.dependencies`. Most agents
+  declare the interface against plain `amd-gaia`, so the mode is not merely
+  unimplemented, it is **uninstallable** — and it fails on a clean install, not
+  in CI. `word-count` is the package that gets this right.
+- Are preflights checking the right thing? `docker --version` tests the *binary*;
+  the agent needs the *daemon*. A preflight can be present and still wrong.
 
 Record every gap. This list is the port's actual scope.
 
@@ -149,6 +161,9 @@ present.
 - Copy-pasting another agent's workflow instead of generating it
 - Porting an agent nobody gave a Phase 0 verdict for
 - Treating `interfaces: api_server: true` as satisfied because the manifest says so
+- Checking a capability claim in `gaia-agent.yaml` only — the same claims are
+  duplicated, unguarded, in `build_registration()`
+- Concluding "it works" from a dev box that already has the extras installed
 
 ## Reference
 
