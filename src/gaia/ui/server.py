@@ -219,6 +219,17 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         queue = DispatchQueue(max_workers=4)
         app.state.dispatch_queue = queue
 
+        # ── Model-slot broker (#2248) ───────────────────────────────────
+        # The daemon exports the broker URL into its own environment, so only
+        # the sidecars it spawns inherit it. This backend is host-side and not
+        # daemon-spawned, so it must discover the daemon itself — otherwise its
+        # model loads bypass the broker and race-evict sidecar models. Attaching
+        # happens lazily at the first load, so a daemon that starts after this
+        # backend is still picked up.
+        from gaia.daemon.broker_client import enable_broker_discovery
+
+        enable_broker_discovery()
+
         # ── Agent Registry ──────────────────────────────────────────────
         from gaia.agents.registry import AgentRegistry
         from gaia.ui._chat_helpers import set_agent_registry
@@ -309,9 +320,20 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 if any(m.get("type") in ("llm", "vlm") for m in all_models):
                     return  # Already loaded — nothing to do
 
+            from gaia.daemon.broker_client import model_lease
             from gaia.llm.lemonade_client import LemonadeClient
+            from gaia.ui.routers.system import _DEFAULT_MODEL_NAME
 
-            with model_load_lock:
+            model_id = db.get_setting("custom_model") or _DEFAULT_MODEL_NAME
+
+            # model_load_lock guards other threads in THIS process; the broker
+            # lease guards other processes sharing Lemonade's single slot
+            # (#2248). Both are needed, and the lease spans the re-check so a
+            # sidecar cannot load between our "nothing resident" verdict and our
+            # load. Lease first, then the lock — same order as the chat
+            # pre-flight, so this background preload can never hold the lock
+            # across a cross-process wait and starve an interactive turn.
+            with model_lease(model_id, priority="background"), model_load_lock:
                 # Double-check after acquiring the lock: another thread may have
                 # loaded the model while we were waiting.
                 try:
@@ -323,9 +345,6 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 except Exception:
                     pass  # proceed with load attempt
 
-                from gaia.ui.routers.system import _DEFAULT_MODEL_NAME
-
-                model_id = db.get_setting("custom_model") or _DEFAULT_MODEL_NAME
                 LemonadeClient(verbose=False).load_model(
                     model_id, ctx_size=DEFAULT_CONTEXT_SIZE, prompt=False
                 )

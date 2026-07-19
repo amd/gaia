@@ -26,6 +26,7 @@ from typing import Optional
 from fastapi import HTTPException
 
 from gaia.agents.install_hints import agent_not_installed_message
+from gaia.daemon.broker_client import BrokerUnavailableError
 
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .models import ChatRequest
@@ -1244,9 +1245,21 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
                 {"type": "status", "status": "info", "message": "Loading LLM model..."}
             )
 
+        from gaia.daemon.broker_client import model_lease
         from gaia.llm.lemonade_client import LemonadeClient
 
-        with model_load_lock:
+        # Interactive priority: this pre-flight is on the user's turn, so it
+        # must jump ahead of queued background loads (embedder warm-ups,
+        # autonomous briefs). The lease spans the re-check and the unload→load
+        # pair so no other process can take the slot mid-swap (#2248).
+        #
+        # Lease BEFORE model_load_lock, and in that order everywhere (see
+        # server.py's startup preload). Taking the in-process lock first would
+        # let a background holder sit on it for the whole cross-process wait,
+        # and this interactive request would then queue behind it on the lock —
+        # where the broker's priority ordering has no say, silently defeating
+        # the priority it just asked for.
+        with model_lease(model_id, priority="interactive"), model_load_lock:
             # Re-check after acquiring the lock: another thread may have
             # already loaded the expected model with sufficient context.
             resident_chat_models = []
@@ -1287,6 +1300,22 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
                 ctx_size=DEFAULT_CONTEXT_SIZE,
                 prompt=False,
                 timeout=_PREFLIGHT_LOAD_TIMEOUT_S,
+            )
+    except BrokerUnavailableError as exc:
+        # Do NOT report this as "check that Lemonade is running" — Lemonade is
+        # fine, the daemon that arbitrates the model slot is not, and pointing
+        # the user at the wrong subsystem costs them the debugging session.
+        logger.error("Pre-flight model load could not lease the model slot: %s", exc)
+        if sse_handler is not None:
+            sse_handler._emit(
+                {
+                    "type": "status",
+                    "status": "warning",
+                    "message": (
+                        "Could not reserve the model slot from the GAIA daemon. "
+                        "Check `gaia daemon status`."
+                    ),
+                }
             )
     except Exception as exc:
         logger.warning("Pre-flight model check failed: %s", exc)
