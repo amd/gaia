@@ -274,7 +274,16 @@ def test_connection_running_returns_base_url_and_bearer():
     assert bearer == ensured["token"]
 
 
-def test_connection_stopped_after_running_raises_again():
+def test_connection_stopped_after_running_raises_again(monkeypatch):
+    # The fake manager reports a hardcoded pid but owns no real OS process, so
+    # its shutdown() can't make that pid disappear. registry.stop() verifies the
+    # pid is gone via psutil.pid_exists against the real process table, which
+    # flakes when the fake pid collides with a live process on the runner. Model
+    # the fake sidecar as fully terminated so the check reflects the double's
+    # intent, not the host's process table.
+    monkeypatch.setattr(
+        "gaia.daemon.sidecars.registry.psutil.pid_exists", lambda pid: False
+    )
     reg = _toy_registry()
     reg.ensure("toy")
     reg.stop("toy")
