@@ -394,6 +394,20 @@ class TestCreateAgentWithDefaults:
         call_kwargs = _patch_code_agent.call_args
         assert call_kwargs.kwargs.get("project_type") == "fullstack"
 
+    def test_unknown_language_defaults_to_typescript_not_process_exit(
+        self, router, _patch_code_agent
+    ):
+        # Regression (issue #2330): the old "safe" Python default tripped
+        # _enforce_typescript_only and raised SystemExit(1), killing the
+        # process. Unknown must resolve to the only supported stack instead.
+        analysis = {
+            "parameters": {"language": "unknown", "project_type": "unknown"},
+        }
+        router._create_agent_with_defaults(analysis)
+        call_kwargs = _patch_code_agent.call_args
+        assert call_kwargs.kwargs.get("language") == "typescript"
+        assert call_kwargs.kwargs.get("project_type") == "fullstack"
+
 
 # ---------------------------------------------------------------------------
 # process_query end-to-end (API mode)
