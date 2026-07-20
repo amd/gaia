@@ -828,6 +828,100 @@ def test_install_cpp_with_artifacts_list_uses_singular_zip(tmp_path):
     assert sentinel.artifact_kind == "cpp"
 
 
+# --- T4d: malicious cpp archives cannot escape the install dir (CWE-22) -------
+
+
+def _cpp_install_from_archive(tmp_path, filename, archive_bytes):
+    """Run install() for a cpp agent serving *archive_bytes* under *filename*."""
+    sha = hashlib.sha256(archive_bytes).hexdigest()
+    path = f"agents/native/1.0.0/{filename}"
+    manifest = {
+        "id": "native",
+        "language": "cpp",
+        "latest_version": "1.0.0",
+        "requirements": {"platforms": []},
+        "versions": {
+            "1.0.0": {
+                "version": "1.0.0",
+                "artifact": {
+                    "filename": filename,
+                    "path": path,
+                    "size_bytes": len(archive_bytes),
+                    "sha256": sha,
+                    "content_type": "application/octet-stream",
+                },
+            }
+        },
+    }
+
+    def fetcher(url):
+        if url.endswith("/gaia-agent.yaml"):
+            return b"id: native\n"
+        if url == f"{BASE}/{path}":
+            return archive_bytes
+        raise AssertionError(url)
+
+    return install(
+        "native",
+        manifest=manifest,
+        base_url=BASE,
+        fetcher=fetcher,
+        install_root=tmp_path,
+        trust_native=True,
+    )
+
+
+def test_install_cpp_tar_member_path_traversal_blocked(tmp_path):
+    """A self-consistent tar with a ``../../`` member must not write outside.
+
+    Regression for the Hub Installer tar-slip (CWE-22): the archive filename
+    passes ``_sanitize_artifact_filename`` but a member escapes install_dir.
+    """
+    import io
+    import tarfile as _tarfile
+
+    buf = io.BytesIO()
+    with _tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        good = _tarfile.TarInfo("agent.so")
+        good_data = b"binary"
+        good.size = len(good_data)
+        tf.addfile(good, io.BytesIO(good_data))
+        evil = _tarfile.TarInfo("../../mcp_servers.json")
+        evil_data = b"TAR_SLIP_CONFIRMED"
+        evil.size = len(evil_data)
+        tf.addfile(evil, io.BytesIO(evil_data))
+    archive = buf.getvalue()
+
+    with pytest.raises(InstallError, match="outside the agent install directory"):
+        _cpp_install_from_archive(
+            tmp_path, "evil_agent-1.0.0-linux-x86_64.tar.gz", archive
+        )
+
+    # The escaped file must NOT have been written two levels up, and nothing
+    # from the malicious archive should survive in the install dir either.
+    assert not (tmp_path.parent / "mcp_servers.json").exists()
+    assert not (tmp_path / "mcp_servers.json").exists()
+    assert not (tmp_path / "native" / "agent.so").exists()
+
+
+def test_install_cpp_tar_symlink_member_rejected(tmp_path):
+    """A tar symlink member is refused (link target could escape install_dir)."""
+    import io
+    import tarfile as _tarfile
+
+    buf = io.BytesIO()
+    with _tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        link = _tarfile.TarInfo("evil-link")
+        link.type = _tarfile.SYMTYPE
+        link.linkname = "../../../../etc/passwd"
+        tf.addfile(link)
+    archive = buf.getvalue()
+
+    with pytest.raises(InstallError, match="link"):
+        _cpp_install_from_archive(tmp_path, "native-1.0.0.tar.gz", archive)
+    assert not (tmp_path / "native" / "evil-link").exists()
+
+
 # --- T5: binaries-only manifest, no artifact for platform_key --------------
 
 
