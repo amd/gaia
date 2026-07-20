@@ -833,14 +833,20 @@ class TestReadFileBinaryGuard:
 
 
 @pytest.fixture
-def sandboxed_read_tools(tmp_path):
+def sandboxed_read_tools(tmp_path, monkeypatch):
     """Register the read tools on a mixin whose PathValidator sandboxes to safe/.
 
     Returns (tools_by_name, safe_dir, secret_dir). ``secret_dir`` is outside
-    the allowlist; reads targeting it must be denied. Runs non-interactively
-    (pytest has no TTY), so out-of-sandbox paths auto-deny deterministically.
+    the allowlist; reads targeting it must be denied.
+
+    ``_is_interactive`` is forced False so out-of-sandbox paths auto-deny
+    deterministically — otherwise, under ``pytest -s`` on a real TTY, the
+    validator would call ``input()`` and hang the test.
     """
+    from gaia import security as _security
     from gaia.security import PathValidator
+
+    monkeypatch.setattr(_security, "_is_interactive", lambda: False)
 
     safe_dir = tmp_path / "safe"
     safe_dir.mkdir()

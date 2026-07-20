@@ -1664,7 +1664,7 @@ class FileSearchToolsMixin:
                 # content preview, so it must honor the same read boundary.
                 denied = self._read_access_error(str(fp))
                 if denied:
-                    denied["operation"] = "get_file_info"
+                    denied.update({"has_errors": True, "operation": "get_file_info"})
                     return denied
 
                 if not fp.exists():
@@ -1902,7 +1902,9 @@ class FileSearchToolsMixin:
                 # indexed documents inside the sandbox still resolve).
                 denied = self._read_access_error(str(fp))
                 if denied:
-                    denied["operation"] = "analyze_data_file"
+                    denied.update(
+                        {"has_errors": True, "operation": "analyze_data_file"}
+                    )
                     return denied
 
                 # Read the file (use resolved fp path in case of fallback)
