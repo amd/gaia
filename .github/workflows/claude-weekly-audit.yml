@@ -19,9 +19,12 @@
 #                      Monday of each month; also selectable via workflow_dispatch.
 #   The `auto` dispatch default resolves to deep on day-of-month <= 7, else normal.
 #
+# SECURITY is NOT a dimension here — it has its own dedicated workflow,
+# .github/workflows/claude-security-audit.yml (deterministic semgrep + a Claude
+# taint/authz/suppression sweep, CVSS-scored, findings to the private code-scanning
+# tab). This audit deliberately leaves security to it, to avoid two half-owners.
+#
 # DIMENSIONS (one read-only Claude job each, run in parallel):
-#   security    — injection, unsafe subprocess/eval, secret handling. NEVER posts
-#                 details publicly (see "Security findings" below).
 #   correctness — logic bugs AND the CLAUDE.md "Fail Loudly" rule: `except Exception:
 #                 pass`, try/except that returns a placeholder, silent degradation.
 #                 (This dimension owns the silent-fallback check.)
@@ -32,7 +35,7 @@
 #                 invocation, not call validity (CLAUDE.md "#1655" boundary rule).
 #   features    — half-finished follow-ups, TODO-as-placeholder, gaps a recent feature implies.
 #
-# A synthesis job collects the five structured outputs, dedupes against already-open
+# A synthesis job collects the four structured outputs, dedupes against already-open
 # `weekly-audit` issues via a stable per-finding key, ranks by severity, and files output.
 #
 # MODEL: claude-opus-4-8 (Claude Opus 4.8) — excellent for static review at half the
@@ -45,9 +48,9 @@
 # (CLAUDE_CODE_OAUTH_TOKEN, covered by the monthly claude-auth-canary.yml). Runs on the
 # Claude Max subscription pool, so there is no per-run dollar cost — only shared quota.
 #
-# COST CEILING: 5 dimension jobs (--max-turns 30) + 1 synthesis job (--max-turns 32) =
+# COST CEILING: 4 dimension jobs (--max-turns 30) + 1 synthesis job (--max-turns 32) =
 # a known per-run ceiling. The dimension matrix runs `max-parallel: 1` (serialized) so
-# the run is a steady drip rather than a 5-job burst — this keeps it under the Max
+# the run is a steady drip rather than a 4-job burst — this keeps it under the Max
 # subscription's rolling (5-hour) rate limit, at the cost of a longer wall-clock.
 # skip-if-empty exits before any Claude call on a no-change week. The concurrency group
 # prevents two scheduled runs from overlapping.
@@ -144,12 +147,12 @@ jobs:
       contents: read
     strategy:
       fail-fast: false
-      # Serialize the dimensions so the run is a steady drip, not a 5-job burst —
+      # Serialize the dimensions so the run is a steady drip, not a 4-job burst —
       # keeps it under the Max subscription's rolling (5-hour) rate limit. Trades
       # wall-clock (~5 sequential Claude jobs) for a smoother token profile.
       max-parallel: 1
       matrix:
-        dimension: [security, correctness, docs, tests, features]
+        dimension: [correctness, docs, tests, features]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -203,12 +206,12 @@ jobs:
                changed files to focus on. In deep mode, review beyond the diff.
             3. Investigate with Grep/Glob/Read/Bash (read-only — do NOT edit, install, or run repo code).
 
-            ## Your lens — the five are mutually exclusive; claim ONLY yours
+            ## Your lens — the four are mutually exclusive; claim ONLY yours
             The lenses overlap unless you respect these boundaries. The decisive question for a
             broken thing is: **is the code wired but misbehaving (correctness), never written
-            (features), or contradicted by its docs (docs)?**
-            - **security**: injection (SQL/command), unsafe subprocess/eval, `pickle`/`yaml.load`
-              without SafeLoader, secrets in code or logs, path traversal, fork-PR surface.
+            (features), or contradicted by its docs (docs)?** SECURITY is out of scope for this
+            audit — it has a dedicated workflow (claude-security-audit.yml); if you spot a security
+            issue, leave it to that workflow rather than filing it here.
             - **correctness**: code that IS wired and runs but silently does the wrong thing or
               nothing — a handler that flips a success flag without doing the work (a rollback
               that never rolls back), a poller that always returns a placeholder/null, a mode
@@ -265,7 +268,6 @@ jobs:
                 a missing, stale, hand-authored, or gate-failing scorecard.
               - **correctness**: the agent's runtime code is bulletproof — NO stubs, NO silent
                 fallbacks, NO half-finished paths, actionable errors at every boundary.
-              - **security**: hold agent code to the strictest reading (it runs on integrators' machines).
 
             ## Severity — calibrate consistently (🔴 high · 🟠 medium · 🟡 low)
             - **🔴 high**: a security issue, data loss, or a break that hits users on the default path.
@@ -317,17 +319,10 @@ jobs:
             and skip anything you are not confident is real. A shorter, fully-substantiated list is
             the goal — never pad.
 
-            ## Security lens — details stay PRIVATE (this overrides the output rule above)
-            If YOUR LENS IS security: a GitHub Actions run has no private DM channel and this
-            job's findings feed a PUBLIC triage issue. So for security findings:
-            - Print the FULL detail (file, symbol, why, remediation) to STDOUT — the job log is
-              visible only to those with Actions read access. Start each with "SECURITY FINDING:".
-            - In `findings-security.json`, write ONLY a redacted stub per finding: a coarse
-              `path` (directory, e.g. `src/gaia/ui/`), NO exploit detail, `title` exactly
-              "Security finding (details in run log)", and a stable `dedup_key`. Never put a
-              `file:line`, exploit steps, or a payload in the JSON.
-            The synthesis job will surface security as a COUNT + a pointer to the run log,
-            tagging @kovtcharov-amd — it never appears with detail in the public issue.
+            ## Security is out of scope — hand it off, do not file it here
+            If you notice a security weakness, do NOT file it in this audit's findings or the
+            public triage issue (that would disclose it). Security has a dedicated private-channel
+            workflow (claude-security-audit.yml). Leave it to that sweep.
           claude_args: |
             --max-turns 30
             --model ${{ env.AUDIT_MODEL }}
@@ -341,7 +336,7 @@ jobs:
           path: findings-${{ matrix.dimension }}.json
           if-no-files-found: warn
 
-  # Collect the five dimension outputs, dedupe against open weekly-audit issues, rank,
+  # Collect the four dimension outputs, dedupe against open weekly-audit issues, rank,
   # and file ONE parent triage issue + per-finding child issues. This is the only job
   # with issues: write.
   synthesize:
@@ -385,8 +380,8 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
-            You are the synthesis step of GAIA's weekly proactive audit. Five dimension jobs
-            (security, correctness, docs, tests, features) each wrote a findings JSON file.
+            You are the synthesis step of GAIA's weekly proactive audit. Four dimension jobs
+            (correctness, docs, tests, features) each wrote a findings JSON file.
             Dedupe them against already-open findings, rank them, and file the output.
 
             REPO: ${{ github.repository }}
@@ -450,7 +445,7 @@ jobs:
             ## File ONE parent TRIAGE issue
             Title: `Weekly audit — ${{ needs.preflight.outputs.mode }} — ${{ github.run_id }}`.
             Label it `weekly-audit`. **Emit a section for EVERY dimension that has at least one
-            finding, in this fixed order: 🔒 Security, Correctness, Features, Docs, Tests.** Group
+            finding, in this fixed order: Correctness, Features, Docs, Tests.** Group
             each finding under the dimension IT declares in its JSON — NEVER re-bucket a
             correctness finding under features (the `dimension` field is authoritative). Within a
             section, order 🔴 → 🟠 → 🟡 and prefix each line with its severity emoji. 🔴/🟠 lines
@@ -469,12 +464,9 @@ jobs:
             ```
             Start the parent body with a one-line tally so trend is visible at a glance, e.g.
             `New this run: 4 (🔴 1 · 🟠 3) · low (in-parent only): 2 · suppressed as dup/wontfix: 9`.
-            **Security section — count + pointer ONLY.** If there were any security findings,
-            render exactly one line at the top and NOTHING else about them (no file, no symbol,
-            no detail):
-            `## 🔒 Security (<count>) — details in the run log, cc @kovtcharov-amd`
-            with the run-log link: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}.
-            NEVER put a security `file:line`, exploit, or payload in this issue.
+            Security is not a dimension here (see claude-security-audit.yml) — do not emit a
+            security section, and if any dimension's findings JSON contains a security issue,
+            omit it rather than disclosing it in this public issue.
 
             ## Cross-link the previous parent (NEVER close it)
             After filing the new parent, comment on the previous parent you found in
