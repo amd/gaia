@@ -1,0 +1,265 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Proactive Claude SECURITY audit. A dedicated, security-only companion to
+# claude-weekly-audit.yml (which now owns correctness/docs/tests/features). It
+# exists because the weekly audit's single general "security lens" missed the hub
+# tar-slip (CWE-22): it sampled a huge repo in one pass and trusted a
+# `# noqa: S202 - hub artifacts are trusted` comment as a settled decision.
+#
+# This workflow fixes both failure modes:
+#   1. DETERMINISTIC layer (semgrep) — maintained security rules over the whole
+#      tree, uploaded to code scanning. Catches known sink patterns exhaustively.
+#   2. REASONING layer (Claude) — the taint/authz/suppression analysis static
+#      tools can't do, over an explicit worklist so nothing is sampled away.
+#      Every '# noqa: S*' / '# nosec' is RE-VERIFIED from scratch, never trusted.
+#
+# PRIVACY: findings never go to a public issue. Both layers upload SARIF to the
+# repo's private Security > Code scanning tab; Claude's full detail also goes to
+# the (access-controlled) run log. High-severity findings ping @kovtcharov-amd.
+#
+# SCORING: each Claude finding carries a proposed CVSS 4.0 *vector*; the score is
+# computed deterministically by util/cvss4.py (matches the FIRST v4 calculator) —
+# never an LLM's guessed number. Scores are PROPOSED and need human confirmation.
+#
+# READ-ONLY: Claude jobs run --allowedTools Read,Grep,Glob,Bash — no Edit/Write,
+# never install or execute repo code (same rule as claude.yml review jobs).
+
+name: Claude Security Audit
+
+on:
+  schedule:
+    # 06:00 UTC every Thursday — offset from the Monday weekly audit so the two
+    # proactive Claude runs don't stack on the shared subscription rate limit.
+    - cron: "0 6 * * 4"
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: "Git ref to audit (for backtesting a known-vuln commit)"
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: claude-security-audit
+  cancel-in-progress: false
+
+env:
+  AUDIT_MODEL: claude-opus-4-8
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Deterministic layer — maintained security rules, native SARIF.
+  # ---------------------------------------------------------------------------
+  semgrep:
+    if: github.repository == 'amd/gaia'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.target_ref || github.ref }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Run semgrep (security rulesets) -> SARIF
+        run: |
+          python -m pip install --quiet semgrep
+          # continue-on-error semantics: a rule-parse hiccup must not sink the SARIF
+          # upload of everything that did scan.
+          semgrep scan --sarif --output semgrep.sarif \
+            --config p/python --config p/security-audit --config p/secrets \
+            src hub || true
+      - name: Upload semgrep SARIF to code scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  # ---------------------------------------------------------------------------
+  # Reasoning layer — one read-only Claude job per lens. continue-on-error so one
+  # lens crashing doesn't sink the others.
+  # ---------------------------------------------------------------------------
+  audit:
+    if: github.repository == 'amd/gaia'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        lens: [sink-taint, authz, suppression-review]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.target_ref || github.ref }}
+
+      - name: Build the deterministic worklist
+        run: |
+          set -euo pipefail
+          {
+            echo "# Security worklist for lens: ${{ matrix.lens }}"
+            echo "## Every security suppression (RE-VERIFY each — do NOT trust the comment)"
+            grep -rnE "# *noqa: *S[0-9]|# *nosec" src hub --include=*.py || true
+            echo ""
+            echo "## Archive extraction / deserialization sinks"
+            grep -rnE "extractall|pickle\.load|yaml\.load\(|marshal\.load" src hub --include=*.py || true
+            echo ""
+            echo "## Shell / eval sinks"
+            grep -rnE "shell=True|os\.system|subprocess\.(run|Popen|call)|\beval\(|\bexec\(" src hub --include=*.py || true
+            echo ""
+            echo "## PathValidator / allowlist / trust gates (check for asymmetric enforcement)"
+            grep -rnE "is_path_allowed|validate_write|validate_read|allowed_paths|trust_native|ensure_native_trust" src hub --include=*.py || true
+          } > security-worklist.txt
+          echo "worklist lines: $(wc -l < security-worklist.txt)"
+
+      - name: Run Claude (${{ matrix.lens }} lens)
+        id: claude
+        continue-on-error: true
+        uses: anthropics/claude-code-action@3553f84341b92da26052e28acf1aa898f9511f32  # v1.0.177
+        with:
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            You are one lens of GAIA's proactive SECURITY audit. YOUR LENS: ${{ matrix.lens }}.
+            Find real, exploitable security weaknesses. Precision beats recall — a false
+            finding erodes trust in the whole audit.
+
+            REPO: ${{ github.repository }}
+            RUN LOG: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            ## First actions
+            1. Read `CLAUDE.md` (esp. "No Silent Fallbacks" and the Security Handling Protocol).
+            2. Read `security-worklist.txt` — a deterministic list of suppressions, sinks, and
+               gate call-sites. Investigate every item relevant to your lens; do not sample.
+            3. Investigate with Grep/Glob/Read/Bash (READ-ONLY — never edit, install, or run repo code).
+
+            ## Your lens
+            - **sink-taint**: trace ATTACKER-CONTROLLED input into a dangerous sink (archive
+              extraction, deserialization, subprocess/shell, eval). A sink is only a finding if
+              untrusted data can reach it. The hub tar-slip (CWE-22) is the archetype: a hub
+              archive's member paths reached `tarfile.extractall` with no per-member check.
+            - **authz**: access-control gaps — a sandbox/allowlist/trust gate that one code path
+              enforces and a sibling path skips. The read_file bypass (CWE-284) is the archetype:
+              `write_file` called the PathValidator but `read_file` did not. Look for ASYMMETRIC
+              enforcement (read vs write, one tool vs another) of `is_path_allowed`,
+              `validate_*`, `allowed_paths`, `trust_native`, auth checks.
+            - **suppression-review**: for EACH `# noqa: S<n>` / `# nosec` in the worklist, RE-DERIVE
+              whether the finding it silences is truly safe. TREAT THE COMMENT AS AN UNPROVEN CLAIM,
+              NOT A DECISION — "hub artifacts are trusted" is exactly the assumption that shipped the
+              tar-slip. If the suppressed risk is real, report it.
+
+            ## Published hub agents (`hub/agents/**`) run on integrators' machines — hold to the
+            strictest reading and bump any real finding up one severity.
+
+            ## Score every finding with a CVSS 4.0 VECTOR (the number is computed later)
+            Propose a vector; do NOT invent a number (an LLM CVSS number is untrustworthy — a real
+            triage guessed 7.3 for a vector that scores 8.7). Pick metrics with this GAIA rubric:
+            - **AV** Network only if untrusted data crosses a network boundary to reach the sink
+              (hub artifact, HTTP request); else Local (a local CLI/file input on the same host).
+            - **AT** Present if exploitation needs a precondition outside the attacker's control
+              (victim points at a non-default hub, a specific agent is installed); else None.
+            - **PR** None unless GAIA privilege/auth is required to trigger it.
+            - **UI** Active if the user must click through a warning (a trust gate); Passive if they
+              must merely initiate an install/command; None only if fully automatic.
+            - **Impact** VC for disclosure/reads, VI for writes/tampering, VA for crash/DoS. Set
+              SC/SI/SA (subsequent) only if it escapes into a SEPARATE security scope.
+            Full vector form: `CVSS:4.0/AV:_/AC:_/AT:_/PR:_/UI:_/VC:_/VI:_/VA:_/SC:_/SI:_/SA:_`.
+
+            ## Verify before reporting
+            Open the cited file, confirm the weakness is present AND not already handled (re-raised,
+            validated two lines down, guarded elsewhere). If you cannot quote concrete evidence you
+            have not verified it — omit it.
+
+            ## Output — write `findings-${{ matrix.lens }}.json` at the repo root
+            `{"findings": []}` if nothing. Each finding:
+            ```json
+            {"findings": [{
+              "path": "src/gaia/....py",
+              "line": 382,
+              "symbol": "function_or_class",
+              "cwe": "CWE-22",
+              "title": "one-line problem statement",
+              "why": "one sentence: concrete impact / what an attacker gains",
+              "evidence": "a direct quote or path:line you READ that proves it",
+              "remediation": "the fix in one sentence",
+              "confidence": "high" | "medium" | "low",
+              "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:P/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N",
+              "dedup_key": "security:<path>:<symbol>"
+            }]}
+            ```
+            `dedup_key` is `security:<path>:<symbol>` — a stable symbol, NEVER a line number.
+            Also print each finding's full detail to STDOUT prefixed "SECURITY FINDING:" (the run
+            log is access-controlled; this is the private detail channel).
+          claude_args: |
+            --max-turns 30
+            --model ${{ env.AUDIT_MODEL }}
+            --allowedTools Read,Grep,Glob,Bash
+
+      - name: Upload findings
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: findings-${{ matrix.lens }}
+          path: findings-${{ matrix.lens }}.json
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # Score + publish. Converts Claude findings to SARIF (CVSS -> security-severity)
+  # and uploads to the private code-scanning tab. Only job with security-events.
+  # ---------------------------------------------------------------------------
+  synthesize:
+    needs: [audit]
+    if: github.repository == 'amd/gaia' && !cancelled()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install CVSS scorer
+        run: python -m pip install --quiet "cvss>=3.6,<4.0"
+      - name: Download findings
+        uses: actions/download-artifact@v8
+        with:
+          path: audit-findings
+      - name: Convert findings to SARIF
+        run: |
+          set -euo pipefail
+          # Flatten the per-lens artifact subdirs into one glob for the converter.
+          find audit-findings -name 'findings-*.json' -exec cp {} . \; || true
+          if ls findings-*.json >/dev/null 2>&1; then
+            python util/findings_to_sarif.py findings-*.json -o claude-security.sarif
+          else
+            echo "No findings files produced; writing an empty SARIF run."
+            python util/findings_to_sarif.py /dev/null -o claude-security.sarif || \
+              echo '{"$schema":"https://json.schemastore.org/sarif-2.1.0.json","version":"2.1.0","runs":[{"tool":{"driver":{"name":"gaia-claude-security-audit","rules":[]}},"results":[]}]}' > claude-security.sarif
+          fi
+      - name: Upload Claude SARIF to code scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: claude-security.sarif
+          category: claude-security
+      - name: Ping maintainer on high-severity findings
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          high=$(python -c "import json,glob; n=0
+          for f in glob.glob('findings-*.json'):
+              for x in json.load(open(f)).get('findings',[]):
+                  v=x.get('cvss_vector','')
+                  n+=1 if ('VI:H' in v or 'VC:H' in v or 'VA:H' in v) else 0
+          print(n)" 2>/dev/null || echo 0)
+          if [ "${high:-0}" -gt 0 ]; then
+            echo "::warning title=Security audit::$high high-impact finding(s) — review the private code-scanning alerts. cc @kovtcharov-amd ($RUN_URL)"
+          fi
