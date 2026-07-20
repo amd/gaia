@@ -900,6 +900,19 @@ class TestReadToolsSandbox:
         assert self._denied(result)
         assert "abc123" not in str(result)
 
+    def test_search_file_content_denies_before_existence_probe(
+        self, sandboxed_read_tools
+    ):
+        """A nonexistent out-of-sandbox dir returns access-denied, not a
+        'Directory not found' existence oracle."""
+        tools, _, secret_dir = sandboxed_read_tools
+        missing = str(secret_dir / "does_not_exist")
+
+        result = tools["search_file_content"]("x", directory=missing)
+
+        assert self._denied(result)
+        assert "not found" not in result.get("error", "").lower()
+
     def test_get_file_info_outside_sandbox_denied(self, sandboxed_read_tools):
         tools, _, secret_dir = sandboxed_read_tools
         secret = secret_dir / "notes.txt"

@@ -800,6 +800,14 @@ class FileSearchToolsMixin:
             Searches actual file contents on disk, not RAG indexed documents.
             """
             try:
+                # Enforce the --allowed-paths sandbox before the existence probe
+                # so out-of-sandbox paths can't be used as a directory-existence
+                # oracle (mirrors read_file / get_file_info). Grepping file
+                # contents outside the sandbox leaks the same data as read_file.
+                denied = self._read_access_error(directory)
+                if denied:
+                    return denied
+
                 directory = Path(directory).resolve()
 
                 if not directory.exists():
@@ -807,12 +815,6 @@ class FileSearchToolsMixin:
                         "status": "error",
                         "error": f"Directory not found: {directory}",
                     }
-
-                # Enforce the --allowed-paths sandbox: grepping file contents
-                # outside the sandbox leaks the same data as read_file.
-                denied = self._read_access_error(str(directory))
-                if denied:
-                    return denied
 
                 # Text file extensions to search
                 text_extensions = {
