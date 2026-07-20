@@ -283,8 +283,21 @@ def check_mypy() -> CheckResult:
     return CheckResult("Type Checking (MyPy)", True, True, 0, output)
 
 
+def _import_security_gates():
+    """Import util/check_security_gates regardless of how lint.py was invoked."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import check_security_gates  # noqa: E402
+
+    return check_security_gates
+
+
 def check_bandit() -> CheckResult:
-    """Run Bandit security check (warning only)."""
+    """Run Bandit security check (warning only).
+
+    NOTE: making NEW HIGH findings blocking (grandfathering today's 18 via
+    .bandit-baseline.json) is a planned follow-up — enabled once the pre-existing
+    HIGH findings are fixed in their own PR.
+    """
     print("\n[6/10] Running security check with Bandit (warning only)...")
     print("-" * 40)
 
@@ -307,6 +320,23 @@ def check_bandit() -> CheckResult:
 
     print("[OK] No security issues found!")
     return CheckResult("Security Check (Bandit)", True, True, 0, output)
+
+
+def check_security_suppressions() -> CheckResult:
+    """Every '# noqa: S<n>' / '# nosec' must be reviewed in .security-suppressions.json."""
+    print("\n[7/10] Checking security suppressions are reviewed...")
+    print("-" * 40)
+    gates = _import_security_gates()
+    try:
+        ok, msgs = gates.check_suppressions()
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"[FAIL] {exc}")
+        return CheckResult("Security Suppressions", False, False, 1, str(exc))
+    for m in msgs:
+        print(m)
+    return CheckResult(
+        "Security Suppressions", ok, False, 0 if ok else 1, "\n".join(msgs)
+    )
 
 
 def check_imports() -> CheckResult:
@@ -661,6 +691,11 @@ def main():
     parser.add_argument("--flake8", action="store_true", help="Run Flake8")
     parser.add_argument("--mypy", action="store_true", help="Run MyPy")
     parser.add_argument("--bandit", action="store_true", help="Run Bandit")
+    parser.add_argument(
+        "--security",
+        action="store_true",
+        help="Check security suppressions are reviewed (.security-suppressions.json)",
+    )
     parser.add_argument("--imports", action="store_true", help="Test imports")
     parser.add_argument(
         "--agents",
@@ -692,6 +727,7 @@ def main():
             args.flake8,
             args.mypy,
             args.bandit,
+            args.security,
             args.imports,
             args.agents,
             args.dependabot,
@@ -740,6 +776,9 @@ def main():
 
     if args.bandit or run_all:
         results.append(check_bandit())
+
+    if args.security or run_all:
+        results.append(check_security_suppressions())
 
     if args.agents or run_all:
         results.append(check_agents())
