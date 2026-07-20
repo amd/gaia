@@ -95,8 +95,10 @@ Two halves, and the expensive one is not the code:
 
 - **The oracle (not automatable):** a labelled, human-curated ground-truth corpus
   plus a deterministic fixture harness so the eval needs no live service and no
-  LLM judge. Email's is `tests/fixtures/email/ground_truth.json` +
-  `FakeGmailBackend`.
+  LLM judge. Email's is the per-task corpus under `tests/fixtures/email/`
+  (`action_items_ground_truth.json`, `briefing_ground_truth.json`,
+  `drafting_ground_truth.json`, `followups_ground_truth.json`,
+  `longthread_ground_truth.json`) + `FakeGmailBackend` (`fake_gmail.py`).
 - **The mechanism:** the adapter, `SCORECARD.md`, the `scorecard_gate.py` wiring
   and a refresh workflow → **use `adding-eval-scorecard`**.
 
