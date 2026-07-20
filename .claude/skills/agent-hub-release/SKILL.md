@@ -36,6 +36,12 @@ This skill covers the **additional** channel an agent like email layers on top: 
 `release_agent_<id>.yml`. An agent can ship one or both channels. Where the two
 overlap (manifest, version rules), the guide is the source of truth.
 
+**Releasing an agent that has never shipped before?** Cutting the release is the
+*last* phase. An agent is not release-ready because its code runs — it needs a
+capability-truth audit, a real scorecard, the doc bundle, and a day-one usability
+check first. Use [`porting-agent-to-hub`](../porting-agent-to-hub/SKILL.md) for
+that flow, then come back here for the lane itself.
+
 ## Distribution model (the mental picture)
 
 ```
