@@ -2977,6 +2977,31 @@ Examples:
         help="Skip interactive confirmation prompt (non-interactive/CI use)",
     )
 
+    # Agent install command — fetch + verify + install a published agent from
+    # the Agent Hub. The headless equivalent of the Agent UI's Install button.
+    agent_install_parser = agent_subparsers.add_parser(
+        "install",
+        help="Install a published agent from the Agent Hub into ~/.gaia/agents/",
+    )
+    agent_install_parser.add_argument(
+        "agent_id",
+        help="Hub agent id to install (e.g. 'email').",
+    )
+    agent_install_parser.add_argument(
+        "--version",
+        default=None,
+        help="Specific version to install (default: the hub's latest).",
+    )
+    agent_install_parser.add_argument(
+        "--trust-native",
+        action="store_true",
+        dest="trust_native",
+        help=(
+            "Explicitly trust a native (C++) agent's unsandboxed binary. Required "
+            "for community/experimental native packages; ignored for Python agents."
+        ),
+    )
+
     # Connectors framework (issue #927, parent of #915) — manage OAuth +
     # MCP-server connectors + per-agent grants. The subparser tree lives in
     # gaia.connectors.cli to keep this file lean.
@@ -6889,7 +6914,7 @@ def handle_agent_command(args):
         print("❌ Error: No agent action specified")
         print(
             "Available actions: init, version, test, configure, health, status, "
-            "export, import"
+            "export, import, install"
         )
         print("Run 'gaia agent --help' for more information")
         sys.exit(1)
@@ -6898,9 +6923,52 @@ def handle_agent_command(args):
         handle_agent_export(args)
     elif args.agent_action == "import":
         handle_agent_import(args)
+    elif args.agent_action == "install":
+        handle_agent_install(args)
     else:
         print(f"❌ Unknown agent action: {args.agent_action}")
         sys.exit(1)
+
+
+def handle_agent_install(args):
+    """Install a published agent from the Agent Hub into ~/.gaia/agents/.
+
+    Thin CLI wrapper over :func:`gaia.hub.installer.install` — the headless
+    equivalent of the Agent UI's Install button, so a machine with no UI can
+    provision a sidecar agent (e.g. ``email``) instead of resorting to a raw
+    ``python -c`` one-liner.
+    """
+    from gaia.hub import installer
+
+    agent_id = args.agent_id
+    version = getattr(args, "version", None)
+    trust_native = getattr(args, "trust_native", False)
+
+    label = agent_id + (f"@{version}" if version else "")
+    print(f"Installing '{label}' from the Agent Hub...")
+    try:
+        result = installer.install(agent_id, version=version, trust_native=trust_native)
+    except installer.TrustRequiredError as exc:
+        print(f"❌ {exc}", file=sys.stderr)
+        print(
+            "   Re-run with --trust-native if you trust the publisher.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    except installer.InstallError as exc:
+        # Actionable install-lifecycle failures (checksum, disk, compat, …).
+        print(f"❌ Could not install '{agent_id}': {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:  # noqa: BLE001 - CLI boundary: surface loudly, exit 1
+        print(f"❌ Could not install '{agent_id}': {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"✅ Installed '{result.id}' v{result.version} to {result.path}")
+    # Sidecar agents run under the daemon — point the user at the next step.
+    from gaia.daemon.sidecars.spec import builtin_specs
+
+    if result.id in builtin_specs():
+        print(f"   Start it with: gaia daemon start-agent {result.id}")
 
 
 def handle_agent_export(args):

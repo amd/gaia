@@ -221,7 +221,7 @@ def test_user_mode_failure_names_working_remedies(monkeypatch):
     msg = str(exc_info.value)
     # Working remedies, spec-driven.
     assert "Agent Hub" in msg
-    assert "installer.install('email')" in msg  # headless path
+    assert "gaia agent install email" in msg  # headless CLI path
     assert "GAIA_EMAIL_AGENT_MODE=dev" in msg
     assert "Sidecar logs:" in msg
     assert "https://amd-gaia.ai/docs/guides/email" in msg
@@ -244,7 +244,7 @@ def test_user_mode_failure_is_spec_driven_no_email_leak(monkeypatch):
     with pytest.raises(SidecarSpawnError) as exc_info:
         m.build_spawn_command(port=9123)
     msg = str(exc_info.value)
-    assert "installer.install('toy')" in msg
+    assert "gaia agent install toy" in msg
     assert "GAIA_TOY_AGENT_MODE=dev" in msg
     assert "email" not in msg.lower()
     assert "GAIA_EMAIL_AGENT_MODE" not in msg

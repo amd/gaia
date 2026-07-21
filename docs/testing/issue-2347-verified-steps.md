@@ -98,7 +98,7 @@ binary from the hub directly, then start the sidecar:
 ```bash
 # 1. Install the published, SHA-verified email binary from the Agent Hub.
 #    Writes ~/.gaia/agents/email/email-agent + an .installed sentinel.
-python -c "from gaia.hub import installer; installer.install('email')"
+gaia agent install email
 
 # 2. Start the sidecar under the daemon (finds the sentinel; no lock needed).
 gaia daemon start-agent email
@@ -122,6 +122,6 @@ uv pip install -e hub/agents/email/python      # once
 GAIA_EMAIL_AGENT_MODE=dev gaia email -q "Triage my inbox"
 ```
 
-> If `installer.install('email')` fails on the reporter's box, capture the full
+> If `gaia agent install email` fails on the reporter's box, capture the full
 > error — that would mean the short-term plan needs a manifest/installer change,
 > not just the message fix. (It did **not** fail in Windows testing.)

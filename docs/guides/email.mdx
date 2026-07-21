@@ -386,8 +386,8 @@ involved. Two modes, selected by `GAIA_EMAIL_AGENT_MODE`:
   hub directly:
 
   ```bash
-  python -c "from gaia.hub import installer; installer.install('email')"
-  # then: gaia daemon start-agent email
+  gaia agent install email
+  gaia daemon start-agent email
   ```
 
   Only a GAIA **source checkout** additionally carries a `binaries.lock.json`
