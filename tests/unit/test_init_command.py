@@ -7,6 +7,7 @@ Unit tests for the gaia init command.
 These tests use mocking to avoid actual network calls and installations.
 """
 
+import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -599,7 +600,11 @@ class TestInstallPipExtras(unittest.TestCase):
         joined = " ".join(warnings)
         self.assertTrue(warnings, "expected a fallback warning")
         self.assertNotIn("pip install pip install", joined)
-        self.assertIn('uv pip install "amd-gaia[rag]"', joined)
+        # #2358: the fallback message must work in a stock venv with no `uv`
+        # on PATH -- not a bare `uv pip install` (the same dead end
+        # install_hints.source_install_command was fixed for).
+        self.assertNotIn("uv pip install", joined)
+        self.assertIn(f'{sys.executable} -m pip install "amd-gaia[rag]"', joined)
 
 
 class TestVersionCompatibility(unittest.TestCase):
