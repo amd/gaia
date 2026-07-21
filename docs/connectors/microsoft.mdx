@@ -124,6 +124,14 @@ The device-code flow skips the Azure app registration and the loopback
 redirect entirely — useful for headless machines, or when a public **client
 ID** is already available (e.g. an org-published GAIA app registration).
 
+**In the Agent UI:** with a client ID configured (env or the OAuth-client
+form), the Microsoft tile in Settings → Connections shows a **Sign in with a
+code** button next to **Connect**. Click it, then enter the displayed code at
+the Microsoft URL — the tile flips to **Connected** automatically when you
+finish. No browser redirect, no app registration.
+
+**From the CLI:**
+
 ```bash
 # Supply a pre-registered public client id (personal + work/school audience)
 export GAIA_MICROSOFT_CLIENT_ID=<application-client-id>

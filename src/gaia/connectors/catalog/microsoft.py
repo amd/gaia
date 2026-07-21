@@ -71,6 +71,10 @@ MICROSOFT_SPEC = ConnectorSpec(
         "https://graph.microsoft.com/Calendars.ReadWrite",
     ),
     oauth_provider_ref="microsoft",
+    # The Microsoft provider implements the RFC 8628 device-code endpoints, so
+    # the UI can offer zero-setup "sign in with a code" alongside the browser
+    # flow (no Azure app registration / loopback redirect needed).
+    supports_device_code=True,
     # First-time setup form. Microsoft public-client PKCE flows take ONLY a
     # Client ID — Microsoft forbids a client_secret for public/native clients.
     # The optional secret field exists solely for the rare confidential

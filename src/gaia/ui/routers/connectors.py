@@ -481,6 +481,9 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
         "mcp_env_keys": list(spec.mcp_env_keys),
         "default_scopes": list(spec.default_scopes),
         "available_scopes": list(spec.available_scopes),
+        # Device-code capability (#1275): lets the UI offer "sign in with a
+        # code" (no browser redirect / no Azure app registration).
+        "supports_device_code": spec.supports_device_code,
         # OAuth setup form (e.g. Google client_id/client_secret) — empty
         # tuple for connectors that don't need first-time provider creds.
         "oauth_setup_fields": [
@@ -846,6 +849,72 @@ async def authorize(
         )
     except ConnectorsError as e:
         raise _raise_http_for(e) from e
+
+
+# Keeps background device-poll tasks referenced so they aren't garbage
+# collected mid-flight (asyncio holds only weak refs to bare tasks).
+_device_poll_tasks: set = set()
+
+
+@router.post(
+    "/{connector_id}/authorize-device", dependencies=[Depends(_require_ui_header)]
+)
+async def authorize_device(
+    request: Request, connector_id: str, body: AuthorizeRequest
+) -> Dict[str, Any]:
+    """Start a device-code flow (no browser redirect / no Azure app needed).
+
+    Returns ``{user_code, verification_uri, expires_in, interval, message}`` for
+    the UI to display. Unlike the browser flow there is no loopback callback, so
+    the server kicks off a background poller; on completion ``poll_device_flow``
+    emits ``connector.oauth.completed`` (and ``connection.connected``) over the
+    same SSE stream the UI already watches, and this endpoint emits
+    ``connector.oauth.error`` if it fails. ``grant_agents`` are resolved up front
+    and committed atomically on success, mirroring ``authorize``.
+
+    The ``device_code`` is intentionally NOT returned — it is a bearer-equivalent
+    for polling and the server owns the poll loop.
+    """
+    grant_map = _resolve_grant_scopes(request, connector_id, body.grant_agents)
+    try:
+        info = await connections.start_device_flow(connector_id, scopes=body.scopes)
+    except ConnectorsError as e:
+        raise _raise_http_for(e) from e
+
+    async def _poll_and_emit() -> None:
+        try:
+            # poll_device_flow emits connector.oauth.completed itself on success.
+            await connections.poll_device_flow(
+                connector_id,
+                info["device_code"],
+                scopes=info["scopes"],
+                interval=info["interval"],
+                expires_in=info["expires_in"],
+                grant_agents=grant_map or None,
+            )
+        except ConnectorsError as e:
+            await _emitter.emit(
+                "connector.oauth.error",
+                {"connector_id": connector_id, "error": str(e)},
+            )
+        except Exception as e:  # noqa: BLE001 — surface, don't crash the loop
+            logger.exception("device-flow poll failed for %s", connector_id)
+            await _emitter.emit(
+                "connector.oauth.error",
+                {"connector_id": connector_id, "error": str(e)},
+            )
+
+    task = asyncio.create_task(_poll_and_emit())
+    _device_poll_tasks.add(task)
+    task.add_done_callback(_device_poll_tasks.discard)
+
+    return {
+        "user_code": info["user_code"],
+        "verification_uri": info["verification_uri"],
+        "expires_in": info["expires_in"],
+        "interval": info["interval"],
+        "message": info["message"],
+    }
 
 
 @router.delete(
