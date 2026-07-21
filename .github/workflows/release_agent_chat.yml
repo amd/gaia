@@ -1,0 +1,339 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Tag-triggered release for the `gaia-agent-chat` package (issue #2358).
+#
+# Deliberately LEAN compared to release_agent_email.yml: chat ships as a
+# single pure-Python wheel through the Agent Hub R2 catalog only -- there is
+# no per-OS frozen-binary matrix, no darwin-x64 compat leg, no npm package,
+# no OIDC trusted publishing, and no binaries.lock.json. Distribution model
+# mirrors email's: the Agent Hub Worker (workers/agent-hub/) fronts the
+# gaia-hub R2 bucket; publishing goes through POST /publish (server-side
+# checksummed, rebuilds index.json); `gaia init --profile chat` / `gaia agent
+# install chat` pull the wheel from the live catalog once published.
+#
+#   1. build       — `python -m build` (sdist + wheel) for
+#                     hub/agents/chat/python on one Linux runner, then a
+#                     wheel-smoke: install the JUST-BUILT wheel into a
+#                     throwaway venv and import ChatAgent from it (proves the
+#                     wheel that will be tagged v0.1.0 forever actually works
+#                     BEFORE that tag becomes immutable).
+#   2. gate        — reuses test_chat_agent.yml (already workflow_call-ready)
+#                     as the unit/registration/discovery gate. NOTE: that
+#                     workflow installs chat via an EDITABLE (`-e`) install
+#                     (same-process sys.path), so it does NOT exercise the
+#                     isolated hub-installer directory this release ships --
+#                     it's a valid unit gate, not a wheel-smoke substitute
+#                     (see the `build` job's own wheel-smoke for that). The
+#                     honest release bar per CLAUDE.md is `gaia eval agent
+#                     --agent-type doc` (live backend + judge); chat has no
+#                     committed SCORECARD.md yet (#2312/#2333), so that eval
+#                     is a documented MANUAL pre-publish step, not a CI gate.
+#   3. publish     — behind the `agent-publish` environment's manual approval
+#                     (same environment release_agent_email.yml uses):
+#                     verify pyproject.toml <-> gaia-agent.yaml version lock
+#                     (stamp_version.py --check) + the pushed tag/dispatch
+#                     input matches those files (publish_to_r2.py takes no
+#                     --version -- it trusts gaia-agent.yaml alone), then
+#                     `publish_to_r2.py --artifact ...=wheel --readme ...`,
+#                     then dispatch deploy_website.yml (cosmetic -- the
+#                     installer reads the R2 index.json directly, the
+#                     website's Agent Hub page is a separate rendering of it).
+#
+# dry_run (workflow_dispatch only): default true. A dry run runs build + gate
+# + the version checks + wheel-smoke, and explicitly SKIPS the real POST
+# /publish + deploy_website dispatch. A tag push is NEVER a dry run (that IS
+# the real release trigger). Unlike release_agent_email.yml (whose
+# workflow_dispatch always triggers a real publish -- there's no
+# dry-run-skip precedent to copy there), this input exists specifically so a
+# maintainer can exercise the whole pipeline (including the version gates
+# and wheel-smoke) without cutting an immutable release.
+#
+# Maintainer setup (one-time) -- IDENTICAL environment/secrets/variables to
+# release_agent_email.yml (see that file's header for the full setup notes):
+#   Environment: agent-publish (required reviewers; deployment branches/tags
+#     restricted to `main` AND the `agent-pkg-*` tag pattern).
+#   Secrets:     GAIA_HUB_TOKEN (Agent Hub Bearer publish token, defined as
+#     an ENVIRONMENT secret on agent-publish, NOT a repo secret).
+#   Variables:   GAIA_HUB_BASE_URL (default https://hub.amd-gaia.ai),
+#     GAIA_HUB_PUBLISH_URL (the Worker's workers.dev origin -- large uploads
+#     are blocked on the proxied custom domain's managed WAF; a wheel is
+#     small so this matters less than for email's binaries, but the Worker
+#     endpoint is the same one either way).
+#
+# Tag namespace: `agent-pkg-chat-*` (NOT `v*` -- avoids firing publish.yml /
+# the paused publish_agents.yml). Example:
+#   git tag agent-pkg-chat-v0.1.0 && git push origin --tags
+
+name: Release Agent (chat)
+
+on:
+  push:
+    tags:
+      - 'agent-pkg-chat-*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run: build + gate + version checks + wheel-smoke only, skip the real publish'
+        type: boolean
+        default: true
+      version:
+        description: 'Version to release (must match pyproject.toml + gaia-agent.yaml), e.g. 0.1.0. Only required for a REAL (non-dry-run) dispatch.'
+        required: false
+
+concurrency:
+  # Never cancel a half-done release — a partial publish must finish.
+  group: release-agent-chat-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CHAT_DIR: hub/agents/chat/python
+  MANIFEST: hub/agents/chat/python/gaia-agent.yaml
+  README: hub/agents/chat/python/README.md
+  HUB_PREFIX: agents/chat
+
+jobs:
+  # ── Stage 1: build the wheel + prove it actually works ──────────────
+  build:
+    name: Build + wheel-smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install build backend
+        run: python -m pip install --upgrade pip build
+
+      - name: Build sdist + wheel
+        working-directory: ${{ env.CHAT_DIR }}
+        run: python -m build
+
+      - name: Assert a .whl was produced
+        working-directory: ${{ env.CHAT_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          whl="$(find dist -maxdepth 1 -name '*.whl' | head -n1)"
+          if [ -z "${whl}" ]; then
+            echo "::error::no .whl found in dist/ — a build that only produces an sdist would defer PEP517 build code to install time; check the [build-system] section of pyproject.toml."
+            ls -la dist/ || true
+            exit 1
+          fi
+          echo "built: ${whl}"
+
+      - name: Wheel-smoke — install the JUST-BUILT wheel into a throwaway venv
+        working-directory: ${{ env.CHAT_DIR }}
+        shell: bash
+        # Budget for a heavy install: gaia-agent-chat depends on bare
+        # amd-gaia (no [rag] marker — RAG extras come from `gaia init`'s
+        # _install_pip_extras, not the wheel itself, see Increment 4), which
+        # itself pulls the full core dependency tree (~40 pkgs, >100 MB:
+        # transformers, accelerate, etc.). This proves the EXACT bytes that
+        # would be tagged v0.1.0 forever actually import, before that tag
+        # becomes immutable (the version-burn guard).
+        run: |
+          set -euo pipefail
+          whl="$(find dist -maxdepth 1 -name '*.whl' | head -n1)"
+          python -m venv /tmp/wheel-smoke-venv
+          /tmp/wheel-smoke-venv/bin/pip install -q "${whl}"
+          /tmp/wheel-smoke-venv/bin/python -c "from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig; print('wheel-smoke OK:', ChatAgent, ChatAgentConfig)"
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: gaia-agent-chat-wheel
+          path: ${{ env.CHAT_DIR }}/dist/*.whl
+          if-no-files-found: error
+
+  # ── Stage 1b: unit/registration/discovery gate ──────────────────────
+  gate:
+    name: Chat Agent Tests (gate)
+    uses: ./.github/workflows/test_chat_agent.yml
+
+  # ── Stage 2: publish to the Agent Hub (manual approval gate) ────────
+  publish:
+    name: Publish to Agent Hub
+    runs-on: ubuntu-latest
+    needs: [build, gate]
+    # Manual approval gate: the `agent-publish` environment (repo Settings →
+    # Environments) pauses this job until a maintainer approves — the human
+    # backstop for an accidental/tampered release tag. GAIA_HUB_TOKEN lives
+    # as an ENVIRONMENT secret here, so it isn't even readable until
+    # approval. Same environment release_agent_email.yml uses.
+    environment: agent-publish
+    permissions:
+      contents: read
+      actions: write   # gh workflow run deploy_website.yml (redeploy on publish)
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # full history so the main-ancestry guard can resolve
+
+      # Publishing is allowed ONLY from main. A tag must point at a commit
+      # on main; a workflow_dispatch must run on main. Blocks an accidental
+      # release from a feature branch.
+      - name: Assert release is cut from main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          if git merge-base --is-ancestor "$(git rev-parse HEAD)" origin/main; then
+            echo "✓ release commit is on main"
+          else
+            echo "::error::Publishing is only allowed from main. The current ref '${GITHUB_REF_NAME}' ($(git rev-parse --short HEAD)) is not on main — merge to main, then tag or dispatch the release from main."
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Resolve dry-run state
+        id: dry
+        shell: bash
+        # A tag push is NEVER a dry run (that is the real release trigger).
+        # workflow_dispatch defaults to a dry run unless the input is
+        # explicitly set to false.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$INPUT_DRY_RUN" != "false" ]; then
+            echo "dry_run=true" >> "$GITHUB_OUTPUT"
+            echo "DRY RUN — will skip the real publish + deploy_website dispatch."
+          else
+            echo "dry_run=false" >> "$GITHUB_OUTPUT"
+            echo "REAL PUBLISH."
+          fi
+
+      # Single-source version gate: pyproject.toml's version and
+      # gaia-agent.yaml's version must agree before we publish anything.
+      - name: Verify pyproject.toml <-> gaia-agent.yaml version lock
+        shell: bash
+        run: python hub/agents/chat/python/packaging/stamp_version.py --check
+
+      - name: Resolve + validate release version
+        id: ver
+        shell: bash
+        # User-controlled inputs go through env (never inlined into the
+        # script) so a value can't inject shell — GitHub Actions
+        # script-injection hardening.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          DRY_RUN: ${{ steps.dry.outputs.dry_run }}
+          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
+        run: |
+          set -euo pipefail
+          PYPROJECT_VER="$(python -c "import re,pathlib; print(re.search(r'(?m)^version\s*=\s*\"([^\"]+)\"', pathlib.Path('${CHAT_DIR}/pyproject.toml').read_text()).group(1))")"
+          MAN_VER="$(python -c "import re,pathlib; print(re.search(r'(?m)^version:[ \t]*(\S+)', pathlib.Path('${MANIFEST}').read_text()).group(1))")"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ "$DRY_RUN" = "true" ]; then
+              # A dry run needs no user-supplied version — the committed
+              # files (already lock-checked above) are the source of truth.
+              VERSION="${PYPROJECT_VER}"
+            else
+              if [ -z "${INPUT_VERSION:-}" ]; then
+                echo "::error::a REAL (non-dry-run) workflow_dispatch requires the 'version' input."
+                exit 1
+              fi
+              VERSION="${INPUT_VERSION}"
+            fi
+          else
+            TAG="${GITHUB_REF_NAME}"
+            VERSION="${TAG#agent-pkg-chat-}"
+            VERSION="${VERSION#v}"
+          fi
+          echo "release version: ${VERSION} (pyproject.toml=${PYPROJECT_VER}, gaia-agent.yaml=${MAN_VER})"
+          if [ "$VERSION" != "$PYPROJECT_VER" ] || [ "$VERSION" != "$MAN_VER" ]; then
+            echo "::error::version mismatch — tag/input=${VERSION}, pyproject.toml=${PYPROJECT_VER}, gaia-agent.yaml=${MAN_VER}. Align all three before tagging/dispatching."
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "base_url=${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}/${HUB_PREFIX}/${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Download wheel artifact
+        if: steps.dry.outputs.dry_run == 'false'
+        uses: actions/download-artifact@v8
+        with:
+          name: gaia-agent-chat-wheel
+          path: dist
+
+      - name: Assert hub publish token present
+        if: steps.dry.outputs.dry_run == 'false'
+        shell: bash
+        # Secret goes through env (never inlined into the script text) so a
+        # value with shell metacharacters can't break parsing or defeat log
+        # masking.
+        env:
+          GAIA_HUB_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GAIA_HUB_TOKEN:-}" ]; then
+            echo "::error::missing environment secret GAIA_HUB_TOKEN on the agent-publish environment — the Agent Hub Bearer publish token (must match the Worker's PUBLISH_TOKENS). See workers/agent-hub/README.md."
+            exit 1
+          fi
+
+      - name: Install requests + PyYAML (publish_to_r2.py deps)
+        if: steps.dry.outputs.dry_run == 'false'
+        run: python -m pip install --upgrade requests pyyaml
+
+      - name: Publish the wheel to the Agent Hub (POST /publish)
+        if: steps.dry.outputs.dry_run == 'false'
+        shell: bash
+        env:
+          # The Worker reads the Bearer token from this env var only — never
+          # the command line or disk.
+          AGENT_HUB_PUBLISH_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
+          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
+          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
+        run: |
+          set -euo pipefail
+          whl="$(find dist -maxdepth 1 -name '*.whl' | head -n1)"
+          if [ -z "${whl}" ]; then
+            echo "::error::no .whl found in the downloaded artifact."
+            exit 1
+          fi
+          # publish_to_r2.py is a generic, --manifest-driven publisher (no
+          # email-specific hardcoding in its POST/verify path) that only
+          # ships under email's packaging/ today — reused here in place
+          # rather than duplicated, matching Increment 3's file-ownership
+          # scope (only stamp_version.py is a NEW chat-owned file).
+          # --artifact needs the explicit =wheel key: _infer_platform_key
+          # only special-cases 'email-agent-*'/'.zip' filenames — a bare
+          # gaia_agent_chat-*.whl has no inferrable prefix.
+          python hub/agents/email/python/packaging/publish_to_r2.py \
+            --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
+            --manifest "${MANIFEST}" \
+            --artifact "${whl}=wheel" \
+            --readme "${README}" \
+            --summary-out published.json
+          echo "=== publish summary ==="
+          cat published.json
+
+      - name: Redeploy the website to publish the new catalog entry
+        if: steps.dry.outputs.dry_run == 'false'
+        shell: bash
+        # The website builds its Agent Hub pages at deploy time from the
+        # live hub index.json (website/src/data/catalog.ts,
+        # HUB_CATALOG_URL), so a freshly published agent only appears after
+        # the site rebuilds. deploy_website.yml auto-triggers only on
+        # website/** changes — a hub publish touches no such file — so
+        # trigger it explicitly via workflow_dispatch. Least-privilege: uses
+        # this job's GITHUB_TOKEN (actions: write), no extra secret.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run deploy_website.yml --ref main
+          echo "✓ requested website redeploy (deploy_website.yml on main)"

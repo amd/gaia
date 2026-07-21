@@ -25,12 +25,30 @@ AGENTS_DIR = REPO_ROOT / "hub" / "agents"
 
 
 class TestSourceInstallCommand:
-    def test_known_wheel_produces_git_subdirectory_install(self):
+    def test_known_wheel_does_not_require_a_bare_uv_executable(self):
+        """#2358: a stock `python -m venv` has neither a `uv` binary on PATH
+        nor the `uv` Python module. Hard-coding `uv pip install` in the hint
+        recreates the exact dead end #2240 was supposed to fix -- it just
+        moves the broken command from `pip install gaia-agent-chat` to
+        `uv pip install "... @ git+..."`. The command must be runnable with
+        nothing more than the active interpreter's own pip (`python -m pip`),
+        the same last-resort frontend `InitCommand._install_pip_extras`
+        already falls back to for exactly this reason.
+        """
         cmd = source_install_command("gaia-agent-chat")
-        assert cmd == (
-            'uv pip install "gaia-agent-chat @ '
-            "git+https://github.com/amd/gaia.git#subdirectory="
-            'hub/agents/chat/python"'
+        assert not cmd.startswith("uv "), (
+            f"command requires a bare `uv` executable on PATH, which a stock "
+            f"`python -m venv` does not have: {cmd!r}"
+        )
+        assert "-m pip install" in cmd, (
+            f"command must be runnable via `python -m pip`, which every "
+            f"stock venv provides even with no `uv` on PATH: {cmd!r}"
+        )
+        # The core operation (which wheel, from which subdirectory) must be
+        # unchanged regardless of which frontend invokes pip.
+        assert (
+            "gaia-agent-chat @ git+https://github.com/amd/gaia.git"
+            "#subdirectory=hub/agents/chat/python" in cmd
         )
 
     def test_unknown_wheel_raises(self):

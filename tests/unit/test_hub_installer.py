@@ -1441,3 +1441,169 @@ class TestAgentIdPathSafety:
         assert (outside / "keep.txt").read_text() == "untouched"
         assert not (outside / "config.json").exists()
         assert list(install_root.iterdir()) == []
+
+
+# ---------------------------------------------------------------------------
+# Real (non-mocked) wheel install (#2358)
+#
+# Every other test in this file uses the mock-and-record `run_pip=lambda
+# args: pip_calls.append(args)` pattern -- it proves install() *called*
+# something shaped like a pip invocation, never that a real wheel would
+# actually unpack into an importable package. This test runs a REAL `pip
+# install --target` subprocess against a real, hand-built wheel (see
+# tests/fixtures/wheel_builder.py) so it can only pass because the install
+# genuinely happened.
+# ---------------------------------------------------------------------------
+
+
+def test_install_real_wheel_lands_in_site_packages_and_is_importable(tmp_path):
+    """Regression guard for the #1655-shaped "already there" trap: assert the
+    fixture package is NOT importable before the install (cold-state
+    precondition), then prove a REAL pip subprocess made it importable.
+    """
+    import importlib
+    import importlib.util
+    import subprocess
+    import sys
+
+    from tests.fixtures.wheel_builder import (
+        build_chat_shaped_fixture_wheel,
+        build_wheel_fetcher,
+        build_wheel_manifest,
+    )
+
+    agent_id = "realwheeltestagent"
+    module_name = f"{agent_id}_pkg"
+
+    # Cold-state precondition (#1655-shaped trap): if this module were
+    # already importable somehow (a stray leftover install, a name
+    # collision), the "it's importable after install" assertion below would
+    # pass for the wrong reason. Fail loud here instead.
+    assert importlib.util.find_spec(module_name) is None, (
+        f"{module_name} is already importable before the install -- this "
+        "test cannot prove anything about a REAL install; pick a more "
+        "unique fixture module name or clean up the stray install"
+    )
+
+    wheel_bytes = build_chat_shaped_fixture_wheel(agent_id=agent_id)
+    manifest, artifact_path = build_wheel_manifest(agent_id, "0.1.0", wheel_bytes)
+    fetcher = build_wheel_fetcher(BASE, artifact_path, wheel_bytes, agent_id)
+
+    def real_run_pip(args):
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", *args],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    # This test proves the wheel-artifact install path lands real files
+    # (#2358 item 6) -- it isn't chartered to prove the separate active-env
+    # `.pth` mechanism, so redirect that target to an isolated scratch dir
+    # rather than writing into this real dev venv's site-packages.
+    result = install(
+        agent_id,
+        manifest=manifest,
+        base_url=BASE,
+        fetcher=fetcher,
+        run_pip=real_run_pip,
+        install_root=tmp_path,
+        active_env_site_packages=tmp_path / "_fake_active_env_site_packages",
+    )
+
+    site_packages = tmp_path / agent_id / "site-packages"
+    assert result.path == tmp_path / agent_id
+    assert (site_packages / module_name / "__init__.py").exists()
+    assert (site_packages / module_name / "agent.py").exists()
+    dist_info = site_packages / f"{agent_id}-0.1.0.dist-info"
+    assert dist_info.is_dir(), "pip did not produce a real dist-info dir"
+
+    sys.path.insert(0, str(site_packages))
+    try:
+        importlib.invalidate_caches()
+        spec = importlib.util.find_spec(module_name)
+        assert spec is not None, (
+            "fixture package did not become importable after adding its "
+            "site-packages to sys.path -- the real pip install did not "
+            "produce a valid package layout"
+        )
+    finally:
+        # Don't leak this fixture's importability into other tests.
+        sys.path.remove(str(site_packages))
+        sys.modules.pop(module_name, None)
+        importlib.invalidate_caches()
+
+
+# ---------------------------------------------------------------------------
+# Default pip runner uv-fallback (#2358 regression)
+#
+# Every test above injects its own `run_pip` (mocked or real), so none of
+# them ever exercise `installer._default_run_pip` -- the runner install()
+# actually falls back to when the caller passes none. That default used to
+# shell out to `uv pip install` only and hard-fail with an "install uv"
+# error when `uv` wasn't on PATH, which is exactly what happened on a real
+# `pip install amd-gaia` machine running `gaia init --profile chat`
+# (#1655-shaped blind spot: a mocked run_pip proves install() *called*
+# something, never that the real default works).
+# ---------------------------------------------------------------------------
+
+
+def test_default_run_pip_falls_back_to_python_pip_when_uv_missing(
+    tmp_path, monkeypatch
+):
+    """`_default_run_pip` must fall back to `python -m pip install` and
+    actually install the wheel when `uv` is unavailable, not raise.
+    """
+    import sys
+
+    from tests.fixtures.wheel_builder import build_chat_shaped_fixture_wheel
+
+    real_run = installer.subprocess.run
+    uv_calls = []
+    pip_calls = []
+
+    def fake_run(cmd, *args, **kwargs):
+        if cmd[0] == "uv" or (cmd[0] == sys.executable and cmd[1:3] == ["-m", "uv"]):
+            uv_calls.append(cmd)
+            raise FileNotFoundError(f"simulated missing uv: {cmd[0]}")
+        if cmd[0] == sys.executable and cmd[1:3] == ["-m", "pip"]:
+            pip_calls.append(cmd)
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(installer.subprocess, "run", fake_run)
+
+    agent_id = "uvfallbacktestagent"
+    module_name = f"{agent_id}_pkg"
+    wheel_bytes = build_chat_shaped_fixture_wheel(agent_id=agent_id)
+    wheel_path = tmp_path / "wheel_src" / f"{agent_id}-0.1.0-py3-none-any.whl"
+    wheel_path.parent.mkdir(parents=True)
+    wheel_path.write_bytes(wheel_bytes)
+
+    site_packages = tmp_path / "site-packages"
+    site_packages.mkdir()
+
+    installer._default_run_pip(["--target", str(site_packages), str(wheel_path)])
+
+    assert uv_calls, "expected _default_run_pip to try the uv frontends first"
+    assert pip_calls, (
+        "expected _default_run_pip to fall back to `python -m pip install` "
+        "when uv is unavailable -- this is the #2358 regression this test "
+        "guards against"
+    )
+    assert (
+        site_packages / module_name / "__init__.py"
+    ).exists(), "the wheel was not actually installed via the python -m pip fallback"
+
+
+def test_default_run_pip_raises_when_every_frontend_fails(monkeypatch):
+    """If uv AND `python -m pip` both fail, `_default_run_pip` must raise an
+    actionable InstallError naming what was tried -- never silently no-op.
+    """
+
+    def fake_run(cmd, *args, **kwargs):
+        raise FileNotFoundError(f"simulated missing frontend: {cmd[0]}")
+
+    monkeypatch.setattr(installer.subprocess, "run", fake_run)
+
+    with pytest.raises(InstallError, match="every pip frontend failed"):
+        installer._default_run_pip(["--target", "/nonexistent", "some-package"])

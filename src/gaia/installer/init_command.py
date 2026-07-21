@@ -454,11 +454,16 @@ class InitCommand:
                     break
             break
 
+        # The fallback message must resolve in a stock venv with no `uv` on
+        # PATH (same reasoning as gaia.agents.install_hints.
+        # source_install_command, #2358) -- this is the frontend the loop
+        # below always ends up trying last, so it's the one the user's
+        # terminal message must actually work with.
         if editable and location:
-            install_spec = f'uv pip install -e ".[{extras_str}]"'
+            install_spec = f'{sys.executable} -m pip install -e ".[{extras_str}]"'
             install_args = ["install", "-e", f"{location}[{extras_str}]"]
         else:
-            install_spec = f'uv pip install "amd-gaia[{extras_str}]"'
+            install_spec = f'{sys.executable} -m pip install "amd-gaia[{extras_str}]"'
             install_args = ["install", f"amd-gaia[{extras_str}]"]
 
         self._print_success(f"Installing extras: {extras_str}")
@@ -502,6 +507,13 @@ class InitCommand:
 
         profile_config = INIT_PROFILES[self.profile]
         has_pip_extras = bool(profile_config.get("pip_extras"))
+        # Data-driven scope (#2358): "chat" and "npu" both declare
+        # `"agent": "chat"` (they resolve to the same standalone wheel), so
+        # keying off the declared agent -- not a hardcoded profile-name
+        # literal -- naturally covers both without a special case, and never
+        # touches profiles for other hub agents (sd/code/analyst/email/...),
+        # each of which has its own, separately-owned install lifecycle.
+        has_hub_agent_check = profile_config.get("agent") == "chat"
 
         _webui_src = Path(__file__).resolve().parent.parent / "apps" / "webui" / "src"
         _is_dev_install = _webui_src.is_dir()
@@ -515,6 +527,8 @@ class InitCommand:
         if has_backend_install:
             total_steps += 1
         if has_pip_extras:
+            total_steps += 1
+        if has_hub_agent_check:
             total_steps += 1
         if _is_dev_install:
             total_steps += 1
@@ -596,6 +610,25 @@ class InitCommand:
                     step_num, total_steps, "Installing Python dependencies..."
                 )
                 self._install_pip_extras()
+
+            # Ensure the profile's hub agent (chat's standalone wheel) is
+            # installed (#2358). Independent of the pip-extras step above:
+            # the hub install targets the isolated
+            # ~/.gaia/agents/chat/site-packages dir, while [rag] extras
+            # target the ACTIVE interpreter — one must not replace or block
+            # the other. Unlike _install_pip_extras (warn-but-continue), a
+            # genuine failure here is allowed to propagate into this
+            # method's own top-level `except Exception` below, which already
+            # converts it into an actionable non-zero exit — silently
+            # continuing would just recreate the "chat isn't installed"
+            # state this issue exists to close.
+            if has_hub_agent_check:
+                step_num += 1
+                self._print("")
+                self._print_step(
+                    step_num, total_steps, "Checking chat agent installation..."
+                )
+                self._ensure_hub_agent_installed()
 
             # Build Agent UI frontend (dev/source installs only)
             if _is_dev_install:
@@ -1901,6 +1934,15 @@ class InitCommand:
             return False
 
     @staticmethod
+    def _is_hub_agent_available(agent_id: str) -> bool:
+        """Whether the standalone ``gaia-agent-<agent_id>`` wheel is
+        importable in THIS process (by the same naming convention
+        ``install_hints._AGENT_SOURCE_SUBDIRS`` and every ``gaia-agent-*``
+        wheel already use: import name ``gaia_agent_<id>``).
+        """
+        return importlib.util.find_spec(f"gaia_agent_{agent_id}") is not None
+
+    @staticmethod
     def _chat_agent_available() -> bool:
         """Whether the standalone gaia-agent-chat wheel is importable.
 
@@ -1909,7 +1951,89 @@ class InitCommand:
         chat` as a ready next step when it isn't installed is a false
         promise, so completion messaging checks first.
         """
-        return importlib.util.find_spec("gaia_agent_chat") is not None
+        return InitCommand._is_hub_agent_available("chat")
+
+    def _ensure_hub_agent_installed(self) -> None:
+        """Install this profile's hub agent from the Agent Hub catalog if it
+        isn't already available and the live catalog confirms it's published.
+
+        Scoped by ``run()``'s ``has_hub_agent_check`` (profiles whose
+        declared ``"agent"`` is ``"chat"`` -- both ``chat`` and ``npu``).
+
+        Distinguishes two catalog states (#2358):
+
+        * Not yet published (today's state — only ``email`` is live on the
+          Hub): NOT an error. A blind "call install() and fail loud" would
+          turn today's soft success (``init`` completes, prints a
+          source-install hint) into a hard failure for every `gaia init
+          --profile chat` until the publish lands — a real regression this
+          method must not introduce. Silently returns; the existing
+          ``_print_completion()`` hint already tells the user how to
+          source-install it in the meantime.
+        * Published but the install itself genuinely fails: this method
+          does NOT catch that exception — it propagates into ``run()``'s
+          own top-level ``except Exception`` handler, which already turns
+          any unexpected exception into an actionable non-zero exit. Unlike
+          ``_install_pip_extras``, a real hub-install failure must fail
+          loudly, not warn-and-continue (that would just recreate the
+          "agent isn't installed" state this issue exists to close).
+
+        A catalog-fetch failure (network down, no offline cache) is treated
+        the same as "not yet published" — `gaia init` must not hard-fail
+        merely because the Hub catalog service is briefly unreachable.
+        """
+        agent_id = INIT_PROFILES[self.profile]["agent"]
+
+        if self._is_hub_agent_available(agent_id):
+            return
+
+        from gaia.hub import catalog as hub_catalog
+
+        try:
+            catalog_result = hub_catalog.load_index()
+            published = any(
+                agent.get("id") == agent_id for agent in catalog_result.agents
+            )
+        except Exception as exc:  # noqa: BLE001 - catalog reachability, not install
+            log.warning(
+                "Could not check the Agent Hub catalog for '%s': %s -- "
+                "treating as not-yet-published (non-fatal)",
+                agent_id,
+                exc,
+            )
+            published = False
+
+        if not published:
+            log.debug(
+                "'%s' is not yet published to the Agent Hub catalog; "
+                "skipping the hub install for this run.",
+                agent_id,
+            )
+            return
+
+        from gaia.hub import installer as hub_installer
+
+        self._print(f"   Installing '{agent_id}' from the Agent Hub...")
+        result = hub_installer.install(agent_id)
+        self._print_success(f"Installed '{agent_id}' from the Agent Hub")
+
+        # No AgentRegistry exists in this process to hot-register into (we
+        # deliberately don't construct one just for this), so mirror the
+        # sys.path side of _hot_register directly: without this, THIS same
+        # process's own _print_completion() would still (incorrectly) show
+        # the "chat agent not installed yet" hint immediately after a
+        # successful install, since installer.install() only mutates
+        # sys.path when a registry= is passed. isinstance-guarded (rather
+        # than a bare truthiness/attribute check) so a test double standing
+        # in for InstallResult can't accidentally make it past this into a
+        # real sys.path mutation.
+        if isinstance(result.path, Path):
+            site_packages = result.path / hub_installer.SITE_PACKAGES_DIRNAME
+            if site_packages.is_dir():
+                sp = str(site_packages)
+                if sp not in sys.path:
+                    sys.path.append(sp)
+                    importlib.invalidate_caches()
 
     def _print_completion(self):
         """Print completion message with next steps."""
