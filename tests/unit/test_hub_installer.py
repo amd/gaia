@@ -1532,3 +1532,76 @@ def test_install_real_wheel_lands_in_site_packages_and_is_importable(tmp_path):
         sys.path.remove(str(site_packages))
         sys.modules.pop(module_name, None)
         importlib.invalidate_caches()
+
+
+# ---------------------------------------------------------------------------
+# Default pip runner uv-fallback (#2358 regression)
+#
+# Every test above injects its own `run_pip` (mocked or real), so none of
+# them ever exercise `installer._default_run_pip` -- the runner install()
+# actually falls back to when the caller passes none. That default used to
+# shell out to `uv pip install` only and hard-fail with an "install uv"
+# error when `uv` wasn't on PATH, which is exactly what happened on a real
+# `pip install amd-gaia` machine running `gaia init --profile chat`
+# (#1655-shaped blind spot: a mocked run_pip proves install() *called*
+# something, never that the real default works).
+# ---------------------------------------------------------------------------
+
+
+def test_default_run_pip_falls_back_to_python_pip_when_uv_missing(tmp_path, monkeypatch):
+    """`_default_run_pip` must fall back to `python -m pip install` and
+    actually install the wheel when `uv` is unavailable, not raise.
+    """
+    import sys
+
+    from tests.fixtures.wheel_builder import build_chat_shaped_fixture_wheel
+
+    real_run = installer.subprocess.run
+    uv_calls = []
+    pip_calls = []
+
+    def fake_run(cmd, *args, **kwargs):
+        if cmd[0] == "uv" or (cmd[0] == sys.executable and cmd[1:3] == ["-m", "uv"]):
+            uv_calls.append(cmd)
+            raise FileNotFoundError(f"simulated missing uv: {cmd[0]}")
+        if cmd[0] == sys.executable and cmd[1:3] == ["-m", "pip"]:
+            pip_calls.append(cmd)
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(installer.subprocess, "run", fake_run)
+
+    agent_id = "uvfallbacktestagent"
+    module_name = f"{agent_id}_pkg"
+    wheel_bytes = build_chat_shaped_fixture_wheel(agent_id=agent_id)
+    wheel_path = tmp_path / "wheel_src" / f"{agent_id}-0.1.0-py3-none-any.whl"
+    wheel_path.parent.mkdir(parents=True)
+    wheel_path.write_bytes(wheel_bytes)
+
+    site_packages = tmp_path / "site-packages"
+    site_packages.mkdir()
+
+    installer._default_run_pip(["--target", str(site_packages), str(wheel_path)])
+
+    assert uv_calls, "expected _default_run_pip to try the uv frontends first"
+    assert pip_calls, (
+        "expected _default_run_pip to fall back to `python -m pip install` "
+        "when uv is unavailable -- this is the #2358 regression this test "
+        "guards against"
+    )
+    assert (site_packages / module_name / "__init__.py").exists(), (
+        "the wheel was not actually installed via the python -m pip fallback"
+    )
+
+
+def test_default_run_pip_raises_when_every_frontend_fails(monkeypatch):
+    """If uv AND `python -m pip` both fail, `_default_run_pip` must raise an
+    actionable InstallError naming what was tried -- never silently no-op.
+    """
+
+    def fake_run(cmd, *args, **kwargs):
+        raise FileNotFoundError(f"simulated missing frontend: {cmd[0]}")
+
+    monkeypatch.setattr(installer.subprocess, "run", fake_run)
+
+    with pytest.raises(InstallError, match="every pip frontend failed"):
+        installer._default_run_pip(["--target", "/nonexistent", "some-package"])

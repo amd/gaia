@@ -397,25 +397,47 @@ def _download_and_verify(
 
 
 def _default_run_pip(args: List[str]) -> None:
-    """Run ``uv pip install <args>``; raise InstallError on failure."""
-    cmd = ["uv", "pip", "install", *args]
-    try:
-        proc = subprocess.run(  # noqa: S603 - args are constructed, not shell
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except FileNotFoundError as exc:
-        raise InstallError(
-            "Could not run 'uv' to install the agent's Python package. Install "
-            "uv (https://docs.astral.sh/uv/) or ensure it is on PATH."
-        ) from exc
-    if proc.returncode != 0:
-        raise InstallError(
-            f"'uv pip install' failed (exit {proc.returncode}): "
+    """Install ``args`` via pip, trying frontends in order until one works.
+
+    Mirrors the frontend list in
+    ``gaia.installer.init_command.InitCommand._install_pip_extras``: the
+    standalone ``uv`` binary leads (fastest, honours the active venv), then
+    ``python -m uv``, then ``python -m pip`` -- guaranteed present in any
+    venv, so a machine with no ``uv`` on PATH (the #2358 dead end: a stock
+    ``pip install amd-gaia`` user hitting ``gaia init --profile chat``)
+    still installs the wheel instead of hard-failing. Raises InstallError
+    only if every frontend fails.
+    """
+    frontends = [
+        ["uv", "pip", "install"],
+        [sys.executable, "-m", "uv", "pip", "install"],
+        [sys.executable, "-m", "pip", "install"],
+    ]
+    attempts: List[str] = []
+    for frontend in frontends:
+        cmd = [*frontend, *args]
+        try:
+            proc = subprocess.run(  # noqa: S603 - args are constructed, not shell
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError:
+            attempts.append(f"{frontend[0]} (not found on PATH)")
+            continue
+        if proc.returncode == 0:
+            return
+        attempts.append(
+            f"{' '.join(frontend)} (exit {proc.returncode}): "
             f"{proc.stderr.strip() or proc.stdout.strip()}"
         )
+    raise InstallError(
+        "Could not install the agent's Python package -- every pip frontend "
+        "failed:\n" + "\n".join(f"  - {a}" for a in attempts) + "\n"
+        f"Install uv (https://docs.astral.sh/uv/) or ensure "
+        f"'{sys.executable} -m pip' works, then retry."
+    )
 
 
 # ---------------------------------------------------------------------------
