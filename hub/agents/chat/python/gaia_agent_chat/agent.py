@@ -11,11 +11,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional
 
+from gaia.logger import get_logger
+
+logger = get_logger(__name__)
+
 try:
     from watchdog.observers import Observer
-except ImportError:
+except ImportError as _watchdog_err:
+    # Typed capability probe — non-fatal, watchdog is optional (file-watch
+    # tools degrade gracefully without it).
+    logger.debug("watchdog not available: %s", _watchdog_err)
     Observer = None
 
+from gaia_agent_chat.profiles import TOOL_GROUP_REGISTRARS, get_profile_spec
 from gaia_agent_chat.session import SessionManager
 from gaia_agent_chat.tool_bundles import DOC_BUNDLES, DOC_CORE_TOOLS
 
@@ -42,7 +50,6 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     ShellToolsMixin,
 )
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, is_tool_calling_model
-from gaia.logger import get_logger
 from gaia.mcp.mixin import MCPClientMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
 from gaia.sd.mixin import SDToolsMixin
@@ -50,7 +57,11 @@ from gaia.security import PathValidator
 from gaia.utils.file_watcher import FileChangeHandler, check_watchdog_available
 from gaia.vlm.mixin import VLMToolsMixin
 
-logger = get_logger(__name__)
+# Sentinel for not-yet-built lazy attributes (``rag``, ``session_manager`` —
+# #2323 Increment 3). Distinct from ``None`` so a degraded/failed build
+# (which legitimately caches ``None``) is never mistaken for "not attempted
+# yet" and rebuilt on every access.
+_UNSET = object()
 
 
 @dataclass
@@ -266,9 +277,17 @@ class ChatAgent(
         # turn — #1744). GPU/CPU keep the GGUF nomic embedder.
         effective_embedding_model = get_embedding_model_for_device(config.device)
 
-        # Initialize RAG SDK (optional - will be None if dependencies not installed)
+        # RAG (#2323 Increment 3): ``RAGConfig`` is cheap (no I/O) and built
+        # eagerly here — every profile's allowed_paths/model/embedding wiring
+        # must be inspectable regardless of whether RAG is ever used. The
+        # actual ``RAGSDK`` construction — which does the real dependency and
+        # model work — is deferred to first ``self.rag`` access (the `rag`
+        # property below), so the lean "chat" profile (and file/data/web)
+        # never pays for it. Degrade-to-``None``-on-failure semantics are
+        # unchanged; only the timing of the attempt (and its warning log)
+        # moves from "always at construction" to "first access, if any".
         try:
-            rag_config = RAGConfig(
+            self._rag_config = RAGConfig(
                 model=effective_model_id,
                 embedding_model=effective_embedding_model,
                 chunk_size=config.chunk_size,
@@ -280,13 +299,13 @@ class ChatAgent(
                 base_url=effective_base_url,  # Pass base_url to RAG for VLM client
                 allowed_paths=config.allowed_paths,  # Pass allowed paths to RAG SDK
             )
-            self.rag = RAGSDK(rag_config)
         except Exception as e:
             logger.warning(
                 "RAG not available (install with: uv pip install -e '.[rag]'): %s", e
             )
             logger.debug("RAG init traceback:", exc_info=True)
-            self.rag = None
+            self._rag_config = None
+        self._rag = _UNSET
 
         # File system monitoring
         self.observers = []
@@ -345,8 +364,15 @@ class ChatAgent(
                     e,
                 )
 
-        # Session management
-        self.session_manager = SessionManager()
+        # Session management — construction deferred to first use (#2323
+        # Increment 3): SessionManager.__init__ runs a startup cleanup sweep
+        # (session.py cleanup_old_sessions), which now runs on first session
+        # access rather than on every agent build. Intentional perf change,
+        # not silent: a one-shot query that never touches sessions skips the
+        # sweep entirely; any session-using flow (interactive mode, the UI,
+        # /save, /sessions, /reset) still builds it and cleans up exactly as
+        # before, just lazily. See the `session_manager` property below.
+        self._session_manager = _UNSET
         self.current_session = None
         self.conversation_history: List[Dict[str, str]] = (
             []
@@ -413,7 +439,14 @@ class ChatAgent(
         # tool), it saves the path to a per-session JSON file.  On subsequent turns
         # a fresh ChatAgent instance is created, so we re-load those documents here
         # to preserve cross-turn discovery (e.g. smart_discovery scenario).
-        if config.ui_session_id and self.rag:
+        # Gated on profile (#2323 Increment 3) so chat/file/data/web — which
+        # never register RAG tools and can't use this restore — never trigger
+        # the lazy RAG build via ``self.rag`` below; ``and`` short-circuits
+        # before evaluating it.
+        _uses_rag = "doc_rag" in get_profile_spec(
+            getattr(config, "prompt_profile", "full")
+        ).tool_groups
+        if _uses_rag and config.ui_session_id and self.rag:
             loaded = self.session_manager.load_session(config.ui_session_id)
             if loaded:
                 self.current_session = loaded
@@ -449,6 +482,92 @@ class ChatAgent(
         # Start watching directories
         if self.watch_directories:
             self._start_watching()
+
+    # ── lazy subsystems (#2323 Increment 3) ────────────────────────────────
+
+    @property
+    def rag(self) -> Optional[RAGSDK]:
+        """Lazily-built ``RAGSDK`` — constructed transparently on ANY first
+        access (not just tool dispatch — ~15 sites across ``app.py`` and the
+        Agent UI's ``_chat_helpers.py`` read ``agent.rag`` directly).
+
+        Degrades to ``None`` on failure and never raises — the lean "chat"
+        profile still reads ``self.rag`` every turn via ``has_indexed``
+        (gated so it never reaches this for chat/file/data/web, but a raise
+        here would crash any profile that does). Cached after the first
+        build attempt (success or failure) — never retried.
+        """
+        if self._rag is _UNSET:
+            self._rag = self._build_rag()
+        return self._rag
+
+    @rag.setter
+    def rag(self, value: Optional[RAGSDK]) -> None:
+        self._rag = value
+
+    def _build_rag(self) -> Optional[RAGSDK]:
+        """Build the ``RAGSDK`` from the ``RAGConfig`` frozen in ``__init__``.
+
+        ``RAGConfig`` itself is built eagerly (cheap, no I/O) so allowed_paths
+        confinement stays inspectable regardless of profile; only the actual
+        SDK construction — the real dependency/model work — is deferred here.
+        """
+        if self._rag_config is None:
+            # RAGConfig construction itself already failed in __init__ (and
+            # was already logged there) — nothing to retry.
+            return None
+        try:
+            return RAGSDK(self._rag_config)
+        except Exception as e:
+            logger.warning(
+                "RAG not available (install with: uv pip install -e '.[rag]'): %s", e
+            )
+            logger.debug("RAG init traceback:", exc_info=True)
+            return None
+
+    @property
+    def session_manager(self) -> SessionManager:
+        """Lazily-built ``SessionManager`` — constructed on first access.
+
+        ``SessionManager.__init__`` runs a startup cleanup sweep
+        (``cleanup_old_sessions``); deferring construction defers that sweep
+        to first session use rather than running it on every agent build.
+        """
+        if self._session_manager is _UNSET:
+            self._session_manager = SessionManager()
+        return self._session_manager
+
+    @session_manager.setter
+    def session_manager(self, value: SessionManager) -> None:
+        self._session_manager = value
+
+    def _ensure_tool_loader_reset(self) -> None:
+        """Bootstrap a session for a just-created agent, if none exists yet.
+
+        Hoisted from three call sites that duplicated this exact block:
+        ``gaia_agent_chat.app`` ``main()``, and the two ``gaia chat`` entry
+        points in ``src/gaia/cli.py``. Guarded on ``not self.current_session``
+        — every "start of a run" entry point calls this so a freshly
+        constructed agent always has a session before its first turn.
+        Resets the dynamic tool loader's per-session state for the new
+        session; never raises (the loader is optional).
+
+        NOT used by ``app.py``'s interactive ``/reset`` command — that is a
+        different operation (save + new session + clear history + reset
+        loader, not just a bootstrap-if-missing), and it needs to keep
+        touching ``self.tool_loader`` directly so a caller driving
+        ``interactive_mode`` with a fully-mocked agent can still observe the
+        swallowed exception at that specific call site.
+        """
+        if self.current_session:
+            return
+        self.current_session = self.session_manager.create_session()
+        try:
+            if hasattr(self, "tool_loader"):
+                self.tool_loader.reset_session()
+        except Exception as e:
+            logger.debug("Tool loader session reset skipped: %s", e)
+        logger.debug("Created new session: %s", self.current_session.session_id)
 
     # ── dynamic tool loader (#1449) ───────────────────────────────────────
 
@@ -629,9 +748,17 @@ class ChatAgent(
 
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the Chat Agent."""
+        profile = getattr(self.config, "prompt_profile", "full")
+        spec = get_profile_spec(profile)
+
         # Get list of indexed documents
         indexed_docs_section = ""
-        has_indexed = hasattr(self, "rag") and self.rag and self.rag.indexed_files
+        # Gate on profile BEFORE touching ``self.rag`` — for chat/file/data/web
+        # (which never register RAG tools) this must never trigger the lazy
+        # RAG build (#2323 Increment 3); only doc/full read it here.
+        has_indexed = "doc_rag" in spec.tool_groups and bool(
+            self.rag and self.rag.indexed_files
+        )
         has_library = hasattr(self, "library_documents") and self.library_documents
 
         if has_indexed:
@@ -799,9 +926,8 @@ No documents are currently indexed.
         # the LLM sees tool instructions for tools that don't exist and either
         # hallucinates them or emits syntactically-valid tool calls that come
         # back as "unknown tool" errors (#495 review feedback from @itomek-amd).
-        profile = getattr(self.config, "prompt_profile", "full")
         filesystem_section = ""
-        if profile in ("file", "full") or getattr(
+        if "filesystem" in spec.capabilities or getattr(
             self.config, "enable_filesystem", False
         ):
             filesystem_section = """
@@ -818,7 +944,7 @@ No documents are currently indexed.
 """
 
         scratchpad_section = ""
-        if profile in ("data", "full") or getattr(
+        if "scratchpad" in spec.capabilities or getattr(
             self.config, "enable_scratchpad", False
         ):
             scratchpad_section = """
@@ -826,7 +952,9 @@ No documents are currently indexed.
 """
 
         browser_section = ""
-        if profile in ("web", "full") or getattr(self.config, "enable_browser", False):
+        if "browser" in spec.capabilities or getattr(
+            self.config, "enable_browser", False
+        ):
             browser_section = """
 **BROWSER TOOLS:** search_web (DuckDuckGo, no key), fetch_page (extract readable text/links/tables), download_file (save URL locally; can then index_document).
 """
@@ -892,73 +1020,42 @@ No documents are currently indexed.
 **UNSUPPORTED:** Email, scheduling, cloud storage, file conversion, live collaboration, video/audio analysis — say not available and link https://github.com/amd/gaia/issues/new?template=feature_request.md . Web browsing IS supported via `search_web` / `fetch_page` / `download_file`. Image analysis IS supported via `analyze_image`.
 """
 
-        # Assemble prompt based on profile
-        profile = getattr(self.config, "prompt_profile", "full")
-
-        if profile == "chat":
-            # Minimal: personality only — but respect explicitly enabled tools.
-            extras = filesystem_section + scratchpad_section + browser_section
-            return base_prompt + extras
-
-        if profile == "doc":
-            # Document Q&A: RAG tools + hallucination prevention.
-            # Native-only escape-hatch menu (#1450): non-native models already
-            # self-recover via the free full-registry path and are the
-            # TTFT-sensitive case, so we don't tax them with the menu. Lives in
-            # this stable prefix (before the volatile tools tail) → no KV thrash.
-            load_tools_menu = ""
-            loader = getattr(self, "tool_loader", None)
-            if loader is not None and is_tool_calling_model(
-                getattr(self, "model_id", None)
-            ):
-                load_tools_menu = (
-                    "\n\n==== LOADABLE TOOL BUNDLES ====\n"
-                    "Your visible tools are trimmed to what this turn needs. If a "
-                    "capability you need is missing, call load_tools(bundle) with "
-                    "one of these names; its tools become available on your next "
-                    "step:\n" + loader.format_bundle_menu()
-                )
-            return (
-                base_prompt
-                + indexed_docs_section
-                + tool_rules
-                + discovery_rules
-                + discovery_rules_tail
-                + rag_query_rules
-                + load_tools_menu
+        # Native-only escape-hatch menu (#1450): non-native models already
+        # self-recover via the free full-registry path and are the
+        # TTFT-sensitive case, so we don't tax them with the menu. Lives in
+        # this stable prefix (before the volatile tools tail) → no KV thrash.
+        # Only ever non-empty for the "doc" profile — no other profile's
+        # ``prompt_blocks`` names "load_tools_menu", and ``tool_loader`` is
+        # only ever built for "doc" (``_maybe_build_tool_loader``).
+        load_tools_menu = ""
+        loader = getattr(self, "tool_loader", None)
+        if loader is not None and is_tool_calling_model(
+            getattr(self, "model_id", None)
+        ):
+            load_tools_menu = (
+                "\n\n==== LOADABLE TOOL BUNDLES ====\n"
+                "Your visible tools are trimmed to what this turn needs. If a "
+                "capability you need is missing, call load_tools(bundle) with "
+                "one of these names; its tools become available on your next "
+                "step:\n" + loader.format_bundle_menu()
             )
 
-        if profile == "file":
-            # File operations: file system + search + discovery
-            return (
-                base_prompt
-                + tool_rules
-                + discovery_rules
-                + filesystem_section
-                + discovery_rules_tail
-            )
-
-        if profile == "data":
-            # Data analysis: scratchpad + file tools
-            return base_prompt + tool_rules + scratchpad_section + data_file_rules
-
-        if profile == "web":
-            # Web research: browser tools
-            return base_prompt + browser_section
-
-        # "full" — all sections (backward-compatible default)
-        return (
-            base_prompt
-            + indexed_docs_section
-            + tool_rules
-            + discovery_rules
-            + filesystem_section
-            + scratchpad_section
-            + browser_section
-            + discovery_rules_tail
-            + rag_query_rules
-            + data_file_rules
-        )
+        # Assemble prompt from this profile's declared block keys (ProfileSpec,
+        # #2323) — replaces the old per-profile if/elif chain. Every profile's
+        # assembled prompt still starts with the universal ``base_prompt``.
+        blocks = {
+            "indexed_docs_section": indexed_docs_section,
+            "tool_rules": tool_rules,
+            "discovery_rules": discovery_rules,
+            "filesystem_section": filesystem_section,
+            "scratchpad_section": scratchpad_section,
+            "browser_section": browser_section,
+            "discovery_rules_tail": discovery_rules_tail,
+            "rag_query_rules": rag_query_rules,
+            "data_file_rules": data_file_rules,
+            "load_tools_menu": load_tools_menu,
+        }
+        return base_prompt + "".join(blocks[key] for key in spec.prompt_blocks)
 
     def _create_console(self):
         """Create console for chat agent."""
@@ -1179,9 +1276,10 @@ No documents are currently indexed.
         from gaia.agents.base.tools import tool
 
         profile = getattr(self.config, "prompt_profile", "full")
+        spec = get_profile_spec(profile)
 
         # "chat" profile: no tools — just personality/conversation
-        if profile == "chat":
+        if spec.early_return:
             # Minimal: only shell for system queries
             self.register_shell_tools()
             self._register_external_tools_conditional()
@@ -1191,31 +1289,10 @@ No documents are currently indexed.
         self.register_shell_tools()
         self.register_memory_tools()  # Persistent memory tools
 
-        if profile in ("doc", "full"):
-            self.register_rag_tools()
-            # Doc profile needs file search for smart discovery workflow
-            self.register_file_tools()
-            self.register_file_search_tools()
+        for _group_name in spec.tool_groups:
+            for _registrar_name in TOOL_GROUP_REGISTRARS[_group_name]:
+                getattr(self, _registrar_name)()
 
-        if profile in ("file", "full"):
-            self.register_file_tools()
-            self.register_filesystem_tools()
-            self.register_file_search_tools()
-            self.register_file_io_tools()
-
-        if profile in ("data", "full"):
-            self.register_scratchpad_tools()
-            if profile == "data":
-                # Data profile also needs file tools to find/read data files
-                self.register_file_tools()
-                self.register_file_search_tools()
-                self.register_file_io_tools()
-
-        if profile in ("web", "full"):
-            self.register_browser_tools()
-
-        if profile == "full":
-            self.register_screenshot_tools()
         self._register_external_tools_conditional()
         self._register_loop_control_tools()  # set_loop_state, request_user_input
 
@@ -1266,7 +1343,7 @@ No documents are currently indexed.
                 }
 
         # Inline list_files — only for profiles that need file operations
-        if profile in ("file", "data", "full"):
+        if spec.generic_file_ops:
 
             @tool
             def list_files(path: str = ".") -> dict:
@@ -1395,9 +1472,7 @@ No documents are currently indexed.
         # Only register web tools for profiles that should browse the internet.
         # Doc/file/data profiles should NOT have fetch_webpage to avoid confusing
         # the LLM into web-browsing when it should use RAG.
-        _web_profiles = ("web", "full")
-
-        if profile in _web_profiles:
+        if spec.web_tools:
 
             @tool
             def open_url(url: str) -> dict:
@@ -1589,8 +1664,18 @@ No documents are currently indexed.
                             "status": "success",
                             "message": f"Notification sent via Windows fallback: {title}",
                         }
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        # Surface the REAL failure — the generic "plyer not
+                        # installed" message below is only accurate when
+                        # plyer truly isn't installed, not when this
+                        # fallback itself errored for an unrelated reason.
+                        logger.debug(
+                            "Windows PowerShell notification fallback failed: %s", e
+                        )
+                        return {
+                            "status": "error",
+                            "error": f"Notification failed: {e}",
+                        }
                 return {
                     "status": "error",
                     "error": "plyer not installed. Run: pip install plyer",
@@ -1625,15 +1710,17 @@ No documents are currently indexed.
                                     "visible": win.is_visible(),
                                 }
                             )
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            # DEBUG only — window titles can carry sensitive
+                            # text (document names, email subjects).
+                            logger.debug("Skipping unreadable window: %s", e)
                     return {
                         "status": "success",
                         "windows": windows,
                         "count": len(windows),
                     }
-                except ImportError:
-                    pass
+                except ImportError as e:
+                    logger.debug("pywinauto not available: %s", e)
                 # Windows fallback: tasklist via subprocess
                 try:
                     import subprocess
@@ -1693,8 +1780,8 @@ No documents are currently indexed.
                                 "(Mission Control equivalent)"
                             ),
                         }
-                except (FileNotFoundError, subprocess.TimeoutExpired):
-                    pass
+                except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+                    logger.debug("osascript window listing unavailable: %s", e)
                 return {
                     "status": "error",
                     "error": (
@@ -1729,8 +1816,8 @@ No documents are currently indexed.
                             "windows": windows,
                             "count": len(windows),
                         }
-                except (FileNotFoundError, subprocess.TimeoutExpired):
-                    pass
+                except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+                    logger.debug("wmctrl window listing unavailable: %s", e)
                 return {
                     "status": "error",
                     "error": "Window listing not available. Install pywinauto (Windows) or wmctrl (Linux).",
@@ -1843,7 +1930,7 @@ No documents are currently indexed.
         # in the same process do not leak in.  Exclusion replaces the old
         # _TOOL_REGISTRY.pop() pattern that corrupted the global dict.
         self._snapshot_tools()
-        if profile in ("file", "data", "full"):
+        if spec.generic_file_ops:
             _chat_exclude = {
                 "write_python_file",
                 "edit_python_file",
