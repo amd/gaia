@@ -22,15 +22,20 @@ review that files **one ranked triage issue** a maintainer skims and promotes.
 
 ## Dimensions (one read-only Claude job each, in parallel)
 
+> **Security is not a dimension here.** It moved to a dedicated workflow,
+> `.github/workflows/claude-security-audit.yml` (deterministic semgrep + a Claude
+> taint/authz/suppression sweep, CVSS-scored, findings to the private code-scanning tab).
+> Filing security into this audit's **public** triage issue was the wrong channel, and a
+> single general "security lens" is what missed the hub tar-slip.
+
 | Dimension | Looks for |
 |-----------|-----------|
-| `security` | injection, unsafe subprocess/eval, unsafe deserialization, secret handling, path traversal, fork-PR surface — **never posts detail publicly** (see below) |
 | `correctness` | code that is **wired but misbehaves** — a handler that flips a success flag without doing the work (a rollback that never rolls back), a poller that always returns null, a mode that no-ops, a flag whose handler raises `NotImplementedError` — plus real logic bugs and every CLAUDE.md "Fail Loudly" violation. **Owns wired-but-broken behavior and the silent-fallback check.** |
 | `docs` | new feature with no `docs/` page or `docs.json` entry; `cli.mdx` drift; `amd-gaia.ai` links missing `/docs/`; hub-agent README/SPEC/SKILL/CHANGELOG drift. A feature **documented as working but stubbed** is a docs finding (doc-vs-code drift), not features. |
 | `tests` | code paths with no test, or assertions that prove invocation not call validity (#1655). In **deep** mode, plain "module X has no coverage" rolls up into ONE aggregate finding; separate findings only for risk-bearing untested logic (auth/gate/precedence/error-mapping/#1655). |
 | `features` | a genuinely **missing or half-shipped** capability where nothing is wired yet (a TODO standing in for unwritten code). If the code is wired but broken, that is `correctness`, not features. |
 
-The five lenses are **mutually exclusive** — the decisive question for a broken thing is
+The four lenses are **mutually exclusive** — the decisive question for a broken thing is
 *is the code wired but misbehaving (correctness), never written (features), or contradicted
 by its docs (docs)?* Without that boundary, correctness findings leak into features and the
 priciest job's output disappears.
@@ -52,22 +57,25 @@ detected by a `release_agent_<id>.yml` workflow, a shipped `SCORECARD.md`, or a 
   `gaia.eval.scorecard_gate` (never hand-authored).
 - **correctness** — runtime code is bulletproof: no stubs, no silent fallbacks, no
   half-finished paths, actionable errors at every boundary.
-- **security** — strictest reading (agent code runs on integrators' machines).
+
+(The security review of published agents runs in `claude-security-audit.yml`.)
 
 > **Fix vs. the original handoff:** the first draft had four dimensions
 > (security/tests/docs/features) and listed the silent-fallback check in the scope
 > narrative but assigned it to **no** dimension — it would have fallen through. This
-> design adds a fifth **`correctness`** dimension and gives it that check explicitly, so
+> design adds a **`correctness`** dimension and gives it that check explicitly, so
 > the workflow covers code *correctness* (bugs) as well as code *debt* (tests, features).
+> (Security was later split out into `claude-security-audit.yml`, leaving the four
+> dimensions above.)
 
 ## Synthesis → one triage issue + child issues
 
-A synthesis job collects the five structured outputs, reduces them to the verified new set,
+A synthesis job collects the four structured outputs, reduces them to the verified new set,
 ranks by severity (**🔴 high · 🟠 medium · 🟡 low** — no green; green reads as "pass"), and files:
 
 - **Parent triage issue** (`weekly-audit`): opens with a one-line tally (new/low/suppressed
   counts) for trend, then a section for **every** dimension with a finding, in fixed order
-  (Security, Correctness, Features, Docs, Tests), each finding grouped under the dimension it
+  (Correctness, Features, Docs, Tests), each finding grouped under the dimension it
   *declares* (never re-bucketed). Each run **supersedes and closes the previous parent** so
   they don't pile up.
 - **Per-finding child issues** for **🔴/🟠 only** — 🟡 (low) findings are listed in the
@@ -87,8 +95,8 @@ ranks by severity (**🔴 high · 🟠 medium · 🟡 low** — no green; green 
   heading, **never a line number** (line numbers move and re-file the finding every week).
   Embedded as `<!-- audit-key: KEY -->` in each child body; synthesis skips any key already
   on an *open* `weekly-audit` issue OR on any `audit-wontfix` issue (accepted debt).
-- **Security stays private**: full detail to the job run log only; a redacted stub in
-  `findings-security.json`; the public issue shows a count + run-log pointer + `@kovtcharov-amd`.
+- **Security is a separate workflow**: `claude-security-audit.yml` owns it; this audit files
+  to a public issue, so it hands security off rather than disclosing it here.
 - **Skip-if-empty**: normal mode exits before any Claude call on a no-change week.
 - **Read-only**: `--allowedTools Read,Grep,Glob,Bash`; never install or run repo code.
 - **Model** `claude-opus-4-8` via the top-level `AUDIT_MODEL` env (one place to change);
