@@ -261,3 +261,89 @@ def test_run_autonomy_cycle_persists_and_serializes(tmp_path):
     # Proposals are returned in serializable dict form, not raw objects.
     assert isinstance(report["proposals"][0], dict)
     assert "action" in report["proposals"][0]
+
+
+# ---------------------------------------------------------------------------
+# The learning loop — trust grows from feedback, shrinks from corrections
+# ---------------------------------------------------------------------------
+
+
+def test_record_outcome_writes_both_scopes(tmp_path):
+    agent = _build_agent(tmp_path, [], level=LEVEL_EARN_TRUST)
+    agent.record_autonomy_outcome(
+        action_type="archive",
+        positive=True,
+        sender="news@x.com",
+        category="PROMOTIONAL",
+    )
+    from gaia_agent_email.trust import TrustLedger, category_scope
+
+    sender_stats = TrustLedger.get_stats(
+        agent, action_type="archive", scope=sender_scope("news@x.com")
+    )
+    cat_stats = TrustLedger.get_stats(
+        agent, action_type="archive", scope=category_scope("PROMOTIONAL")
+    )
+    assert sender_stats["positive"] == 1
+    assert cat_stats["positive"] == 1
+
+
+def test_closed_loop_feedback_earns_autonomy(tmp_path):
+    """Cold sender is proposed; after enough positive feedback via the public
+    funnel, the very next cycle archives it silently. The full loop, no seeded
+    ledger rows."""
+    sender = "deals@shop.com"
+    agent = _build_agent(
+        tmp_path,
+        [_promo_message("m1", sender)],
+        level=LEVEL_EARN_TRUST,
+        autonomy_trust_min_samples=3,
+    )
+
+    # Cold: proposed, not executed.
+    first = agent._run_email_autonomy_cycle()
+    assert first["executed"] == []
+    assert len(first["proposals"]) == 1
+
+    # The user accepts three suggestions for this sender (the real earn path).
+    for _ in range(3):
+        agent.record_autonomy_outcome(
+            action_type="archive", positive=True, sender=sender, category="PROMOTIONAL"
+        )
+
+    # Re-seed the same message (it was only proposed, never archived) and rerun.
+    agent._gmail.add_message(_promo_message("m2", sender))
+    second = agent._run_email_autonomy_cycle()
+    executed_ids = {e["message_id"] for e in second["executed"]}
+    assert "m2" in executed_ids
+
+
+def test_correction_capture_pulls_trust_back(tmp_path):
+    """An auto-archive the user undoes records a negative and re-closes the gate."""
+    sender = "deals@shop.com"
+    agent = _build_agent(
+        tmp_path,
+        [_promo_message("m1", sender)],
+        level=LEVEL_FULL,  # full auto-executes immediately, so we get an action_id
+        autonomy_trust_min_samples=3,
+    )
+    report = agent._run_email_autonomy_cycle()
+    action_id = report["executed"][0]["action_id"]
+
+    # User undoes it → correction captured as a negative for the scope.
+    assert agent.note_action_undone(action_id) is True
+
+    from gaia_agent_email.trust import TrustLedger
+
+    stats = TrustLedger.get_stats(
+        agent, action_type="archive", scope=sender_scope(sender)
+    )
+    assert stats["negative"] == 1
+
+    # Idempotent: the same undo can't be counted twice.
+    assert agent.note_action_undone(action_id) is False
+
+
+def test_note_action_undone_ignores_non_autonomy_ids(tmp_path):
+    agent = _build_agent(tmp_path, [], level=LEVEL_EARN_TRUST)
+    assert agent.note_action_undone("not-an-autonomy-action") is False

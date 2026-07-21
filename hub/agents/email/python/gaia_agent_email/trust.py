@@ -122,10 +122,81 @@ CREATE TABLE IF NOT EXISTS email_trust_ledger (
 );
 """
 
+# Attribution index: maps each autonomously-executed action back to the
+# ``(action_type, sender, category)`` scope it was decided under. When the user
+# later undoes that action (a correction), :func:`lookup_autonomy_action`
+# recovers the scope so the negative signal lands on the right ledger rows.
+# One row per auto-executed action; ``resolved`` guards against a single undo
+# being counted twice.
+EMAIL_AUTONOMY_ACTIONS_DDL = """
+CREATE TABLE IF NOT EXISTS email_autonomy_actions (
+    action_id    TEXT PRIMARY KEY,
+    action_type  TEXT NOT NULL,
+    sender       TEXT,
+    category     TEXT,
+    created_at   REAL NOT NULL,
+    resolved     INTEGER NOT NULL DEFAULT 0
+);
+"""
+
 
 def init_trust_schema(db) -> None:
-    """Create the ledger table if absent. Idempotent."""
+    """Create the ledger + attribution tables if absent. Idempotent."""
     db.execute(EMAIL_TRUST_LEDGER_DDL)
+    db.execute(EMAIL_AUTONOMY_ACTIONS_DDL)
+
+
+def record_autonomy_action(
+    db,
+    *,
+    action_id: str,
+    action_type: str,
+    sender: str = "",
+    category: str = "",
+    now: Optional[float] = None,
+) -> None:
+    """Index one auto-executed action so a later undo can be attributed.
+
+    Idempotent on ``action_id`` (INSERT OR REPLACE) — re-recording the same
+    action id overwrites rather than duplicating.
+    """
+    ts = time.time() if now is None else now
+    db.query(
+        "INSERT OR REPLACE INTO email_autonomy_actions "
+        "(action_id, action_type, sender, category, created_at, resolved) "
+        "VALUES (:id, :t, :s, :c, :ts, 0)",
+        {
+            "id": action_id,
+            "t": action_type,
+            "s": sender,
+            "c": category,
+            "ts": ts,
+        },
+    )
+
+
+def lookup_autonomy_action(db, *, action_id: str) -> Optional[Dict[str, Any]]:
+    """Return the unresolved index row for an action id, or None.
+
+    A row already marked ``resolved`` returns None so the same undo can't be
+    scored twice.
+    """
+    return db.query(
+        "SELECT action_id, action_type, sender, category FROM "
+        "email_autonomy_actions WHERE action_id = :id AND resolved = 0",
+        {"id": action_id},
+        one=True,
+    )
+
+
+def mark_autonomy_action_resolved(db, *, action_id: str) -> None:
+    """Flag an indexed action as resolved (its correction has been counted)."""
+    db.update(
+        "email_autonomy_actions",
+        {"resolved": 1},
+        "action_id = :id",
+        {"id": action_id},
+    )
 
 
 # ---------------------------------------------------------------------------

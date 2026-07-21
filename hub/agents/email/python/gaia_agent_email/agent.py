@@ -1230,6 +1230,17 @@ class EmailTriageAgent(
             )
             if decision.action == "auto":
                 executed = self._autonomy_execute(action_type, row)
+                # Index the action so a later undo is attributed to this scope
+                # and lands a negative signal on the right ledger rows.
+                action_id = executed.get("action_id")
+                if action_id:
+                    trust.record_autonomy_action(
+                        self,
+                        action_id=action_id,
+                        action_type=action_type,
+                        sender=sender,
+                        category=row.get("category", ""),
+                    )
                 report["executed"].append(
                     {
                         "message_id": row.get("id"),
@@ -1294,6 +1305,54 @@ class EmailTriageAgent(
         returned proposals via :meth:`propose`.
         """
         return self._run_email_autonomy_cycle(context).get("proposals", [])
+
+    def record_autonomy_outcome(
+        self,
+        *,
+        action_type: str,
+        positive: bool,
+        sender: str = "",
+        category: str = "",
+    ) -> None:
+        """The single write-path for every trust signal (the learning loop).
+
+        Undo of an auto-action, a proposal accepted/rejected, a thumbs up/down
+        in the activity feed — they all funnel here. The outcome is recorded
+        against BOTH the sender and the category scope, so trust accrues at
+        whichever granularity recurs (a specific newsletter address AND the
+        promotional category both learn from the same choice). This is how the
+        agent "learns from your patterns": enough positives lift a scope over
+        the trust bar and the next cycle acts silently; a correction pulls it
+        back below and the agent returns to asking.
+        """
+        for scope in (
+            trust.sender_scope(sender) if sender else "",
+            trust.category_scope(category) if category else "",
+        ):
+            if scope:
+                trust.TrustLedger.record_outcome(
+                    self, action_type=action_type, scope=scope, positive=positive
+                )
+
+    def note_action_undone(self, action_id: str) -> bool:
+        """Capture a correction: an auto-executed action the user undid.
+
+        Called by the undo surface. If ``action_id`` was an autonomy action, a
+        negative outcome is recorded for its scope and the index row is marked
+        resolved (so one undo is never counted twice). Returns True when a
+        correction was captured, False when the id was not an autonomy action.
+        """
+        row = trust.lookup_autonomy_action(self, action_id=action_id)
+        if row is None:
+            return False
+        self.record_autonomy_outcome(
+            action_type=row["action_type"],
+            positive=False,
+            sender=row.get("sender") or "",
+            category=row.get("category") or "",
+        )
+        trust.mark_autonomy_action_resolved(self, action_id=action_id)
+        return True
 
     def run_autonomy_cycle(
         self, context: Optional[Dict[str, Any]] = None
