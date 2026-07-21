@@ -134,9 +134,9 @@ def test_ungranted_error_is_headless_first_and_complete():
             "email", "google", base_url="http://127.0.0.1:9", bearer="b"
         )
     msg = str(exc.value)
+    # One-flow connect+grant so the scopes can't drift (#2347).
     assert "gaia connectors connect google --scopes" in msg
-    assert "gaia connectors grants grant google installed:email" in msg
-    assert "SAME scopes" in msg
+    assert "--grant-agent installed:email" in msg
     # CLI leads; the UI is the fallback, not the headline.
     assert msg.index("gaia connectors connect") < msg.index("Settings -> Connections")
 

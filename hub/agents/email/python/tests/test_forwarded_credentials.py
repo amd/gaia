@@ -71,8 +71,9 @@ def test_missing_credential_error_names_the_cli_not_just_the_ui():
     with pytest.raises(ConnectorsError) as exc:
         forwarded_credentials.get_forwarded_token("google", ["s1"])
     msg = str(exc.value)
+    # One-flow connect+grant so scopes can't drift (#2347).
     assert "gaia connectors connect google" in msg
-    assert "gaia connectors grants grant google installed:email" in msg
+    assert "--grant-agent installed:email" in msg
 
 
 def test_scope_short_error_names_the_missing_scopes_in_the_cli_command():
@@ -84,7 +85,7 @@ def test_scope_short_error_names_the_missing_scopes_in_the_cli_command():
     with pytest.raises(ConnectorsError) as exc:
         forwarded_credentials.get_forwarded_token("google", ["s1", "s2"])
     msg = str(exc.value)
-    assert "gaia connectors connect google --scopes s2" in msg
+    assert "gaia connectors connect google --scopes s2 --grant-agent" in msg
     assert "{provider}" not in msg  # f-string bug regression guard
 
 
