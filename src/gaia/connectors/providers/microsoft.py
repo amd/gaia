@@ -116,14 +116,18 @@ class MicrosoftOAuthProvider:
                     "accounts ('consumers'), and add a http://localhost redirect "
                     "URI under Authentication -> Mobile & desktop applications\n"
                     "  3. Add the Microsoft Graph delegated permissions you need "
-                    "(e.g. Mail.ReadWrite, Mail.Send)\n"
-                    "  4. Copy the Application (client) ID. Public desktop "
-                    "clients need no secret; a confidential registration also "
-                    "needs a client secret under Certificates & secrets"
+                    "(e.g. Mail.ReadWrite, Mail.Send, Calendars.ReadWrite)\n"
+                    "  4. Copy the Application (client) ID, and create a client "
+                    "secret under Certificates & secrets -> New client secret"
                 ),
-                example_grant=(
-                    "installed:email "
-                    "--scopes https://graph.microsoft.com/Mail.ReadWrite"
+                example=(
+                    "  For the email agent, copy-paste (bash):\n"
+                    '    SCOPES="https://graph.microsoft.com/Mail.ReadWrite '
+                    "https://graph.microsoft.com/Mail.Send "
+                    'https://graph.microsoft.com/Calendars.ReadWrite"\n'
+                    "    gaia connectors connect microsoft --scopes $SCOPES\n"
+                    "    gaia connectors grants grant microsoft installed:email "
+                    "--scopes $SCOPES"
                 ),
                 docs="https://amd-gaia.ai/docs/connectors/microsoft",
             )

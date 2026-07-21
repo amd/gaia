@@ -107,13 +107,26 @@ gaia daemon start-agent email
 gaia daemon status
 ```
 
-Then the connector + triage steps (needs a Google connector and a running
-Lemonade server):
+Then the connector + triage steps (needs your own Google OAuth client and a
+running Lemonade server). The scopes MUST match on `connect` and `grants grant`:
 
 ```bash
-gaia connectors            # add/authorize the Google connector for the email agent
+# Create a Google Cloud "Desktop app" OAuth client first (Gmail API enabled),
+# then register it, authorize the scopes, and grant them to the email agent.
+gaia connectors configure google --client-id <ID> --client-secret <SECRET>
+
+SCOPES="https://www.googleapis.com/auth/gmail.modify \
+https://www.googleapis.com/auth/gmail.send \
+https://www.googleapis.com/auth/calendar.events \
+https://www.googleapis.com/auth/calendar.readonly"
+gaia connectors connect google --scopes $SCOPES        # opens a browser
+gaia connectors grants grant google installed:email --scopes $SCOPES
+
 gaia email -q "Triage my inbox"
 ```
+
+> If you run `gaia email` before configuring Google, the error prints these exact
+> steps (the connector CLI is self-documenting) — no need to look them up.
 
 Alternative for developers working from a source checkout:
 

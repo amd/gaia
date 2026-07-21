@@ -103,9 +103,15 @@ class GoogleOAuthProvider:
                     "  4. Create an OAuth client ID of type 'Desktop app' — this "
                     "gives you a Client ID and Client Secret"
                 ),
-                example_grant=(
-                    "installed:email "
-                    "--scopes https://www.googleapis.com/auth/gmail.modify"
+                example=(
+                    "  For the email agent, copy-paste (bash):\n"
+                    '    SCOPES="https://www.googleapis.com/auth/gmail.modify '
+                    "https://www.googleapis.com/auth/gmail.send "
+                    "https://www.googleapis.com/auth/calendar.events "
+                    'https://www.googleapis.com/auth/calendar.readonly"\n'
+                    "    gaia connectors connect google --scopes $SCOPES\n"
+                    "    gaia connectors grants grant google installed:email "
+                    "--scopes $SCOPES"
                 ),
                 docs="https://amd-gaia.ai/docs/connectors/google",
             )

@@ -131,11 +131,16 @@ class TestRegistry:
         assert "Desktop app" in msg
         # The exact CLI commands (self-documenting, no UI needed).
         assert "gaia connectors configure google --client-id" in msg
-        assert "gaia connectors connect google" in msg
+        # connect MUST authorize scopes, and the grant must match (#2347).
+        assert "gaia connectors connect google --scopes" in msg
         assert "gaia connectors grants grant google" in msg
-        # Concrete example grant for the email agent.
+        assert "SAME scopes on connect and grant" in msg
+        # Concrete, copy-paste example with the email agent's FULL scope set.
         assert "installed:email" in msg
         assert "gmail.modify" in msg
+        assert "gmail.send" in msg
+        assert "calendar.events" in msg
+        assert "calendar.readonly" in msg
         # UI path still named for UI users.
         assert "Settings -> Connections -> Google" in msg
         assert "amd-gaia.ai/docs/connectors/google" in msg

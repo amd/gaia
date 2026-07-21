@@ -81,7 +81,10 @@ class TestConnectSelfDocuments:
         assert "not configured" in err
         assert "console.cloud.google.com" in err  # console steps
         assert "gaia connectors configure google --client-id" in err  # exact command
+        # connect must authorize scopes, grant must match (#2347 correctness).
+        assert "gaia connectors connect google --scopes" in err
         assert "gaia connectors grants grant google" in err
+        assert "gmail.modify" in err  # copy-paste example has real scopes
         assert "amd-gaia.ai/docs/connectors/google" in err
 
 

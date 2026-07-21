@@ -174,7 +174,7 @@ class TestOAuthClientNotConfiguredError:
             provider_label="Google",
             console_steps="  1. Do a thing at https://console.example",
             docs="https://amd-gaia.ai/docs/connectors/google",
-            example_grant="installed:email --scopes https://scope/x",
+            example="  For the email agent:\n    gaia connectors connect google ...",
         )
         kwargs.update(overrides)
         return OAuthClientNotConfiguredError(kwargs.pop("provider_id"), **kwargs)
@@ -193,15 +193,19 @@ class TestOAuthClientNotConfiguredError:
         assert "https://console.example" in s  # console setup steps
         # Exact CLI commands, spec-driven off provider_id.
         assert "gaia connectors configure google --client-id" in s
-        assert "gaia connectors connect google" in s
+        # connect MUST authorize scopes (the #2347 correctness gap) ...
+        assert "gaia connectors connect google --scopes" in s
+        # ... and the grant must use the SAME scopes.
         assert "gaia connectors grants grant google" in s
+        assert "SAME scopes on connect and grant" in s
         assert "amd-gaia.ai/docs/connectors/google" in s
         # UI path named too.
         assert "Settings -> Connections -> Google" in s
 
-    def test_example_grant_is_optional(self):
-        # Omitting the example grant drops the "e.g." block but keeps the
-        # generic grant command.
-        s = str(self._err(example_grant=None))
-        assert "e.g. for the email agent" not in s
+    def test_example_block_is_optional(self):
+        # Omitting the example drops the copy-paste block but keeps the generic
+        # command template (still names --scopes on connect).
+        s = str(self._err(example=None))
+        assert "For the email agent" not in s
+        assert "gaia connectors connect google --scopes" in s
         assert "gaia connectors grants grant google <agent-id>" in s
