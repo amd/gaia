@@ -1548,7 +1548,9 @@ def test_install_real_wheel_lands_in_site_packages_and_is_importable(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_default_run_pip_falls_back_to_python_pip_when_uv_missing(tmp_path, monkeypatch):
+def test_default_run_pip_falls_back_to_python_pip_when_uv_missing(
+    tmp_path, monkeypatch
+):
     """`_default_run_pip` must fall back to `python -m pip install` and
     actually install the wheel when `uv` is unavailable, not raise.
     """
@@ -1588,9 +1590,9 @@ def test_default_run_pip_falls_back_to_python_pip_when_uv_missing(tmp_path, monk
         "when uv is unavailable -- this is the #2358 regression this test "
         "guards against"
     )
-    assert (site_packages / module_name / "__init__.py").exists(), (
-        "the wheel was not actually installed via the python -m pip fallback"
-    )
+    assert (
+        site_packages / module_name / "__init__.py"
+    ).exists(), "the wheel was not actually installed via the python -m pip fallback"
 
 
 def test_default_run_pip_raises_when_every_frontend_fails(monkeypatch):
