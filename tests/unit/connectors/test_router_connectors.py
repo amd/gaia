@@ -419,6 +419,74 @@ class TestAuthorizeGrantAgents:
 
 
 # ---------------------------------------------------------------------------
+# POST /api/connectors/{connector_id}/authorize-device — device-code (#1275)
+# ---------------------------------------------------------------------------
+
+
+class TestAuthorizeDeviceEndpoint:
+    _DEVICE_INFO = {
+        "provider_id": "microsoft",
+        "scopes": ["https://graph.microsoft.com/Mail.ReadWrite"],
+        "device_code": "SECRET-DEVICE-CODE",
+        "user_code": "ABCD-EFGH",
+        "verification_uri": "https://microsoft.com/devicelogin",
+        "expires_in": 900,
+        "interval": 5,
+        "message": "Go to https://microsoft.com/devicelogin and enter ABCD-EFGH",
+    }
+
+    def test_returns_display_fields_and_hides_device_code(
+        self, ui_api_client, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "gaia.connectors.start_device_flow",
+            AsyncMock(return_value=dict(self._DEVICE_INFO)),
+        )
+        # Background poll is mocked so no real network/keyring work happens.
+        monkeypatch.setattr(
+            "gaia.connectors.poll_device_flow",
+            AsyncMock(return_value={"account_email": "user@example.com"}),
+        )
+        resp = ui_api_client.post(
+            "/api/connectors/microsoft/authorize-device",
+            json={"scopes": ["https://graph.microsoft.com/Mail.ReadWrite"]},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["user_code"] == "ABCD-EFGH"
+        assert body["verification_uri"].endswith("devicelogin")
+        assert body["interval"] == 5
+        # The device_code is a bearer-equivalent for polling — never returned.
+        assert "device_code" not in body
+
+    def test_without_header_is_403(self, ui_api_client):
+        resp = ui_api_client.post(
+            "/api/connectors/microsoft/authorize-device",
+            json={"scopes": []},
+        )
+        assert resp.status_code == 403
+
+    def test_unknown_agent_is_404(self, ui_api_client, monkeypatch):
+        monkeypatch.setattr(
+            "gaia.connectors.start_device_flow",
+            AsyncMock(return_value=dict(self._DEVICE_INFO)),
+        )
+        monkeypatch.setattr("gaia.connectors.poll_device_flow", AsyncMock())
+        ui_api_client.app.state.agent_registry = _fake_registry(
+            "installed:email",
+            "microsoft",
+            ["https://graph.microsoft.com/Mail.ReadWrite"],
+        )
+        resp = ui_api_client.post(
+            "/api/connectors/microsoft/authorize-device",
+            json={"scopes": [], "grant_agents": ["installed:ghost"]},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # POST /api/connectors/{connector_id}/test
 # ---------------------------------------------------------------------------
 

@@ -278,6 +278,13 @@ export interface ConnectorRow {
     default_scopes: string[];
     available_scopes: string[];
     /**
+     * Whether the provider supports the RFC 8628 device-code flow (#1275) —
+     * a short code entered at a URL, no browser redirect and no per-user Azure
+     * app registration. When ``true`` the tile offers a "Sign in with a code"
+     * option alongside the browser Connect button (Microsoft today).
+     */
+    supports_device_code?: boolean;
+    /**
      * First-time setup fields the user fills in to provide OAuth-app
      * client credentials (e.g. Google Cloud Console client_id +
      * client_secret). When ``configurable`` is ``false`` and this list

@@ -25,7 +25,10 @@ import pytest
 
 from gaia.connectors.errors import AuthRequiredError, ConnectorsError
 from gaia.connectors.store import (
+    _CHUNK_CHARS,
+    _CHUNK_SENTINEL,
     SERVICE_NAME,
+    _chunk_username,
     _connection_username,
     _provider_credentials_username,
     clear_provider_credentials,
@@ -124,6 +127,107 @@ class TestRoundTrip:
         # Only oauth_pkce providers are enumerated — MCP-server connectors have
         # no keyring connection and must not appear.
         assert "mcp-git" not in ids
+
+
+class TestLargeBlobChunking:
+    """#1275: Windows Credential Manager caps a blob at ~2560 bytes. Microsoft
+    refresh tokens (~1600 chars) exceed it, so the store transparently chunks
+    oversized values across extra slots. These tests exercise that path (the
+    in-memory keyring has no size cap, so we assert the chunk *mechanics*
+    directly rather than relying on a backend to reject the write)."""
+
+    def test_torn_rewrite_fails_safe_to_none(self):
+        # A crashed mid-rewrite (chunk overwritten but manifest still points at
+        # a stale count/CRC) must NOT reassemble into a truncated-but-valid
+        # token — the CRC guard turns it into None ("reconnect").
+        import keyring as _kr
+
+        from gaia.connectors.store import _chunk_username
+
+        save_connection(
+            provider="microsoft",
+            account_email="a@example.com",
+            refresh_token="R" * (_CHUNK_CHARS * 2),  # 2 chunks
+            scopes=["s1"],
+            client_id_hash="h",
+        )
+        username = _connection_username("microsoft", "default")
+        # Simulate a torn rewrite: chunk #0 gets new (longer) data, but the
+        # manifest still describes the old payload.
+        _kr.set_password(SERVICE_NAME, _chunk_username(username, 0), "X" * _CHUNK_CHARS)
+        assert load_connection("microsoft", current_client_id_hash="h") is None
+
+    def test_large_refresh_token_round_trips(self):
+        big_token = "R" * (_CHUNK_CHARS * 3 + 17)  # forces 4 chunks
+        save_connection(
+            provider="microsoft",
+            account_email="a@example.com",
+            refresh_token=big_token,
+            scopes=["s1"],
+            client_id_hash="h",
+        )
+        blob = load_connection("microsoft", current_client_id_hash="h")
+        assert blob is not None
+        assert blob["refresh_token"] == big_token
+
+    def test_large_blob_writes_sentinel_and_chunk_slots(self):
+        big_token = "R" * (_CHUNK_CHARS * 2)
+        save_connection(
+            provider="microsoft",
+            account_email="a@example.com",
+            refresh_token=big_token,
+            scopes=["s1"],
+            client_id_hash="h",
+        )
+        username = _connection_username("microsoft", "default")
+        # Base slot holds the manifest sentinel, not raw JSON.
+        base = keyring.get_password(SERVICE_NAME, username)
+        assert base.startswith(_CHUNK_SENTINEL)
+        # At least the first chunk slot exists.
+        assert (
+            keyring.get_password(SERVICE_NAME, _chunk_username(username, 0)) is not None
+        )
+
+    def test_delete_removes_all_chunk_slots(self):
+        big_token = "R" * (_CHUNK_CHARS * 2)
+        save_connection(
+            provider="microsoft",
+            account_email="a@example.com",
+            refresh_token=big_token,
+            scopes=["s1"],
+            client_id_hash="h",
+        )
+        username = _connection_username("microsoft", "default")
+        delete_connection("microsoft")
+        assert keyring.get_password(SERVICE_NAME, username) is None
+        assert keyring.get_password(SERVICE_NAME, _chunk_username(username, 0)) is None
+        assert load_connection("microsoft", current_client_id_hash="h") is None
+
+    def test_shrink_from_chunked_to_small_sweeps_stale_chunks(self):
+        # A large value (chunked) overwritten by a small one must not leave
+        # orphaned chunk slots that a later reader could trip over.
+        username = _connection_username("microsoft", "default")
+        save_connection(
+            provider="microsoft",
+            account_email="a@example.com",
+            refresh_token="R" * (_CHUNK_CHARS * 2),
+            scopes=["s1"],
+            client_id_hash="h",
+        )
+        assert (
+            keyring.get_password(SERVICE_NAME, _chunk_username(username, 0)) is not None
+        )
+        # Overwrite with a short token — stored raw, chunk slots swept.
+        save_connection(
+            provider="microsoft",
+            account_email="a@example.com",
+            refresh_token="short",
+            scopes=["s1"],
+            client_id_hash="h",
+        )
+        assert keyring.get_password(SERVICE_NAME, _chunk_username(username, 0)) is None
+        blob = load_connection("microsoft", current_client_id_hash="h")
+        assert blob["refresh_token"] == "short"
 
 
 class TestSingleBlobAtomicity:

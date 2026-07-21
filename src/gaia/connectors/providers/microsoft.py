@@ -12,8 +12,10 @@ NO module-level side effects: instantiating the provider reads
 module registers nothing — registration is lazy on first ``get("microsoft")``
 (see ``providers/__init__.py``), matching ``GoogleOAuthProvider``.
 
-Tenant is ``consumers`` — personal Microsoft accounts (Outlook.com / Hotmail /
-Live). Work/school (Entra ID) tenants are out of scope for v1.
+Tenant defaults to ``common`` — accepts BOTH personal Microsoft accounts
+(Outlook.com / Hotmail / Live) AND work/school (Entra ID) accounts. Override
+with ``GAIA_MICROSOFT_TENANT`` to pin a single Entra tenant id (or
+``organizations`` / ``consumers``) for orgs that want to restrict sign-in.
 
 Public-client PKCE: per the Microsoft identity platform docs, public clients
 (native/desktop, single-page apps) MUST NOT send a ``client_secret`` when
@@ -37,8 +39,19 @@ from urllib.parse import urlencode
 
 from gaia.connectors.errors import ConfigurationError
 
-# Personal-account tenant. Pinned in both endpoint URLs.
-_TENANT = "consumers"
+# Default login tenant. ``common`` accepts personal AND work/school accounts.
+# Overridable via GAIA_MICROSOFT_TENANT (a single-tenant Entra id, or
+# ``organizations`` / ``consumers``). Resolved per-instance so an env change
+# takes effect on the next provider instantiation without a module reload.
+_DEFAULT_TENANT = "common"
+
+
+def _resolve_tenant() -> str:
+    """Return the Microsoft login tenant segment for the endpoint URLs."""
+    return (
+        os.environ.get("GAIA_MICROSOFT_TENANT") or _DEFAULT_TENANT
+    ).strip() or _DEFAULT_TENANT
+
 
 # Plain-language descriptions for the AgentUI consent dialog, mirroring the
 # Google provider's SCOPE_DESCRIPTIONS. The router/CLI render these strings;
@@ -62,9 +75,10 @@ SCOPE_DESCRIPTIONS: dict[str, str] = {
 
 class MicrosoftOAuthProvider:
     """
-    Concrete provider for the Microsoft identity platform (``consumers``
-    tenant). Implements the ``OAuthProvider`` Protocol structurally — no
-    inheritance, matching ``GoogleOAuthProvider``.
+    Concrete provider for the Microsoft identity platform (``common``
+    tenant by default — personal + work/school). Implements the
+    ``OAuthProvider`` Protocol structurally — no inheritance, matching
+    ``GoogleOAuthProvider``.
 
     Reads ``GAIA_MICROSOFT_CLIENT_ID`` at instantiation time, NOT at import
     time. ``client_id_hash`` is a non-cryptographic CRC32 fingerprint used
@@ -72,8 +86,6 @@ class MicrosoftOAuthProvider:
     """
 
     provider_id: str = "microsoft"
-    auth_url: str = f"https://login.microsoftonline.com/{_TENANT}/oauth2/v2.0/authorize"
-    token_url: str = f"https://login.microsoftonline.com/{_TENANT}/oauth2/v2.0/token"
     # offline_access => refresh token; openid => id_token (account email).
     # The shared flow depends on both; keep them in the default set so a bare
     # connect (no explicit scopes) still works end-to-end.
@@ -82,8 +94,46 @@ class MicrosoftOAuthProvider:
         "offline_access",
         "https://graph.microsoft.com/User.Read",
     )
+    # Userinfo fallback (#1275): the flow layer calls this when the token
+    # response carries no decodable email in the id_token (common on the
+    # device-code path). Provider-agnostic hook — flow.py GETs ``userinfo_url``
+    # with the access token and hands the JSON to ``parse_account_email``.
+    userinfo_url: str = (
+        "https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName"
+    )
 
-    def __init__(self, client_id: str | None = None, client_secret: str | None = None):
+    @staticmethod
+    def parse_account_email(userinfo: dict) -> str | None:
+        """Extract the account email from a Graph ``/me`` response. Personal
+        accounts often null ``mail`` and carry the address in
+        ``userPrincipalName`` instead."""
+        return (userinfo.get("mail") or userinfo.get("userPrincipalName") or "") or None
+
+    def __init__(
+        self,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+        tenant: str | None = None,
+    ):
+        # Login tenant resolved per-instance (GAIA_MICROSOFT_TENANT honored).
+        # ``common`` accepts personal AND work/school accounts. The endpoint
+        # URLs are instance attributes (not class constants) so an env change
+        # is picked up on the next instantiation without a module reload.
+        self.tenant: str = tenant or _resolve_tenant()
+        self.auth_url: str = (
+            f"https://login.microsoftonline.com/{self.tenant}/oauth2/v2.0/authorize"
+        )
+        self.token_url: str = (
+            f"https://login.microsoftonline.com/{self.tenant}/oauth2/v2.0/token"
+        )
+        # Device-code endpoint (#1275): enables zero-Azure-app-registration
+        # sign-in — the user enters a short code at a Microsoft URL instead of
+        # a browser redirect. Presence of this attribute is how the generic
+        # device flow detects device-code capable providers (duck-typed, like
+        # authorization_params()).
+        self.device_code_url: str = (
+            f"https://login.microsoftonline.com/{self.tenant}/oauth2/v2.0/devicecode"
+        )
         # Resolution order matches GoogleOAuthProvider (user-friendliness
         # first):
         #   1. Explicit kwargs (tests / library callers).
@@ -110,8 +160,8 @@ class MicrosoftOAuthProvider:
                 "Microsoft OAuth client is not configured. Open Settings → "
                 "Connections → Microsoft in the AgentUI and paste the "
                 "Application (client) ID from your Azure App registration "
-                "(personal-accounts / 'consumers' audience, with a "
-                "http://localhost redirect URI). (Power users may also set the "
+                "('any account' / 'common' audience — personal + work/school — "
+                "with a http://localhost redirect URI). (Power users may also set the "
                 "GAIA_MICROSOFT_CLIENT_ID env var — and, only for a "
                 "confidential web-app registration, GAIA_MICROSOFT_CLIENT_SECRET "
                 "— before launching GAIA.) See "
@@ -183,6 +233,28 @@ class MicrosoftOAuthProvider:
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
             "client_id": self.client_id,
+        }
+        if self.client_secret:
+            body["client_secret"] = self.client_secret
+        return body
+
+    # ---- Device-code flow (#1275) ------------------------------------------
+    # RFC 8628 device authorization grant. Used for the zero-setup sign-in that
+    # does not need a per-user Azure app registration or a loopback redirect
+    # URI — the user just enters a short code at a Microsoft URL. A public
+    # client sends NO secret here either (unless a confidential app is
+    # configured), matching the auth-code bodies above.
+
+    def device_code_request_body(self, scopes: Iterable[str]) -> dict:
+        """POST body for the ``/devicecode`` endpoint (request a user code)."""
+        return {"client_id": self.client_id, "scope": " ".join(scopes)}
+
+    def device_token_request_body(self, device_code: str) -> dict:
+        """POST body for polling ``/token`` with a pending device code."""
+        body: dict = {
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+            "client_id": self.client_id,
+            "device_code": device_code,
         }
         if self.client_secret:
             body["client_secret"] = self.client_secret
