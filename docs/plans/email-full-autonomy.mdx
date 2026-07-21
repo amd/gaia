@@ -6,11 +6,13 @@ icon: "wand-magic-sparkles"
 
 # Email Agent — Full Autonomy (Earn-Trust + Learning Loop)
 
-> **Status:** Phases 1–4 (backend) + the proactive eval harness shipped — trust
-> engine, autonomous cycle, closed learning loop, REST control surface, and
-> automatic correction capture, all tested. Remaining: the production driver (a
-> `DaemonClock` job hitting `POST /v1/email/agent/autonomy/run`) and the npm
-> thin-client CLI (`gaia email autonomy …`) that wraps the REST surface.
+> **Status:** Phases 1–5 shipped — trust engine, autonomous cycle, closed
+> learning loop, REST control surface, automatic correction capture, the
+> proactive eval harness, AND the scheduled driver (`AutonomyScheduler` +
+> `run_autonomy_job`, opt-in via `GAIA_EMAIL_AUTONOMY_ENABLED`), all tested.
+> Remaining follow-ups: registering `run_autonomy_job` on the core `DaemonClock`
+> for the daemon-supervised path (cross-process, tracked with #2156), and the npm
+> thin-client CLI (`gaia email autonomy …`) wrapping the REST surface.
 >
 > **Milestone:** [Autonomy + Messaging Expansion [OSS]](https://github.com/amd/gaia/milestone/6)
 >

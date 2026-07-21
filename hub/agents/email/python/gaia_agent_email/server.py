@@ -78,6 +78,10 @@ def build_app():
     from gaia_agent_email.agent_routes import router as agent_router
     from gaia_agent_email.api_routes import require_caller_token
     from gaia_agent_email.api_routes import router as email_router
+    from gaia_agent_email.autonomy_scheduler import (
+        AutonomyScheduleConfig,
+        AutonomyScheduler,
+    )
     from gaia_agent_email.briefing import BriefingScheduleConfig, BriefingScheduler
     from gaia_agent_email.connection_intake_routes import (
         router as connection_intake_router,
@@ -90,27 +94,34 @@ def build_app():
     # invalid value aborts startup loudly, not at the first scheduled fire.
     # Off by default: without the env opt-in no scheduler task is created.
     briefing_config = BriefingScheduleConfig.from_env()
+    # Full-autonomy cycle driver (#1115). Off by default; env config read at
+    # build time so an invalid level/interval aborts startup loudly.
+    autonomy_config = AutonomyScheduleConfig.from_env()
 
     @asynccontextmanager
     async def lifespan(_app):
         # V2-15 (#2156): under daemon supervision the daemon drives the brief
-        # from its single reconciled clock, so the embedded clock stays dark —
-        # running both over one store is a double-run. Standalone / bare
-        # integrator runs (no supervision env) keep the embedded clock live.
+        # AND the autonomy cycle from its single reconciled clock, so the
+        # embedded timers stay dark — running both over one store is a
+        # double-run. Standalone / bare integrator runs (no supervision env)
+        # keep the embedded timers live.
         if is_daemon_supervised():
             log.info(
                 "Email sidecar under daemon supervision: embedded "
-                "BriefingScheduler gated off (the daemon drives the daily "
-                "brief from its reconciled clock)."
+                "BriefingScheduler and AutonomyScheduler gated off (the daemon "
+                "drives both from its reconciled clock)."
             )
             yield
             return
-        scheduler = BriefingScheduler(briefing_config)
-        scheduler.start()
+        briefing_scheduler = BriefingScheduler(briefing_config)
+        briefing_scheduler.start()
+        autonomy_scheduler = AutonomyScheduler(autonomy_config)
+        autonomy_scheduler.start()
         try:
             yield
         finally:
-            await scheduler.stop()
+            await briefing_scheduler.stop()
+            await autonomy_scheduler.stop()
 
     app = FastAPI(
         title="GAIA Email Agent Sidecar",

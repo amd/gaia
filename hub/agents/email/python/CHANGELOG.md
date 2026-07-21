@@ -45,8 +45,14 @@ contract version is tracked separately as
     `GET /v1/email/agent/autonomy/{session_id}` expose the level, thresholds,
     and every earned-trust scope with its tally. `POST /v1/email/agent/autonomy`
     sets the level (pause / resume / `off` kill switch); `POST …/autonomy/run`
-    triggers one cycle (the daemon/CLI driver seam). Config knobs:
-    `autonomy_level`, `autonomy_trust_min_samples`, `autonomy_trust_threshold`.
+    triggers one cycle. Config knobs: `autonomy_level`,
+    `autonomy_trust_min_samples`, `autonomy_trust_threshold`.
+  - **Runs on a schedule.** `AutonomyScheduler` + `run_autonomy_job`
+    (`autonomy_scheduler.py`) drive the cycle on an interval — off by default,
+    opt in with `GAIA_EMAIL_AUTONOMY_ENABLED=true` (`…_LEVEL`, `…_INTERVAL_MINUTES`,
+    `…_MAX_MESSAGES`). Mirrors the briefing scheduler and is gated off under
+    daemon supervision, where the daemon's single clock drives `run_autonomy_job`
+    instead — no second scheduler.
 - `gaia_agent_email.supervision.is_daemon_supervised()` — detects the daemon
   supervision handshake (the env-var name is owned by core in
   `gaia.daemon.constants`, so daemon and sidecar can never drift).
