@@ -94,8 +94,8 @@ class EmailAgentConfig:
       ``resolve_mail_backend`` stays connector-agnostic (``None`` → Gmail) for
       the eval seam. Case-insensitive.
     - ``calendar_provider``: which calendar provider the agent operates on —
-      ``"google"`` (the default) or ``"microsoft"`` (personal Outlook.com
-      calendar via MS Graph, #1276). Selects the live backend in
+      ``"google"`` (the default) or ``"microsoft"`` (Outlook calendar —
+      personal or work/school — via MS Graph, #1276). Selects the live backend in
       ``resolve_calendar_backend``. Case-insensitive. When ``None`` (the
       default), tracks ``mail_provider`` so a Microsoft-only user who set
       ``mail_provider="microsoft"`` gets the Outlook calendar too without

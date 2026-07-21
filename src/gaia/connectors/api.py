@@ -44,7 +44,9 @@ from gaia.connectors.events import emit_change
 from gaia.connectors.flow import (
     cancel_flow,
     complete_authorization,
+    poll_device_flow,
     start_authorization,
+    start_device_flow,
 )
 from gaia.connectors.grants import (
     check_agent_grant,
@@ -687,8 +689,10 @@ __all__ = [
     "list_connections",
     "load_activations",
     "load_grants",
+    "poll_device_flow",
     "revoke_agent_grant",
     "revoke_connection",
     "start_authorization",
+    "start_device_flow",
     "tripwire_check",
 ]

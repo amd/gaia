@@ -8,8 +8,9 @@ All network/OAuth is mocked; there are NO live calls. Coverage mirrors the
 Google provider tests in ``test_providers.py`` plus the Microsoft-specific
 invariants that the later mail/calendar leads depend on:
 
-- Tenant is ``consumers`` (personal Outlook.com/Hotmail/Live) — pinned in
-  BOTH the authorize and token endpoint URLs.
+- Tenant defaults to ``common`` (personal Outlook.com/Hotmail/Live AND
+  work/school Entra ID) — in BOTH the authorize and token endpoint URLs;
+  overridable via ``GAIA_MICROSOFT_TENANT``.
 - Public/native PKCE client: ``token_request_body`` / ``refresh_request_body``
   carry NO ``client_secret`` unless one is explicitly configured (Microsoft
   forbids secrets for public clients — unlike Google, which requires one).
@@ -31,8 +32,8 @@ from gaia.connectors import providers
 from gaia.connectors.errors import ConfigurationError
 from gaia.connectors.providers.base import OAuthProvider
 
-CONSUMERS_AUTH_URL = "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize"
-CONSUMERS_TOKEN_URL = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
+COMMON_AUTH_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+COMMON_TOKEN_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
 
 MAIL_READ = "https://graph.microsoft.com/Mail.Read"
 MAIL_SEND = "https://graph.microsoft.com/Mail.Send"
@@ -55,6 +56,9 @@ def _ms_env(monkeypatch):
         "GAIA_MICROSOFT_CLIENT_ID", "11112222-bbbb-3333-cccc-4444dddd5555"
     )
     monkeypatch.delenv("GAIA_MICROSOFT_CLIENT_SECRET", raising=False)
+    # Default tenant must resolve to ``common`` unless a test opts into an
+    # override — clear any ambient value from the developer's shell.
+    monkeypatch.delenv("GAIA_MICROSOFT_TENANT", raising=False)
     return "11112222-bbbb-3333-cccc-4444dddd5555"
 
 
@@ -110,13 +114,32 @@ class TestProtocol:
 
 
 class TestEndpointsAndTenant:
-    def test_endpoints_pin_consumers_tenant(self, _ms_env):
+    def test_endpoints_default_to_common_tenant(self, _ms_env):
         prov = providers.get("microsoft")
-        assert prov.auth_url == CONSUMERS_AUTH_URL
-        assert prov.token_url == CONSUMERS_TOKEN_URL
-        # The personal-account tenant must be in both URLs.
-        assert "/consumers/" in prov.auth_url
-        assert "/consumers/" in prov.token_url
+        assert prov.auth_url == COMMON_AUTH_URL
+        assert prov.token_url == COMMON_TOKEN_URL
+        # ``common`` accepts personal AND work/school accounts; it must be in
+        # both URLs so neither account type is rejected before token exchange.
+        assert "/common/" in prov.auth_url
+        assert "/common/" in prov.token_url
+
+    def test_tenant_override_from_env(self, monkeypatch, _ms_env):
+        # An org can pin a single Entra tenant id (or organizations/consumers)
+        # via GAIA_MICROSOFT_TENANT; both endpoint URLs must reflect it.
+        monkeypatch.setenv("GAIA_MICROSOFT_TENANT", "organizations")
+        providers._registry.clear()  # type: ignore[attr-defined]
+        prov = providers.get("microsoft")
+        assert prov.tenant == "organizations"
+        assert "/organizations/" in prov.auth_url
+        assert "/organizations/" in prov.token_url
+
+    def test_tenant_override_accepts_bare_guid(self, monkeypatch, _ms_env):
+        monkeypatch.setenv(
+            "GAIA_MICROSOFT_TENANT", "aaaabbbb-cccc-dddd-eeee-ffff00001111"
+        )
+        providers._registry.clear()  # type: ignore[attr-defined]
+        prov = providers.get("microsoft")
+        assert "/aaaabbbb-cccc-dddd-eeee-ffff00001111/" in prov.token_url
 
     def test_client_id_hash_is_stable_crc32(self, monkeypatch):
         client_id = "11112222-bbbb-3333-cccc-4444dddd5555"
@@ -217,6 +240,71 @@ class TestAuthorizationParams:
         prov = providers.get("microsoft")
         params = prov.authorization_params()
         assert params.get("response_mode") == "query"
+
+
+class TestDeviceCodeFlow:
+    def test_device_code_url_uses_resolved_tenant(self, _ms_env):
+        prov = providers.get("microsoft")
+        assert prov.device_code_url == (
+            "https://login.microsoftonline.com/common/oauth2/v2.0/devicecode"
+        )
+
+    def test_device_code_url_honors_tenant_override(self, monkeypatch, _ms_env):
+        monkeypatch.setenv("GAIA_MICROSOFT_TENANT", "organizations")
+        providers._registry.clear()  # type: ignore[attr-defined]
+        prov = providers.get("microsoft")
+        assert "/organizations/" in prov.device_code_url
+
+    def test_device_code_request_body_carries_client_id_and_scopes(self, _ms_env):
+        prov = providers.get("microsoft")
+        body = prov.device_code_request_body([MAIL_READ, "offline_access"])
+        assert body["client_id"] == "11112222-bbbb-3333-cccc-4444dddd5555"
+        # Space-delimited scope string per the MS v2.0 spec.
+        assert body["scope"] == f"{MAIL_READ} offline_access"
+
+    def test_device_token_body_public_client_has_no_secret(self, _ms_env):
+        prov = providers.get("microsoft")
+        body = prov.device_token_request_body("DEV-CODE-123")
+        assert body["grant_type"] == (
+            "urn:ietf:params:oauth:grant-type:device_code"
+        )
+        assert body["device_code"] == "DEV-CODE-123"
+        assert body["client_id"] == "11112222-bbbb-3333-cccc-4444dddd5555"
+        assert "client_secret" not in body
+
+    def test_device_token_body_confidential_includes_secret(self, monkeypatch):
+        monkeypatch.delenv("GAIA_MICROSOFT_TENANT", raising=False)
+        monkeypatch.setenv("GAIA_MICROSOFT_CLIENT_ID", "conf-client")
+        monkeypatch.setenv("GAIA_MICROSOFT_CLIENT_SECRET", "super-secret")
+        prov = providers.get("microsoft")
+        body = prov.device_token_request_body("DEV")
+        assert body["client_secret"] == "super-secret"
+
+
+class TestUserinfoFallback:
+    def test_userinfo_url_targets_graph_me(self, _ms_env):
+        prov = providers.get("microsoft")
+        assert prov.userinfo_url.startswith("https://graph.microsoft.com/v1.0/me")
+
+    def test_parse_account_email_prefers_mail(self, _ms_env):
+        prov = providers.get("microsoft")
+        assert (
+            prov.parse_account_email(
+                {"mail": "a@example.com", "userPrincipalName": "b@example.com"}
+            )
+            == "a@example.com"
+        )
+
+    def test_parse_account_email_falls_back_to_upn(self, _ms_env):
+        prov = providers.get("microsoft")
+        assert (
+            prov.parse_account_email({"mail": None, "userPrincipalName": "b@example.com"})
+            == "b@example.com"
+        )
+
+    def test_parse_account_email_none_when_absent(self, _ms_env):
+        prov = providers.get("microsoft")
+        assert prov.parse_account_email({}) is None
 
 
 class TestCatalog:

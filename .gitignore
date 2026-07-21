@@ -254,3 +254,13 @@ util/custom/*
 # exist in that specific MCP integration.
 eval/scenarios/mcp_tool_reliability/
 tests/unit/eval/test_mcp_tool_reliability_scenarios.py
+
+# Internal skill-marketplace installs (slai-marketplace). AMD-internal skills
+# copied into per-tool dirs; never ship them to the public repo. The repo's own
+# committed skills under .claude/skills/* stay tracked — only the
+# marketplace-installed m365-* skill dir is ignored.
+/skills/
+/.cline/
+/.codex/
+/.cursor/
+/.claude/skills/m365-email/

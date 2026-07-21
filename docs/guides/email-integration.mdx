@@ -298,7 +298,7 @@ offline access and the scopes the agent needs:
 | Provider | OAuth flow | Mail scopes to request |
 |---|---|---|
 | **Gmail** | Web or Desktop-app client (authorization-code) | `https://www.googleapis.com/auth/gmail.modify`, `https://www.googleapis.com/auth/gmail.send` |
-| **Personal Outlook.com** | **Device-code** flow | `https://graph.microsoft.com/Mail.ReadWrite`, `https://graph.microsoft.com/Mail.Send` |
+| **Outlook** (personal Outlook.com **or** work/school Microsoft 365) | Browser (PKCE) or **device-code** flow, `common` tenant | `https://graph.microsoft.com/Mail.ReadWrite`, `https://graph.microsoft.com/Mail.Send` |
 
 Add calendar scopes only if you use the calendar endpoints: Google
 `https://www.googleapis.com/auth/calendar.events` (and/or `calendar.readonly`),
@@ -323,7 +323,7 @@ curl -s -X POST http://127.0.0.1:4200/v1/connections/google \
   }'
 ```
 
-For personal Outlook, `POST /v1/connections/microsoft` with the Graph scopes above.
+For Outlook (personal or work/school), `POST /v1/connections/microsoft` with the Graph scopes above.
 
 **Response** — `201 Created`, metadata only (secrets are never echoed back):
 
@@ -554,10 +554,10 @@ Tools exposed: `triage_email`, `triage_email_batch`, `draft_reply`, `send_email`
 ## Provider coverage
 
 - **Gmail** — full support (triage, search, draft/send, archive, quarantine, calendar).
-- **Personal Outlook.com** — supported via the device-code OAuth flow; phishing
-  quarantine is **Gmail-only** (an Outlook mailbox is refused with **400**, because its
-  label-based undo can't reverse Outlook's folder move).
-- **Enterprise Microsoft Graph** — deferred.
+- **Outlook** — personal (Outlook.com) **and** work/school (Microsoft 365 / Entra
+  ID) mailboxes, via the browser (PKCE) or device-code OAuth flow on the `common`
+  tenant. Phishing quarantine is **Gmail-only** (an Outlook mailbox is refused with
+  **400**, because its label-based undo can't reverse Outlook's folder move).
 
 ## Related
 

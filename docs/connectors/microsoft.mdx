@@ -8,11 +8,24 @@ description: "Connect GAIA to Outlook mail, calendar, and OneDrive via Microsoft
   **Connector ID:** `microsoft` · **Type:** `oauth_pkce` · **Catalog entry:** [`src/gaia/connectors/catalog/microsoft.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/catalog/microsoft.py)
 </Info>
 
-GAIA connects to your **personal** Microsoft account — Outlook.com, Hotmail,
-or Live — using the Microsoft identity platform v2.0 with PKCE. Work and
-school (Microsoft Entra ID) accounts are not supported in this release.
+GAIA connects to your Microsoft account — **personal** (Outlook.com, Hotmail,
+Live) **or work/school** (Microsoft 365 / Entra ID) — using the Microsoft
+identity platform v2.0. The default login tenant is `common`, which accepts
+both account types. To restrict sign-in to one tenant, set
+`GAIA_MICROSOFT_TENANT` (a specific Entra tenant id, or `organizations` /
+`consumers`).
 
-## What you'll need
+There are two ways to sign in:
+
+- **Browser (PKCE)** — the default. Needs an Azure **App registration** you
+  create once (below). Best when you control your own app registration.
+- **Device code** — `gaia connectors connect microsoft --device`. You enter a
+  short code at a Microsoft URL; no loopback redirect. This is the zero-setup
+  path when a pre-registered public **client ID** is supplied via
+  `GAIA_MICROSOFT_CLIENT_ID` (no per-user app registration or redirect URI
+  needed). See [Device-code sign-in](#device-code-sign-in) below.
+
+## What you'll need (browser flow)
 
 Microsoft requires every app — including GAIA running locally — to identify
 itself with an **App registration** that you create once in the Azure portal.
@@ -27,9 +40,10 @@ GAIA stores the Client ID encrypted in your OS keyring.
 
 1. Go to the [Azure portal → App registrations](https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade).
 2. Click **New registration**.
-3. **Name**: `GAIA Personal` (or whatever you like).
-4. **Supported account types**: choose **Personal Microsoft accounts only**.
-   <Tooltip tip="This maps to the 'consumers' tenant GAIA uses. Picking a work/school option would target a tenant GAIA does not authenticate against in this release.">Why this option?</Tooltip>
+3. **Name**: `GAIA` (or whatever you like).
+4. **Supported account types**: choose **Accounts in any organizational
+   directory and personal Microsoft accounts**.
+   <Tooltip tip="This maps to the 'common' tenant GAIA uses by default, so both work/school and personal accounts can sign in. To restrict to one, register for that audience and set GAIA_MICROSOFT_TENANT.">Why this option?</Tooltip>
 5. Click **Register**. The **Overview** page shows the **Application (client)
    ID** — copy it for Step 3.
 
@@ -104,6 +118,39 @@ The scopes a connection can request are listed in the spec at
 | `https://graph.microsoft.com/Calendars.Read` | Read your calendar events |
 | `https://graph.microsoft.com/Calendars.ReadWrite` | Manage your calendar events |
 
+## Device-code sign-in
+
+The device-code flow skips the Azure app registration and the loopback
+redirect entirely — useful for headless machines, or when a public **client
+ID** is already available (e.g. an org-published GAIA app registration).
+
+```bash
+# Supply a pre-registered public client id (personal + work/school audience)
+export GAIA_MICROSOFT_CLIENT_ID=<application-client-id>
+# Optional: pin a single tenant instead of the default 'common'
+# export GAIA_MICROSOFT_TENANT=organizations
+
+gaia connectors connect microsoft --device
+```
+
+GAIA prints a short code and a URL (`https://microsoft.com/devicelogin`). Open
+the URL on any device, enter the code, and approve. GAIA polls until sign-in
+completes, then stores the refresh token in your OS keyring — identical to the
+browser flow from that point on. Grant an agent afterward:
+
+```bash
+gaia connectors grants grant microsoft installed:email \
+  --scopes https://graph.microsoft.com/Mail.ReadWrite \
+           https://graph.microsoft.com/Mail.Send
+```
+
+<Note>
+  The client ID used for device code must be a **public client** registered for
+  the "any account" audience with device-code flow allowed. GAIA does not ship
+  a client ID — supply your own via `GAIA_MICROSOFT_CLIENT_ID`, or use the
+  browser flow with your own app registration.
+</Note>
+
 ## Common issues
 
 ### `AADSTS50011: redirect URI mismatch`
@@ -114,9 +161,12 @@ or you added it under the wrong platform. Re-check Step 2 — it must be a
 
 ### `AADSTS700016` / `unauthorized_client`
 
-The Client ID is wrong, or the app was registered for the wrong account type.
-Confirm you copied the **Application (client) ID** from the Overview page and
-chose **Personal Microsoft accounts only** in Step 1.
+The Client ID is wrong, or the app was registered for an account type that
+doesn't match your sign-in. Confirm you copied the **Application (client) ID**
+from the Overview page and chose **Accounts in any organizational directory
+and personal Microsoft accounts** in Step 1. If you pinned
+`GAIA_MICROSOFT_TENANT`, make sure it matches your account type
+(`organizations` for work/school, `consumers` for personal).
 
 ### `AADSTS65001` / consent required
 
