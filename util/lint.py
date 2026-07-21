@@ -284,29 +284,54 @@ def check_mypy() -> CheckResult:
 
 
 def check_bandit() -> CheckResult:
-    """Run Bandit security check (warning only)."""
-    print("\n[6/10] Running security check with Bandit (warning only)...")
+    """Run Bandit security check.
+
+    HIGH-severity findings are BLOCKING: any HIGH finding not allow-listed in
+    ``.bandit-baseline.json`` fails the check. MEDIUM/LOW findings are still
+    reported (warning-only) so they stay visible without blocking the build.
+    """
+    print("\n[6/10] Running security check with Bandit (HIGH = blocking)...")
     print("-" * 40)
 
-    cmd = uvx("bandit", "-r", SRC_DIR, "-ll", "--exclude", EXCLUDE_DIRS)
+    from check_security_gates import (
+        check_bandit_high_gate,
+        format_finding,
+        run_bandit,
+    )
 
-    print(f"[CMD] {' '.join(cmd)}")
-    exit_code, output = run_command(cmd)
+    try:
+        report = run_bandit(SRC_DIR)
+    except (RuntimeError, ValueError) as exc:
+        print(f"[ERROR] Could not run Bandit: {exc}")
+        return CheckResult("Security Check (Bandit)", False, False, 1, str(exc))
 
-    if exit_code != 0:
-        # Count issue lines
-        issues = output.count(">> Issue:") or 1
-        print(f"\n[WARNING] Bandit found security issues (non-blocking):")
-        lines = output.strip().split("\n")[:30]
-        for line in lines:
-            print(line)
-        if len(output.strip().split("\n")) > 30:
-            print("... (output truncated, showing first 30 lines)")
-        print("\nNote: Many are false positives for ML applications.")
-        return CheckResult("Security Check (Bandit)", False, True, issues, output)
+    passed, new_highs = check_bandit_high_gate(SRC_DIR)
 
-    print("[OK] No security issues found!")
-    return CheckResult("Security Check (Bandit)", True, True, 0, output)
+    # Surface MEDIUM/LOW counts as an informational warning (non-blocking).
+    med_low = [
+        r
+        for r in report.get("results", [])
+        if r.get("issue_severity") in ("MEDIUM", "LOW")
+    ]
+    if med_low:
+        print(f"[INFO] {len(med_low)} MEDIUM/LOW finding(s) (non-blocking).")
+
+    if not passed:
+        print(f"\n[BLOCKING] Bandit found {len(new_highs)} HIGH-severity issue(s):")
+        for finding in new_highs:
+            print(f"  - {format_finding(finding)}")
+        print(
+            "\nFix the finding, or (only if genuinely unavoidable) add an inline "
+            "`# nosec <rule>` with a matching justified entry in "
+            "`.security-suppressions.json`, then allowlist it in "
+            "`.bandit-baseline.json`."
+        )
+        return CheckResult(
+            "Security Check (Bandit)", False, False, len(new_highs), str(new_highs)
+        )
+
+    print("[OK] No HIGH-severity security issues found!")
+    return CheckResult("Security Check (Bandit)", True, False, 0, "")
 
 
 def check_imports() -> CheckResult:

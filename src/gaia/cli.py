@@ -3653,9 +3653,9 @@ def main():
                         system = platform.system()
                         try:
                             if system == "Windows":
-                                subprocess.run(
-                                    ["start", "", mailto_url], shell=True, check=True
-                                )
+                                # os.startfile uses ShellExecute (no shell parsing),
+                                # safe for the user-built mailto URL
+                                os.startfile(mailto_url)
                             elif system == "Darwin":  # macOS
                                 subprocess.run(["open", mailto_url], check=True)
                             else:  # Linux/Unix
@@ -4777,10 +4777,13 @@ Let me know your answer!
 def kill_process_by_port(port):
     """Find and kill a process running on a specific port."""
     try:
+        port = int(port)
+    except (ValueError, TypeError):
+        return {"success": False, "message": f"Invalid port number: {port!r}"}
+    try:
         if sys.platform.startswith("win"):
-            # Windows implementation
-            cmd = f"netstat -ano | findstr :{port}"
-            output = subprocess.check_output(cmd, shell=True).decode()
+            # Windows implementation (filter netstat output in Python, no shell pipe)
+            output = subprocess.check_output(["netstat", "-ano"]).decode()
             if output:
                 # Split output into lines and process each line
                 for line in output.strip().split("\n"):
@@ -4792,7 +4795,9 @@ def kill_process_by_port(port):
                             pid = int(parts[-1])
                             if pid > 0:  # Ensure we don't try to kill PID 0
                                 subprocess.run(
-                                    f"taskkill /PID {pid} /F", shell=True, check=True
+                                    ["taskkill", "/PID", str(pid), "/F"],
+                                    shell=False,
+                                    check=True,
                                 )
                                 return {
                                     "success": True,
@@ -4808,8 +4813,9 @@ def kill_process_by_port(port):
             # Linux/Unix implementation
             try:
                 # Use lsof to find process using the port
-                cmd = f"lsof -ti:{port}"
-                output = subprocess.check_output(cmd, shell=True).decode().strip()
+                output = (
+                    subprocess.check_output(["lsof", f"-ti:{port}"]).decode().strip()
+                )
                 if output:
                     pids = output.split("\n")
                     killed_pids = []
@@ -4817,7 +4823,9 @@ def kill_process_by_port(port):
                         try:
                             pid = int(pid_str.strip())
                             if pid > 0:
-                                subprocess.run(f"kill -9 {pid}", shell=True, check=True)
+                                subprocess.run(
+                                    ["kill", "-9", str(pid)], shell=False, check=True
+                                )
                                 killed_pids.append(str(pid))
                         except (ValueError, subprocess.CalledProcessError):
                             continue
@@ -4834,8 +4842,8 @@ def kill_process_by_port(port):
                 # If lsof is not available, try netstat + ps approach
                 try:
                     # Use netstat to find the port, then extract PID
-                    cmd = f"netstat -tulpn | grep :{port}"
-                    output = subprocess.check_output(cmd, shell=True).decode()
+                    # (filter output in Python, no shell pipe)
+                    output = subprocess.check_output(["netstat", "-tulpn"]).decode()
                     if output:
                         for line in output.strip().split("\n"):
                             if f":{port}" in line:
@@ -4847,8 +4855,8 @@ def kill_process_by_port(port):
                                             pid = int(part.split("/")[0])
                                             if pid > 0:
                                                 subprocess.run(
-                                                    f"kill -9 {pid}",
-                                                    shell=True,
+                                                    ["kill", "-9", str(pid)],
+                                                    shell=False,
                                                     check=True,
                                                 )
                                                 return {
