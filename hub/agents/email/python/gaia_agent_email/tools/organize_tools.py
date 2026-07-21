@@ -845,15 +845,23 @@ class OrganizeToolsMixin:
             """Undo a batch archive by its batch_id, restoring every message
             to the inbox within the undo window. Reverses archive_message_batch."""
             try:
-                return _envelope_ok(
-                    undo_archive_batch_impl(
-                        agent._backend_for_action,
-                        db,
-                        batch_id=batch_id,
-                        window_seconds=window,
-                        debug=debug_flag,
-                    )
+                result = undo_archive_batch_impl(
+                    agent._backend_for_action,
+                    db,
+                    batch_id=batch_id,
+                    window_seconds=window,
+                    debug=debug_flag,
                 )
+                # Learning loop: an undone auto-archive is a correction. Attribute
+                # each restored action back to its trust scope (no-op for
+                # user-initiated archives, which were never indexed as autonomy).
+                capture = getattr(agent, "note_action_undone", None)
+                if capture is not None:
+                    for entry in result.get("messages", []):
+                        action_id = entry.get("action_id")
+                        if action_id:
+                            capture(action_id)
+                return _envelope_ok(result)
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
             except Exception as exc:

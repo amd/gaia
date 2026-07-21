@@ -35,9 +35,9 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Any, ClassVar, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional
 
-from gaia_agent_email import action_store, schedule_store, task_store
+from gaia_agent_email import action_store, schedule_store, task_store, trust
 from gaia_agent_email.config import ConfigurationError, EmailAgentConfig
 from gaia_agent_email.model_select import (
     NPU_EMAIL_MODEL_ID,
@@ -73,6 +73,9 @@ from gaia_agent_email.tools.schedule_tools import ScheduleToolsMixin
 from gaia_agent_email.tools.summarize_tools import SummarizeToolsMixin
 from gaia_agent_email.tools.voice_tools import VoiceToolsMixin
 from gaia_agent_email.voice_profile import render_style_guidance
+
+if TYPE_CHECKING:  # import-cheap: only for annotations, never at runtime
+    from gaia.agents.base.goal_store import Proposal
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
@@ -484,9 +487,17 @@ class EmailTriageAgent(
         db_path = config.resolved_db_path()
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.init_db(db_path)
+        # A scheduler-built autonomy agent and a live session agent can hold
+        # separate connections to this same state.db (#1115). Wait on a busy
+        # writer instead of failing the whole cycle with "database is locked";
+        # WAL lets a reader proceed during a write. Scoped to the email agent's
+        # connection — not a core-mixin change.
+        self._db.execute("PRAGMA busy_timeout = 5000")
+        self._db.execute("PRAGMA journal_mode = WAL")
         action_store.init_schema(self)
         schedule_store.init_schema(self)
         task_store.init_schema(self)
+        trust.init_trust_schema(self)
 
         # LLM connection. Default to Lemonade — the config's base_url
         # allowlist guarantees the host is local. Resolved BEFORE init_memory()
@@ -1138,6 +1149,322 @@ class EmailTriageAgent(
             debug=bool(getattr(self.config, "debug", False)),
             remember_mailbox=self._remember_message_mailbox,
         )
+
+    # -- Full autonomy: observe -> decide -> act (#1115 / #557) -------------
+
+    def _autonomy_policy(self) -> "trust.TrustPolicy":
+        """Build the earn-trust policy from current config + the confirm-floor.
+
+        Rebuilt per cycle so a runtime ``autonomy_level`` change (e.g. via the
+        the forthcoming ``gaia email autonomy`` CLI) takes effect on the next
+        heartbeat without
+        reconstructing the agent.
+        """
+        ledger = trust.TrustLedger(
+            min_samples=self.config.autonomy_trust_min_samples,
+            threshold=self.config.autonomy_trust_threshold,
+        )
+        return trust.TrustPolicy(
+            level=self.config.autonomy_level,
+            ledger=ledger,
+            confirm_floor=self.confirmation_required_tools(),
+        )
+
+    @staticmethod
+    def _autonomy_candidate(row: Dict[str, Any]) -> Optional[tuple]:
+        """Map a triage result to a candidate ``(tool, action_type)`` or None.
+
+        Phase 2 only proposes/auto-executes the clearest reversible action —
+        archiving low-signal mail (promotional / FYI / spam). Phishing is left
+        to the ``quarantine_phishing_message`` floor tool; urgent / needs-response
+        / personal mail is never auto-touched. Reply drafting lands in Phase 3.
+        """
+        from gaia_agent_email.tools.triage_heuristics import (
+            CATEGORY_FYI,
+            CATEGORY_PROMOTIONAL,
+        )
+
+        if row.get("is_phishing"):
+            return None
+        category = (row.get("category") or "").strip().upper()
+        if row.get("is_spam") or category in (CATEGORY_FYI, CATEGORY_PROMOTIONAL):
+            return ("archive_message", "archive")
+        return None
+
+    def _run_email_autonomy_cycle(
+        self, context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """One observe -> decide -> act pass. Pure of GoalStore side effects.
+
+        Observes the inbox (reusing ``_triage_all_backends``), asks
+        :class:`~gaia_agent_email.trust.TrustPolicy` what to do with each
+        candidate, auto-executes the reversible actions it is trusted to run,
+        and collects the rest as proposals. Returns a structured report; the
+        ``proposals`` list holds ``Proposal`` objects the caller persists via
+        :meth:`propose`. Kept side-effect-pure of GoalStore so it is unit-testable
+        without touching ``~/.gaia/goals.db``.
+        """
+        from gaia_agent_email.tools.read_tools import extract_sender_email
+
+        from gaia.agents.base.goal_store import Proposal
+
+        context = context or {}
+        report: Dict[str, Any] = {
+            "level": self.config.autonomy_level,
+            "executed": [],
+            "proposals": [],
+            "skipped": 0,
+            "already_proposed": 0,
+        }
+        policy = self._autonomy_policy()
+        if not policy.enabled:
+            return report
+
+        max_messages = int(context.get("max_messages", 25))
+        triage = self._triage_all_backends(max_messages=max_messages)
+
+        for row in triage.get("results", []):
+            candidate = self._autonomy_candidate(row)
+            if candidate is None:
+                report["skipped"] += 1
+                continue
+            tool_name, action_type = candidate
+            sender = extract_sender_email(row.get("from", ""))
+            decision = policy.decide(
+                tool=tool_name,
+                action_type=action_type,
+                category=row.get("category", ""),
+                sender=sender,
+                db=self,
+                preferences=self._session_preferences,
+            )
+            message_id = row.get("id")
+            if decision.action == "auto":
+                executed = self._autonomy_execute(action_type, row)
+                # Index the action so a later undo is attributed to this scope
+                # and lands a negative signal on the right ledger rows.
+                action_id = executed.get("action_id")
+                if action_id:
+                    trust.record_autonomy_action(
+                        self,
+                        action_id=action_id,
+                        action_type=action_type,
+                        sender=sender,
+                        category=row.get("category", ""),
+                    )
+                # A message we once proposed and now act on is resolved — clear
+                # its re-proposal guard so the row can't linger open.
+                if message_id:
+                    trust.resolve_proposal(
+                        self, message_id=message_id, action_type=action_type
+                    )
+                report["executed"].append(
+                    {
+                        "message_id": message_id,
+                        "action": action_type,
+                        "sender": sender,
+                        "reason": decision.reason,
+                        "confidence": decision.confidence,
+                        **executed,
+                    }
+                )
+            elif decision.action in ("suggest", "draft"):
+                # Re-proposal guard: a message already proposed and not yet acted
+                # on must not spawn a duplicate goal every cycle. Without this,
+                # a headless timer piles up one pending goal per message per fire.
+                if message_id and trust.has_open_proposal(
+                    self, message_id=message_id, action_type=action_type
+                ):
+                    report["already_proposed"] += 1
+                    continue
+                report["proposals"].append(
+                    Proposal(
+                        action=f"{action_type} email {message_id} from {sender}",
+                        rationale=decision.reason,
+                        action_class="other",
+                        risk="low",
+                    )
+                )
+                if message_id:
+                    trust.record_proposal(
+                        self, message_id=message_id, action_type=action_type
+                    )
+            else:
+                # confirm — the floor. Never reached for archive candidates, but
+                # counted rather than silently dropped if the taxonomy grows.
+                report["skipped"] += 1
+
+        return report
+
+    def _autonomy_execute(
+        self, action_type: str, row: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Execute one trusted reversible action. Records undo via action_store.
+
+        Only reversible actions reach here (the policy guarantees it). Returns
+        the impl's result (carrying the ``action_id`` undo handle).
+        """
+        from gaia_agent_email.tools.organize_tools import archive_message_impl
+
+        if action_type != "archive":
+            raise ValueError(
+                f"_autonomy_execute: no executor for action_type {action_type!r}. "
+                "The policy admitted an action the executor does not implement — "
+                "add an executor branch before widening the candidate map."
+            )
+        import uuid as _uuid
+
+        message_id = row.get("id")
+        provider = row.get("mailbox") or self._provider_for_message(message_id, None)
+        backend = self._backends[provider]
+        # Mint a batch_id so the auto-archive is undoable via undo_archive_batch
+        # (the same handle the REST/UI undo surface uses) — and undoing it feeds
+        # the learning loop as a correction.
+        return archive_message_impl(
+            backend,
+            self,
+            message_id=message_id,
+            mailbox=provider,
+            batch_id=_uuid.uuid4().hex,
+            debug=bool(getattr(self.config, "debug", False)),
+        )
+
+    def on_heartbeat(
+        self, context: Optional[Dict[str, Any]] = None
+    ) -> List["Proposal"]:
+        """Steady-state autonomous pass (base ``Agent`` hook, spec §6.7).
+
+        Runs one observe -> decide -> act cycle and returns the proposals that
+        need user approval. Auto-executed actions happen as a side effect and
+        are recorded (with undo) in ``action_store``; the driver persists the
+        returned proposals via :meth:`propose`.
+
+        Cost note: this triages the inbox (mailbox I/O + local inference on any
+        heuristic-uncertain message), so a full cycle can take many seconds. The
+        REST/scheduler drivers offload it to a worker thread; a direct caller
+        should not invoke it on a latency-sensitive path.
+        """
+        return self._run_email_autonomy_cycle(context).get("proposals", [])
+
+    def record_autonomy_outcome(
+        self,
+        *,
+        action_type: str,
+        positive: bool,
+        sender: str = "",
+        category: str = "",
+    ) -> None:
+        """The single write-path for every trust signal (the learning loop).
+
+        Undo of an auto-action, a proposal accepted/rejected, a thumbs up/down
+        in the activity feed — they all funnel here. The outcome is recorded
+        against BOTH the sender and the category scope, so trust accrues at
+        whichever granularity recurs (a specific newsletter address AND the
+        promotional category both learn from the same choice). This is how the
+        agent "learns from your patterns": enough positives lift a scope over
+        the trust bar and the next cycle acts silently; a correction pulls it
+        back below and the agent returns to asking.
+        """
+        for scope in (
+            trust.sender_scope(sender) if sender else "",
+            trust.category_scope(category) if category else "",
+        ):
+            if scope:
+                trust.TrustLedger.record_outcome(
+                    self, action_type=action_type, scope=scope, positive=positive
+                )
+
+    def note_action_undone(self, action_id: str) -> bool:
+        """Capture a correction: an auto-executed action the user undid.
+
+        Called by the undo surface. If ``action_id`` was an autonomy action, a
+        negative outcome is recorded for its scope and the index row is marked
+        resolved (so one undo is never counted twice). Returns True when a
+        correction was captured, False when the id was not an autonomy action.
+        """
+        row = trust.lookup_autonomy_action(self, action_id=action_id)
+        if row is None:
+            return False
+        self.record_autonomy_outcome(
+            action_type=row["action_type"],
+            positive=False,
+            sender=row.get("sender") or "",
+            category=row.get("category") or "",
+        )
+        trust.mark_autonomy_action_resolved(self, action_id=action_id)
+        return True
+
+    def set_autonomy_level(self, level: str) -> Dict[str, Any]:
+        """Change the autonomy level at runtime (pause / resume / kill switch).
+
+        ``off`` is the kill switch — the next heartbeat is a no-op. Returns the
+        applied status. Raises ``ValueError`` (translated to HTTP 400 at the
+        boundary) on an unknown level rather than silently ignoring it.
+        """
+        if level not in trust.AUTONOMY_LEVELS:
+            raise ValueError(
+                f"autonomy level must be one of {list(trust.AUTONOMY_LEVELS)}, "
+                f"got {level!r}"
+            )
+        self.config.autonomy_level = level
+        return {"level": level, "enabled": level != trust.LEVEL_OFF}
+
+    def autonomy_status(self) -> Dict[str, Any]:
+        """Inspectable snapshot of the autonomy engine (never a black box).
+
+        Returns the current level, the trust thresholds, and the earned-trust
+        ledger — every ``(action, scope)`` with its positive/negative tally and
+        whether it has crossed the bar. This is the single read-model the
+        planned ``gaia email autonomy status`` / ``trust`` CLI, the REST surface, and
+        the Agent-UI panel all render, so autonomy behavior is always
+        explainable ("archives news@x because 12/12 correct").
+        """
+        ledger = trust.TrustLedger(
+            min_samples=self.config.autonomy_trust_min_samples,
+            threshold=self.config.autonomy_trust_threshold,
+        )
+        scopes = []
+        for row in trust.TrustLedger.list_ledger(self):
+            total = int(row["positive"]) + int(row["negative"])
+            scopes.append(
+                {
+                    "action_type": row["action_type"],
+                    "scope": row["scope"],
+                    "positive": row["positive"],
+                    "negative": row["negative"],
+                    "total": total,
+                    "score": (row["positive"] / total) if total else 0.0,
+                    "trusted": ledger.is_trusted(
+                        self, action_type=row["action_type"], scope=row["scope"]
+                    ),
+                }
+            )
+        return {
+            "level": self.config.autonomy_level,
+            "enabled": self.config.autonomy_level != trust.LEVEL_OFF,
+            "trust_min_samples": self.config.autonomy_trust_min_samples,
+            "trust_threshold": self.config.autonomy_trust_threshold,
+            "trusted_scope_count": sum(1 for s in scopes if s["trusted"]),
+            "scopes": scopes,
+        }
+
+    def run_autonomy_cycle(
+        self, context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Driver-facing entry: run a cycle and persist proposals to GoalStore.
+
+        This is the seam a ``DaemonClock`` job / the planned ``gaia email autonomy`` CLI
+        invokes (mirroring ``run_briefing_job`` for the briefing feature).
+        Returns a JSON-serializable report — the ``Proposal`` objects are
+        replaced by their persisted dict form.
+        """
+        report = self._run_email_autonomy_cycle(context)
+        persisted = []
+        for proposal in report["proposals"]:
+            self.propose(proposal)
+            persisted.append(proposal.to_dict())
+        report["proposals"] = persisted
+        return report
 
     # -- Phase I3 batch-organize counter -----------------------------------
 

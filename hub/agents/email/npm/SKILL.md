@@ -251,6 +251,37 @@ and the runtime memory toggle `POST /memory` + `GET /memory/{id}` (enabling memo
 was never initialized returns **409**, never a silent no-op). One turn at a time per
 session — an overlapping `/query` returns **409**. See `SPEC.md` for the full table.
 
+### Full autonomy (`/v1/email/agent/autonomy/*`)
+
+The agent can run **proactively** on an earn-trust gradient: it archives low-signal mail
+on its own once a sender/category has *proven itself*, drafts replies for review, and
+**always asks before anything destructive** (send / forward / permanent-delete / RSVP).
+Turn it on and inspect the earned trust:
+
+```js
+// Turn on full autonomy (levels: off | suggest | earn_trust | full; "off" = kill switch)
+await fetch(`${base}/v1/email/agent/autonomy`, {
+  method: "POST", headers: { "content-type": "application/json" },
+  body: JSON.stringify({ session_id: "s1", level: "earn_trust" }),
+});
+
+// Run one observe→decide→act cycle now (the daemon/scheduler drives this in production)
+const r = await fetch(`${base}/v1/email/agent/autonomy/run`, {
+  method: "POST", headers: { "content-type": "application/json" },
+  body: JSON.stringify({ session_id: "s1", max_messages: 25 }),
+});
+const report = await r.json();   // { level, executed:[…], proposals:[…], skipped }
+
+// Inspect the earned-trust ledger — autonomy is never a black box
+const status = await (await fetch(`${base}/v1/email/agent/autonomy/s1`)).json();
+// { level, enabled, trust_min_samples, trust_threshold, trusted_scope_count, scopes:[…] }
+```
+
+The agent **learns from you**: undoing an auto-archive (`undo_archive_batch`) is captured
+as a correction that pulls trust back below the bar; accepted suggestions lift it over.
+Every auto-action is reversible with undo. A bad `level` returns **400**; an unknown
+session returns **404**.
+
 ## Running in a server / long-lived app
 
 - **`fetchBinary` is a build step**, not per request (network + SHA verify). Run it
