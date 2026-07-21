@@ -571,8 +571,10 @@ gaia agent install <id> --trust-native     # required for native (C++) agents
 
 `gaia agent list` shows what the hub offers (with an `[installed]` marker) so
 you know which id to pass. This is the supported way to provision a sidecar
-agent (e.g. `email`) on a machine with no UI; follow it with
-`gaia daemon start-agent <id>` to launch the sidecar.
+agent (e.g. `email`) on a machine with no UI. Running the agent (e.g.
+`gaia email -q "..."`) starts its sidecar automatically on first use;
+`gaia daemon start-agent <id>` is an optional pre-flight to launch and
+health-check it early.
 
 ##### Automated PyPI publishing (CI)
 
