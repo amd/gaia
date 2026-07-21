@@ -124,6 +124,23 @@ def test_forward_provider_ungranted_raises_not_granted_and_posts_nothing():
     assert http.posts == []  # nothing forwarded when ungranted
 
 
+def test_ungranted_error_is_headless_first_and_complete():
+    """This is the FIRST error a cold headless box hits on `gaia email` (#2347),
+    so it must lead with the CLI (connect + grant, matching scopes), point at
+    where the OAuth-client setup surfaces, and only then mention the UI."""
+    fwd, _ = _forwarder(grants={})
+    with pytest.raises(NotGrantedError) as exc:
+        fwd.forward_provider(
+            "email", "google", base_url="http://127.0.0.1:9", bearer="b"
+        )
+    msg = str(exc.value)
+    # One-flow connect+grant so the scopes can't drift (#2347).
+    assert "gaia connectors connect google --scopes" in msg
+    assert "--grant-agent installed:email" in msg
+    # CLI leads; the UI is the fallback, not the headline.
+    assert msg.index("gaia connectors connect") < msg.index("Settings -> Connections")
+
+
 def test_forward_provider_unforwardable_provider_raises():
     fwd, _ = _forwarder(grants={"dropbox": {"installed:email": ["s"]}})
     with pytest.raises(NotGrantedError):

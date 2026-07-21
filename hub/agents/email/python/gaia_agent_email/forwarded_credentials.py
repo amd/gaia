@@ -167,22 +167,26 @@ def get_forwarded_token(provider: str, scopes: List[str]) -> str:
         raise ConnectorsError(
             f"no forwarded '{provider}' credential is available to the email "
             "sidecar. The connection may not be granted to this agent, or it was "
-            "revoked/withdrawn. Connect and grant it in Settings → Connections; "
-            "the daemon forwards a token on the next use."
+            "revoked/withdrawn. Connect and grant it in one command — no Agent UI "
+            f"required: `gaia connectors connect {provider} --scopes <scopes> "
+            "--grant-agent installed:email`, or use Settings -> Connections in "
+            "the Agent UI. The daemon forwards a token on the next use."
         )
     if (cred.expires_at - time.time()) < _EXPIRY_BUFFER_SECONDS:
         raise ConnectorsError(
             f"the forwarded '{provider}' access token has expired and the daemon "
             "has not re-forwarded a fresh one yet. Retry in a moment; if it "
-            "persists, reconnect '{provider}' in Settings → Connections."
+            f"persists, reconnect with `gaia connectors connect {provider} "
+            "--scopes <scopes>` (or Settings -> Connections in the Agent UI)."
         )
     missing = [s for s in scopes if s not in cred.scopes]
     if missing:
         raise ConnectorsError(
             f"the forwarded '{provider}' token does not cover the required "
-            f"scopes {missing}. Reconnect '{provider}' with the missing scopes "
-            "in Settings → Connections so the daemon can forward a token that "
-            "covers them."
+            f"scopes {missing}. Reconnect with those scopes in one command: "
+            f"`gaia connectors connect {provider} --scopes {' '.join(missing)} "
+            f"--grant-agent installed:email` (or Settings -> Connections in the "
+            "Agent UI) so the daemon can forward a token that covers them."
         )
     return cred.access_token
 

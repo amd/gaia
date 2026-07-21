@@ -181,9 +181,13 @@ class ConnectionForwarder:
         if granted is None:
             raise NotGrantedError(
                 f"agent '{agent_id}' ({grant_agent_id}) has no grant for "
-                f"'{provider}'. Grant it in Settings → Connections (or "
-                f"`gaia connectors grants grant {provider} {grant_agent_id} "
-                "<scopes>`) before the daemon can forward a token."
+                f"'{provider}'. Connect the account and grant the agent in one "
+                f"command — no Agent UI required:\n"
+                f"  gaia connectors connect {provider} --scopes <scopes> "
+                f"--grant-agent {grant_agent_id}\n"
+                f"(`gaia connectors connect {provider}` prints the full OAuth-client "
+                f"setup if the connector isn't configured yet.) In the Agent UI you "
+                f"can instead use Settings -> Connections."
             )
 
         try:

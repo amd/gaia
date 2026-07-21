@@ -37,7 +37,7 @@ import zlib
 from typing import Iterable, Sequence
 from urllib.parse import urlencode
 
-from gaia.connectors.errors import ConfigurationError
+from gaia.connectors.errors import OAuthClientNotConfiguredError
 
 # Default login tenant. ``common`` accepts personal AND work/school accounts.
 # Overridable via GAIA_MICROSOFT_TENANT (a single-tenant Entra id, or
@@ -156,16 +156,32 @@ class MicrosoftOAuthProvider:
             or os.environ.get("GAIA_MICROSOFT_CLIENT_ID", "")
         )
         if not resolved_id:
-            raise ConfigurationError(
-                "Microsoft OAuth client is not configured. Open Settings → "
-                "Connections → Microsoft in the AgentUI and paste the "
-                "Application (client) ID from your Azure App registration "
-                "('any account' / 'common' audience — personal + work/school — "
-                "with a http://localhost redirect URI). (Power users may also set the "
-                "GAIA_MICROSOFT_CLIENT_ID env var — and, only for a "
-                "confidential web-app registration, GAIA_MICROSOFT_CLIENT_SECRET "
-                "— before launching GAIA.) See "
-                "docs/runbooks/microsoft-oauth-client.md."
+            raise OAuthClientNotConfiguredError(
+                "microsoft",
+                provider_label="Microsoft",
+                console_steps=(
+                    "  1. Register an app at https://portal.azure.com -> "
+                    "Microsoft Entra ID -> App registrations\n"
+                    "  2. Set the supported account type to 'any account' "
+                    "('common' audience — personal + work/school), and add a "
+                    "http://localhost redirect URI under Authentication -> "
+                    "Mobile & desktop applications\n"
+                    "  3. Add the Microsoft Graph delegated permissions you need "
+                    "(e.g. Mail.ReadWrite, Mail.Send, Calendars.ReadWrite)\n"
+                    "  4. Copy the Application (client) ID — this is a public "
+                    "(PKCE) client, so no client secret is needed"
+                ),
+                example=(
+                    "  For the email agent, copy-paste (bash) after creating the "
+                    "client above:\n"
+                    "    gaia connectors configure microsoft --client-id <ID>\n"
+                    '    SCOPES="https://graph.microsoft.com/Mail.ReadWrite '
+                    "https://graph.microsoft.com/Mail.Send "
+                    'https://graph.microsoft.com/Calendars.ReadWrite"\n'
+                    "    gaia connectors connect microsoft --scopes $SCOPES "
+                    "--grant-agent installed:email"
+                ),
+                docs="https://amd-gaia.ai/docs/connectors/microsoft",
             )
         self.client_id: str = resolved_id
         # CRC32 fingerprint for log correlation / tripwire comparison only.

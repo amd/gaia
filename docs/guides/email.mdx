@@ -80,34 +80,35 @@ There are two ways to connect Google depending on how you use GAIA.
 
     Both flags are required together — Google rejects token requests that omit the secret even for Desktop-app PKCE clients.
 
-    **Step 2 — Sign in and authorize the mailbox scopes.** Pass the email
-    agent's scopes explicitly with `--scopes` — the bare
+    **Step 2 — Sign in and grant the email agent in one command.** Pass the
+    email agent's scopes explicitly with `--scopes` (a bare
     `gaia connectors connect google` requests only the default
-    `openid`/`email`/`profile` and your mailbox calls would later fail with a
-    scope error:
+    `openid`/`email`/`profile` and mailbox calls would later fail with a scope
+    error), and add `--grant-agent installed:email` so the same scopes are
+    granted to the agent in the same flow — no separate `grants grant` step, and
+    the connect/grant scopes can never drift:
 
     ```bash
     gaia connectors connect google \
+      --grant-agent installed:email \
       --scopes https://www.googleapis.com/auth/gmail.modify \
                https://www.googleapis.com/auth/gmail.send \
                https://www.googleapis.com/auth/calendar.events \
                https://www.googleapis.com/auth/calendar.readonly
     ```
 
-    The command prints an authorization URL. Open it in a browser, complete the OAuth consent screen (grant every requested scope), and paste the resulting code back into the terminal.
+    The command prints an authorization URL. Open it in a browser **on the
+    machine running GAIA** (the sign-in completes via a `127.0.0.1` callback on
+    that box; on a remote/headless host, open it there or forward the callback
+    port over SSH), complete the OAuth consent screen granting every requested
+    scope, and the flow finishes.
 
-    **Step 3 — Grant the same scopes to the email agent.** Authorizing the
-    connection stores the credentials, but the email agent has no access
-    until you grant it those scopes explicitly. In the CLI flow this is a
-    **separate, required step** (the Agent UI does it for you):
-
-    ```bash
-    gaia connectors grants grant google installed:email \
-      --scopes https://www.googleapis.com/auth/gmail.modify \
-               https://www.googleapis.com/auth/gmail.send \
-               https://www.googleapis.com/auth/calendar.events \
-               https://www.googleapis.com/auth/calendar.readonly
-    ```
+    <Note>
+    Prefer to do it in two explicit steps? Run `gaia connectors connect google
+    --scopes …` first, then `gaia connectors grants grant google installed:email
+    --scopes …` with the **same** scopes. `--grant-agent` just folds those into
+    one flow (which is what the Agent UI does).
+    </Note>
 
     Skip this and the first email tool call fails with
     `AGENT_NOT_GRANTED` — see [Troubleshooting](#troubleshooting).
@@ -379,12 +380,22 @@ daemon *client*: on each email request it asks the daemon to ensure the
 sidecar is running, then talks to the sidecar port directly. No Node.js is
 involved. Two modes, selected by `GAIA_EMAIL_AGENT_MODE`:
 
-- `user` (default) — runs the published frozen binary. An Agent Hub install is
-  used first (its SHA-256 was verified against the hub manifest at install time
-  and is re-checked before every spawn); otherwise the binary is fetched on
-  first email use and verified against `binaries.lock.json`. Either way SHA-256
-  is the integrity gate: a tampered or unpublished binary fails loudly; there is
-  no fallback to dev mode.
+- `user` (default) — runs the published frozen binary. The binary comes from an
+  **Agent Hub install** (its SHA-256 was verified against the hub manifest at
+  install time and is re-checked before every spawn). In the Agent UI, click
+  **Install** on the email agent; on a **headless** machine, install it from the
+  hub directly:
+
+  ```bash
+  gaia agent install email
+  gaia daemon start-agent email
+  ```
+
+  Only a GAIA **source checkout** additionally carries a `binaries.lock.json`
+  from which the binary can be lazily fetched on first use; an installed GAIA
+  does not ship that file, so without a Hub install (or dev mode) user mode fails
+  loudly naming those two remedies — it never silently falls back. Either way
+  SHA-256 is the integrity gate: a tampered or unpublished binary fails loudly.
 - `dev` — runs the agent from your local source with hot reload, so prompt/tool
   edits show up live without a freeze → publish cycle:
 

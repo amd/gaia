@@ -558,10 +558,23 @@ uv pip install "gaia-agent-summarize @ git+https://github.com/amd/gaia.git#subdi
 ```
 </Note>
 
-The **Hub (R2)** path is the Agent UI's discover/install panel, which downloads
-the wheel from R2 into `~/.gaia/agents/<id>/` (`POST /api/agents/install`, backed
-by `gaia.hub.installer`). Use it when browsing the Hub UI; use `pip install` for
-scripted or headless setups.
+The **Hub (R2)** path downloads the published, SHA-verified artifact into
+`~/.gaia/agents/<id>/` (backed by `gaia.hub.installer`). Use the Agent UI's
+discover/install panel when browsing the Hub, or install headlessly with:
+
+```bash
+gaia agent list                            # installed + available hub agents
+gaia agent install <id>                    # latest published version
+gaia agent install <id> --version 0.5.0    # a specific version
+gaia agent install <id> --trust-native     # required for native (C++) agents
+```
+
+`gaia agent list` shows what the hub offers (with an `[installed]` marker) so
+you know which id to pass. This is the supported way to provision a sidecar
+agent (e.g. `email`) on a machine with no UI. Running the agent (e.g.
+`gaia email -q "..."`) starts its sidecar automatically on first use;
+`gaia daemon start-agent <id>` is an optional pre-flight to launch and
+health-check it early.
 
 ##### Automated PyPI publishing (CI)
 

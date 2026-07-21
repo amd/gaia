@@ -61,6 +61,98 @@ def _run(*argv) -> tuple[int, str, str]:
     return rc, out.getvalue(), err.getvalue()
 
 
+class TestConnectSelfDocuments:
+    """`gaia connectors connect google` with no client credentials must be
+    self-documenting for a headless user (#2347) — the console setup steps and
+    the exact commands, not a UI-only dead end."""
+
+    def test_connect_without_client_creds_prints_setup_guide(self, monkeypatch):
+        monkeypatch.delenv("GAIA_GOOGLE_CLIENT_ID", raising=False)
+        monkeypatch.delenv("GAIA_GOOGLE_CLIENT_SECRET", raising=False)
+        # Ensure no keyring-stored client creds resolve either.
+        monkeypatch.setattr(
+            "gaia.connectors.store.peek_provider_credentials", lambda pid: None
+        )
+        _registry.clear()
+
+        rc, _out, err = _run("connectors", "connect", "google")
+
+        assert rc == 3  # ConfigurationError exit code
+        assert "not configured" in err
+        assert "console.cloud.google.com" in err  # console steps
+        assert "gaia connectors configure google --client-id" in err  # exact command
+        # connect authorizes scopes and grants the agent in one flow (#2347).
+        assert "gaia connectors connect google --scopes" in err
+        assert "--grant-agent installed:email" in err
+        assert "gmail.modify" in err  # copy-paste example has real scopes
+        assert "amd-gaia.ai/docs/connectors/google" in err
+
+
+class TestConnectGrantAgent:
+    """`gaia connectors connect --grant-agent` folds connect + grant into one
+    flow so the scopes can never drift (#2347 UX)."""
+
+    def test_grant_agent_without_scopes_is_a_usage_error(self):
+        rc, _out, err = _run(
+            "connectors", "connect", "google", "--grant-agent", "installed:email"
+        )
+        assert rc == 2
+        assert "--grant-agent requires --scopes" in err
+
+    def test_grant_agent_passes_grant_agents_to_the_flow(self, monkeypatch):
+        captured = {}
+
+        async def _fake_start(connector_id, *, scopes, grant_agents=None):
+            captured["connector_id"] = connector_id
+            captured["scopes"] = list(scopes)
+            captured["grant_agents"] = grant_agents
+            return {"flow_id": "F1", "authorization_url": "https://auth.example"}
+
+        async def _fake_complete(flow_id):
+            return {"account_email": "alice@example.com"}
+
+        monkeypatch.setattr("gaia.connectors.api.start_authorization", _fake_start)
+        monkeypatch.setattr(
+            "gaia.connectors.api.complete_authorization", _fake_complete
+        )
+
+        rc, out, _err = _run(
+            "connectors",
+            "connect",
+            "google",
+            "--scopes",
+            "https://www.googleapis.com/auth/gmail.modify",
+            "--grant-agent",
+            "installed:email",
+        )
+        assert rc == 0
+        # The grant rides the SAME scopes as the connect — no drift possible.
+        assert captured["grant_agents"] == {
+            "installed:email": ["https://www.googleapis.com/auth/gmail.modify"]
+        }
+        assert "Connected as alice@example.com" in out
+        assert "granted google → installed:email" in out
+
+    def test_plain_connect_passes_no_grant_agents(self, monkeypatch):
+        captured = {}
+
+        async def _fake_start(connector_id, *, scopes, grant_agents=None):
+            captured["grant_agents"] = grant_agents
+            return {"flow_id": "F1", "authorization_url": "https://auth.example"}
+
+        async def _fake_complete(flow_id):
+            return {"account_email": "bob@example.com"}
+
+        monkeypatch.setattr("gaia.connectors.api.start_authorization", _fake_start)
+        monkeypatch.setattr(
+            "gaia.connectors.api.complete_authorization", _fake_complete
+        )
+
+        rc, _out, _err = _run("connectors", "connect", "google", "--scopes", "s1")
+        assert rc == 0
+        assert captured["grant_agents"] is None
+
+
 class TestStatus:
     def test_status_empty(self):
         # list/status shows catalog entries; google is always in the catalog

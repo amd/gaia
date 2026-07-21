@@ -113,16 +113,35 @@ class TestRegistry:
         assert providers.get("google") is prov
 
     def test_lazy_google_missing_creds_raises_configuration_error(self, monkeypatch):
-        # No env vars and no keyring entry → ConfigurationError that
-        # points the user to the AgentUI setup form.
+        # No env vars and no keyring entry → a self-documenting error that
+        # unblocks a headless user (#2347): the Google Cloud Console steps, the
+        # exact `gaia connectors ...` commands, an example grant, AND the UI path.
+        from gaia.connectors.errors import OAuthClientNotConfiguredError
+
         monkeypatch.delenv("GAIA_GOOGLE_CLIENT_ID", raising=False)
         monkeypatch.delenv("GAIA_GOOGLE_CLIENT_SECRET", raising=False)
-        with pytest.raises(ConfigurationError) as exc:
+        with pytest.raises(OAuthClientNotConfiguredError) as exc:
             providers.get("google")
         msg = str(exc.value)
-        assert "Settings" in msg
-        assert "Connections" in msg
-        assert "docs/runbooks/google-oauth-client.md" in msg
+        # Subclass of ConfigurationError so CLI (exit 3) / router (503) unchanged.
+        assert isinstance(exc.value, ConfigurationError)
+        assert "not configured" in msg
+        # Console setup steps a headless user must do by hand.
+        assert "console.cloud.google.com" in msg
+        assert "Desktop app" in msg
+        # The exact CLI commands (self-documenting, no UI needed).
+        assert "gaia connectors configure google --client-id" in msg
+        # connect authorizes scopes and grants the agent in one flow (#2347).
+        assert "gaia connectors connect google --scopes" in msg
+        assert "--grant-agent installed:email" in msg
+        # Concrete, copy-paste example with the email agent's FULL scope set.
+        assert "gmail.modify" in msg
+        assert "gmail.send" in msg
+        assert "calendar.events" in msg
+        assert "calendar.readonly" in msg
+        # UI path still named for UI users.
+        assert "Settings -> Connections -> Google" in msg
+        assert "amd-gaia.ai/docs/connectors/google" in msg
 
     def test_google_loads_from_keyring_without_env(self, monkeypatch):
         # New AgentUI path: user pasted client_id/client_secret into the

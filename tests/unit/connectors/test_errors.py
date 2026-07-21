@@ -21,6 +21,7 @@ from gaia.connectors.errors import (
     ConsentDeniedError,
     FlowInProgressError,
     FlowTimeoutError,
+    OAuthClientNotConfiguredError,
     ScopeMismatchError,
 )
 
@@ -161,3 +162,48 @@ class TestConfigurationError:
         s = str(err)
         assert "GAIA_GOOGLE_CLIENT_ID" in s
         assert "docs/runbooks/google-oauth-client.md" in s
+
+
+class TestOAuthClientNotConfiguredError:
+    """The self-documenting missing-client error (#2347): a headless user must
+    be able to unblock themselves from the message alone."""
+
+    def _err(self, **overrides):
+        kwargs = dict(
+            provider_id="google",
+            provider_label="Google",
+            console_steps="  1. Do a thing at https://console.example",
+            docs="https://amd-gaia.ai/docs/connectors/google",
+            example="  For the email agent:\n    gaia connectors connect google ...",
+        )
+        kwargs.update(overrides)
+        return OAuthClientNotConfiguredError(kwargs.pop("provider_id"), **kwargs)
+
+    def test_is_a_configuration_error(self):
+        # Subclass so the CLI (exit 3) and the UI router (503) keep handling it.
+        err = self._err()
+        assert isinstance(err, ConfigurationError)
+        assert isinstance(err, ConnectorsError)
+        assert err.provider_id == "google"
+        assert err.provider_label == "Google"
+
+    def test_message_is_self_documenting(self):
+        s = str(self._err())
+        assert "not configured" in s
+        assert "https://console.example" in s  # console setup steps
+        # Exact CLI commands, spec-driven off provider_id.
+        assert "gaia connectors configure google --client-id" in s
+        # connect authorizes scopes AND grants the agent in one flow (#2347):
+        # --grant-agent folds in the grant so scopes can't drift.
+        assert "gaia connectors connect google --scopes" in s
+        assert "--grant-agent <agent-id>" in s
+        assert "amd-gaia.ai/docs/connectors/google" in s
+        # UI path named too.
+        assert "Settings -> Connections -> Google" in s
+
+    def test_example_block_is_optional(self):
+        # Omitting the example drops the copy-paste block but keeps the generic
+        # command template (connect --scopes ... --grant-agent).
+        s = str(self._err(example=None))
+        assert "For the email agent" not in s
+        assert "gaia connectors connect google --scopes <scope> ... --grant-agent" in s

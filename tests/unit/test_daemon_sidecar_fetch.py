@@ -212,13 +212,33 @@ def test_hub_installed_short_circuit_precedes_lock(tmp_path):
 def test_placeholder_still_refuses_without_hub_install(tmp_path):
     out = tmp_path / "email"
     out.mkdir()
-    with pytest.raises(PlatformError, match="binaries.lock.json.*placeholder"):
+    with pytest.raises(PlatformError, match="placeholder sha256"):
         fetchmod.fetch_binary(
             out_dir=out,
             platform_key="darwin-arm64",
             lock_path=_lock(tmp_path, "PENDING-1648-replace"),
             session=_FakeSession(REAL_BYTES),
         )
+
+
+def test_placeholder_message_points_at_hub_not_email_release(tmp_path):
+    """The placeholder-refusal message must be generic (this code serves any
+    sidecar agent) and name the working Agent Hub path, not the email-only
+    release workflow it used to hardcode (#2347)."""
+    out = tmp_path / "email"
+    out.mkdir()
+    with pytest.raises(PlatformError) as exc_info:
+        fetchmod.fetch_binary(
+            out_dir=out,
+            platform_key="darwin-arm64",
+            lock_path=_lock(tmp_path, "PENDING-1648-replace"),
+            session=_FakeSession(REAL_BYTES),
+        )
+    msg = str(exc_info.value)
+    assert "Agent Hub" in msg
+    assert "independent of this lock" in msg
+    assert "release_agent_email" not in msg
+    assert "GAIA_EMAIL_AGENT_MODE" not in msg  # dev-mode remedy is the manager's job
 
 
 def test_hub_installed_binary_tampered_raises(tmp_path):
