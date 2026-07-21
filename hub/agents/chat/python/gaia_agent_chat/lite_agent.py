@@ -3,9 +3,12 @@ from typing import Optional
 
 from gaia.agents.base.agent import Agent, default_max_steps
 from gaia.agents.tools import ScreenshotToolsMixin
+from gaia.logger import get_logger
 from gaia.mcp.mixin import MCPClientMixin
 from gaia.sd.mixin import SDToolsMixin
 from gaia.vlm.mixin import VLMToolsMixin
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -53,9 +56,9 @@ class ChatAgentLite(
         # Register only lightweight tools shared across chat: screenshots (if available)
         try:
             self.register_screenshot_tools()
-        except Exception:
-            # optional in test environments
-            pass
+        except Exception as e:
+            # optional in test environments — non-fatal, but visible
+            logger.debug("Screenshot tools not registered: %s", e)
 
     def _get_system_prompt(self) -> str:
         return "You are AMD GAIA Chat Assistant. Be concise, helpful, and safe."

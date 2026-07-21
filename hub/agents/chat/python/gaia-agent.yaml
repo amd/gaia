@@ -8,7 +8,10 @@ license: MIT
 category: conversation
 tags: [chat, general, personality, rag, files]
 icon: message-circle
-tools_count: 0
+# Real registered-tool count for entry_class's default config (prompt_profile
+# defaults to "full") — introspected, drift-guarded by
+# tests/unit/test_chat_fix_contracts.py.
+tools_count: 54
 
 language: python
 min_gaia_version: "0.22.0"
@@ -28,5 +31,7 @@ interfaces:
   tui: true
   cli: true
   pipe: true
-  api_server: true
-  mcp_server: true
+  # No FastAPI/uvicorn route wiring of its own (api_server), and
+  # MCPClientMixin makes this an MCP client, not a server (mcp_server).
+  api_server: false
+  mcp_server: false
