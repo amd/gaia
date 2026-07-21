@@ -1109,7 +1109,17 @@ class LemonadeClient:
                 # For subprocess.Popen
                 if sys.platform.startswith("win") and self.server_process.pid:
                     # On Windows, use taskkill to ensure process tree is terminated
-                    os.system(f"taskkill /F /PID {self.server_process.pid} /T")
+                    subprocess.run(
+                        [
+                            "taskkill",
+                            "/F",
+                            "/PID",
+                            str(self.server_process.pid),
+                            "/T",
+                        ],
+                        shell=False,
+                        check=False,
+                    )
                 elif self.server_process.pid:
                     # On Linux/Unix, kill the process group to terminate child processes
                     try:

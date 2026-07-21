@@ -114,7 +114,7 @@ class Context7Cache:
             Path to cache file
         """
         key = f"{library}:{query}"
-        hash_key = hashlib.md5(key.encode()).hexdigest()[:12]
+        hash_key = hashlib.md5(key.encode(), usedforsecurity=False).hexdigest()[:12]
         safe_lib = library.replace("/", "_").replace(".", "_")
         return self.docs_dir / f"{safe_lib}_{hash_key}.json"
 
