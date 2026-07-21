@@ -294,18 +294,23 @@ def check_bandit() -> CheckResult:
     print("-" * 40)
 
     from check_security_gates import (
-        check_bandit_high_gate,
         format_finding,
+        load_baseline,
+        new_bandit_highs,
         run_bandit,
     )
 
+    # Scan once; drive both the HIGH gate and the MEDIUM/LOW count off one report.
     try:
         report = run_bandit(SRC_DIR)
     except (RuntimeError, ValueError) as exc:
         print(f"[ERROR] Could not run Bandit: {exc}")
         return CheckResult("Security Check (Bandit)", False, False, 1, str(exc))
 
-    passed, new_highs = check_bandit_high_gate(SRC_DIR)
+    new_highs = new_bandit_highs(
+        report.get("results", []), load_baseline(".bandit-baseline.json")
+    )
+    passed = not new_highs
 
     # Surface MEDIUM/LOW counts as an informational warning (non-blocking).
     med_low = [
