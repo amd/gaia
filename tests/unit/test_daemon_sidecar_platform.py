@@ -73,8 +73,10 @@ def test_resolve_entry_unknown_platform_raises(tmp_path):
             {"linux-x64": {"filename": "f", "executable": "e", "sha256": "a" * 64}},
         )
     )
-    with pytest.raises(PlatformError, match="no email-agent binary for platform"):
+    with pytest.raises(PlatformError, match="no sidecar binary for platform") as exc:
         plat.resolve_entry(lock, "plan9-sparc")
+    # Shared code serves any sidecar agent — no email branding leaks (#2347).
+    assert "email-agent" not in str(exc.value)
 
 
 def test_resolve_entry_incomplete_raises(tmp_path):

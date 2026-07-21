@@ -116,7 +116,7 @@ def resolve_entry(lock: BinaryLock, platform_key: str) -> LockEntry:
     if entry is None:
         available = ", ".join(lock.binaries) or "(none)"
         raise PlatformError(
-            f"no email-agent binary for platform '{platform_key}'. Available in "
+            f"no sidecar binary for platform '{platform_key}'. Available in "
             f"binaries.lock.json: {available}. Supported targets: "
             + ", ".join(SUPPORTED_PLATFORMS)
         )
