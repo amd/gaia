@@ -1511,5 +1511,291 @@ class TestEnsureServerRunningAutoStartFirst(unittest.TestCase):
         mock_input.assert_not_called()
 
 
+# ---------------------------------------------------------------------------
+# #2358: `gaia init --profile chat` must install the chat agent from the Hub
+# (via gaia.hub.installer.install) when it isn't already importable, so
+# `gaia chat` works right after `gaia init` on a plain `pip install amd-gaia`.
+#
+# ``gaia.hub.installer.install`` is patched at its OWN module
+# (``gaia.hub.installer.install``), not at an alias imported into
+# ``init_command``, because every other collaborator in this file
+# (``LemonadeClient``, ``resolve_lemonade``, ``build_start_command``) is
+# imported LAZILY inside method bodies in init_command.py and this test suite
+# consistently patches those at their origin module (e.g.
+# ``gaia.llm.lemonade_client.LemonadeClient`` above) rather than at an
+# init_command-local alias -- the hub-install wiring is expected to follow
+# the same lazy-import convention.
+# ---------------------------------------------------------------------------
+
+
+def _fake_catalog_result(agents):
+    """Build a ``gaia.hub.catalog.CatalogResult`` listing *agents* (dicts with
+    at least an ``id`` key), for mocking ``gaia.hub.catalog.load_index``."""
+    from gaia.hub.catalog import CatalogResult
+
+    return CatalogResult(agents=agents, offline=False, source="network")
+
+
+class _HubInstallWiringTestBase(unittest.TestCase):
+    """Shared run()-reaching harness for the #2358 hub-install wiring tests.
+
+    Patches every `InitCommand.run()` step OTHER than the (not-yet-written)
+    hub-install step, so `run()` can be exercised end-to-end deterministically
+    without touching the network, a real Lemonade server, real pip, or the
+    user's real ``~/.gaia/config.json``.
+    """
+
+    def _make_cmd(self, profile, **kwargs):
+        from gaia.installer.init_command import InitCommand
+
+        with patch("gaia.installer.init_command.LemonadeInstaller"):
+            cmd = InitCommand(profile=profile, yes=True, skip_lemonade=True, **kwargs)
+        return cmd
+
+    def _patch_common_steps(self, cmd, order=None):
+        """Patch every step so run() reaches (and passes through) the
+        hub-install step deterministically. Records call order in *order*
+        when provided (list of step-name strings).
+        """
+
+        def _tracked(name, retval=True):
+            def _fn(*_a, **_k):
+                if order is not None:
+                    order.append(name)
+                return retval
+
+            return _fn
+
+        patches = [
+            patch.object(cmd, "_ensure_server_running", side_effect=_tracked("server")),
+            patch.object(
+                cmd, "_download_models", side_effect=_tracked("download_models")
+            ),
+            patch.object(
+                cmd, "_install_pip_extras", side_effect=_tracked("pip_extras")
+            ),
+            patch.object(cmd, "_verify_setup", side_effect=_tracked("verify")),
+            # NPU-only steps; harmless no-ops for profiles that don't declare
+            # required_device/backend (run() only calls them when declared).
+            patch.object(
+                cmd, "_check_device_available", side_effect=_tracked("device_check")
+            ),
+            patch.object(
+                cmd, "_install_backend", side_effect=_tracked("install_backend")
+            ),
+            patch("gaia.ui.build.ensure_webui_built", return_value=True),
+            # Never touch the real user's ~/.gaia/config.json during a test.
+            patch("gaia.config.GaiaConfig"),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+
+class TestHubInstallWiringChatProfile(_HubInstallWiringTestBase):
+    """AC: `gaia init --profile chat` installs chat from the Hub when it
+    isn't already importable, and skips the install when it already is."""
+
+    def test_installs_chat_agent_when_not_available_and_published(self):
+        cmd = self._make_cmd("chat")
+        self._patch_common_steps(cmd)
+        with (
+            patch(
+                "gaia.installer.init_command.importlib.util.find_spec",
+                return_value=None,
+            ),
+            patch(
+                "gaia.hub.catalog.load_index",
+                return_value=_fake_catalog_result(
+                    [{"id": "chat", "latest_version": "0.1.0"}]
+                ),
+            ),
+            patch("gaia.hub.installer.install") as mock_install,
+        ):
+            mock_install.return_value = MagicMock(hot_registered=True)
+            rc = cmd.run()
+
+        self.assertEqual(rc, 0)
+        mock_install.assert_called_once()
+
+    def test_skips_install_when_chat_agent_already_available(self):
+        cmd = self._make_cmd("chat")
+        self._patch_common_steps(cmd)
+        with (
+            patch(
+                "gaia.installer.init_command.importlib.util.find_spec",
+                return_value=MagicMock(),  # a real find_spec() result -> importable
+            ),
+            patch("gaia.hub.installer.install") as mock_install,
+        ):
+            rc = cmd.run()
+
+        self.assertEqual(rc, 0)
+        mock_install.assert_not_called()
+
+    def test_hub_install_runs_after_download_models_and_pip_extras_still_runs(self):
+        """Ordering: the hub-install attempt happens AFTER `_download_models()`
+        (models must exist before the agent that uses them is wired in), and
+        the `[rag]` pip-extras step still runs independently -- the hub
+        install targets `~/.gaia/agents/chat/site-packages` while the extras
+        step targets the ACTIVE interpreter's site-packages; one must not
+        replace or block the other (#2358 plan amendment A9).
+        """
+        cmd = self._make_cmd("chat")
+        order = []
+        self._patch_common_steps(cmd, order)
+
+        def _track_install(*_a, **_k):
+            order.append("hub_install")
+            return MagicMock(hot_registered=True)
+
+        with (
+            patch(
+                "gaia.installer.init_command.importlib.util.find_spec",
+                return_value=None,
+            ),
+            patch(
+                "gaia.hub.catalog.load_index",
+                return_value=_fake_catalog_result([{"id": "chat"}]),
+            ),
+            patch("gaia.hub.installer.install", side_effect=_track_install),
+        ):
+            rc = cmd.run()
+
+        self.assertEqual(rc, 0)
+        self.assertIn("download_models", order)
+        self.assertIn("hub_install", order)
+        self.assertIn("pip_extras", order)
+        self.assertLess(
+            order.index("download_models"),
+            order.index("hub_install"),
+            f"hub install must happen after model downloads; order was {order}",
+        )
+
+
+class TestHubInstallWiringFailsLoudly(_HubInstallWiringTestBase):
+    """AC: unlike `_install_pip_extras` (warn-but-continue), a genuine hub
+    install failure for a PUBLISHED chat agent must hard-fail `init` --
+    silently continuing would recreate the exact "chat isn't installed"
+    state this issue closes. But chat isn't in the live Hub catalog yet
+    (only `email` is, as of #2358) -- so `init --profile chat` must NOT
+    hard-fail merely because chat isn't published yet; it must only fail
+    loud once chat IS published and the install itself genuinely fails.
+    """
+
+    def test_returns_nonzero_when_published_chat_install_genuinely_fails(self):
+        from gaia.hub.installer import InstallError
+
+        cmd = self._make_cmd("chat")
+        self._patch_common_steps(cmd)
+        with (
+            patch(
+                "gaia.installer.init_command.importlib.util.find_spec",
+                return_value=None,
+            ),
+            patch(
+                "gaia.hub.catalog.load_index",
+                return_value=_fake_catalog_result(
+                    [{"id": "chat", "latest_version": "0.1.0"}]
+                ),
+            ),
+            patch(
+                "gaia.hub.installer.install",
+                side_effect=InstallError("simulated genuine hub install failure"),
+            ),
+        ):
+            rc = cmd.run()
+
+        self.assertNotEqual(
+            rc,
+            0,
+            "a genuine hub-install failure for a published agent must fail "
+            "`gaia init` loudly, not warn-and-continue like the pip-extras "
+            "step does",
+        )
+
+    def test_returns_zero_when_chat_not_yet_published_in_catalog(self):
+        """Regression guard: chat isn't in the live catalog yet (only
+        `email` is) -- `init --profile chat` must still exit 0 today, not
+        hard-fail on every user's `gaia init` before chat is ever published.
+        This may currently pass "by accident" (no hub-install call exists at
+        all yet) -- that's fine; it pins the not-yet-published case so a
+        later "install unconditionally" implementation doesn't regress it.
+        """
+        cmd = self._make_cmd("chat")
+        self._patch_common_steps(cmd)
+        with (
+            patch(
+                "gaia.installer.init_command.importlib.util.find_spec",
+                return_value=None,
+            ),
+            patch(
+                "gaia.hub.catalog.load_index",
+                return_value=_fake_catalog_result([]),  # chat not yet published
+            ),
+            patch("gaia.hub.installer.install") as mock_install,
+        ):
+            rc = cmd.run()
+
+        self.assertEqual(rc, 0)
+        mock_install.assert_not_called()
+
+
+class TestHubInstallWiringChatOnlyScope(_HubInstallWiringTestBase):
+    """AC: only profiles whose declared agent is "chat" trigger the hub
+    install. A generic "install the profile's agent" would make
+    `gaia init --profile sd/code/rag/vlm/minimal/all` hard-fail today, since
+    none of those agents are in the hub index (#2358 review finding).
+
+    Scope decision (documented, since the plan text left this ambiguous):
+    ``INIT_PROFILES["npu"]["agent"] == "chat"`` too (both profiles resolve to
+    the same standalone chat wheel), so `npu` is treated as IN-SCOPE for the
+    hub-install wiring -- same as `chat` -- and is deliberately excluded from
+    the "must never call install" list below. See
+    ``TestHubInstallWiringNpuProfile`` for the positive case.
+    """
+
+    NON_CHAT_PROFILES = ("sd", "code", "rag", "vlm", "minimal", "all")
+
+    def test_non_chat_profiles_never_call_hub_install_and_still_exit_zero(self):
+        for profile in self.NON_CHAT_PROFILES:
+            with self.subTest(profile=profile):
+                cmd = self._make_cmd(profile)
+                self._patch_common_steps(cmd)
+                with patch("gaia.hub.installer.install") as mock_install:
+                    rc = cmd.run()
+                self.assertEqual(rc, 0, f"profile={profile}")
+                mock_install.assert_not_called()
+
+
+class TestHubInstallWiringNpuProfile(_HubInstallWiringTestBase):
+    """Positive case for the npu-profile scope decision above: `npu`
+    declares ``"agent": "chat"`` just like `chat` does, so it must ALSO
+    trigger the hub install when chat isn't already available.
+    """
+
+    def test_npu_profile_also_installs_chat_agent_when_not_available(self):
+        cmd = self._make_cmd("npu")
+        self._patch_common_steps(cmd)
+        with (
+            patch(
+                "gaia.installer.init_command.importlib.util.find_spec",
+                return_value=None,
+            ),
+            patch(
+                "gaia.hub.catalog.load_index",
+                return_value=_fake_catalog_result(
+                    [{"id": "chat", "latest_version": "0.1.0"}]
+                ),
+            ),
+            patch("gaia.hub.installer.install") as mock_install,
+        ):
+            mock_install.return_value = MagicMock(hot_registered=True)
+            rc = cmd.run()
+
+        self.assertEqual(rc, 0)
+        mock_install.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
