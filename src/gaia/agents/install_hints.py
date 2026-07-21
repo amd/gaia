@@ -12,6 +12,8 @@ install path that actually resolves today: pip installing straight from the
 package's subdirectory in this repo.
 """
 
+import sys
+
 # hub/agents/<subdir>/python for each wheel this module has a hint for. Keep
 # in sync with the directories under hub/agents/ (ls hub/agents/).
 _AGENT_SOURCE_SUBDIRS = {
@@ -38,13 +40,21 @@ _REPO_URL = "https://github.com/amd/gaia.git"
 def source_install_command(wheel: str) -> str:
     """Return the pip command that installs ``wheel`` straight from source.
 
+    Uses ``sys.executable -m pip`` rather than a bare ``uv`` binary: a stock
+    ``python -m venv`` has neither the ``uv`` executable on PATH nor the
+    ``uv`` Python module, so hard-coding ``uv pip install`` here would just
+    move the #2240 dead end from ``pip install gaia-agent-<id>`` to this
+    hint's own recommended command. ``python -m pip`` is the one frontend
+    every stock venv provides (the same last-resort fallback
+    ``InitCommand._install_pip_extras`` already uses for this reason).
+
     Raises ``KeyError`` if ``wheel`` isn't a known ``gaia-agent-*`` package --
     that's a bug at the call site (a typo'd wheel name), not a runtime
     condition to swallow.
     """
     subdir = _AGENT_SOURCE_SUBDIRS[wheel]
     return (
-        f'uv pip install "{wheel} @ git+{_REPO_URL}#subdirectory='
+        f'{sys.executable} -m pip install "{wheel} @ git+{_REPO_URL}#subdirectory='
         f'hub/agents/{subdir}/python"'
     )
 
