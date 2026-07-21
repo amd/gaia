@@ -338,7 +338,6 @@ def _handle_connect(args: argparse.Namespace) -> int:
 def _handle_connect_device(args: argparse.Namespace) -> int:
     """Device-code connect: print the code + URL, then poll until sign-in."""
     from gaia.connectors.api import poll_device_flow, start_device_flow
-    from gaia.connectors.errors import ConnectorsError
 
     async def _run() -> str:
         info = await start_device_flow(args.connector_id, scopes=args.scopes or [])

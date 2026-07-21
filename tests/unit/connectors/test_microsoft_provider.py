@@ -265,9 +265,7 @@ class TestDeviceCodeFlow:
     def test_device_token_body_public_client_has_no_secret(self, _ms_env):
         prov = providers.get("microsoft")
         body = prov.device_token_request_body("DEV-CODE-123")
-        assert body["grant_type"] == (
-            "urn:ietf:params:oauth:grant-type:device_code"
-        )
+        assert body["grant_type"] == ("urn:ietf:params:oauth:grant-type:device_code")
         assert body["device_code"] == "DEV-CODE-123"
         assert body["client_id"] == "11112222-bbbb-3333-cccc-4444dddd5555"
         assert "client_secret" not in body
@@ -298,7 +296,9 @@ class TestUserinfoFallback:
     def test_parse_account_email_falls_back_to_upn(self, _ms_env):
         prov = providers.get("microsoft")
         assert (
-            prov.parse_account_email({"mail": None, "userPrincipalName": "b@example.com"})
+            prov.parse_account_email(
+                {"mail": None, "userPrincipalName": "b@example.com"}
+            )
             == "b@example.com"
         )
 

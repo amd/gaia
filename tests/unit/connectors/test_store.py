@@ -184,7 +184,9 @@ class TestLargeBlobChunking:
         base = keyring.get_password(SERVICE_NAME, username)
         assert base.startswith(_CHUNK_SENTINEL)
         # At least the first chunk slot exists.
-        assert keyring.get_password(SERVICE_NAME, _chunk_username(username, 0)) is not None
+        assert (
+            keyring.get_password(SERVICE_NAME, _chunk_username(username, 0)) is not None
+        )
 
     def test_delete_removes_all_chunk_slots(self):
         big_token = "R" * (_CHUNK_CHARS * 2)
@@ -212,7 +214,9 @@ class TestLargeBlobChunking:
             scopes=["s1"],
             client_id_hash="h",
         )
-        assert keyring.get_password(SERVICE_NAME, _chunk_username(username, 0)) is not None
+        assert (
+            keyring.get_password(SERVICE_NAME, _chunk_username(username, 0)) is not None
+        )
         # Overwrite with a short token — stored raw, chunk slots swept.
         save_connection(
             provider="microsoft",

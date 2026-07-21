@@ -137,9 +137,7 @@ def _decode_email_from_id_token(id_token: str) -> Optional[str]:
     return email if isinstance(email, str) else None
 
 
-async def _resolve_account_email(
-    provider, id_token: str, access_token: str
-) -> str:
+async def _resolve_account_email(provider, id_token: str, access_token: str) -> str:
     """Best-effort account email for display: prefer the id_token claim; if it
     yields nothing, fall back to the provider's ``userinfo_url`` (e.g. Graph
     ``/me``). Returns ``"default"`` when neither works — the connection is keyed
@@ -523,9 +521,7 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
 _DEVICE_POLL_DEFAULT_INTERVAL = 5
 
 
-async def start_device_flow(
-    provider_id: str, scopes: Iterable[str]
-) -> Dict[str, Any]:
+async def start_device_flow(provider_id: str, scopes: Iterable[str]) -> Dict[str, Any]:
     """Request a device + user code from the provider's device-code endpoint.
 
     Returns ``{provider_id, scopes, device_code, user_code, verification_uri,

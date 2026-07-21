@@ -132,7 +132,9 @@ class TestStartDeviceFlow:
         assert _FakeAsyncClient.calls[0][0].endswith("/common/oauth2/v2.0/devicecode")
 
     def test_non_200_raises(self, monkeypatch):
-        _install_responses(monkeypatch, [_FakeResp(400, {"error": "invalid_client"}, "bad")])
+        _install_responses(
+            monkeypatch, [_FakeResp(400, {"error": "invalid_client"}, "bad")]
+        )
         with pytest.raises(ConnectorsError) as exc:
             asyncio.run(flow_mod.start_device_flow("microsoft", [MAIL_READ]))
         assert "Device-code request" in str(exc.value)
@@ -203,7 +205,10 @@ class TestPollDeviceFlow:
             monkeypatch,
             [_FakeResp(200, payload)],
             get_responses=[
-                _FakeResp(200, {"mail": "user@example.com", "userPrincipalName": "u@example.com"})
+                _FakeResp(
+                    200,
+                    {"mail": "user@example.com", "userPrincipalName": "u@example.com"},
+                )
             ],
         )
         result = asyncio.run(
@@ -238,9 +243,7 @@ class TestPollDeviceFlow:
             )
 
     def test_expired_token_raises_timeout(self, monkeypatch):
-        _install_responses(
-            monkeypatch, [_FakeResp(400, {"error": "expired_token"})]
-        )
+        _install_responses(monkeypatch, [_FakeResp(400, {"error": "expired_token"})])
         with pytest.raises(FlowTimeoutError):
             asyncio.run(
                 flow_mod.poll_device_flow("microsoft", "DEV", scopes=[MAIL_READ])

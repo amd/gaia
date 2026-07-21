@@ -48,7 +48,10 @@ _DEFAULT_TENANT = "common"
 
 def _resolve_tenant() -> str:
     """Return the Microsoft login tenant segment for the endpoint URLs."""
-    return (os.environ.get("GAIA_MICROSOFT_TENANT") or _DEFAULT_TENANT).strip() or _DEFAULT_TENANT
+    return (
+        os.environ.get("GAIA_MICROSOFT_TENANT") or _DEFAULT_TENANT
+    ).strip() or _DEFAULT_TENANT
+
 
 # Plain-language descriptions for the AgentUI consent dialog, mirroring the
 # Google provider's SCOPE_DESCRIPTIONS. The router/CLI render these strings;
