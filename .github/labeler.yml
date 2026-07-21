@@ -50,6 +50,26 @@ talk:
     - any-glob-to-any-file: ['src/gaia/talk/**/*', 'docs/guides/talk.md', 'docs/sdk/agents/talk.md']
 
 # ---------------------------------------------------------------------------
+# Terminal Agent Hub: Go TUI, daemon supervisor, and the agent sidecar contract
+# (milestone #45). Kept with the src/gaia area rules above the hub-agent block.
+# ---------------------------------------------------------------------------
+
+# Go terminal UI (gaia-tui)
+tui:
+  - changed-files:
+    - any-glob-to-any-file: ['tui/**/*', '.github/workflows/build_tui.yml']
+
+# Daemon supervisor / sidecar control plane
+daemon:
+  - changed-files:
+    - any-glob-to-any-file: ['src/gaia/daemon/**/*']
+
+# Agent sidecar contract / harness
+sidecar:
+  - changed-files:
+    - any-glob-to-any-file: ['src/gaia/daemon/sidecars/**/*', 'hub/agents/*/python/packaging/**/*']
+
+# ---------------------------------------------------------------------------
 # Hub agents (hub/agents/<id>/python, hub/agents/<id>/npm). One label per
 # packaged agent so a PR touching a single agent's sources is labelled for it.
 # ---------------------------------------------------------------------------
