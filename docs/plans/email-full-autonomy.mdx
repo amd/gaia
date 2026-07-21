@@ -1,0 +1,125 @@
+---
+title: "Email Agent — Full Autonomy"
+description: "Earn-trust autonomous email handling with a hard confirm-floor and a closed correction→memory→behavior learning loop"
+icon: "wand-magic-sparkles"
+---
+
+# Email Agent — Full Autonomy (Earn-Trust + Learning Loop)
+
+> **Status:** In progress — Phase 1 (trust engine) landing first.
+>
+> **Milestone:** [Autonomy + Messaging Expansion [OSS]](https://github.com/amd/gaia/milestone/6)
+>
+> **Anchor issues:** #1115 (heartbeat + email as first consumer), #557 (think-act-schedule
+> loop), #1483 (graduated trust), #1287 (self-learning loop — this *implements* it),
+> #2005 (autonomous observation cycle), #558/#421 (activity feed + notifications),
+> #1508 (proactive eval harness).
+>
+> **Out of scope:** #1286 (model fine-tuning). Personalization is memory/prompt-based only.
+>
+> **Frames this builds on:** [`docs/spec/autonomous-agent-mode.md`](/spec/autonomous-agent-mode)
+> (§6.6 permission grants, §6.7 observation cycle) and
+> [`docs/plans/autonomy-engine.mdx`](/plans/autonomy-engine) (the daemon owns the single clock).
+
+---
+
+## 1. What we're building
+
+Turn on **full autonomy** and the email agent handles the inbox end-to-end: it triages,
+files, labels, and drafts on its own; it **checks in before anything destructive or
+irreversible** (send, permanent delete, forward, calendar RSVP); and it **learns from you**
+— your corrections, your own behavior, your writing voice, and explicit feedback — so it
+grows more personalized and more trusted over time.
+
+**Earn-trust posture (the default).** Cautious on day one: it proposes and drafts, and
+auto-executes only in categories it has proven itself on or you've explicitly approved. As
+its track record accumulates in the trust ledger, it widens what it does silently — but the
+destructive floor never moves.
+
+```
+Day 1:   "Archive this newsletter?"           → asks
+Day 14:  archives newsletters silently         (proven 14/14)
+         drafts your replies, waits for edit
+         send / permanent-delete / forward      → always asks
+```
+
+## 2. Design principles
+
+1. **The confirm-floor is inviolable.** Send, forward, permanent delete, and RSVP always
+   require explicit confirmation, at every autonomy level. This is the existing
+   `CONFIRMATION_REQUIRED_TOOLS` set — the policy layer can never lower it.
+2. **Trust is earned, per scope, from evidence.** Autonomy widens only when the ledger shows
+   enough correct decisions in a category/sender scope. No global "trust me" switch.
+3. **Reversible-first.** Only reversible actions (archive, label, mark-read, star) are ever
+   auto-executed. Every one is logged with undo via `action_store`.
+4. **Learn from the strongest signal available.** Explicit corrections and feedback outweigh
+   implicit behavior, which outweighs priors. All feed one ledger.
+5. **Cheap-first, fail-loud, inspectable.** Zero LLM tokens on a quiet inbox; every decision
+   carries a rationale; `gaia email autonomy trust` shows exactly what's been earned.
+6. **One clock, not a new daemon.** Heartbeats are jobs on the daemon `DaemonClock`, per the
+   autonomy-engine reconciliation — never a second background service.
+
+## 3. Architecture — completing existing rails
+
+| Layer | Already exists | This feature adds |
+|-------|----------------|-------------------|
+| Trust gradient | `AgentMode`, `GoalStore`, `Proposal`/`Goal`, `on_first_run`/`on_heartbeat`/`propose` hooks (core) | `TrustPolicy` + earned-trust `TrustLedger` for email; hook overrides |
+| Confirm floor | `CONFIRMATION_REQUIRED_TOOLS` + reversible `action_store` undo | Policy layer that treats the floor as inviolable |
+| Personalization | `MemoryMixin`, `preference_tools`, `profile_tools`, `voice_profile`, `_record_reply_interaction` VIP promotion (#1290) | Closed correction→memory→behavior loop; standing-rule synthesis |
+| Scheduling | `DaemonClock`, email `briefing`/`scheduler` seams | New-email heartbeat job feeding the loop |
+| Observation | Spec §6.7 (unimplemented, #2005) | The email observe→decide→act|propose cycle |
+
+## 4. The trust engine (Phase 1)
+
+`gaia_agent_email/trust.py`:
+
+- **`TrustLedger`** — pure functions over the agent's SQLite handle (mirrors `action_store`).
+  Table `email_trust_ledger` keyed `(action_type, scope)` where scope is `category:<NAME>`
+  or `sender:<addr>`. Records `positive`/`negative` outcomes; exposes `get_stats` and
+  `is_trusted(min_samples, threshold)`.
+- **`TrustPolicy`** — given `(tool, action_type, category, sender)` returns a
+  `TrustDecision(action, reason, confidence)` where action ∈ `auto | draft | suggest |
+  confirm`:
+  1. tool in confirm-floor → **confirm** (hard).
+  2. level `off` → loop disabled (no decisions).
+  3. level `suggest` → **suggest** everything reversible.
+  4. level `earn_trust` → reply-composition → **draft**; reversible action in a trusted or
+     explicitly-preferred scope → **auto**; otherwise → **suggest**.
+  5. level `full` → reversible → **auto**; drafts still never auto-send.
+
+Config (`EmailAgentConfig`): `autonomy_level` (default `off`), `autonomy_trust_min_samples`
+(default 5), `autonomy_trust_threshold` (default 0.85).
+
+## 5. The autonomous loop (Phase 2)
+
+`EmailTriageAgent.on_heartbeat`: observe new-mail delta (cheap, zero-token when quiet) →
+triage (reuse `pre_scan`/`triage`) → per message `TrustPolicy.decide` → auto-execute or emit
+`Proposal`/draft → report to the activity feed. Driven by a `DaemonClock` job (briefing
+seam), gated by quiet hours, a kill switch, and the `agent_loop` rate limits.
+
+## 6. The learning loop (Phase 3)
+
+- **Correction capture** at the action seams: draft edited pre-send, suggested label
+  rejected, auto-archive undone, proposal accepted/rejected → a `learning_event` → ledger
+  (negative) + MemoryStore.
+- **Implicit behavior miner**: periodic scan of what *you* archived/read/replied to outside
+  the agent → inferred preferences.
+- **Standing-rule synthesis**: a pattern crossing threshold auto-proposes a rule ("Always
+  archive news@x? — 12/12 matched") that updates `preference_tools` + the ledger.
+- **Voice**: extend `voice_profile` to per-recipient tone.
+- **Explicit feedback**: thumbs on activity-feed actions → strongest ledger weight.
+- **Magical extras**: VIP inference from your reply latency (extends #1290), auto-detected
+  quiet-hours/brief-time from cadence, confidence-scored rationales, aging nudges.
+
+## 7. Surface & control (Phase 4)
+
+`gaia email autonomy {status|pause|resume|trust|kill}` — `trust` renders the earned-trust
+ledger so autonomy is never a black box. Activity-feed entries + notifications with
+Accept/Reject/Edit/thumbs; REST/MCP autonomy-state surface.
+
+## 8. Safety & eval (Phase 5)
+
+Proactive eval harness (#1508): first-run + heartbeat simulation, trust-progression
+scenarios, and the hard invariant **"never auto-sends, never auto-deletes."** Fail-loudly
+sweep on new paths; README/SPEC/SKILL/CHANGELOG kept in sync; `autonomous-agent-mode.md`
+§6.7 updated and #2005 reconciled.
