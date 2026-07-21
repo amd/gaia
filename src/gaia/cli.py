@@ -3654,8 +3654,10 @@ def main():
                         try:
                             if system == "Windows":
                                 # os.startfile uses ShellExecute (no shell parsing),
-                                # safe for the user-built mailto URL
-                                os.startfile(mailto_url)
+                                # safe for the user-built mailto URL (which contains
+                                # '&'-separated query params cmd would mis-parse).
+                                # Windows-only attr; guarded by the platform check.
+                                os.startfile(mailto_url)  # pylint: disable=no-member
                             elif system == "Darwin":  # macOS
                                 subprocess.run(["open", mailto_url], check=True)
                             else:  # Linux/Unix
