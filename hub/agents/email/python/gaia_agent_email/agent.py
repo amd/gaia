@@ -1354,6 +1354,45 @@ class EmailTriageAgent(
         trust.mark_autonomy_action_resolved(self, action_id=action_id)
         return True
 
+    def autonomy_status(self) -> Dict[str, Any]:
+        """Inspectable snapshot of the autonomy engine (never a black box).
+
+        Returns the current level, the trust thresholds, and the earned-trust
+        ledger — every ``(action, scope)`` with its positive/negative tally and
+        whether it has crossed the bar. This is the single read-model the
+        ``gaia email autonomy status`` / ``trust`` CLI, the REST surface, and
+        the Agent-UI panel all render, so autonomy behavior is always
+        explainable ("archives news@x because 12/12 correct").
+        """
+        ledger = trust.TrustLedger(
+            min_samples=self.config.autonomy_trust_min_samples,
+            threshold=self.config.autonomy_trust_threshold,
+        )
+        scopes = []
+        for row in trust.TrustLedger.list_ledger(self):
+            total = int(row["positive"]) + int(row["negative"])
+            scopes.append(
+                {
+                    "action_type": row["action_type"],
+                    "scope": row["scope"],
+                    "positive": row["positive"],
+                    "negative": row["negative"],
+                    "total": total,
+                    "score": (row["positive"] / total) if total else 0.0,
+                    "trusted": ledger.is_trusted(
+                        self, action_type=row["action_type"], scope=row["scope"]
+                    ),
+                }
+            )
+        return {
+            "level": self.config.autonomy_level,
+            "enabled": self.config.autonomy_level != trust.LEVEL_OFF,
+            "trust_min_samples": self.config.autonomy_trust_min_samples,
+            "trust_threshold": self.config.autonomy_trust_threshold,
+            "trusted_scope_count": sum(1 for s in scopes if s["trusted"]),
+            "scopes": scopes,
+        }
+
     def run_autonomy_cycle(
         self, context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:

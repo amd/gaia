@@ -347,3 +347,33 @@ def test_correction_capture_pulls_trust_back(tmp_path):
 def test_note_action_undone_ignores_non_autonomy_ids(tmp_path):
     agent = _build_agent(tmp_path, [], level=LEVEL_EARN_TRUST)
     assert agent.note_action_undone("not-an-autonomy-action") is False
+
+
+# ---------------------------------------------------------------------------
+# Inspectable status — autonomy is never a black box
+# ---------------------------------------------------------------------------
+
+
+def test_autonomy_status_reports_level_and_ledger(tmp_path):
+    agent = _build_agent(
+        tmp_path, [], level=LEVEL_EARN_TRUST, autonomy_trust_min_samples=3
+    )
+    # Below the bar, then over it.
+    for _ in range(2):
+        agent.record_autonomy_outcome(
+            action_type="archive", positive=True, sender="a@x.com"
+        )
+    for _ in range(3):
+        agent.record_autonomy_outcome(
+            action_type="archive", positive=True, category="PROMOTIONAL"
+        )
+
+    status = agent.autonomy_status()
+    assert status["level"] == LEVEL_EARN_TRUST
+    assert status["enabled"] is True
+    by_scope = {s["scope"]: s for s in status["scopes"]}
+    assert by_scope[sender_scope("a@x.com")]["trusted"] is False  # only 2 samples
+    from gaia_agent_email.trust import category_scope
+
+    assert by_scope[category_scope("PROMOTIONAL")]["trusted"] is True  # 3 samples
+    assert status["trusted_scope_count"] == 1
