@@ -113,7 +113,14 @@ def run_bandit(src_dir: str, exclude: str = DEFAULT_EXCLUDE) -> Dict[str, Any]:
         cmd = ["bandit", *base]
 
     # bandit exits non-zero when it finds issues; we parse the JSON regardless.
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except FileNotFoundError as exc:
+        # Re-raise as RuntimeError so callers only handle one exception type.
+        raise RuntimeError(
+            f"bandit is not installed ({exc}). Install it with "
+            "`uv pip install -e '.[dev]'`, or run lint via `uv run python util/lint.py`."
+        ) from exc
     if not proc.stdout.strip():
         raise RuntimeError(
             f"bandit produced no output (exit {proc.returncode}):\n{proc.stderr}"

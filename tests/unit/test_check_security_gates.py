@@ -13,11 +13,13 @@ import pytest
 _UTIL_DIR = Path(__file__).resolve().parents[2] / "util"
 sys.path.insert(0, str(_UTIL_DIR))
 
+import check_security_gates  # noqa: E402
 from check_security_gates import (  # noqa: E402
     bandit_finding_key,
     load_baseline,
     new_bandit_highs,
     parse_bandit_json,
+    run_bandit,
 )
 
 
@@ -126,6 +128,18 @@ class TestLoadBaseline:
         p = tmp_path / "baseline.json"
         p.write_text(json.dumps({"findings": [{"path": "a.py", "test_id": "B602"}]}))
         assert load_baseline(p) == [{"path": "a.py", "test_id": "B602"}]
+
+
+class TestRunBanditErrors:
+    def test_missing_binary_raises_runtimeerror(self, monkeypatch):
+        # A missing bandit binary makes subprocess.run raise FileNotFoundError;
+        # it must surface as an actionable RuntimeError, not crash the caller.
+        def _boom(*_a, **_k):
+            raise FileNotFoundError("bandit")
+
+        monkeypatch.setattr(check_security_gates.subprocess, "run", _boom)
+        with pytest.raises(RuntimeError, match="bandit is not installed"):
+            run_bandit("src/gaia")
 
 
 class TestRepoBaselineIsEmpty:

@@ -302,7 +302,7 @@ def check_bandit() -> CheckResult:
 
     # Scan once; drive both the HIGH gate and the MEDIUM/LOW count off one report.
     try:
-        report = run_bandit(SRC_DIR)
+        report = run_bandit(SRC_DIR, EXCLUDE_DIRS)
     except (RuntimeError, ValueError) as exc:
         print(f"[ERROR] Could not run Bandit: {exc}")
         return CheckResult("Security Check (Bandit)", False, False, 1, str(exc))
