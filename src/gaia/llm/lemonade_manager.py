@@ -422,11 +422,11 @@ class LemonadeManager:
                             if k in item:
                                 detected.add(str(item[k]))
                                 break
-        # Lemonade on Apple Silicon reports the llama.cpp Metal backend as
-        # 'metal' in system_info while its health payload calls the same device
-        # 'gpu' — normalize to the generic GPU tier so a default device='gpu'
-        # request validates on macOS instead of falling through to cpu.
-        if "metal" in detected:
+        # Live Lemonade groups AMD/NVIDIA GPUs under amd_gpu/nvidia_gpu (a list),
+        # and Apple Silicon uses 'metal' — none are in _DEVICE_PRIORITY's legacy
+        # amd_igpu/amd_dgpu keys. Normalize any detected GPU to the generic GPU
+        # tier so a present dGPU isn't rejected and forced to CPU.
+        if any(_is_gpu_device_key(d) for d in detected):
             detected.add("amd_dgpu")
         # Find highest-capability detected device
         highest = None

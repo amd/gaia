@@ -92,6 +92,76 @@ class TestGpuSelectorAcceptsBothGpuTiers:
         assert LemonadeManager.ensure_ready(device="cpu") is True
 
 
+class TestGpuValidatedForGroupedKeyShapes:
+    """A 'gpu' request validates against live Lemonade's grouped-key shapes.
+
+    Live Lemonade on Linux/Windows reports AMD/NVIDIA GPUs under a single
+    grouped key (``amd_gpu``/``nvidia_gpu``) whose value is a *list*, not the
+    legacy split ``amd_igpu``/``amd_dgpu`` keys. ``_validate_device_requirement``
+    used to only normalize the macOS ``metal`` key, so a real dGPU under
+    ``amd_gpu`` fell through to CPU and a ``gpu`` request wrongly raised.
+    """
+
+    def test_gpu_satisfied_on_amd_gpu_list_shape(self, monkeypatch):
+        # The reproduction shape: amd_gpu as a list (RX 7900 XTX), amd_npu
+        # unavailable — same payload live Lemonade returns on Ubuntu.
+        from gaia.llm.lemonade_manager import LemonadeManager
+
+        _patch_lemonade(monkeypatch, "lemonade11_amd_dgpu_windows.json")
+        assert LemonadeManager.ensure_ready(device="gpu") is True
+
+    def test_gpu_satisfied_on_metal_shape(self, monkeypatch):
+        from gaia.llm.lemonade_manager import LemonadeManager
+
+        _patch_lemonade(monkeypatch, "lemonade11_metal_macos.json")
+        assert LemonadeManager.ensure_ready(device="gpu") is True
+
+    def test_gpu_satisfied_on_nvidia_gpu_list_shape(self, monkeypatch):
+        from gaia.llm.lemonade_client import LemonadeClient
+        from gaia.llm.lemonade_manager import LemonadeManager
+
+        data = {
+            "devices": {
+                "nvidia_gpu": [{"available": True, "name": "NVIDIA GeForce RTX 4090"}],
+                "amd_npu": {"available": False},
+                "cpu": {"available": True},
+            }
+        }
+        monkeypatch.setattr(
+            LemonadeClient, "get_status", lambda self: _make_status(), raising=False
+        )
+        monkeypatch.setattr(
+            LemonadeClient, "get_system_info", lambda self: data, raising=False
+        )
+        assert LemonadeManager.ensure_ready(device="gpu") is True
+
+    def test_unavailable_amd_gpu_list_still_fails(self, monkeypatch):
+        # Availability floor preserved: a present-but-available:false grouped
+        # GPU must NOT satisfy a gpu request.
+        from gaia.llm.lemonade_client import LemonadeClient
+        from gaia.llm.lemonade_manager import (
+            HardwareRequirementError,
+            LemonadeManager,
+        )
+
+        data = {
+            "devices": {
+                "amd_gpu": [{"available": False, "name": "AMD Radeon RX 7900 XTX"}],
+                "amd_npu": {"available": False},
+                "cpu": {"available": True},
+            }
+        }
+        monkeypatch.setattr(
+            LemonadeClient, "get_status", lambda self: _make_status(), raising=False
+        )
+        monkeypatch.setattr(
+            LemonadeClient, "get_system_info", lambda self: data, raising=False
+        )
+        with pytest.raises(HardwareRequirementError) as exc:
+            LemonadeManager.ensure_ready(device="gpu")
+        assert "gpu" in str(exc.value).lower()
+
+
 # ── B2: unavailable device fails loudly with an actionable error ──────────────
 
 
