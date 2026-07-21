@@ -53,6 +53,12 @@ from gaia.vlm.mixin import VLMToolsMixin
 
 logger = get_logger(__name__)
 
+# Sentinel for not-yet-built lazy attributes (``rag``, ``session_manager`` —
+# #2323 Increment 3). Distinct from ``None`` so a degraded/failed build
+# (which legitimately caches ``None``) is never mistaken for "not attempted
+# yet" and rebuilt on every access.
+_UNSET = object()
+
 
 @dataclass
 class ChatAgentConfig:
@@ -267,9 +273,17 @@ class ChatAgent(
         # turn — #1744). GPU/CPU keep the GGUF nomic embedder.
         effective_embedding_model = get_embedding_model_for_device(config.device)
 
-        # Initialize RAG SDK (optional - will be None if dependencies not installed)
+        # RAG (#2323 Increment 3): ``RAGConfig`` is cheap (no I/O) and built
+        # eagerly here — every profile's allowed_paths/model/embedding wiring
+        # must be inspectable regardless of whether RAG is ever used. The
+        # actual ``RAGSDK`` construction — which does the real dependency and
+        # model work — is deferred to first ``self.rag`` access (the `rag`
+        # property below), so the lean "chat" profile (and file/data/web)
+        # never pays for it. Degrade-to-``None``-on-failure semantics are
+        # unchanged; only the timing of the attempt (and its warning log)
+        # moves from "always at construction" to "first access, if any".
         try:
-            rag_config = RAGConfig(
+            self._rag_config = RAGConfig(
                 model=effective_model_id,
                 embedding_model=effective_embedding_model,
                 chunk_size=config.chunk_size,
@@ -281,13 +295,13 @@ class ChatAgent(
                 base_url=effective_base_url,  # Pass base_url to RAG for VLM client
                 allowed_paths=config.allowed_paths,  # Pass allowed paths to RAG SDK
             )
-            self.rag = RAGSDK(rag_config)
         except Exception as e:
             logger.warning(
                 "RAG not available (install with: uv pip install -e '.[rag]'): %s", e
             )
             logger.debug("RAG init traceback:", exc_info=True)
-            self.rag = None
+            self._rag_config = None
+        self._rag = _UNSET
 
         # File system monitoring
         self.observers = []
@@ -346,8 +360,15 @@ class ChatAgent(
                     e,
                 )
 
-        # Session management
-        self.session_manager = SessionManager()
+        # Session management — construction deferred to first use (#2323
+        # Increment 3): SessionManager.__init__ runs a startup cleanup sweep
+        # (session.py cleanup_old_sessions), which now runs on first session
+        # access rather than on every agent build. Intentional perf change,
+        # not silent: a one-shot query that never touches sessions skips the
+        # sweep entirely; any session-using flow (interactive mode, the UI,
+        # /save, /sessions, /reset) still builds it and cleans up exactly as
+        # before, just lazily. See the `session_manager` property below.
+        self._session_manager = _UNSET
         self.current_session = None
         self.conversation_history: List[Dict[str, str]] = (
             []
@@ -414,7 +435,14 @@ class ChatAgent(
         # tool), it saves the path to a per-session JSON file.  On subsequent turns
         # a fresh ChatAgent instance is created, so we re-load those documents here
         # to preserve cross-turn discovery (e.g. smart_discovery scenario).
-        if config.ui_session_id and self.rag:
+        # Gated on profile (#2323 Increment 3) so chat/file/data/web — which
+        # never register RAG tools and can't use this restore — never trigger
+        # the lazy RAG build via ``self.rag`` below; ``and`` short-circuits
+        # before evaluating it.
+        _uses_rag = "doc_rag" in get_profile_spec(
+            getattr(config, "prompt_profile", "full")
+        ).tool_groups
+        if _uses_rag and config.ui_session_id and self.rag:
             loaded = self.session_manager.load_session(config.ui_session_id)
             if loaded:
                 self.current_session = loaded
@@ -450,6 +478,64 @@ class ChatAgent(
         # Start watching directories
         if self.watch_directories:
             self._start_watching()
+
+    # ── lazy subsystems (#2323 Increment 3) ────────────────────────────────
+
+    @property
+    def rag(self) -> Optional[RAGSDK]:
+        """Lazily-built ``RAGSDK`` — constructed transparently on ANY first
+        access (not just tool dispatch — ~15 sites across ``app.py`` and the
+        Agent UI's ``_chat_helpers.py`` read ``agent.rag`` directly).
+
+        Degrades to ``None`` on failure and never raises — the lean "chat"
+        profile still reads ``self.rag`` every turn via ``has_indexed``
+        (gated so it never reaches this for chat/file/data/web, but a raise
+        here would crash any profile that does). Cached after the first
+        build attempt (success or failure) — never retried.
+        """
+        if self._rag is _UNSET:
+            self._rag = self._build_rag()
+        return self._rag
+
+    @rag.setter
+    def rag(self, value: Optional[RAGSDK]) -> None:
+        self._rag = value
+
+    def _build_rag(self) -> Optional[RAGSDK]:
+        """Build the ``RAGSDK`` from the ``RAGConfig`` frozen in ``__init__``.
+
+        ``RAGConfig`` itself is built eagerly (cheap, no I/O) so allowed_paths
+        confinement stays inspectable regardless of profile; only the actual
+        SDK construction — the real dependency/model work — is deferred here.
+        """
+        if self._rag_config is None:
+            # RAGConfig construction itself already failed in __init__ (and
+            # was already logged there) — nothing to retry.
+            return None
+        try:
+            return RAGSDK(self._rag_config)
+        except Exception as e:
+            logger.warning(
+                "RAG not available (install with: uv pip install -e '.[rag]'): %s", e
+            )
+            logger.debug("RAG init traceback:", exc_info=True)
+            return None
+
+    @property
+    def session_manager(self) -> SessionManager:
+        """Lazily-built ``SessionManager`` — constructed on first access.
+
+        ``SessionManager.__init__`` runs a startup cleanup sweep
+        (``cleanup_old_sessions``); deferring construction defers that sweep
+        to first session use rather than running it on every agent build.
+        """
+        if self._session_manager is _UNSET:
+            self._session_manager = SessionManager()
+        return self._session_manager
+
+    @session_manager.setter
+    def session_manager(self, value: SessionManager) -> None:
+        self._session_manager = value
 
     # ── dynamic tool loader (#1449) ───────────────────────────────────────
 
@@ -630,9 +716,17 @@ class ChatAgent(
 
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the Chat Agent."""
+        profile = getattr(self.config, "prompt_profile", "full")
+        spec = get_profile_spec(profile)
+
         # Get list of indexed documents
         indexed_docs_section = ""
-        has_indexed = hasattr(self, "rag") and self.rag and self.rag.indexed_files
+        # Gate on profile BEFORE touching ``self.rag`` — for chat/file/data/web
+        # (which never register RAG tools) this must never trigger the lazy
+        # RAG build (#2323 Increment 3); only doc/full read it here.
+        has_indexed = "doc_rag" in spec.tool_groups and bool(
+            self.rag and self.rag.indexed_files
+        )
         has_library = hasattr(self, "library_documents") and self.library_documents
 
         if has_indexed:
@@ -800,8 +894,6 @@ No documents are currently indexed.
         # the LLM sees tool instructions for tools that don't exist and either
         # hallucinates them or emits syntactically-valid tool calls that come
         # back as "unknown tool" errors (#495 review feedback from @itomek-amd).
-        profile = getattr(self.config, "prompt_profile", "full")
-        spec = get_profile_spec(profile)
         filesystem_section = ""
         if "filesystem" in spec.capabilities or getattr(
             self.config, "enable_filesystem", False
