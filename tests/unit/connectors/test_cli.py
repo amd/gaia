@@ -61,6 +61,30 @@ def _run(*argv) -> tuple[int, str, str]:
     return rc, out.getvalue(), err.getvalue()
 
 
+class TestConnectSelfDocuments:
+    """`gaia connectors connect google` with no client credentials must be
+    self-documenting for a headless user (#2347) — the console setup steps and
+    the exact commands, not a UI-only dead end."""
+
+    def test_connect_without_client_creds_prints_setup_guide(self, monkeypatch):
+        monkeypatch.delenv("GAIA_GOOGLE_CLIENT_ID", raising=False)
+        monkeypatch.delenv("GAIA_GOOGLE_CLIENT_SECRET", raising=False)
+        # Ensure no keyring-stored client creds resolve either.
+        monkeypatch.setattr(
+            "gaia.connectors.store.peek_provider_credentials", lambda pid: None
+        )
+        _registry.clear()
+
+        rc, _out, err = _run("connectors", "connect", "google")
+
+        assert rc == 3  # ConfigurationError exit code
+        assert "not configured" in err
+        assert "console.cloud.google.com" in err  # console steps
+        assert "gaia connectors configure google --client-id" in err  # exact command
+        assert "gaia connectors grants grant google" in err
+        assert "amd-gaia.ai/docs/connectors/google" in err
+
+
 class TestStatus:
     def test_status_empty(self):
         # list/status shows catalog entries; google is always in the catalog
