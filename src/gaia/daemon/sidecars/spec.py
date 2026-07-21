@@ -53,6 +53,10 @@ class AgentSidecarSpec:
     token_env_var: str
     mode_env_var: str
     cache_dir_name: str
+    # Guide URL surfaced in user-mode failure messages so a stuck user has a
+    # place to read next (kept generic: shared spawn/fetch code has no agent
+    # docs baked in). Must keep the /docs/ prefix (#1058).
+    docs_url: Optional[str] = None
     token_file_env_var: Optional[str] = None
     secret_file_min_version: Optional[str] = None
     dev_src_dir: Optional[Path] = None
@@ -100,6 +104,7 @@ def builtin_specs() -> "dict[str, AgentSidecarSpec]":
             service_id="gaia-agent-email",
             display_name="Email",
             expected_api_major="2",
+            docs_url="https://amd-gaia.ai/docs/guides/email",
             token_env_var=_EMAIL_TOKEN_ENV_VAR,
             token_file_env_var=_EMAIL_TOKEN_FILE_ENV_VAR,
             secret_file_min_version=_EMAIL_SECRET_FILE_MIN_VERSION,

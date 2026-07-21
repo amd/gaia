@@ -205,6 +205,52 @@ def test_user_mode_fetch_failure_raises_with_remedy(monkeypatch):
         m.build_spawn_command(port=9123)
 
 
+def test_user_mode_failure_names_working_remedies(monkeypatch):
+    """The user-mode failure must name remedies that actually work today (#2347):
+    the Agent Hub install (with a headless one-liner), dev mode, the log dir,
+    and the docs URL — and must NOT wrap the original fetch cause."""
+    monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "user")
+
+    def _boom(**kw):
+        raise RuntimeError("cannot read the sidecar binary lock at /x")
+
+    monkeypatch.setattr(mgr.fetch, "fetch_binary", _boom)
+    m = mgr.AgentSidecarManager(builtin_specs()["email"])
+    with pytest.raises(SidecarSpawnError) as exc_info:
+        m.build_spawn_command(port=9123)
+    msg = str(exc_info.value)
+    # Working remedies, spec-driven.
+    assert "Agent Hub" in msg
+    assert "installer.install('email')" in msg  # headless path
+    assert "GAIA_EMAIL_AGENT_MODE=dev" in msg
+    assert "Sidecar logs:" in msg
+    assert "https://amd-gaia.ai/docs/guides/email" in msg
+    # The original cause is preserved for debugging.
+    assert "cannot read the sidecar binary lock" in msg
+
+
+def test_user_mode_failure_is_spec_driven_no_email_leak(monkeypatch):
+    """A non-email spec's failure must be truly generic — its own agent_id and
+    mode env var, no leftover hardcoded email strings, and no docs line when the
+    spec declares no docs_url."""
+    monkeypatch.delenv("GAIA_EMAIL_AGENT_MODE", raising=False)
+    monkeypatch.setenv("GAIA_TOY_AGENT_MODE", "user")
+
+    def _boom(**kw):
+        raise RuntimeError("no binary")
+
+    monkeypatch.setattr(mgr.fetch, "fetch_binary", _boom)
+    m = mgr.AgentSidecarManager(_TOY_SPEC)
+    with pytest.raises(SidecarSpawnError) as exc_info:
+        m.build_spawn_command(port=9123)
+    msg = str(exc_info.value)
+    assert "installer.install('toy')" in msg
+    assert "GAIA_TOY_AGENT_MODE=dev" in msg
+    assert "email" not in msg.lower()
+    assert "GAIA_EMAIL_AGENT_MODE" not in msg
+    assert "Docs:" not in msg  # _TOY_SPEC has no docs_url
+
+
 def test_user_mode_spawns_hub_installed_binary_despite_placeholder_lock(
     monkeypatch, tmp_path
 ):

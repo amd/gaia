@@ -168,11 +168,11 @@ def fetch_binary(
         )
     if plat.is_placeholder_sha(entry.sha256):
         raise PlatformError(
-            f"binaries.lock.json has a placeholder sha256 for '{key}' "
-            f"({entry.sha256}); no binary is published for it in this build. Fetch is "
-            "blocked so a bad binary can never be trusted. Install the email agent "
-            "from the Agent Hub, publish it (release_agent_email.yml) to populate "
-            "the real SHA, or run dev mode (GAIA_EMAIL_AGENT_MODE=dev)."
+            f"the binary lock has a placeholder sha256 for '{key}' "
+            f"({entry.sha256}); this lock publishes no verifiable binary for it. "
+            "Fetch is blocked so an unverifiable binary can never be trusted. "
+            "Install the agent from the Agent Hub, which downloads and verifies "
+            "the real binary from the hub manifest (independent of this lock)."
         )
 
     cache.mkdir(parents=True, exist_ok=True)

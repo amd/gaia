@@ -295,10 +295,19 @@ class AgentSidecarManager:
                     agent_dir_name=self.spec.cache_dir_name,
                 )
             except Exception as e:  # re-raise with the user-mode remedy
+                docs = f" Docs: {self.spec.docs_url}." if self.spec.docs_url else ""
                 raise SidecarSpawnError(
-                    f"{self.spec.display_name} sidecar binary unavailable in user "
-                    f"mode: {e} Set {self.spec.mode_env_var}=dev to run from "
-                    "source, or publish the agent so the binary + real SHA exist."
+                    f"Cannot start the {self.spec.display_name} agent: no verified "
+                    f"sidecar binary is available in user mode. {e}\n"
+                    "Fix it one of these ways:\n"
+                    f"  * Install '{self.spec.agent_id}' from the Agent Hub (in the "
+                    "Agent UI, click Install) — it downloads and verifies the "
+                    "binary from the hub and records the install this resolver "
+                    'reads. Headless (no UI): python -c "from gaia.hub import '
+                    f"installer; installer.install('{self.spec.agent_id}')\"\n"
+                    f"  * Or, from a GAIA source checkout, set "
+                    f"{self.spec.mode_env_var}=dev to run the agent from source.\n"
+                    f"Sidecar logs: {self.log_dir}.{docs}"
                 ) from e
             self.installed_binary_version = result.version
             argv = [str(result.binary_path), "--host", self.host, "--port", str(port)]

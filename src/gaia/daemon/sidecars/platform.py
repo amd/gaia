@@ -78,8 +78,12 @@ def load_lock(lock_path: Optional[Path] = None) -> BinaryLock:
         raw = path.read_text(encoding="utf-8")
     except OSError as e:
         raise PlatformError(
-            f"cannot read binaries.lock.json at {path}: {e}. This manifest ships "
-            "with the email agent package; reinstall/rebuild it if it is missing."
+            f"cannot read the sidecar binary lock at {path}: {e}. This file is "
+            "only present in a source checkout (it ships in the agent's npm "
+            "package, not the installed Python wheel), so an installed GAIA "
+            "resolves the binary from an Agent Hub install instead. Install the "
+            "agent from the Agent Hub, or run from a source checkout in dev mode "
+            "— reinstalling the Python wheel will not create this file."
         ) from e
     try:
         parsed = json.loads(raw)
