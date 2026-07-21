@@ -89,6 +89,33 @@ class _FakeAgent:
             "message": "status",
         }
 
+    # -- Autonomy surface --------------------------------------------------
+    _autonomy_level = "off"
+
+    def autonomy_status(self) -> dict:
+        return {
+            "level": self._autonomy_level,
+            "enabled": self._autonomy_level != "off",
+            "trust_min_samples": 5,
+            "trust_threshold": 0.85,
+            "trusted_scope_count": 0,
+            "scopes": [],
+        }
+
+    def set_autonomy_level(self, level: str) -> dict:
+        if level not in ("off", "suggest", "earn_trust", "full"):
+            raise ValueError(f"bad level {level!r}")
+        self._autonomy_level = level
+        return {"level": level, "enabled": level != "off"}
+
+    def run_autonomy_cycle(self, context=None) -> dict:
+        return {
+            "level": self._autonomy_level,
+            "executed": [],
+            "proposals": [],
+            "skipped": 0,
+        }
+
     def close_db(self) -> None:
         self.closed = True
 
@@ -361,3 +388,57 @@ class TestMemoryOverHttp:
 def client_registry(client) -> "agent_routes._SessionRegistry":
     """The registry the client's app is bound to (monkeypatched per test)."""
     return agent_routes.registry
+
+
+# ---------------------------------------------------------------------------
+# Autonomy control surface (#1483 / #1115)
+# ---------------------------------------------------------------------------
+
+
+class TestAutonomyRoutes:
+    def _mk(self, client, sid="s1"):
+        client.post("/v1/email/agent/session", json={"session_id": sid})
+
+    def test_status_reports_level(self, client):
+        self._mk(client)
+        r = client.get("/v1/email/agent/autonomy/s1")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["level"] == "off"
+        assert body["enabled"] is False
+        assert "scopes" in body
+
+    def test_status_404_without_session(self, client):
+        r = client.get("/v1/email/agent/autonomy/nope")
+        assert r.status_code == 404
+
+    def test_set_level_resume_then_kill(self, client):
+        self._mk(client)
+        r = client.post(
+            "/v1/email/agent/autonomy",
+            json={"session_id": "s1", "level": "earn_trust"},
+        )
+        assert r.status_code == 200 and r.json()["level"] == "earn_trust"
+        # Kill switch.
+        r2 = client.post(
+            "/v1/email/agent/autonomy", json={"session_id": "s1", "level": "off"}
+        )
+        assert r2.json()["enabled"] is False
+
+    def test_set_level_rejects_bad_value(self, client):
+        self._mk(client)
+        r = client.post(
+            "/v1/email/agent/autonomy", json={"session_id": "s1", "level": "turbo"}
+        )
+        assert r.status_code == 400
+
+    def test_run_cycle_returns_report(self, client):
+        self._mk(client)
+        r = client.post("/v1/email/agent/autonomy/run", json={"session_id": "s1"})
+        assert r.status_code == 200
+        body = r.json()
+        assert "executed" in body and "proposals" in body
+
+    def test_run_cycle_404_without_session(self, client):
+        r = client.post("/v1/email/agent/autonomy/run", json={"session_id": "nope"})
+        assert r.status_code == 404

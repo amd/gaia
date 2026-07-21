@@ -349,6 +349,42 @@ def test_note_action_undone_ignores_non_autonomy_ids(tmp_path):
     assert agent.note_action_undone("not-an-autonomy-action") is False
 
 
+def test_undo_tool_captures_correction_end_to_end(tmp_path):
+    """Undoing an auto-archive through the real undo_archive_batch tool restores
+    the message AND records the correction — the production learning path."""
+    import json
+
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+
+    sender = "deals@shop.com"
+    agent = _build_agent(
+        tmp_path, [_promo_message("m1", sender)], level=LEVEL_FULL
+    )
+    report = agent._run_email_autonomy_cycle()
+    action_id = report["executed"][0]["action_id"]
+    row = agent.query(
+        "SELECT batch_id FROM email_actions WHERE action_id = :a",
+        {"a": action_id},
+        one=True,
+    )
+    batch_id = row["batch_id"]
+    assert batch_id, "autonomy archive must carry a batch_id so it is undoable"
+
+    entry = _TOOL_REGISTRY.get("undo_archive_batch")
+    assert entry is not None
+    json.loads(entry["function"](batch_id))  # invoke as the agent would
+
+    # Message restored to the inbox.
+    assert "INBOX" in agent._gmail.get_message("m1").get("labelIds", [])
+    # Correction captured as a negative for the scope.
+    from gaia_agent_email.trust import TrustLedger
+
+    stats = TrustLedger.get_stats(
+        agent, action_type="archive", scope=sender_scope(sender)
+    )
+    assert stats["negative"] == 1
+
+
 # ---------------------------------------------------------------------------
 # Inspectable status — autonomy is never a black box
 # ---------------------------------------------------------------------------

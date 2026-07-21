@@ -1283,14 +1283,20 @@ class EmailTriageAgent(
                 "The policy admitted an action the executor does not implement — "
                 "add an executor branch before widening the candidate map."
             )
+        import uuid as _uuid
+
         message_id = row.get("id")
         provider = row.get("mailbox") or self._provider_for_message(message_id, None)
         backend = self._backends[provider]
+        # Mint a batch_id so the auto-archive is undoable via undo_archive_batch
+        # (the same handle the REST/UI undo surface uses) — and undoing it feeds
+        # the learning loop as a correction.
         return archive_message_impl(
             backend,
             self,
             message_id=message_id,
             mailbox=provider,
+            batch_id=_uuid.uuid4().hex,
             debug=bool(getattr(self.config, "debug", False)),
         )
 
@@ -1353,6 +1359,21 @@ class EmailTriageAgent(
         )
         trust.mark_autonomy_action_resolved(self, action_id=action_id)
         return True
+
+    def set_autonomy_level(self, level: str) -> Dict[str, Any]:
+        """Change the autonomy level at runtime (pause / resume / kill switch).
+
+        ``off`` is the kill switch — the next heartbeat is a no-op. Returns the
+        applied status. Raises ``ValueError`` (translated to HTTP 400 at the
+        boundary) on an unknown level rather than silently ignoring it.
+        """
+        if level not in trust.AUTONOMY_LEVELS:
+            raise ValueError(
+                f"autonomy level must be one of {list(trust.AUTONOMY_LEVELS)}, "
+                f"got {level!r}"
+            )
+        self.config.autonomy_level = level
+        return {"level": level, "enabled": level != trust.LEVEL_OFF}
 
     def autonomy_status(self) -> Dict[str, Any]:
         """Inspectable snapshot of the autonomy engine (never a black box).
