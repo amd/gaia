@@ -357,9 +357,7 @@ def test_undo_tool_captures_correction_end_to_end(tmp_path):
     from gaia.agents.base.tools import _TOOL_REGISTRY
 
     sender = "deals@shop.com"
-    agent = _build_agent(
-        tmp_path, [_promo_message("m1", sender)], level=LEVEL_FULL
-    )
+    agent = _build_agent(tmp_path, [_promo_message("m1", sender)], level=LEVEL_FULL)
     report = agent._run_email_autonomy_cycle()
     action_id = report["executed"][0]["action_id"]
     row = agent.query(
@@ -413,3 +411,89 @@ def test_autonomy_status_reports_level_and_ledger(tmp_path):
 
     assert by_scope[category_scope("PROMOTIONAL")]["trusted"] is True  # 3 samples
     assert status["trusted_scope_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Proactive simulation harness (#1508) — multi-cycle convergence + invariants
+# ---------------------------------------------------------------------------
+
+
+class TestAutonomySimulation:
+    """Simulate an inbox over many heartbeats and assert the earn-trust engine
+    converges the way the design promises, and that the safety invariants hold
+    across the whole run — not just a single decision."""
+
+    def _promos_from(self, sender, n, start=0):
+        return [_promo_message(f"p{start + i}", sender) for i in range(n)]
+
+    def test_converges_from_proposing_to_acting_with_positive_feedback(self, tmp_path):
+        sender = "deals@shop.com"
+        agent = _build_agent(
+            tmp_path,
+            [],
+            level=LEVEL_EARN_TRUST,
+            autonomy_trust_min_samples=3,
+        )
+
+        # Cycle 1-3: cold → proposes; the "user" accepts each suggestion.
+        proposed_cycles = 0
+        for c in range(3):
+            agent._gmail.add_message(_promo_message(f"a{c}", sender))
+            report = agent._run_email_autonomy_cycle()
+            if report["proposals"]:
+                proposed_cycles += 1
+                # User accepts the suggestion → positive feedback.
+                agent.record_autonomy_outcome(
+                    action_type="archive",
+                    positive=True,
+                    sender=sender,
+                    category="PROMOTIONAL",
+                )
+        assert proposed_cycles >= 1  # it asked before it earned trust
+
+        # Now trusted: a fresh message from the same sender is auto-archived.
+        agent._gmail.add_message(_promo_message("final", sender))
+        final = agent._run_email_autonomy_cycle()
+        assert any(e["message_id"] == "final" for e in final["executed"])
+
+    def test_never_auto_executes_a_floor_tool_across_full_inbox(self, tmp_path):
+        """Whatever the inbox, an autonomy cycle only ever executes reversible
+        actions — never a send/forward/delete. The structural guarantee."""
+        from gaia_agent_email.trust import REVERSIBLE_AUTO_ACTIONS
+
+        sender = "deals@shop.com"
+        msgs = self._promos_from(sender, 5) + [
+            _urgent_message("u1", "boss@x.com"),
+            _urgent_message("u2", "vip@x.com"),
+        ]
+        agent = _build_agent(tmp_path, msgs, level=LEVEL_FULL)
+        report = agent._run_email_autonomy_cycle()
+        for entry in report["executed"]:
+            assert entry["action"] in REVERSIBLE_AUTO_ACTIONS
+
+    def test_correction_demotes_a_previously_trusted_scope(self, tmp_path):
+        sender = "deals@shop.com"
+        agent = _build_agent(
+            tmp_path,
+            [],
+            level=LEVEL_EARN_TRUST,
+            autonomy_trust_min_samples=3,
+            autonomy_trust_threshold=0.85,
+        )
+        # Earn trust (3/3), then two corrections drag accuracy below the bar.
+        for _ in range(3):
+            agent.record_autonomy_outcome(
+                action_type="archive", positive=True, sender=sender
+            )
+        status_before = {s["scope"]: s for s in agent.autonomy_status()["scopes"]}
+        assert status_before[sender_scope(sender)]["trusted"] is True
+
+        for _ in range(2):
+            agent.record_autonomy_outcome(
+                action_type="archive", positive=False, sender=sender
+            )
+        # 3/5 = 0.6 < 0.85 → no longer trusted; the agent goes back to asking.
+        agent._gmail.add_message(_promo_message("m1", sender))
+        report = agent._run_email_autonomy_cycle()
+        assert report["executed"] == []
+        assert len(report["proposals"]) == 1

@@ -219,10 +219,21 @@ emits the canonical seven-event vocabulary.
 | `GET /v1/email/agent/session/{id}/history` | Conversation so far (`turns[]`, oldest first). |
 | `POST /v1/email/agent/memory` | Runtime memory toggle (#1666), `{ session_id, enabled }` → `{ enabled, available, message }`. Enabling memory that was never initialized (started with `GAIA_MEMORY_DISABLED` / Lemonade unreachable) → **409**, never a silent no-op. |
 | `GET /v1/email/agent/memory/{id}` | Memory status without changing it. |
+| `GET /v1/email/agent/autonomy/{id}` | Inspectable autonomy status: `{ level, enabled, trust_min_samples, trust_threshold, trusted_scope_count, scopes[] }` — the earned-trust ledger, never a black box. |
+| `POST /v1/email/agent/autonomy` | Set the autonomy level, `{ session_id, level }` where level ∈ `off` \| `suggest` \| `earn_trust` \| `full` (`off` = kill switch). Bad level → **400**. |
+| `POST /v1/email/agent/autonomy/run` | Trigger one observe→decide→act cycle, `{ session_id, max_messages? }` → `{ level, executed[], proposals[], skipped }`. The daemon clock / scheduler drives this in production. |
 
 Sessions are in-process and single-tenant (the sidecar hosts one user's agent); one turn
 runs at a time per session. Memory uses FAISS locally; embeddings still go over Lemonade
 HTTP, so the frozen binary stays free of torch/transformers.
+
+**Full autonomy (earn-trust).** At `earn_trust` the agent auto-executes only *reversible*
+actions (archive/label/mark-read) and only once a sender/category has crossed the trust
+bar (`autonomy_trust_min_samples` decisions at ≥ `autonomy_trust_threshold` accuracy);
+everything else is proposed. The destructive floor — send, forward, permanent-delete,
+RSVP, quarantine — **always requires confirmation, at every level**. Undoing an
+auto-action feeds the trust ledger as a correction, so the agent adapts to you. See
+`docs/plans/email-full-autonomy.mdx`.
 
 ### Mailbox actions (archive / quarantine, schema 2.1)
 
