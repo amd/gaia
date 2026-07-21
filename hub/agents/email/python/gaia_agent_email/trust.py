@@ -67,15 +67,17 @@ AutonomyLevel = Literal["off", "suggest", "earn_trust", "full"]
 #: Each is recorded in ``action_store`` with an undo path. ``trash`` is
 #: deliberately excluded — a soft-delete is reversible only inside the undo
 #: window, so it stays a suggestion until the user opts it up explicitly.
+# Names MUST match the ``action_type`` strings ``action_store`` records (so an
+# undo of an autonomy action attributes to the same action_type the ledger
+# learned under). See organize_tools/delete_tools ``record_action`` calls.
 REVERSIBLE_AUTO_ACTIONS = frozenset(
     {
         "archive",
         "add_label",
-        "remove_label",
+        "add_star",
+        "remove_star",
         "mark_read",
         "mark_unread",
-        "star",
-        "unstar",
     }
 )
 
@@ -96,7 +98,7 @@ class TrustDecision:
     """The policy's verdict for one candidate action.
 
     ``action`` is the disposition; ``reason`` is a human-readable rationale
-    surfaced in the activity feed and ``gaia email autonomy`` output;
+    surfaced in the activity feed and the planned ``gaia email autonomy`` output;
     ``confidence`` is the ledger trust score in ``[0, 1]`` (1.0 for the
     hard-coded floor and for explicit preferences).
     """
@@ -140,10 +142,67 @@ CREATE TABLE IF NOT EXISTS email_autonomy_actions (
 """
 
 
+# Open-proposal ledger: one row per message the cycle has already proposed an
+# action for and that has not yet been resolved. Without this, every heartbeat
+# re-proposes the same still-in-inbox message and GoalStore accumulates a
+# duplicate pending goal each fire. Keyed ``(message_id, action_type)``.
+EMAIL_AUTONOMY_PROPOSALS_DDL = """
+CREATE TABLE IF NOT EXISTS email_autonomy_proposals (
+    message_id   TEXT NOT NULL,
+    action_type  TEXT NOT NULL,
+    created_at   REAL NOT NULL,
+    resolved     INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (message_id, action_type)
+);
+"""
+
+
 def init_trust_schema(db) -> None:
     """Create the ledger + attribution tables if absent. Idempotent."""
     db.execute(EMAIL_TRUST_LEDGER_DDL)
     db.execute(EMAIL_AUTONOMY_ACTIONS_DDL)
+    db.execute(EMAIL_AUTONOMY_PROPOSALS_DDL)
+
+
+def has_open_proposal(db, *, message_id: str, action_type: str) -> bool:
+    """True when an unresolved proposal already exists for this message+action.
+
+    The re-proposal guard: a message the cycle proposed last fire and that the
+    user has not acted on yet must not be proposed again.
+    """
+    row = db.query(
+        "SELECT 1 FROM email_autonomy_proposals WHERE message_id = :m "
+        "AND action_type = :a AND resolved = 0",
+        {"m": message_id, "a": action_type},
+        one=True,
+    )
+    return row is not None
+
+
+def record_proposal(
+    db,
+    *,
+    message_id: str,
+    action_type: str,
+    now: Optional[float] = None,
+) -> None:
+    """Mark that an action has been proposed for a message. Idempotent."""
+    ts = time.time() if now is None else now
+    db.query(
+        "INSERT OR IGNORE INTO email_autonomy_proposals "
+        "(message_id, action_type, created_at, resolved) VALUES (:m, :a, :ts, 0)",
+        {"m": message_id, "a": action_type, "ts": ts},
+    )
+
+
+def resolve_proposal(db, *, message_id: str, action_type: str) -> None:
+    """Clear the open-proposal guard for a message (acted on or superseded)."""
+    db.update(
+        "email_autonomy_proposals",
+        {"resolved": 1},
+        "message_id = :m AND action_type = :a",
+        {"m": message_id, "a": action_type},
+    )
 
 
 def record_autonomy_action(
@@ -161,16 +220,19 @@ def record_autonomy_action(
     action id overwrites rather than duplicating.
     """
     ts = time.time() if now is None else now
-    db.query(
-        "INSERT OR REPLACE INTO email_autonomy_actions "
-        "(action_id, action_type, sender, category, created_at, resolved) "
-        "VALUES (:id, :t, :s, :c, :ts, 0)",
+    # ``db.insert`` commits (query() does not); action_id is a fresh uuid PK so a
+    # plain insert is safe — no REPLACE needed. Committing matters for the
+    # scheduler's per-run agent, which closes its connection after the cycle: an
+    # uncommitted index row would be lost and the later undo never attributed.
+    db.insert(
+        "email_autonomy_actions",
         {
-            "id": action_id,
-            "t": action_type,
-            "s": sender,
-            "c": category,
-            "ts": ts,
+            "action_id": action_id,
+            "action_type": action_type,
+            "sender": sender,
+            "category": category,
+            "created_at": ts,
+            "resolved": 0,
         },
     )
 
@@ -256,33 +318,28 @@ class TrustLedger:
         one they rejected / undid / edited is negative.
         """
         ts = time.time() if now is None else now
-        col = "positive" if positive else "negative"
         outcome = OUTCOME_POSITIVE if positive else OUTCOME_NEGATIVE
-        existing = db.query(
-            "SELECT positive, negative FROM email_trust_ledger "
-            "WHERE action_type = :a AND scope = :s",
-            {"a": action_type, "s": scope},
-            one=True,
-        )
-        if existing is None:
-            db.insert(
-                "email_trust_ledger",
+        # Atomic upsert (single statement) so two concurrent first-writes to the
+        # same (action_type, scope) — the session agent and a scheduler-built
+        # agent share one on-disk DB — can't both INSERT and collide on the PK.
+        # Wrapped in a transaction so the write commits (query() alone does not).
+        with db.transaction():
+            db.query(
+                "INSERT INTO email_trust_ledger "
+                "(action_type, scope, positive, negative, last_outcome, updated_at) "
+                "VALUES (:a, :s, :pos, :neg, :outcome, :ts) "
+                "ON CONFLICT(action_type, scope) DO UPDATE SET "
+                "positive = positive + :pos, negative = negative + :neg, "
+                "last_outcome = :outcome, updated_at = :ts",
                 {
-                    "action_type": action_type,
-                    "scope": scope,
-                    "positive": 1 if positive else 0,
-                    "negative": 0 if positive else 1,
-                    "last_outcome": outcome,
-                    "updated_at": ts,
+                    "a": action_type,
+                    "s": scope,
+                    "pos": 1 if positive else 0,
+                    "neg": 0 if positive else 1,
+                    "outcome": outcome,
+                    "ts": ts,
                 },
             )
-            return
-        db.update(
-            "email_trust_ledger",
-            {col: int(existing[col]) + 1, "last_outcome": outcome, "updated_at": ts},
-            "action_type = :a AND scope = :s",
-            {"a": action_type, "s": scope},
-        )
 
     @staticmethod
     def get_stats(db, *, action_type: str, scope: str) -> Dict[str, Any]:

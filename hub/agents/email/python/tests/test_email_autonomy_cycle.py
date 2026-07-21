@@ -349,6 +349,39 @@ def test_note_action_undone_ignores_non_autonomy_ids(tmp_path):
     assert agent.note_action_undone("not-an-autonomy-action") is False
 
 
+def test_cold_message_proposed_once_not_re_proposed_each_cycle(tmp_path):
+    """Re-running the cycle on the same still-in-inbox message must NOT pile up a
+    duplicate proposal every fire — the headless-timer spam guard."""
+    agent = _build_agent(
+        tmp_path,
+        [_promo_message("m1", "deals@shop.com")],
+        level=LEVEL_EARN_TRUST,
+        autonomy_trust_min_samples=3,
+    )
+    first = agent._run_email_autonomy_cycle()
+    assert len(first["proposals"]) == 1
+    assert first["already_proposed"] == 0
+
+    # Same message still in the inbox → second cycle proposes nothing new.
+    second = agent._run_email_autonomy_cycle()
+    assert second["proposals"] == []
+    assert second["already_proposed"] == 1
+
+
+def test_run_autonomy_cycle_does_not_duplicate_goals(tmp_path):
+    """End-to-end: two driver runs create exactly one GoalStore proposal."""
+    agent = _build_agent(
+        tmp_path,
+        [_promo_message("m1", "deals@shop.com")],
+        level=LEVEL_EARN_TRUST,
+        autonomy_trust_min_samples=3,
+    )
+    with patch.object(agent, "propose") as mock_propose:
+        agent.run_autonomy_cycle()
+        agent.run_autonomy_cycle()
+    assert mock_propose.call_count == 1
+
+
 def test_undo_tool_captures_correction_end_to_end(tmp_path):
     """Undoing an auto-archive through the real undo_archive_batch tool restores
     the message AND records the correction — the production learning path."""
@@ -456,11 +489,14 @@ class TestAutonomySimulation:
         final = agent._run_email_autonomy_cycle()
         assert any(e["message_id"] == "final" for e in final["executed"])
 
-    def test_never_auto_executes_a_floor_tool_across_full_inbox(self, tmp_path):
+    def test_cycle_only_auto_executes_reversible_actions(self, tmp_path):
         """Whatever the inbox, an autonomy cycle only ever executes reversible
-        actions — never a send/forward/delete. The structural guarantee."""
+        actions — never a floor tool. (The floor's confirm-gate itself is locked
+        in test_trust.py; this guards the candidate map that feeds the cycle.)"""
+        from gaia_agent_email.agent import EmailTriageAgent
         from gaia_agent_email.trust import REVERSIBLE_AUTO_ACTIONS
 
+        floor = EmailTriageAgent.CONFIRMATION_REQUIRED_TOOLS
         sender = "deals@shop.com"
         msgs = self._promos_from(sender, 5) + [
             _urgent_message("u1", "boss@x.com"),
@@ -468,8 +504,10 @@ class TestAutonomySimulation:
         ]
         agent = _build_agent(tmp_path, msgs, level=LEVEL_FULL)
         report = agent._run_email_autonomy_cycle()
+        assert report["executed"], "expected the promos to be archived"
         for entry in report["executed"]:
             assert entry["action"] in REVERSIBLE_AUTO_ACTIONS
+            assert entry["action"] not in floor
 
     def test_correction_demotes_a_previously_trusted_scope(self, tmp_path):
         sender = "deals@shop.com"

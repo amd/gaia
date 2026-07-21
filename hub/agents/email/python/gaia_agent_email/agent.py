@@ -486,6 +486,13 @@ class EmailTriageAgent(
         db_path = config.resolved_db_path()
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self.init_db(db_path)
+        # A scheduler-built autonomy agent and a live session agent can hold
+        # separate connections to this same state.db (#1115). Wait on a busy
+        # writer instead of failing the whole cycle with "database is locked";
+        # WAL lets a reader proceed during a write. Scoped to the email agent's
+        # connection — not a core-mixin change.
+        self._db.execute("PRAGMA busy_timeout = 5000")
+        self._db.execute("PRAGMA journal_mode = WAL")
         action_store.init_schema(self)
         schedule_store.init_schema(self)
         task_store.init_schema(self)
@@ -1148,7 +1155,8 @@ class EmailTriageAgent(
         """Build the earn-trust policy from current config + the confirm-floor.
 
         Rebuilt per cycle so a runtime ``autonomy_level`` change (e.g. via the
-        ``gaia email autonomy`` CLI) takes effect on the next heartbeat without
+        the forthcoming ``gaia email autonomy`` CLI) takes effect on the next
+        heartbeat without
         reconstructing the agent.
         """
         ledger = trust.TrustLedger(
@@ -1205,6 +1213,7 @@ class EmailTriageAgent(
             "executed": [],
             "proposals": [],
             "skipped": 0,
+            "already_proposed": 0,
         }
         policy = self._autonomy_policy()
         if not policy.enabled:
@@ -1228,6 +1237,7 @@ class EmailTriageAgent(
                 db=self,
                 preferences=self._session_preferences,
             )
+            message_id = row.get("id")
             if decision.action == "auto":
                 executed = self._autonomy_execute(action_type, row)
                 # Index the action so a later undo is attributed to this scope
@@ -1241,9 +1251,15 @@ class EmailTriageAgent(
                         sender=sender,
                         category=row.get("category", ""),
                     )
+                # A message we once proposed and now act on is resolved — clear
+                # its re-proposal guard so the row can't linger open.
+                if message_id:
+                    trust.resolve_proposal(
+                        self, message_id=message_id, action_type=action_type
+                    )
                 report["executed"].append(
                     {
-                        "message_id": row.get("id"),
+                        "message_id": message_id,
                         "action": action_type,
                         "sender": sender,
                         "reason": decision.reason,
@@ -1252,14 +1268,26 @@ class EmailTriageAgent(
                     }
                 )
             elif decision.action in ("suggest", "draft"):
+                # Re-proposal guard: a message already proposed and not yet acted
+                # on must not spawn a duplicate goal every cycle. Without this,
+                # a headless timer piles up one pending goal per message per fire.
+                if message_id and trust.has_open_proposal(
+                    self, message_id=message_id, action_type=action_type
+                ):
+                    report["already_proposed"] += 1
+                    continue
                 report["proposals"].append(
                     Proposal(
-                        action=f"{action_type} email {row.get('id')} from {sender}",
+                        action=f"{action_type} email {message_id} from {sender}",
                         rationale=decision.reason,
                         action_class="other",
                         risk="low",
                     )
                 )
+                if message_id:
+                    trust.record_proposal(
+                        self, message_id=message_id, action_type=action_type
+                    )
             else:
                 # confirm — the floor. Never reached for archive candidates, but
                 # counted rather than silently dropped if the taxonomy grows.
@@ -1309,6 +1337,11 @@ class EmailTriageAgent(
         need user approval. Auto-executed actions happen as a side effect and
         are recorded (with undo) in ``action_store``; the driver persists the
         returned proposals via :meth:`propose`.
+
+        Cost note: this triages the inbox (mailbox I/O + local inference on any
+        heuristic-uncertain message), so a full cycle can take many seconds. The
+        REST/scheduler drivers offload it to a worker thread; a direct caller
+        should not invoke it on a latency-sensitive path.
         """
         return self._run_email_autonomy_cycle(context).get("proposals", [])
 
@@ -1381,7 +1414,7 @@ class EmailTriageAgent(
         Returns the current level, the trust thresholds, and the earned-trust
         ledger — every ``(action, scope)`` with its positive/negative tally and
         whether it has crossed the bar. This is the single read-model the
-        ``gaia email autonomy status`` / ``trust`` CLI, the REST surface, and
+        planned ``gaia email autonomy status`` / ``trust`` CLI, the REST surface, and
         the Agent-UI panel all render, so autonomy behavior is always
         explainable ("archives news@x because 12/12 correct").
         """
@@ -1419,7 +1452,7 @@ class EmailTriageAgent(
     ) -> Dict[str, Any]:
         """Driver-facing entry: run a cycle and persist proposals to GoalStore.
 
-        This is the seam a ``DaemonClock`` job / the ``gaia email autonomy`` CLI
+        This is the seam a ``DaemonClock`` job / the planned ``gaia email autonomy`` CLI
         invokes (mirroring ``run_briefing_job`` for the briefing feature).
         Returns a JSON-serializable report — the ``Proposal`` objects are
         replaced by their persisted dict form.
