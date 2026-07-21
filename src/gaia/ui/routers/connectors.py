@@ -897,11 +897,18 @@ async def authorize_device(
                 "connector.oauth.error",
                 {"connector_id": connector_id, "error": str(e)},
             )
-        except Exception as e:  # noqa: BLE001 — surface, don't crash the loop
+        except Exception:  # noqa: BLE001 — surface, don't crash the loop
+            # Unexpected (non-ConnectorsError) failure: keep the detail in the
+            # server log, emit a generic message so an arbitrary exception
+            # string never reaches the client over SSE.
             logger.exception("device-flow poll failed for %s", connector_id)
             await _emitter.emit(
                 "connector.oauth.error",
-                {"connector_id": connector_id, "error": str(e)},
+                {
+                    "connector_id": connector_id,
+                    "error": "Device-code sign-in failed unexpectedly. "
+                    "Check the server logs and try again.",
+                },
             )
 
     task = asyncio.create_task(_poll_and_emit())

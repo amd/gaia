@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+import zlib
 from typing import List, Optional
 
 from gaia.connectors._keyring import keyring  # actionable error if missing (#1621)
@@ -140,8 +141,21 @@ def _wrap_keyring_call(operation: str):
 # an oversized value across extra keyring slots (``<username>#<idx>``) and
 # reassemble on read. Small values stay in a single raw slot — backward
 # compatible with every pre-existing entry and the short Google blobs.
+#
+# Torn-write safety: keyring has no atomic multi-slot transaction, and
+# Microsoft rotates the refresh token on every refresh (varying length →
+# varying chunk count), so an overwrite can crash mid-rewrite with slots and
+# manifest out of sync. The manifest therefore carries a CRC32 of the full
+# payload; ``_kr_get`` validates the reassembled value against it and returns
+# ``None`` ("reconnect") on any mismatch — a torn state can never surface as a
+# truncated-but-valid-looking token.
 _CHUNK_CHARS = 1024
 _CHUNK_SENTINEL = "\x00gaia-chunked\x00"  # cannot occur inside a JSON blob
+
+
+def _payload_crc(payload: str) -> str:
+    """Non-cryptographic integrity check for reassembled chunk payloads."""
+    return format(zlib.crc32(payload.encode("utf-8")), "08x")
 
 
 def _chunk_username(username: str, idx: int) -> str:
@@ -198,32 +212,54 @@ def _kr_set(username: str, payload: str) -> None:
     ]
     for idx, chunk in enumerate(chunks):
         _kr_raw_set(_chunk_username(username, idx), chunk)
+    # Publish the manifest (count + CRC of the full payload) BEFORE sweeping
+    # stale high slots, so a reader after this point reassembles against the
+    # new count and the CRC guards any partial state.
+    _kr_raw_set(username, f"{_CHUNK_SENTINEL}{len(chunks)}:{_payload_crc(payload)}")
     # Drop any extra chunk slots left over from a longer previous value.
     stale = len(chunks)
     while _kr_raw_get(_chunk_username(username, stale)) is not None:
         _kr_raw_delete(_chunk_username(username, stale))
         stale += 1
-    _kr_raw_set(username, f"{_CHUNK_SENTINEL}{len(chunks)}")
+
+
+def _parse_manifest(raw: str) -> Optional[tuple[int, Optional[str]]]:
+    """Parse ``<SENTINEL><count>[:<crc>]`` → ``(count, crc)``. ``None`` if the
+    manifest is malformed. ``crc`` is ``None`` for a legacy count-only manifest."""
+    body = raw[len(_CHUNK_SENTINEL) :]
+    count_str, _, crc = body.partition(":")
+    try:
+        return int(count_str), (crc or None)
+    except ValueError:
+        return None
 
 
 def _kr_get(username: str) -> Optional[str]:
-    """Read a (possibly chunked) value stored via :func:`_kr_set`."""
+    """Read a (possibly chunked) value stored via :func:`_kr_set`.
+
+    Any partial/torn state (missing slot, or a CRC mismatch from a crashed
+    mid-rewrite) resolves to ``None`` — never a truncated-but-valid-looking
+    value."""
     raw = _kr_raw_get(username)
     if raw is None or not raw.startswith(_CHUNK_SENTINEL):
         return raw
-    try:
-        count = int(raw[len(_CHUNK_SENTINEL) :])
-    except ValueError:
+    parsed = _parse_manifest(raw)
+    if parsed is None:
         return None
+    count, crc = parsed
     parts: list[str] = []
     for idx in range(count):
         part = _kr_raw_get(_chunk_username(username, idx))
         if part is None:
-            # Torn entry — return None (treated as "not configured") rather
-            # than a truncated token that would fail cryptically downstream.
+            # Missing slot — torn entry; treat as "not configured".
             return None
         parts.append(part)
-    return "".join(parts)
+    value = "".join(parts)
+    if crc is not None and _payload_crc(value) != crc:
+        # Reassembled payload doesn't match the manifest CRC — a crashed
+        # mid-rewrite left slots and manifest out of sync. Fail safe.
+        return None
+    return value
 
 
 def _kr_delete(username: str) -> None:
@@ -231,10 +267,8 @@ def _kr_delete(username: str) -> None:
     raw = _kr_raw_get(username)
     _kr_raw_delete(username)
     if raw is not None and raw.startswith(_CHUNK_SENTINEL):
-        try:
-            count = int(raw[len(_CHUNK_SENTINEL) :])
-        except ValueError:
-            count = 0
+        parsed = _parse_manifest(raw)
+        count = parsed[0] if parsed else 0
         for idx in range(count):
             _kr_raw_delete(_chunk_username(username, idx))
     _kr_clear_chunks(username)

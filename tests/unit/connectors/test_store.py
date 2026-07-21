@@ -136,6 +136,27 @@ class TestLargeBlobChunking:
     in-memory keyring has no size cap, so we assert the chunk *mechanics*
     directly rather than relying on a backend to reject the write)."""
 
+    def test_torn_rewrite_fails_safe_to_none(self):
+        # A crashed mid-rewrite (chunk overwritten but manifest still points at
+        # a stale count/CRC) must NOT reassemble into a truncated-but-valid
+        # token — the CRC guard turns it into None ("reconnect").
+        import keyring as _kr
+
+        from gaia.connectors.store import _chunk_username
+
+        save_connection(
+            provider="microsoft",
+            account_email="a@example.com",
+            refresh_token="R" * (_CHUNK_CHARS * 2),  # 2 chunks
+            scopes=["s1"],
+            client_id_hash="h",
+        )
+        username = _connection_username("microsoft", "default")
+        # Simulate a torn rewrite: chunk #0 gets new (longer) data, but the
+        # manifest still describes the old payload.
+        _kr.set_password(SERVICE_NAME, _chunk_username(username, 0), "X" * _CHUNK_CHARS)
+        assert load_connection("microsoft", current_client_id_hash="h") is None
+
     def test_large_refresh_token_round_trips(self):
         big_token = "R" * (_CHUNK_CHARS * 3 + 17)  # forces 4 chunks
         save_connection(
