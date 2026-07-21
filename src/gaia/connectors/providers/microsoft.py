@@ -121,7 +121,10 @@ class MicrosoftOAuthProvider:
                     "secret under Certificates & secrets -> New client secret"
                 ),
                 example=(
-                    "  For the email agent, copy-paste (bash):\n"
+                    "  For the email agent, copy-paste (bash) after creating the "
+                    "client above:\n"
+                    "    gaia connectors configure microsoft --client-id <ID> "
+                    "--client-secret <SECRET>\n"
                     '    SCOPES="https://graph.microsoft.com/Mail.ReadWrite '
                     "https://graph.microsoft.com/Mail.Send "
                     'https://graph.microsoft.com/Calendars.ReadWrite"\n'

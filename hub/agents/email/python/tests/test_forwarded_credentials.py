@@ -65,6 +65,29 @@ def test_get_missing_credential_raises_loudly():
     assert "google" in str(exc.value)
 
 
+def test_missing_credential_error_names_the_cli_not_just_the_ui():
+    # A headless user must be able to unblock from the message (#2347): it names
+    # the connect + grant CLI commands, not only "Settings -> Connections".
+    with pytest.raises(ConnectorsError) as exc:
+        forwarded_credentials.get_forwarded_token("google", ["s1"])
+    msg = str(exc.value)
+    assert "gaia connectors connect google" in msg
+    assert "gaia connectors grants grant google installed:email" in msg
+
+
+def test_scope_short_error_names_the_missing_scopes_in_the_cli_command():
+    # The reconnect command must carry the ACTUAL missing scopes, not a
+    # placeholder, and must not print an unexpanded '{provider}' literal.
+    forwarded_credentials.set_forwarded(
+        "google", access_token="tok", scopes=["s1"], expires_at=_FUTURE
+    )
+    with pytest.raises(ConnectorsError) as exc:
+        forwarded_credentials.get_forwarded_token("google", ["s1", "s2"])
+    msg = str(exc.value)
+    assert "gaia connectors connect google --scopes s2" in msg
+    assert "{provider}" not in msg  # f-string bug regression guard
+
+
 def test_get_expired_token_raises_loudly():
     forwarded_credentials.set_forwarded(
         "google", access_token="tok", scopes=["s1"], expires_at=_PAST

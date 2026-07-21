@@ -104,7 +104,10 @@ class GoogleOAuthProvider:
                     "gives you a Client ID and Client Secret"
                 ),
                 example=(
-                    "  For the email agent, copy-paste (bash):\n"
+                    "  For the email agent, copy-paste (bash) after creating the "
+                    "client above:\n"
+                    "    gaia connectors configure google --client-id <ID> "
+                    "--client-secret <SECRET>\n"
                     '    SCOPES="https://www.googleapis.com/auth/gmail.modify '
                     "https://www.googleapis.com/auth/gmail.send "
                     "https://www.googleapis.com/auth/calendar.events "
