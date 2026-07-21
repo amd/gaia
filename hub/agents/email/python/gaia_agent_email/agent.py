@@ -35,9 +35,9 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Any, ClassVar, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional
 
-from gaia_agent_email import action_store, schedule_store, task_store
+from gaia_agent_email import action_store, schedule_store, task_store, trust
 from gaia_agent_email.config import ConfigurationError, EmailAgentConfig
 from gaia_agent_email.model_select import (
     NPU_EMAIL_MODEL_ID,
@@ -73,6 +73,9 @@ from gaia_agent_email.tools.schedule_tools import ScheduleToolsMixin
 from gaia_agent_email.tools.summarize_tools import SummarizeToolsMixin
 from gaia_agent_email.tools.voice_tools import VoiceToolsMixin
 from gaia_agent_email.voice_profile import render_style_guidance
+
+if TYPE_CHECKING:  # import-cheap: only for annotations, never at runtime
+    from gaia.agents.base.goal_store import Proposal
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
@@ -486,6 +489,7 @@ class EmailTriageAgent(
         action_store.init_schema(self)
         schedule_store.init_schema(self)
         task_store.init_schema(self)
+        trust.init_trust_schema(self)
 
         # LLM connection. Default to Lemonade — the config's base_url
         # allowlist guarantees the host is local. Resolved BEFORE init_memory()
@@ -1137,6 +1141,177 @@ class EmailTriageAgent(
             debug=bool(getattr(self.config, "debug", False)),
             remember_mailbox=self._remember_message_mailbox,
         )
+
+    # -- Full autonomy: observe -> decide -> act (#1115 / #557) -------------
+
+    def _autonomy_policy(self) -> "trust.TrustPolicy":
+        """Build the earn-trust policy from current config + the confirm-floor.
+
+        Rebuilt per cycle so a runtime ``autonomy_level`` change (e.g. via the
+        ``gaia email autonomy`` CLI) takes effect on the next heartbeat without
+        reconstructing the agent.
+        """
+        ledger = trust.TrustLedger(
+            min_samples=self.config.autonomy_trust_min_samples,
+            threshold=self.config.autonomy_trust_threshold,
+        )
+        return trust.TrustPolicy(
+            level=self.config.autonomy_level,
+            ledger=ledger,
+            confirm_floor=self.confirmation_required_tools(),
+        )
+
+    @staticmethod
+    def _autonomy_candidate(row: Dict[str, Any]) -> Optional[tuple]:
+        """Map a triage result to a candidate ``(tool, action_type)`` or None.
+
+        Phase 2 only proposes/auto-executes the clearest reversible action —
+        archiving low-signal mail (promotional / FYI / spam). Phishing is left
+        to the ``quarantine_phishing_message`` floor tool; urgent / needs-response
+        / personal mail is never auto-touched. Reply drafting lands in Phase 3.
+        """
+        from gaia_agent_email.tools.triage_heuristics import (
+            CATEGORY_FYI,
+            CATEGORY_PROMOTIONAL,
+        )
+
+        if row.get("is_phishing"):
+            return None
+        category = (row.get("category") or "").strip().upper()
+        if row.get("is_spam") or category in (CATEGORY_FYI, CATEGORY_PROMOTIONAL):
+            return ("archive_message", "archive")
+        return None
+
+    def _run_email_autonomy_cycle(
+        self, context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """One observe -> decide -> act pass. Pure of GoalStore side effects.
+
+        Observes the inbox (reusing ``_triage_all_backends``), asks
+        :class:`~gaia_agent_email.trust.TrustPolicy` what to do with each
+        candidate, auto-executes the reversible actions it is trusted to run,
+        and collects the rest as proposals. Returns a structured report; the
+        ``proposals`` list holds ``Proposal`` objects the caller persists via
+        :meth:`propose`. Kept side-effect-pure of GoalStore so it is unit-testable
+        without touching ``~/.gaia/goals.db``.
+        """
+        from gaia_agent_email.tools.read_tools import extract_sender_email
+
+        from gaia.agents.base.goal_store import Proposal
+
+        context = context or {}
+        report: Dict[str, Any] = {
+            "level": self.config.autonomy_level,
+            "executed": [],
+            "proposals": [],
+            "skipped": 0,
+        }
+        policy = self._autonomy_policy()
+        if not policy.enabled:
+            return report
+
+        max_messages = int(context.get("max_messages", 25))
+        triage = self._triage_all_backends(max_messages=max_messages)
+
+        for row in triage.get("results", []):
+            candidate = self._autonomy_candidate(row)
+            if candidate is None:
+                report["skipped"] += 1
+                continue
+            tool_name, action_type = candidate
+            sender = extract_sender_email(row.get("from", ""))
+            decision = policy.decide(
+                tool=tool_name,
+                action_type=action_type,
+                category=row.get("category", ""),
+                sender=sender,
+                db=self,
+                preferences=self._session_preferences,
+            )
+            if decision.action == "auto":
+                executed = self._autonomy_execute(action_type, row)
+                report["executed"].append(
+                    {
+                        "message_id": row.get("id"),
+                        "action": action_type,
+                        "sender": sender,
+                        "reason": decision.reason,
+                        "confidence": decision.confidence,
+                        **executed,
+                    }
+                )
+            elif decision.action in ("suggest", "draft"):
+                report["proposals"].append(
+                    Proposal(
+                        action=f"{action_type} email {row.get('id')} from {sender}",
+                        rationale=decision.reason,
+                        action_class="other",
+                        risk="low",
+                    )
+                )
+            else:
+                # confirm — the floor. Never reached for archive candidates, but
+                # counted rather than silently dropped if the taxonomy grows.
+                report["skipped"] += 1
+
+        return report
+
+    def _autonomy_execute(
+        self, action_type: str, row: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Execute one trusted reversible action. Records undo via action_store.
+
+        Only reversible actions reach here (the policy guarantees it). Returns
+        the impl's result (carrying the ``action_id`` undo handle).
+        """
+        from gaia_agent_email.tools.organize_tools import archive_message_impl
+
+        if action_type != "archive":
+            raise ValueError(
+                f"_autonomy_execute: no executor for action_type {action_type!r}. "
+                "The policy admitted an action the executor does not implement — "
+                "add an executor branch before widening the candidate map."
+            )
+        message_id = row.get("id")
+        provider = row.get("mailbox") or self._provider_for_message(message_id, None)
+        backend = self._backends[provider]
+        return archive_message_impl(
+            backend,
+            self,
+            message_id=message_id,
+            mailbox=provider,
+            debug=bool(getattr(self.config, "debug", False)),
+        )
+
+    def on_heartbeat(
+        self, context: Optional[Dict[str, Any]] = None
+    ) -> List["Proposal"]:
+        """Steady-state autonomous pass (base ``Agent`` hook, spec §6.7).
+
+        Runs one observe -> decide -> act cycle and returns the proposals that
+        need user approval. Auto-executed actions happen as a side effect and
+        are recorded (with undo) in ``action_store``; the driver persists the
+        returned proposals via :meth:`propose`.
+        """
+        return self._run_email_autonomy_cycle(context).get("proposals", [])
+
+    def run_autonomy_cycle(
+        self, context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Driver-facing entry: run a cycle and persist proposals to GoalStore.
+
+        This is the seam a ``DaemonClock`` job / the ``gaia email autonomy`` CLI
+        invokes (mirroring ``run_briefing_job`` for the briefing feature).
+        Returns a JSON-serializable report — the ``Proposal`` objects are
+        replaced by their persisted dict form.
+        """
+        report = self._run_email_autonomy_cycle(context)
+        persisted = []
+        for proposal in report["proposals"]:
+            self.propose(proposal)
+            persisted.append(proposal.to_dict())
+        report["proposals"] = persisted
+        return report
 
     # -- Phase I3 batch-organize counter -----------------------------------
 
