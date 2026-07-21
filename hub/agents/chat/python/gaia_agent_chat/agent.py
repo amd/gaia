@@ -11,9 +11,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional
 
+from gaia.logger import get_logger
+
+logger = get_logger(__name__)
+
 try:
     from watchdog.observers import Observer
-except ImportError:
+except ImportError as _watchdog_err:
+    # Typed capability probe — non-fatal, watchdog is optional (file-watch
+    # tools degrade gracefully without it).
+    logger.debug("watchdog not available: %s", _watchdog_err)
     Observer = None
 
 from gaia_agent_chat.profiles import TOOL_GROUP_REGISTRARS, get_profile_spec
@@ -43,15 +50,12 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     ShellToolsMixin,
 )
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, is_tool_calling_model
-from gaia.logger import get_logger
 from gaia.mcp.mixin import MCPClientMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
 from gaia.sd.mixin import SDToolsMixin
 from gaia.security import PathValidator
 from gaia.utils.file_watcher import FileChangeHandler, check_watchdog_available
 from gaia.vlm.mixin import VLMToolsMixin
-
-logger = get_logger(__name__)
 
 # Sentinel for not-yet-built lazy attributes (``rag``, ``session_manager`` —
 # #2323 Increment 3). Distinct from ``None`` so a degraded/failed build
@@ -536,6 +540,34 @@ class ChatAgent(
     @session_manager.setter
     def session_manager(self, value: SessionManager) -> None:
         self._session_manager = value
+
+    def _ensure_tool_loader_reset(self) -> None:
+        """Bootstrap a session for a just-created agent, if none exists yet.
+
+        Hoisted from three call sites that duplicated this exact block:
+        ``gaia_agent_chat.app`` ``main()``, and the two ``gaia chat`` entry
+        points in ``src/gaia/cli.py``. Guarded on ``not self.current_session``
+        — every "start of a run" entry point calls this so a freshly
+        constructed agent always has a session before its first turn.
+        Resets the dynamic tool loader's per-session state for the new
+        session; never raises (the loader is optional).
+
+        NOT used by ``app.py``'s interactive ``/reset`` command — that is a
+        different operation (save + new session + clear history + reset
+        loader, not just a bootstrap-if-missing), and it needs to keep
+        touching ``self.tool_loader`` directly so a caller driving
+        ``interactive_mode`` with a fully-mocked agent can still observe the
+        swallowed exception at that specific call site.
+        """
+        if self.current_session:
+            return
+        self.current_session = self.session_manager.create_session()
+        try:
+            if hasattr(self, "tool_loader"):
+                self.tool_loader.reset_session()
+        except Exception as e:
+            logger.debug("Tool loader session reset skipped: %s", e)
+        logger.debug("Created new session: %s", self.current_session.session_id)
 
     # ── dynamic tool loader (#1449) ───────────────────────────────────────
 
@@ -1632,8 +1664,18 @@ No documents are currently indexed.
                             "status": "success",
                             "message": f"Notification sent via Windows fallback: {title}",
                         }
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        # Surface the REAL failure — the generic "plyer not
+                        # installed" message below is only accurate when
+                        # plyer truly isn't installed, not when this
+                        # fallback itself errored for an unrelated reason.
+                        logger.debug(
+                            "Windows PowerShell notification fallback failed: %s", e
+                        )
+                        return {
+                            "status": "error",
+                            "error": f"Notification failed: {e}",
+                        }
                 return {
                     "status": "error",
                     "error": "plyer not installed. Run: pip install plyer",
@@ -1668,15 +1710,17 @@ No documents are currently indexed.
                                     "visible": win.is_visible(),
                                 }
                             )
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            # DEBUG only — window titles can carry sensitive
+                            # text (document names, email subjects).
+                            logger.debug("Skipping unreadable window: %s", e)
                     return {
                         "status": "success",
                         "windows": windows,
                         "count": len(windows),
                     }
-                except ImportError:
-                    pass
+                except ImportError as e:
+                    logger.debug("pywinauto not available: %s", e)
                 # Windows fallback: tasklist via subprocess
                 try:
                     import subprocess
@@ -1736,8 +1780,8 @@ No documents are currently indexed.
                                 "(Mission Control equivalent)"
                             ),
                         }
-                except (FileNotFoundError, subprocess.TimeoutExpired):
-                    pass
+                except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+                    logger.debug("osascript window listing unavailable: %s", e)
                 return {
                     "status": "error",
                     "error": (
@@ -1772,8 +1816,8 @@ No documents are currently indexed.
                             "windows": windows,
                             "count": len(windows),
                         }
-                except (FileNotFoundError, subprocess.TimeoutExpired):
-                    pass
+                except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+                    logger.debug("wmctrl window listing unavailable: %s", e)
                 return {
                     "status": "error",
                     "error": "Window listing not available. Install pywinauto (Windows) or wmctrl (Linux).",

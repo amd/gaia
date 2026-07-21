@@ -777,16 +777,25 @@ async def async_main(action, **kwargs):
             # Create Chat Agent with configuration
             agent = ChatAgent(config)
 
-            # Create initial session if not loading one
+            # Create initial session if not loading one. ``_ensure_tool_loader_reset``
+            # is a ChatAgent method (#2323); guard with hasattr since cli.py (core)
+            # and gaia-agent-chat (an independently-versioned hub wheel) can drift —
+            # an older installed wheel won't have it yet. It logs its own
+            # "Created new session" line, so the fallback branch below does too
+            # (for parity), but the two are not both reachable in one call.
             if not agent.current_session:
-                agent.current_session = agent.session_manager.create_session()
-                # Reset tool loader session state on new session
-                try:
-                    if hasattr(agent, "tool_loader"):
-                        agent.tool_loader.reset_session()
-                except Exception:
-                    pass
-                log.debug(f"Created new session: {agent.current_session.session_id}")
+                if hasattr(agent, "_ensure_tool_loader_reset"):
+                    agent._ensure_tool_loader_reset()
+                else:
+                    agent.current_session = agent.session_manager.create_session()
+                    try:
+                        if hasattr(agent, "tool_loader"):
+                            agent.tool_loader.reset_session()
+                    except Exception as e:
+                        log.debug("Tool loader session reset skipped: %s", e)
+                    log.debug(
+                        f"Created new session: {agent.current_session.session_id}"
+                    )
 
             # List tools if requested
             if kwargs.get("list_tools", False):
@@ -1054,14 +1063,19 @@ def _launch_interactive_cli(log=None):
         )
         agent = ChatAgent(config)
 
+        # ``_ensure_tool_loader_reset`` is a ChatAgent method (#2323); guard with
+        # hasattr since cli.py (core) and gaia-agent-chat (an independently
+        # versioned hub wheel) can drift — an older installed wheel won't have it.
         if not agent.current_session:
-            agent.current_session = agent.session_manager.create_session()
-            # Reset tool loader session state on new session
-            try:
-                if hasattr(agent, "tool_loader"):
-                    agent.tool_loader.reset_session()
-            except Exception:
-                pass
+            if hasattr(agent, "_ensure_tool_loader_reset"):
+                agent._ensure_tool_loader_reset()
+            else:
+                agent.current_session = agent.session_manager.create_session()
+                try:
+                    if hasattr(agent, "tool_loader"):
+                        agent.tool_loader.reset_session()
+                except Exception as e:
+                    log.debug("Tool loader session reset skipped: %s", e)
 
         interactive_mode(agent)
     except KeyboardInterrupt:
