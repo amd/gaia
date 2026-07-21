@@ -6940,7 +6940,7 @@ def handle_agent_command(args):
         sys.exit(1)
 
 
-def handle_agent_list(args):
+def handle_agent_list(_args):
     """List installed agents and agents available from the Agent Hub.
 
     Read-only discovery for ``gaia agent install`` — degrades to an
