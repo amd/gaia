@@ -112,9 +112,8 @@ class GoogleOAuthProvider:
                     "https://www.googleapis.com/auth/gmail.send "
                     "https://www.googleapis.com/auth/calendar.events "
                     'https://www.googleapis.com/auth/calendar.readonly"\n'
-                    "    gaia connectors connect google --scopes $SCOPES\n"
-                    "    gaia connectors grants grant google installed:email "
-                    "--scopes $SCOPES"
+                    "    gaia connectors connect google --scopes $SCOPES "
+                    "--grant-agent installed:email"
                 ),
                 docs="https://amd-gaia.ai/docs/connectors/google",
             )

@@ -131,12 +131,10 @@ class TestRegistry:
         assert "Desktop app" in msg
         # The exact CLI commands (self-documenting, no UI needed).
         assert "gaia connectors configure google --client-id" in msg
-        # connect MUST authorize scopes, and the grant must match (#2347).
+        # connect authorizes scopes and grants the agent in one flow (#2347).
         assert "gaia connectors connect google --scopes" in msg
-        assert "gaia connectors grants grant google" in msg
-        assert "SAME scopes on connect and grant" in msg
+        assert "--grant-agent installed:email" in msg
         # Concrete, copy-paste example with the email agent's FULL scope set.
-        assert "installed:email" in msg
         assert "gmail.modify" in msg
         assert "gmail.send" in msg
         assert "calendar.events" in msg

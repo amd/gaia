@@ -63,10 +63,9 @@ class OAuthClientNotConfiguredError(ConfigurationError):
         docs: str,
         example: str | None,
     ) -> str:
-        # A connection is authorized with a scope set; each agent must ALSO be
-        # granted those same scopes. Getting the scopes to match on both is the
-        # #1 way this setup goes wrong (#2347), so the frame spells it out and
-        # the per-provider example is copy-paste-ready with the real scopes.
+        # Registering the client, authorizing scopes, and granting the agent is
+        # two commands: `--grant-agent` folds the grant into `connect` so the
+        # scopes can never drift (the mismatch was the #1 setup failure, #2347).
         example_block = f"{example}\n" if example else ""
         env_prefix = f"GAIA_{pid.upper()}"
         return (
@@ -74,12 +73,11 @@ class OAuthClientNotConfiguredError(ConfigurationError):
             f"sign-in flow. GAIA ships no OAuth credentials — create your own "
             f"client once (free), then register it with GAIA:\n"
             f"{console_steps}\n"
-            f"Then register the client, sign in, and grant the agent — no Agent "
-            f"UI required (use the SAME scopes on connect and grant):\n"
+            f"Then register the client and sign in — no Agent UI required:\n"
             f"  gaia connectors configure {pid} --client-id <ID> "
             f"--client-secret <SECRET>\n"
-            f"  gaia connectors connect {pid} --scopes <scope> ...\n"
-            f"  gaia connectors grants grant {pid} <agent-id> --scopes <scope> ...\n"
+            f"  gaia connectors connect {pid} --scopes <scope> ... "
+            f"--grant-agent <agent-id>\n"
             f"{example_block}"
             f"(Power users / CI can instead set {env_prefix}_CLIENT_ID and "
             f"{env_prefix}_CLIENT_SECRET in the environment before launching "

@@ -112,18 +112,23 @@ running Lemonade server). The scopes MUST match on `connect` and `grants grant`:
 
 ```bash
 # Create a Google Cloud "Desktop app" OAuth client first (Gmail API enabled),
-# then register it, authorize the scopes, and grant them to the email agent.
+# then register it and connect. --grant-agent folds the agent grant into the
+# same flow, so the scopes can't drift between connect and grant.
 gaia connectors configure google --client-id <ID> --client-secret <SECRET>
 
 SCOPES="https://www.googleapis.com/auth/gmail.modify \
 https://www.googleapis.com/auth/gmail.send \
 https://www.googleapis.com/auth/calendar.events \
 https://www.googleapis.com/auth/calendar.readonly"
-gaia connectors connect google --scopes $SCOPES        # opens a browser
-gaia connectors grants grant google installed:email --scopes $SCOPES
+gaia connectors connect google --scopes $SCOPES --grant-agent installed:email
 
 gaia email -q "Triage my inbox"
 ```
+
+> Headless note: `connect` completes via a callback to `127.0.0.1` on the box
+> running GAIA. Open the printed URL in a browser on that box, or forward the
+> callback port over SSH — a browser on another machine can't reach the
+> loopback and the flow times out.
 
 > If you run `gaia email` before configuring Google, the error prints these exact
 > steps (the connector CLI is self-documenting) — no need to look them up.

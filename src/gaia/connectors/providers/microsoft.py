@@ -128,9 +128,8 @@ class MicrosoftOAuthProvider:
                     '    SCOPES="https://graph.microsoft.com/Mail.ReadWrite '
                     "https://graph.microsoft.com/Mail.Send "
                     'https://graph.microsoft.com/Calendars.ReadWrite"\n'
-                    "    gaia connectors connect microsoft --scopes $SCOPES\n"
-                    "    gaia connectors grants grant microsoft installed:email "
-                    "--scopes $SCOPES"
+                    "    gaia connectors connect microsoft --scopes $SCOPES "
+                    "--grant-agent installed:email"
                 ),
                 docs="https://amd-gaia.ai/docs/connectors/microsoft",
             )

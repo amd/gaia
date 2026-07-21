@@ -76,6 +76,16 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         nargs="+",
         help="OAuth scopes to request (connector-specific)",
     )
+    p_conn.add_argument(
+        "--grant-agent",
+        dest="grant_agent",
+        help=(
+            "Also grant the requested --scopes to this namespaced agent id "
+            "(e.g. 'installed:email') in the same flow — one command instead of a "
+            "separate `grants grant`, and the scopes always match. Requires "
+            "--scopes."
+        ),
+    )
 
     # configure (generic dispatcher + OAuth-client convenience flags)
     p_cfg = sub.add_parser(
@@ -304,18 +314,39 @@ def _handle_list(args: argparse.Namespace) -> int:
 def _handle_connect(args: argparse.Namespace) -> int:
     from gaia.connectors.api import complete_authorization, start_authorization
 
+    grant_agent = getattr(args, "grant_agent", None)
+    scopes = args.scopes or []
+    if grant_agent and not scopes:
+        sys.stderr.write(
+            "gaia connectors connect: --grant-agent requires --scopes (there is "
+            "nothing to grant without them).\n"
+        )
+        return 2
+    # One-flow connect + grant: authorize the scopes AND grant them to the agent
+    # so the two can never drift (the Agent UI does this via the same path).
+    grant_agents = {grant_agent: list(scopes)} if grant_agent else None
+
     async def _run() -> str:
-        info = await start_authorization(args.connector_id, scopes=args.scopes or [])
+        info = await start_authorization(
+            args.connector_id, scopes=scopes, grant_agents=grant_agents
+        )
         sys.stdout.write(
             f"Open this URL to authorize {args.connector_id}:\n"
             f"  {info['authorization_url']}\n"
+            "Sign-in completes via a callback to 127.0.0.1 on THIS machine. On a "
+            "remote/headless box, open the URL in a browser here, or forward the "
+            "callback port over SSH — a browser on another machine cannot reach "
+            "this loopback and the flow will time out.\n"
         )
         sys.stdout.flush()
         result = await complete_authorization(info["flow_id"])
         return result.get("account_email") or "<unknown>"
 
     email = asyncio.run(_run())
-    sys.stdout.write(f"Connected as {email}\n")
+    msg = f"Connected as {email}"
+    if grant_agent:
+        msg += f"; granted {args.connector_id} → {grant_agent}: {', '.join(scopes)}"
+    sys.stdout.write(msg + "\n")
     return 0
 
 

@@ -193,19 +193,17 @@ class TestOAuthClientNotConfiguredError:
         assert "https://console.example" in s  # console setup steps
         # Exact CLI commands, spec-driven off provider_id.
         assert "gaia connectors configure google --client-id" in s
-        # connect MUST authorize scopes (the #2347 correctness gap) ...
+        # connect authorizes scopes AND grants the agent in one flow (#2347):
+        # --grant-agent folds in the grant so scopes can't drift.
         assert "gaia connectors connect google --scopes" in s
-        # ... and the grant must use the SAME scopes.
-        assert "gaia connectors grants grant google" in s
-        assert "SAME scopes on connect and grant" in s
+        assert "--grant-agent <agent-id>" in s
         assert "amd-gaia.ai/docs/connectors/google" in s
         # UI path named too.
         assert "Settings -> Connections -> Google" in s
 
     def test_example_block_is_optional(self):
         # Omitting the example drops the copy-paste block but keeps the generic
-        # command template (still names --scopes on connect).
+        # command template (connect --scopes ... --grant-agent).
         s = str(self._err(example=None))
         assert "For the email agent" not in s
-        assert "gaia connectors connect google --scopes" in s
-        assert "gaia connectors grants grant google <agent-id>" in s
+        assert "gaia connectors connect google --scopes <scope> ... --grant-agent" in s
