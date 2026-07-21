@@ -1497,6 +1497,10 @@ def test_install_real_wheel_lands_in_site_packages_and_is_importable(tmp_path):
             text=True,
         )
 
+    # This test proves the wheel-artifact install path lands real files
+    # (#2358 item 6) -- it isn't chartered to prove the separate active-env
+    # `.pth` mechanism, so redirect that target to an isolated scratch dir
+    # rather than writing into this real dev venv's site-packages.
     result = install(
         agent_id,
         manifest=manifest,
@@ -1504,6 +1508,7 @@ def test_install_real_wheel_lands_in_site_packages_and_is_importable(tmp_path):
         fetcher=fetcher,
         run_pip=real_run_pip,
         install_root=tmp_path,
+        active_env_site_packages=tmp_path / "_fake_active_env_site_packages",
     )
 
     site_packages = tmp_path / agent_id / "site-packages"

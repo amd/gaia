@@ -106,6 +106,12 @@ def test_hub_installed_wheel_agent_importable_in_fresh_process(tmp_path, monkeyp
     )
 
     install_root = tmp_home / ".gaia" / "agents"
+    # This test proves the registry.discover() sys.path-priming mechanism
+    # (#2358 mechanism 1), not the separate active-env `.pth` mechanism
+    # (mechanism 2, covered by test_chat_hub_wheel_journey.py) -- redirect
+    # the `.pth` target to an isolated scratch dir so this test never writes
+    # into the real dev venv's site-packages.
+    fake_active_env = tmp_path / "fake-active-env-site-packages"
     result = hub_installer.install(
         FIXTURE_AGENT_ID,
         manifest=manifest,
@@ -113,6 +119,7 @@ def test_hub_installed_wheel_agent_importable_in_fresh_process(tmp_path, monkeyp
         fetcher=fetcher,
         run_pip=_real_pip_run_pip(sys.executable),
         install_root=install_root,
+        active_env_site_packages=fake_active_env,
         # Deliberately NOT passing registry= -- this test is about proving
         # the cross-process gap, not papering over it with the in-process
         # hot-register path installer.install() also supports.

@@ -239,33 +239,79 @@ def _fake_lemonade_health_server():
         thread.join(timeout=5)
 
 
-def _gaia_executable() -> str:
-    """Resolve the `gaia` console script next to the active interpreter --
-    the same venv `.venv-wt/bin/python` runs from has `.venv-wt/bin/gaia`,
-    guaranteed present for any editable/real install (unlike relying on
-    inherited shell PATH, which pytest's own invocation may not carry)."""
-    from pathlib import Path
+def _build_throwaway_venv(venv_dir) -> str:
+    """Build a standalone, disposable venv with core ``amd-gaia`` editable-
+    installed, and return its own ``purelib`` (site-packages) directory.
 
+    This is the "active environment" mechanism 2 (#2358's active-env `.pth`
+    priming) actually needs to prove itself against: the mechanism writes a
+    ``.pth`` file into a specific interpreter's own site-packages so THAT
+    interpreter's later, unrelated invocations (the `gaia chat` subprocess
+    below) pick it up automatically at startup. The pytest process's own
+    venv (`.venv-wt`) is NOT an acceptable stand-in -- writing there would
+    permanently pollute this repo's real dev venv with a `.pth` entry
+    pointing at a `tmp_path` directory that gets deleted the moment this
+    test tears down. A disposable venv gets the isolation for free: it (and
+    its `.pth` file) is deleted along with the rest of `tmp_path`.
+
+    A NESTED venv's ``--system-site-packages`` inherits from the ORIGINAL
+    base Python install, not from `.venv-wt` (verified empirically), so
+    there is no cheap way to "borrow" `.venv-wt`'s already-installed
+    packages -- this does a real (but core-only, no `[dev,rag]` extras)
+    editable install. With a warm local pip cache this takes well under a
+    minute; this test is already marked ``@pytest.mark.integration`` for
+    exactly this kind of cost.
+    """
+    import subprocess as _subprocess
+    from pathlib import Path as _Path
+
+    repo_root = _Path(__file__).resolve().parents[2]
+    _subprocess.run(
+        [sys.executable, "-m", "venv", str(venv_dir)], check=True, timeout=120
+    )
+    bin_dir = venv_dir / ("Scripts" if sys.platform == "win32" else "bin")
+    venv_python = str(bin_dir / ("python.exe" if sys.platform == "win32" else "python"))
+    _subprocess.run(
+        [venv_python, "-m", "pip", "install", "-q", "-e", str(repo_root)],
+        check=True,
+        timeout=600,
+    )
+    purelib = _subprocess.run(
+        [venv_python, "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    ).stdout.strip()
+    return purelib
+
+
+def _gaia_executable(venv_dir) -> str:
+    """Resolve the `gaia` console script inside the throwaway venv."""
     suffix = ".exe" if sys.platform == "win32" else ""
-    return str(Path(sys.executable).parent / f"gaia{suffix}")
+    bin_name = "Scripts" if sys.platform == "win32" else "bin"
+    return str(venv_dir / bin_name / f"gaia{suffix}")
 
 
-def _minimal_path_env() -> str:
+def _minimal_path_env(venv_dir) -> str:
     """A PATH with `node`/`npm` deliberately excluded.
 
     `gaia init` unconditionally attempts to rebuild the Agent UI frontend in
     a dev/source checkout (`_is_dev_install`, init_command.py:507) when
-    `apps/webui/dist` doesn't exist yet -- true for a fresh worktree. If
+    `apps/webui/dist` doesn't exist yet -- true for a fresh worktree (the
+    throwaway venv's editable install points at the SAME repo checkout). If
     node/npm ARE on PATH, `ensure_webui_built` (gaia/ui/build.py) will
     happily kick off a REAL `npm install && npm run build`, which is slow,
     unrelated to this test, and not hermetic. Stripping node/npm from PATH
     makes that gate no-op cleanly (it already handles "node not found" as a
-    graceful non-failure, gaia/ui/build.py:76-80) -- so keep the venv's own
-    bin dir (for `gaia`/`python`) plus basic system dirs, nothing else.
+    graceful non-failure, gaia/ui/build.py:76-80) -- so keep the throwaway
+    venv's own bin dir (for `gaia`/`python`) plus basic system dirs, nothing
+    else.
     """
     from pathlib import Path
 
-    venv_bin = str(Path(sys.executable).parent)
+    bin_name = "Scripts" if sys.platform == "win32" else "bin"
+    venv_bin = str(Path(venv_dir) / bin_name)
     if sys.platform == "win32":
         return venv_bin
     return os.pathsep.join([venv_bin, "/usr/bin", "/bin", "/usr/sbin", "/sbin"])
@@ -276,6 +322,14 @@ def test_clean_core_only_init_then_chat_journey(tmp_path):
     tmp_home = tmp_path / "home"
     tmp_home.mkdir()
     install_root = tmp_home / ".gaia" / "agents"
+
+    # A dedicated, disposable venv stands in for "the real user's active
+    # environment" -- see _build_throwaway_venv's docstring for why this
+    # can't be the pytest process's own `.venv-wt`.
+    from pathlib import Path as _Path
+
+    throwaway_venv = tmp_path / "throwaway-venv"
+    throwaway_purelib = _Path(_build_throwaway_venv(throwaway_venv))
 
     # --- 1. Install a REAL fixture wheel, standing in for chat (#2358) ---
     wheel_bytes = _build_chat_fixture_wheel()
@@ -291,6 +345,11 @@ def test_clean_core_only_init_then_chat_journey(tmp_path):
         fetcher=fetcher,
         run_pip=_real_pip_run_pip(sys.executable),
         install_root=install_root,
+        # The throwaway venv's OWN site-packages -- this is the mechanism-2
+        # `.pth` write under test; a fresh `gaia chat` subprocess launched
+        # from that same venv (below) picks it up at interpreter startup
+        # with zero other wiring.
+        active_env_site_packages=throwaway_purelib,
     )
     site_packages = install_root / AGENT_ID / "site-packages"
     assert (site_packages / "gaia_agent_chat" / "agent.py").exists(), (
@@ -301,8 +360,12 @@ def test_clean_core_only_init_then_chat_journey(tmp_path):
         result.hot_registered is False
     )  # no registry= passed -- fresh-process proof only
 
-    gaia_exe = _gaia_executable()
-    base_env = {**os.environ, "HOME": str(tmp_home), "PATH": _minimal_path_env()}
+    gaia_exe = _gaia_executable(throwaway_venv)
+    base_env = {
+        **os.environ,
+        "HOME": str(tmp_home),
+        "PATH": _minimal_path_env(throwaway_venv),
+    }
 
     # --- 2. `gaia init --profile chat` as a REAL subprocess ---
     with _fake_lemonade_health_server() as lemonade_base_url:

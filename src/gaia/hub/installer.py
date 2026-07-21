@@ -39,6 +39,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import sysconfig
 import tarfile
 import tempfile
 import threading
@@ -65,6 +66,20 @@ BACKUP_DIRNAME = ".backup"
 
 # Where Python wheels get installed (``uv pip install --target``).
 SITE_PACKAGES_DIRNAME = "site-packages"
+
+# ``.pth`` file written into the ACTIVE environment's own site-packages
+# (never the isolated per-agent one above) at wheel install time. A `pip
+# install --target` install is only importable via an explicit sys.path
+# mutation in the installing process (see _hot_register) -- a later, unrelated
+# process using the SAME interpreter/venv (e.g. the next `gaia chat`
+# invocation, which imports `gaia_agent_chat` directly rather than through
+# AgentRegistry) would otherwise never see it. Python's `site` module reads
+# every `.pth` file in site-packages at interpreter startup and appends each
+# line to sys.path, so one shared file with one absolute path per installed
+# wheel agent closes that gap with no code change anywhere else (#2358). This
+# is the same mechanism `pip install -e` uses for editable installs -- a
+# pointer file, not core-bundling.
+ACTIVE_ENV_PTH_FILENAME = "gaia-hub-agents.pth"
 
 # ``artifact_kind`` values recorded in the sentinel. A sentinel written before
 # this field existed reads as "wheel" (the only kind installed pre-#2084).
@@ -697,6 +712,127 @@ def _snapshot_backup(agent_id: str, install_root: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Active-environment .pth priming (#2358)
+#
+# _hot_register (below) makes a freshly-installed wheel importable in the
+# CALLING process only, via an in-memory sys.path mutation. Some callers
+# never construct an AgentRegistry at all -- e.g. `gaia chat`'s CLI handler
+# does a bare `from gaia_agent_chat.agent import ChatAgent` (cli.py) -- so a
+# later, unrelated `gaia` invocation using the SAME interpreter/venv would
+# still fail to import a wheel agent installed by an earlier `gaia init`.
+# Writing one absolute site-packages path per installed wheel agent into a
+# shared `.pth` file in the ACTIVE environment's own site-packages closes
+# that gap generically, with no call-site change required anywhere: Python's
+# `site` module reads every `.pth` file at interpreter startup and appends
+# each line to sys.path before user code runs.
+# ---------------------------------------------------------------------------
+
+
+def _default_active_env_site_packages() -> Path:
+    """The current interpreter's own (active-environment) site-packages dir.
+
+    This is deliberately NOT the isolated per-agent ``site-packages`` under
+    ``install_root/<id>/`` -- it's the ambient environment's own
+    (``sysconfig``'s ``purelib`` scheme path), the one Python's ``site``
+    module scans for ``.pth`` files at interpreter startup.
+    """
+    return Path(sysconfig.get_path("purelib"))
+
+
+def _read_pth_lines(pth_path: Path) -> List[str]:
+    if not pth_path.exists():
+        return []
+    return [
+        line
+        for line in pth_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def _write_pth_lines(pth_path: Path, lines: List[str]) -> None:
+    """Write *lines* to *pth_path* atomically (temp file + ``os.replace``),
+    so a crash mid-write never corrupts a ``.pth`` file other packages also
+    rely on. Deletes the file entirely when *lines* is empty."""
+    if not lines:
+        pth_path.unlink(missing_ok=True)
+        return
+    pth_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_name = tempfile.mkstemp(
+        dir=str(pth_path.parent), prefix=".gaia-hub-pth-"
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        os.replace(str(tmp_path), str(pth_path))
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
+def _add_wheel_agent_to_active_env_path(
+    site_packages: Path, active_env_site_packages: Optional[Path] = None
+) -> None:
+    """Add *site_packages* to the active environment's ``.pth`` file (idempotent).
+
+    Raises:
+        InstallError: If the ``.pth`` file cannot be written (permissions,
+            missing directory, etc.) -- a wheel agent that isn't importable
+            outside the installing process is a real, actionable failure, not
+            one to silently swallow (CLAUDE.md fail-loudly).
+    """
+    target_dir = active_env_site_packages or _default_active_env_site_packages()
+    pth_path = target_dir / ACTIVE_ENV_PTH_FILENAME
+    line = str(site_packages)
+    try:
+        lines = _read_pth_lines(pth_path)
+        if line in lines:
+            return
+        lines.append(line)
+        _write_pth_lines(pth_path, lines)
+        logger.info(
+            "installer: added %s to %s (wheel agent importable in any new "
+            "process using this environment)",
+            line,
+            pth_path,
+        )
+    except OSError as exc:
+        raise InstallError(
+            f"Could not write {pth_path} to make the newly installed wheel "
+            f"agent at {site_packages} importable outside this process: "
+            f"{exc}. Check write permissions on {target_dir}."
+        ) from exc
+
+
+def _remove_wheel_agent_from_active_env_path(
+    site_packages: Path, active_env_site_packages: Optional[Path] = None
+) -> None:
+    """Remove *site_packages* from the active environment's ``.pth`` file.
+
+    No-op if the file or the line is already absent (uninstall of an agent
+    whose install predates this mechanism, or a repeated uninstall).
+
+    Raises:
+        InstallError: If the ``.pth`` file cannot be rewritten/removed.
+    """
+    target_dir = active_env_site_packages or _default_active_env_site_packages()
+    pth_path = target_dir / ACTIVE_ENV_PTH_FILENAME
+    line = str(site_packages)
+    try:
+        lines = _read_pth_lines(pth_path)
+        if line not in lines:
+            return
+        remaining = [entry for entry in lines if entry != line]
+        _write_pth_lines(pth_path, remaining)
+        logger.info("installer: removed %s from %s", line, pth_path)
+    except OSError as exc:
+        raise InstallError(
+            f"Could not clean up {pth_path} after removing the wheel agent "
+            f"at {site_packages}: {exc}."
+        ) from exc
+
+
+# ---------------------------------------------------------------------------
 # Hot-register
 # ---------------------------------------------------------------------------
 
@@ -810,6 +946,7 @@ def install(
     skip_compatibility_check: bool = False,
     trust_native: bool = False,
     platform_key: Optional[str] = None,
+    active_env_site_packages: Optional[Path] = None,
 ) -> InstallResult:
     """Download, verify, and install an agent from the hub.
 
@@ -827,6 +964,11 @@ def install(
         platform_key: Artifact-filename platform key (``win32-x64`` etc.) used
             to select among ``versions[v].artifacts[]``; defaults to the real
             host's key (injectable for tests).
+        active_env_site_packages: Where to write the ``.pth`` entry that makes
+            a wheel install importable by ANY later process using this same
+            interpreter/venv (not just the calling process); defaults to this
+            interpreter's own site-packages (``sysconfig``'s ``purelib``).
+            Injectable so tests don't write into the real active environment.
 
     Raises:
         InstallInProgressError, ChecksumError, DiskSpaceError,
@@ -946,6 +1088,16 @@ def install(
                     artifact_kind=artifact_kind,
                     executable=generic_name,
                 )
+                # Prime the ACTIVE environment (not just this process) so a
+                # later, unrelated `gaia` invocation using the same
+                # interpreter/venv can import this wheel too (#2358) — closes
+                # the gap for call sites that never touch AgentRegistry (e.g.
+                # `gaia chat`'s hardcoded `import gaia_agent_chat`).
+                if artifact_kind == ARTIFACT_KIND_WHEEL:
+                    _add_wheel_agent_to_active_env_path(
+                        install_dir / SITE_PACKAGES_DIRNAME,
+                        active_env_site_packages,
+                    )
             except Exception:
                 # Install failed mid-write — restore the backup if we made one so
                 # the user is left with a working previous version, not a stub.
@@ -1058,8 +1210,14 @@ def uninstall(
     *,
     install_root: Optional[Path] = None,
     registry: Any = None,
+    active_env_site_packages: Optional[Path] = None,
 ) -> None:
     """Remove a hub-installed agent. Refuses builtins.
+
+    Args:
+        active_env_site_packages: Where the ``.pth`` entry added at install
+            time lives; defaults to this interpreter's own site-packages.
+            Injectable so tests don't touch the real active environment.
 
     Raises:
         InstallError: If *agent_id* is a reserved builtin.
@@ -1071,7 +1229,8 @@ def uninstall(
         )
     root = install_root or default_install_root()
     install_dir = agent_install_dir(agent_id, root)
-    if read_sentinel(agent_id, root) is None:
+    installed = read_sentinel(agent_id, root)
+    if installed is None:
         raise NotInstalledError(
             f"'{agent_id}' is not installed (no {SENTINEL_NAME} at {install_dir})."
         )
@@ -1082,6 +1241,10 @@ def uninstall(
             f"Could not remove '{agent_id}': {exc}. It appears to be running — "
             f"close it and retry."
         ) from exc
+    if installed.artifact_kind == ARTIFACT_KIND_WHEEL:
+        _remove_wheel_agent_from_active_env_path(
+            install_dir / SITE_PACKAGES_DIRNAME, active_env_site_packages
+        )
     _discard_backup(agent_id, root)
     if registry is not None:
         _deregister(agent_id, registry)
