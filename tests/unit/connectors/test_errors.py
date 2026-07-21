@@ -21,6 +21,7 @@ from gaia.connectors.errors import (
     ConsentDeniedError,
     FlowInProgressError,
     FlowTimeoutError,
+    OAuthClientNotConfiguredError,
     ScopeMismatchError,
 )
 
@@ -161,3 +162,46 @@ class TestConfigurationError:
         s = str(err)
         assert "GAIA_GOOGLE_CLIENT_ID" in s
         assert "docs/runbooks/google-oauth-client.md" in s
+
+
+class TestOAuthClientNotConfiguredError:
+    """The self-documenting missing-client error (#2347): a headless user must
+    be able to unblock themselves from the message alone."""
+
+    def _err(self, **overrides):
+        kwargs = dict(
+            provider_id="google",
+            provider_label="Google",
+            console_steps="  1. Do a thing at https://console.example",
+            docs="https://amd-gaia.ai/docs/connectors/google",
+            example_grant="installed:email --scopes https://scope/x",
+        )
+        kwargs.update(overrides)
+        return OAuthClientNotConfiguredError(kwargs.pop("provider_id"), **kwargs)
+
+    def test_is_a_configuration_error(self):
+        # Subclass so the CLI (exit 3) and the UI router (503) keep handling it.
+        err = self._err()
+        assert isinstance(err, ConfigurationError)
+        assert isinstance(err, ConnectorsError)
+        assert err.provider_id == "google"
+        assert err.provider_label == "Google"
+
+    def test_message_is_self_documenting(self):
+        s = str(self._err())
+        assert "not configured" in s
+        assert "https://console.example" in s  # console setup steps
+        # Exact CLI commands, spec-driven off provider_id.
+        assert "gaia connectors configure google --client-id" in s
+        assert "gaia connectors connect google" in s
+        assert "gaia connectors grants grant google" in s
+        assert "amd-gaia.ai/docs/connectors/google" in s
+        # UI path named too.
+        assert "Settings -> Connections -> Google" in s
+
+    def test_example_grant_is_optional(self):
+        # Omitting the example grant drops the "e.g." block but keeps the
+        # generic grant command.
+        s = str(self._err(example_grant=None))
+        assert "e.g. for the email agent" not in s
+        assert "gaia connectors grants grant google <agent-id>" in s

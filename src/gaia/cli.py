@@ -3002,6 +3002,14 @@ Examples:
         ),
     )
 
+    # Agent list command — show installed agents + what the Agent Hub offers, so
+    # `gaia agent install <id>` is discoverable (and the id referenced in install
+    # errors resolves to a real command).
+    agent_subparsers.add_parser(
+        "list",
+        help="List installed agents and agents available from the Agent Hub",
+    )
+
     # Connectors framework (issue #927, parent of #915) — manage OAuth +
     # MCP-server connectors + per-agent grants. The subparser tree lives in
     # gaia.connectors.cli to keep this file lean.
@@ -6914,7 +6922,7 @@ def handle_agent_command(args):
         print("❌ Error: No agent action specified")
         print(
             "Available actions: init, version, test, configure, health, status, "
-            "export, import, install"
+            "export, import, install, list"
         )
         print("Run 'gaia agent --help' for more information")
         sys.exit(1)
@@ -6925,9 +6933,53 @@ def handle_agent_command(args):
         handle_agent_import(args)
     elif args.agent_action == "install":
         handle_agent_install(args)
+    elif args.agent_action == "list":
+        handle_agent_list(args)
     else:
         print(f"❌ Unknown agent action: {args.agent_action}")
         sys.exit(1)
+
+
+def handle_agent_list(args):
+    """List installed agents and agents available from the Agent Hub.
+
+    Read-only discovery for ``gaia agent install`` — degrades to an
+    installed-only listing (with a loud note) if the hub catalog is unreachable,
+    never a silent empty result.
+    """
+    from gaia.hub import catalog, installer
+
+    installed = installer.list_installed()
+
+    available = []
+    offline = False
+    try:
+        result = catalog.load_index()
+        available = result.agents
+        offline = result.offline
+    except Exception as exc:  # noqa: BLE001 - CLI boundary: degrade loudly
+        print(f"⚠ Could not reach the Agent Hub catalog: {exc}", file=sys.stderr)
+
+    available_ids = {e.get("id") for e in available}
+    if available:
+        suffix = " (offline cache)" if offline else ""
+        print(f"Available from the Agent Hub{suffix}:")
+        for entry in sorted(available, key=lambda a: a.get("id", "")):
+            aid = entry.get("id", "?")
+            ver = entry.get("latest_version", "?")
+            mark = "  [installed]" if aid in installed else ""
+            print(f"  {aid:<24} {ver}{mark}")
+
+    extra = [aid for aid in sorted(installed) if aid not in available_ids]
+    if extra:
+        print("\nInstalled (not in the hub catalog):")
+        for aid in extra:
+            print(f"  {aid:<24} {installed[aid].version}")
+
+    if not available and not installed:
+        print("No agents installed, and the Agent Hub catalog is unavailable.")
+    else:
+        print("\nInstall one with: gaia agent install <id>")
 
 
 def handle_agent_install(args):
@@ -6961,6 +7013,10 @@ def handle_agent_install(args):
         sys.exit(1)
     except Exception as exc:  # noqa: BLE001 - CLI boundary: surface loudly, exit 1
         print(f"❌ Could not install '{agent_id}': {exc}", file=sys.stderr)
+        print(
+            "   If the id is wrong, run `gaia agent list` to see available agents.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     print(f"✅ Installed '{result.id}' v{result.version} to {result.path}")

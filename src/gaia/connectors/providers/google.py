@@ -28,7 +28,7 @@ import zlib
 from typing import Iterable, Sequence
 from urllib.parse import urlencode
 
-from gaia.connectors.errors import ConfigurationError
+from gaia.connectors.errors import OAuthClientNotConfiguredError
 
 # Plain-language descriptions for the AgentUI consent dialog (AC23). The
 # router and the CLI both surface this map; agents declare scope URLs in
@@ -90,13 +90,24 @@ class GoogleOAuthProvider:
             else stored.get("client_id") or os.environ.get("GAIA_GOOGLE_CLIENT_ID", "")
         )
         if not resolved_id:
-            raise ConfigurationError(
-                "Google OAuth client is not configured. Open Settings → "
-                "Connections → Google in the AgentUI and paste the Client ID "
-                "and Client Secret from your Google Cloud Console Desktop-app "
-                "OAuth client. (Power users may also set the "
-                "GAIA_GOOGLE_CLIENT_ID and GAIA_GOOGLE_CLIENT_SECRET env vars "
-                "before launching GAIA.) See docs/runbooks/google-oauth-client.md."
+            raise OAuthClientNotConfiguredError(
+                "google",
+                provider_label="Google",
+                console_steps=(
+                    "  1. Create or pick a project at "
+                    "https://console.cloud.google.com\n"
+                    "  2. Enable the Gmail API (and any other Google API you "
+                    "need) for that project\n"
+                    "  3. Configure the OAuth consent screen (External; add "
+                    "yourself as a test user)\n"
+                    "  4. Create an OAuth client ID of type 'Desktop app' — this "
+                    "gives you a Client ID and Client Secret"
+                ),
+                example_grant=(
+                    "installed:email "
+                    "--scopes https://www.googleapis.com/auth/gmail.modify"
+                ),
+                docs="https://amd-gaia.ai/docs/connectors/google",
             )
         self.client_id: str = resolved_id
         # CRC32 fingerprint for log correlation / tripwire comparison only.

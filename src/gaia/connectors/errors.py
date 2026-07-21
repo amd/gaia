@@ -26,6 +26,65 @@ class ConfigurationError(ConnectorsError):
     """Required configuration (env var, runbook entry) is missing."""
 
 
+class OAuthClientNotConfiguredError(ConfigurationError):
+    """An ``oauth_pkce`` connector has no OAuth *client* credentials configured.
+
+    GAIA ships no OAuth credentials — each user creates their own client once in
+    the provider's cloud console, then registers it. The message is
+    self-documenting for a headless CLI user (the console setup steps plus the
+    exact ``gaia connectors ...`` commands) and also names the Agent UI path, so
+    whoever hits it can unblock themselves without leaving the terminal. Inherits
+    :class:`ConfigurationError` so the CLI (exit 3) and the UI router (HTTP 503)
+    keep handling it unchanged.
+    """
+
+    def __init__(
+        self,
+        provider_id: str,
+        *,
+        provider_label: str,
+        console_steps: str,
+        docs: str,
+        example_grant: str | None = None,
+    ):
+        self.provider_id = provider_id
+        self.provider_label = provider_label
+        super().__init__(
+            self._build_message(
+                provider_id, provider_label, console_steps, docs, example_grant
+            )
+        )
+
+    @staticmethod
+    def _build_message(
+        pid: str,
+        label: str,
+        console_steps: str,
+        docs: str,
+        example_grant: str | None,
+    ) -> str:
+        example = ""
+        if example_grant:
+            example = (
+                f"      e.g. for the email agent:\n"
+                f"      gaia connectors grants grant {pid} {example_grant}\n"
+            )
+        return (
+            f"{label} OAuth client is not configured, so GAIA cannot start the "
+            f"sign-in flow. GAIA ships no OAuth credentials — create your own "
+            f"client once (free), then register it with GAIA:\n"
+            f"{console_steps}\n"
+            f"Then register the client and sign in — no Agent UI required:\n"
+            f"  gaia connectors configure {pid} --client-id <ID> "
+            f"--client-secret <SECRET>\n"
+            f"  gaia connectors connect {pid}\n"
+            f"  gaia connectors grants grant {pid} <agent-id> --scopes <scope> ...\n"
+            f"{example}"
+            f"In the Agent UI you can instead use Settings -> Connections -> "
+            f"{label}. Full walkthrough: {docs}"
+        )
+
+
 class AuthRequiredError(ConnectorsError):
     """
     A caller cannot use a connection right now and must take a specific action.

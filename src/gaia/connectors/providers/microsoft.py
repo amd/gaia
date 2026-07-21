@@ -35,7 +35,7 @@ import zlib
 from typing import Iterable, Sequence
 from urllib.parse import urlencode
 
-from gaia.connectors.errors import ConfigurationError
+from gaia.connectors.errors import OAuthClientNotConfiguredError
 
 # Personal-account tenant. Pinned in both endpoint URLs.
 _TENANT = "consumers"
@@ -106,16 +106,26 @@ class MicrosoftOAuthProvider:
             or os.environ.get("GAIA_MICROSOFT_CLIENT_ID", "")
         )
         if not resolved_id:
-            raise ConfigurationError(
-                "Microsoft OAuth client is not configured. Open Settings → "
-                "Connections → Microsoft in the AgentUI and paste the "
-                "Application (client) ID from your Azure App registration "
-                "(personal-accounts / 'consumers' audience, with a "
-                "http://localhost redirect URI). (Power users may also set the "
-                "GAIA_MICROSOFT_CLIENT_ID env var — and, only for a "
-                "confidential web-app registration, GAIA_MICROSOFT_CLIENT_SECRET "
-                "— before launching GAIA.) See "
-                "docs/runbooks/microsoft-oauth-client.md."
+            raise OAuthClientNotConfiguredError(
+                "microsoft",
+                provider_label="Microsoft",
+                console_steps=(
+                    "  1. Register an app at https://portal.azure.com -> "
+                    "Microsoft Entra ID -> App registrations\n"
+                    "  2. Set the supported account type to include personal "
+                    "accounts ('consumers'), and add a http://localhost redirect "
+                    "URI under Authentication -> Mobile & desktop applications\n"
+                    "  3. Add the Microsoft Graph delegated permissions you need "
+                    "(e.g. Mail.ReadWrite, Mail.Send)\n"
+                    "  4. Copy the Application (client) ID. Public desktop "
+                    "clients need no secret; a confidential registration also "
+                    "needs a client secret under Certificates & secrets"
+                ),
+                example_grant=(
+                    "installed:email "
+                    "--scopes https://graph.microsoft.com/Mail.ReadWrite"
+                ),
+                docs="https://amd-gaia.ai/docs/connectors/microsoft",
             )
         self.client_id: str = resolved_id
         # CRC32 fingerprint for log correlation / tripwire comparison only.
