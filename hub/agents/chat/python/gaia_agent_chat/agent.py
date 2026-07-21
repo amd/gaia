@@ -16,6 +16,7 @@ try:
 except ImportError:
     Observer = None
 
+from gaia_agent_chat.profiles import TOOL_GROUP_REGISTRARS, get_profile_spec
 from gaia_agent_chat.session import SessionManager
 from gaia_agent_chat.tool_bundles import DOC_BUNDLES, DOC_CORE_TOOLS
 
@@ -800,8 +801,9 @@ No documents are currently indexed.
         # hallucinates them or emits syntactically-valid tool calls that come
         # back as "unknown tool" errors (#495 review feedback from @itomek-amd).
         profile = getattr(self.config, "prompt_profile", "full")
+        spec = get_profile_spec(profile)
         filesystem_section = ""
-        if profile in ("file", "full") or getattr(
+        if "filesystem" in spec.capabilities or getattr(
             self.config, "enable_filesystem", False
         ):
             filesystem_section = """
@@ -818,7 +820,7 @@ No documents are currently indexed.
 """
 
         scratchpad_section = ""
-        if profile in ("data", "full") or getattr(
+        if "scratchpad" in spec.capabilities or getattr(
             self.config, "enable_scratchpad", False
         ):
             scratchpad_section = """
@@ -826,7 +828,9 @@ No documents are currently indexed.
 """
 
         browser_section = ""
-        if profile in ("web", "full") or getattr(self.config, "enable_browser", False):
+        if "browser" in spec.capabilities or getattr(
+            self.config, "enable_browser", False
+        ):
             browser_section = """
 **BROWSER TOOLS:** search_web (DuckDuckGo, no key), fetch_page (extract readable text/links/tables), download_file (save URL locally; can then index_document).
 """
@@ -892,73 +896,42 @@ No documents are currently indexed.
 **UNSUPPORTED:** Email, scheduling, cloud storage, file conversion, live collaboration, video/audio analysis — say not available and link https://github.com/amd/gaia/issues/new?template=feature_request.md . Web browsing IS supported via `search_web` / `fetch_page` / `download_file`. Image analysis IS supported via `analyze_image`.
 """
 
-        # Assemble prompt based on profile
-        profile = getattr(self.config, "prompt_profile", "full")
-
-        if profile == "chat":
-            # Minimal: personality only — but respect explicitly enabled tools.
-            extras = filesystem_section + scratchpad_section + browser_section
-            return base_prompt + extras
-
-        if profile == "doc":
-            # Document Q&A: RAG tools + hallucination prevention.
-            # Native-only escape-hatch menu (#1450): non-native models already
-            # self-recover via the free full-registry path and are the
-            # TTFT-sensitive case, so we don't tax them with the menu. Lives in
-            # this stable prefix (before the volatile tools tail) → no KV thrash.
-            load_tools_menu = ""
-            loader = getattr(self, "tool_loader", None)
-            if loader is not None and is_tool_calling_model(
-                getattr(self, "model_id", None)
-            ):
-                load_tools_menu = (
-                    "\n\n==== LOADABLE TOOL BUNDLES ====\n"
-                    "Your visible tools are trimmed to what this turn needs. If a "
-                    "capability you need is missing, call load_tools(bundle) with "
-                    "one of these names; its tools become available on your next "
-                    "step:\n" + loader.format_bundle_menu()
-                )
-            return (
-                base_prompt
-                + indexed_docs_section
-                + tool_rules
-                + discovery_rules
-                + discovery_rules_tail
-                + rag_query_rules
-                + load_tools_menu
+        # Native-only escape-hatch menu (#1450): non-native models already
+        # self-recover via the free full-registry path and are the
+        # TTFT-sensitive case, so we don't tax them with the menu. Lives in
+        # this stable prefix (before the volatile tools tail) → no KV thrash.
+        # Only ever non-empty for the "doc" profile — no other profile's
+        # ``prompt_blocks`` names "load_tools_menu", and ``tool_loader`` is
+        # only ever built for "doc" (``_maybe_build_tool_loader``).
+        load_tools_menu = ""
+        loader = getattr(self, "tool_loader", None)
+        if loader is not None and is_tool_calling_model(
+            getattr(self, "model_id", None)
+        ):
+            load_tools_menu = (
+                "\n\n==== LOADABLE TOOL BUNDLES ====\n"
+                "Your visible tools are trimmed to what this turn needs. If a "
+                "capability you need is missing, call load_tools(bundle) with "
+                "one of these names; its tools become available on your next "
+                "step:\n" + loader.format_bundle_menu()
             )
 
-        if profile == "file":
-            # File operations: file system + search + discovery
-            return (
-                base_prompt
-                + tool_rules
-                + discovery_rules
-                + filesystem_section
-                + discovery_rules_tail
-            )
-
-        if profile == "data":
-            # Data analysis: scratchpad + file tools
-            return base_prompt + tool_rules + scratchpad_section + data_file_rules
-
-        if profile == "web":
-            # Web research: browser tools
-            return base_prompt + browser_section
-
-        # "full" — all sections (backward-compatible default)
-        return (
-            base_prompt
-            + indexed_docs_section
-            + tool_rules
-            + discovery_rules
-            + filesystem_section
-            + scratchpad_section
-            + browser_section
-            + discovery_rules_tail
-            + rag_query_rules
-            + data_file_rules
-        )
+        # Assemble prompt from this profile's declared block keys (ProfileSpec,
+        # #2323) — replaces the old per-profile if/elif chain. Every profile's
+        # assembled prompt still starts with the universal ``base_prompt``.
+        blocks = {
+            "indexed_docs_section": indexed_docs_section,
+            "tool_rules": tool_rules,
+            "discovery_rules": discovery_rules,
+            "filesystem_section": filesystem_section,
+            "scratchpad_section": scratchpad_section,
+            "browser_section": browser_section,
+            "discovery_rules_tail": discovery_rules_tail,
+            "rag_query_rules": rag_query_rules,
+            "data_file_rules": data_file_rules,
+            "load_tools_menu": load_tools_menu,
+        }
+        return base_prompt + "".join(blocks[key] for key in spec.prompt_blocks)
 
     def _create_console(self):
         """Create console for chat agent."""
@@ -1179,9 +1152,10 @@ No documents are currently indexed.
         from gaia.agents.base.tools import tool
 
         profile = getattr(self.config, "prompt_profile", "full")
+        spec = get_profile_spec(profile)
 
         # "chat" profile: no tools — just personality/conversation
-        if profile == "chat":
+        if spec.early_return:
             # Minimal: only shell for system queries
             self.register_shell_tools()
             self._register_external_tools_conditional()
@@ -1191,31 +1165,10 @@ No documents are currently indexed.
         self.register_shell_tools()
         self.register_memory_tools()  # Persistent memory tools
 
-        if profile in ("doc", "full"):
-            self.register_rag_tools()
-            # Doc profile needs file search for smart discovery workflow
-            self.register_file_tools()
-            self.register_file_search_tools()
+        for _group_name in spec.tool_groups:
+            for _registrar_name in TOOL_GROUP_REGISTRARS[_group_name]:
+                getattr(self, _registrar_name)()
 
-        if profile in ("file", "full"):
-            self.register_file_tools()
-            self.register_filesystem_tools()
-            self.register_file_search_tools()
-            self.register_file_io_tools()
-
-        if profile in ("data", "full"):
-            self.register_scratchpad_tools()
-            if profile == "data":
-                # Data profile also needs file tools to find/read data files
-                self.register_file_tools()
-                self.register_file_search_tools()
-                self.register_file_io_tools()
-
-        if profile in ("web", "full"):
-            self.register_browser_tools()
-
-        if profile == "full":
-            self.register_screenshot_tools()
         self._register_external_tools_conditional()
         self._register_loop_control_tools()  # set_loop_state, request_user_input
 
@@ -1266,7 +1219,7 @@ No documents are currently indexed.
                 }
 
         # Inline list_files — only for profiles that need file operations
-        if profile in ("file", "data", "full"):
+        if spec.generic_file_ops:
 
             @tool
             def list_files(path: str = ".") -> dict:
@@ -1395,9 +1348,7 @@ No documents are currently indexed.
         # Only register web tools for profiles that should browse the internet.
         # Doc/file/data profiles should NOT have fetch_webpage to avoid confusing
         # the LLM into web-browsing when it should use RAG.
-        _web_profiles = ("web", "full")
-
-        if profile in _web_profiles:
+        if spec.web_tools:
 
             @tool
             def open_url(url: str) -> dict:
@@ -1843,7 +1794,7 @@ No documents are currently indexed.
         # in the same process do not leak in.  Exclusion replaces the old
         # _TOOL_REGISTRY.pop() pattern that corrupted the global dict.
         self._snapshot_tools()
-        if profile in ("file", "data", "full"):
+        if spec.generic_file_ops:
             _chat_exclude = {
                 "write_python_file",
                 "edit_python_file",
