@@ -146,7 +146,7 @@ def test_notify_desktop_windows_real_error_not_masked_as_plyer_missing(caplog):
         agent._register_tools()
         notify_desktop = agent._tools_registry["notify_desktop"]["function"]
 
-    caplog.set_level(logging.DEBUG)
+    caplog.set_level(logging.DEBUG, logger="gaia_agent_chat.agent")
     with (
         patch("platform.system", return_value="Windows"),
         patch("subprocess.Popen", side_effect=RuntimeError("ps blocked")),
@@ -182,7 +182,7 @@ def test_lite_agent_screenshot_registration_failure_is_logged(caplog):
     agent = ChatAgentLite.__new__(ChatAgentLite)
     agent.config = ChatAgentLiteConfig()
 
-    caplog.set_level(logging.DEBUG)
+    caplog.set_level(logging.DEBUG, logger="gaia_agent_chat.lite_agent")
     with patch.object(
         ChatAgentLite,
         "register_screenshot_tools",
@@ -210,7 +210,7 @@ def test_reset_command_tool_loader_failure_is_logged(caplog, monkeypatch):
     )
 
     monkeypatch.setattr("builtins.input", MagicMock(side_effect=["/reset", "/quit"]))
-    caplog.set_level(logging.DEBUG)
+    caplog.set_level(logging.DEBUG, logger="gaia_agent_chat.app")
     app_module.interactive_mode(mock_agent)
 
     assert "reset command tool loader boom" in caplog.text, (
@@ -235,7 +235,7 @@ def test_bootstrap_session_tool_loader_failure_is_logged(caplog, monkeypatch):
     )
 
     monkeypatch.setattr(sys, "argv", ["gaia-chat"])
-    caplog.set_level(logging.DEBUG)
+    caplog.set_level(logging.DEBUG, logger="gaia_agent_chat.app")
     with (
         patch.object(app_module, "ChatAgent", return_value=mock_agent),
         patch.object(app_module, "interactive_mode"),
@@ -261,7 +261,7 @@ def test_main_finally_stop_watching_failure_is_logged(caplog, monkeypatch):
     mock_agent.stop_watching.side_effect = RuntimeError("stop watching boom")
 
     monkeypatch.setattr(sys, "argv", ["gaia-chat"])
-    caplog.set_level(logging.DEBUG)
+    caplog.set_level(logging.DEBUG, logger="gaia_agent_chat.app")
     with (
         patch.object(app_module, "ChatAgent", return_value=mock_agent),
         patch.object(app_module, "interactive_mode"),
@@ -295,7 +295,7 @@ def test_list_windows_per_window_failure_logged_at_debug(caplog):
     fake_pywinauto = types.ModuleType("pywinauto")
     fake_pywinauto.Desktop = MagicMock(return_value=fake_desktop)
 
-    caplog.set_level(logging.DEBUG)
+    caplog.set_level(logging.DEBUG, logger="gaia_agent_chat.agent")
     with (
         patch.dict(sys.modules, {"pywinauto": fake_pywinauto}),
         patch("platform.system", return_value="Windows"),
