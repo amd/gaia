@@ -1513,6 +1513,13 @@ gaia connectors <subcommand> [OPTIONS]
 gaia connectors connect google
 ```
 
+```bash Authorize Microsoft (device code, no app registration)
+# Personal Outlook.com or work/school Microsoft 365 (common tenant).
+# Supply a pre-registered public client id; GAIA prints a code + URL.
+export GAIA_MICROSOFT_CLIENT_ID=<application-client-id>
+gaia connectors connect microsoft --device
+```
+
 ```bash Configure an MCP server token
 gaia connectors configure github --set GITHUB_TOKEN=ghp_xxx
 ```
@@ -1521,6 +1528,11 @@ gaia connectors configure github --set GITHUB_TOKEN=ghp_xxx
 gaia connectors grants grant google builtin:chat --scopes gmail.readonly
 ```
 </CodeGroup>
+
+The `--device` flag on `connect` uses the RFC 8628 device-code flow instead of
+the browser redirect — required for Microsoft zero-setup sign-in (no Azure app
+registration or loopback redirect URI). Pin `GAIA_MICROSOFT_TENANT` to restrict
+sign-in to one tenant (`organizations`, `consumers`, or a specific Entra id).
 
 [→ Connectors Guide](/connectors) · [→ Connectors SDK](/sdk/infrastructure/connectors)
 

@@ -1,0 +1,19 @@
+{
+  "_comment": "Approved security suppressions. Every '# noqa: S<n>' (flake8-bandit) and '# nosec' (bandit) comment in src/ or hub/ MUST be listed here with a justification, or CI fails (util/check_security_gates.py, run by util/lint.py). Adding an entry requires PR review — this is the gate that would have caught the GAIA hub tar-slip (CWE-22), where a '# noqa: S202 - hub artifacts are trusted' silenced an unvalidated tarfile.extractall. Keyed by (path, rule), not line number. See SECURITY.md.",
+  "suppressions": [
+    {"path": "src/gaia/eval/scorecard_gate.py", "rule": "S603", "justification": "git is a fixed, trusted executable; args are a constructed list, never shell-interpreted"},
+    {"path": "src/gaia/hub/installer.py", "rule": "S603", "justification": "'uv pip install' args are a constructed list (no user string), never shell-interpreted"},
+    {"path": "src/gaia/hub/native_launcher.py", "rule": "S603", "justification": "native binary path is an installed hub artifact (operator-controlled); args are constructed, not shell"},
+    {"path": "src/gaia/mcp/mcp_bridge.py", "rule": "B104", "justification": "binds 0.0.0.0 only on explicit caller opt-in (documented flag), never by default"},
+    {
+      "path": "src/gaia/agents/tools/shell_tools.py",
+      "rule": "B602",
+      "justification": "Sandboxed shell tool. Every command (and each pipeline segment) is validated against a whitelist via _validate_command before execution; shell=True is enabled ONLY on Windows so cmd.exe can resolve built-ins (dir/cd/type) and pipes that Git-for-Windows tools rely on. Converting to args-list would break piped/whitelisted commands the tool exists to run."
+    },
+    {
+      "path": "src/gaia/mcp/client/transports/stdio.py",
+      "rule": "B602",
+      "justification": "Legacy from_command() API accepts a full shell command STRING (documented contract, e.g. commands using pipes/env-expansion) and needs shell parsing. Command is caller-supplied SDK config, not external/untrusted input; modern from_config() passes an args list and runs shell=False."
+    }
+  ]
+}

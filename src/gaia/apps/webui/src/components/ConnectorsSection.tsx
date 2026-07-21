@@ -241,6 +241,10 @@ function OAuthConfigureBody({
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState<string | null>(null);
     const [setupValues, setSetupValues] = useState<Record<string, string>>({});
+    // Device-code sign-in (#1275): once started, the server polls in the
+    // background and we display the code + URL here until the SSE
+    // oauth_completed/oauth_error event resolves it.
+    const [deviceInfo, setDeviceInfo] = useState<api.DeviceAuthInfo | null>(null);
 
     // #2117 — agents that declare this connector as a requirement. Connecting
     // grants the selected agents in the same flow (default-on), so a mailbox
@@ -308,6 +312,52 @@ function OAuthConfigureBody({
             setBusy(false);
         }
     };
+
+    // Device-code connect: no browser redirect / no Azure app registration.
+    // The server polls in the background; we just show the code + URL and let
+    // the SSE oauth_completed / oauth_error events (below) resolve the state.
+    const handleConnectDevice = async () => {
+        setBusy(true);
+        setErr(null);
+        setDeviceInfo(null);
+        try {
+            const info = await api.authorizeConnectorDevice(
+                connector.id,
+                connector.available_scopes?.length
+                    ? connector.available_scopes
+                    : connector.default_scopes,
+                selectedGrantAgents(),
+            );
+            setDeviceInfo(info);
+        } catch (e) {
+            setErr(e instanceof Error ? e.message : String(e));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    // Success path: once the backend reports the connection, drop the code UI.
+    useEffect(() => {
+        if (connector.configured) setDeviceInfo(null);
+    }, [connector.configured]);
+
+    // While a device sign-in is pending, react to THIS connector's SSE events
+    // so an expiry / denial surfaces as an error instead of a spinner that
+    // never resolves. Mounted only while the tile is expanded.
+    useConnectorsSSE(
+        useCallback(
+            (event) => {
+                if (event.connectorId !== connector.id) return;
+                if (event.reason === 'oauth_error') {
+                    setErr(String(event.payload.error ?? 'Device sign-in failed.'));
+                    setDeviceInfo(null);
+                } else if (event.reason === 'oauth_completed') {
+                    setDeviceInfo(null);
+                }
+            },
+            [connector.id],
+        ),
+    );
 
     const handleDisconnect = async () => {
         setBusy(true);
@@ -467,17 +517,29 @@ function OAuthConfigureBody({
                         Setup required
                     </span>
                 ) : (
-                    <button
-                        className="btn-primary"
-                        disabled={busy}
-                        onClick={() => void handleConnect()}
-                    >
-                        {busy ? (
-                            <Loader2 size={12} className="spin" />
-                        ) : (
-                            <><ExternalLink size={12} /> Connect</>
+                    <>
+                        <button
+                            className="btn-primary"
+                            disabled={busy || deviceInfo !== null}
+                            onClick={() => void handleConnect()}
+                        >
+                            {busy ? (
+                                <Loader2 size={12} className="spin" />
+                            ) : (
+                                <><ExternalLink size={12} /> Connect</>
+                            )}
+                        </button>
+                        {connector.supports_device_code && (
+                            <button
+                                className="btn-secondary"
+                                disabled={busy || deviceInfo !== null}
+                                onClick={() => void handleConnectDevice()}
+                                title="Enter a short code at a URL — no browser redirect or app registration needed"
+                            >
+                                Sign in with a code
+                            </button>
                         )}
-                    </button>
+                    </>
                 )}
                 {(connector.docs_url || connector.product_url) && (
                     <a
@@ -490,6 +552,48 @@ function OAuthConfigureBody({
                     </a>
                 )}
             </div>
+            {deviceInfo && !connector.configured && (
+                <div className="device-code-block">
+                    <p className="device-code-instructions">
+                        Go to{' '}
+                        <a
+                            href={deviceInfo.verification_uri}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => {
+                                e.preventDefault();
+                                openAuthUrl(deviceInfo.verification_uri);
+                            }}
+                        >
+                            {deviceInfo.verification_uri}
+                        </a>{' '}
+                        and enter this code:
+                    </p>
+                    <div className="device-code-value">
+                        <code>{deviceInfo.user_code}</code>
+                        <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={() =>
+                                void navigator.clipboard?.writeText(deviceInfo.user_code)
+                            }
+                            title="Copy code"
+                        >
+                            Copy
+                        </button>
+                    </div>
+                    <p className="device-code-waiting">
+                        <Loader2 size={12} className="spin" /> Waiting for sign-in…
+                    </p>
+                    <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => setDeviceInfo(null)}
+                    >
+                        Cancel
+                    </button>
+                </div>
+            )}
         </div>
     );
 }

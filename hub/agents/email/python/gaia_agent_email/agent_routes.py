@@ -232,6 +232,21 @@ class HistoryResponse(_Strict):
     turns: List[HistoryTurn]
 
 
+class AutonomyLevelRequest(_Strict):
+    session_id: str = Field(..., description="Session to change autonomy for.")
+    level: str = Field(
+        ...,
+        description="off | suggest | earn_trust | full. 'off' is the kill switch.",
+    )
+
+
+class AutonomyRunRequest(_Strict):
+    session_id: str = Field(..., description="Session to run one autonomy cycle for.")
+    max_messages: int = Field(
+        25, ge=1, le=200, description="Inbox budget for this cycle."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -343,6 +358,58 @@ async def memory_status(session_id: str) -> MemoryStatusResponse:
     if session is None:
         raise HTTPException(status_code=404, detail="No such session.")
     return _memory_status(session.agent)
+
+
+@router.get("/autonomy/{session_id}")
+async def autonomy_status(session_id: str) -> Dict[str, Any]:
+    """Inspectable snapshot: level, thresholds, and the earned-trust ledger.
+
+    This is the read-model the ``gaia email autonomy status/trust`` CLI and the
+    Agent-UI panel render — autonomy is always explainable, never a black box.
+    """
+    session = registry.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="No such session.")
+    status_fn = getattr(session.agent, "autonomy_status", None)
+    if not callable(status_fn):
+        raise HTTPException(
+            status_code=501, detail="This agent build does not expose autonomy."
+        )
+    return status_fn()
+
+
+@router.post("/autonomy")
+async def set_autonomy(request: AutonomyLevelRequest) -> Dict[str, Any]:
+    """Set the autonomy level at runtime — pause/resume/kill (``off``)."""
+    session = registry.get(request.session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="No such session.")
+    setter = getattr(session.agent, "set_autonomy_level", None)
+    if not callable(setter):
+        raise HTTPException(
+            status_code=501, detail="This agent build does not expose autonomy."
+        )
+    try:
+        return setter(request.level)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/autonomy/run")
+async def run_autonomy(request: AutonomyRunRequest) -> Dict[str, Any]:
+    """Trigger one observe->decide->act cycle now (the daemon/CLI driver seam).
+
+    Runs on a worker thread — the cycle does mailbox I/O and local inference.
+    """
+    session = registry.get(request.session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="No such session.")
+    runner = getattr(session.agent, "run_autonomy_cycle", None)
+    if not callable(runner):
+        raise HTTPException(
+            status_code=501, detail="This agent build does not expose autonomy."
+        )
+    return await asyncio.to_thread(runner, {"max_messages": request.max_messages})
 
 
 @router.post("/confirm-tool")

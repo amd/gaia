@@ -16,7 +16,14 @@ logger = get_logger(__name__)
 
 
 def parse_args():
-    """Parse command line arguments."""
+    """Parse command line arguments.
+
+    # dead relative to cli.py; see #2323 — the real `gaia chat` entry point is
+    # src/gaia/cli.py, which builds its own ChatAgentConfig from argparse
+    # directly. This function (and `main()` below) only run via the standalone
+    # `python -m gaia_agent_chat.app` entry, which no shipped console_script
+    # invokes. Left in place — removing it is a separate behavior change.
+    """
     parser = argparse.ArgumentParser(
         description="Chat Agent with RAG and file search capabilities"
     )
@@ -321,8 +328,8 @@ def interactive_mode(agent: ChatAgent):
                     try:
                         if hasattr(agent, "tool_loader"):
                             agent.tool_loader.reset_session()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("Tool loader session reset skipped: %s", e)
                     # Clear chat history (if agent tracks it)
                     if hasattr(agent, "chat_history"):
                         agent.chat_history = []
@@ -1007,8 +1014,8 @@ def main():
             try:
                 if hasattr(agent, "tool_loader"):
                     agent.tool_loader.reset_session()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Tool loader session reset skipped: %s", e)
             logger.debug(f"Created new session: {agent.current_session.session_id}")
 
         # Index document if --index flag provided
@@ -1069,8 +1076,8 @@ def main():
         # Cleanup
         try:
             agent.stop_watching()
-        except Exception:  # pylint: disable=broad-except
-            pass
+        except Exception as e:  # pylint: disable=broad-except
+            logger.debug("stop_watching() failed during cleanup: %s", e)
 
 
 if __name__ == "__main__":

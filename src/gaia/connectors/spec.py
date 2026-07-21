@@ -101,6 +101,12 @@ class ConnectorSpec:
     # setup fields persist as *provider* credentials reused across many
     # connect/disconnect cycles.
     oauth_setup_fields: tuple[ConfigField, ...] = field(default_factory=tuple)
+    # oauth_pkce only: the provider also supports the RFC 8628 device-code flow
+    # (a short code entered at a URL — no loopback redirect / no per-user app
+    # registration). Surfaced to the UI so it can offer a "sign in with a code"
+    # path alongside the browser button. Default False — the provider must
+    # implement the device-code endpoints (e.g. Microsoft).
+    supports_device_code: bool = False
     # mcp_server only
     mcp_command: str | None = None
     mcp_args: tuple[str, ...] = field(default_factory=tuple)

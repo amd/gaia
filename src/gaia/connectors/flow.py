@@ -137,6 +137,41 @@ def _decode_email_from_id_token(id_token: str) -> Optional[str]:
     return email if isinstance(email, str) else None
 
 
+async def _resolve_account_email(provider, id_token: str, access_token: str) -> str:
+    """Best-effort account email for display: prefer the id_token claim; if it
+    yields nothing, fall back to the provider's ``userinfo_url`` (e.g. Graph
+    ``/me``). Returns ``"default"`` when neither works — the connection is keyed
+    by DEFAULT_ACCOUNT internally, so this only affects the display label and
+    must never fail the connect. The userinfo call is skipped entirely for
+    providers whose id_token already carries the email (e.g. Google)."""
+    email = _decode_email_from_id_token(id_token or "")
+    if email:
+        return email
+    userinfo_url = getattr(provider, "userinfo_url", None)
+    parse = getattr(provider, "parse_account_email", None)
+    if userinfo_url and access_token and callable(parse):
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    userinfo_url, headers={"Authorization": f"Bearer {access_token}"}
+                )
+            if resp.status_code == 200:
+                return parse(resp.json()) or "default"
+            logger.warning(
+                "flow: userinfo lookup for %s returned %s (label only)",
+                getattr(provider, "provider_id", "?"),
+                resp.status_code,
+            )
+        except Exception as e:  # noqa: BLE001 — label-only, never fail connect
+            logger.warning(
+                "flow: userinfo lookup for %s failed (%s); label falls back to "
+                "'default'",
+                getattr(provider, "provider_id", "?"),
+                e,
+            )
+    return "default"
+
+
 async def start_authorization(
     provider_id: str,
     scopes: Iterable[str],
@@ -420,7 +455,9 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
             "docs/security/connections.mdx."
         )
 
-    account_email = _decode_email_from_id_token(payload.get("id_token", "")) or ""
+    account_email = await _resolve_account_email(
+        provider, payload.get("id_token", ""), payload.get("access_token", "")
+    )
 
     save_connection(
         provider=flow.provider_id,
@@ -469,3 +506,182 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
         {"provider": flow.provider_id, "account_email": state_dict["account_email"]},
     )
     return state_dict
+
+
+# ---------------------------------------------------------------------------
+# Device-code flow (RFC 8628) — #1275
+# ---------------------------------------------------------------------------
+# Zero-setup sign-in for providers that expose a ``device_code_url`` (Microsoft
+# today). No loopback redirect and no per-user app registration: the user opens
+# a short URL, types a code, and approves. The resulting refresh token persists
+# through the SAME ``store.save_connection`` as the loopback flow, so every
+# downstream consumer (tokens.get_or_refresh, the email agent's
+# _get_outlook_token) is identical regardless of how the user connected.
+
+_DEVICE_POLL_DEFAULT_INTERVAL = 5
+
+
+async def start_device_flow(provider_id: str, scopes: Iterable[str]) -> Dict[str, Any]:
+    """Request a device + user code from the provider's device-code endpoint.
+
+    Returns ``{provider_id, scopes, device_code, user_code, verification_uri,
+    expires_in, interval, message}``. The caller shows ``user_code`` +
+    ``verification_uri`` (or the provider-supplied ``message``) to the user,
+    then awaits :func:`poll_device_flow` with the returned ``device_code``.
+    """
+    provider = get_provider(provider_id)
+    device_code_url = getattr(provider, "device_code_url", None)
+    if not device_code_url:
+        raise ConnectorsError(
+            f"Provider {provider_id!r} does not support the device-code flow. "
+            "Use start_authorization (browser loopback) instead. See "
+            "docs/security/connections.mdx."
+        )
+    scopes_list = list(scopes) or list(provider.default_scopes)
+    body = provider.device_code_request_body(scopes_list)
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post(device_code_url, data=body)
+    if resp.status_code != 200:
+        raise ConnectorsError(
+            f"Device-code request for {provider_id} failed with status "
+            f"{resp.status_code}: {resp.text[:300]}. Check the client id / "
+            "tenant (GAIA_MICROSOFT_CLIENT_ID / GAIA_MICROSOFT_TENANT). See "
+            "docs/security/connections.mdx."
+        )
+    d = resp.json()
+    logger.info(
+        "device-flow: started provider=%s scopes=%d", provider_id, len(scopes_list)
+    )
+    return {
+        "provider_id": provider_id,
+        "scopes": scopes_list,
+        "device_code": d["device_code"],
+        "user_code": d["user_code"],
+        "verification_uri": (
+            d.get("verification_uri") or d.get("verification_url") or ""
+        ),
+        "expires_in": int(d.get("expires_in", 900)),
+        "interval": int(d.get("interval", _DEVICE_POLL_DEFAULT_INTERVAL)),
+        "message": d.get("message", ""),
+    }
+
+
+async def poll_device_flow(
+    provider_id: str,
+    device_code: str,
+    *,
+    scopes: Iterable[str],
+    interval: int = _DEVICE_POLL_DEFAULT_INTERVAL,
+    expires_in: int = 900,
+    grant_agents: Optional[Mapping[str, Iterable[str]]] = None,
+) -> Dict[str, Any]:
+    """Poll the token endpoint until the user approves the device code.
+
+    Honors the RFC 8628 poll cadence: ``authorization_pending`` waits one
+    ``interval``; ``slow_down`` widens it by 5s. Persists the connection on
+    success and commits any ``grant_agents`` (namespaced agent id → scopes) in
+    the same step, so a device-code connect can grant an agent atomically the
+    way the loopback flow does. Raises ``FlowTimeoutError`` /
+    ``ConsentDeniedError`` / ``ConnectorsError`` on the unhappy paths — never a
+    silent empty result.
+    """
+    import time as _time
+
+    provider = get_provider(provider_id)
+    scopes_list = list(scopes) or list(provider.default_scopes)
+    body = provider.device_token_request_body(device_code)
+    poll_interval = max(int(interval), 1)
+    deadline = _time.monotonic() + max(int(expires_in), poll_interval)
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        while True:
+            resp = await client.post(provider.token_url, data=body)
+            if resp.status_code == 200:
+                payload = resp.json()
+                break
+            try:
+                err_payload = resp.json()
+            except Exception:  # noqa: BLE001 — body may be empty/non-JSON
+                err_payload = {}
+            err = err_payload.get("error", "")
+            if err == "authorization_pending":
+                pass
+            elif err == "slow_down":
+                poll_interval += 5
+            elif err == "expired_token":
+                raise FlowTimeoutError(
+                    f"Device-code for {provider_id} expired before sign-in. "
+                    "Run the connect command again."
+                )
+            elif err in ("authorization_declined", "access_denied"):
+                raise ConsentDeniedError(
+                    f"Device-code sign-in for {provider_id} was declined."
+                )
+            else:
+                raise ConnectorsError(
+                    f"Device-code polling for {provider_id} failed: "
+                    f"{err or resp.status_code}: "
+                    f"{err_payload.get('error_description', resp.text[:200])}. "
+                    "See docs/security/connections.mdx."
+                )
+            if _time.monotonic() >= deadline:
+                raise FlowTimeoutError(
+                    f"Device-code for {provider_id} timed out after "
+                    f"{expires_in}s waiting for sign-in. Run connect again."
+                )
+            await asyncio.sleep(poll_interval)
+
+    refresh_token = payload.get("refresh_token")
+    if not refresh_token:
+        raise ConnectorsError(
+            f"Device-code token response for {provider_id} returned no "
+            "refresh_token. The 'offline_access' scope must be requested (it is "
+            "in the Microsoft default_scopes). See docs/security/connections.mdx."
+        )
+    account_email = await _resolve_account_email(
+        provider, payload.get("id_token", ""), payload.get("access_token", "")
+    )
+
+    save_connection(
+        provider=provider_id,
+        account_email=account_email,
+        refresh_token=refresh_token,
+        scopes=scopes_list,
+        client_id_hash=provider.client_id_hash,
+    )
+
+    if grant_agents:
+        from gaia.connectors.grants import grant_agent
+
+        for agent_id, agent_scopes in grant_agents.items():
+            try:
+                grant_agent(provider_id, agent_id, list(agent_scopes))
+            except Exception as e:
+                raise ConnectorsError(
+                    f"Connected {provider_id!r} via device code but failed to "
+                    f"grant it to agent {agent_id!r}: {e}. Grant it manually "
+                    f"with `gaia connectors grants grant {provider_id} "
+                    f"{agent_id} --scopes {' '.join(agent_scopes)}`."
+                ) from e
+
+    await emit(
+        "connector.oauth.completed",
+        {"connector_id": provider_id, "account_email": account_email},
+    )
+    await emit(
+        "connection.connected",
+        {"provider": provider_id, "account_email": account_email},
+    )
+    logger.info(
+        "device-flow: connected provider=%s account=%s scopes=%d",
+        provider_id,
+        account_email,
+        len(scopes_list),
+    )
+    return {
+        "provider": provider_id,
+        "account_email": account_email,
+        "scopes": scopes_list,
+        "connected_at": _time.time(),
+    }

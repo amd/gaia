@@ -66,7 +66,7 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     p_status.add_argument("connector_id", nargs="?")
     p_status.add_argument("--json", action="store_true", dest="as_json")
 
-    # connect (OAuth PKCE)
+    # connect (OAuth PKCE, or device-code with --device)
     p_conn = sub.add_parser(
         "connect", help="Authorize an OAuth connector (opens browser)"
     )
@@ -84,6 +84,15 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
             "(e.g. 'installed:email') in the same flow — one command instead of a "
             "separate `grants grant`, and the scopes always match. Requires "
             "--scopes."
+        ),
+    )
+    p_conn.add_argument(
+        "--device",
+        action="store_true",
+        help=(
+            "Use the device-code flow (enter a short code at a URL) instead of "
+            "the browser redirect. Needed for zero-setup Microsoft sign-in "
+            "(no Azure app registration). Provider must support device code."
         ),
     )
 
@@ -312,6 +321,13 @@ def _handle_list(args: argparse.Namespace) -> int:
 
 
 def _handle_connect(args: argparse.Namespace) -> int:
+    # Importing the catalog registers the built-in specs so an unknown-connector
+    # error is actionable rather than a bare KeyError.
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+
+    if getattr(args, "device", False):
+        return _handle_connect_device(args)
+
     from gaia.connectors.api import complete_authorization, start_authorization
 
     grant_agent = getattr(args, "grant_agent", None)
@@ -347,6 +363,41 @@ def _handle_connect(args: argparse.Namespace) -> int:
     if grant_agent:
         msg += f"; granted {args.connector_id} → {grant_agent}: {', '.join(scopes)}"
     sys.stdout.write(msg + "\n")
+    return 0
+
+
+def _handle_connect_device(args: argparse.Namespace) -> int:
+    """Device-code connect: print the code + URL, then poll until sign-in."""
+    from gaia.connectors.api import poll_device_flow, start_device_flow
+
+    async def _run() -> str:
+        info = await start_device_flow(args.connector_id, scopes=args.scopes or [])
+        # Prefer the provider's own message (it already contains the URL + code);
+        # fall back to a constructed instruction line.
+        if info.get("message"):
+            sys.stdout.write(info["message"] + "\n")
+        else:
+            sys.stdout.write(
+                f"To authorize {args.connector_id}, visit "
+                f"{info['verification_uri']} and enter code: {info['user_code']}\n"
+            )
+        sys.stdout.write("Waiting for sign-in...\n")
+        sys.stdout.flush()
+        result = await poll_device_flow(
+            args.connector_id,
+            info["device_code"],
+            scopes=info["scopes"],
+            interval=info["interval"],
+            expires_in=info["expires_in"],
+        )
+        return result.get("account_email") or "<unknown>"
+
+    try:
+        email = asyncio.run(_run())
+    except ConnectorsError as e:
+        sys.stderr.write(f"gaia connectors connect --device: {e}\n")
+        return 1
+    sys.stdout.write(f"Connected as {email}\n")
     return 0
 
 

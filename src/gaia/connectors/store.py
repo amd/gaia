@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+import zlib
 from typing import List, Optional
 
 from gaia.connectors._keyring import keyring  # actionable error if missing (#1621)
@@ -128,6 +129,151 @@ def _wrap_keyring_call(operation: str):
     return wrapper
 
 
+# ---------------------------------------------------------------------------
+# Transparent large-blob chunking (#1275 Windows fix)
+# ---------------------------------------------------------------------------
+# Windows Credential Manager caps a single credential blob at 2560 bytes
+# (CRED_MAX_CREDENTIAL_BLOB_SIZE). keyring stores the value as UTF-16, so the
+# practical ceiling is ~1280 chars — and CredWrite fails with a cryptic
+# "The stub received bad data" (error 1783) past it. Google refresh tokens
+# (~100 chars) never came close, so this went unnoticed; Microsoft Graph
+# refresh tokens (~1600 chars) blow straight past it. We transparently split
+# an oversized value across extra keyring slots (``<username>#<idx>``) and
+# reassemble on read. Small values stay in a single raw slot — backward
+# compatible with every pre-existing entry and the short Google blobs.
+#
+# Torn-write safety: keyring has no atomic multi-slot transaction, and
+# Microsoft rotates the refresh token on every refresh (varying length →
+# varying chunk count), so an overwrite can crash mid-rewrite with slots and
+# manifest out of sync. The manifest therefore carries a CRC32 of the full
+# payload; ``_kr_get`` validates the reassembled value against it and returns
+# ``None`` ("reconnect") on any mismatch — a torn state can never surface as a
+# truncated-but-valid-looking token.
+_CHUNK_CHARS = 1024
+_CHUNK_SENTINEL = "\x00gaia-chunked\x00"  # cannot occur inside a JSON blob
+
+
+def _payload_crc(payload: str) -> str:
+    """Non-cryptographic integrity check for reassembled chunk payloads."""
+    return format(zlib.crc32(payload.encode("utf-8")), "08x")
+
+
+def _chunk_username(username: str, idx: int) -> str:
+    return f"{username}#{idx}"
+
+
+def _kr_raw_set(username: str, value: str) -> None:
+    @_wrap_keyring_call("set_password")
+    def _set():
+        keyring.set_password(SERVICE_NAME, username, value)
+
+    _set()
+
+
+def _kr_raw_get(username: str) -> Optional[str]:
+    @_wrap_keyring_call("get_password")
+    def _get():
+        return keyring.get_password(SERVICE_NAME, username)
+
+    return _get()
+
+
+def _kr_raw_delete(username: str) -> None:
+    try:
+        keyring.delete_password(SERVICE_NAME, username)
+    except keyring.errors.PasswordDeleteError:
+        pass
+    except keyring.errors.KeyringError as e:
+        raise ConnectorsError(
+            f"Keyring delete_password failed: {e}. See "
+            "docs/security/connections.mdx."
+        ) from e
+
+
+def _kr_clear_chunks(username: str) -> None:
+    """Best-effort removal of any leftover chunk slots for ``username``."""
+    idx = 0
+    while _kr_raw_get(_chunk_username(username, idx)) is not None:
+        _kr_raw_delete(_chunk_username(username, idx))
+        idx += 1
+
+
+def _kr_set(username: str, payload: str) -> None:
+    """Store ``payload`` under ``username``, chunking if it exceeds the
+    single-slot ceiling. Chunks are written BEFORE the manifest so a reader
+    never sees a manifest pointing at not-yet-written parts."""
+    if len(payload) <= _CHUNK_CHARS:
+        _kr_raw_set(username, payload)
+        # A prior write may have been chunked; sweep stale chunk slots.
+        _kr_clear_chunks(username)
+        return
+    chunks = [
+        payload[i : i + _CHUNK_CHARS] for i in range(0, len(payload), _CHUNK_CHARS)
+    ]
+    for idx, chunk in enumerate(chunks):
+        _kr_raw_set(_chunk_username(username, idx), chunk)
+    # Publish the manifest (count + CRC of the full payload) BEFORE sweeping
+    # stale high slots, so a reader after this point reassembles against the
+    # new count and the CRC guards any partial state.
+    _kr_raw_set(username, f"{_CHUNK_SENTINEL}{len(chunks)}:{_payload_crc(payload)}")
+    # Drop any extra chunk slots left over from a longer previous value.
+    stale = len(chunks)
+    while _kr_raw_get(_chunk_username(username, stale)) is not None:
+        _kr_raw_delete(_chunk_username(username, stale))
+        stale += 1
+
+
+def _parse_manifest(raw: str) -> Optional[tuple[int, Optional[str]]]:
+    """Parse ``<SENTINEL><count>[:<crc>]`` → ``(count, crc)``. ``None`` if the
+    manifest is malformed. ``crc`` is ``None`` for a legacy count-only manifest."""
+    body = raw[len(_CHUNK_SENTINEL) :]
+    count_str, _, crc = body.partition(":")
+    try:
+        return int(count_str), (crc or None)
+    except ValueError:
+        return None
+
+
+def _kr_get(username: str) -> Optional[str]:
+    """Read a (possibly chunked) value stored via :func:`_kr_set`.
+
+    Any partial/torn state (missing slot, or a CRC mismatch from a crashed
+    mid-rewrite) resolves to ``None`` — never a truncated-but-valid-looking
+    value."""
+    raw = _kr_raw_get(username)
+    if raw is None or not raw.startswith(_CHUNK_SENTINEL):
+        return raw
+    parsed = _parse_manifest(raw)
+    if parsed is None:
+        return None
+    count, crc = parsed
+    parts: list[str] = []
+    for idx in range(count):
+        part = _kr_raw_get(_chunk_username(username, idx))
+        if part is None:
+            # Missing slot — torn entry; treat as "not configured".
+            return None
+        parts.append(part)
+    value = "".join(parts)
+    if crc is not None and _payload_crc(value) != crc:
+        # Reassembled payload doesn't match the manifest CRC — a crashed
+        # mid-rewrite left slots and manifest out of sync. Fail safe.
+        return None
+    return value
+
+
+def _kr_delete(username: str) -> None:
+    """Delete a (possibly chunked) value and all its chunk slots. Idempotent."""
+    raw = _kr_raw_get(username)
+    _kr_raw_delete(username)
+    if raw is not None and raw.startswith(_CHUNK_SENTINEL):
+        parsed = _parse_manifest(raw)
+        count = parsed[0] if parsed else 0
+        for idx in range(count):
+            _kr_raw_delete(_chunk_username(username, idx))
+    _kr_clear_chunks(username)
+
+
 def save_connection(
     *,
     provider: str,
@@ -171,11 +317,7 @@ def save_connection(
     # migration since the username shape already accommodates it.
     username = _connection_username(provider, DEFAULT_ACCOUNT)
 
-    @_wrap_keyring_call("set_password")
-    def _set():
-        keyring.set_password(SERVICE_NAME, username, payload)
-
-    _set()
+    _kr_set(username, payload)
 
 
 def load_connection(
@@ -195,11 +337,7 @@ def load_connection(
     verify_keyring_backend()
     username = _connection_username(provider, account_email)
 
-    @_wrap_keyring_call("get_password")
-    def _get():
-        return keyring.get_password(SERVICE_NAME, username)
-
-    raw = _get()
+    raw = _kr_get(username)
     if raw is None:
         return None
 
@@ -261,11 +399,7 @@ def peek_connection(
     verify_keyring_backend()
     username = _connection_username(provider, account_email)
 
-    @_wrap_keyring_call("get_password")
-    def _get():
-        return keyring.get_password(SERVICE_NAME, username)
-
-    raw = _get()
+    raw = _kr_get(username)
     if raw is None:
         return None
     try:
@@ -282,17 +416,7 @@ def delete_connection(provider: str, *, account_email: str = DEFAULT_ACCOUNT) ->
     """Remove the keyring entry for ``provider`` if present. Idempotent."""
     verify_keyring_backend()
     username = _connection_username(provider, account_email)
-
-    try:
-        keyring.delete_password(SERVICE_NAME, username)
-    except keyring.errors.PasswordDeleteError:
-        # Already gone — fine.
-        pass
-    except keyring.errors.KeyringError as e:
-        raise ConnectorsError(
-            f"Keyring delete_password failed: {e}. See "
-            "docs/security/connections.mdx."
-        ) from e
+    _kr_delete(username)
 
 
 def save_provider_credentials(
@@ -314,12 +438,7 @@ def save_provider_credentials(
         {"client_id": client_id, "client_secret": client_secret}, sort_keys=True
     )
     username = _provider_credentials_username(provider)
-
-    @_wrap_keyring_call("set_password")
-    def _set():
-        keyring.set_password(SERVICE_NAME, username, payload)
-
-    _set()
+    _kr_set(username, payload)
 
 
 def peek_provider_credentials(provider: str) -> Optional[dict]:
@@ -332,11 +451,7 @@ def peek_provider_credentials(provider: str) -> Optional[dict]:
     verify_keyring_backend()
     username = _provider_credentials_username(provider)
 
-    @_wrap_keyring_call("get_password")
-    def _get():
-        return keyring.get_password(SERVICE_NAME, username)
-
-    raw = _get()
+    raw = _kr_get(username)
     if raw is None:
         return None
     try:
@@ -349,15 +464,7 @@ def clear_provider_credentials(provider: str) -> None:
     """Remove the stored OAuth client credentials for *provider*. Idempotent."""
     verify_keyring_backend()
     username = _provider_credentials_username(provider)
-    try:
-        keyring.delete_password(SERVICE_NAME, username)
-    except keyring.errors.PasswordDeleteError:
-        pass
-    except keyring.errors.KeyringError as e:
-        raise ConnectorsError(
-            f"Keyring delete_password failed: {e}. See "
-            "docs/security/connections.mdx."
-        ) from e
+    _kr_delete(username)
 
 
 def list_connections() -> List[str]:
@@ -384,9 +491,9 @@ def list_connections() -> List[str]:
     for provider in known:
         username = _connection_username(provider, DEFAULT_ACCOUNT)
         try:
-            if keyring.get_password(SERVICE_NAME, username) is not None:
+            if _kr_raw_get(username) is not None:
                 found.append(provider)
-        except keyring.errors.KeyringError:
+        except ConnectorsError:
             # Translate-and-skip is OK for an enumeration call: a single
             # failed backend doesn't invalidate the list.
             continue

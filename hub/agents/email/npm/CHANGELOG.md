@@ -6,6 +6,16 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## Unreleased
 
+- **Work/school Outlook (Microsoft 365 / Entra ID) mailboxes now work, not just
+  personal Outlook.com.** The Microsoft connector previously signed in only
+  against the `consumers` tenant, so a corporate Microsoft 365 account was
+  rejected before GAIA ever saw a token. It now uses the `common` tenant by
+  default (both account types), overridable with `GAIA_MICROSOFT_TENANT`. A new
+  zero-setup device-code sign-in connects without an Azure app registration or
+  loopback redirect — from the CLI (`gaia connectors connect microsoft --device`)
+  or the Agent UI (a **Sign in with a code** button on the Microsoft tile). No
+  email-agent tool changed — the existing Outlook backend just reaches more
+  mailboxes (#1275).
 - **In the GAIA daemon deployment, the sidecar no longer holds long-lived OAuth
   secrets.** Previously a sidecar read the mailbox connection straight from the
   machine keyring. Now, under the Agent UI daemon, the daemon (the custody home)

@@ -55,6 +55,32 @@ class FileSearchToolsMixin:
             )
         return file_list
 
+    def _get_path_validator(self):
+        """Return the host agent's PathValidator, or None if it has none."""
+        return getattr(self, "path_validator", None) or getattr(
+            self, "_path_validator", None
+        )
+
+    def _read_access_error(self, path: str):
+        """Enforce the ``--allowed-paths`` sandbox on read operations.
+
+        Reads must honor the same allowlist boundary as ``write_file`` /
+        ``edit_file`` — otherwise the documented security sandbox only
+        restricts writes while any file readable by the process leaks
+        through the read tools (CWE-862). ``FileIOToolsMixin`` already
+        gates its reads this way; this mirrors it.
+
+        Returns an error dict when ``path`` is outside the sandbox, or
+        ``None`` when the read is permitted (or no validator is attached).
+        """
+        validator = self._get_path_validator()
+        if validator is not None and not validator.is_path_allowed(path):
+            return {
+                "status": "error",
+                "error": f"Access denied: '{path}' is not in allowed paths",
+            }
+        return None
+
     def register_file_search_tools(self) -> None:
         """Register shared file search tools."""
         from gaia.agents.base.tools import tool
@@ -558,6 +584,13 @@ class FileSearchToolsMixin:
                 Dictionary with file content and type-specific metadata
             """
             try:
+                # Enforce the --allowed-paths sandbox on reads. Checked before
+                # the existence probe so paths outside the sandbox can't be used
+                # as a file-existence oracle.
+                denied = self._read_access_error(file_path)
+                if denied:
+                    return denied
+
                 if not os.path.exists(file_path):
                     # Check if parent directory exists to give a more helpful error
                     parent_dir = os.path.dirname(file_path)
@@ -767,6 +800,14 @@ class FileSearchToolsMixin:
             Searches actual file contents on disk, not RAG indexed documents.
             """
             try:
+                # Enforce the --allowed-paths sandbox before the existence probe
+                # so out-of-sandbox paths can't be used as a directory-existence
+                # oracle (mirrors read_file / get_file_info). Grepping file
+                # contents outside the sandbox leaks the same data as read_file.
+                denied = self._read_access_error(directory)
+                if denied:
+                    return denied
+
                 directory = Path(directory).resolve()
 
                 if not directory.exists():
@@ -1621,6 +1662,13 @@ class FileSearchToolsMixin:
             try:
                 fp = Path(file_path)
 
+                # Enforce the --allowed-paths sandbox: get_file_info returns a
+                # content preview, so it must honor the same read boundary.
+                denied = self._read_access_error(str(fp))
+                if denied:
+                    denied.update({"has_errors": True, "operation": "get_file_info"})
+                    return denied
+
                 if not fp.exists():
                     return {
                         "status": "error",
@@ -1850,6 +1898,16 @@ class FileSearchToolsMixin:
                         "has_errors": True,
                         "operation": "analyze_data_file",
                     }
+
+                # Enforce the --allowed-paths sandbox on the resolved path
+                # (checked after the indexed-file fallback so legitimately
+                # indexed documents inside the sandbox still resolve).
+                denied = self._read_access_error(str(fp))
+                if denied:
+                    denied.update(
+                        {"has_errors": True, "operation": "analyze_data_file"}
+                    )
+                    return denied
 
                 # Read the file (use resolved fp path in case of fallback)
                 rows, all_columns, read_error = _read_tabular_file(str(fp))

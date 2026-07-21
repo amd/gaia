@@ -94,8 +94,8 @@ class EmailAgentConfig:
       ``resolve_mail_backend`` stays connector-agnostic (``None`` → Gmail) for
       the eval seam. Case-insensitive.
     - ``calendar_provider``: which calendar provider the agent operates on —
-      ``"google"`` (the default) or ``"microsoft"`` (personal Outlook.com
-      calendar via MS Graph, #1276). Selects the live backend in
+      ``"google"`` (the default) or ``"microsoft"`` (Outlook calendar —
+      personal or work/school — via MS Graph, #1276). Selects the live backend in
       ``resolve_calendar_backend``. Case-insensitive. When ``None`` (the
       default), tracks ``mail_provider`` so a Microsoft-only user who set
       ``mail_provider="microsoft"`` gets the Outlook calendar too without
@@ -147,6 +147,18 @@ class EmailAgentConfig:
     scheduler_poll_seconds: float = 30.0
     start_scheduler: bool = True
     ctx_size: Optional[int] = None
+    # Full-autonomy earn-trust engine (#1483 / #1287). ``autonomy_level`` is the
+    # single switch: "off" (default — chat only, no autonomous activity),
+    # "suggest" (propose only), "earn_trust" (auto-execute reversible actions in
+    # trusted/approved scopes, draft replies, suggest the rest — this is what
+    # "full autonomy mode" maps to), or "full" (auto-execute every reversible
+    # action). The destructive/irreversible confirm-floor (send, forward,
+    # permanent delete, RSVP, quarantine) ALWAYS asks, at every level — see
+    # ``trust.TrustPolicy``. A scope becomes trusted only after
+    # ``autonomy_trust_min_samples`` decisions at/above ``autonomy_trust_threshold``.
+    autonomy_level: str = "off"
+    autonomy_trust_min_samples: int = 5
+    autonomy_trust_threshold: float = 0.85
 
     def validate(self) -> None:
         """Run startup-time invariants. Called from the agent's __init__.
@@ -186,6 +198,28 @@ class EmailAgentConfig:
                 f"count, got {self.ctx_size!r}. Pass e.g. 16384 (the #1892 "
                 "envelope target) or leave it None for Lemonade's default "
                 "floor."
+            )
+        # Import here (not at module top) to keep config import-cheap for the
+        # many callers that never touch the autonomy engine.
+        from gaia_agent_email.trust import AUTONOMY_LEVELS
+
+        if self.autonomy_level not in AUTONOMY_LEVELS:
+            raise ConfigurationError(
+                f"EmailAgentConfig.autonomy_level must be one of "
+                f"{list(AUTONOMY_LEVELS)}, got {self.autonomy_level!r}."
+            )
+        if (
+            not isinstance(self.autonomy_trust_min_samples, int)
+            or self.autonomy_trust_min_samples < 1
+        ):
+            raise ConfigurationError(
+                f"EmailAgentConfig.autonomy_trust_min_samples must be a "
+                f"positive integer, got {self.autonomy_trust_min_samples!r}."
+            )
+        if not 0.0 < self.autonomy_trust_threshold <= 1.0:
+            raise ConfigurationError(
+                f"EmailAgentConfig.autonomy_trust_threshold must be in (0, 1], "
+                f"got {self.autonomy_trust_threshold!r}."
             )
 
     def resolved_db_path(self) -> str:

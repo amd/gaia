@@ -15,9 +15,10 @@ leads add agent tools that request a Bearer token for these Graph scopes via
 the generic ``oauth_pkce`` handler — no Microsoft-specific OAuth code in the
 agents.
 
-Tenant is ``consumers`` (personal Outlook.com / Hotmail / Live). ``openid`` and
-``offline_access`` are in ``default_scopes`` because the shared OAuth flow
-requires an id_token (account email) and a refresh token respectively.
+Tenant defaults to ``common`` (personal Outlook.com / Hotmail / Live AND
+work/school Entra ID accounts; override with ``GAIA_MICROSOFT_TENANT``).
+``openid`` and ``offline_access`` are in ``default_scopes`` because the shared
+OAuth flow requires an id_token (account email) and a refresh token respectively.
 """
 
 import gaia.connectors.oauth_pkce  # noqa: F401  # pylint: disable=unused-import
@@ -32,14 +33,16 @@ MICROSOFT_SPEC = ConnectorSpec(
     tier=1,
     type="oauth_pkce",
     description=(
-        "Connect GAIA to your personal Microsoft account for Outlook mail, "
-        "calendar, OneDrive, and more via Microsoft Graph."
+        "Connect GAIA to your Microsoft account — personal (Outlook.com / "
+        "Hotmail / Live) or work/school (Microsoft 365 / Entra ID) — for "
+        "Outlook mail, calendar, OneDrive, and more via Microsoft Graph."
     ),
     instructions_md=(
-        "Sign in with your personal Microsoft account (Outlook.com, Hotmail, "
-        "or Live) to allow GAIA to access your Outlook mail and calendar. You "
-        "can revoke access at any time from your "
-        "[Microsoft account privacy page](https://account.live.com/consent/Manage)."
+        "Sign in with your Microsoft account — personal (Outlook.com, Hotmail, "
+        "or Live) or work/school (Microsoft 365) — to allow GAIA to access your "
+        "Outlook mail and calendar. Personal accounts can revoke access from the "
+        "[Microsoft account privacy page](https://account.live.com/consent/Manage); "
+        "work/school accounts from [My Apps](https://myapps.microsoft.com)."
     ),
     product_url="https://www.microsoft.com/microsoft-365",
     docs_url="https://amd-gaia.ai/docs/connectors/microsoft",
@@ -68,6 +71,10 @@ MICROSOFT_SPEC = ConnectorSpec(
         "https://graph.microsoft.com/Calendars.ReadWrite",
     ),
     oauth_provider_ref="microsoft",
+    # The Microsoft provider implements the RFC 8628 device-code endpoints, so
+    # the UI can offer zero-setup "sign in with a code" alongside the browser
+    # flow (no Azure app registration / loopback redirect needed).
+    supports_device_code=True,
     # First-time setup form. Microsoft public-client PKCE flows take ONLY a
     # Client ID — Microsoft forbids a client_secret for public/native clients.
     # The optional secret field exists solely for the rare confidential
@@ -81,10 +88,11 @@ MICROSOFT_SPEC = ConnectorSpec(
             kind="text",
             help_md=(
                 "From the Azure portal → App registrations → your app → "
-                "Overview. Register the app with the "
-                "'Personal Microsoft accounts only' audience and a "
-                "http://localhost redirect URI of type 'Mobile and desktop "
-                "applications'. Looks like a GUID, e.g. "
+                "Overview. Register the app with the 'Accounts in any "
+                "organizational directory and personal Microsoft accounts' "
+                "audience (so both work/school and personal accounts can sign "
+                "in) and a http://localhost redirect URI of type 'Mobile and "
+                "desktop applications'. Looks like a GUID, e.g. "
                 "11112222-bbbb-3333-cccc-4444dddd5555."
             ),
         ),

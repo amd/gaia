@@ -23,8 +23,12 @@ def configure_console_encoding():
 
             # Also try to set the console code page to UTF-8
             try:
+                # chcp is a cmd.exe builtin; invoke via cmd /c so we avoid shell=True
                 subprocess.run(
-                    ["chcp", "65001"], capture_output=True, shell=True, check=False
+                    ["cmd", "/c", "chcp", "65001"],
+                    capture_output=True,
+                    shell=False,
+                    check=False,
                 )
             except (subprocess.SubprocessError, OSError, FileNotFoundError):
                 pass  # Ignore if chcp command fails
