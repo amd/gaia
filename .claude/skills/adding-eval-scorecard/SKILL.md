@@ -21,6 +21,8 @@ This is a **phased checklist with a hard gate at the real-eval step** — the sc
 3. **doc-root** = the directory holding that canonical README. The scorecard lives at `<doc-root>/SCORECARD.md` — a **single file updated in place**, versioned via the publish snapshot (same as README.md). **There is no `scorecards/` directory.**
 4. **Eval vehicle**: what existing harness produces this agent's accuracy metric? (email → `gaia eval benchmark` over `tests/fixtures/email/`.) If none exists, STOP and surface that — propose the minimal harness before building; do not invent numbers.
 
+   **Expect none.** Email is the only agent with a corpus + harness; for every other agent this step is the long pole, not a lookup. Two traps: an `agent_type` in the scenario corpus may name a **ChatAgent prompt profile** rather than your package (so a green scenario is measuring something else), and the ground truth itself is human judgment the factory does not automate. Build the corpus + deterministic fixture harness first — see [`porting-agent-to-hub`](../porting-agent-to-hub/SKILL.md) Phase 4 — then return here for the adapter and gate.
+
 ## Phase 2 — Write the adapter (harness → payload)
 
 Copy `hub/agents/email/python/packaging/gen_scorecard.py` as the template. The adapter:

@@ -644,7 +644,7 @@ class ShellToolsMixin:
                         timeout=timeout,
                         check=False,
                         env=os.environ.copy(),
-                        shell=use_shell,
+                        shell=use_shell,  # nosec B602 - Windows-only; command whitelist-validated above, shell needed for cmd.exe built-ins/pipes
                     )
                     duration = time.monotonic() - start_time
 

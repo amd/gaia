@@ -561,9 +561,11 @@ Conversation:
         # Determine language with defaults
         language = params.get("language")
         if language == "unknown":
-            # Default to Python as the safest option
-            language = "python"
-            logger.info("Defaulting to Python for unknown language")
+            # Default to TypeScript/Next.js — the only stack RoutingAgent
+            # supports. Any other value trips _enforce_typescript_only and
+            # kills the process (issue #2330).
+            language = "typescript"
+            logger.info("Defaulting to TypeScript (Next.js) for unknown language")
 
         # Determine project type with smart defaults based on language
         project_type = params.get("project_type")

@@ -82,6 +82,9 @@ Once it runs and is documented (README/SPEC/SKILL per the doc-sync rule), ship i
   [`hub-publishing.mdx`](../../../docs/guides/hub-publishing.mdx) guide.
 - **Frozen-binary + npm sidecar** (like the email agent): the
   [`agent-hub-release`](../agent-hub-release/SKILL.md) skill.
+- **Taking an agent that already exists to a publishable, Agent-UI-usable state**
+  (the parity kit, the generalize-before-documenting rule, the day-one gate): the
+  [`porting-agent-to-hub`](../porting-agent-to-hub/SKILL.md) skill.
 
 ## Reference
 

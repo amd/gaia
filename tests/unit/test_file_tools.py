@@ -825,3 +825,120 @@ class TestReadFileBinaryGuard:
         assert result.get("status") != "error" or "index_document" not in result.get(
             "error", ""
         )
+
+
+# ===========================================================================
+# 10. Read tools honor the --allowed-paths sandbox (CWE-862 regression)
+# ===========================================================================
+
+
+@pytest.fixture
+def sandboxed_read_tools(tmp_path, monkeypatch):
+    """Register the read tools on a mixin whose PathValidator sandboxes to safe/.
+
+    Returns (tools_by_name, safe_dir, secret_dir). ``secret_dir`` is outside
+    the allowlist; reads targeting it must be denied.
+
+    ``_is_interactive`` is forced False so out-of-sandbox paths auto-deny
+    deterministically — otherwise, under ``pytest -s`` on a real TTY, the
+    validator would call ``input()`` and hang the test.
+    """
+    from gaia import security as _security
+    from gaia.security import PathValidator
+
+    monkeypatch.setattr(_security, "_is_interactive", lambda: False)
+
+    safe_dir = tmp_path / "safe"
+    safe_dir.mkdir()
+    secret_dir = tmp_path / "secret"
+    secret_dir.mkdir()
+
+    inst = _StubMixin()
+    inst.path_validator = PathValidator(allowed_paths=[str(safe_dir)])
+    inst.register_file_search_tools()
+
+    names = ("read_file", "search_file_content", "get_file_info", "analyze_data_file")
+    tools = {name: _TOOL_REGISTRY[name]["function"] for name in names}
+    return tools, safe_dir, secret_dir
+
+
+class TestReadToolsSandbox:
+    """read tools must enforce the same allowlist that write_file enforces."""
+
+    def _denied(self, result) -> bool:
+        return result.get("status") == "error" and "not in allowed paths" in result.get(
+            "error", ""
+        )
+
+    def test_read_file_inside_sandbox_succeeds(self, sandboxed_read_tools):
+        tools, safe_dir, _ = sandboxed_read_tools
+        ok = safe_dir / "ok.txt"
+        ok.write_text("safe content", encoding="utf-8")
+
+        result = tools["read_file"](str(ok))
+
+        assert result["status"] == "success"
+        assert result["content"] == "safe content"
+
+    def test_read_file_outside_sandbox_denied(self, sandboxed_read_tools):
+        tools, _, secret_dir = sandboxed_read_tools
+        secret = secret_dir / "credentials.txt"
+        secret.write_text("API_KEY=ghp_SECRETTOKEN_12345", encoding="utf-8")
+
+        result = tools["read_file"](str(secret))
+
+        assert self._denied(result)
+        # The secret content must never reach the caller/LLM.
+        assert "ghp_SECRETTOKEN_12345" not in str(result)
+
+    def test_search_file_content_outside_sandbox_denied(self, sandboxed_read_tools):
+        tools, _, secret_dir = sandboxed_read_tools
+        (secret_dir / "creds.env").write_text("TOKEN=abc123", encoding="utf-8")
+
+        result = tools["search_file_content"]("TOKEN", directory=str(secret_dir))
+
+        assert self._denied(result)
+        assert "abc123" not in str(result)
+
+    def test_search_file_content_denies_before_existence_probe(
+        self, sandboxed_read_tools
+    ):
+        """A nonexistent out-of-sandbox dir returns access-denied, not a
+        'Directory not found' existence oracle."""
+        tools, _, secret_dir = sandboxed_read_tools
+        missing = str(secret_dir / "does_not_exist")
+
+        result = tools["search_file_content"]("x", directory=missing)
+
+        assert self._denied(result)
+        assert "not found" not in result.get("error", "").lower()
+
+    def test_get_file_info_outside_sandbox_denied(self, sandboxed_read_tools):
+        tools, _, secret_dir = sandboxed_read_tools
+        secret = secret_dir / "notes.txt"
+        secret.write_text("line1\nline2\n", encoding="utf-8")
+
+        result = tools["get_file_info"](str(secret))
+
+        assert self._denied(result)
+        assert "line1" not in str(result)
+
+    def test_analyze_data_file_outside_sandbox_denied(self, sandboxed_read_tools):
+        tools, _, secret_dir = sandboxed_read_tools
+        secret = secret_dir / "data.csv"
+        secret.write_text("name,salary\nalice,999999\n", encoding="utf-8")
+
+        result = tools["analyze_data_file"](str(secret))
+
+        assert self._denied(result)
+        assert "999999" not in str(result)
+
+    def test_read_file_no_validator_still_reads(self, read_file_fn, tmp_path):
+        """A mixin host with no PathValidator keeps working (backward compat)."""
+        f = tmp_path / "plain.txt"
+        f.write_text("no validator here", encoding="utf-8")
+
+        result = read_file_fn(str(f))
+
+        assert result["status"] == "success"
+        assert result["content"] == "no validator here"

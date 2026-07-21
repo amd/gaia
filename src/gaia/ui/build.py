@@ -79,20 +79,24 @@ def ensure_webui_built(log_fn=print, warn_fn=None, _webui_dir=None):
         warn_fn("Warning: npm not found. Cannot auto-rebuild Agent UI frontend.")
         return False
 
-    # On Windows, npm is a .cmd batch file requiring shell execution
-    _shell = sys.platform == "win32"
+    # On Windows npm is a .cmd batch file, which CreateProcess can't launch
+    # directly; invoke via `cmd /c` (args are static) so we avoid shell=True.
+    def _npm(*args):
+        if sys.platform == "win32":
+            return ["cmd", "/c", "npm", *args]
+        return ["npm", *args]
 
     # Step 1 — npm install (only if node_modules/ missing)
     if not (webui_dir / "node_modules").is_dir():
         log_fn("Installing Agent UI frontend dependencies...")
         try:
             subprocess.run(
-                ["npm", "install"],
+                _npm("install"),
                 cwd=str(webui_dir),
                 check=True,
                 capture_output=True,
                 text=True,
-                shell=_shell,
+                shell=False,
             )
         except subprocess.CalledProcessError as e:
             warn_fn(f"Warning: npm install failed: {e.stderr}")
@@ -106,10 +110,10 @@ def ensure_webui_built(log_fn=print, warn_fn=None, _webui_dir=None):
     log_fn("Building Agent UI frontend...")
     try:
         subprocess.run(
-            ["npm", "run", "build"],
+            _npm("run", "build"),
             cwd=str(webui_dir),
             check=True,
-            shell=_shell,
+            shell=False,
         )
         log_fn("Agent UI frontend built successfully.")
         return True

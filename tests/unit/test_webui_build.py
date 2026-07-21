@@ -126,10 +126,17 @@ class TestEnsureWebuiBuilt(unittest.TestCase):
 
             msgs, mock_run, result = self._call(webui_dir)
 
+        # On Windows npm is invoked via `cmd /c npm ...` (avoids shell=True);
+        # on other platforms it's the bare `npm ...`. Match the npm suffix and
+        # assert every call runs shell=False.
         called_cmds = [c.args[0] for c in mock_run.call_args_list]
         self.assertTrue(
-            any(c == ["npm", "run", "build"] for c in called_cmds),
-            f"Expected ['npm', 'run', 'build'] call, got: {called_cmds}",
+            any(c[-3:] == ["npm", "run", "build"] for c in called_cmds),
+            f"Expected an 'npm run build' call, got: {called_cmds}",
+        )
+        self.assertTrue(
+            all(c.kwargs.get("shell") is False for c in mock_run.call_args_list),
+            "All npm calls must run with shell=False",
         )
         self.assertTrue(result, "Expected True when build succeeds")
 
