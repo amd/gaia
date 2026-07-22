@@ -7,6 +7,16 @@ contract version is tracked separately as
 
 ## [Unreleased]
 
+### Fixed
+
+- **Re-proposal dedup survives headless/scheduled teardown (#2381).**
+  `record_proposal` wrote its dedup row through `query()`, which never commits,
+  so when the scheduler rebuilt the agent between fires (closing the DB
+  connection) the row was lost and the same still-in-inbox message was proposed
+  again on every fire. The INSERT is now committed via `db.transaction()`, so a
+  proposal recorded on one connection is visible after teardown/rebuild — matching
+  the commit discipline already used by `record_outcome` and `record_autonomy_action`.
+
 ### Changed
 
 - **Daemon-supervised scheduling (V2-15, #2156).** When the GAIA daemon spawns
