@@ -28,6 +28,8 @@ from gaia.daemon.custody.constants import (
     HOST_API_PREFIX,
     HOST_API_VERSION,
     MEMORY_SCOPE_AGENT,
+    RAG_QUERY_DEFAULT_K,
+    RAG_QUERY_MAX_K,
 )
 from gaia.daemon.custody.errors import CustodyError, UnknownSecretError
 
@@ -49,6 +51,30 @@ def _resolve_agent(auth, authorization: "str | None") -> str:
             f"'{CUSTODY_AUTH_SCHEME} <secret>'."
         )
     return auth.resolve(credential)
+
+
+def _parse_rag_k(raw) -> int:
+    """Coerce the request's ``k`` to a bounded positive int, or raise a 400.
+
+    Guards the SQL ``LIMIT``: a negative/zero ``k`` becomes ``LIMIT -1`` (full
+    corpus dump) and a null/non-integer ``k`` raises ``TypeError`` (500). Both
+    are caller-input errors, so reject them loudly with a 400 instead of passing
+    them through to the query.
+    """
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"'k' must be an integer between 1 and {RAG_QUERY_MAX_K}; "
+                f"got {raw!r}."
+            ),
+        )
+    if raw < 1 or raw > RAG_QUERY_MAX_K:
+        raise HTTPException(
+            status_code=400,
+            detail=f"'k' must be between 1 and {RAG_QUERY_MAX_K}; got {raw}.",
+        )
+    return raw
 
 
 def build_custody_router(auth, store) -> APIRouter:
@@ -77,7 +103,7 @@ def build_custody_router(auth, store) -> APIRouter:
                 status_code=400,
                 detail="POST /host/v1/rag/query requires a non-empty 'query'.",
             )
-        k = int(payload.get("k", 4))
+        k = _parse_rag_k(payload.get("k", RAG_QUERY_DEFAULT_K))
         chunks = store.query_rag(agent_id, query, k=k)
         return {"chunks": chunks}
 
