@@ -1,6 +1,6 @@
 ---
 title: "v0.23.0"
-description: "The Agent UI gets in-app install, auto-update, and a first-run wizard so a new user never touches a terminal; the email agent gains a full-autonomy engine that learns what it can do without asking; Outlook now covers work/school accounts with device-code sign-in; and every agent runs as its own daemon-supervised process instead of living inside the UI."
+description: "The Agent UI gets in-app install, auto-update, and a first-run wizard so a new user never touches a terminal; the email agent gains a full-autonomy engine that files low-signal mail on its own while always confirming anything destructive; Outlook now covers work/school accounts with device-code sign-in; and every agent runs as its own daemon-supervised process instead of living inside the UI."
 ---
 
 # GAIA v0.23.0 Release Notes
@@ -9,9 +9,9 @@ GAIA v0.23.0 is a large release built around making the Agent UI a real applicat
 
 **Why upgrade:**
 - **Install and update from inside the app** — the Agent UI can install itself, pull updates from a real feed, and open `gaia://` links from the website; a first-run wizard checks your hardware and downloads a model before you ever open a terminal.
-- **The email agent can run your inbox for you (beta)** — turn on autonomy and it files low-signal mail silently, always asks before anything destructive, and gets less chatty over time as it earns your trust — correct it once and it goes back to asking.
+- **The email agent can run your inbox for you (beta)** — turn on autonomy and it files low-signal mail on its own, always asks before anything destructive, and pulls back the moment you correct it.
 - **Outlook now works for work and school accounts** — sign in with a short device code, no Azure app registration required.
-- **Agents run as their own processes** — each agent is a daemon-supervised sidecar instead of code living inside the Agent UI, so a scheduled job or a long chat outlives closing the window.
+- **Agents run as their own processes** — each agent is a daemon-supervised sidecar instead of code living inside the Agent UI, so a running agent (a long chat or an in-flight job) survives closing the window.
 - **Switching agents is instant** — every agent now shares one model and context size, so the Lemonade-side cold reload that used to cost seconds on every switch is gone.
 - **A dedicated security audit** — deterministic scanning plus a reasoning pass over specific vulnerability classes, feeding CVSS-scored findings into GitHub's private code-scanning tab instead of a public issue.
 
@@ -29,7 +29,7 @@ GAIA v0.23.0 is a large release built around making the Agent UI a real applicat
 
 ### Closing the Agent UI no longer stops the email agent
 
-Sidecar agents (currently email) are now supervised by the always-on `gaia` daemon, not the Agent UI backend process. Before, closing the UI killed the email sidecar along with it. Now the sidecar keeps running — so a scheduled briefing or a long-running job survives the window closing — and you stop it explicitly: `gaia daemon stop-agent email` or `gaia daemon stop` (PR [#2144](https://github.com/amd/gaia/pull/2144)).
+Sidecar agents (currently email) are now supervised by the always-on `gaia` daemon, not the Agent UI backend process. Before, closing the UI killed the email sidecar along with it. Now the sidecar keeps running — so an in-flight job or a long chat survives the window closing — and you stop it explicitly: `gaia daemon stop-agent email` or `gaia daemon stop` (PR [#2144](https://github.com/amd/gaia/pull/2144)).
 
 ### Hub agent packages moved to an agent-first layout
 
@@ -43,13 +43,13 @@ Hub packages used to be split by language first — `hub/agents/python/email/` a
 
 The Agent UI shell had three install/update paths that either didn't exist or were dead stubs. Clicking install on a Hub agent used to hit an IPC handler that threw "not yet implemented"; now it drives the real backend install runtime with streaming progress, so importing an agent from the Hub actually works. Auto-update moved off a hard-wired GitHub Releases check onto a configurable R2 feed with a mutable channel pointer, and an app with no feed configured says so loudly instead of silently checking a dead URL. The website's "Open in GAIA" button now has somewhere to land: the app registers the `gaia://` protocol and handles `gaia://hub/install/<id>` deep links on all three desktop platforms (PR [#2196](https://github.com/amd/gaia/pull/2196)).
 
-None of that helps if a new user doesn't know where to start, so first launch on a fresh machine now opens a wizard: it scans your hardware and gates on real capability (RAM, disk, NPU, GPU) instead of finding out at runtime, downloads the recommended model with visible progress and retry instead of swallowing a failed download, and offers to connect an account (Google, for email triage) before you ever reach chat (PR [#2204](https://github.com/amd/gaia/pull/2204)). The in-app Hub itself is reorganized into Apps, Components, and Agents lanes, and every install now goes through a trust gate — anything that isn't AMD-verified requires an explicit override tick before it will install (PR [#2201](https://github.com/amd/gaia/pull/2201)).
+None of that helps if a new user doesn't know where to start, so first launch on a fresh machine now opens a wizard: it scans your hardware and gates on real capability (RAM, disk, NPU, GPU) instead of finding out at runtime, downloads the recommended model with visible progress and retry instead of swallowing a failed download, and offers to connect an account (Google, for email triage) before you ever reach chat (PR [#2204](https://github.com/amd/gaia/pull/2204)). The in-app Hub itself is reorganized into Apps, Components, and Agents lanes, and adds a trust gate in the UI — a non-AMD-verified agent requires an explicit override before install (enforced in the backend for native binary agents; a UI-level prompt for others) (PR [#2201](https://github.com/amd/gaia/pull/2201)).
 
 ---
 
 ### The email agent can decide for itself — full autonomy (beta)
 
-Until now the email agent only ever acted when you asked it to. Turn on autonomy and it triages and files low-signal mail on its own, on an earn-trust gradient: cautious the first day, and progressively quieter for senders and categories that have proven themselves — correct it once and it's back to asking immediately. It never silently sends, forwards, permanently deletes, quarantines, or RSVPs; those always wait for your confirmation regardless of how much trust a sender has earned. Every auto-executed action is reversible and comes with undo (PR [#2363](https://github.com/amd/gaia/pull/2363)):
+Until now the email agent only ever acted when you asked it to. Turn on autonomy and it triages and files low-signal mail on its own, and it learns from your corrections — correct it once and it's back to asking for that sender immediately. (The complementary direction — growing quieter as a sender earns trust — is scaffolded in this release but not yet active.) It never silently sends, forwards, permanently deletes, quarantines, or RSVPs; those always wait for your confirmation regardless of how much trust a sender has earned. Every auto-executed action is reversible and comes with undo (PR [#2363](https://github.com/amd/gaia/pull/2363)):
 
 ```
 POST /v1/email/agent/autonomy      {"level": "earn_trust"}   # "off" is the kill switch
@@ -68,7 +68,7 @@ The Microsoft connector was pinned to personal Outlook.com accounts only, so a w
 
 Agents used to run as code loaded directly into whatever hosted them — the email agent's sidecar lived and died with the Agent UI backend, and every future agent would have needed to reinvent that lifecycle plumbing. Now the always-on `gaia` daemon owns agent supervision: the UI, `gaia email` on the CLI, and `gaia api` are all thin clients of the same daemon-managed sidecar, so they share one running instance instead of each spawning their own. A killed daemon reaps its orphaned sidecars on the next start instead of leaking processes (PR [#2144](https://github.com/amd/gaia/pull/2144)).
 
-Behind that one architectural move: `gaia email` and `gaia api` now both relay through the daemon instead of running the email agent in-process (PRs [#2191](https://github.com/amd/gaia/pull/2191), [#2205](https://github.com/amd/gaia/pull/2205)), chat streams over a proper SSE reverse proxy (PR [#2188](https://github.com/amd/gaia/pull/2188)), a host-owned broker serializes model loads across agents so two sidecars can no longer race-evict each other's model out from under them (PR [#2194](https://github.com/amd/gaia/pull/2194)), a per-agent-scoped custody API keeps one agent from ever reading another's memory or sessions (PR [#2197](https://github.com/amd/gaia/pull/2197)), scheduled jobs (briefings, sends, snoozes) move onto one daemon-owned clock so they keep firing after the process that used to own them closes (PR [#2199](https://github.com/amd/gaia/pull/2199)), OAuth tokens forward from the daemon to a sidecar as short-lived access tokens rather than the sidecar holding your refresh token (PR [#2203](https://github.com/amd/gaia/pull/2203)), and existing `~/.gaia` sessions and memory migrate into the new layout automatically, once, without data loss (PR [#2200](https://github.com/amd/gaia/pull/2200)).
+Behind that one architectural move: `gaia email` and `gaia api` now both relay through the daemon instead of running the email agent in-process (PRs [#2191](https://github.com/amd/gaia/pull/2191), [#2205](https://github.com/amd/gaia/pull/2205)), chat streams over a proper SSE reverse proxy (PR [#2188](https://github.com/amd/gaia/pull/2188)), a host-owned broker serializes model *loads* across agents so two sidecars don't collide loading models at the same time (PR [#2194](https://github.com/amd/gaia/pull/2194)), a per-agent-scoped custody API keeps one agent from ever reading another's memory or sessions (PR [#2197](https://github.com/amd/gaia/pull/2197)), the scheduling machinery (briefings, sends, snoozes) is consolidated onto a single daemon-owned clock (PR [#2199](https://github.com/amd/gaia/pull/2199)), OAuth tokens forward from the daemon to a sidecar as short-lived access tokens rather than the sidecar holding your refresh token (PR [#2203](https://github.com/amd/gaia/pull/2203)), and existing `~/.gaia` sessions and memory migrate into the new layout automatically, once, without data loss (PR [#2200](https://github.com/amd/gaia/pull/2200)).
 
 ---
 
