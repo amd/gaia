@@ -127,6 +127,59 @@ def _reg_to_info(reg) -> AgentInfo:
     )
 
 
+def _sidecar_required_connections(spec) -> list:
+    """Build ``[ConnectorRequirement]`` for a daemon sidecar spec (#2408).
+
+    A frozen-binary sidecar is absent from the in-process registry, so its
+    class-level ``REQUIRED_CONNECTORS`` never reaches the connector grant flow.
+    Reconstruct them from the daemon spec's ``forward_providers`` +
+    ``forward_scopes`` literals. A provider the spec forwards but declares no
+    scopes for is skipped (nothing to grant).
+    """
+    from gaia.connectors.providers.base import ConnectorRequirement
+
+    reqs = []
+    for provider in spec.forward_providers:
+        scopes = spec.forward_scopes.get(provider)
+        if not scopes:
+            continue
+        reqs.append(
+            ConnectorRequirement(
+                connector_id=provider,
+                scopes=tuple(scopes),
+                reason=(
+                    f"{spec.display_name} needs access to your {provider} "
+                    "account to read, organize, and reply on your behalf."
+                ),
+            )
+        )
+    return reqs
+
+
+def installed_sidecar_required_connections() -> "dict[str, list]":
+    """Map ``namespaced_agent_id -> [ConnectorRequirement]`` for installed
+    sidecar agents that are absent from the in-process registry (#2408).
+
+    The connector grant flow reads ``required_connections`` off the registry;
+    frozen-binary sidecars never land there, so it can neither offer nor
+    resolve their mailbox scopes on a fresh install. This bridges the daemon
+    sidecar spec into that flow the same way :func:`_installed_sidecar_agents`
+    bridges the agent picker.
+    """
+    from gaia.daemon.sidecars.spec import builtin_specs
+    from gaia.hub import installer
+
+    installed = installer.list_installed()
+    out: "dict[str, list]" = {}
+    for agent_id, spec in builtin_specs().items():
+        if agent_id not in installed:
+            continue
+        reqs = _sidecar_required_connections(spec)
+        if reqs:
+            out[f"installed:{agent_id}"] = reqs
+    return out
+
+
 def _installed_sidecar_agents(registry) -> list[AgentInfo]:
     """Hub-installed sidecar agents that the daemon supervises out-of-process.
 
@@ -164,6 +217,18 @@ def _installed_sidecar_agents(registry) -> list[AgentInfo]:
             continue
         meta = cached.get(agent_id, {})
         sentinel = installed[agent_id]
+        # Surface the sidecar's OAuth requirements so the Connectors panel
+        # lists it under PER-AGENT GRANTS and the connect flow offers its
+        # mailbox scopes (#2408) — otherwise it shows "No agents require
+        # access" and the grant is never created on a fresh install.
+        required_connections = [
+            {
+                "connector_id": cr.connector_id,
+                "scopes": list(cr.scopes),
+                "reason": cr.reason,
+            }
+            for cr in _sidecar_required_connections(spec)
+        ]
         agents.append(
             AgentInfo(
                 id=agent_id,
@@ -172,6 +237,7 @@ def _installed_sidecar_agents(registry) -> list[AgentInfo]:
                 source="installed",
                 conversation_starters=[],
                 models=list(meta.get("models", [])),
+                required_connections=required_connections,
                 namespaced_agent_id=f"installed:{agent_id}",
                 category=meta.get("category", "general"),
                 tags=list(meta.get("tags", [])),

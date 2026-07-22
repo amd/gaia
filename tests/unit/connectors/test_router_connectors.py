@@ -390,6 +390,40 @@ class TestAuthorizeGrantAgents:
         )
         assert resp.status_code == 400
 
+    def test_authorize_resolves_sidecar_absent_from_registry(
+        self, ui_api_client, monkeypatch
+    ):
+        """Fresh install: the email agent is a frozen binary absent from the
+        in-process registry. Its scopes must still resolve via the daemon
+        sidecar bridge instead of 404ing ``installed:email`` (#2408)."""
+        from gaia.connectors.providers.base import ConnectorRequirement
+
+        mock_start = AsyncMock(
+            return_value={"flow_id": "f1", "authorization_url": "https://auth"}
+        )
+        monkeypatch.setattr("gaia.connectors.start_authorization", mock_start)
+        # Registry is empty (no wheel agents on a consumer box).
+        ui_api_client.app.state.agent_registry = _fake_registry(
+            "installed:other", "google", ["openid"]
+        )
+        monkeypatch.setattr(
+            "gaia.ui.routers.agents.installed_sidecar_required_connections",
+            lambda: {
+                "installed:email": [
+                    ConnectorRequirement(connector_id="google", scopes=self._SCOPES)
+                ]
+            },
+        )
+
+        resp = ui_api_client.post(
+            "/api/connectors/google/authorize",
+            json={"scopes": ["openid"], "grant_agents": ["installed:email"]},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 200, resp.text
+        _, kwargs = mock_start.call_args
+        assert kwargs["grant_agents"] == {"installed:email": self._SCOPES}
+
     def test_configure_resolves_grant_agents_into_config(
         self, ui_api_client, monkeypatch
     ):

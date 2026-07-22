@@ -229,6 +229,32 @@ class TestInstalledSidecarAgentsMerge:
         assert resp.status_code == 200
         assert resp.json()["id"] == "email"
 
+    def test_installed_email_surfaces_required_connections(self):
+        """The sidecar's Google/Microsoft OAuth requirements must reach the
+        picker so the Connectors panel lists it under PER-AGENT GRANTS instead
+        of "No agents require access" (#2408)."""
+        client = self._client_with_empty_registry()
+        with (
+            patch(
+                "gaia.hub.installer.list_installed", return_value=self._email_sentinel()
+            ),
+            patch("gaia.hub.catalog.cached_index_agents", return_value=[]),
+        ):
+            data = client.get("/api/agents").json()
+
+        email = data["agents"][0]
+        by_connector = {rc["connector_id"]: rc for rc in email["required_connections"]}
+        assert set(by_connector) == {"google", "microsoft"}
+        assert (
+            "https://www.googleapis.com/auth/gmail.modify"
+            in by_connector["google"]["scopes"]
+        )
+        assert (
+            "https://www.googleapis.com/auth/calendar.readonly"
+            in by_connector["google"]["scopes"]
+        )
+        assert by_connector["google"]["reason"]
+
 
 class TestGetAgent:
     def test_known_agent_returns_200(self, client):

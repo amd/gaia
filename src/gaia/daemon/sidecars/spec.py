@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Mapping, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -66,6 +66,17 @@ class AgentSidecarSpec:
     grant_agent_id: Optional[str] = None
     forward_providers: Tuple[str, ...] = field(default_factory=tuple)
     forwarded_mode_env_var: Optional[str] = None
+    # provider -> the OAuth scopes the sidecar's REQUIRED_CONNECTORS declares
+    # for that provider (#2408). A frozen-binary sidecar is absent from the
+    # host's in-process agent registry, so the connector grant flow can't read
+    # its class-level REQUIRED_CONNECTORS; the host bridges these literals into
+    # the registry-facing view instead. Kept literal (not imported from the hub
+    # wheel) for the same reason as the env-var contracts above — core never
+    # depends on the wheel. MUST equal the wheel's declared scopes:
+    # google  == gaia_agent_email.scopes.ALL_SCOPES
+    # microsoft == gaia_agent_email.outlook_scopes.(OUTLOOK_MAIL_SCOPES
+    #              + OUTLOOK_CALENDAR_SCOPES)
+    forward_scopes: Mapping[str, Tuple[str, ...]] = field(default_factory=dict)
 
 
 # The email agent's caller-auth token channel (#1706). MUST equal
@@ -89,6 +100,26 @@ _EMAIL_GRANT_AGENT_ID = "installed:email"
 # The email sidecar's forwarded-credentials mode switch (#2154). MUST equal
 # gaia_agent_email.forwarded_credentials.FORWARDED_MODE_ENV_VAR — a literal.
 _EMAIL_FORWARDED_MODE_ENV_VAR = "GAIA_EMAIL_FORWARDED_CREDENTIALS"
+
+# The email sidecar's per-provider OAuth scopes (#2408). Literals mirroring the
+# hub wheel's REQUIRED_CONNECTORS so the host can offer/grant the mailbox on a
+# fresh install without importing the frozen binary. MUST equal:
+#   google    -> gaia_agent_email.scopes.ALL_SCOPES
+#   microsoft -> gaia_agent_email.outlook_scopes.OUTLOOK_MAIL_SCOPES
+#                + OUTLOOK_CALENDAR_SCOPES
+_EMAIL_FORWARD_SCOPES: "dict[str, Tuple[str, ...]]" = {
+    "google": (
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.send",
+        "https://www.googleapis.com/auth/calendar.events",
+        "https://www.googleapis.com/auth/calendar.readonly",
+    ),
+    "microsoft": (
+        "https://graph.microsoft.com/Mail.ReadWrite",
+        "https://graph.microsoft.com/Mail.Send",
+        "https://graph.microsoft.com/Calendars.ReadWrite",
+    ),
+}
 
 
 def _default_email_src_dir() -> Path:
@@ -114,5 +145,6 @@ def builtin_specs() -> "dict[str, AgentSidecarSpec]":
             grant_agent_id=_EMAIL_GRANT_AGENT_ID,
             forward_providers=("google", "microsoft"),
             forwarded_mode_env_var=_EMAIL_FORWARDED_MODE_ENV_VAR,
+            forward_scopes=_EMAIL_FORWARD_SCOPES,
         ),
     }

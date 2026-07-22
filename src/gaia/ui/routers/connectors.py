@@ -314,8 +314,22 @@ def _resolve_grant_scopes(
     if registry is None:
         raise HTTPException(status_code=503, detail="Agent registry not initialized")
 
-    by_nsid = {reg.namespaced_agent_id: reg for reg in registry.list()}
-    unknown = [nsid for nsid in agent_ids if nsid not in by_nsid]
+    # namespaced_agent_id -> [ConnectorRequirement]. Frozen-binary sidecar
+    # agents (e.g. email) are absent from the in-process registry, so bridge
+    # their requirements from the daemon sidecar spec (#2408) — otherwise the
+    # connect flow 404s ``installed:email`` and the grant is never created on a
+    # fresh install. The registry wins for any id it already carries (a wheel
+    # install has richer metadata).
+    from .agents import installed_sidecar_required_connections
+
+    reqs_by_nsid = {
+        reg.namespaced_agent_id: list(reg.required_connections)
+        for reg in registry.list()
+    }
+    for nsid, reqs in installed_sidecar_required_connections().items():
+        reqs_by_nsid.setdefault(nsid, reqs)
+
+    unknown = [nsid for nsid in agent_ids if nsid not in reqs_by_nsid]
     if unknown:
         raise HTTPException(
             status_code=404,
@@ -324,9 +338,8 @@ def _resolve_grant_scopes(
 
     resolved: Dict[str, List[str]] = {}
     for nsid in agent_ids:
-        reg = by_nsid[nsid]
         scopes: set[str] = set()
-        for cr in reg.required_connections:
+        for cr in reqs_by_nsid[nsid]:
             if cr.connector_id == connector_id:
                 scopes.update(cr.scopes)
         if not scopes:
