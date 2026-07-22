@@ -112,9 +112,10 @@ def get_agent_registry():
 
 
 # Agent types served by an out-of-process sidecar with a dedicated dispatch
-# branch below. They are never registry-loadable: a binary-only hub install
-# ships no importable wheel, so registry.get() is None even when the agent is
-# installed and healthy.
+# branch below. Since #2408, an installed sidecar IS registry-loadable (the
+# installer bridge registers it for the connectors grant flow), but its
+# factory always raises — chat dispatch must still go through the branch
+# below, never registry.create_agent().
 _SIDECAR_AGENT_TYPES = frozenset({"email"})
 
 

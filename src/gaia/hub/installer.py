@@ -1175,13 +1175,15 @@ def install(
                 percent=90,
                 version=resolved_version,
             )
-            # Binary installs have no site-packages to scan (nothing to
-            # hot-register), regardless of the manifest's declared language.
-            hot = (
-                False
-                if artifact_kind == ARTIFACT_KIND_BINARY
-                else _hot_register(agent_id, install_dir, language, registry)
-            )
+            # Binary installs have no site-packages to scan (nothing for
+            # _hot_register), regardless of the manifest's declared language —
+            # bridge it into the registry directly instead, so a sidecar
+            # agent's connector grants work without a server restart (#2408).
+            if artifact_kind == ARTIFACT_KIND_BINARY:
+                register_installed_sidecars(registry)
+                hot = registry is not None and registry.get(agent_id) is not None
+            else:
+                hot = _hot_register(agent_id, install_dir, language, registry)
 
             # NOTE: the backup snapshot is intentionally retained after a
             # successful update so rollback() can restore the prior version. It
