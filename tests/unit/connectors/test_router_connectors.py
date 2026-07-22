@@ -562,6 +562,8 @@ class TestSidecarInstallNoRestart:
             # Drive the exact call the Hub panel's background install task
             # makes (gaia.ui.routers.hub._run_install -> installer.install),
             # completing a binary-kind install against the same registry.
+            # trusted=True mirrors the UI's "Trust & Install" confirmation that
+            # a non-verified (experimental) agent like email requires (#2410).
             installer_mod.install(
                 "email",
                 version="0.1.0",
@@ -569,6 +571,7 @@ class TestSidecarInstallNoRestart:
                 fetcher=lambda url: artifact_bytes,
                 registry=registry,
                 skip_compatibility_check=True,
+                trusted=True,
                 platform_key="linux-x64",
             )
 
