@@ -377,6 +377,9 @@ def _install_binary_agent(tmp_path, agent_id="email", platform_key="linux-x64"):
         run_pip=refuse_pip,
         install_root=tmp_path,
         platform_key=platform_key,
+        # Non-verified binary agent installed to set up the lifecycle/health
+        # test; the trust gate itself is covered in test_hub_security.py.
+        trusted=True,
     )
     return installer.agent_install_dir(agent_id, tmp_path) / f"{agent_id}-agent"
 
