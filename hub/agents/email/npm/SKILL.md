@@ -253,9 +253,10 @@ session — an overlapping `/query` returns **409**. See `SPEC.md` for the full 
 
 ### Full autonomy (`/v1/email/agent/autonomy/*`)
 
-The agent can run **proactively** on an earn-trust gradient: it archives low-signal mail
-on its own once a sender/category has *proven itself*, drafts replies for review, and
-**always asks before anything destructive** (send / forward / permanent-delete / RSVP).
+The agent can run **proactively** at the `earn_trust` level: it archives low-signal mail
+on its own **where your explicit preferences already sanction it** (a low-priority sender,
+or a category you default to archive), drafts replies for review, and **always asks before
+anything destructive** (send / forward / permanent-delete / RSVP).
 Turn it on and inspect the earned trust:
 
 ```js
@@ -277,9 +278,11 @@ const status = await (await fetch(`${base}/v1/email/agent/autonomy/s1`)).json();
 // { level, enabled, trust_min_samples, trust_threshold, trusted_scope_count, scopes:[…] }
 ```
 
-The agent **learns from you**: undoing an auto-archive (`undo_archive_batch`) is captured
-as a correction that pulls trust back below the bar; accepted suggestions lift it over.
-Every auto-action is reversible with undo. A bad `level` returns **400**; an unknown
+The agent **learns from your corrections**: undoing an auto-archive (`undo_archive_batch`)
+is captured as a negative outcome that pulls the sender/category back below the trust bar.
+(Positive-outcome accrual — trust *rising* as suggestions are accepted or left standing —
+is not yet wired, so today the ledger only ratchets trust down.) Every auto-action is
+reversible with undo. A bad `level` returns **400**; an unknown
 session returns **404**.
 
 ## Running in a server / long-lived app
