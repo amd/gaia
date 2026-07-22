@@ -82,8 +82,10 @@ a substitute — they gate the logic, not the surface.
 - **CLI** command/flag/output → the real `gaia <subcommand>` and its output.
 - **HTTP API / REST** → the real request and the response (status + body).
 
-Evidence may live inline, in a follow-up comment, on an evidence branch, or behind an
-`assets.amd-gaia.ai` link (the R2 evidence bucket) — presence is what matters, not location. Do **not** flag when the change touches none of these surfaces
+Screenshot evidence should be **embedded in the PR description** as a rendered
+`![](assets.amd-gaia.ai/…)` image (R2 evidence bucket), not a bare link or a comment the
+reviewer must scroll to find. Text evidence (CLI/API/MCP) may sit inline in the description
+or a linked comment. A screenshot that doesn't render on the PR is not shown. Do **not** flag when the change touches none of these surfaces
 (internal refactor, docs, tests, CI), when the author marked a surface **N/A with a reason**,
 when the description points to evidence elsewhere, or when the matching evidence is already
 present. This is a nudge for a missing artifact, never a demand to re-run what the PR shows.

@@ -44,9 +44,10 @@ Mix automated and manual checks as needed.
 
 <!--
 Real-world proof matched to the surface you changed — GAIA tests on the surface a user
-actually touches. Green unit tests alone are not evidence. Paste inline, or link an
-assets.amd-gaia.ai (R2) URL / follow-up comment / evidence branch. Mark a surface N/A
-(with a reason) if the change doesn't touch it; delete the whole section only for pure
+actually touches. Green unit tests alone are not evidence. **Embed screenshots here in
+the description** as `![caption](https://assets.amd-gaia.ai/testing/<pr>/<run>/shot.png)`
+so they render on the PR — not a bare link, not comment-only. Mark a surface N/A (with a
+reason) if the change doesn't touch it; delete the whole section only for pure
 internal/docs/CI changes.
 -->
 
