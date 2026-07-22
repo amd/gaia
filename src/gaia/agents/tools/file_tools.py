@@ -1867,16 +1867,47 @@ class FileSearchToolsMixin:
             try:
                 fp = Path(file_path)
 
-                if not fp.exists():
-                    # Fuzzy fallback: search indexed documents by basename
-                    resolved = None
-                    basename = fp.name.lower()
+                def _resolve_indexed_basename(target: Path):
+                    """Return an already-indexed document Path whose basename
+                    matches *target*, or None. Consults only the in-sandbox index
+                    — never *target*'s on-disk state — so it cannot be used to
+                    probe files outside the sandbox."""
                     if hasattr(self, "rag") and self.rag and self.rag.indexed_files:
+                        wanted = target.name.lower()
                         for indexed_path in self.rag.indexed_files:
-                            if Path(indexed_path).name.lower() == basename:
-                                resolved = Path(indexed_path)
-                                break
-                    if resolved and resolved.exists():
+                            if Path(indexed_path).name.lower() == wanted:
+                                return Path(indexed_path)
+                    return None
+
+                # Enforce the --allowed-paths sandbox FIRST — before any existence
+                # or extension probe — so an out-of-sandbox path yields one
+                # identical refusal whether or not it exists and regardless of its
+                # extension (no file-existence/type oracle). An out-of-sandbox path
+                # proceeds only if its basename matches an indexed document that is
+                # itself inside the sandbox (the fuzzy fallback below).
+                denied = self._read_access_error(str(fp))
+                if denied:
+                    resolved = _resolve_indexed_basename(fp)
+                    if (
+                        resolved is None
+                        or not resolved.exists()
+                        or self._read_access_error(str(resolved))
+                    ):
+                        denied.update(
+                            {"has_errors": True, "operation": "analyze_data_file"}
+                        )
+                        return denied
+                    fp = resolved
+
+                if not fp.exists():
+                    # In-sandbox but missing: fuzzy-resolve to an indexed document
+                    # by basename (re-validated against the sandbox).
+                    resolved = _resolve_indexed_basename(fp)
+                    if (
+                        resolved
+                        and resolved.exists()
+                        and not self._read_access_error(str(resolved))
+                    ):
                         fp = resolved
                     else:
                         return {
@@ -1898,16 +1929,6 @@ class FileSearchToolsMixin:
                         "has_errors": True,
                         "operation": "analyze_data_file",
                     }
-
-                # Enforce the --allowed-paths sandbox on the resolved path
-                # (checked after the indexed-file fallback so legitimately
-                # indexed documents inside the sandbox still resolve).
-                denied = self._read_access_error(str(fp))
-                if denied:
-                    denied.update(
-                        {"has_errors": True, "operation": "analyze_data_file"}
-                    )
-                    return denied
 
                 # Read the file (use resolved fp path in case of fallback)
                 rows, all_columns, read_error = _read_tabular_file(str(fp))

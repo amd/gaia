@@ -106,12 +106,19 @@ function extractDeepLinkFromArgv(argv) {
  * untrusted web page, so the install MUST be gated behind an explicit per-agent
  * confirmation — the same trust bar the in-app install enforces (#2201). A bare
  * OS "Open GAIA?" prompt is NOT consent to download and run a specific agent.
- * If `confirm` does not return true, no install is attempted.
+ * If `confirm` does not return true, no install is attempted. `confirm` is
+ * expected to have shown the agent's real catalog tier and permissions first
+ * (see `buildInstallPrompt`), not just its bare id, before resolving true.
+ *
+ * Once confirmed, the install is sent with the trust override set — the
+ * backend's non-verified gate now covers every non-verified agent, not just
+ * native ones, and this out-of-band flow already required its own explicit
+ * per-agent confirmation regardless of tier.
  *
  * @param {{ action: string, agentId: string }} command
  * @param {{
  *   confirm: (command: {action: string, agentId: string}) => Promise<boolean>,
- *   installAgent: (agentId: string) => Promise<any>,
+ *   installAgent: (agentId: string, opts?: { trustNative?: boolean }) => Promise<any>,
  *   focusWindow?: () => void,
  *   logger?: { log?: (...a: any[]) => void, error?: (...a: any[]) => void },
  * }} deps
@@ -142,8 +149,82 @@ async function dispatchDeepLink(command, deps) {
   }
 
   log(`[deep-link] Confirmed — installing "${command.agentId}"`);
-  await installAgent(command.agentId);
+  await installAgent(command.agentId, { trustNative: true });
   return { installed: true };
 }
 
-module.exports = { parseDeepLink, extractDeepLinkFromArgv, dispatchDeepLink };
+// ── Informed trust prompt (security fix: gate ALL non-verified agents) ─────
+//
+// The bare confirm dialog above only ever showed the raw agent id — no tier,
+// no permissions, no AMD-verified indicator. That's per-agent confirmation,
+// but it isn't INFORMED consent. buildInstallPrompt renders the same facts
+// the in-app trust gate (hubLanes.trustGateFor) shows, from a catalog entry,
+// so the caller (main.cjs) can put them in front of the user before they
+// confirm.
+
+const TIER_LABEL = {
+  verified: "AMD Verified",
+  community: "Community",
+  experimental: "Experimental",
+};
+
+/** Normalize a possibly-missing/unknown tier the same way the in-app gate does. */
+function normalizeTier(entry) {
+  const t = entry && entry.security_tier;
+  return t === "verified" || t === "community" ? t : "experimental";
+}
+
+/**
+ * Build the confirmation prompt for a deep-link install from its catalog
+ * entry. Pure — no Electron dependency — so the trust posture is
+ * unit-testable without a running dialog.
+ *
+ * @param {{
+ *   id: string,
+ *   name?: string,
+ *   security_tier?: "verified" | "community" | "experimental",
+ *   permissions?: string[],
+ * } | null | undefined} entry — the agent's catalog entry.
+ * @returns {{ title: string, message: string, detail: string, requiresTrust: boolean }}
+ * @throws {Error} if no entry is given — never build a prompt for an agent
+ *   that couldn't be looked up; the caller must fail closed instead.
+ */
+function buildInstallPrompt(entry) {
+  if (!entry || typeof entry !== "object") {
+    throw new Error(
+      "buildInstallPrompt requires a catalog entry — refuse rather than prompting blind."
+    );
+  }
+
+  const tier = normalizeTier(entry);
+  const requiresTrust = tier !== "verified";
+  const name = entry.name || entry.id;
+  const permissions = Array.isArray(entry.permissions) ? entry.permissions : [];
+
+  const detail = [
+    `Tier: ${TIER_LABEL[tier]}${requiresTrust ? " — NOT AMD-verified" : ""}`,
+    permissions.length
+      ? `Permissions: ${permissions.join(", ")}`
+      : "Permissions: none declared",
+    requiresTrust
+      ? "This agent has not been audited by AMD. Only continue if you trust the " +
+        "publisher — installing downloads and runs third-party code on your machine."
+      : "This agent has been reviewed and verified by AMD.",
+  ].join("\n\n");
+
+  return {
+    title: requiresTrust
+      ? "Install untrusted agent from the web?"
+      : "Install agent from the web?",
+    message: `A website asked GAIA to install "${name}" (${entry.id}).`,
+    detail,
+    requiresTrust,
+  };
+}
+
+module.exports = {
+  parseDeepLink,
+  extractDeepLinkFromArgv,
+  dispatchDeepLink,
+  buildInstallPrompt,
+};

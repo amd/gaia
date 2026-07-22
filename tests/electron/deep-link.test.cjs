@@ -13,6 +13,7 @@ const {
   parseDeepLink,
   extractDeepLinkFromArgv,
   dispatchDeepLink,
+  buildInstallPrompt,
 } = require("../../src/gaia/apps/webui/services/deep-link.cjs");
 
 describe("parseDeepLink()", () => {
@@ -116,9 +117,13 @@ describe("dispatchDeepLink() — install confirmation gate (security)", () => {
       focusWindow,
     });
 
-    // Confirmation happened before install, and for THIS agent.
+    // Confirmation happened before install, and for THIS agent. Once
+    // confirmed, the trust override is always sent — this out-of-band flow
+    // already required its own explicit per-agent confirmation, and the
+    // backend's non-verified gate now covers every non-verified agent, not
+    // just native ones.
     expect(confirm).toHaveBeenCalledWith(command);
-    expect(installAgent).toHaveBeenCalledWith("summarize");
+    expect(installAgent).toHaveBeenCalledWith("summarize", { trustNative: true });
     expect(confirm.mock.invocationCallOrder[0]).toBeLessThan(
       installAgent.mock.invocationCallOrder[0]
     );
@@ -182,5 +187,86 @@ describe("dispatchDeepLink() — install confirmation gate (security)", () => {
       )
     ).rejects.toThrow(/Unsupported deep-link action/);
     expect(installAgent).not.toHaveBeenCalled();
+  });
+});
+
+describe("buildInstallPrompt() — informed trust prompt (security fix: gate ALL non-verified agents)", () => {
+  test("a non-verified agent's prompt requires trust and says so", () => {
+    const prompt = buildInstallPrompt({
+      id: "sketchy",
+      name: "Sketchy Agent",
+      security_tier: "community",
+      permissions: ["fs:read"],
+    });
+    expect(prompt.requiresTrust).toBe(true);
+    expect(prompt.detail).toMatch(/not amd-verified/i);
+    expect(prompt.detail).toMatch(/fs:read/);
+  });
+
+  test("a verified agent's prompt does not demand extra trust", () => {
+    const prompt = buildInstallPrompt({
+      id: "safe",
+      name: "Safe Agent",
+      security_tier: "verified",
+      permissions: [],
+    });
+    expect(prompt.requiresTrust).toBe(false);
+    expect(prompt.detail).not.toMatch(/not amd-verified/i);
+  });
+
+  test("an unknown/missing tier defaults to the least-trusted posture", () => {
+    const prompt = buildInstallPrompt({ id: "unknown-tier", name: "Mystery" });
+    expect(prompt.requiresTrust).toBe(true);
+  });
+
+  test("refuses to build a prompt (throws) rather than prompting blind when no entry is given", () => {
+    expect(() => buildInstallPrompt(null)).toThrow();
+    expect(() => buildInstallPrompt(undefined)).toThrow();
+  });
+});
+
+describe("dispatchDeepLink() + buildInstallPrompt() — end-to-end trust posture (security fix)", () => {
+  const command = { action: "install", agentId: "summarize" };
+
+  test("(i) a non-verified agent's deep link requires the trust ack and installs with the trust option on consent", async () => {
+    const entry = { id: "summarize", security_tier: "community", permissions: [] };
+    expect(buildInstallPrompt(entry).requiresTrust).toBe(true);
+
+    const installAgent = jest.fn().mockResolvedValue({ status: "completed" });
+    const result = await dispatchDeepLink(command, {
+      confirm: jest.fn().mockResolvedValue(true),
+      installAgent,
+    });
+
+    expect(installAgent).toHaveBeenCalledWith("summarize", { trustNative: true });
+    expect(result).toEqual({ installed: true });
+  });
+
+  test("(ii) declining a non-verified agent's trust ack does not install", async () => {
+    const entry = { id: "summarize", security_tier: "experimental", permissions: [] };
+    expect(buildInstallPrompt(entry).requiresTrust).toBe(true);
+
+    const installAgent = jest.fn();
+    const result = await dispatchDeepLink(command, {
+      confirm: jest.fn().mockResolvedValue(false),
+      installAgent,
+    });
+
+    expect(installAgent).not.toHaveBeenCalled();
+    expect(result).toEqual({ installed: false, reason: "declined" });
+  });
+
+  test("(iii) a verified agent's prompt does not demand extra trust, and still installs with the trust option once confirmed", async () => {
+    const entry = { id: "summarize", security_tier: "verified", permissions: [] };
+    expect(buildInstallPrompt(entry).requiresTrust).toBe(false);
+
+    const installAgent = jest.fn().mockResolvedValue({ status: "completed" });
+    const result = await dispatchDeepLink(command, {
+      confirm: jest.fn().mockResolvedValue(true),
+      installAgent,
+    });
+
+    expect(installAgent).toHaveBeenCalledWith("summarize", { trustNative: true });
+    expect(result).toEqual({ installed: true });
   });
 });

@@ -128,9 +128,9 @@ export interface AgentInfo {
      */
     permissions?: string[];
     /**
-     * True when installing this agent needs an explicit native-trust opt-in —
-     * a non-verified native (C++) package that runs unsandboxed. The Hub shows
-     * a "Trust & Install" confirmation before sending ``trust_native``.
+     * True when installing this agent needs an explicit trust opt-in — any
+     * non-verified package (of any language) that runs third-party code. The
+     * Hub shows a "Trust & Install" confirmation before sending ``trust_native``.
      */
     requires_trust?: boolean;
     /** Optional remote avatar image URL from the catalog. */
