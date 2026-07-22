@@ -51,6 +51,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from gaia.agents.registry import _RESERVED_BUILTIN_IDS
+from gaia.daemon.sidecars.spec import builtin_specs
 from gaia.hub import catalog as catalog_mod
 from gaia.hub.compatibility import check_compatibility, current_platform_key
 from gaia.logger import get_logger
@@ -889,6 +890,46 @@ def _hot_register(agent_id: str, install_dir: Path, language: str, registry) -> 
         logger.warning("installer: hot-register failed for %s: %s", agent_id, exc)
         return False
     return registry.get(agent_id) is not None
+
+
+def register_installed_sidecars(registry: Any) -> None:
+    """Register every hub-installed daemon-sidecar agent into *registry* (#2408).
+
+    Bridges ``gaia.daemon.sidecars.spec.builtin_specs()`` (what the daemon can
+    supervise, and the connector scopes it declares) with :func:`list_installed`
+    (what is actually on disk) so a binary sidecar agent (e.g. email) is visible
+    to the connectors grant flow and ``/api/agents`` without an importable
+    wheel. A binary install has no site-packages to entry-point-scan, so
+    :func:`_hot_register` never covers it.
+
+    Called once at server startup (right after ``AgentRegistry.discover()``)
+    and again the moment a binary sidecar finishes installing from the Hub
+    panel, so neither trigger point leaves the registry stale until a
+    restart. ``AgentRegistry.register_sidecar`` is itself idempotent against
+    an already-registered bare id, so calling this repeatedly is safe.
+
+    Best-effort at the :func:`list_installed` I/O boundary (mirrors
+    ``AgentRegistry._prime_installed_wheel_agents_path``): a disk read
+    failure logs and registers nothing rather than failing UI boot.
+    """
+    if registry is None:
+        return
+    try:
+        installed = list_installed()
+    except Exception as exc:  # noqa: BLE001 - best-effort discovery step
+        logger.warning(
+            "installer: could not list installed agents for sidecar "
+            "connector registration: %s",
+            exc,
+        )
+        return
+
+    for agent_id, spec in builtin_specs().items():
+        if agent_id not in installed:
+            continue
+        registry.register_sidecar(
+            agent_id, spec.display_name, spec.required_connections
+        )
 
 
 # ---------------------------------------------------------------------------
