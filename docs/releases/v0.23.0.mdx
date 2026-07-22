@@ -14,7 +14,7 @@ GAIA v0.23.0 is a large release built around making the Agent UI a real applicat
 - **Agents share one model** — every agent now resolves to the same model and context size, so switching between them no longer forces Lemonade to unload and reload a different model.
 
 <Note>
-**Email autonomy is beta.** It only auto-executes reversible actions, each with undo, and the confirmation floor for anything destructive (send, forward, permanent delete, RSVP, quarantine) never relaxes — not even for a fully-trusted sender. It's genuinely useful, but it's new this release: watch what it does for the first few days rather than trusting it blind, and report anything that looks wrong.
+**Email autonomy is beta.** It only auto-executes reversible actions, each with undo, and the confirmation floor for anything destructive (send, forward, permanent delete, RSVP, quarantine) never relaxes — not even for a fully-trusted sender. It's genuinely useful, but it's new this release: watch what it does for the first few days rather than trusting it blind, and report anything that looks wrong. **Platform this release:** the email agent installs and runs on **Linux**; the **Windows** binary isn't available yet (#1648). Autonomy is turned on and inspected through the API/CLI — there's no Agent-UI control for it yet.
 </Note>
 
 <Note>
