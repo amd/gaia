@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Tuple
 
+from gaia.connectors.providers.base import ConnectorRequirement
+
 
 @dataclass(frozen=True)
 class AgentSidecarSpec:
@@ -44,6 +46,18 @@ class AgentSidecarSpec:
       machine keyring/grants store (the whole point of forward-out: the sidecar
       never holds a long-lived refresh token). MUST equal the hub package's
       ``gaia_agent_email.forwarded_credentials.FORWARDED_MODE_ENV_VAR``.
+
+    Connector-grant registration (#2408) — host/UI-facing only, never consulted
+    by :class:`~gaia.daemon.sidecars.manager.AgentSidecarManager`:
+
+    - ``required_connections`` — the connector scopes this sidecar needs,
+      surfaced into the live ``AgentRegistry`` (via
+      ``gaia.hub.installer.register_installed_sidecars`` ->
+      ``AgentRegistry.register_sidecar``) so the connectors grant flow and
+      ``/api/agents`` can see them without an importable wheel. Transcribed as
+      literals from the hub package's own scope constants (core cannot import
+      the wheel at runtime, #2154) and guarded against drift by
+      ``tests/unit/connectors/test_email_scope_drift.py``.
     """
 
     agent_id: str
@@ -66,6 +80,9 @@ class AgentSidecarSpec:
     grant_agent_id: Optional[str] = None
     forward_providers: Tuple[str, ...] = field(default_factory=tuple)
     forwarded_mode_env_var: Optional[str] = None
+    required_connections: Tuple[ConnectorRequirement, ...] = field(
+        default_factory=tuple
+    )
 
 
 # The email agent's caller-auth token channel (#1706). MUST equal
@@ -89,6 +106,32 @@ _EMAIL_GRANT_AGENT_ID = "installed:email"
 # The email sidecar's forwarded-credentials mode switch (#2154). MUST equal
 # gaia_agent_email.forwarded_credentials.FORWARDED_MODE_ENV_VAR — a literal.
 _EMAIL_FORWARDED_MODE_ENV_VAR = "GAIA_EMAIL_FORWARDED_CREDENTIALS"
+
+# Connector scopes the email sidecar needs (#2408). Transcribed as literals —
+# not imported — so core never depends on the hub wheel (server.py:621-629).
+# MUST equal gaia_agent_email/scopes.py's ALL_SCOPES (GMAIL_SCOPES +
+# CALENDAR_SCOPES) and outlook_scopes.py's OUTLOOK_MAIL_SCOPES +
+# OUTLOOK_CALENDAR_SCOPES. Guarded against drift by
+# tests/unit/connectors/test_email_scope_drift.py.
+_EMAIL_REQUIRED_CONNECTIONS = (
+    ConnectorRequirement(
+        connector_id="google",
+        scopes=(
+            "https://www.googleapis.com/auth/gmail.modify",  # from gaia_agent_email/scopes.py
+            "https://www.googleapis.com/auth/gmail.send",  # from gaia_agent_email/scopes.py
+            "https://www.googleapis.com/auth/calendar.events",  # from gaia_agent_email/scopes.py
+            "https://www.googleapis.com/auth/calendar.readonly",  # from gaia_agent_email/scopes.py
+        ),
+    ),
+    ConnectorRequirement(
+        connector_id="microsoft",
+        scopes=(
+            "https://graph.microsoft.com/Mail.ReadWrite",  # from gaia_agent_email/outlook_scopes.py
+            "https://graph.microsoft.com/Mail.Send",  # from gaia_agent_email/outlook_scopes.py
+            "https://graph.microsoft.com/Calendars.ReadWrite",  # from gaia_agent_email/outlook_scopes.py
+        ),
+    ),
+)
 
 
 def _default_email_src_dir() -> Path:
@@ -114,5 +157,6 @@ def builtin_specs() -> "dict[str, AgentSidecarSpec]":
             grant_agent_id=_EMAIL_GRANT_AGENT_ID,
             forward_providers=("google", "microsoft"),
             forwarded_mode_env_var=_EMAIL_FORWARDED_MODE_ENV_VAR,
+            required_connections=_EMAIL_REQUIRED_CONNECTIONS,
         ),
     }

@@ -232,10 +232,15 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
         # ── Agent Registry ──────────────────────────────────────────────
         from gaia.agents.registry import AgentRegistry
+        from gaia.hub.installer import register_installed_sidecars
         from gaia.ui._chat_helpers import set_agent_registry
 
         registry = AgentRegistry()
         registry.discover()
+        # Surface any hub-installed daemon-sidecar agent (e.g. email) that
+        # discover() can't see (no agent.py) so the connectors grant flow and
+        # /api/agents work on a fresh install without a restart (#2408).
+        register_installed_sidecars(registry)
         app.state.agent_registry = registry
         set_agent_registry(registry)
         agent_ids = [r.id for r in registry.list()]

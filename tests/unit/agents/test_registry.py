@@ -914,3 +914,216 @@ class TestBuilderModelPreferences:
             "builder", available_models=["gemma4-it-e2b-FLM"]
         )
         assert resolved == "gemma4-it-e2b-FLM"
+
+
+# ---------------------------------------------------------------------------
+# Sidecar registration (#2408) — the connector-grant registry gap
+#
+# A daemon-supervised sidecar agent (e.g. email) ships a frozen binary + an
+# ``.installed`` sentinel but no ``agent.py``, so ``discover()``'s directory
+# scan never finds it and the connector-grant flow 404s on its namespaced id
+# forever. ``register_sidecar`` is the core primitive that registers a real
+# (but never-instantiated) stand-in so the grant flow and ``/api/agents`` can
+# see it. Scopes are hardcoded here (not imported from
+# ``gaia.daemon.sidecars.spec``) so this test doesn't just trivially agree
+# with whatever the implementation under test already says.
+# ---------------------------------------------------------------------------
+
+
+class TestRegisterSidecar:
+    _GOOGLE_SCOPES = [
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.send",
+        "https://www.googleapis.com/auth/calendar.events",
+        "https://www.googleapis.com/auth/calendar.readonly",
+    ]
+    _MICROSOFT_SCOPES = [
+        "https://graph.microsoft.com/Mail.ReadWrite",
+        "https://graph.microsoft.com/Mail.Send",
+        "https://graph.microsoft.com/Calendars.ReadWrite",
+    ]
+
+    def _connections(self):
+        from gaia.connectors.providers.base import ConnectorRequirement
+
+        return [
+            ConnectorRequirement(connector_id="google", scopes=self._GOOGLE_SCOPES),
+            ConnectorRequirement(
+                connector_id="microsoft", scopes=self._MICROSOFT_SCOPES
+            ),
+        ]
+
+    def test_bare_id_and_namespaced_id_are_set_separately(self):
+        """The dedup guard and AgentRegistration.id use the BARE id; only
+        namespaced_agent_id (the grant-ledger key) gets the 'installed:'
+        prefix. Getting this backwards silently defeats the dedup guard."""
+        registry = AgentRegistry()
+        registry.register_sidecar("email", "Email", self._connections())
+        reg = registry.get("email")
+        assert reg is not None
+        assert reg.id == "email"
+        assert reg.namespaced_agent_id == "installed:email"
+
+    def test_visible_and_carries_no_model_preference(self):
+        """hidden=False (else it vanishes from /api/agents); models=[] so
+        resolve_model('email', ...) returns None, matching today's
+        unregistered behaviour rather than resolving to some default."""
+        registry = AgentRegistry()
+        registry.register_sidecar("email", "Email", self._connections())
+        reg = registry.get("email")
+        assert reg.hidden is False
+        assert reg.models == []
+
+    def test_carries_both_provider_scope_requirements(self):
+        registry = AgentRegistry()
+        registry.register_sidecar("email", "Email", self._connections())
+        reg = registry.get("email")
+        by_provider = {
+            cr.connector_id: list(cr.scopes) for cr in reg.required_connections
+        }
+        assert by_provider.get("google") == self._GOOGLE_SCOPES
+        assert by_provider.get("microsoft") == self._MICROSOFT_SCOPES
+
+    def test_create_agent_raises_without_constructing_anything(self):
+        """The factory must fail loudly, never import/instantiate the
+        out-of-process sidecar (server.py never imports the hub wheel)."""
+        registry = AgentRegistry()
+        registry.register_sidecar("email", "Email", self._connections())
+        with pytest.raises(RuntimeError, match="out-of-process"):
+            registry.create_agent("email")
+
+    def test_second_call_is_idempotent(self):
+        """Calling register_sidecar twice must not raise or duplicate."""
+        registry = AgentRegistry()
+        registry.register_sidecar("email", "Email", self._connections())
+        registry.register_sidecar("email", "Email", self._connections())
+        ids = [r.id for r in registry.list() if r.id == "email"]
+        assert ids == ["email"]
+
+    def test_does_not_clobber_a_real_pre_existing_registration(self):
+        """A legitimate custom agent (or a prior real registration) claiming
+        the bare id 'email' must survive a register_sidecar call — 'email'
+        is not in _RESERVED_BUILTIN_IDS, so a custom agent CAN legally claim
+        it, and this stub must never silently overwrite it."""
+        registry = AgentRegistry()
+
+        def _real_factory(**_kwargs):
+            return "a real agent instance"
+
+        registry._register(
+            AgentRegistration(
+                id="email",
+                name="Custom Email",
+                description="a user's own custom agent claiming id 'email'",
+                source="custom_python",
+                conversation_starters=[],
+                factory=_real_factory,
+                agent_dir=None,
+                models=[],
+                namespaced_agent_id="custom:deadbeef:email",
+            )
+        )
+
+        registry.register_sidecar("email", "Email", self._connections())
+
+        reg = registry.get("email")
+        assert reg.namespaced_agent_id == "custom:deadbeef:email"
+        assert reg.factory is _real_factory
+
+
+# ---------------------------------------------------------------------------
+# Bridge: gaia.hub.installer.register_installed_sidecars (#2408)
+#
+# The bridge lives in gaia.hub.installer (not core) — it is what makes an
+# on-disk sidecar install visible to a live AgentRegistry. Tested here (not
+# in tests/unit/connectors/) because it needs no email wheel: it only reads
+# gaia.daemon.sidecars.spec.builtin_specs() and a monkeypatched
+# list_installed(), both wheel-free.
+# ---------------------------------------------------------------------------
+
+
+class TestRegisterInstalledSidecarsBridge:
+    @staticmethod
+    def _fake_installed(agent_id: str = "email"):
+        from gaia.hub.installer import ARTIFACT_KIND_BINARY, InstalledAgent
+
+        return {
+            agent_id: InstalledAgent(
+                id=agent_id,
+                version="0.1.0",
+                language="python",
+                installed_at="2026-01-01T00:00:00Z",
+                artifact_kind=ARTIFACT_KIND_BINARY,
+            )
+        }
+
+    def test_installed_sidecar_is_registered_with_required_connections(
+        self, monkeypatch
+    ):
+        from gaia.hub import installer as installer_mod
+
+        monkeypatch.setattr(
+            installer_mod, "list_installed", lambda *a, **kw: self._fake_installed()
+        )
+        registry = AgentRegistry()
+
+        installer_mod.register_installed_sidecars(registry)
+
+        reg = registry.get("email")
+        assert reg is not None
+        assert reg.namespaced_agent_id == "installed:email"
+        assert reg.required_connections  # non-empty
+
+    def test_not_installed_agent_is_not_phantom_registered(self, monkeypatch):
+        from gaia.hub import installer as installer_mod
+
+        monkeypatch.setattr(installer_mod, "list_installed", lambda *a, **kw: {})
+        registry = AgentRegistry()
+
+        installer_mod.register_installed_sidecars(registry)
+
+        assert registry.get("email") is None
+
+    def test_pre_existing_registration_field_survives_the_bridge(self, monkeypatch):
+        """Cardinality alone is insufficient (dict-keyed → count stays 1
+        either way) — assert a DISTINGUISHING field survives, proving the
+        bridge skipped rather than overwrote."""
+        from gaia.hub import installer as installer_mod
+
+        monkeypatch.setattr(
+            installer_mod, "list_installed", lambda *a, **kw: self._fake_installed()
+        )
+        registry = AgentRegistry()
+
+        def _real_factory(**_kwargs):
+            return "a real email agent instance"
+
+        registry._register(
+            AgentRegistration(
+                id="email",
+                name="Custom Email",
+                description="a user's own custom agent claiming id 'email'",
+                source="custom_python",
+                conversation_starters=[],
+                factory=_real_factory,
+                agent_dir=None,
+                models=[],
+                namespaced_agent_id="custom:deadbeef:email",
+            )
+        )
+
+        installer_mod.register_installed_sidecars(registry)
+
+        reg = registry.get("email")
+        assert reg.namespaced_agent_id == "custom:deadbeef:email"
+        assert reg.factory is _real_factory
+
+    def test_registry_none_is_a_safe_no_op(self, monkeypatch):
+        """install() may call this with registry=None (CLI-only installs,
+        e.g. cli.py:7026) — must not raise."""
+        from gaia.hub import installer as installer_mod
+
+        monkeypatch.setattr(
+            installer_mod, "list_installed", lambda *a, **kw: self._fake_installed()
+        )
+        installer_mod.register_installed_sidecars(None)  # must not raise
