@@ -1,11 +1,13 @@
 ---
 name: "gaia-testing"
-description: "GAIA's multi-tier regression harness — runs unit, integration, and real-world (on-machine) tiers and brings back screenshots, logs, traces, planted-fact retrieval proof, and per-operation timing with anomaly flags, all collected to the local machine (no remote login needed to view). Use this in the GAIA repo in place of the generic `testing` skill — it carries GAIA's exact commands, ports, and `gaia eval agent` baselines. Fires when the user wants real-world / on-hardware proof, screenshots, or end-to-end evidence that a feature, agent, change, fix, or release actually works — not a quick 'is the app running' check (the `verify` skill) or an LLM-behaviour scorecard alone (`gaia eval agent`). Scales: 'run the unit tests' stays unit-only and skips the planning gate; 'test / validate / QA this feature or release' runs all applicable tiers with evidence."
+description: "GAIA's multi-tier regression harness — runs unit, integration, and real-world (on-machine) tiers and brings back screenshots, logs, traces, planted-fact retrieval proof, and per-operation timing with anomaly flags, all collected to the local machine (no remote login needed to view). It carries GAIA's drivers (Agent UI, Agent UI MCP), exact commands, ports, and `gaia eval agent` baselines, and extends (does not replace) the generic `testing` skill. Fires when the user wants real-world / on-hardware proof, screenshots, or end-to-end evidence that a feature, agent, change, fix, or release actually works — not a quick 'is the app running' check (the `verify` skill) or an LLM-behaviour scorecard alone (`gaia eval agent`). Scales: 'run the unit tests' stays unit-only and skips the planning gate; 'test / validate / QA this feature or release' runs all applicable tiers with evidence."
 ---
 
 # GAIA Testing
 
 Test the way that catches regressions `pytest` misses: **unit → integration → real-world**, where the real-world tier drives the *real* interface on *real* hardware and returns screenshots, logs, traces, and timing as evidence. Features ship broken while CI is green — a RAG feature that worked in the backend but was hard-blocked in the UI, a release-note claim about a CLI command the source flatly contradicted. **Runtime observation plus source cross-checking is the point.**
+
+**This is the GAIA specialization of the generic `testing` skill** — the same surface→evidence discipline, wired to GAIA's drivers: the Agent UI via Playwright (`gaia chat --ui`), the Agent UI MCP (`gaia mcp serve`), Lemonade ports, and `gaia eval agent` baselines. It extends that skill; it does not supersede it.
 
 ## Roles — the strongest model plans & judges, a faster model executes
 
@@ -19,7 +21,20 @@ Reach for these rather than hand-rolling — they are how the skill drives and o
 - **Browser-automation MCPs — drive and observe a UI.** Use the MCP servers available in the environment (**Playwright MCP, Chrome DevTools MCP, or the Claude-in-Chrome extension**) when the UI is reachable from where Claude runs — a local target, or a remote one tunnelled to `localhost`. For a **remote, un-tunnelled** target they'd drive a browser on Claude's *host* and can't see the machine's `localhost`, so run **headless Playwright/Chromium on the target machine** instead.
 - **GAIA's Agent UI MCP server — drive the agents without a browser.** `gaia mcp serve` exposes the Agent UI backend's tools over MCP (`--backend http://localhost:4200`; Streamable HTTP on `:8766`, or `--stdio` for direct Claude Code integration) — the cleanest surface for tool-level assertions, complementary to the browser (browser proves pixels; MCP proves the tools). Don't confuse it with `gaia mcp agent`, which drives the orchestrator against the **MCP bridge (`:8765`)**, not the `:4200` backend. `gaia eval agent` is the LLM-behaviour scorecard (Phase 4).
 
-These are availability-aware, not hard dependencies: use whichever the environment actually exposes, and say in the plan which you'll use.
+Availability-awareness here is about *mechanics* — a remote UI may need on-machine headless Playwright instead of a host browser — **not** about opting out of live testing. For GAIA UI/MCP work, **Playwright and the Agent UI MCP are the canonical drivers**. The next section makes the surface→evidence mapping binding.
+
+## The real-world contract — surface → driver → PR evidence
+
+**Default posture: if a change is reachable through the Agent UI, it is tested through the Agent UI, live — and the proof is a screenshot.** Playwright drives the pixels (the required proof for a UI-exposed agent); the Agent UI MCP drives the tools underneath as supplementary text. Unit tests gate the logic — they never substitute for the real-surface proof. Every change carries evidence **matched to the surface it touches, shown on the PR** (an `assets.amd-gaia.ai` R2 link — see *Evidence & artifact conventions* — inline, a follow-up comment, or an evidence branch; the point is that it is *shown*):
+
+| Change touches | Drive it live with | Evidence on the PR |
+|---|---|---|
+| **An agent / behaviour exposed in the Agent UI** (Chat, Email, …) | **Playwright** against `gaia chat --ui` (a real browser) | **Required: Agent UI screenshot(s)** — before→after, at each meaningful step; text from the API/CLI/Agent UI MCP does **not** substitute |
+| **MCP tools / servers** | a live MCP client against the server under test — for the Agent UI's own tools/agents, **GAIA's Agent UI MCP** (`gaia mcp serve`, `:8766`/`--stdio` → `:4200` backend) | The actual tool call and its returned response (text) |
+| **CLI** — a command, flag, or output | the real `gaia <subcommand>` a user runs | The command and its real output, as a code block (text) |
+| **HTTP API / REST** — an endpoint | a real request to the running server | The real request and the response, status + body, as a code block (text) |
+
+**For anything exposed in the Agent UI, the required proof is an Agent UI screenshot** — driving the same agent via the API, CLI, or Agent UI MCP gives useful text evidence but does **not** replace it (use the MCP alongside, as the tool-level complement). Non-UI surfaces (API, CLI, MCP) are proven with the text evidence above. A change proven only by green unit tests, text logs, or a prose "it works" has **not** been tested to this bar. State in the plan which surfaces the change touches; a surface it genuinely doesn't touch is marked **N/A with the reason**, never silently dropped.
 
 ## When this fires — scale to the request
 
@@ -35,6 +50,7 @@ Tiers that are impossible on this machine are decided in Phase 0 and **excluded 
 
 - **Evidence > summaries > source.** Before reporting a pass, the judge reads the screenshot pixels and, for any behaviour/wiring claim, checks the code at the exact ref under test. This is the rule that catches shipped-but-broken features — do not treat the executor's prose as truth.
 - **Proof of a fix or implementation is a visual artifact, never a prose claim.** "It works" is proven by a screenshot or a live browser representation — drive the real UI in a browser (Chrome / Chromium via the browser tooling) and capture it, step by step; for a CLI/API surface, capture the terminal output or the raw response. A change reported as working with no captured artifact has not been proven, and the artifact must be surfaced to the user (and, on a PR, attached to it).
+- **Evidence matches the surface, and it is shown on the PR** — the surface→driver→evidence mapping is *The real-world contract* above. **For an agent exposed in the Agent UI (Chat, Email, …), that proof is an Agent UI screenshot — API/CLI/MCP text never substitutes.** Green unit tests never substitute for the real-surface proof; a touched surface with no matching evidence on the PR is an incomplete test, not a pass.
 - **Verify against the ref under test, not `main`** — a fix on `main` may not be in the branch, and vice versa.
 - **Prove retrieval/behaviour with planted, unguessable facts.** For RAG / search / data flows, inject values a model cannot guess (e.g. mascot `Zephyr`, passphrase `violet-otter-92`, table cell `APAC 8610`, speaker-note `desk 17C`) and require the output to echo them. If the feature has no retrieval/data surface, say so in the plan — planted facts are N/A and the judge verifies by source inspection instead. Never silently skip.
 - **No silent fallbacks / degrade loudly.** An impossible tier is excluded up front; a tier that *fails during execution* stops with an actionable error — it never quietly becomes a partial "pass".
@@ -95,6 +111,13 @@ Exercise cross-component behaviour through the **real CLI a user runs** — neve
 ## Phase 5 — Tier 3: Real-world (on the chosen machine)
 
 1. **Deploy + bring up.** First clear any partial state from a prior failed run on the target (stale processes, half-downloaded model caches, bound ports). Get the build onto the target (clone/checkout the ref, install, build any frontend) and run setup — locally if the target is local (the common case), else via its declared access method. **If the ref is an external fork/PR, honour the untrusted-code Hard rule.** Start services as detached/background processes (or under a terminal multiplexer) so they outlive the executor. (For Lemonade startup gotchas — port conflicts, model loading — see `lemonade-client-patterns.md` and CLAUDE.md rather than re-deriving them here.)
+
+   For a **packaged / hub / sidecar agent** (e.g. the email agent), test the **published-install path from a cold state** — a dev-mode run proves the code, never the install users actually hit (#1655/#2084):
+   - **Install the published artifact fresh** — `gaia agent install <id>` — and confirm the expected version + binary landed.
+   - **Prove it launches and passes its health/version handshake** — `gaia daemon start-agent <id>` (default `--mode user` = the frozen binary users get; `--mode dev` runs from source and proves *only* the code), then `gaia daemon status` / `gaia daemon agents`. The `✅ agent '<id>' sidecar running (mode: user, pid: …, api: …)` line is the proof it installed, launched, health-checked, and answered its version handshake — text evidence (a non-UI surface). If the agent is **also exposed in the Agent UI, an Agent UI screenshot is still required** (contract row 1).
+   - **A self-documenting failure counts as a pass criterion** — run the entry command *before* setup (`gaia <agent> …`) and confirm the error names the exact fix (`gaia agent install …`), not a dead end.
+   - **Headless / remote OAuth gotcha** — a connector's `127.0.0.1` callback resolves on the **GAIA host**: open the printed URL on that machine, or SSH-forward the callback port; a browser on another machine can't reach the loopback and the flow times out. (Same principle as the browser-MCP rule — drive a remote surface *on the box*.)
+   - **Tier it:** install + launch + handshake needs no connector credentials and no Lemonade — that alone is the high-value smoke proof; exercising the agent's real data source (a live inbox, a real Jira project, …) additionally needs a running Lemonade and the tester's own connector credentials.
 2. **Confirm the hardware is actually used — a health 200 is not enough.** Read the backend's own device line from its startup log (e.g. an inference backend reporting `using device <GPU name>` and layers offloaded to GPU). `rocm-smi`/`nvidia-smi` may be **absent** (a Vulkan backend has no ROCm userspace) — fall back to VRAM via sysfs (`/sys/class/drm/card*/device/mem_info_vram_used`) or the backend log. If inference is on CPU, the tier is **"not exercised on GPU"**, not a pass.
 3. **Drive the real surface live, and capture it.** Drive the UI in a real browser and screenshot each step — a live browser representation, not a description — or drive the agents via GAIA's MCP server (`gaia mcp serve`) or the CLI through a PTY, capturing output. Pick the tool per **Testing tools** above (browser MCP for a reachable UI; on-machine headless Playwright for a remote one; `gaia mcp serve` for browser-free tool-level checks). A UI feature still needs a browser screenshot for the proof rule. Exercise the feature end-to-end; for input-type features (RAG document formats, etc.) exercise **every supported type named in the spec/release notes, not just the happy-path one**. Inject the planted facts. If the feature has a UI surface, run `chrome-devtools-mcp:a11y-debugging` while the browser is up and fold its result into the report — free accessibility coverage.
 4. **One GPU + one model slot → run scenarios sequentially** (concurrent heavy runs race-evict each other's models — CLAUDE.md "Run agent evals SERIALLY").
@@ -125,6 +148,15 @@ If the run died mid-deploy, also check for a corrupt/partial model cache before 
 ## Evidence & artifact conventions
 
 - **One per-run directory** on the local host (under the system temp dir, or a project-local `test-runs/`), created **mode 700** so captured secrets/data are not world-readable; with a `shots/` subdir; a fresh dir per run.
+- **Hosting PR/issue-bound artifacts — R2 evidence bucket (preferred).** Upload sanitized screenshots/videos and embed the public URL:
+
+  ```bash
+  rclone copy <run-dir>/shots/NN_step.png gaia:amd-gaia/testing/<pr-or-issue>/<run-id>/ --s3-no-check-bucket
+  # → embed https://assets.amd-gaia.ai/testing/<pr-or-issue>/<run-id>/NN_step.png
+  ```
+
+  Credentials are **machine-local only** — an rclone remote named `gaia` in the user's `rclone.conf` (one-time setup: `scripts/video-demo/R2-SETUP.md`); they are gated by a secret key and must **never** be committed, echoed, or pasted into an issue/PR. No `gaia` remote on this machine → fall back to a throwaway evidence branch and say so in the report. **The bucket is world-readable** (`assets.amd-gaia.ai`), so the sanitize Hard rule is a hard gate before every upload — an artifact you wouldn't post publicly does not go to R2.
+- **Video artifacts** (Agent UI journeys, demos): record with Playwright's built-in video capture or a screen recorder, compress with `scripts/video-demo/compress-video.sh|.ps1`, then upload/link exactly like screenshots (same bucket, same sanitize gate). Prefixes: test-evidence video goes with its run under `testing/<pr-or-issue>/<run-id>/`; demos go under the top-level `demos/<name>/`. A demo that isn't tied to a PR is shared on a GitHub **issue** — demos don't need to live in the repo.
 - **Screenshots** named `NN_description.png`; capture at every meaningful step and on failure. TUIs: capture the rendered text frame (a terminal multiplexer's capture) as the definitive record, plus a PNG.
 - **Logs & traces:** keep raw command output, the agent/tool-call trace, browser console, and server logs; quote raw output in the report rather than paraphrasing.
 - **Surface, don't make them dig:** push the few decisive screenshots to the user via the file-send tool with per-image captions; the rest stay in the dir, referenced by path.

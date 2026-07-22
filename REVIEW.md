@@ -17,8 +17,10 @@ Spend the attention budget on what can actually break a user or the codebase, in
 
 1. 🔴 **Correctness & safety** — real bugs (wrong logic, crashes, data loss), security
    issues, breaking changes to public API / CLI / REST, and silent-fallback violations.
-2. 🟡 **Missing tests & architecture** — new logic shipped without tests, and GAIA
-   architecture/convention violations (also checked inline by the workflow).
+2. 🟡 **Missing tests & architecture** — new logic shipped without tests, GAIA
+   architecture/convention violations (also checked inline by the workflow), and a
+   user-visible change shipped without **real-world evidence matched to its surface**
+   (see "Real-world evidence" below).
 3. 🟢 **Everything else** — style, naming, micro-optimizations, wording. This is the nit
    tier and is strictly capped (below).
 
@@ -63,6 +65,28 @@ Correctness-first does not mean silent on small wins. A `suggestion` block is we
 genuinely useful, low-risk fix — a clear typo in a docstring, a hardcoded value that should
 be a constant, a noisy log line, an obvious one-line bug fix. These count toward the nit cap
 unless they fix a real bug.
+
+## Real-world evidence
+
+GAIA tests everything on the surface a user actually touches, and the PR must **show** that
+proof. When a diff changes a user-visible surface but the **PR description** shows no matching
+evidence and doesn't point to where it lives (a linked comment or evidence branch), flag it
+**once** as a 🟡 (not per-file) and name the evidence that's missing. Green unit tests are not
+a substitute — they gate the logic, not the surface.
+
+- **An agent exposed in the Agent UI** (Chat, Email, …) → a live **Playwright** run against
+  `gaia chat --ui` with **before→after screenshot(s)** on the PR. This is the one surface where
+  text is **not** enough — API / CLI / Agent UI MCP evidence does not substitute for the screenshot.
+- **MCP tools / servers** → a live MCP client call and its response (the Agent UI MCP,
+  `gaia mcp serve`, for the Agent UI's own tools).
+- **CLI** command/flag/output → the real `gaia <subcommand>` and its output.
+- **HTTP API / REST** → the real request and the response (status + body).
+
+Evidence may live inline, in a follow-up comment, on an evidence branch, or behind an
+`assets.amd-gaia.ai` link (the R2 evidence bucket) — presence is what matters, not location. Do **not** flag when the change touches none of these surfaces
+(internal refactor, docs, tests, CI), when the author marked a surface **N/A with a reason**,
+when the description points to evidence elsewhere, or when the matching evidence is already
+present. This is a nudge for a missing artifact, never a demand to re-run what the PR shows.
 
 ## Length caps
 
