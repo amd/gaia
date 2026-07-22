@@ -45,10 +45,11 @@ Mix automated and manual checks as needed.
 <!--
 Real-world proof matched to the surface you changed — GAIA tests on the surface a user
 actually touches. Green unit tests alone are not evidence. **Embed screenshots here in
-the description** as `![caption](https://assets.amd-gaia.ai/testing/<pr>/<run>/shot.png)`
-so they render on the PR — not a bare link, not comment-only. Mark a surface N/A (with a
-reason) if the change doesn't touch it; delete the whole section only for pure
-internal/docs/CI changes.
+the description** as `![caption](https://raw.githubusercontent.com/<owner>/<repo>/<branch>-evidence/…png)`
+so they render on the PR — use a raw.githubusercontent.com URL (an R2/assets.amd-gaia.ai
+image gets camo-proxied and often won't render inline). Not a bare link, not comment-only.
+Mark a surface N/A (with a reason) if the change doesn't touch it; delete the whole section
+only for pure internal/docs/CI changes.
 -->
 
 - [ ] **Agent exposed in the Agent UI** (Chat, Email, …) — live browser (Playwright) **screenshot(s)**, before→after (required; text evidence does not substitute)

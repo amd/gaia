@@ -25,7 +25,7 @@ Availability-awareness here is about *mechanics* — a remote UI may need on-mac
 
 ## The real-world contract — surface → driver → PR evidence
 
-**Default posture: if a change is reachable through the Agent UI, it is tested through the Agent UI, live — and the proof is a screenshot.** Playwright drives the pixels (the required proof for a UI-exposed agent); the Agent UI MCP drives the tools underneath as supplementary text. Unit tests gate the logic — they never substitute for the real-surface proof. Every change carries evidence **matched to the surface it touches, embedded in the PR description** — screenshots as `![caption](https://assets.amd-gaia.ai/…)` markdown images so they **render on the PR itself**, not a bare link and not buried in a follow-up comment (a comment is a fallback only when it keeps a long description clean, and even then the description links to it). A screenshot the reviewer has to hunt for is not shown. See *Evidence & artifact conventions*:
+**Default posture: if a change is reachable through the Agent UI, it is tested through the Agent UI, live — and the proof is a screenshot.** Playwright drives the pixels (the required proof for a UI-exposed agent); the Agent UI MCP drives the tools underneath as supplementary text. Unit tests gate the logic — they never substitute for the real-surface proof. Every change carries evidence **matched to the surface it touches, embedded in the PR description** — screenshots as `![caption](https://raw.githubusercontent.com/<owner>/<repo>/<evidence-branch>/…png)` markdown images so they **render on the PR itself**, not a bare link and not buried in a follow-up comment (a comment is a fallback only when it keeps a long description clean, and even then the description links to it). **Use a `raw.githubusercontent.com` URL, not an `assets.amd-gaia.ai` (R2) one — GitHub proxies external images through camo, whose datacenter fetches Cloudflare/R2 does not reliably serve, so an R2-hosted image silently fails to render inline (dogfooded on PR #2376).** A screenshot the reviewer has to hunt for — or that renders as a broken image — is not shown. See *Evidence & artifact conventions*:
 
 | Change touches | Drive it live with | Evidence on the PR |
 |---|---|---|
@@ -131,7 +131,7 @@ The judge does not rubber-stamp the executor's report.
 2. **Cross-check claims against source** at the tested ref (`gh api .../contents/<path>?ref=<ref>` or the local checkout). For any **CLI or release-note behaviour claim** ("`gaia X` does Y", "command Z exists"), *run the command* and read it in `src/gaia/cli.py` at that ref — never accept it from the notes.
 3. **Verify planted facts in two places:** the screenshot (the UI rendered it) *and* the raw agent/CLI trace (`grep` the captured trace). A fact in the screenshot but absent from the trace can mean a cached/hallucinated response, not live retrieval.
 4. **Check timing** against the thresholds; surface outliers with their hardware context.
-5. **Deliver:** embed the decisive screenshots **in the PR description** as `![](assets.amd-gaia.ai/…)` images (each captioned with what it proves) and confirm they render on the PR — not a bare link, not comment-only. Also push them to the user via the file-send tool, plus a report table (`Tier | Verdict | Evidence`). State plainly any tier that **was not truly exercised** — a warm cache, a skipped login, a CPU fallback. "Not exercised" ≠ "passed". Lead with the finding.
+5. **Deliver:** embed the decisive screenshots **in the PR description** as `![](raw.githubusercontent.com/…)` images (each captioned with what it proves) and confirm they render on the PR — verify the rendered `<img src>` is `raw.githubusercontent.com` (served directly), not `camo.githubusercontent.com` (proxied, unreliable for R2). Not a bare link, not comment-only. Also push them to the user via the file-send tool, plus a report table (`Tier | Verdict | Evidence`). State plainly any tier that **was not truly exercised** — a warm cache, a skipped login, a CPU fallback. "Not exercised" ≠ "passed". Lead with the finding.
 
 ## Phase 7 — Cleanup
 
@@ -148,17 +148,24 @@ If the run died mid-deploy, also check for a corrupt/partial model cache before 
 ## Evidence & artifact conventions
 
 - **One per-run directory** on the local host (under the system temp dir, or a project-local `test-runs/`), created **mode 700** so captured secrets/data are not world-readable; with a `shots/` subdir; a fresh dir per run.
-- **Hosting PR/issue-bound artifacts — R2 evidence bucket (preferred).** Upload the sanitized screenshot/video, then **embed it as a markdown image in the PR description** so it renders on the PR:
+- **Hosting an inline PR screenshot — `raw.githubusercontent.com` evidence branch (required for images that must render).** GitHub serves `raw.githubusercontent.com` images **directly**; an external URL (like R2's `assets.amd-gaia.ai`) is rewritten to a `camo.githubusercontent.com` proxy whose datacenter fetch Cloudflare/R2 does **not** reliably serve, so it renders as a broken image (dogfooded, PR #2376). Push the sanitized PNG to a throwaway evidence branch and embed its raw URL:
+
+  ```bash
+  git -C <repo> worktree add /tmp/ev -b <branch>-evidence origin/main
+  cp <run-dir>/shots/NN_step.png /tmp/ev/testing/<pr>/ && (cd /tmp/ev && git add -A && git commit -qm evidence && git push -u origin <branch>-evidence)
+  # embed in the PR DESCRIPTION (not just a comment):
+  # ![NN_step — what it proves](https://raw.githubusercontent.com/<owner>/<repo>/<branch>-evidence/testing/<pr>/NN_step.png)
+  ```
+
+  **Verify it renders:** `gh api repos/<owner>/<repo>/issues/<pr> -H "Accept: application/vnd.github.full+json" -q .body_html` and confirm the `<img src>` is `raw.githubusercontent.com` (direct), **not** `camo.githubusercontent.com`. Delete the evidence branch after merge (`/clean_gone`). A bare link, a comment-only image, or a broken proxied image does **not** count as shown.
+- **Durable / user-facing hosting, videos, demos — R2 evidence bucket.** R2 (`assets.amd-gaia.ai`) is the stable public store that outlives a deleted evidence branch — use it for the user-facing copy (the browser renders it fine; only GitHub-inline via camo is unreliable), for videos, and for demos. Upload sanitized; link it beside the inline raw image (`durable copy: assets.amd-gaia.ai/…`).
 
   ```bash
   rclone copy <run-dir>/shots/NN_step.png gaia:amd-gaia/testing/<pr-or-issue>/<run-id>/ --s3-no-check-bucket
-  # then in the PR DESCRIPTION (not just a comment), paste the image so it renders:
-  # ![NN_step — what it proves](https://assets.amd-gaia.ai/testing/<pr-or-issue>/<run-id>/NN_step.png)
+  # → durable link https://assets.amd-gaia.ai/testing/<pr-or-issue>/<run-id>/NN_step.png
   ```
 
-  Verify it renders: open the PR after editing and confirm the image shows, and that the raw URL returns `200 image/png`. A bare link, or an image only in a comment the reviewer must scroll to, does **not** count as shown.
-
-  Credentials are **machine-local only** — an rclone remote named `gaia` in the user's `rclone.conf` (one-time setup: `scripts/video-demo/R2-SETUP.md`); they are gated by a secret key and must **never** be committed, echoed, or pasted into an issue/PR. No `gaia` remote on this machine → fall back to a throwaway evidence branch and say so in the report. **The bucket is world-readable** (`assets.amd-gaia.ai`), so the sanitize Hard rule is a hard gate before every upload — an artifact you wouldn't post publicly does not go to R2.
+  Credentials are **machine-local only** — an rclone remote named `gaia` in the user's `rclone.conf` (one-time setup: `scripts/video-demo/R2-SETUP.md`); they are gated by a secret key and must **never** be committed, echoed, or pasted into an issue/PR. No `gaia` remote on this machine → use the evidence branch alone and say so in the report. **The bucket is world-readable** (`assets.amd-gaia.ai`), so the sanitize Hard rule is a hard gate before every upload — an artifact you wouldn't post publicly does not go to R2.
 - **Video artifacts** (Agent UI journeys, demos): record with Playwright's built-in video capture or a screen recorder, compress with `scripts/video-demo/compress-video.sh|.ps1`, then upload/link exactly like screenshots (same bucket, same sanitize gate). Prefixes: test-evidence video goes with its run under `testing/<pr-or-issue>/<run-id>/`; demos go under the top-level `demos/<name>/`. A demo that isn't tied to a PR is shared on a GitHub **issue** — demos don't need to live in the repo.
 - **Screenshots** named `NN_description.png`; capture at every meaningful step and on failure. TUIs: capture the rendered text frame (a terminal multiplexer's capture) as the definitive record, plus a PNG.
 - **Logs & traces:** keep raw command output, the agent/tool-call trace, browser console, and server logs; quote raw output in the report rather than paraphrasing.

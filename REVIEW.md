@@ -83,9 +83,10 @@ a substitute — they gate the logic, not the surface.
 - **HTTP API / REST** → the real request and the response (status + body).
 
 Screenshot evidence should be **embedded in the PR description** as a rendered
-`![](assets.amd-gaia.ai/…)` image (R2 evidence bucket), not a bare link or a comment the
-reviewer must scroll to find. Text evidence (CLI/API/MCP) may sit inline in the description
-or a linked comment. A screenshot that doesn't render on the PR is not shown. Do **not** flag when the change touches none of these surfaces
+`![](raw.githubusercontent.com/…)` image (a raw URL renders directly; an R2/assets.amd-gaia.ai
+image gets camo-proxied and often won't render), not a bare link or a comment the reviewer
+must scroll to find. Text evidence (CLI/API/MCP) may sit inline in the description or a
+linked comment. A screenshot that doesn't render on the PR is not shown. Do **not** flag when the change touches none of these surfaces
 (internal refactor, docs, tests, CI), when the author marked a surface **N/A with a reason**,
 when the description points to evidence elsewhere, or when the matching evidence is already
 present. This is a nudge for a missing artifact, never a demand to re-run what the PR shows.
