@@ -3007,12 +3007,12 @@ Examples:
         help="Specific version to install (default: the hub's latest).",
     )
     agent_install_parser.add_argument(
-        "--trust-native",
+        "--trust",
         action="store_true",
-        dest="trust_native",
+        dest="trusted",
         help=(
-            "Explicitly trust a native (C++) agent's unsandboxed binary. Required "
-            "for community/experimental native packages; ignored for Python agents."
+            "Explicitly trust a non-verified agent (it runs third-party code on "
+            "your machine). Required for any community/experimental package."
         ),
     )
 
@@ -7018,16 +7018,16 @@ def handle_agent_install(args):
 
     agent_id = args.agent_id
     version = getattr(args, "version", None)
-    trust_native = getattr(args, "trust_native", False)
+    trusted = getattr(args, "trusted", False)
 
     label = agent_id + (f"@{version}" if version else "")
     print(f"Installing '{label}' from the Agent Hub...")
     try:
-        result = installer.install(agent_id, version=version, trust_native=trust_native)
+        result = installer.install(agent_id, version=version, trusted=trusted)
     except installer.TrustRequiredError as exc:
         print(f"❌ {exc}", file=sys.stderr)
         print(
-            "   Re-run with --trust-native if you trust the publisher.",
+            "   Re-run with --trust if you trust the publisher.",
             file=sys.stderr,
         )
         sys.exit(1)

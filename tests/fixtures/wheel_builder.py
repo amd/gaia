@@ -164,6 +164,9 @@ def build_wheel_manifest(
     manifest = {
         "id": agent_id,
         "language": "python",
+        # Verified so install-mechanics fixtures aren't blocked by the trust
+        # gate; the gate's behavior is covered in test_hub_security.py.
+        "security_tier": "verified",
         "latest_version": version,
         "requirements": {"platforms": []},
         "versions": {

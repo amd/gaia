@@ -15,8 +15,10 @@ export interface InstallWarning {
  * Build the list of warnings that gate an install. Empty list ⇒ install can
  * proceed without confirmation.
  *
- * - ``native_trust``: a non-verified native (C++) agent runs unsandboxed; the
- *   backend refuses (403) unless the user opts in via ``trust_native``.
+ * - ``native_trust``: this check only raises the warning for a non-verified
+ *   native (C++) agent, but the backend refuses (403) ANY non-verified
+ *   install — not just native ones — unless the caller opts in via
+ *   ``trust_native``.
  * - ``deprecated``: the publisher marked the agent deprecated; it may be
  *   unmaintained or superseded.
  */
