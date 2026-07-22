@@ -275,6 +275,29 @@ def test_boundary_granted_forward_succeeds_200():
     assert len(http.posts) == 1
 
 
+def test_boundary_forward_all_ungranted_agent_maps_to_403():
+    """forward_all raises NotGrantedError before its per-provider loop when the
+    agent has no grant_agent_id; the route must map that to 403, not fall through
+    to a 500."""
+    spec = AgentSidecarSpec(
+        agent_id="email",
+        service_id="gaia-agent-email",
+        display_name="Email",
+        expected_api_major="2",
+        token_env_var="GAIA_EMAIL_SIDECAR_TOKEN",
+        mode_env_var="GAIA_EMAIL_AGENT_MODE",
+        cache_dir_name="email",
+        grant_agent_id="",  # no grant configured → NotGrantedError
+        forward_providers=("google",),
+        forwarded_mode_env_var="GAIA_EMAIL_FORWARDED_CREDENTIALS",
+    )
+    fwd = ConnectionForwarder({"email": spec})
+    client = _routes_client(fwd)
+    r = client.post("/daemon/v1/agents/email/connections/forward", headers=_auth())
+    assert r.status_code == 403
+    assert "grant_agent_id" in r.json()["detail"]
+
+
 def test_boundary_delivery_failure_maps_to_502():
     fwd, _ = _forwarder(
         grants={"google": {"installed:email": ["s1"]}},
