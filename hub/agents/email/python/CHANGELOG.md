@@ -7,6 +7,17 @@ contract version is tracked separately as
 
 ## [Unreleased]
 
+### Added
+
+- **`list_connected_mailboxes` tool — the agent can report live mailbox
+  connection state (#2401).** "Which mailbox are you connected to?" now names
+  the actual connected account(s) instead of paraphrasing the system prompt's
+  capability text, and with nothing connected the agent says so plainly and
+  points to Settings → Connectors. State is resolved live per call (via
+  `available_mailbox_providers()` + `get_connection`), so a disconnect →
+  reconnect made without restarting GAIA is reflected on the next question.
+  The reactive fail-loud errors on mailbox *operations* are unchanged.
+
 ### Fixed
 
 - **Re-proposal dedup survives headless/scheduled teardown (#2381).**

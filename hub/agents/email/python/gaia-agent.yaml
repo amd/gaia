@@ -19,7 +19,7 @@ icon: mail
 # tests/test_capability_matrix.py (AST-derived, reconciled against
 # __init__.py) and tests/test_email_agent.py (live registry, #1232);
 # a mismatch fails CI.
-tools_count: 55
+tools_count: 56
 
 language: python
 min_gaia_version: "0.22.0"

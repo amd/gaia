@@ -121,5 +121,5 @@ def build_registration():
         category="productivity",
         tags=["email", "gmail", "calendar", "triage"],
         icon="mail",
-        tools_count=55,  # guarded by tests/test_email_agent.py (#1232)
+        tools_count=56,  # guarded by tests/test_email_agent.py (#1232)
     )
