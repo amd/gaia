@@ -188,11 +188,16 @@ def record_proposal(
 ) -> None:
     """Mark that an action has been proposed for a message. Idempotent."""
     ts = time.time() if now is None else now
-    db.query(
-        "INSERT OR IGNORE INTO email_autonomy_proposals "
-        "(message_id, action_type, created_at, resolved) VALUES (:m, :a, :ts, 0)",
-        {"m": message_id, "a": action_type, "ts": ts},
-    )
+    # Wrapped in a transaction so the INSERT commits (query() alone does not).
+    # The scheduler rebuilds the agent between fires and closes its connection
+    # after each cycle — an uncommitted dedup row would be lost and the next
+    # fire would re-propose the same still-in-inbox message.
+    with db.transaction():
+        db.query(
+            "INSERT OR IGNORE INTO email_autonomy_proposals "
+            "(message_id, action_type, created_at, resolved) VALUES (:m, :a, :ts, 0)",
+            {"m": message_id, "a": action_type, "ts": ts},
+        )
 
 
 def resolve_proposal(db, *, message_id: str, action_type: str) -> None:

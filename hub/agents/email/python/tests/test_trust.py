@@ -315,3 +315,31 @@ def test_floor_matches_agent_confirmation_required_tools():
     from gaia_agent_email.agent import EmailTriageAgent
 
     assert set(FLOOR) == set(EmailTriageAgent.CONFIRMATION_REQUIRED_TOOLS)
+
+
+# ---------------------------------------------------------------------------
+# Re-proposal dedup survives scheduler teardown (#2381)
+# ---------------------------------------------------------------------------
+
+
+def test_record_proposal_commits_across_connection_teardown(tmp_path):
+    """A proposal recorded on one connection must be visible after the agent is
+    torn down and rebuilt against the same on-disk DB — the headless/scheduled
+    path. An uncommitted INSERT would be lost, re-proposing the same message.
+    """
+    db_path = str(tmp_path / "state.db")
+
+    # Fire 1: record a proposal, then close the connection (scheduler teardown).
+    first = _DB()
+    first.init_db(db_path)
+    trust.init_trust_schema(first)
+    trust.record_proposal(first, message_id="msg-1", action_type="archive")
+    first.close_db()
+
+    # Fire 2: fresh agent against the same DB must see the earlier proposal.
+    second = _DB()
+    second.init_db(db_path)
+    assert trust.has_open_proposal(
+        second, message_id="msg-1", action_type="archive"
+    )
+    second.close_db()
