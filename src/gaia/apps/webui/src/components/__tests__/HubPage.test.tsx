@@ -158,8 +158,10 @@ describe('HubPage trust gate (issue #1722)', () => {
         await waitFor(() => expect(mockedApi.installAgent).toHaveBeenCalledTimes(1));
         const [id, , trustNative] = mockedApi.installAgent.mock.calls[0];
         expect(id).toBe('rag-kit');
-        // Community (non-native) → gated, but no native-trust flag is sent.
-        expect(trustNative).toBe(false);
+        // Community (non-native, e.g. python) agent still sends trust_native —
+        // the security fix generalizes the wire flag to every non-verified
+        // agent, not just native binaries.
+        expect(trustNative).toBe(true);
     });
 
     it('shows declared permissions in the trust gate', async () => {

@@ -114,7 +114,7 @@ jobs:
             grep -rnE "shell=True|os\.system|subprocess\.(run|Popen|call)|\beval\(|\bexec\(" src hub --include=*.py || true
             echo ""
             echo "## PathValidator / allowlist / trust gates (check for asymmetric enforcement)"
-            grep -rnE "is_path_allowed|validate_write|validate_read|allowed_paths|trust_native|ensure_native_trust" src hub --include=*.py || true
+            grep -rnE "is_path_allowed|validate_write|validate_read|allowed_paths|trust_native|ensure_trust_ack|requires_trust_ack" src hub --include=*.py || true
           } > security-worklist.txt
           echo "worklist lines: $(wc -l < security-worklist.txt)"
 

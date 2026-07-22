@@ -304,6 +304,52 @@ class AgentProcessManager extends EventEmitter {
   }
 
   /**
+   * Fetch a single agent's catalog entry (tier, permissions, verified status)
+   * from the live backend. Used by the gaia:// deep-link install gate
+   * (main.cjs) to build an informed trust prompt — the confirmation must show
+   * the agent's real tier/permissions, not just its bare id.
+   *
+   * Throws with an actionable message when the backend is unreachable or the
+   * agent id isn't in the catalog. Callers MUST treat that as a refusal —
+   * never install without having shown the user what they're installing.
+   *
+   * @param {string} agentId
+   * @returns {Promise<object>} the matching catalog entry
+   */
+  async fetchCatalogEntry(agentId) {
+    if (typeof agentId !== "string" || !agentId.trim()) {
+      throw new Error("fetchCatalogEntry requires a non-empty agent id");
+    }
+    const base = this._backendBaseUrl();
+
+    let resp;
+    try {
+      resp = await fetch(`${base}/api/agents/catalog`, {
+        headers: { ...UI_HEADER },
+      });
+    } catch (err) {
+      throw new Error(
+        `Could not reach the GAIA backend to look up "${agentId}" in the agent catalog: ${err.message}`
+      );
+    }
+
+    if (!resp.ok) {
+      const detail = await this._readErrorDetail(resp);
+      throw new Error(
+        `Agent catalog request failed (HTTP ${resp.status}): ${detail}`
+      );
+    }
+
+    const body = await resp.json();
+    const agents = Array.isArray(body && body.agents) ? body.agents : [];
+    const entry = agents.find((a) => a && a.id === agentId);
+    if (!entry) {
+      throw new Error(`"${agentId}" was not found in the agent catalog.`);
+    }
+    return entry;
+  }
+
+  /**
    * Install a published agent via the backend runtime, streaming progress.
    *
    * @param {string} agentId

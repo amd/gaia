@@ -51,6 +51,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from gaia.agents.registry import _RESERVED_BUILTIN_IDS
+from gaia.daemon.sidecars.spec import builtin_specs
 from gaia.hub import catalog as catalog_mod
 from gaia.hub.compatibility import check_compatibility, current_platform_key
 from gaia.logger import get_logger
@@ -87,8 +88,9 @@ ARTIFACT_KIND_WHEEL = "wheel"
 ARTIFACT_KIND_BINARY = "binary"
 ARTIFACT_KIND_CPP = "cpp"
 
-# The only security tier whose native agents install without an explicit trust
-# opt-in. ``community`` / ``experimental`` C++ agents require ``trust_native``.
+# The only security tier whose agents install without an explicit trust opt-in.
+# Any non-verified agent (``community`` / ``experimental``, of any language)
+# requires the caller to pass ``trusted=True``.
 VERIFIED_TIER = "verified"
 
 # Least-privileged default when a manifest omits its tier (mirrors the manifest
@@ -126,12 +128,12 @@ class InstallInProgressError(InstallError):
 
 
 class TrustRequiredError(InstallError):
-    """A native (C++) non-verified agent needs explicit trust to install.
+    """A non-verified agent needs an explicit trust opt-in to install.
 
-    Native agents run as unsandboxed binaries on the user's machine, so a
-    ``community``/``experimental`` C++ package is only installed when the caller
-    explicitly opts in (``trust_native=True`` / the UI's *Trust & Install*
-    confirmation). Maps to HTTP 403 at the router boundary.
+    A non-verified agent runs third-party code on the user's machine, so any
+    ``community``/``experimental`` package (of any language) is only installed
+    when the caller explicitly opts in (``trusted=True`` / the UI's
+    *Trust & Install* confirmation). Maps to HTTP 403 at the router boundary.
     """
 
 
@@ -891,40 +893,76 @@ def _hot_register(agent_id: str, install_dir: Path, language: str, registry) -> 
     return registry.get(agent_id) is not None
 
 
+def register_installed_sidecars(registry: Any) -> None:
+    """Register every hub-installed daemon-sidecar agent into *registry* (#2408).
+
+    Bridges ``gaia.daemon.sidecars.spec.builtin_specs()`` (what the daemon can
+    supervise, and the connector scopes it declares) with :func:`list_installed`
+    (what is actually on disk) so a binary sidecar agent (e.g. email) is visible
+    to the connectors grant flow and ``/api/agents`` without an importable
+    wheel. A binary install has no site-packages to entry-point-scan, so
+    :func:`_hot_register` never covers it.
+
+    Called once at server startup (right after ``AgentRegistry.discover()``)
+    and again the moment a binary sidecar finishes installing from the Hub
+    panel, so neither trigger point leaves the registry stale until a
+    restart. ``AgentRegistry.register_sidecar`` is itself idempotent against
+    an already-registered bare id, so calling this repeatedly is safe.
+
+    Best-effort at the :func:`list_installed` I/O boundary (mirrors
+    ``AgentRegistry._prime_installed_wheel_agents_path``): a disk read
+    failure logs and registers nothing rather than failing UI boot.
+    """
+    if registry is None:
+        return
+    try:
+        installed = list_installed()
+    except Exception as exc:  # noqa: BLE001 - best-effort discovery step
+        logger.warning(
+            "installer: could not list installed agents for sidecar "
+            "connector registration: %s",
+            exc,
+        )
+        return
+
+    for agent_id, spec in builtin_specs().items():
+        if agent_id not in installed:
+            continue
+        registry.register_sidecar(
+            agent_id, spec.display_name, spec.required_connections
+        )
+
+
 # ---------------------------------------------------------------------------
 # Security tier / native-agent trust
 # ---------------------------------------------------------------------------
 
 
-def requires_native_trust(manifest: Dict[str, Any]) -> bool:
-    """Whether installing *manifest* needs an explicit native-trust opt-in.
+def requires_trust_ack(manifest: Dict[str, Any]) -> bool:
+    """Whether installing *manifest* needs an explicit trust opt-in.
 
-    True for native (``language: cpp``) agents that are not in the ``verified``
-    tier — they ship an unsandboxed binary from a non-AMD-audited publisher.
+    True for any agent not in the ``verified`` tier — a non-AMD-verified package
+    runs third-party code on the user's machine regardless of its language.
     """
-    language = manifest.get("language", "python")
     tier = manifest.get("security_tier", DEFAULT_SECURITY_TIER)
-    return language == "cpp" and tier != VERIFIED_TIER
+    return tier != VERIFIED_TIER
 
 
-def ensure_native_trust(
-    agent_id: str, manifest: Dict[str, Any], *, trust_native: bool
-) -> None:
-    """Raise :class:`TrustRequiredError` if native trust is needed but absent.
+def ensure_trust_ack(agent_id: str, manifest: Dict[str, Any], *, trusted: bool) -> None:
+    """Raise :class:`TrustRequiredError` if trust is needed but not acknowledged.
 
-    No-op for Python agents and ``verified`` native agents. Called both by the
-    router (synchronous 403) and :func:`install` (defense in depth).
+    No-op for ``verified`` agents. Called both by the router (synchronous 403)
+    and :func:`install` (defense in depth).
     """
-    if trust_native or not requires_native_trust(manifest):
+    if trusted or not requires_trust_ack(manifest):
         return
     tier = manifest.get("security_tier", DEFAULT_SECURITY_TIER)
     raise TrustRequiredError(
-        f"'{agent_id}' is a native (C++) agent in the '{tier}' security tier. "
-        f"Native agents run as unsandboxed binaries on your machine, so this one "
-        f"is not installed automatically. Re-install with explicit trust "
-        f"(trust_native=true, or the UI's 'Trust & Install' confirmation) only if "
-        f"you trust its publisher. See "
-        f"https://amd-gaia.ai/docs/spec/agent-hub-restructure."
+        f"'{agent_id}' is a non-verified agent in the '{tier}' security tier. "
+        f"It runs third-party code on your machine, so it is not installed "
+        f"automatically. Re-install with explicit trust (trusted=true, or the "
+        f"UI's 'Trust & Install' confirmation) only if you trust its publisher. "
+        f"See https://amd-gaia.ai/docs/spec/agent-hub-restructure."
     )
 
 
@@ -966,7 +1004,7 @@ def install(
     install_root: Optional[Path] = None,
     registry: Any = None,
     skip_compatibility_check: bool = False,
-    trust_native: bool = False,
+    trusted: bool = False,
     platform_key: Optional[str] = None,
     active_env_site_packages: Optional[Path] = None,
 ) -> InstallResult:
@@ -981,8 +1019,8 @@ def install(
         install_root: Install root; defaults to ``~/.gaia/agents``.
         registry: Live :class:`AgentRegistry` to hot-register into.
         skip_compatibility_check: Skip the platform/disk gate (tests/forced).
-        trust_native: Explicit opt-in to install a non-verified native (C++)
-            agent. Required for ``community``/``experimental`` C++ packages.
+        trusted: Explicit opt-in to install a non-verified agent. Required for
+            any ``community``/``experimental`` package (of any language).
         platform_key: Artifact-filename platform key (``win32-x64`` etc.) used
             to select among ``versions[v].artifacts[]``; defaults to the real
             host's key (injectable for tests).
@@ -1012,10 +1050,10 @@ def install(
                 )
             language = manifest.get("language", "python")
 
-            # Native-agent trust gate — refuse non-verified C++ packages unless
-            # the caller explicitly opted in (defense in depth; the router also
-            # enforces this synchronously for a clean 403).
-            ensure_native_trust(agent_id, manifest, trust_native=trust_native)
+            # Trust gate — refuse any non-verified package unless the caller
+            # explicitly opted in (defense in depth; the router also enforces
+            # this synchronously for a clean 403).
+            ensure_trust_ack(agent_id, manifest, trusted=trusted)
 
             # Deprecation is non-fatal but must be loud: a deprecated agent may
             # be unmaintained or superseded.
@@ -1134,13 +1172,15 @@ def install(
                 percent=90,
                 version=resolved_version,
             )
-            # Binary installs have no site-packages to scan (nothing to
-            # hot-register), regardless of the manifest's declared language.
-            hot = (
-                False
-                if artifact_kind == ARTIFACT_KIND_BINARY
-                else _hot_register(agent_id, install_dir, language, registry)
-            )
+            # Binary installs have no site-packages to scan (nothing for
+            # _hot_register), regardless of the manifest's declared language —
+            # bridge it into the registry directly instead, so a sidecar
+            # agent's connector grants work without a server restart (#2408).
+            if artifact_kind == ARTIFACT_KIND_BINARY:
+                register_installed_sidecars(registry)
+                hot = registry is not None and registry.get(agent_id) is not None
+            else:
+                hot = _hot_register(agent_id, install_dir, language, registry)
 
             # NOTE: the backup snapshot is intentionally retained after a
             # successful update so rollback() can restore the prior version. It

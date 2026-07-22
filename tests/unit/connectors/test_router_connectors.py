@@ -419,6 +419,178 @@ class TestAuthorizeGrantAgents:
 
 
 # ---------------------------------------------------------------------------
+# End-to-end: hub-installed sidecar -> connector-grant flow (#2408)
+#
+# Unlike TestAuthorizeGrantAgents above (which plants a fake registry stand-in
+# to unit-test _resolve_grant_scopes' own logic), these tests run the REAL
+# server lifespan (registry.discover() + the installer bridge) so they
+# reproduce the fresh-install failure at the HTTP boundary. A test that
+# plants `installed:email` directly into app.state.agent_registry passes
+# identically whether or not the sidecar is actually wired into discovery,
+# and proves nothing about this bug.
+# ---------------------------------------------------------------------------
+
+
+class TestSidecarRegistrationEndToEnd:
+    _GOOGLE_ALL_SCOPES = [
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.send",
+        "https://www.googleapis.com/auth/calendar.events",
+        "https://www.googleapis.com/auth/calendar.readonly",
+    ]
+
+    @staticmethod
+    def _fake_installed_email():
+        from gaia.hub.installer import ARTIFACT_KIND_BINARY, InstalledAgent
+
+        return {
+            "email": InstalledAgent(
+                id="email",
+                version="0.1.0",
+                language="python",
+                installed_at="2026-01-01T00:00:00Z",
+                artifact_kind=ARTIFACT_KIND_BINARY,
+            )
+        }
+
+    def test_authorize_succeeds_after_real_lifespan_registers_sidecar(
+        self, monkeypatch
+    ):
+        """A sidecar 'installed' before the server even boots must be
+        resolvable by the grant flow through the real startup path — no
+        fake registry planted."""
+        from starlette.testclient import TestClient
+
+        from gaia.ui.server import create_app
+
+        monkeypatch.setattr(
+            "gaia.hub.installer.list_installed",
+            lambda *a, **kw: self._fake_installed_email(),
+        )
+        mock_start = AsyncMock(
+            return_value={"flow_id": "f1", "authorization_url": "https://auth"}
+        )
+        monkeypatch.setattr("gaia.connectors.start_authorization", mock_start)
+
+        with TestClient(create_app(db_path=":memory:")) as client:
+            resp = client.post(
+                "/api/connectors/google/authorize",
+                json={"scopes": ["openid"], "grant_agents": ["installed:email"]},
+                headers=UI_HEADER,
+            )
+
+        assert resp.status_code == 200, resp.text
+        _, kwargs = mock_start.call_args
+        assert sorted(kwargs["grant_agents"]["installed:email"]) == sorted(
+            self._GOOGLE_ALL_SCOPES
+        )
+
+    def test_authorize_404s_when_the_bridge_is_not_wired(self, monkeypatch):
+        """Sibling with the bridge itself disabled (not just 'not
+        installed') — proves the 200 above comes from server.py's wiring
+        calling the bridge, not incidentally from something else."""
+        from starlette.testclient import TestClient
+
+        from gaia.ui.server import create_app
+
+        monkeypatch.setattr(
+            "gaia.hub.installer.list_installed",
+            lambda *a, **kw: self._fake_installed_email(),
+        )
+        monkeypatch.setattr(
+            "gaia.hub.installer.register_installed_sidecars", lambda registry: None
+        )
+        monkeypatch.setattr("gaia.connectors.start_authorization", AsyncMock())
+
+        with TestClient(create_app(db_path=":memory:")) as client:
+            resp = client.post(
+                "/api/connectors/google/authorize",
+                json={"scopes": ["openid"], "grant_agents": ["installed:email"]},
+                headers=UI_HEADER,
+            )
+
+        assert resp.status_code == 404
+        assert resp.json()["detail"]["error"] == "unknown_agent"
+
+
+class TestSidecarInstallNoRestart:
+    """Installing email from the Hub panel while the server is already
+    running must register it into the SAME live registry the connectors
+    router reads — no restart (#2408, the live-install trigger point)."""
+
+    @staticmethod
+    def _binary_manifest(sha256: str, size: int) -> dict:
+        return {
+            "id": "email",
+            "language": "python",
+            "latest_version": "0.1.0",
+            "versions": {
+                "0.1.0": {
+                    "artifact": {
+                        "filename": "email-agent-linux-x64",
+                        "path": "agents/email/0.1.0/email-agent-linux-x64",
+                        "sha256": sha256,
+                        "size_bytes": size,
+                    }
+                }
+            },
+        }
+
+    def test_binary_install_registers_without_restart(self, monkeypatch):
+        import hashlib
+
+        from starlette.testclient import TestClient
+
+        from gaia.hub import installer as installer_mod
+        from gaia.ui.server import create_app
+
+        artifact_bytes = b"fake-email-sidecar-binary"
+        sha256 = hashlib.sha256(artifact_bytes).hexdigest()
+        manifest = self._binary_manifest(sha256, len(artifact_bytes))
+
+        with TestClient(create_app(db_path=":memory:")) as client:
+            registry = client.app.state.agent_registry
+
+            # Baseline: email is not installed yet, so the grant flow 404s.
+            resp = client.post(
+                "/api/connectors/google/authorize",
+                json={"scopes": ["openid"], "grant_agents": ["installed:email"]},
+                headers=UI_HEADER,
+            )
+            assert resp.status_code == 404
+
+            # Drive the exact call the Hub panel's background install task
+            # makes (gaia.ui.routers.hub._run_install -> installer.install),
+            # completing a binary-kind install against the same registry.
+            installer_mod.install(
+                "email",
+                version="0.1.0",
+                manifest=manifest,
+                fetcher=lambda url: artifact_bytes,
+                registry=registry,
+                skip_compatibility_check=True,
+                platform_key="linux-x64",
+            )
+
+            monkeypatch.setattr(
+                "gaia.connectors.start_authorization",
+                AsyncMock(
+                    return_value={
+                        "flow_id": "f1",
+                        "authorization_url": "https://auth",
+                    }
+                ),
+            )
+            resp = client.post(
+                "/api/connectors/google/authorize",
+                json={"scopes": ["openid"], "grant_agents": ["installed:email"]},
+                headers=UI_HEADER,
+            )
+
+        assert resp.status_code == 200, resp.text
+
+
+# ---------------------------------------------------------------------------
 # POST /api/connectors/{connector_id}/authorize-device — device-code (#1275)
 # ---------------------------------------------------------------------------
 

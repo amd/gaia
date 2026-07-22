@@ -183,6 +183,7 @@ def check_compatibility(
     install_dir: Optional[Path] = None,
     detected_npu: Optional[bool] = None,
     detected_gpu_vram_gb: Optional[float] = None,
+    subject: str = "This agent",
 ) -> CompatibilityReport:
     """Check whether the current machine satisfies *requirements*.
 
@@ -202,6 +203,10 @@ def check_compatibility(
         detected_gpu_vram_gb: GPU VRAM (GB) reported by the caller's scan, used
             the same way for a ``gpu_vram_gb`` requirement. ``None`` keeps the
             "cannot verify" warning.
+        subject: What the warnings call the thing being checked. Defaults to
+            ``"This agent"`` for the hub-install path; the onboarding preflight
+            passes its own phrase (e.g. ``"The recommended model"``) so first-run
+            setup never claims an agent is involved when none has been chosen.
 
     Returns:
         A :class:`CompatibilityReport`. ``compatible`` is ``True`` only when no
@@ -240,13 +245,13 @@ def check_compatibility(
     if reqs.min_memory_gb:
         if total_mem is None:
             warnings.append(
-                f"Could not detect system memory; this agent recommends "
+                f"Could not detect system memory; {subject.lower()} recommends "
                 f"{reqs.min_memory_gb:g} GB."
             )
         elif total_mem < reqs.min_memory_gb:
             memory_ok = False
             warnings.append(
-                f"This agent recommends {reqs.min_memory_gb:g} GB RAM; your "
+                f"{subject} recommends {reqs.min_memory_gb:g} GB RAM; your "
                 f"system has {total_mem:.1f} GB. It may run slowly or fail to "
                 f"load its model."
             )
@@ -282,25 +287,35 @@ def check_compatibility(
         if detected_npu is True:
             pass  # requirement met — no warning
         elif detected_npu is False:
-            warnings.append(
-                "This agent requests an NPU, but none was detected on this "
-                "machine. It will fall back to GPU/CPU inference, which is "
-                "slower. Ensure your Ryzen AI NPU driver is installed."
-            )
+            if detected_gpu_vram_gb:
+                # A capable GPU is already present, so GPU/CPU is the expected
+                # accelerator for this machine class — an NPU is optional here.
+                # Emit an informational line, not a remediation CTA: there is no
+                # Ryzen AI NPU driver to "install" on a dGPU box (#2396).
+                warnings.append(
+                    f"No NPU detected; {subject.lower()} will run on this "
+                    "machine's GPU. An NPU is optional and not required here."
+                )
+            else:
+                warnings.append(
+                    f"{subject} requests an NPU, but none was detected on this "
+                    "machine. It will fall back to GPU/CPU inference, which is "
+                    "slower. Ensure your Ryzen AI NPU driver is installed."
+                )
         else:
             warnings.append(
-                "This agent requests an NPU. GAIA cannot verify NPU availability "
+                f"{subject} requests an NPU. GAIA cannot verify NPU availability "
                 "here; ensure your Ryzen AI NPU driver is installed."
             )
     if reqs.gpu_vram_gb:
         if detected_gpu_vram_gb is None:
             warnings.append(
-                f"This agent recommends {reqs.gpu_vram_gb:g} GB of GPU VRAM. GAIA "
+                f"{subject} recommends {reqs.gpu_vram_gb:g} GB of GPU VRAM. GAIA "
                 "cannot verify GPU VRAM here."
             )
         elif detected_gpu_vram_gb < reqs.gpu_vram_gb:
             warnings.append(
-                f"This agent recommends {reqs.gpu_vram_gb:g} GB of GPU VRAM; this "
+                f"{subject} recommends {reqs.gpu_vram_gb:g} GB of GPU VRAM; this "
                 f"machine has {detected_gpu_vram_gb:g} GB. It may run slowly or "
                 "fail to load its model."
             )

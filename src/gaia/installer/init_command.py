@@ -2014,7 +2014,11 @@ class InitCommand:
         from gaia.hub import installer as hub_installer
 
         self._print(f"   Installing '{agent_id}' from the Agent Hub...")
-        result = hub_installer.install(agent_id)
+        # Curated first-run profile agent: a hardcoded INIT_PROFILES id, not user
+        # input, so GAIA's own curation is the trust decision. Pass the trust
+        # opt-in explicitly — every non-verified agent now needs it, and the
+        # profile agents are not published in the "verified" tier.
+        result = hub_installer.install(agent_id, trusted=True)
         self._print_success(f"Installed '{agent_id}' from the Agent Hub")
 
         # No AgentRegistry exists in this process to hot-register into (we

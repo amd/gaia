@@ -397,6 +397,126 @@ def test_concurrent_direct_loads_serialize(monkeypatch):
     assert len(local.acquired) == 4 and len(local.released) == 4
 
 
+# ── The inference lease (#2380) ──────────────────────────────────────────────
+
+
+def _bare_chat_client():
+    """A LemonadeClient carrying only the attrs the chat paths touch."""
+    import logging
+
+    from gaia.llm.lemonade_client import LemonadeClient
+
+    client = object.__new__(LemonadeClient)
+    client.model_lease_priority = "background"
+    client.base_url = "http://127.0.0.1:0/api/v1"
+    client.api_key = None
+    client.log = logging.getLogger("test.lemonade")
+    return client
+
+
+def test_non_streaming_chat_holds_the_lease_across_the_inference_request(monkeypatch):
+    """The lease must span the /chat/completions call, not just the load (#2380).
+
+    Before the fix the lease closed as soon as ``_ensure_model_loaded`` returned,
+    so a second sidecar could acquire the freed slot and evict this model while
+    the request below was still generating. This pins the lease held for BOTH.
+    """
+    local = _LocalBroker(monkeypatch)
+    client = _bare_chat_client()
+
+    held: dict = {}
+    monkeypatch.setattr(
+        client,
+        "_ensure_model_loaded",
+        lambda model, auto_download=True: held.__setitem__(
+            "ensure", broker_client.holding_lease()
+        ),
+    )
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            held["request"] = broker_client.holding_lease()
+            return {"choices": [{"message": {"content": "hi"}}]}
+
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_client.requests.post", lambda *a, **k: _Resp()
+    )
+
+    result = client.chat_completions(
+        model="m1", messages=[{"role": "user", "content": "hi"}]
+    )
+
+    assert result["choices"][0]["message"]["content"] == "hi"
+    assert held == {"ensure": True, "request": True}
+    # One lease for the whole load+inference; released after the return.
+    assert len(local.acquired) == 1 and len(local.released) == 1
+    assert not broker_client.holding_lease()
+
+
+def test_streaming_chat_holds_the_lease_across_the_whole_generation(monkeypatch):
+    """Streaming must keep the slot leased for every chunk, not just the load.
+
+    The lease is acquired on first iteration and released when the stream is
+    exhausted, so no other sidecar can evict the model mid-stream (#2380).
+    """
+    local = _LocalBroker(monkeypatch)
+    client = _bare_chat_client()
+    monkeypatch.setattr(
+        client, "_ensure_model_loaded", lambda model, auto_download=True: None
+    )
+
+    held_per_chunk: List[bool] = []
+
+    class _Delta:
+        role = "assistant"
+        content = "x"
+
+    class _Choice:
+        index = 0
+        finish_reason = None
+        delta = _Delta()
+
+    class _Chunk:
+        id = "0"
+        created = 0
+        model = "m1"
+        choices = [_Choice()]
+
+    class _FakeStream:
+        def __iter__(self):
+            for _ in range(3):
+                held_per_chunk.append(broker_client.holding_lease())
+                yield _Chunk()
+
+    class _FakeOpenAI:
+        def __init__(self, *a, **k):
+            self.chat = self
+
+        @property
+        def completions(self):
+            return self
+
+        def create(self, **kwargs):
+            return _FakeStream()
+
+    monkeypatch.setattr("gaia.llm.lemonade_client.OpenAI", _FakeOpenAI)
+
+    gen = client.chat_completions(
+        model="m1", messages=[{"role": "user", "content": "hi"}], stream=True
+    )
+    # Lazy: nothing acquired until the consumer starts iterating.
+    assert not local.acquired
+    chunks = list(gen)
+
+    assert len(chunks) == 3
+    assert held_per_chunk == [True, True, True]
+    assert len(local.acquired) == 1 and len(local.released) == 1
+    assert not broker_client.holding_lease()
+
+
 # ── The wired call sites ─────────────────────────────────────────────────────
 
 

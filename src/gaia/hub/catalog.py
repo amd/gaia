@@ -351,13 +351,13 @@ STATUS_UPDATE_AVAILABLE = "update_available"
 DEFAULT_PACKAGE_TYPE = "agent"
 
 
-def _requires_trust(language: str, security_tier: str) -> bool:
-    """Whether a catalog entry needs an explicit native-trust opt-in to install.
+def _requires_trust(security_tier: str) -> bool:
+    """Whether a catalog entry needs an explicit trust opt-in to install.
 
-    Native (``cpp``) agents outside the ``verified`` tier ship an unsandboxed
-    binary from a non-AMD-audited publisher; the UI prompts before installing.
+    Any agent outside the ``verified`` tier runs third-party code from a
+    non-AMD-verified publisher; the UI prompts before installing.
     """
-    return language == "cpp" and security_tier != "verified"
+    return security_tier != "verified"
 
 
 def merge_with_registry(
@@ -427,7 +427,7 @@ def merge_with_registry(
             "language": language,
             "author": entry.get("author", ""),
             "security_tier": security_tier,
-            "requires_trust": _requires_trust(language, security_tier),
+            "requires_trust": _requires_trust(security_tier),
             # Declared permission scopes (``<domain>:<action>``) shown in the
             # install trust gate. Absent from older entries / local-only agents.
             "permissions": entry.get("permissions", []),
@@ -464,7 +464,7 @@ def merge_with_registry(
             "language": reg.language,
             "author": "",
             "security_tier": reg_tier,
-            "requires_trust": _requires_trust(reg.language, reg_tier),
+            "requires_trust": _requires_trust(reg_tier),
             "permissions": [],
             "download_size_bytes": 0,
             "requirements": {"platforms": []},

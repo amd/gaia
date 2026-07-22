@@ -31,28 +31,28 @@ class _InstallResult:
         self.hot_registered = False
 
 
-def _args(agent_id="email", version=None, trust_native=False):
+def _args(agent_id="email", version=None, trusted=False):
     return Namespace(
         agent_action="install",
         agent_id=agent_id,
         version=version,
-        trust_native=trust_native,
+        trusted=trusted,
     )
 
 
 def test_install_success_forwards_args_and_prints_next_step(monkeypatch, capsys):
     captured = {}
 
-    def _fake_install(agent_id, *, version=None, trust_native=False):
+    def _fake_install(agent_id, *, version=None, trusted=False):
         captured["agent_id"] = agent_id
         captured["version"] = version
-        captured["trust_native"] = trust_native
+        captured["trusted"] = trusted
         return _InstallResult(agent_id=agent_id, version=version or "0.5.0")
 
     monkeypatch.setattr(installer, "install", _fake_install)
-    cli.handle_agent_install(_args("email", version="0.5.0", trust_native=True))
+    cli.handle_agent_install(_args("email", version="0.5.0", trusted=True))
 
-    assert captured == {"agent_id": "email", "version": "0.5.0", "trust_native": True}
+    assert captured == {"agent_id": "email", "version": "0.5.0", "trusted": True}
     out = capsys.readouterr().out
     assert "✅ Installed 'email' v0.5.0" in out
     # email is a daemon sidecar spec, so the start hint must appear.
@@ -63,7 +63,7 @@ def test_install_non_sidecar_agent_omits_daemon_hint(monkeypatch, capsys):
     monkeypatch.setattr(
         installer,
         "install",
-        lambda agent_id, *, version=None, trust_native=False: _InstallResult(
+        lambda agent_id, *, version=None, trusted=False: _InstallResult(
             agent_id="some-tool", version="1.0.0"
         ),
     )
@@ -74,7 +74,7 @@ def test_install_non_sidecar_agent_omits_daemon_hint(monkeypatch, capsys):
 
 
 def test_install_error_exits_nonzero_and_is_loud(monkeypatch, capsys):
-    def _boom(agent_id, *, version=None, trust_native=False):
+    def _boom(agent_id, *, version=None, trusted=False):
         raise installer.ChecksumError("artifact checksum mismatch for X")
 
     monkeypatch.setattr(installer, "install", _boom)
@@ -89,7 +89,7 @@ def test_install_error_exits_nonzero_and_is_loud(monkeypatch, capsys):
 def test_install_unknown_id_suggests_agent_list(monkeypatch, capsys):
     # A typo'd id 404s on the manifest fetch (a plain requests error, not an
     # InstallError) — the generic branch must point the user at `gaia agent list`.
-    def _boom(agent_id, *, version=None, trust_native=False):
+    def _boom(agent_id, *, version=None, trusted=False):
         raise RuntimeError(
             "404 Client Error: Not Found for url: .../emial/manifest.json"
         )
@@ -104,7 +104,7 @@ def test_install_unknown_id_suggests_agent_list(monkeypatch, capsys):
 
 
 def test_install_trust_required_names_the_flag(monkeypatch, capsys):
-    def _needs_trust(agent_id, *, version=None, trust_native=False):
+    def _needs_trust(agent_id, *, version=None, trusted=False):
         raise installer.TrustRequiredError("'x' is a native agent in 'experimental'")
 
     monkeypatch.setattr(installer, "install", _needs_trust)
@@ -112,7 +112,7 @@ def test_install_trust_required_names_the_flag(monkeypatch, capsys):
         cli.handle_agent_install(_args("x"))
     assert exc.value.code == 1
     err = capsys.readouterr().err
-    assert "--trust-native" in err
+    assert "--trust" in err
 
 
 # ---------------------------------------------------------------------------
