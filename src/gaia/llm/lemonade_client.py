@@ -1649,17 +1649,6 @@ class LemonadeClient:
                 **kwargs,
             )
 
-        # Pre-flight: ensure the model is loaded at the GAIA-expected ctx.
-        # The streaming path already does this via
-        # ``_stream_chat_completions_with_openai`` -> ``_ensure_model_loaded``.
-        # Pre-#1030 follow-up the non-streaming path skipped the check, so
-        # when something (e.g. the RAG SDK's embedder warm-up) unloaded the
-        # LLM, the next non-streaming chat_completion let Lemonade auto-load
-        # Gemma at its own default ctx (32K) — bypassing
-        # MODELS[…].min_ctx_size and silently capping doc-Q&A at 32K.
-        if auto_download:
-            self._ensure_model_loaded(model, auto_download=True)
-
         # Note: self.base_url already includes /api/v1
         url = f"{self.base_url}/chat/completions"
         data = {
@@ -1717,12 +1706,29 @@ class LemonadeClient:
 
             return result
 
-        # Execute with auto-download retry logic
-        try:
-            return _make_request()
-        except (requests.exceptions.RequestException, LemonadeClientError):
-            # Use helper to handle auto-download and retry
-            return self._execute_with_auto_download(_make_request, model, auto_download)
+        # Hold the model-slot lease across BOTH the pre-flight load and the
+        # inference request (#2380). The broker hands out one lease at a time and
+        # its contract is that the holder does the load AND the inference before
+        # releasing; a lease dropped after the load lets another sidecar acquire
+        # it and evict this model mid-generation. Re-entrant per thread, so the
+        # load's own inner lease folds into this one.
+        #
+        # The pre-flight ensure also guards the GAIA-expected ctx: pre-#1030 the
+        # non-streaming path skipped it, so an embedder warm-up that unloaded the
+        # LLM let Lemonade auto-load Gemma at its 32K default, silently capping
+        # doc-Q&A. (The streaming path does the same via _ensure_model_loaded.)
+        with self._model_slot_lease(model):
+            if auto_download:
+                self._ensure_model_loaded(model, auto_download=True)
+
+            # Execute with auto-download retry logic
+            try:
+                return _make_request()
+            except (requests.exceptions.RequestException, LemonadeClientError):
+                # Use helper to handle auto-download and retry
+                return self._execute_with_auto_download(
+                    _make_request, model, auto_download
+                )
 
     def _stream_chat_completions_with_openai(
         self,
@@ -1756,9 +1762,45 @@ class LemonadeClient:
             }]
         }
         """
-        # Proactively ensure model is loaded before making request
-        self._ensure_model_loaded(model, auto_download)
+        # Hold the model-slot lease across BOTH the load and the entire
+        # generation (#2380). The broker's contract is that one holder does the
+        # load AND the inference before releasing; a lease dropped after the
+        # load lets another sidecar acquire it and evict this model mid-stream.
+        # Re-entrant per thread, so the load's own inner lease folds into this.
+        # As a generator the lease is acquired on first iteration and released
+        # when the consumer finishes or closes the stream.
+        with self._model_slot_lease(model):
+            self._ensure_model_loaded(model, auto_download)
+            yield from self._stream_chat_chunks(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_completion_tokens=max_completion_tokens,
+                stop=stop,
+                timeout=timeout,
+                logprobs=logprobs,
+                tools=tools,
+                **kwargs,
+            )
 
+    def _stream_chat_chunks(
+        self,
+        model: str,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.7,
+        max_completion_tokens: int = 1000,
+        stop: Optional[Union[str, List[str]]] = None,
+        timeout: int = DEFAULT_REQUEST_TIMEOUT,
+        logprobs: Optional[bool] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        **kwargs,
+    ) -> Generator[Dict[str, Any], None, None]:
+        """Stream chat chunks from Lemonade's OpenAI-compatible endpoint.
+
+        The caller (:meth:`_stream_chat_completions_with_openai`) holds the
+        model-slot lease across the whole iteration so the model cannot be
+        evicted mid-stream (#2380).
+        """
         # Create a client just for this request.
         # ``api_key`` is required by the OpenAI SDK (rejects None/"" with
         # OpenAIError); when no real key is configured the placeholder is
