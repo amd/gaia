@@ -8,11 +8,10 @@ description: "The Agent UI gets in-app install, auto-update, and a first-run wiz
 GAIA v0.23.0 is a large release built around making the Agent UI a real application instead of a developer tool with a browser front end. It can now install and update itself, walk a new user through hardware checks and model download on first launch, and run every agent as an isolated process supervised by a background daemon instead of code loaded into the UI. The email agent grows a full-autonomy mode that decides what to handle silently and what to ask about, and Outlook support extends to work and school accounts with a zero-setup sign-in flow. Underneath, every agent now shares one model and one context size so switching between them is instant, Lemonade Server moves to 11.0.0, and a dedicated security-audit pipeline replaces a general weekly pass with deterministic scanning plus reasoning over CWE-specific classes.
 
 **Why upgrade:**
-- **Install agents from inside the app** — the Agent UI's Hub install now actually works (a real backend install, not the old "not yet implemented" stub); a first-run wizard checks your hardware and downloads a model before you ever open a terminal.
+- **Install agents from inside the app** — the Agent UI's Hub install now actually works (a real backend install, not the old "not yet implemented" stub), verified end to end.
 - **The email agent can run your inbox for you (beta)** — turn on autonomy and it files low-signal mail on its own, always asks before anything destructive, and pulls back the moment you correct it.
 - **Agents run as their own processes** — each agent is a daemon-supervised sidecar instead of code living inside the Agent UI, so a running agent (a long chat or an in-flight job) survives closing the window.
-- **Switching agents is instant** — every agent now shares one model and context size, so the Lemonade-side cold reload that used to cost seconds on every switch is gone.
-- **Security hardening** — the MCP bridge now binds to loopback only, the API rejects wildcard CORS with credentials, and every new security suppression must be reviewed in an allowlist.
+- **Agents share one model** — every agent now resolves to the same model and context size, so switching between them no longer forces Lemonade to unload and reload a different model.
 
 <Note>
 **Email autonomy is beta.** It only auto-executes reversible actions, each with undo, and the confirmation floor for anything destructive (send, forward, permanent delete, RSVP, quarantine) never relaxes — not even for a fully-trusted sender. It's genuinely useful, but it's new this release: watch what it does for the first few days rather than trusting it blind, and report anything that looks wrong.
@@ -38,11 +37,9 @@ Hub packages used to be split by language first — `hub/agents/python/email/` a
 
 ## What's New
 
-### Install agents from the Hub, and onboard without a terminal — Agent UI
+### Install agents from the Hub — Agent UI
 
-Clicking install on a Hub agent used to hit an IPC handler that threw "not yet implemented"; now it drives the real backend install runtime with streaming progress, so importing an agent from the Hub actually works — verified end to end (install → a real binary on disk → it runs) (PR [#2196](https://github.com/amd/gaia/pull/2196)).
-
-First launch on a fresh machine now opens a wizard: it scans your hardware and gates on real capability (RAM, disk, NPU, GPU) instead of finding out at runtime, and downloads the recommended model with visible progress and retry instead of swallowing a failed download (PR [#2204](https://github.com/amd/gaia/pull/2204)). The in-app Hub is reorganized into Apps, Components, and Agents lanes (PR [#2201](https://github.com/amd/gaia/pull/2201)).
+Clicking install on a Hub agent used to hit an IPC handler that threw "not yet implemented"; now it drives the real backend install runtime with streaming progress, so importing an agent from the Hub actually works — verified end to end (install → a real binary on disk → it runs) (PR [#2196](https://github.com/amd/gaia/pull/2196)). The in-app Hub is also reorganized into Apps, Components, and Agents lanes (PR [#2201](https://github.com/amd/gaia/pull/2201)).
 
 ---
 
@@ -65,35 +62,15 @@ Behind that one architectural move: `gaia email` and `gaia api` now both relay t
 
 ---
 
-### Every agent shares one model — instant switching
+### Every agent shares one model
 
-Agents that left their model unset used to default to a different model than chat and email, so moving between agents forced Lemonade to unload and cold-reload — measured at 7.9 seconds on a warm server. Every agent now resolves to Gemma-4-E4B at one context size per device profile, so the resident model is simply reused: three consecutive agent switches measured 0.00s each with the same `llama-server` process still running (PR [#2284](https://github.com/amd/gaia/pull/2284)).
+Agents that left their model unset used to default to a different model than chat and email, so moving between agents forced Lemonade to unload and cold-reload the model. Every agent now resolves to Gemma-4-E4B at one context size per device profile, so the resident model is reused across a switch instead of reloaded (PR [#2284](https://github.com/amd/gaia/pull/2284)).
 
 ---
 
 ### Lemonade Server 11.0.0
 
 The pinned Lemonade Server moves 10.10.0 → 11.0.0 (PR [#2130](https://github.com/amd/gaia/pull/2130)). This doesn't move existing installs — a machine already on a 10.x that clears every profile's minimum is left alone — but it fixes a version-check bug found while crossing the major boundary: GAIA compared Lemonade's major version for equality, so every 10.x install was about to start seeing a false "version mismatch" warning on every run, the exact opposite of what `gaia init` reported. The check is now a floor (10.2.0), not an equality check, so a newer server is never flagged as wrong.
-
----
-
-### Security hardening
-
-This release lands a batch of security hardening: the MCP bridge binds to loopback instead of all interfaces (PR [#2246](https://github.com/amd/gaia/pull/2246)), the API's CORS policy no longer allows a wildcard origin with credentials (PR [#2238](https://github.com/amd/gaia/pull/2238)), SQL is parameterized and sensitive values are redacted from logs (PR [#2239](https://github.com/amd/gaia/pull/2239)), and a new lint gate requires every future security suppression to be reviewed in an allowlist instead of silently accepted (PR [#2343](https://github.com/amd/gaia/pull/2343)).
-
----
-
-### Agent Hub / infrastructure
-
-A hub-installed wheel agent could be installed successfully and still fail to import in a fresh process, because installation only patched the installing process's own `sys.path`. That's now fixed generically for every wheel agent, and `gaia init` can install the chat agent from the Hub catalog when it's missing (PR [#2373](https://github.com/amd/gaia/pull/2373)). This is infrastructure, not a finished user path: chat's own publish to the Hub catalog is a separate, still-pending step, so a plain `pip install amd-gaia` still doesn't give you a working `gaia chat` yet — that milestone stays open until the publish lands and is verified end to end.
-
-Elsewhere in the Hub: agent packages are catalogued with a manifest type discriminator so an app, component, or agent can be told apart before install (PR [#2183](https://github.com/amd/gaia/pull/2183)), and file-based custom agents now report their real health in the UI instead of always showing "error" (PR [#2277](https://github.com/amd/gaia/pull/2277)).
-
----
-
-### Agents propose their own next steps
-
-The base `Agent` class gained the hooks its autonomy work is built on: `on_heartbeat`/`propose`, letting an agent surface an approval-gated suggestion for something it thinks should happen next, instead of only ever reacting to a prompt. The email autonomy engine above is the first concrete consumer (PR [#2187](https://github.com/amd/gaia/pull/2187)).
 
 ---
 
@@ -115,6 +92,10 @@ The base `Agent` class gained the hooks its autonomy work is built on: `on_heart
 - **Explicitly targeting an unconnected mailbox silently used a different one** (PR [#2172](https://github.com/amd/gaia/pull/2172)) — it now errors instead of substituting.
 - **A model-load failure could fail silently** (PR [#2185](https://github.com/amd/gaia/pull/2185)) — `_ensure_model_loaded` now raises loudly instead of swallowing the error.
 - **The `amd-gaia[agents]` extra could downgrade the core wheel** (PR [#2262](https://github.com/amd/gaia/pull/2262)) — pip's resolver could pull in an older core package than the one already installed.
+- **Security: the MCP bridge bound to all interfaces** (PR [#2246](https://github.com/amd/gaia/pull/2246)) — it now binds to loopback only.
+- **Security: the API allowed a wildcard CORS origin with credentials** (PR [#2238](https://github.com/amd/gaia/pull/2238)) — that combination is now rejected.
+- **Security: SQL wasn't parameterized and some logs leaked sensitive values** (PR [#2239](https://github.com/amd/gaia/pull/2239)) — SQL is parameterized and those values are redacted.
+- **Security suppressions are now review-gated** (PR [#2343](https://github.com/amd/gaia/pull/2343)) — a reviewed allowlist replaces silently-accepted suppressions.
 
 ---
 
