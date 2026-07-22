@@ -29,18 +29,20 @@ contract version is tracked separately as
   #1483, #1287, #2005).** Set `autonomy_level` to `earn_trust` and the agent
   handles low-signal mail on its own: each heartbeat (`on_heartbeat` /
   `run_autonomy_cycle`) triages the inbox and either archives a message silently
-  — once its sender/category has *proven* itself in the trust ledger — or files
-  a proposal for approval. Cautious on day one, near-invisible once trusted.
+  — where your explicit preferences sanction it, or its sender/category has crossed
+  the trust bar in the ledger — or files a proposal for approval. Cautious on day one.
   - **The destructive floor always asks.** Send, forward, permanent-delete,
     RSVP, and quarantine require confirmation at *every* level, even for a
     fully-trusted sender — a parity test locks the policy floor to the agent's
     real `CONFIRMATION_REQUIRED_TOOLS`. Only reversible actions auto-execute,
     each with undo via `action_store`.
-  - **It learns from you.** `record_autonomy_outcome` is the single funnel every
-    trust signal flows through; undoing an auto-archive (through the real
-    `undo_archive_batch` tool) is captured automatically as a correction and
-    pulls trust back below the bar, while accepted suggestions lift it over.
-    Both the sender and the category scope learn from one choice.
+  - **It learns from your corrections.** `record_autonomy_outcome` is the single
+    funnel every trust signal flows through; undoing an auto-archive (through the
+    real `undo_archive_batch` tool) is captured automatically as a negative outcome
+    and pulls trust back below the bar, updating both the sender and the category
+    scope from one choice. Positive-outcome accrual — trust *rising* as suggestions
+    are accepted or left standing — is not yet wired, so today the ledger only
+    ratchets trust down.
   - **Inspectable, never a black box.** `autonomy_status()` and
     `GET /v1/email/agent/autonomy/{session_id}` expose the level, thresholds,
     and every earned-trust scope with its tally. `POST /v1/email/agent/autonomy`
