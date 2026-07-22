@@ -495,6 +495,10 @@ async function checkForUpdates() {
   // first so a feed written to config after init() is picked up here.
   if (!forwardFeedUrl && !state.pinnedVersion) {
     if (!_applyForwardFeed()) return;
+    // Feed just became available after a no-feed (NO_CHANNEL) start — init()
+    // skipped arming the periodic scheduler, so arm it now or background checks
+    // never resume once the feed goes live.
+    if (!scheduledTimeout) scheduleNextCheck();
   }
   if (checkInProgress) {
     log("info", "Skipping check — another check is already in progress");
