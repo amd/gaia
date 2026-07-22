@@ -1,6 +1,6 @@
 ---
 title: "v0.23.0"
-description: "The Agent UI gets in-app install, auto-update, and a first-run wizard so a new user never touches a terminal; the email agent gains a full-autonomy engine that files low-signal mail on its own while always confirming anything destructive; Outlook now covers work/school accounts with device-code sign-in; and every agent runs as its own daemon-supervised process instead of living inside the UI."
+description: "The Agent UI gets in-app install, auto-update, and a first-run wizard so a new user never touches a terminal; the email agent gains a full-autonomy engine that files low-signal mail on its own while always confirming anything destructive; and every agent runs as its own daemon-supervised process instead of living inside the UI."
 ---
 
 # GAIA v0.23.0 Release Notes
@@ -8,12 +8,11 @@ description: "The Agent UI gets in-app install, auto-update, and a first-run wiz
 GAIA v0.23.0 is a large release built around making the Agent UI a real application instead of a developer tool with a browser front end. It can now install and update itself, walk a new user through hardware checks and model download on first launch, and run every agent as an isolated process supervised by a background daemon instead of code loaded into the UI. The email agent grows a full-autonomy mode that decides what to handle silently and what to ask about, and Outlook support extends to work and school accounts with a zero-setup sign-in flow. Underneath, every agent now shares one model and one context size so switching between them is instant, Lemonade Server moves to 11.0.0, and a dedicated security-audit pipeline replaces a general weekly pass with deterministic scanning plus reasoning over CWE-specific classes.
 
 **Why upgrade:**
-- **Install and update from inside the app** — the Agent UI can install itself, pull updates from a real feed, and open `gaia://` links from the website; a first-run wizard checks your hardware and downloads a model before you ever open a terminal.
+- **Install agents from inside the app** — the Agent UI's Hub install now actually works (a real backend install, not the old "not yet implemented" stub); a first-run wizard checks your hardware and downloads a model before you ever open a terminal.
 - **The email agent can run your inbox for you (beta)** — turn on autonomy and it files low-signal mail on its own, always asks before anything destructive, and pulls back the moment you correct it.
-- **Outlook now works for work and school accounts** — sign in with a short device code, no Azure app registration required.
 - **Agents run as their own processes** — each agent is a daemon-supervised sidecar instead of code living inside the Agent UI, so a running agent (a long chat or an in-flight job) survives closing the window.
 - **Switching agents is instant** — every agent now shares one model and context size, so the Lemonade-side cold reload that used to cost seconds on every switch is gone.
-- **A dedicated security audit** — deterministic scanning plus a reasoning pass over specific vulnerability classes, feeding CVSS-scored findings into GitHub's private code-scanning tab instead of a public issue.
+- **Security hardening** — the MCP bridge now binds to loopback only, the API rejects wildcard CORS with credentials, and every new security suppression must be reviewed in an allowlist.
 
 <Note>
 **Email autonomy is beta.** It only auto-executes reversible actions, each with undo, and the confirmation floor for anything destructive (send, forward, permanent delete, RSVP, quarantine) never relaxes — not even for a fully-trusted sender. It's genuinely useful, but it's new this release: watch what it does for the first few days rather than trusting it blind, and report anything that looks wrong.
@@ -41,9 +40,9 @@ Hub packages used to be split by language first — `hub/agents/python/email/` a
 
 ### Install, update, and onboard without a terminal — Agent UI
 
-The Agent UI shell had three install/update paths that either didn't exist or were dead stubs. Clicking install on a Hub agent used to hit an IPC handler that threw "not yet implemented"; now it drives the real backend install runtime with streaming progress, so importing an agent from the Hub actually works. Auto-update moved off a hard-wired GitHub Releases check onto a configurable R2 feed with a mutable channel pointer, and an app with no feed configured says so loudly instead of silently checking a dead URL. The website's "Open in GAIA" button now has somewhere to land: the app registers the `gaia://` protocol and handles `gaia://hub/install/<id>` deep links on all three desktop platforms (PR [#2196](https://github.com/amd/gaia/pull/2196)).
+Clicking install on a Hub agent used to hit an IPC handler that threw "not yet implemented"; now it drives the real backend install runtime with streaming progress, so importing an agent from the Hub actually works — verified end to end (install → a real binary on disk → it runs) (PR [#2196](https://github.com/amd/gaia/pull/2196)).
 
-None of that helps if a new user doesn't know where to start, so first launch on a fresh machine now opens a wizard: it scans your hardware and gates on real capability (RAM, disk, NPU, GPU) instead of finding out at runtime, downloads the recommended model with visible progress and retry instead of swallowing a failed download, and offers to connect an account (Google, for email triage) before you ever reach chat (PR [#2204](https://github.com/amd/gaia/pull/2204)). The in-app Hub itself is reorganized into Apps, Components, and Agents lanes, and adds a trust gate in the UI — a non-AMD-verified agent requires an explicit override before install (enforced in the backend for native binary agents; a UI-level prompt for others) (PR [#2201](https://github.com/amd/gaia/pull/2201)).
+First launch on a fresh machine now opens a wizard: it scans your hardware and gates on real capability (RAM, disk, NPU, GPU) instead of finding out at runtime, and downloads the recommended model with visible progress and retry instead of swallowing a failed download (PR [#2204](https://github.com/amd/gaia/pull/2204)). The in-app Hub is reorganized into Apps, Components, and Agents lanes (PR [#2201](https://github.com/amd/gaia/pull/2201)).
 
 ---
 
@@ -58,17 +57,11 @@ GET  /v1/email/agent/autonomy/{id}                           # inspect earned tr
 
 ---
 
-### Outlook for work and school accounts — `gaia connectors`
-
-The Microsoft connector was pinned to personal Outlook.com accounts only, so a work or school (Microsoft 365 / Entra ID) account was rejected before a token was even issued — and connecting required registering your own Azure app. It now defaults to the tenant that accepts both personal and work/school accounts, and adds a zero-setup device-code sign-in: enter a short code at a URL, no Azure registration, no redirect URI. Available from the CLI (`gaia connectors connect microsoft --device`) and as a "Sign in with a code" button on the Microsoft tile in the Agent UI. A related Windows-only fix means Outlook's longer refresh tokens no longer fail to save to Credential Manager (PR [#2364](https://github.com/amd/gaia/pull/2364)).
-
----
-
 ### Agents run as isolated, daemon-supervised processes
 
 Agents used to run as code loaded directly into whatever hosted them — the email agent's sidecar lived and died with the Agent UI backend, and every future agent would have needed to reinvent that lifecycle plumbing. Now the always-on `gaia` daemon owns agent supervision: the UI, `gaia email` on the CLI, and `gaia api` are all thin clients of the same daemon-managed sidecar, so they share one running instance instead of each spawning their own. A killed daemon reaps its orphaned sidecars on the next start instead of leaking processes (PR [#2144](https://github.com/amd/gaia/pull/2144)).
 
-Behind that one architectural move: `gaia email` and `gaia api` now both relay through the daemon instead of running the email agent in-process (PRs [#2191](https://github.com/amd/gaia/pull/2191), [#2205](https://github.com/amd/gaia/pull/2205)), chat streams over a proper SSE reverse proxy (PR [#2188](https://github.com/amd/gaia/pull/2188)), a host-owned broker serializes model *loads* across agents so two sidecars don't collide loading models at the same time (PR [#2194](https://github.com/amd/gaia/pull/2194)), a per-agent-scoped custody API keeps one agent from ever reading another's memory or sessions (PR [#2197](https://github.com/amd/gaia/pull/2197)), the scheduling machinery (briefings, sends, snoozes) is consolidated onto a single daemon-owned clock (PR [#2199](https://github.com/amd/gaia/pull/2199)), OAuth tokens forward from the daemon to a sidecar as short-lived access tokens rather than the sidecar holding your refresh token (PR [#2203](https://github.com/amd/gaia/pull/2203)), and existing `~/.gaia` sessions and memory migrate into the new layout automatically, once, without data loss (PR [#2200](https://github.com/amd/gaia/pull/2200)).
+Behind that one architectural move: `gaia email` and `gaia api` now both relay through the daemon instead of running the email agent in-process (PRs [#2191](https://github.com/amd/gaia/pull/2191), [#2205](https://github.com/amd/gaia/pull/2205)), chat streams over a proper SSE reverse proxy (PR [#2188](https://github.com/amd/gaia/pull/2188)), a per-agent-scoped custody API keeps one agent from ever reading another's memory or sessions (PR [#2197](https://github.com/amd/gaia/pull/2197)), OAuth tokens forward from the daemon to a sidecar as short-lived access tokens rather than the sidecar holding your refresh token (PR [#2203](https://github.com/amd/gaia/pull/2203)), and existing `~/.gaia` sessions and memory migrate into the new layout automatically, once, without data loss (PR [#2200](https://github.com/amd/gaia/pull/2200)).
 
 ---
 
@@ -84,11 +77,9 @@ The pinned Lemonade Server moves 10.10.0 → 11.0.0 (PR [#2130](https://github.c
 
 ---
 
-### A dedicated security audit
+### Security hardening
 
-The weekly audit's single general security pass sampled a large repository in one go and missed a real path-traversal bug in hub archive extraction because it read an existing `# noqa` comment as a settled decision rather than re-checking it. A dedicated security-audit workflow replaces that: deterministic semgrep scanning across the whole tree feeds a private GitHub code-scanning tab, and a reasoning pass runs three specific lenses — path/injection sinks, authorization gate-asymmetry, and a from-scratch re-review of every existing suppression comment — over an explicit worklist instead of a sampled one. Findings are scored with real CVSS 4.0 arithmetic against a reviewed vector, not a guessed severity number (PR [#2346](https://github.com/amd/gaia/pull/2346)).
-
-Alongside the new audit, this release also closes out a batch of security hardening found by earlier passes: the file-read sandbox now actually enforces `--allowed-paths` (PR [#2344](https://github.com/amd/gaia/pull/2344)), hub archive extraction is hardened against path traversal (PR [#2342](https://github.com/amd/gaia/pull/2342)), the MCP bridge binds to loopback instead of all interfaces (PR [#2246](https://github.com/amd/gaia/pull/2246)), the API's CORS policy no longer allows a wildcard origin with credentials (PR [#2238](https://github.com/amd/gaia/pull/2238)), SQL is parameterized and sensitive values are redacted from logs (PR [#2239](https://github.com/amd/gaia/pull/2239)), API errors no longer leak stack traces (PR [#2236](https://github.com/amd/gaia/pull/2236)), and exposed routes are rate-limited (PR [#2237](https://github.com/amd/gaia/pull/2237)). A new lint gate requires every future security suppression to be reviewed in an allowlist instead of silently accepted (PR [#2343](https://github.com/amd/gaia/pull/2343)).
+This release lands a batch of security hardening: the MCP bridge binds to loopback instead of all interfaces (PR [#2246](https://github.com/amd/gaia/pull/2246)), the API's CORS policy no longer allows a wildcard origin with credentials (PR [#2238](https://github.com/amd/gaia/pull/2238)), SQL is parameterized and sensitive values are redacted from logs (PR [#2239](https://github.com/amd/gaia/pull/2239)), and a new lint gate requires every future security suppression to be reviewed in an allowlist instead of silently accepted (PR [#2343](https://github.com/amd/gaia/pull/2343)).
 
 ---
 
