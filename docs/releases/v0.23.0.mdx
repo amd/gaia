@@ -38,7 +38,7 @@ Hub packages used to be split by language first — `hub/agents/python/email/` a
 
 ## What's New
 
-### Install, update, and onboard without a terminal — Agent UI
+### Install agents from the Hub, and onboard without a terminal — Agent UI
 
 Clicking install on a Hub agent used to hit an IPC handler that threw "not yet implemented"; now it drives the real backend install runtime with streaming progress, so importing an agent from the Hub actually works — verified end to end (install → a real binary on disk → it runs) (PR [#2196](https://github.com/amd/gaia/pull/2196)).
 
