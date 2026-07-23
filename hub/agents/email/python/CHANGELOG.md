@@ -20,6 +20,17 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **`/query` Lemonade-down errors are now actionable, not a raw traceback (#2139).**
+  When the local LLM backend was unreachable, the `/query` SSE stream's terminal
+  `error` event led with the raw `requests`/`urllib3` exception repr, giving the
+  user no next step. The sidecar now classifies connection-shaped failures at the
+  error boundary and emits the standard guidance — Lemonade Server not reachable at
+  `<url>`; start it with `lemonade-server serve` (or `gaia init`); docs link —
+  keeping the original exception appended as `Technical details:` for debugging.
+  Every `/query` client (CLI, `gaia api`, third-party) benefits, not just the Agent
+  UI relay (which mitigated host-side in #2136). Unrelated errors pass through
+  verbatim, never masked behind a Lemonade message.
+
 - **Re-proposal dedup survives headless/scheduled teardown (#2381).**
   `record_proposal` wrote its dedup row through `query()`, which never commits,
   so when the scheduler rebuilt the agent between fires (closing the DB

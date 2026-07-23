@@ -50,6 +50,7 @@ from __future__ import annotations
 import asyncio
 import json
 import queue
+import re
 import threading
 import uuid
 from typing import Any, Dict, List, Optional
@@ -226,6 +227,111 @@ def _sse(event: Dict[str, Any]) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
+# ---------------------------------------------------------------------------
+# Terminal-error classification (issue #2139)
+# ---------------------------------------------------------------------------
+
+# Connection/timeout-shaped fragments of the ``requests`` / ``urllib3`` /
+# ``httpx`` error reprs a down or unreachable Lemonade Server produces. Those
+# transport errors are siblings of the builtin ``ConnectionError`` (under
+# ``OSError``, or under ``httpx.HTTPError``), so an ``isinstance`` check alone
+# misses them — the string shape is the reliable signal. Deliberately narrow:
+# a non-match falls through to the raw exception text so unrelated failures are
+# never masked behind a Lemonade message.
+_LEMONADE_DOWN_RE = re.compile(
+    r"connection\s+(?:refused|reset|aborted|error)"
+    r"|connectionerror"
+    r"|connection\s*pool"
+    r"|failed to establish a new connection"
+    r"|max retries exceeded"
+    r"|newconnectionerror"
+    r"|could\s*n[o']t\s+(?:reach|connect|resolve)"
+    r"|no route to host"
+    r"|name or service not known"
+    r"|not reachable"
+    r"|unreachable"
+    r"|(?:read |connect(?:ion)? )?timed?\s*out"
+    r"|timeout",
+    re.IGNORECASE,
+)
+
+#: Where a user looks next — kept as a constant so tests assert on it and the
+#: copy stays stable. Matches the sidecar's other Lemonade-down guidance
+#: (``api_routes._assert_lemonade_reachable``).
+_LEMONADE_DOCS_URL = "https://amd-gaia.ai/docs/guides/email"
+
+
+def _flatten_exception_text(exc: BaseException) -> str:
+    """Join ``str()`` of *exc* and its ``__cause__`` / ``__context__`` chain.
+
+    A transport error is often wrapped (``raise ... from e``), so the
+    connection-shaped detail can live on a cause rather than the outer
+    exception. Cycle-guarded against pathological exception graphs.
+    """
+    parts: List[str] = []
+    cur: Optional[BaseException] = exc
+    seen: set = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        text = str(cur)
+        parts.append(text if text else type(cur).__name__)
+        cur = cur.__cause__ or cur.__context__
+    return "\n".join(parts)
+
+
+def _is_lemonade_unreachable(exc: BaseException) -> bool:
+    """True when *exc* (or its cause chain) is a Lemonade-unreachable failure.
+
+    Two signals: a builtin ``ConnectionError`` anywhere in the cause chain
+    (``ConnectionRefusedError`` / ``ConnectionResetError`` all subclass it),
+    and — for the ``requests`` / ``httpx`` / ``urllib3`` errors that are NOT
+    builtin ``ConnectionError`` subclasses — the connection-shaped repr.
+    """
+    cur: Optional[BaseException] = exc
+    seen: set = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, ConnectionError):
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return bool(_LEMONADE_DOWN_RE.search(_flatten_exception_text(exc)))
+
+
+def _terminal_error_detail(exc: BaseException) -> str:
+    """Build the ``agent_error`` content for a failed ``/query`` run.
+
+    A Lemonade-unreachable failure — the most common consumer failure — gets
+    the standard actionable guidance (what failed, what to do, where to look),
+    with the original exception appended (never replacing it) for debugging.
+    Every other exception passes through as ``str(exc)`` so a genuinely
+    unexpected failure is surfaced verbatim, not masked behind a Lemonade
+    message.
+    """
+    if not _is_lemonade_unreachable(exc):
+        return str(exc)
+
+    try:
+        from gaia_agent_email.model_select import _resolve_probe_base
+
+        target = _resolve_probe_base(None)
+    except Exception as resolve_exc:  # noqa: BLE001
+        # Naming the exact URL is cosmetic; never let message-building throw and
+        # lose the original error. Log so the resolution failure isn't silent.
+        logger.debug(
+            "could not resolve Lemonade base URL for error copy: %s", resolve_exc
+        )
+        target = "the local Lemonade Server"
+
+    raw = str(exc) or type(exc).__name__
+    return (
+        f"Local Lemonade Server is not reachable at {target}. The email agent "
+        "runs local inference, so it needs Lemonade Server running. Start it "
+        "with `lemonade-server serve` (or run `gaia init`), then retry. "
+        f"Docs: {_LEMONADE_DOCS_URL}"
+        f"\n\nTechnical details: {raw}"
+    )
+
+
 def _confirmation_refusal(action: str) -> Dict[str, Any]:
     """The terminal ``final`` that ends the stateless-stub confirmation flow (D1)."""
     return {
@@ -345,7 +451,12 @@ async def query(request: QueryRequest) -> StreamingResponse:
                 agent.process_query(user_query)
         except Exception as exc:  # surface loudly as a terminal error event
             logger.exception("email /query run failed for run_id=%s", run.run_id)
-            handler._emit({"type": "agent_error", "content": str(exc)})
+            # Lemonade-down is the most common failure; emit actionable copy
+            # (never the raw urllib3/requests repr) while leaving genuinely
+            # unexpected errors verbatim — see _terminal_error_detail (#2139).
+            handler._emit(
+                {"type": "agent_error", "content": _terminal_error_detail(exc)}
+            )
         finally:
             handler.signal_done()
 
