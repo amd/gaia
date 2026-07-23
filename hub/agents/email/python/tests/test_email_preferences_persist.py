@@ -138,7 +138,9 @@ def _build_agent_no_memory(tmp_path: Path) -> EmailTriageAgent:
             del os.environ["GAIA_MEMORY_DISABLED"]
         else:
             os.environ["GAIA_MEMORY_DISABLED"] = old
-    assert agent._memory_store is None, "expected memory disabled (_memory_store is None)"
+    assert (
+        agent._memory_store is None
+    ), "expected memory disabled (_memory_store is None)"
     return agent
 
 
@@ -532,10 +534,11 @@ class TestHonestPersistenceStatus:
             assert result["ok"] is True
             data = result["data"]
             # In-process mutation still happens; only persistence is suppressed.
-            assert "secret@example.com" in agent._session_preferences["priority_senders"]
+            assert (
+                "secret@example.com" in agent._session_preferences["priority_senders"]
+            )
             assert data["persisted"] is False, (
-                "incognito must NOT claim a durable save; "
-                f"got: {data}"
+                "incognito must NOT claim a durable save; " f"got: {data}"
             )
             assert data["persistence"] == "incognito"
             assert "SESSION ONLY" in data["note"].upper()
