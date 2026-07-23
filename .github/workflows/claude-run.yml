@@ -200,13 +200,20 @@ jobs:
         id: surface
         if: inputs.generate_evidence && github.event.pull_request.head.repo.fork == false
         run: |
-          # A change is "testable on this lane" if it touches a CLI/API/MCP surface.
-          if grep -qE '^[AM].*(src/gaia/cli\.py|src/gaia/api/|src/gaia/mcp/|hub/agents/)' pr-files.txt 2>/dev/null; then
+          # COARSE gate only: is there any runnable, non-test source change to test at all?
+          # We deliberately do NOT enumerate specific surfaces — that path list rots and
+          # misses real ones (e.g. src/gaia/daemon/ has both a `gaia daemon` CLI and custody
+          # HTTP routes, but the old cli.py|api|mcp list skipped it — #2390). The gaia-testing
+          # skill is the source of truth for surface→evidence and writes "N/A" itself when
+          # nothing runnable changed, so this only decides "is there product code in the diff".
+          if grep -E '^[AM]' pr-files.txt 2>/dev/null \
+             | grep -vE '(/tests/|/test_|_test\.|\.md$|\.mdx$)' \
+             | grep -qE '(src/gaia/|hub/agents/)'; then
             echo "testable=true" >> "$GITHUB_OUTPUT"
-            echo "CLI/API/MCP surface changed → evidence stage will run."
+            echo "Runnable source changed → evidence stage runs; the skill picks the surface."
           else
             echo "testable=false" >> "$GITHUB_OUTPUT"
-            echo "No CLI/API/MCP surface changed → skipping evidence (review-only)."
+            echo "No runnable source changed (docs/tests/CI only) → skipping evidence (review-only)."
           fi
 
       - name: Set up GAIA for evidence
