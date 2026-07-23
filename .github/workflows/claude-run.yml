@@ -229,15 +229,22 @@ jobs:
         run: pip install -e ".[dev]"
 
       # Generate evidence with a cheaper model; it ONLY writes the bundle, never comments.
+      # SECRET HARDENING: this step runs an agent with Bash while the OAuth token is in the
+      # environment. To keep a command from dumping that env to the log (a connector/keyring
+      # path did exactly this via a failed `dbus-launch` — issue #2416):
+      #   - no github_token (this step never posts — least privilege);
+      #   - PYTHON_KEYRING_BACKEND=null so keyring never spawns dbus-launch;
+      #   - the prompt forbids auth/connector flows and any env-printing command.
       - name: Generate real-world evidence (gaia-testing skill)
         id: evidence
         if: steps.surface.outputs.testable == 'true'
         continue-on-error: true
+        env:
+          PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
         uses: anthropics/claude-code-action@af0559ee4f514d1ef21826982bed13f7edc3c35e  # v1.0.178
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
             Follow the gaia-testing skill at `.claude/skills/gaia-testing/SKILL.md` (read it) to
             produce REAL-WORLD test evidence for ONLY the surfaces this PR changes. The changed
@@ -247,6 +254,15 @@ jobs:
             responses. For any Agent-UI / real-inference surface the PR touches, write one line:
             "pending strix-halo lane (real inference not available on this runner)".
             Actually RUN the commands and capture their real output — never fabricate.
+
+            SECURITY — this runner holds secrets in its environment:
+            - NEVER print or capture the environment: no `env`, `printenv`, `set`, `export $(...)`,
+              `dbus-launch`, or any command whose output includes env vars. If a command errors and
+              would echo the environment, do not run it and note the surface as untested instead.
+            - Do NOT run any authentication / OAuth / login / `gaia connectors connect` / keyring /
+              credential flow. Exercise only read-only or validation paths of the changed surface;
+              if the only way to reach a surface is an auth flow, mark it N/A with that reason.
+
             Write the result as GitHub-flavoured markdown to `evidence-bundle.md` in the repo root.
             If nothing testable on this lane changed, write exactly:
             "N/A — no CLI/API/MCP surface changed in this PR." Do NOT review the code, and do NOT
