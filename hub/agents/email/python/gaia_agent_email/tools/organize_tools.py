@@ -28,6 +28,9 @@ from gaia.logger import get_logger
 
 log = get_logger(__name__)
 
+# The Gmail system label whose removal defines "archived / out of the inbox".
+_INBOX_LABEL = "INBOX"
+
 
 # ---------------------------------------------------------------------------
 # Pure impls
@@ -55,6 +58,23 @@ def archive_message_impl(
         prior_labels = list(prior.get("labelIds", []))
         # Gmail call — if this raises, NO db row is written.
         result = gmail.archive_message(message_id)
+        # Verify the archive actually took effect before claiming success.
+        # Gmail's modify response echoes the post-mutation labelIds; if INBOX
+        # is still present the archive silently no-op'd (wrong id resolved or
+        # the provider rejected the change) — fail loudly rather than record a
+        # false success (#2406). Raising here, before record_action, preserves
+        # the no-phantom-undo-row ordering invariant. Folder-based backends
+        # (Outlook) return an id-only result with no labelIds; there the
+        # returned post-archive id is the confirmation, so skip the label check.
+        post_labels = (result or {}).get("labelIds")
+        if post_labels is not None and _INBOX_LABEL in post_labels:
+            raise RuntimeError(
+                f"Archive did not take effect for message {message_id!r}: it is "
+                "still in the inbox (INBOX label present after the archive call). "
+                "This usually means the wrong message id was resolved or the mail "
+                "provider rejected the change. Re-run the search to confirm the "
+                "target message, or archive it manually in your mail client."
+            )
         # Capture the post-archive id: for folder-based backends (Outlook)
         # the move returns a new id; for label-based backends (Gmail) it
         # equals the pre-archive id.
@@ -71,10 +91,15 @@ def archive_message_impl(
             mailbox=mailbox,
         )
         st["result_summary"] = {"action_id": action_id}
+        # Surface the identity of the message actually archived so the success
+        # message can cite it (id/subject/sender), not just the sender name the
+        # user typed (#2406 AC b).
         return {
             "action_id": action_id,
             "message_id": message_id,
             "post_archive_id": post_archive_id,
+            "subject": _extract_subject(prior),
+            "sender": _extract_sender(prior),
         }
 
 
@@ -304,6 +329,14 @@ def _extract_sender(msg: Dict[str, Any]) -> str:
     """Pull the ``From`` header out of a Gmail-API-shape message."""
     for h in (msg.get("payload") or {}).get("headers", []):
         if (h.get("name") or "").lower() == "from":
+            return h.get("value", "")
+    return ""
+
+
+def _extract_subject(msg: Dict[str, Any]) -> str:
+    """Pull the ``Subject`` header out of a Gmail-API-shape message."""
+    for h in (msg.get("payload") or {}).get("headers", []):
+        if (h.get("name") or "").lower() == "subject":
             return h.get("value", "")
     return ""
 
