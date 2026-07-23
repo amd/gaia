@@ -53,6 +53,11 @@ on:
         required: false
         type: string
         default: ""
+      generate_evidence:
+        description: "true to run the gaia-testing skill and write evidence-bundle.md before the Claude call, for the reviewer to fold in. Gated in-step to SAME-REPO PRs touching a testable surface — it never runs on fork code (fork execution with secrets is the boundary this repo forbids)."
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   run:
@@ -183,6 +188,66 @@ jobs:
 
           echo "Diff generated: $(wc -l < pr-diff.txt) lines"
           echo "Files changed: $(wc -l < pr-files.txt) files"
+
+      # --- Real-world evidence stage (opt-in via generate_evidence; pr-review only) ---
+      # SECURITY: every step here is gated on head.repo.fork == false. A fork PR's code
+      # is untrusted and this job holds secrets under pull_request_target, so we NEVER
+      # install or run PR code from a fork. Same-repo PRs come from write-access
+      # collaborators, whose code CI already runs. The gate is this workflow `if:`, not
+      # prompt text. Ubuntu runner → CLI/API/MCP evidence only (no Lemonade/GPU); the
+      # Agent-UI / real-inference lane is the self-hosted strix-halo follow-up.
+      - name: Detect testable surface
+        id: surface
+        if: inputs.generate_evidence && github.event.pull_request.head.repo.fork == false
+        run: |
+          # A change is "testable on this lane" if it touches a CLI/API/MCP surface.
+          if grep -qE '^[AM].*(src/gaia/cli\.py|src/gaia/api/|src/gaia/mcp/|hub/agents/)' pr-files.txt 2>/dev/null; then
+            echo "testable=true" >> "$GITHUB_OUTPUT"
+            echo "CLI/API/MCP surface changed → evidence stage will run."
+          else
+            echo "testable=false" >> "$GITHUB_OUTPUT"
+            echo "No CLI/API/MCP surface changed → skipping evidence (review-only)."
+          fi
+
+      - name: Set up GAIA for evidence
+        if: steps.surface.outputs.testable == 'true'
+        continue-on-error: true   # a failed install must not block the review; reviewer notes evidence unavailable
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install GAIA (evidence lane)
+        if: steps.surface.outputs.testable == 'true'
+        continue-on-error: true
+        run: pip install -e ".[dev]"
+
+      # Generate evidence with a cheaper model; it ONLY writes the bundle, never comments.
+      - name: Generate real-world evidence (gaia-testing skill)
+        id: evidence
+        if: steps.surface.outputs.testable == 'true'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@af0559ee4f514d1ef21826982bed13f7edc3c35e  # v1.0.178
+        with:
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            Follow the gaia-testing skill at `.claude/skills/gaia-testing/SKILL.md` (read it) to
+            produce REAL-WORLD test evidence for ONLY the surfaces this PR changes. The changed
+            files are in `pr-files.txt`; the diff is `pr-diff.txt`. This runner is `ubuntu-latest`
+            with NO Lemonade/GPU, so cover only the non-inference surfaces per the skill's contract:
+            CLI (the real `gaia <subcommand>` + its output), HTTP-API contract, and MCP tool
+            responses. For any Agent-UI / real-inference surface the PR touches, write one line:
+            "pending strix-halo lane (real inference not available on this runner)".
+            Actually RUN the commands and capture their real output — never fabricate.
+            Write the result as GitHub-flavoured markdown to `evidence-bundle.md` in the repo root.
+            If nothing testable on this lane changed, write exactly:
+            "N/A — no CLI/API/MCP surface changed in this PR." Do NOT review the code, and do NOT
+            post any PR comment — writing the file is your only output.
+          claude_args: |
+            --max-turns 40
+            --model claude-sonnet-5
+            --allowedTools Read,Grep,Glob,Bash,Write
 
       # --- Attempt 1 ---
       # continue-on-error: a rate-limit / expired-token / outage / install-crash must
