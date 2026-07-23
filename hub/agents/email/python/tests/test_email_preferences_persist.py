@@ -9,9 +9,13 @@ Acceptance criteria covered:
 - Test-AC: priority sender set in session A is in _session_preferences in session B.
 - Test-AC: clear_session_preferences clears persistence so a new session starts empty.
 
-Embedder is mocked out (same pattern as test_email_memory.py) so tests run
-hermetically without Lemonade.  GAIA_MEMORY_DISABLED=1 is NOT used here because
-we need _memory_store to be set for preference persistence to work.
+#2427: preferences persist in the agent's state.db (like the trust ledger), NOT
+in the embedding-backed MemoryStore, so they survive across sessions even when
+memory v2 is disabled (embedding model absent). The TestMemoryDisabledFallback
+and TestHonestPersistenceStatus classes cover that fix directly.
+
+Embedder is mocked out (same pattern as test_email_memory.py) so the
+memory-enabled tests run hermetically without Lemonade.
 """
 
 from __future__ import annotations
@@ -59,10 +63,6 @@ class _MinimalCalendarBackend:
 
 EMBEDDING_DIM = 768
 
-_PREF_ENTITY = "email:preferences"
-_PREF_DOMAIN = "email_agent_prefs"
-_PREF_CATEGORY = "preference"
-
 
 def _fake_embed(text: str) -> np.ndarray:
     """Deterministic unit vector — keeps FAISS happy."""
@@ -109,6 +109,39 @@ def _build_agent(tmp_path: Path) -> EmailTriageAgent:
     ):
         mock_sdk.return_value = MagicMock()
         return EmailTriageAgent(config=cfg)
+
+
+def _build_agent_no_memory(tmp_path: Path) -> EmailTriageAgent:
+    """Build an agent with memory v2 disabled — the #2427 field scenario.
+
+    ``GAIA_MEMORY_DISABLED=1`` forces ``_memory_store`` to None, reproducing
+    the state where the embedding model 404s from Lemonade. No embedder
+    patching is needed because memory init is short-circuited. Preferences
+    must still persist via state.db, which is independent of the embedder.
+    """
+    cfg = EmailAgentConfig(
+        gmail_backend=_MinimalMailBackend(),
+        calendar_backend=_MinimalCalendarBackend(),
+        db_path=str(tmp_path / "state.db"),
+        memory_db_path=str(tmp_path / "memory.db"),
+        silent_mode=True,
+        debug=False,
+    )
+    old = os.environ.get("GAIA_MEMORY_DISABLED")
+    os.environ["GAIA_MEMORY_DISABLED"] = "1"
+    try:
+        with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:
+            mock_sdk.return_value = MagicMock()
+            agent = EmailTriageAgent(config=cfg)
+    finally:
+        if old is None:
+            del os.environ["GAIA_MEMORY_DISABLED"]
+        else:
+            os.environ["GAIA_MEMORY_DISABLED"] = old
+    assert (
+        agent._memory_store is None
+    ), "expected memory disabled (_memory_store is None)"
+    return agent
 
 
 def _invoke_set_priority_sender(email: str) -> dict:
@@ -223,8 +256,13 @@ class TestPrioritySenderPersistsAcrossRestart:
         finally:
             agent_b.close_db()
 
-    def test_no_duplicate_memory_records(self, tmp_path):
-        """Writing preferences multiple times does not accumulate duplicate records."""
+    def test_no_duplicate_state_db_records(self, tmp_path):
+        """Writing preferences multiple times keeps exactly one state.db row.
+
+        #2427: persistence moved from MemoryStore to the single-row
+        ``email_preferences`` table in state.db. The upsert must keep the row
+        count at one no matter how many times a preference is written.
+        """
         agent_a = _build_agent(tmp_path)
         try:
             # Write the same sender several times
@@ -233,14 +271,19 @@ class TestPrioritySenderPersistsAcrossRestart:
         finally:
             agent_a.close_db()
 
-        # Re-open the memory store directly and count records for the entity
-        from gaia.agents.base.memory_store import MemoryStore
+        # Re-open state.db directly and count preference rows.
+        import sqlite3
 
-        store = MemoryStore(tmp_path / "memory.db")
-        rows = store.get_by_entity(_PREF_ENTITY)
+        conn = sqlite3.connect(tmp_path / "state.db")
+        try:
+            rows = conn.execute("SELECT key, value FROM email_preferences").fetchall()
+        finally:
+            conn.close()
         assert (
             len(rows) == 1
-        ), f"Expected exactly 1 memory record for {_PREF_ENTITY!r}, got {len(rows)}: {rows}"
+        ), f"Expected exactly 1 email_preferences row, got {len(rows)}: {rows}"
+        stored = json.loads(rows[0][1])
+        assert "boss@company.com" in stored["priority_senders"]
 
 
 class TestCategoryDefaultPersistsAcrossRestart:
@@ -377,7 +420,8 @@ class TestIncognitoGate:
 
 
 class TestMemoryDisabledFallback:
-    """When GAIA_MEMORY_DISABLED=1, preferences still work in-session but aren't persisted."""
+    """#2427: with memory v2 disabled (embedding model absent) preferences
+    still mutate in-session AND persist across sessions via state.db."""
 
     def test_preferences_work_in_session_without_memory(self, tmp_path):
         """GAIA_MEMORY_DISABLED=1 — preferences mutate in-memory but don't crash."""
@@ -413,3 +457,123 @@ class TestMemoryDisabledFallback:
                 del os.environ["GAIA_MEMORY_DISABLED"]
             else:
                 os.environ["GAIA_MEMORY_DISABLED"] = old
+
+    def test_priority_sender_persists_across_sessions_without_memory(self, tmp_path):
+        """#2427 core (AC-1 persist branch + AC-2): with the embedding model
+        absent (memory disabled), a captured priority-sender rule STILL
+        persists to state.db, is restored in a fresh session, and is honored
+        on re-triage — and the tool honestly reports ``persisted: true``."""
+        # Session A — memory disabled; capture the rule (T21).
+        agent_a = _build_agent_no_memory(tmp_path)
+        try:
+            result = _invoke_set_priority_sender("newsletters@techcrunch.com")
+            assert result["ok"] is True, f"set_priority_sender failed: {result}"
+            # Honest success: it really WAS persisted (state.db needs no embedder).
+            assert result["data"]["persisted"] is True, (
+                "with memory disabled the rule must still persist to state.db, "
+                f"so persisted must be True. Got: {result['data']}"
+            )
+            assert result["data"]["persistence"] == "persisted"
+            assert "note" not in result["data"]
+        finally:
+            agent_a.close_db()
+
+        # Session B — fresh instance, still memory-disabled, same state.db (T22).
+        agent_b = _build_agent_no_memory(tmp_path)
+        try:
+            assert (
+                "newsletters@techcrunch.com"
+                in agent_b._session_preferences["priority_senders"]
+            ), (
+                "priority sender captured with memory disabled was not restored "
+                f"in a new session. Got: {agent_b._session_preferences['priority_senders']}"
+            )
+            # [Reflection C1] Prove the restored rule is APPLIED during triage,
+            # not merely present in the dict — this is what T22 actually checks.
+            from gaia_agent_email.tools.read_tools import _apply_session_preferences
+            from gaia_agent_email.tools.triage_heuristics import CATEGORY_URGENT
+
+            decision = {
+                "from": "TechCrunch <newsletters@techcrunch.com>",
+                "category": "FYI",
+                "confident": True,
+            }
+            out = _apply_session_preferences(decision, agent_b._session_preferences)
+            assert out["category"] == CATEGORY_URGENT, (
+                "restored priority-sender rule must re-classify the sender's "
+                f"mail as urgent on re-triage; got: {out}"
+            )
+            assert out["preference_applied"] == "priority_sender"
+        finally:
+            agent_b.close_db()
+
+
+class TestHonestPersistenceStatus:
+    """#2427 (AC-1 honest-statement branch): the tool never claims a durable
+    save when nothing was written — it reports session-only honestly."""
+
+    def test_normal_mode_reports_persisted(self, tmp_path):
+        """A normal (non-incognito, db-ready) write reports persisted: true."""
+        agent = _build_agent(tmp_path)
+        try:
+            result = _invoke_set_priority_sender("boss@company.com")
+            assert result["ok"] is True
+            data = result["data"]
+            assert data["persisted"] is True
+            assert data["persistence"] == "persisted"
+            assert "note" not in data
+        finally:
+            agent.close_db()
+
+    def test_incognito_reports_session_only(self, tmp_path):
+        """An incognito write reports persisted: false + a session-only note."""
+        agent = _build_agent(tmp_path)
+        try:
+            agent._incognito = True
+            result = _invoke_set_priority_sender("secret@example.com")
+            assert result["ok"] is True
+            data = result["data"]
+            # In-process mutation still happens; only persistence is suppressed.
+            assert (
+                "secret@example.com" in agent._session_preferences["priority_senders"]
+            )
+            assert data["persisted"] is False, (
+                "incognito must NOT claim a durable save; " f"got: {data}"
+            )
+            assert data["persistence"] == "incognito"
+            assert "SESSION ONLY" in data["note"].upper()
+        finally:
+            agent.close_db()
+
+    def test_db_unavailable_reports_session_only(self, tmp_path):
+        """When the state.db handle is not ready, report session-only, not success.
+
+        Simulated by closing the db before the write — ``db_ready`` is then
+        False, the fail-loudly guard the issue is fundamentally about.
+        """
+        agent = _build_agent(tmp_path)
+        agent.close_db()
+        assert agent.db_ready is False
+        result = _invoke_set_priority_sender("boss@company.com")
+        assert result["ok"] is True
+        data = result["data"]
+        assert data["persisted"] is False, (
+            "an unavailable persistence layer must surface, not claim success; "
+            f"got: {data}"
+        )
+        assert data["persistence"] == "unavailable"
+        assert "SESSION ONLY" in data["note"].upper()
+
+    def test_category_default_and_clear_report_persistence(self, tmp_path):
+        """The other two preference tools also report the persistence outcome."""
+        agent = _build_agent(tmp_path)
+        try:
+            cat = _invoke_set_category_default("FYI", "archive")
+            assert cat["data"]["persisted"] is True
+            assert cat["data"]["persistence"] == "persisted"
+
+            cleared = _invoke_clear_session_preferences()
+            assert cleared["data"]["persisted"] is True
+            assert cleared["data"]["persistence"] == "persisted"
+        finally:
+            agent.close_db()

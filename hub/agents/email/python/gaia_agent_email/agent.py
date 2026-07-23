@@ -65,6 +65,7 @@ from gaia_agent_email.tools.preference_tools import (
     _normalize_email,
     _persist_preferences,
     _validate_session_preferences,
+    init_preferences_schema,
     init_session_preferences,
 )
 from gaia_agent_email.tools.profile_tools import ProfileToolsMixin
@@ -537,6 +538,10 @@ class EmailTriageAgent(
         schedule_store.init_schema(self)
         task_store.init_schema(self)
         trust.init_trust_schema(self)
+        # Session preferences persist in state.db (like the trust ledger), so
+        # they survive restarts independent of the embedding model / MemoryStore
+        # (#2427). Must precede _load_persisted_preferences() below.
+        init_preferences_schema(self)
 
         # LLM connection. Default to Lemonade — the config's base_url
         # allowlist guarantees the host is local. Resolved BEFORE init_memory()
@@ -1128,12 +1133,13 @@ class EmailTriageAgent(
 
         Reads reply interactions via ``_evaluate_promotions()`` and, for each
         qualifying sender not already in priority_senders, writes them through
-        the #1288 persistence path (``_session_preferences`` + MemoryStore) so
+        the #1288 persistence path (``_session_preferences`` + state.db) so
         the promotion applies this turn AND survives restart.
 
         Called synchronously from ``_triage_all_backends`` — never on a
-        background thread or scheduler. Memory-guarded: skips silently when
-        ``_memory_store is None``.
+        background thread or scheduler. Guarded on ``_memory_store`` because the
+        promotion *evidence* (reply history) comes from memory; the persistence
+        itself no longer needs it (#2427).
         """
         if getattr(self, "_memory_store", None) is None:
             return
