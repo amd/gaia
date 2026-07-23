@@ -251,9 +251,21 @@ jobs:
             files are in `pr-files.txt`; the diff is `pr-diff.txt`. This runner is `ubuntu-latest`
             with NO Lemonade/GPU, so cover only the non-inference surfaces per the skill's contract:
             CLI (the real `gaia <subcommand>` + its output), HTTP-API contract, and MCP tool
-            responses. For any Agent-UI / real-inference surface the PR touches, write one line:
+            responses. Actually RUN the commands and capture their real output — never fabricate.
+
+            A UI-backed change is NOT wholly deferrable here. The Agent UI surface the PR touches
+            is almost always driven by an HTTP route (`src/gaia/ui/routers/**`), a CLI command, or
+            an API this runner CAN boot and hit with no model. Exercise that underlying layer for
+            real (start the server/daemon, request the changed route, capture status+body); defer
+            ONLY the rendered screenshot with the one line
             "pending strix-halo lane (real inference not available on this runner)".
-            Actually RUN the commands and capture their real output — never fabricate.
+
+            Spot-regression (NOT a full re-run — `test_unit.yml` and the per-area suites already
+            run in their own jobs; do not duplicate them): while the surface is booted, also
+            exercise 1-3 ADJACENT operations the change could plausibly affect — a sibling route in
+            the same router, a sibling `gaia` subcommand, or a direct importer of the changed
+            module — and confirm each still returns its expected shape. Report it under a
+            "Spot regression" subheading (what you poked / expected / got).
 
             SECURITY — this runner holds secrets in its environment:
             - NEVER print or capture the environment: no `env`, `printenv`, `set`, `export $(...)`,
@@ -268,7 +280,7 @@ jobs:
             "N/A — no CLI/API/MCP surface changed in this PR." Do NOT review the code, and do NOT
             post any PR comment — writing the file is your only output.
           claude_args: |
-            --max-turns 40
+            --max-turns 50
             --model claude-sonnet-5
             --allowedTools Read,Grep,Glob,Bash,Write
 

@@ -91,6 +91,15 @@ linked comment. A screenshot that doesn't render on the PR is not shown. Do **no
 when the description points to evidence elsewhere, or when the matching evidence is already
 present. This is a nudge for a missing artifact, never a demand to re-run what the PR shows.
 
+**CI-lane evidence legitimately defers the pixels.** The automated evidence stage runs on a
+no-inference runner, so for a UI-backed change it exercises the underlying HTTP route / CLI
+layer and marks only the rendered screenshot *"pending strix-halo lane"*. Treat present
+route/CLI evidence with a deferred screenshot as adequate for merge-time CI — nudge for the
+eventual screenshot, don't block on it. The gap worth flagging is a UI-backed change with
+**neither** a screenshot **nor** the underlying-route evidence this lane could have produced. A
+**Spot regression** subsection (a few *adjacent* operations exercised alongside the changed
+one) is expected content, not scope creep.
+
 ## Length caps
 
 Keep reviews skimmable:
