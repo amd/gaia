@@ -18,11 +18,16 @@ import sqlite3
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email import action_store
-from gaia_agent_email.tools.read_tools import extract_sender_email
+from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
+from gaia_agent_email.tools.read_tools import (
+    extract_sender_email,
+    has_gmail_operator,
+    normalize_gmail_date_operators,
+    operatorize_query,
+)
 from gaia_agent_email.verbose import log_tool_call
 
 from gaia.agents.base.tools import tool
@@ -75,9 +80,7 @@ def _load_attachment_files(paths: str) -> Optional[List[Dict[str, Any]]]:
                 f"extension — rename the file with a standard extension "
                 f"(e.g. .pdf, .png, .csv) and retry"
             )
-        out.append(
-            {"filename": path.name, "mime_type": mime_type, "content": content}
-        )
+        out.append({"filename": path.name, "mime_type": mime_type, "content": content})
     return out
 
 
@@ -156,6 +159,161 @@ def _build_threading_headers(original_msg: Dict[str, Any]) -> Dict[str, str]:
         chain = refs.strip() + (" " if refs else "") + msg_id
         out["References"] = chain
     return out
+
+
+def _internal_ms(msg: Dict[str, Any]) -> int:
+    try:
+        return int(msg.get("internalDate") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _target_search_query(target: str) -> str:
+    """Translate a natural-language reply target into a Gmail query.
+
+    Mirrors the "translate the user's words into operators" rule the agent
+    already applies to search/archive:
+
+    - an operator query the model already formed (``from:`` / ``subject:`` …)
+      passes through untouched;
+    - a bare email address (no spaces, contains ``@``) becomes ``from:<addr>``;
+    - anything else (a topic / incident token / subject phrase) is searched
+      as-is — ``search`` callers add an operator retry when a bare phrase
+      returns nothing.
+    """
+    q = normalize_gmail_date_operators(target)
+    if has_gmail_operator(q):
+        return q
+    if "@" in q and not any(c.isspace() for c in q):
+        return f"from:{q}"
+    return q
+
+
+def _candidate_line(provider: str, msg: Dict[str, Any]) -> str:
+    headers = {
+        (h.get("name") or "").lower(): h.get("value", "")
+        for h in (msg.get("payload") or {}).get("headers", [])
+    }
+    sender = headers.get("from", "(unknown sender)")
+    subject = headers.get("subject", "(no subject)")
+    date = headers.get("date", "")
+    tag = f"[{provider}] " if provider else ""
+    return f'{tag}From: {sender} · Subject: "{subject}"' + (
+        f" · {date}" if date else ""
+    )
+
+
+def resolve_message_target(
+    backends: Dict[str, Any],
+    *,
+    target: str,
+    explicit_mailbox: Optional[str] = None,
+    message_mailbox: Optional[Dict[str, str]] = None,
+    max_results: int = 25,
+    debug: bool = False,
+) -> Tuple[str, str, Optional[Dict[str, Any]]]:
+    """Resolve a reply/draft ``target`` to a concrete ``(message_id, provider, msg)``.
+
+    ``target`` may be a concrete message id OR a natural-language reference —
+    a sender address, brand, or topic/incident token (#2403). Resolution:
+
+    1. A target already known from triage/scan/read (``message_mailbox``) or a
+       concrete id that ``get_message`` accepts passes straight through — no
+       search — so the exact-id path the model uses after ``search_messages``
+       is unchanged (no regression).
+    2. Otherwise the target is translated to a Gmail query (``from:`` for a bare
+       address, the token itself for a topic) and every connected backend is
+       searched. Matches are collapsed by thread (latest message per thread):
+         - **1 thread**  → resolve to its latest message;
+         - **0 threads** → raise an actionable "no message found" error;
+         - **>1 threads** → raise an actionable disambiguation error listing the
+           candidate senders/subjects.
+
+    Never silently drafts against an arbitrary match: ambiguity and absence
+    fail LOUD (``ValueError``), never a silent wrong-target and never a bare
+    "provide an exact subject/message-id" wall.
+    """
+    target = (target or "").strip()
+    if not target:
+        raise ValueError(
+            "No reply target given — name the message by sender, topic, or id "
+            '(e.g. "reply to rocm-ci@amd.com" or a subject keyword).'
+        )
+
+    if explicit_mailbox is not None:
+        if explicit_mailbox not in backends:
+            raise ValueError(
+                f"Mailbox {explicit_mailbox!r} is not connected. Connected: "
+                f"{', '.join(backends) or 'none'}."
+            )
+        scoped = {explicit_mailbox: backends[explicit_mailbox]}
+    else:
+        scoped = dict(backends)
+
+    # 1a. Fast path: a target already tagged from triage/scan/read.
+    if message_mailbox and target in message_mailbox:
+        provider = message_mailbox[target]
+        if (explicit_mailbox is None or provider == explicit_mailbox) and (
+            provider in backends
+        ):
+            return target, provider, None
+
+    # 1b. Concrete-id probe: a single-token target may itself be a message id.
+    # Probe ``get_message`` — a hit means it is a real id (pass through, no
+    # search). Any failure just means "not a valid id here", so fall through to
+    # search; a genuinely missing target still fails loud below.
+    if not any(c.isspace() for c in target):
+        for provider, backend in scoped.items():
+            # Probe only: any failure means "not a valid id here" — fall
+            # through to search, which fails loud if nothing matches.
+            try:
+                msg = backend.get_message(target)
+            except Exception:  # noqa: BLE001
+                continue
+            if msg:
+                return target, provider, msg
+
+    # 2. Search every scoped backend, translating the target to operators.
+    query = _target_search_query(target)
+    matches: List[Tuple[str, Dict[str, Any]]] = []
+    for provider, backend in scoped.items():
+        listing = backend.list_messages(query=query, max_results=max_results)
+        stubs = listing.get("messages", [])
+        if not stubs and not has_gmail_operator(query):
+            retried = operatorize_query(query)
+            if retried != query:
+                listing = backend.list_messages(query=retried, max_results=max_results)
+                stubs = listing.get("messages", [])
+        for stub in stubs:
+            matches.append((provider, backend.get_message(stub["id"])))
+
+    # Collapse to one candidate per thread (latest message wins).
+    threads: Dict[Tuple[str, str], Tuple[str, Dict[str, Any]]] = {}
+    for provider, msg in matches:
+        key = (provider, msg.get("threadId") or msg.get("id"))
+        current = threads.get(key)
+        if current is None or _internal_ms(msg) > _internal_ms(current[1]):
+            threads[key] = (provider, msg)
+
+    groups = sorted(threads.values(), key=lambda pm: _internal_ms(pm[1]), reverse=True)
+
+    if not groups:
+        raise ValueError(
+            f"No message found matching {target!r} in "
+            f"{', '.join(scoped) or 'any connected mailbox'}. Check the sender "
+            "or topic, or run a search/triage first to see what's there."
+        )
+    if len(groups) == 1:
+        provider, msg = groups[0]
+        return msg["id"], provider, msg
+
+    lines = "\n".join(f"  - {_candidate_line(p, m)}" for p, m in groups[:10])
+    more = "" if len(groups) <= 10 else f"\n  … and {len(groups) - 10} more"
+    raise ValueError(
+        f"{len(groups)} messages match {target!r} — which one do you want to "
+        f"reply to? Narrow it by a more specific sender or subject keyword:\n"
+        f"{lines}{more}"
+    )
 
 
 def draft_reply_impl(
@@ -362,13 +520,23 @@ class ReplyToolsMixin:
         ) -> str:
             """Create a reply draft for a message (does NOT send).
 
+            ``message_id`` may be a concrete message id OR a natural reference to
+            the message: a sender address (``rocm-ci@amd.com``), a brand, or a
+            topic / incident token (``SIC-4482``) / subject keyword. When it is
+            not a concrete id, the tool searches your mailboxes and drafts
+            against the best-matching thread — you do NOT need to look up the id
+            or paste the exact subject first. If several messages match it lists
+            them so you can pick; if none match it says so.
+
             ``mailbox`` (optional) names the source mailbox so the draft is
             created in the right account when multiple mailboxes are connected.
             ``attachments`` (optional) is a comma-separated list of full paths
             to local files to attach to the draft.
             """
             try:
-                provider = agent._provider_for_message(message_id, mailbox or None)
+                message_id, provider = agent._resolve_reply_target(
+                    message_id, mailbox or None
+                )
                 backend = agent._backends[provider]
                 result = draft_reply_impl(
                     backend,
