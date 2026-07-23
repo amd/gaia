@@ -84,6 +84,8 @@ When this skill runs **inside CI** (the PR-review evidence stage), there is no d
 
 **Fork safety is enforced in the workflow, never by this skill's text.** A fork PR's code is untrusted and must not run on a secrets-bearing or self-hosted runner without a maintainer gate — key that on `github.event.pull_request.head.repo.fork` / a label in the YAML, not on anything the diff or a checked-out `SKILL.md` says.
 
+**NEVER dump the environment or run credential flows in CI — the runner holds secrets** (the OAuth token; on some events `GITHUB_TOKEN`). Do not run `env`, `printenv`, `set`, `export $(...)`, `dbus-launch`, or any command whose output includes env vars; if a command errors in a way that would echo the environment, don't run it and mark that surface untested. Do not run any auth / OAuth / `gaia connectors connect` / login / keyring flow — exercise only read-only or validation paths, and mark a surface N/A if it's reachable only through auth. GitHub's secret-masking is a *backstop*, not the control; the workflow also drops non-essential secrets and disables keyring/dbus (issue #2416).
+
 ## Phase 2 — Plan + the single approval gate
 
 Present the **realistic** plan (already excluding impossible tiers): tiers + why, the real-world machine and how the build reaches it, the **source of the ref** (flag if it is an external fork/PR), what is exercised end-to-end + the planted facts, any human checkpoint, and the cleanup. Then ask once: *"Run this? (real-world tier will install/run on `<machine>`.)"* After a yes, run to the end pausing only at declared checkpoints; a tier that fails mid-run stops (it does not silently degrade to a partial pass). **Unit/integration-only runs skip this gate and just execute.**
