@@ -172,9 +172,9 @@ def test_single_archive_loop_shares_one_undo_batch_surviving_the_run(
             "SELECT DISTINCT batch_id FROM email_actions WHERE action_type='archive'"
         )
         batch_ids = {r["batch_id"] for r in rows}
-        assert batch_ids == {agent._organize_batch_id}, (
-            f"single archives must share the per-turn batch handle, got {batch_ids}"
-        )
+        assert batch_ids == {
+            agent._organize_batch_id
+        }, f"single archives must share the per-turn batch handle, got {batch_ids}"
         batch_id = agent._organize_batch_id
 
         # t = 1040: past the FIRST op's own 30s window (1000+30=1030) but within
