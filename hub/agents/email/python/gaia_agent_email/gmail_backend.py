@@ -429,16 +429,42 @@ class LiveGmailBackend:
         token = self._access_token_fn()
         return {"Authorization": f"Bearer {token}"}
 
+    @staticmethod
+    def _unauthorized_message(where: str) -> str:
+        """401 remediation, mode-aware (#2159).
+
+        In forwarded mode the connection is valid host-side — the daemon owns
+        the refresh token and re-forwards fresh access tokens automatically — so
+        a 401 means the forwarded token went stale, NOT that the user must
+        reconnect. Telling them to reconnect (as the single old message did)
+        sends them down a dead end while the daemon's re-forward timer fixes it
+        on its own. Standalone mode keeps the reconnect guidance because there
+        the sidecar owns its own OAuth.
+        """
+        from gaia_agent_email import forwarded_credentials
+
+        if forwarded_credentials.is_forwarding_enabled():
+            return (
+                "Gmail API returned 401 with a daemon-forwarded token. The "
+                "connection is still valid host-side — the daemon re-forwards a "
+                "fresh access token automatically, so no reconnect is needed; "
+                "retry in a moment. If it persists, the Google connection may "
+                "have been revoked — check Settings → Connectors. (where: "
+                + where
+                + ")"
+            )
+        return (
+            "Gmail API returned 401. The access token may have expired or "
+            "scopes were revoked. Reconnect Google in Settings → Connectors. "
+            "(where: " + where + ")"
+        )
+
     def _raise_http(self, response: httpx.Response, where: str) -> None:
         # Construct the error message from status + truncated body ONLY.
         # Never from the wrapper exception, which would expose the
         # Authorization header.
         if response.status_code == 401:
-            raise ConnectorsError(
-                "Gmail API returned 401. The access token may have expired or "
-                "scopes were revoked. Reconnect Google in Settings → "
-                "Connectors. (where: " + where + ")"
-            )
+            raise ConnectorsError(self._unauthorized_message(where))
         enable_url = access_not_configured_url(response)
         if enable_url:
             raise ConnectorsError(

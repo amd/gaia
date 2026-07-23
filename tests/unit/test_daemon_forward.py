@@ -212,6 +212,28 @@ def test_forward_all_skips_granted_but_unconnected_provider():
 # --- withdraw ---------------------------------------------------------------
 
 
+def test_running_connections_returns_only_running_with_base_url():
+    """The re-forward timer (#2388) iterates this instead of the private manager
+    map: only RUNNING sidecars that have a base_url are re-forwardable."""
+    from gaia.daemon.sidecars.registry import SidecarRegistry
+
+    class _Mgr:
+        def __init__(self, running, base_url):
+            self.is_running = running
+            self.base_url = base_url
+            self.auth_token = "bearer-x"
+
+    reg = SidecarRegistry({"email": _SPEC})
+    lock = __import__("threading").Lock()
+    reg._managers = {
+        "running": (_Mgr(True, "http://127.0.0.1:9"), lock),
+        "stopped": (_Mgr(False, "http://127.0.0.1:10"), lock),
+        "no_url": (_Mgr(True, None), lock),
+    }
+    conns = reg.running_connections()
+    assert conns == [("running", "http://127.0.0.1:9", "bearer-x")]
+
+
 def test_withdraw_deletes_from_sidecar():
     fwd, http = _forwarder(grants={"google": {"installed:email": ["s1"]}})
     result = fwd.withdraw("email", "google", base_url="http://127.0.0.1:9", bearer="b")
