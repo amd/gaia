@@ -229,10 +229,11 @@ jobs:
         run: pip install -e ".[dev]"
 
       # Generate evidence with a cheaper model; it ONLY writes the bundle, never comments.
-      # SECRET HARDENING: this step runs an agent with Bash while the OAuth token is in the
-      # environment. To keep a command from dumping that env to the log (a connector/keyring
-      # path did exactly this via a failed `dbus-launch` — issue #2416):
-      #   - no github_token (this step never posts — least privilege);
+      # Run the Claude CLI DIRECTLY (not claude-code-action): the action always initializes
+      # GitHub auth at startup and, given no token, falls back to OIDC and silently never runs
+      # (the #2417 regression, masked by continue-on-error). This step makes zero GitHub calls,
+      # so it carries NO github token at all — only the model OAuth token, which must exist.
+      # SECRET HARDENING (issue #2416): the agent runs Bash with that token in env, so —
       #   - PYTHON_KEYRING_BACKEND=null so keyring never spawns dbus-launch;
       #   - the prompt forbids auth/connector flows and any env-printing command.
       - name: Generate real-world evidence (gaia-testing skill)
@@ -240,20 +241,30 @@ jobs:
         if: steps.surface.outputs.testable == 'true'
         continue-on-error: true
         env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
-        uses: anthropics/claude-code-action@af0559ee4f514d1ef21826982bed13f7edc3c35e  # v1.0.178
-        with:
-          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          prompt: |
+          EVIDENCE_PROMPT: |
             Follow the gaia-testing skill at `.claude/skills/gaia-testing/SKILL.md` (read it) to
             produce REAL-WORLD test evidence for ONLY the surfaces this PR changes. The changed
             files are in `pr-files.txt`; the diff is `pr-diff.txt`. This runner is `ubuntu-latest`
             with NO Lemonade/GPU, so cover only the non-inference surfaces per the skill's contract:
             CLI (the real `gaia <subcommand>` + its output), HTTP-API contract, and MCP tool
-            responses. For any Agent-UI / real-inference surface the PR touches, write one line:
+            responses. Actually RUN the commands and capture their real output — never fabricate.
+
+            A UI-backed change is NOT wholly deferrable here. The Agent UI surface the PR touches
+            is almost always driven by an HTTP route (`src/gaia/ui/routers/**`), a CLI command, or
+            an API this runner CAN boot and hit with no model. Exercise that underlying layer for
+            real (start the server/daemon, request the changed route, capture status+body); defer
+            ONLY the rendered screenshot with the one line
             "pending strix-halo lane (real inference not available on this runner)".
-            Actually RUN the commands and capture their real output — never fabricate.
+
+            Spot-regression (NOT a full re-run — `test_unit.yml` and the per-area suites already
+            run in their own jobs; do not duplicate them): while the surface is booted, also
+            exercise 1-3 ADJACENT operations the change could plausibly affect — a sibling route in
+            the same router, a sibling `gaia` subcommand, or a direct importer of the changed
+            module — and confirm each still returns its expected shape. Report it under a
+            "Spot regression" subheading (what you poked / expected / got).
 
             SECURITY — this runner holds secrets in its environment:
             - NEVER print or capture the environment: no `env`, `printenv`, `set`, `export $(...)`,
@@ -267,10 +278,28 @@ jobs:
             If nothing testable on this lane changed, write exactly:
             "N/A — no CLI/API/MCP surface changed in this PR." Do NOT review the code, and do NOT
             post any PR comment — writing the file is your only output.
-          claude_args: |
-            --max-turns 40
+        run: |
+          # claude-code pinned — bump deliberately. Direct CLI = no GitHub auth / no github token.
+          npm install -g @anthropic-ai/claude-code@2.1.218
+          claude -p "$EVIDENCE_PROMPT" \
+            --allowedTools "Read,Grep,Glob,Bash,Write" \
+            --max-turns 50 \
             --model claude-sonnet-5
-            --allowedTools Read,Grep,Glob,Bash,Write
+
+      # Fail loudly, don't mask: the step above is continue-on-error, so a broken evidence
+      # harness (auth / install / rate-limit) leaves NO bundle — which otherwise reads as
+      # "nothing to test". Write a visible sentinel so the review says the harness broke, not
+      # that the surface was clean. A silent-green evidence stage is exactly how #2417 hid.
+      - name: Flag evidence-harness failure (no silent green)
+        if: steps.surface.outputs.testable == 'true' && steps.evidence.outcome == 'failure'
+        run: |
+          {
+            echo "⚠️ EVIDENCE HARNESS FAILED TO RUN — this is NOT \"nothing to test\"."
+            echo
+            echo "The evidence stage errored before producing evidence (auth / install / rate-limit"
+            echo "— see this run's logs). The changed surface was NOT exercised; the verdict below"
+            echo "rests on static review only."
+          } > evidence-bundle.md
 
       # --- Attempt 1 ---
       # continue-on-error: a rate-limit / expired-token / outage / install-crash must

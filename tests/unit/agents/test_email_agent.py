@@ -152,6 +152,8 @@ class TestToolRegistry:
         "triage_inbox",
         "pre_scan_inbox",
         "profile_inbox",
+        # Connection state (#2401)
+        "list_connected_mailboxes",
         # Follow-up tracking (#1606) — read-only detection
         "check_followups",
         # Organize
