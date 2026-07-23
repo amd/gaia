@@ -239,9 +239,10 @@ def undo_archive_batch_impl(
         )
         if not rows:
             raise RuntimeError(
-                f"undo window has expired ({window_seconds} s) or batch_id "
-                f"{batch_id!r} has no undoable archive actions. Use your mail "
-                "client to move the messages back to the inbox manually."
+                f"undo window has expired ({window_seconds} s after the batch "
+                f"completed) or batch_id {batch_id!r} has no undoable archive "
+                "actions. Use your mail client to move the messages back to the "
+                "inbox manually."
             )
         restored: List[Dict[str, Any]] = []
         failed: List[Dict[str, Any]] = []
@@ -479,6 +480,11 @@ class OrganizeToolsMixin:
                         message_id=message_id,
                         prior=prior,
                         mailbox=provider,
+                        # #2163 — share the per-turn undo batch so a loop of single
+                        # archives is undoable as ONE batch (undo_archive_batch),
+                        # with a completion-anchored window instead of a per-op
+                        # window that expires mid-run.
+                        batch_id=agent._organize_batch_id,
                         debug=debug_flag,
                     )
                 )

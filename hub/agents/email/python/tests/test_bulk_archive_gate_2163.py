@@ -1,21 +1,25 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-Regression tests for #2163 — two defects in bulk archive:
+Regression tests for #2163 — bulk archive left the earliest items unsafe:
 
-1. The bulk-archive confirmation GATE let pre-threshold operations execute
-   UNCONFIRMED. ``archive_message_batch`` checked the per-turn organize counter
-   BEFORE its own ops were counted, so a fresh ``archive_message_batch([6 ids])``
-   saw count == 0, passed the gate, and archived all six with no confirmation.
+The reported repro ("archive all suggested promos") looped the SINGLE
+``archive_message`` tool six times. Each op recorded its own action with its own
+30 s undo window, so during the ~26 s run the earliest items' undo windows had
+already lapsed by the time the agent offered "undo within the window" — the
+offer was false, and there was no single handle to undo the set as a whole.
 
-2. Undo windows EXPIRED MID-RUN. ``fetch_batch_undoable`` measured the window
-   from each row's own ``created_at``; in a multi-item run the earliest items
-   crossed the window before the run finished, so the closing "undo within the
-   window" offer was already false for them.
+The fix follows the issue's remedy (b): a loop of single archives in one turn
+shares ONE per-turn undo batch handle, and ``fetch_batch_undoable`` anchors the
+window to batch COMPLETION (the latest op) rather than per-row. Every item then
+stays undoable for the full window after the run finishes. The sanctioned bulk
+tool ``archive_message_batch`` (issue #1270 — 20+ in one call) is unchanged and
+NOT gated; it was already one undoable batch and now also gets the
+completion-anchored window.
 
-Both are exercised against the real ``FakeGmailBackend`` and a controllable
-clock (the ``action_store`` module's ``time`` is swapped for a settable fake),
-so no wall-clock timing and no live mailbox are involved.
+Exercised against the real ``FakeGmailBackend`` and a controllable clock (the
+``action_store`` module's ``time`` is swapped for a settable fake), so no
+wall-clock timing and no live mailbox are involved.
 """
 
 from __future__ import annotations
@@ -44,7 +48,6 @@ from gaia_agent_email.tools.organize_tools import (  # noqa: E402
 
 from gaia.agents.base.tools import _TOOL_REGISTRY  # noqa: E402
 from gaia.database.mixin import DatabaseMixin  # noqa: E402
-
 from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
 
 EMBEDDING_DIM = 768
@@ -116,7 +119,9 @@ def _build_agent_with_fake_gmail(tmp_path: Path, messages: list[dict]):
             "gaia.agents.base.memory.MemoryMixin._embed_text",
             side_effect=_fake_embed,
         ),
-        patch("gaia.agents.base.memory.MemoryMixin._backfill_embeddings", return_value=0),
+        patch(
+            "gaia.agents.base.memory.MemoryMixin._backfill_embeddings", return_value=0
+        ),
         patch("gaia.agents.base.memory.MemoryMixin._rebuild_faiss_index"),
         patch("gaia.agents.base.memory.MemoryMixin.init_system_context"),
     ):
@@ -132,43 +137,72 @@ def _call_tool(name: str, *args, **kwargs) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Defect 1 — gate blocks pre-threshold bulk archive (AC a)
+# Defects 1+2 on the reported repro path — a loop of SINGLE archive_message
+# calls (N6: "archive all suggested promos") shares ONE per-turn undo batch, so
+# the whole set is undoable as a unit for a window anchored to completion. This
+# is the issue's remedy (b): "mint a single batch-level undo handle whose window
+# starts when the batch completes, not per-op". No pre-threshold op is left with
+# its own clock ticking mid-run.
 # ---------------------------------------------------------------------------
 
 
-def test_bulk_archive_gate_blocks_before_any_op_executes(tmp_path):
-    """archive_message_batch([6 ids]) on a fresh turn must archive NOTHING and
-    return the batch-confirm sentinel — the plan-level gate fires before any op."""
-    msgs = [_inbox_message(f"m{i}", f"s{i}@x.com") for i in range(6)]
+def test_single_archive_loop_shares_one_undo_batch_surviving_the_run(
+    tmp_path, monkeypatch
+):
+    """Five single archive_message calls in one turn share one batch_id, and
+    undo_archive_batch restores ALL of them even after the earliest op's own
+    per-op window would have lapsed — no mid-run expiry."""
+    clock = _Clock(1000.0)
+    monkeypatch.setattr(action_store, "time", clock)
+
+    msgs = [_inbox_message(f"m{i}", "promo@shop.com") for i in range(5)]
     agent, backend = _build_agent_with_fake_gmail(tmp_path, msgs)
     try:
-        agent._reset_organize_counter()  # fresh turn
-        ids = [m["id"] for m in msgs]
-        res = _call_tool("archive_message_batch", ids)
+        agent._reset_organize_counter()  # fresh turn -> fresh batch handle
+        # Loop single archives, advancing the clock so the run spans 20s
+        # (ops at 1000,1005,1010,1015,1020) — like a real multi-item run.
+        for i, m in enumerate(msgs):
+            clock.now = 1000.0 + 5.0 * i
+            res = _call_tool("archive_message", m["id"])
+            assert res["ok"] is True, f"single archive should succeed: {res}"
+            assert "INBOX" not in backend.get_message(m["id"]).get("labelIds", [])
 
-        # Gate tripped: error envelope carrying the batch-confirm sentinel.
-        assert res["ok"] is False, f"expected gate to block, got {res}"
-        assert "Batch threshold exceeded" in res["error"]
+        # All five singles recorded ONE shared batch_id (route b).
+        rows = agent.query(
+            "SELECT DISTINCT batch_id FROM email_actions WHERE action_type='archive'"
+        )
+        batch_ids = {r["batch_id"] for r in rows}
+        assert batch_ids == {agent._organize_batch_id}, (
+            f"single archives must share the per-turn batch handle, got {batch_ids}"
+        )
+        batch_id = agent._organize_batch_id
 
-        # NOTHING archived — every message still in INBOX.
-        for mid in ids:
-            labels = backend.get_message(mid).get("labelIds", [])
-            assert "INBOX" in labels, f"{mid} was archived unconfirmed: {labels}"
+        # t = 1040: past the FIRST op's own 30s window (1000+30=1030) but within
+        # the window measured from completion (1020+30=1050). Undo restores ALL 5.
+        clock.now = 1040.0
+        undo = _call_tool("undo_archive_batch", batch_id)
+        assert undo["ok"] is True, f"undo should succeed within window: {undo}"
+        assert undo["data"]["restored"] == 5
+        for m in msgs:
+            labels = backend.get_message(m["id"]).get("labelIds", [])
+            assert "INBOX" in labels, f"{m['id']} not restored: {labels}"
     finally:
         agent.close_db()
 
 
-def test_below_threshold_batch_still_archives(tmp_path):
-    """A below-threshold batch is NOT gated — no over-gating regression."""
-    msgs = [_inbox_message(f"m{i}", f"s{i}@x.com") for i in range(4)]
+def test_batch_archive_tool_still_archives_bulk_unchanged(tmp_path):
+    """#1270 regression guard: archive_message_batch remains the sanctioned bulk
+    vehicle — a 6-message batch archives all six in one call (no new gate)."""
+    msgs = [_inbox_message(f"m{i}", f"s{i}@x.com") for i in range(6)]
     agent, backend = _build_agent_with_fake_gmail(tmp_path, msgs)
     try:
         agent._reset_organize_counter()
         ids = [m["id"] for m in msgs]
         res = _call_tool("archive_message_batch", ids)
 
-        assert res["ok"] is True, f"below-threshold batch should run: {res}"
-        assert res["data"]["total"] == 4
+        assert res["ok"] is True, f"bulk batch must still archive: {res}"
+        assert res["data"]["total"] == 6
+        assert len(res["data"]["succeeded"]) == 6
         for mid in ids:
             labels = backend.get_message(mid).get("labelIds", [])
             assert "INBOX" not in labels, f"{mid} not archived: {labels}"
@@ -177,7 +211,7 @@ def test_below_threshold_batch_still_archives(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Defect 2 — undo window survives the whole run (AC b)
+# Defect 2 (unit) — the batch undo window is anchored to completion, not per-op
 # ---------------------------------------------------------------------------
 
 
@@ -224,7 +258,9 @@ def test_undo_window_anchored_to_batch_completion(tmp_path, monkeypatch):
     # after completion (1020). Under the old per-row logic rows at 1000 & 1005
     # would be dropped; anchored-to-completion keeps all five undoable.
     clock.now = 1040.0
-    rows = action_store.fetch_batch_undoable(db, batch_id=batch_id, window_seconds=window)
+    rows = action_store.fetch_batch_undoable(
+        db, batch_id=batch_id, window_seconds=window
+    )
     assert len(rows) == 5, f"all 5 must stay undoable at t=1040, got {len(rows)}"
 
     # End-to-end: undo restores every message to the inbox.
@@ -258,7 +294,9 @@ def test_undo_window_still_expires_from_completion(tmp_path, monkeypatch):
     window = 30
     # t = 1051: 31s after completion (1020) — the whole-batch window has elapsed.
     clock.now = 1051.0
-    rows = action_store.fetch_batch_undoable(db, batch_id=batch_id, window_seconds=window)
+    rows = action_store.fetch_batch_undoable(
+        db, batch_id=batch_id, window_seconds=window
+    )
     assert rows == [], "batch must be non-undoable past completion + window"
 
     with pytest.raises(RuntimeError):
