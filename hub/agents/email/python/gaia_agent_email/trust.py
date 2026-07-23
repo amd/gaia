@@ -37,6 +37,7 @@ MemoryStore; this ledger is the evidence those grants are earned from.
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Mapping, Optional
@@ -282,6 +283,52 @@ def sender_scope(sender: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Auto-archive safety guard (#2426)
+# ---------------------------------------------------------------------------
+
+# Account-security / account-notification senders. A message from one of these
+# is never auto-archived unattended — even at ``full`` or on a fully-trusted
+# scope — because a mis-categorized security alert silently leaving the inbox
+# is the exact failure this guards against. Matched against the bare, lowercased
+# address. Deliberately conservative and provider-anchored (known account
+# domains + any ``accounts``/``account`` leading domain label + explicit
+# ``security``/``account-security`` local-parts) rather than broad (e.g. "any
+# no-reply@"), which would drown ``full`` mode in proposals. Downgrading to a
+# proposal is the safe failure mode, so bias toward catching a real security
+# sender over avoiding a stray proposal.
+_SECURITY_SENDER_DOMAINS = frozenset(
+    {
+        "id.apple.com",
+        "accountprotection.microsoft.com",
+    }
+)
+_SECURITY_LEADING_LABELS = frozenset({"accounts", "account"})
+_SECURITY_LOCALPART_RE = re.compile(r"^(?:security|account-security)(?:[-.+].*)?$")
+
+
+def is_security_sender(sender: str) -> bool:
+    """True when a sender is an account-security / account-notification address.
+
+    Anchored on a small set of known account domains, on any domain whose
+    leading label is ``accounts``/``account`` (``accounts.google.com``,
+    ``accounts.anybank.com``), and on a ``security``/``account-security``
+    local-part (exactly, or followed by a ``-``/``.``/``+`` separator — so
+    ``security@`` and ``security-alert@`` match but ``securityweekly@`` does
+    not). Case-insensitive; empty / address-less input is False.
+    """
+    addr = (sender or "").strip().lower().rstrip(">")
+    if "@" not in addr:
+        return False
+    local, _, domain = addr.partition("@")
+    domain = domain.strip()
+    if any(domain == d or domain.endswith("." + d) for d in _SECURITY_SENDER_DOMAINS):
+        return True
+    if domain.split(".", 1)[0] in _SECURITY_LEADING_LABELS:
+        return True
+    return bool(_SECURITY_LOCALPART_RE.match(local))
+
+
+# ---------------------------------------------------------------------------
 # TrustLedger — the earned-evidence tally
 # ---------------------------------------------------------------------------
 
@@ -452,11 +499,15 @@ class TrustPolicy:
         sender: str = "",
         db: Any = None,
         preferences: Optional[Mapping[str, Any]] = None,
+        is_important: bool = False,
     ) -> TrustDecision:
         """Return the disposition for one candidate action.
 
         ``tool`` is the tool name (checked against the floor); ``action_type``
-        is the taxonomy key (``archive``, ``draft_reply``, …).
+        is the taxonomy key (``archive``, ``draft_reply``, …). ``is_important``
+        is the provider's importance flag (Gmail ``IMPORTANT`` label / Outlook
+        high-importance): when set, an ``archive`` candidate is downgraded to a
+        proposal rather than auto-executed (#2426), at every autonomy level.
         """
         # 1. Inviolable floor — no level, trust score, or preference lowers it.
         if tool in self.confirm_floor:
@@ -491,6 +542,26 @@ class TrustPolicy:
         if self.level == LEVEL_SUGGEST:
             return TrustDecision(
                 "suggest", reason="autonomy level is suggest-only", confidence=0.0
+            )
+
+        # 5.5 Importance / security-sender guard (#2426): never auto-archive,
+        # unattended, a message the provider marked IMPORTANT or one from an
+        # account-security / notification sender — a mis-categorized security
+        # alert must be PROPOSED, not silently archived. One-directional, like
+        # the send/delete confirm-floor: a higher level or a fully-trusted scope
+        # can never override it. Scoped to ``archive`` (the visibility-removing
+        # action, and the only action the candidate map emits); widen this if
+        # the candidate map grows other visibility-affecting actions.
+        if action_type == "archive" and (is_important or is_security_sender(sender)):
+            why = (
+                "provider-flagged IMPORTANT"
+                if is_important
+                else "account-security / notification sender"
+            )
+            return TrustDecision(
+                "suggest",
+                reason=f"{why} — proposed for your review, not auto-archived",
+                confidence=0.0,
             )
 
         # 6. full level auto-executes every reversible action.

@@ -852,6 +852,10 @@ def triage_inbox_impl(
                 "thread_id": msg.get("threadId"),
                 "subject": payload_headers.get("subject", ""),
                 "from": payload_headers.get("from", ""),
+                # Provider system labels (Gmail labelIds / Outlook-derived) —
+                # the autonomy cycle reads the IMPORTANT flag off this to gate
+                # auto-archive (#2426).
+                "label_ids": list(msg.get("labelIds", [])),
                 "category": heuristic.category,
                 "is_spam": heuristic.is_spam,
                 "is_phishing": heuristic.is_phishing,

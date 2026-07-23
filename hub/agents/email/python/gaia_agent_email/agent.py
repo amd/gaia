@@ -1287,6 +1287,7 @@ class EmailTriageAgent(
         without touching ``~/.gaia/goals.db``.
         """
         from gaia_agent_email.tools.read_tools import extract_sender_email
+        from gaia_agent_email.tools.triage_heuristics import LABEL_IMPORTANT
 
         from gaia.agents.base.goal_store import Proposal
 
@@ -1312,6 +1313,9 @@ class EmailTriageAgent(
                 continue
             tool_name, action_type = candidate
             sender = extract_sender_email(row.get("from", ""))
+            # #2426: never auto-archive a provider-IMPORTANT message — the guard
+            # in TrustPolicy.decide downgrades it to a proposal.
+            is_important = LABEL_IMPORTANT in (row.get("label_ids") or [])
             decision = policy.decide(
                 tool=tool_name,
                 action_type=action_type,
@@ -1319,6 +1323,7 @@ class EmailTriageAgent(
                 sender=sender,
                 db=self,
                 preferences=self._session_preferences,
+                is_important=is_important,
             )
             message_id = row.get("id")
             if decision.action == "auto":
