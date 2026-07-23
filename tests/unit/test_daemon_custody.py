@@ -318,6 +318,31 @@ def test_http_rag_query_scoped(custody_client):
     assert r.json()["chunks"] == []
 
 
+@pytest.mark.parametrize("bad_k", [-1, 0, 51, None, "4", 1.5, True])
+def test_http_rag_query_rejects_out_of_range_k(custody_client, bad_k):
+    """k=-1 must not slip through as SQLite LIMIT -1 (full-corpus dump), and
+    null/non-int k must not 500 — both are 400s (issue #2387)."""
+    client, secret_a, _ = custody_client
+    r = client.post(
+        "/host/v1/rag/query",
+        headers=_h(secret_a),
+        json={"query": "x", "k": bad_k},
+    )
+    assert r.status_code == 400
+    assert "'k'" in r.json()["detail"]
+
+
+def test_http_rag_query_accepts_valid_k(custody_client):
+    client, secret_a, _ = custody_client
+    r = client.post(
+        "/host/v1/rag/query",
+        headers=_h(secret_a),
+        json={"query": "x", "k": 50},
+    )
+    assert r.status_code == 200
+    assert r.json()["chunks"] == []
+
+
 def test_http_version_route_is_unauthenticated(custody_client):
     client, _, _ = custody_client
     r = client.get("/host/v1/version")
