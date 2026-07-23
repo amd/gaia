@@ -20,8 +20,6 @@ from __future__ import annotations
 import logging
 import time as _t
 
-import pytest
-
 from gaia.daemon.sidecars.spec import builtin_specs
 
 
@@ -72,9 +70,7 @@ class _FakeManager:
 def _registry(on_started, *, manager_cls=_FakeManager):
     from gaia.daemon.sidecars.registry import SidecarRegistry
 
-    reg = SidecarRegistry(
-        {"email": builtin_specs()["email"]}, on_started=on_started
-    )
+    reg = SidecarRegistry({"email": builtin_specs()["email"]}, on_started=on_started)
     reg._manager_factory = manager_cls  # type: ignore[attr-defined]
     return reg
 
@@ -138,7 +134,9 @@ class _RecordingForwarder:
         self.calls = []
 
     def forward_all(self, agent_id, *, base_url, bearer):
-        self.calls.append({"agent_id": agent_id, "base_url": base_url, "bearer": bearer})
+        self.calls.append(
+            {"agent_id": agent_id, "base_url": base_url, "bearer": bearer}
+        )
         return {"agent_id": agent_id, "forwarded": [], "skipped": [], "errors": []}
 
 

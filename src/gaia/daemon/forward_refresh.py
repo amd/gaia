@@ -33,8 +33,6 @@ from __future__ import annotations
 
 import os
 import threading
-import time
-from typing import Callable
 
 from gaia.logger import get_logger
 
@@ -97,12 +95,10 @@ class ForwardRefresher:
         forwarder,
         *,
         interval: "float | None" = None,
-        sleep: Callable[[float], None] = time.sleep,
     ):
         self._registry = registry
         self._forwarder = forwarder
         self._interval = interval if interval is not None else resolve_interval()
-        self._sleep = sleep
         self._stop = threading.Event()
         self._thread: "threading.Thread | None" = None
 
@@ -167,9 +163,7 @@ class ForwardRefresher:
             target=self._run, name="forward-refresher", daemon=True
         )
         self._thread.start()
-        logger.info(
-            "forward-refresh: started (interval=%.0fs)", self._interval
-        )
+        logger.info("forward-refresh: started (interval=%.0fs)", self._interval)
 
     def stop(self) -> None:
         """Signal the timer to exit and join it (idempotent, safe unstarted)."""
