@@ -37,7 +37,7 @@ def test_server_app_dir_import_string_resolves_to_fastapi_app():
         "import server as s;"
         "from fastapi import FastAPI;"
         "from fastapi.testclient import TestClient;"
-        "assert hasattr(s, 'app'), 'module-level app missing for uvicorn --reload';"
+        "assert hasattr(s, 'app'), 'module-level app missing for uvicorn server:app';"
         "assert isinstance(s.app, FastAPI), type(s.app);"
         "client = TestClient(s.app, raise_server_exceptions=False);"
         "h = client.get('/health');"

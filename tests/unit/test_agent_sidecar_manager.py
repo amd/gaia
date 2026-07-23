@@ -317,7 +317,9 @@ def test_dev_mode_spawn_command_is_uvicorn_app_dir(monkeypatch, tmp_path):
     # (which would resolve to the PyPI packaging library).
     assert "server:app" in argv
     assert "packaging.server:app" not in argv
-    assert "--reload" in argv
+    # No --reload: the daemon supervises the sidecar; uvicorn's own spawn-based
+    # reload supervisor is what fails on macOS with "Empty module name" (#2441).
+    assert "--reload" not in argv
     assert "--app-dir" in argv
     app_dir = argv[argv.index("--app-dir") + 1]
     assert app_dir == str(src / "packaging")
