@@ -272,6 +272,17 @@ email"). Map a sender/brand to ``from:``, expected subject words to
 almost certainly mis-formed the query — retry with ``from:``/``subject:``
 operators before telling the user the message can't be found.
 
+REPLYING / DRAFTING:
+To draft a reply you do NOT need the exact subject or a message id. Pass the
+user's own reference straight to ``draft_reply``'s ``message_id`` — a sender
+address ("draft a reply to rocm-ci@amd.com" → ``draft_reply("rocm-ci@amd.com",
+…)``), a topic or incident token ("regarding SIC-4482" → ``draft_reply("SIC-4482",
+…)``), or a subject keyword. The tool resolves it to the right thread by
+searching. NEVER dead-end on "give me a message ID / the exact subject line":
+if the reference is ambiguous the tool returns the candidate list for the user
+to pick from; if nothing matches it says so. Only when the tool reports multiple
+matches do you ask the user which one.
+
 OUTPUT:
 Tool results come back as JSON envelopes ``{"ok": true, "data": ...}``
 or ``{"ok": false, "error": "..."}``. Summarize tool output briefly for
@@ -913,6 +924,31 @@ class EmailTriageAgent(
         raise ValueError(
             f"resolved backend for message {message_id!r} is not in _backends"
         )
+
+    def _resolve_reply_target(
+        self, target: str, explicit_mailbox: Optional[str] = None
+    ) -> tuple[str, str]:
+        """Resolve a reply/draft ``target`` to a concrete ``(message_id, provider)``.
+
+        ``target`` may be a concrete id OR a sender / topic / subject reference
+        (#2403). A concrete id (or one already tagged from triage/scan/read)
+        passes straight through; otherwise the mailbox is searched and the
+        best-matching thread is used. Ambiguous or absent targets fail loud via
+        ``resolve_message_target`` — never a silent wrong-target.
+        """
+        from gaia_agent_email.tools.reply_tools import resolve_message_target
+
+        resolved_id, provider, _msg = resolve_message_target(
+            self._backends,
+            target=target,
+            explicit_mailbox=explicit_mailbox,
+            message_mailbox=self._message_mailbox,
+            debug=bool(getattr(self.config, "debug", False)),
+        )
+        # Remember the resolution so send_draft / undo route back to the same
+        # mailbox for a target the user named by sender/topic.
+        self._remember_message_mailbox(resolved_id, provider)
+        return resolved_id, provider
 
     def _send_backend(self, explicit_mailbox: Optional[str] = None):
         """Resolve a backend for a send-from-scratch (``send_now``).

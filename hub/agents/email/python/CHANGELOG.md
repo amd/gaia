@@ -20,6 +20,17 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Draft/reply resolves a target from a sender or topic (#2403).**
+  `draft_reply` no longer demands a concrete message id or the exact subject
+  line. Its `message_id` argument now accepts a natural reference — a sender
+  address (`rocm-ci@amd.com`), a topic/incident token (`SIC-4482`), or a subject
+  keyword — and resolves it by searching the connected mailboxes and drafting
+  against the best-matching thread. A concrete id (or one already tagged from
+  triage/scan/read) still passes straight through (no search, no regression).
+  Ambiguity fails LOUD with a candidate list to pick from, and no match fails
+  LOUD with "not found" — never a silent wrong-target and never a bare
+  "give me a message ID / exact subject" wall.
+
 - **Re-proposal dedup survives headless/scheduled teardown (#2381).**
   `record_proposal` wrote its dedup row through `query()`, which never commits,
   so when the scheduler rebuilt the agent between fires (closing the DB
