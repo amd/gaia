@@ -600,15 +600,30 @@ def _parse_gmail_date_value(raw: str, *, op: str) -> str:
     return f"{y:04d}/{mo:02d}/{d:02d}"
 
 
+# Relative day-words Gmail cannot parse as absolute dates. For recency
+# operators (after/newer) map them to the timezone-robust ``newer_than:``
+# window instead of a fragile absolute date: Gmail evaluates ``after:DATE``
+# against a Pacific-time day boundary, so a same-day message can fall on the
+# wrong side of it for accounts in other timezones and be missed (#2406).
+# ``newer_than:1d`` is relative to *now* and has no such boundary.
+_RELATIVE_DAY_WINDOWS = {"today": "1d", "yesterday": "2d"}
+
+
 def normalize_gmail_date_operators(query: str) -> str:
     """Rewrite date-operator values in ``query`` to Gmail's ``YYYY/MM/DD``.
 
-    Raises ``ValueError`` on an unparseable value — a loud error beats
-    passing it through as free text and returning a false zero-result.
+    Relative recency words (``after:today`` / ``newer:yesterday``) are rewritten
+    to the timezone-robust ``newer_than:`` window so a present same-day message
+    is reliably matched. Raises ``ValueError`` on an otherwise-unparseable value
+    — a loud error beats passing it through as free text and returning a false
+    zero-result.
     """
 
     def _sub(m: "re.Match[str]") -> str:
         op = m.group("op").lower()
+        bare = m.group("val").strip().strip('"').strip().lower()
+        if op in ("after", "newer") and bare in _RELATIVE_DAY_WINDOWS:
+            return f"newer_than:{_RELATIVE_DAY_WINDOWS[bare]}"
         return f"{op}:{_parse_gmail_date_value(m.group('val'), op=op)}"
 
     return _DATE_OP_RE.sub(_sub, query)

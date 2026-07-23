@@ -643,18 +643,97 @@ class FakeCalendarBackend:
 # ---------------------------------------------------------------------------
 
 
+_RELATIVE_UNIT_SECONDS = {
+    "h": 3600,
+    "d": 86_400,
+    "w": 7 * 86_400,
+    "m": 30 * 86_400,
+    "y": 365 * 86_400,
+}
+
+
+def _relative_window_seconds(value: str) -> Optional[int]:
+    """Parse a Gmail relative window like ``1d`` / ``2w`` / ``3m`` into seconds."""
+    m = re.fullmatch(r"(\d+)\s*([hdwmy])", value.strip().lower())
+    if not m:
+        return None
+    return int(m.group(1)) * _RELATIVE_UNIT_SECONDS[m.group(2)]
+
+
+def _absolute_date_epoch(value: str) -> Optional[float]:
+    """Parse a normalized ``YYYY/MM/DD`` Gmail date into an epoch (UTC midnight)."""
+    m = re.fullmatch(r"(\d{4})/(\d{1,2})/(\d{1,2})", value.strip())
+    if not m:
+        return None
+    try:
+        dt = datetime(
+            int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=timezone.utc
+        )
+    except ValueError:
+        return None
+    return dt.timestamp()
+
+
+def _msg_epoch(msg: Dict[str, Any]) -> float:
+    """Message receipt time in epoch seconds from Gmail's millis ``internalDate``."""
+    try:
+        return int(msg.get("internalDate", "0")) / 1000.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _date_operator_matches(
+    token: str, msg: Dict[str, Any], now: float
+) -> Optional[bool]:
+    """Evaluate a date operator token against ``msg``.
+
+    Returns True/False if ``token`` is a recognized date operator, else None so
+    the caller falls through to its other token handling. Models the operators
+    the email agent emits — ``newer_than``/``older_than`` (relative windows) and
+    the absolute ``after``/``before``/``newer``/``older`` (``YYYY/MM/DD``, the
+    form ``normalize_gmail_date_operators`` produces).
+    """
+    when = _msg_epoch(msg)
+    if token.startswith(("newer_than:", "older_than:")):
+        op, _, val = token.partition(":")
+        window = _relative_window_seconds(val)
+        if window is None:
+            return None
+        if op == "newer_than":
+            return when >= now - window
+        return when <= now - window
+    for op in ("after", "before", "newer", "older"):
+        prefix = op + ":"
+        if token.startswith(prefix):
+            epoch = _absolute_date_epoch(token[len(prefix) :])
+            if epoch is None:
+                return None
+            if op in ("after", "newer"):
+                return when >= epoch
+            return when < epoch
+    return None
+
+
 def _query_matches(query: str, msg: Dict[str, Any]) -> bool:
     """Tiny subset of Gmail's query DSL.
 
-    Only ``is:unread``, ``from:``, ``subject:`` are honored — enough for
-    the eval-harness scenarios we run.
+    ``is:unread``, ``from:``, ``subject:`` and the date operators
+    (``newer_than``/``older_than``/``after``/``before``/``newer``/``older``) are
+    honored — enough for the eval-harness scenarios and the #2406 same-day
+    search coverage.
     """
     headers = {
         (h.get("name") or "").lower(): h.get("value", "")
         for h in (msg.get("payload") or {}).get("headers", [])
     }
     label_ids = set(msg.get("labelIds", []))
+    now = datetime.now(timezone.utc).timestamp()
     for token in query.split():
+        date_verdict = _date_operator_matches(token, msg, now)
+        if date_verdict is not None:
+            if not date_verdict:
+                return False
+            continue
         if token == "is:unread":
             if "UNREAD" not in label_ids:
                 return False
