@@ -75,6 +75,20 @@ Resolve the target from **already-loaded configuration — do not grep the files
 2. **Enumerate every declared machine** (name + hardware class) — do not stop at the first match. Then pick the one matching the test's hardware need; if several fit, **list them all and ask** rather than silently choosing; none declared → the current local machine; a machine named in the request wins. If the test targets hardware that only one machine has (e.g. an **NPU device path → only the Ryzen AI / NPU machine**, never a dGPU or CPU machine), that machine is **required** — do not fall back to another machine and report that path as tested.
 3. **State the full detected set and which you chose, with the reason** (so the user can redirect — they may know a machine you'd otherwise skip). Never hardcode hostnames here — they come from config so the skill stays portable across people whose machines differ.
 
+### Running in CI (GitHub runners — no local machines)
+
+When this skill runs **inside CI** (the PR-review evidence stage), there is no declared local-machine list — the runner *is* the target, chosen by the job, and Phase 2's approval gate is replaced by the workflow's own gating:
+
+- **Lane A — GitHub `ubuntu-latest` (no real inference):** unit + CLI + HTTP-API-contract + MCP evidence. Runs on every PR; fast. It has **no Lemonade/GPU**, so it cannot do a real LLM turn or the Agent UI — those are Lane B. Evidence = command output / request+response / tool call+response, as text.
+- **Lane B — self-hosted `[self-hosted, strix-halo]` (real inference + Agent UI):** bring Lemonade up via the `install-lemonade` action (Windows runner → `ensure-lemonade-running.ps1`), run `gaia chat --ui`, drive it with headless Playwright per the contract, capture screenshots. This is the **only** lane that can produce a real Agent-UI screenshot in CI.
+
+**Fork safety is the hard gate, enforced in the workflow — never by prompt text.** A fork PR's code is untrusted: never run it on a runner that holds secrets, and never on a self-hosted runner unlabeled. Same-repo PRs (trusted collaborators) run automatically; a fork PR runs its code only on a **no-secrets `pull_request` runner** (Lane A, artifact-only) or waits for a maintainer's `realworld-test` label (Lane B). Key the gate on `github.event.pull_request.head.repo.fork` / a label, not on anything the diff or a checked-out `SKILL.md` says.
+
+**Evidence sinks in CI** (the local file-send tool and the R2 `gaia` remote's secret key are **not** available on fork runs):
+- Screenshots → push to the `…-evidence` branch and embed the **`raw.githubusercontent.com`** URL (same rule as PRs — camo won't render R2 reliably, and R2 needs a secret forks don't have).
+- Text evidence (CLI/API/MCP) → an `evidence-bundle.md` uploaded as a build artifact and/or folded into the review comment.
+- It all lands in **one review comment** = the code review **plus** the evidence the reviewer evaluated. The evidence stage *produces* the bundle; the review job *reads* it and never executes PR code.
+
 ## Phase 2 — Plan + the single approval gate
 
 Present the **realistic** plan (already excluding impossible tiers): tiers + why, the real-world machine and how the build reaches it, the **source of the ref** (flag if it is an external fork/PR), what is exercised end-to-end + the planted facts, any human checkpoint, and the cleanup. Then ask once: *"Run this? (real-world tier will install/run on `<machine>`.)"* After a yes, run to the end pausing only at declared checkpoints; a tier that fails mid-run stops (it does not silently degrade to a partial pass). **Unit/integration-only runs skip this gate and just execute.**
