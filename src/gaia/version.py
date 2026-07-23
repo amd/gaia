@@ -9,7 +9,7 @@ from importlib.metadata import version as get_package_version_metadata
 __version__ = "0.22.0"
 
 # Lemonade version used across CI and installer
-LEMONADE_VERSION = "11.0.0"
+LEMONADE_VERSION = "11.5.0"
 
 # Oldest Lemonade Server GAIA runs against. LEMONADE_VERSION is what we install;
 # this is the floor below which we refuse. Profiles may require newer
