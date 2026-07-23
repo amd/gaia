@@ -44,3 +44,9 @@ CUSTODY_EPHEMERAL_ENV_VAR = "GAIA_CUSTODY_EPHEMERAL"
 MEMORY_SCOPE_AGENT = "agent"
 MEMORY_SCOPE_USER = "user"
 VALID_MEMORY_SCOPES = (MEMORY_SCOPE_AGENT, MEMORY_SCOPE_USER)
+
+# RAG query result cap (rag/query 'k'). Bounds the LIMIT so a caller can't force
+# a full-corpus dump (negative/zero → SQLite LIMIT -1 returns everything) or a
+# 500 (null/non-int → TypeError). Out-of-range or non-integer 'k' is a 400.
+RAG_QUERY_DEFAULT_K = 4
+RAG_QUERY_MAX_K = 50
