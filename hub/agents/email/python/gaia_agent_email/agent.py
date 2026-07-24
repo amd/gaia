@@ -110,6 +110,23 @@ class _UnavailableCalendarBackend:
         raise ConfigurationError(self._message)
 
 
+class _UnavailableMailBackend:
+    """Placeholder PRIMARY mail backend when no mailbox is connected.
+
+    Mirrors ``_UnavailableCalendarBackend``: the agent must still construct with
+    zero connectors so conversational, no-mailbox questions (connection status,
+    capabilities) reach the LLM loop instead of 502-ing at construction. Any
+    actual mail operation that touches this primary backend raises the deferred,
+    actionable ``ConfigurationError`` rather than failing loudly at __init__.
+    """
+
+    def __init__(self, message: str) -> None:
+        self._message = message
+
+    def __getattr__(self, name: str):
+        raise ConfigurationError(self._message)
+
+
 # ---------------------------------------------------------------------------
 # Provider-intent detection (#2164)
 # ---------------------------------------------------------------------------
@@ -460,10 +477,20 @@ class EmailTriageAgent(
         # connected mailbox, an explicit value restricts to one. Each backend
         # satisfies the ``GmailBackend`` Protocol so the tools treat Gmail and
         # Outlook interchangeably.
-        self._backends: dict[str, Any] = dict(config.resolve_mail_backends())
-        # ``self._gmail`` stays the PRIMARY backend (first in registry order) so
-        # existing single-backend tool closures keep working unchanged.
-        self._gmail = next(iter(self._backends.values()))
+        # Resolve eagerly, but if NO mailbox is connected — mirror the deferred
+        # calendar backend below — construct with an empty backend set and a
+        # placeholder primary so the agent loop still runs. This lets
+        # conversational, no-mailbox questions be answered; operational tools
+        # fail loudly per call via the actionable ``ConfigurationError`` instead
+        # of 502-ing before the LLM ever starts.
+        try:
+            self._backends: dict[str, Any] = dict(config.resolve_mail_backends())
+            # ``self._gmail`` stays the PRIMARY backend (first in registry order)
+            # so existing single-backend tool closures keep working unchanged.
+            self._gmail = next(iter(self._backends.values()))
+        except (ConfigurationError, ConnectorsError) as exc:
+            self._backends = {}
+            self._gmail = _UnavailableMailBackend(str(exc))
         # message_id → provider, populated by triage / scan / read so action
         # tools route each message to the mailbox it came from (no cross-mailbox
         # 404s when multiple are connected). See ``_backend_for_message``.
