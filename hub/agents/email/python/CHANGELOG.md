@@ -28,6 +28,17 @@ contract version is tracked separately as
   fixes apply on the REST surface (`/v1/email/archive`, `/v1/email/search`) as
   well as the agent's in-loop tools — a no-op archive returns an actionable 409,
   not a bare 500.
+- **`/query` Lemonade-down errors are now actionable, not a raw traceback (#2139).**
+  When the local LLM backend was unreachable, the `/query` SSE stream's terminal
+  `error` event led with the raw `requests`/`urllib3` exception repr, giving the
+  user no next step. The sidecar now classifies connection-shaped failures at the
+  error boundary and emits the standard guidance — Lemonade Server not reachable at
+  `<url>`; start it with `lemonade-server serve` (or `gaia init`); docs link —
+  keeping the original exception appended as `Technical details:` for debugging.
+  Every `/query` client (CLI, `gaia api`, third-party) benefits, not just the Agent
+  UI relay (which mitigated host-side in #2136). Unrelated errors pass through
+  verbatim, never masked behind a Lemonade message.
+
 - **Applying an existing label by its display name no longer fails with
   `Invalid label` (#2428).** `label_message` / `move_to_label` (and their batch
   variants) resolve a label's display name to its provider id via `list_labels`
