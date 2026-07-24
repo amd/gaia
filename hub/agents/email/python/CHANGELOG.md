@@ -28,6 +28,12 @@ contract version is tracked separately as
   fixes apply on the REST surface (`/v1/email/archive`, `/v1/email/search`) as
   well as the agent's in-loop tools — a no-op archive returns an actionable 409,
   not a bare 500.
+- **Preferences persist without the embedder, and survive upgrade (#2427).**
+  Priority/low-priority senders and category defaults now persist in the agent's
+  `state.db` (like the trust ledger) instead of the embedding-backed MemoryStore,
+  so they survive restarts even when the embedding model is absent. On first load
+  after upgrade, a one-time read-through migrates any preferences a prior version
+  wrote to the MemoryStore into `state.db` — nothing is silently dropped.
 - **`/query` Lemonade-down errors are now actionable, not a raw traceback (#2139).**
   When the local LLM backend was unreachable, the `/query` SSE stream's terminal
   `error` event led with the raw `requests`/`urllib3` exception repr, giving the
