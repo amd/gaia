@@ -601,7 +601,7 @@ def test_confirm_then_archive_round_trips(action_env):
     assert body["archived"] is True
     assert body["schema_version"] == SCHEMA_VERSION
     assert body["post_archive_id"] == "m1"  # label-based backend keeps the id
-    assert body["undo_window_seconds"] == 30
+    assert body["undo_window_seconds"] == 120
     assert "INBOX" not in mailbox.messages["m1"]["labelIds"]
 
     # The same token cannot be replayed (single-use).

@@ -111,7 +111,7 @@ class DeleteToolsMixin:
         db = self
         agent = self  # for per-message backend routing (#1603 Phase 2)
         debug_flag = bool(getattr(self.config, "debug", False))
-        window = int(getattr(self.config, "undo_window_seconds", 30))
+        window = int(getattr(self.config, "undo_window_seconds", 120))
 
         @tool
         def trash_message(message_id: str, mailbox: str = "") -> str:
