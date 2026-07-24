@@ -55,6 +55,40 @@ def _allowed_hosts() -> set[str]:
     return out
 
 
+# The 30s default is calibrated for an instant-UI-button undo. Chat-mediated
+# bulk operations run through the LLM tool-loop and take real time (a multi-item
+# archive can exceed 30s on a slow local model, #2447), so the floor is
+# overridable via GAIA_EMAIL_UNDO_WINDOW_SECONDS.
+_UNDO_WINDOW_ENV = "GAIA_EMAIL_UNDO_WINDOW_SECONDS"
+_DEFAULT_UNDO_WINDOW_SECONDS = 30
+
+
+def default_undo_window_seconds() -> int:
+    """Resolve the undo window from ``GAIA_EMAIL_UNDO_WINDOW_SECONDS``, else 30.
+
+    A malformed or non-positive override raises ``ConfigurationError`` rather
+    than silently falling back to the default — a bad env value is a
+    configuration error the operator must fix, not a value to guess past.
+    """
+    raw = os.environ.get(_UNDO_WINDOW_ENV, "").strip()
+    if not raw:
+        return _DEFAULT_UNDO_WINDOW_SECONDS
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ConfigurationError(
+            f"{_UNDO_WINDOW_ENV}={raw!r} is not an integer. Set it to a "
+            f"positive number of seconds (e.g. 120), or unset it to use the "
+            f"{_DEFAULT_UNDO_WINDOW_SECONDS}s default."
+        ) from exc
+    if value <= 0:
+        raise ConfigurationError(
+            f"{_UNDO_WINDOW_ENV}={raw!r} must be a positive number of seconds. "
+            f"Unset it to use the {_DEFAULT_UNDO_WINDOW_SECONDS}s default."
+        )
+    return value
+
+
 @dataclass
 class EmailAgentConfig:
     """Configuration for ``EmailTriageAgent``.
@@ -78,7 +112,11 @@ class EmailAgentConfig:
     - ``output_dir``: where the agent dumps transcripts / artifacts.
     - ``undo_window_seconds``: how long after a soft-delete the user has
       to ``restore_message``. After this window ``restore_message``
-      raises with a "use Trash to recover" message.
+      raises with a "use Trash to recover" message. Defaults to 30 (the
+      instant-UI-button floor) but is overridable via the
+      ``GAIA_EMAIL_UNDO_WINDOW_SECONDS`` env var so chat-mediated bulk
+      operations — which run through the slower LLM tool-loop — stay
+      undoable after completion (#2447).
     - ``followup_window_days``: how many days a sent message may sit
       without an inbound reply before ``check_followups`` flags it
       (#1606). Must be a positive integer.
@@ -124,7 +162,7 @@ class EmailAgentConfig:
     silent_mode: bool = False
     show_stats: bool = False
     output_dir: Optional[str] = None
-    undo_window_seconds: int = 30
+    undo_window_seconds: int = field(default_factory=default_undo_window_seconds)
     followup_window_days: int = 3
     db_path: Optional[str] = None
     memory_db_path: Optional[str] = None
@@ -183,6 +221,15 @@ class EmailAgentConfig:
                     "cloud LLM endpoints are permitted (AC3). To use a "
                     "non-default Lemonade port, set LEMONADE_BASE_URL."
                 )
+        if not isinstance(self.undo_window_seconds, int) or (
+            self.undo_window_seconds <= 0
+        ):
+            raise ConfigurationError(
+                f"EmailAgentConfig.undo_window_seconds must be a positive "
+                f"integer number of seconds, got {self.undo_window_seconds!r}. "
+                f"Set {_UNDO_WINDOW_ENV} to a positive value or leave it unset "
+                "for the 30s default."
+            )
         if not isinstance(self.followup_window_days, int) or (
             self.followup_window_days <= 0
         ):
