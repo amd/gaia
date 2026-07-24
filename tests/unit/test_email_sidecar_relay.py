@@ -33,7 +33,10 @@ import uuid
 import pytest
 
 from gaia.ui.email_sidecar import relay  # noqa: E402 - expected to fail (red phase)
-from gaia.ui.email_sidecar.errors import SidecarError  # noqa: E402
+from gaia.ui.email_sidecar.errors import (  # noqa: E402
+    SidecarError,
+    SidecarHTTPError,
+)
 
 # ---------------------------------------------------------------------------
 # Part 2 — unit tests: hand-rolled fakes, no real HTTP
@@ -567,6 +570,69 @@ class TestStreamFailureHandling:
         # The call below must complete without raising -- the assertion IS
         # that no exception escapes.
         relay.relay_query(handler, proxy, query="q", context=[])
+
+
+# --- Sidecar HTTP-error detail surfacing (#2419) ----------------------------
+
+
+class TestSidecarHTTPErrorDetail:
+    """A non-404 ``SidecarHTTPError`` carries the sidecar's own actionable
+    ``detail`` (e.g. the zero-connector 502). The relay must surface that
+    detail instead of masking it as the generic crash message."""
+
+    def test_non_404_http_error_with_detail_surfaces_detail(self):
+        handler = _FakeHandler()
+        detail = (
+            "Failed to start the email agent for this query: No mailbox "
+            "connected — connect Google or Microsoft in Settings → Connectors "
+            "before triaging."
+        )
+        proxy = _ScriptedProxy(
+            lambda: _RaisingIterator(
+                SidecarHTTPError(502, detail, path="/v1/email/query")
+            )
+        )
+        relay.relay_query(handler, proxy, query="q", context=[])
+        agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
+        assert len(agent_errors) == 1
+        assert agent_errors[0]["content"] == detail
+
+    def test_connection_shaped_http_error_detail_gains_hint(self):
+        handler = _FakeHandler()
+        detail = "502 local LLM triage failed: connection refused"
+        proxy = _ScriptedProxy(
+            lambda: _RaisingIterator(
+                SidecarHTTPError(502, detail, path="/v1/email/query")
+            )
+        )
+        relay.relay_query(handler, proxy, query="q", context=[])
+        agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
+        assert len(agent_errors) == 1
+        assert agent_errors[0]["content"] == detail + relay.LEMONADE_CONNECTION_HINT
+
+    def test_404_http_error_still_shows_version_upgrade_message(self):
+        handler = _FakeHandler()
+        proxy = _ScriptedProxy(
+            lambda: _RaisingIterator(
+                SidecarHTTPError(404, "Not Found", path="/v1/email/query")
+            )
+        )
+        relay.relay_query(handler, proxy, query="q", context=[])
+        agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
+        assert len(agent_errors) == 1
+        assert agent_errors[0]["content"] == relay.EMAIL_QUERY_VERSION_UPGRADE_MESSAGE
+
+    def test_detail_less_http_error_falls_back_to_stream_ended(self):
+        handler = _FakeHandler()
+        proxy = _ScriptedProxy(
+            lambda: _RaisingIterator(
+                SidecarHTTPError(503, "  ", path="/v1/email/query")
+            )
+        )
+        relay.relay_query(handler, proxy, query="q", context=[])
+        agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
+        assert len(agent_errors) == 1
+        assert agent_errors[0]["content"] == relay.STREAM_ENDED_UNEXPECTEDLY
 
 
 # --- Orphaned-generation cleanup (#2158) -------------------------------------

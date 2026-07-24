@@ -289,6 +289,37 @@ class TestInitCommand(unittest.TestCase):
         cmd._print_step(4, 5, "Installing [rag] dependencies")
         self.assertIn("[rag]", buf.getvalue())
 
+    @patch("gaia.installer.init_command.LemonadeInstaller")
+    def test_hub_agent_bootstrap_installs_with_trust(self, _mock_installer_class):
+        """`gaia init` installs its curated profile agent WITH the trust opt-in.
+
+        Every non-verified agent now needs an explicit trust acknowledgement to
+        install. The curated first-run profile agent is a hardcoded INIT_PROFILES
+        id (trusted by GAIA's own curation), so the bootstrap must pass the flag
+        — otherwise `gaia init` hard-fails for exactly the new users it targets.
+        """
+        from gaia.hub import catalog as hub_catalog
+        from gaia.hub import installer as hub_installer
+        from gaia.installer.init_command import INIT_PROFILES, InitCommand
+
+        agent_id = INIT_PROFILES["chat"]["agent"]
+        cmd = InitCommand(profile="chat", yes=True)
+
+        index = MagicMock()
+        index.agents = [{"id": agent_id}]
+
+        with (
+            patch.object(cmd, "_is_hub_agent_available", return_value=False),
+            patch.object(hub_catalog, "load_index", return_value=index),
+            patch.object(hub_installer, "install") as mock_install,
+        ):
+            mock_install.return_value = MagicMock(path="not-a-real-path")
+            cmd._ensure_hub_agent_installed()
+
+        mock_install.assert_called_once()
+        self.assertEqual(mock_install.call_args.args[0], agent_id)
+        self.assertIs(mock_install.call_args.kwargs.get("trusted"), True)
+
 
 class TestRunInit(unittest.TestCase):
     """Test run_init entry point function."""
@@ -764,14 +795,16 @@ class TestEnsureLemonadeInstalledSkipsWhenPresent(unittest.TestCase):
     def test_skip_when_installed_at_newer_version(
         self, mock_urlopen, mock_urlretrieve, mock_subprocess
     ):
-        """Case 4 (CRITICAL): installed at NEWER version (e.g. 11.0.0) -> no download.
+        """Case 4 (CRITICAL): installed at a NEWER version -> no download.
 
-        Scenario: the bundled NSIS installer dropped Lemonade v10.2.0 but the
-        user has since upgraded to v11.0.0. ``gaia init`` must treat this as
-        compatible (newer is fine), NOT downgrade or re-download.
+        Scenario: the bundled NSIS installer dropped an older Lemonade but the
+        user has since upgraded past ``LEMONADE_VERSION``. ``gaia init`` must
+        treat this as compatible (newer is fine), NOT downgrade or re-download.
         """
-        # Pick a version definitively newer than LEMONADE_VERSION (10.2.0)
-        newer_version = "11.0.0"
+        # Derive a version strictly newer than LEMONADE_VERSION so this test
+        # never drifts on a version bump (bump the major).
+        _major = int(LEMONADE_VERSION.lstrip("v").split(".")[0])
+        newer_version = f"{_major + 1}.0.0"
         info = LemonadeInfo(
             installed=True,
             version=newer_version,

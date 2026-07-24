@@ -83,15 +83,22 @@ describe('trustGateFor — the verified-only refusal (issue #1722)', () => {
         expect(gate.reasons).toHaveLength(0);
     });
 
-    it('requires an override for a community agent (not AMD-verified)', () => {
-        const gate = trustGateFor(agent({ id: 'comm', security_tier: 'community' }));
+    it('sends trust_native for a non-verified PYTHON agent, not just native ones', () => {
+        // The core fix under test: a non-verified agent that ships no native
+        // binary at all must still demand the override and the trust flag.
+        const gate = trustGateFor(
+            agent({ id: 'comm', security_tier: 'community', language: 'python' }),
+        );
         expect(gate.requiresOverride).toBe(true);
+        expect(gate.trustNative).toBe(true);
         expect(gate.reasons.join(' ')).toMatch(/not audited/i);
+        expect(gate.reasons.join(' ')).not.toMatch(/native binary/i);
     });
 
-    it('requires an override for an experimental agent', () => {
+    it('requires an override and trustNative for an experimental agent (also non-native)', () => {
         const gate = trustGateFor(agent({ id: 'exp', security_tier: 'experimental' }));
         expect(gate.requiresOverride).toBe(true);
+        expect(gate.trustNative).toBe(true);
         expect(gate.reasons.join(' ')).toMatch(/experimental/i);
     });
 
@@ -104,12 +111,33 @@ describe('trustGateFor — the verified-only refusal (issue #1722)', () => {
         expect(gate.reasons.join(' ')).toMatch(/without sandboxing/i);
     });
 
+    it('does NOT require an override for a native (cpp) agent that IS verified', () => {
+        const gate = trustGateFor(
+            agent({ id: 'native-verified', language: 'cpp', security_tier: 'verified' }),
+        );
+        expect(gate.requiresOverride).toBe(false);
+        expect(gate.trustNative).toBe(false);
+        expect(gate.reasons).toHaveLength(0);
+    });
+
     it('gates a deprecated agent even when verified', () => {
         const gate = trustGateFor(
             agent({ id: 'old', security_tier: 'verified', deprecated: true }),
         );
         expect(gate.requiresOverride).toBe(true);
         expect(gate.reasons.join(' ')).toMatch(/deprecated/i);
+    });
+
+    it('does NOT mislabel a non-native agent as native even when the backend-generalized requires_trust flag is set', () => {
+        // requires_trust now covers ANY non-verified agent on the backend, so
+        // isNative must stay keyed on language==='cpp' alone — never on
+        // requires_trust — or a non-native agent would wrongly show the
+        // "ships a native binary" reason.
+        const gate = trustGateFor(
+            agent({ id: 'py-comm', security_tier: 'community', requires_trust: true }),
+        );
+        expect(gate.trustNative).toBe(true); // via requiresOverride, not isNative
+        expect(gate.reasons.join(' ')).not.toMatch(/native binary/i);
     });
 
     it('surfaces permissions and platform requirements', () => {

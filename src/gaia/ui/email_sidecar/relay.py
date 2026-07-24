@@ -395,12 +395,19 @@ def relay_query(
             )
         else:
             crashed = True
+            detail = (exc.detail or "").strip()
             if exc.status_code == 404:
                 # Backstop for the pre-flight version gate (#2109 Design 3):
                 # a pre-2.4 binary that somehow passed pre-flight (a stale or
                 # missing manager.api_version) 404s here instead — same
                 # actionable message either way.
                 crash_message = EMAIL_QUERY_VERSION_UPGRADE_MESSAGE
+            elif detail:
+                # Surface the sidecar's own actionable detail (e.g. the
+                # zero-connector 502) instead of masking it as a generic
+                # crash — #2419. Bodyless transport failures still fall
+                # through to STREAM_ENDED_UNEXPECTEDLY.
+                crash_message = _augment_error_detail(detail)
             logger.warning("email relay: stream failed for run_id=%s: %s", rid, exc)
     except Exception as exc:  # noqa: BLE001 - boundary: translate, never raise
         if handler.cancelled.is_set():

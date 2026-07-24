@@ -84,6 +84,7 @@ _LABEL_INBOX = "INBOX"
 _LABEL_UNREAD = "UNREAD"
 _LABEL_STARRED = "STARRED"
 _LABEL_SENT = "SENT"
+_LABEL_IMPORTANT = "IMPORTANT"
 
 # ``$select`` for ``get_message`` — pull exactly the fields the Gmail-shape
 # translation needs (Graph returns a large default projection otherwise).
@@ -177,6 +178,10 @@ def _derive_label_ids(msg: Dict[str, Any]) -> List[str]:
         labels.append(_LABEL_UNREAD)
     if ((msg.get("flag") or {}).get("flagStatus") or "") == "flagged":
         labels.append(_LABEL_STARRED)
+    # Graph ``importance:high`` is the Outlook equivalent of Gmail's IMPORTANT
+    # label — the auto-archive safety guard (#2426) keys off this string.
+    if (msg.get("importance") or "").strip().lower() == "high":
+        labels.append(_LABEL_IMPORTANT)
     for category in msg.get("categories") or []:
         if category:
             labels.append(category)

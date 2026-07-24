@@ -54,6 +54,8 @@ def build_connections_router(token: str, registry, forwarder):
             )
         except UnknownAgentError as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
+        except NotGrantedError as e:
+            raise HTTPException(status_code=403, detail=str(e)) from e
 
     @router.post(f"{API_PREFIX}/agents/{{agent_id}}/connections/{{provider}}/forward")
     async def forward_provider(agent_id: str, provider: str) -> dict:

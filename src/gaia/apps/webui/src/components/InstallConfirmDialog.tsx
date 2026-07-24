@@ -15,16 +15,21 @@ export interface InstallWarning {
  * Build the list of warnings that gate an install. Empty list ⇒ install can
  * proceed without confirmation.
  *
- * - ``native_trust``: a non-verified native (C++) agent runs unsandboxed; the
- *   backend refuses (403) unless the user opts in via ``trust_native``.
+ * - ``native_trust``: warns that a non-verified *native* (C++) agent ships an
+ *   unsandboxed binary. This is the native-specific warning — deliberately NOT
+ *   keyed off ``requires_trust`` (which is now true for ANY non-verified agent),
+ *   so a non-verified Python agent isn't mislabeled as shipping a native binary.
+ *   The backend's 403 covers every non-verified agent regardless (see
+ *   ``hubLanes.trustGateFor``).
  * - ``deprecated``: the publisher marked the agent deprecated; it may be
  *   unmaintained or superseded.
  */
 export function installWarnings(agent: AgentInfo): InstallWarning[] {
     const warnings: InstallWarning[] = [];
     const nativeUntrusted =
-        agent.requires_trust === true ||
-        (agent.language === 'cpp' && !!agent.security_tier && agent.security_tier !== 'verified');
+        agent.language === 'cpp' &&
+        !!agent.security_tier &&
+        agent.security_tier !== 'verified';
     if (nativeUntrusted) {
         warnings.push({
             type: 'native_trust',

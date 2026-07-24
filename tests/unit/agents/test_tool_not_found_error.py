@@ -122,3 +122,73 @@ def test_bad_name_never_quoted_in_error(bad_name, registry):
     agent = _make_agent_with_tools(registry)
     err = agent._execute_tool(bad_name, {})["error"]
     assert f"'{bad_name}'" not in err, f"bad name leaked into error: {err}"
+
+
+# ---------------------------------------------------------------------------
+# Unexpected-kwargs branch (issue #2445)
+# ---------------------------------------------------------------------------
+
+
+def _agent_with_typed_tool(func):
+    """Build an agent whose single registered tool has a real signature."""
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        agent = _DummyAgent(silent_mode=True, skip_lemonade=True)
+    agent._instance_tools = {
+        "archive_message_batch": {
+            "name": "archive_message_batch",
+            "description": "stub",
+            "parameters": {},
+            "function": func,
+        }
+    }
+    return agent
+
+
+def test_hallucinated_kwarg_yields_structured_error_not_typeerror():
+    """A model that adds an unsupported kwarg gets a recoverable tool-error,
+    never an uncaught TypeError (issue #2445)."""
+
+    def archive_message_batch(message_ids):
+        return {"status": "success", "archived": message_ids}
+
+    agent = _agent_with_typed_tool(archive_message_batch)
+    result = agent._execute_tool(
+        "archive_message_batch",
+        {"message_ids": ["a", "b"], "mailbox": "INBOX"},
+    )
+    assert result["status"] == "error"
+    err = result["error"]
+    assert "mailbox" in err
+    # Names the parameter the tool DOES accept so the model can recover
+    assert "message_ids" in err
+
+
+def test_valid_args_still_execute():
+    """The unexpected-kwargs guard must not reject a well-formed call."""
+
+    def archive_message_batch(message_ids):
+        return {"status": "success", "archived": message_ids}
+
+    agent = _agent_with_typed_tool(archive_message_batch)
+    result = agent._execute_tool("archive_message_batch", {"message_ids": ["a"]})
+    assert result["status"] == "success"
+
+
+def test_var_keyword_tool_accepts_any_kwarg():
+    """A tool declaring **kwargs opts out of the guard — extra kwargs pass."""
+
+    def flexible(**kwargs):
+        return {"status": "success", "got": sorted(kwargs)}
+
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        agent = _DummyAgent(silent_mode=True, skip_lemonade=True)
+    agent._instance_tools = {
+        "flexible": {
+            "name": "flexible",
+            "description": "stub",
+            "parameters": {},
+            "function": flexible,
+        }
+    }
+    result = agent._execute_tool("flexible", {"anything": 1, "extra": 2})
+    assert result["status"] == "success"

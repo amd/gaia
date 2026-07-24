@@ -1364,9 +1364,13 @@ class MemoryMixin(ProceduralMemoryMixin):
                         source="llm_extract",
                         context=self._memory_context,
                     )
-                    # Mark old as superseded and remove from FAISS
-                    store.update(old_id, superseded_by=new_id)
-                    self._faiss_remove(old_id)
+                    # Only supersede when store() actually created a new row.
+                    # Dedup can collapse near-identical content back into old_id,
+                    # which would point superseded_by at the row itself and hide
+                    # it from every active query (recall, get_by_category).
+                    if new_id != old_id:
+                        store.update(old_id, superseded_by=new_id)
+                        self._faiss_remove(old_id)
                     # Embed the new item
                     try:
                         vec = self._embed_text(op["content"])

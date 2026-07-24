@@ -39,6 +39,9 @@ def _manifest(agent_id="demo", version="1.0.0", artifact_bytes=b"wheel-bytes", *
     return {
         "id": agent_id,
         "language": "python",
+        # Mechanics tests use a verified manifest so the install trust gate is a
+        # no-op here; the gate itself is covered in test_hub_security.py.
+        "security_tier": "verified",
         "latest_version": version,
         "requirements": {"platforms": [], **reqs},
         "versions": {
@@ -319,7 +322,7 @@ def test_install_cpp_artifact_extracted(tmp_path):
         base_url=BASE,
         fetcher=fetcher,
         install_root=tmp_path,
-        trust_native=True,  # experimental native agent — explicit trust required
+        trusted=True,  # experimental native agent — explicit trust required
     )
     assert result.language == "cpp"
     assert (tmp_path / "native" / "bin" / "demo").exists()
@@ -542,6 +545,7 @@ def _binary_manifest(
     return {
         "id": agent_id,
         "language": "python",
+        "security_tier": "verified",
         "latest_version": version,
         "requirements": {"platforms": []},
         "versions": {
@@ -567,6 +571,7 @@ def _legacy_binary_manifest(
     return {
         "id": agent_id,
         "language": "python",
+        "security_tier": "verified",
         "latest_version": version,
         "requirements": {"platforms": []},
         "versions": {
@@ -819,7 +824,7 @@ def test_install_cpp_with_artifacts_list_uses_singular_zip(tmp_path):
         run_pip=lambda args: pip_calls.append(args),
         install_root=tmp_path,
         platform_key="linux-x64",
-        trust_native=True,
+        trusted=True,
     )
     assert result.language == "cpp"
     assert (tmp_path / "native" / "bin" / "demo").exists()
@@ -867,7 +872,7 @@ def _cpp_install_from_archive(tmp_path, filename, archive_bytes):
         base_url=BASE,
         fetcher=fetcher,
         install_root=tmp_path,
-        trust_native=True,
+        trusted=True,
     )
 
 

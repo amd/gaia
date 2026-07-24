@@ -74,6 +74,9 @@ def test_installer_output_is_a_sentinel_the_sidecar_fetch_accepts(tmp_path):
         _AGENT_ID,
         version=_VERSION,
         manifest=_manifest(),
+        # Non-verified python agent (models the email sidecar): the install
+        # now requires the explicit trust opt-in every non-verified agent needs.
+        trusted=True,
         base_url=_BASE_URL,
         fetcher=_fetcher,
         run_pip=lambda args: pytest.fail("binary install must never call pip"),
@@ -141,6 +144,7 @@ def test_wheel_kind_install_is_not_accepted_as_a_sidecar_binary(tmp_path):
         _AGENT_ID,
         version=_VERSION,
         manifest=manifest,
+        trusted=True,
         base_url=_BASE_URL,
         fetcher=_wheel_fetcher,
         run_pip=lambda args: None,  # wheel path shells out to pip; stub it

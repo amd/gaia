@@ -321,23 +321,42 @@ class CanonicalTranslator:
 TERMINAL_TYPES = frozenset({"final", "error"})
 
 
-def _render_args_summary(tool: str, args: Dict[str, Any]) -> str:
-    """Render tool args as the literal text the user would approve.
+# Human labels for the confirmation-gated actions the /query stream surfaces.
+# The machine action name still rides on the event's ``action`` field as
+# anti-spoof metadata; this map is only for the human-readable headline.
+_ACTION_LABELS = {
+    "send_now": "Send this email",
+    "send_draft": "Send this draft",
+    "forward_message": "Forward this email",
+    "quarantine_phishing_message": "Quarantine this message as phishing",
+    "unquarantine_message": "Restore this message from quarantine",
+    "archive_message": "Archive this message",
+}
 
-    Kept deterministic and compact — recipients/subject/body for a send, or a
-    ``key=value`` join for any other gated action.
+
+def _render_args_summary(tool: str, args: Dict[str, Any]) -> str:
+    """Render a human-readable confirmation prompt for a gated tool call.
+
+    Produces a plain sentence a chat user can approve — e.g. ``Send this email
+    to a@b.com — subject "Re: …"?`` — rather than a raw ``key=value`` dump. The
+    machine action name is carried on the event's ``action`` field, not here.
     """
-    if not args:
-        return f"{tool} (no arguments)"
-    if isinstance(args, dict):
-        parts = []
-        for key, value in args.items():
-            text = str(value)
-            if len(text) > 200:
-                text = text[:200] + "…"
-            parts.append(f"{key}={text}")
-        return f"{tool}: " + ", ".join(parts)
-    return f"{tool}: {args}"
+    label = _ACTION_LABELS.get(tool, f"Run '{tool}'")
+    if not isinstance(args, dict) or not args:
+        return f"{label}?"
+    detail = []
+    recipient = args.get("to")
+    if recipient:
+        detail.append(f"to {recipient}")
+    subject = args.get("subject")
+    if subject:
+        text = str(subject)
+        if len(text) > 120:
+            text = text[:120] + "…"
+        detail.append(f'— subject "{text}"')
+    if detail:
+        return f"{label} " + " ".join(detail) + "?"
+    return f"{label}?"
 
 
 __all__ = ["CanonicalTranslator", "TERMINAL_TYPES"]

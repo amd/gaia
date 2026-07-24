@@ -32,11 +32,18 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import zlib
 from typing import List, Optional
 
-from gaia.connectors._keyring import keyring  # actionable error if missing (#1621)
+from gaia.connectors._keyring import (  # actionable error if missing (#1621)
+    _KEYRING_BACKEND_ENV_VAR,
+    _NULL_KEYRING_ALIASES,
+    _NULL_KEYRING_BACKEND,
+    keyring,
+    normalize_keyring_backend_env,
+)
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConnectorsError,
@@ -94,8 +101,33 @@ def verify_keyring_backend() -> None:
     Raise ``ConnectorsError`` if the active keyring is one of the refused
     backends. Called eagerly at every save and at every load — cheap, and
     closes the silent-plaintext-fallback path (A4).
+
+    Also the single eager choke point where an unresolvable
+    ``PYTHON_KEYRING_BACKEND`` first surfaces (#2441): keyring resolves the var
+    as a ``module.Class`` path, so a bad value raises deep inside keyring
+    (a dotless value → ``ValueError: Empty module name``). Turn that opaque
+    failure into an actionable error naming the offending value and the correct
+    form — never let it bubble up as an unexplained sidecar 502.
     """
-    backend = keyring.get_keyring()
+    normalize_keyring_backend_env()
+    try:
+        backend = keyring.get_keyring()
+    except Exception as e:  # noqa: BLE001 - re-raised loudly with context below
+        configured = os.environ.get(_KEYRING_BACKEND_ENV_VAR)
+        hint = ""
+        if configured:
+            hint = (
+                f" {_KEYRING_BACKEND_ENV_VAR}={configured!r} is not a valid "
+                "keyring backend identifier: keyring expects a fully-qualified "
+                "'module.Class' path (for example "
+                f"'{_NULL_KEYRING_BACKEND}' to disable the store in "
+                "dev/testing), or one of the GAIA shorthands "
+                f"{sorted(_NULL_KEYRING_ALIASES)}."
+            )
+        raise ConnectorsError(
+            f"Could not initialize the keyring backend: {e}.{hint} "
+            "See docs/security/connections.mdx."
+        ) from e
     cls_name = type(backend).__name__
     if cls_name in _REFUSED_BACKEND_CLASS_NAMES:
         raise ConnectorsError(

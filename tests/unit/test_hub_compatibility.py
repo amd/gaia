@@ -134,6 +134,54 @@ def test_detected_gpu_vram_meets_requirement_no_warning(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# subject parameter + NPU-optional gating (#2396): the hub-install path keeps
+# its "This agent…" wording, but the onboarding preflight passes its own
+# subject and a capable GPU turns the NPU warning purely informational.
+# ---------------------------------------------------------------------------
+def test_npu_absent_default_subject_keeps_agent_wording(monkeypatch):
+    # Regression guard: the per-agent hub-install path is unchanged when no
+    # capable GPU is present (acceptance criterion #3).
+    monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
+    report = check_compatibility({"platforms": [], "npu": True}, detected_npu=False)
+    assert any(
+        "This agent requests an NPU" in w and "Ryzen AI NPU driver" in w
+        for w in report.warnings
+    )
+
+
+def test_npu_absent_with_capable_gpu_is_informational(monkeypatch):
+    monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
+    report = check_compatibility(
+        {"platforms": [], "npu": True},
+        detected_npu=False,
+        detected_gpu_vram_gb=24.0,
+        subject="The recommended model",
+    )
+    assert report.compatible is True
+    npu_warnings = [w for w in report.warnings if "NPU" in w]
+    assert npu_warnings, "expected an informational NPU line"
+    joined = " ".join(npu_warnings)
+    # No agent framing and no driver-install CTA on a dGPU box.
+    assert "agent" not in joined.lower()
+    assert "install" not in joined.lower()
+    assert "optional" in joined.lower()
+
+
+def test_subject_flows_into_memory_and_vram_warnings(monkeypatch):
+    monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
+    monkeypatch.setattr(compatibility, "detect_total_memory_gb", lambda: 4.0)
+    report = check_compatibility(
+        {"platforms": [], "min_memory_gb": 16, "gpu_vram_gb": 24},
+        detected_gpu_vram_gb=8.0,
+        subject="The recommended model",
+    )
+    joined = " ".join(report.warnings)
+    assert "The recommended model recommends 16 GB RAM" in joined
+    assert "The recommended model recommends 24 GB of GPU VRAM" in joined
+    assert "This agent" not in joined
+
+
+# ---------------------------------------------------------------------------
 # current_platform_key: npm/artifact-filename style keys (#2084)
 #
 # Distinct from detect_platform()/current_platform()'s hub-triple vocabulary

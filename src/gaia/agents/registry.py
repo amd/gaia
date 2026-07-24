@@ -1269,6 +1269,60 @@ class AgentRegistry:
         """
         return self._agents.get(self.canonical_id(agent_id))
 
+    def register_sidecar(
+        self,
+        agent_id: str,
+        display_name: str,
+        required_connections: List[ConnectorRequirement],
+    ) -> None:
+        """Register a daemon-supervised sidecar agent (e.g. email) (#2408).
+
+        A sidecar install (frozen binary + ``.installed`` sentinel under
+        ``~/.gaia/agents/<id>/``) ships no ``agent.py``, so ``discover()``'s
+        directory scan never finds it and the connectors grant flow 404s on
+        its namespaced id forever. This registers a lightweight stand-in with
+        real identity and the connector scopes the daemon spec declares, but
+        a factory that fails loudly rather than importing or instantiating
+        the out-of-process agent — the UI backend never imports the hub
+        wheel (server.py:621-629).
+
+        Idempotent: a no-op if *agent_id* (the BARE id, not the namespaced
+        one) is already registered — protects a real wheel/custom-agent
+        registration, or a repeated call, from being clobbered by this stub.
+        Called by ``gaia.hub.installer.register_installed_sidecars``.
+        """
+        if self.get(agent_id) is not None:
+            return
+
+        def _sidecar_factory(**_kwargs):
+            raise RuntimeError(
+                f"'{agent_id}' runs out-of-process as a daemon sidecar; it "
+                "is not instantiated in-process by the AgentRegistry. It is "
+                "supervised by the gaia daemon and reached over its own "
+                "REST/MCP surface."
+            )
+
+        self._register(
+            AgentRegistration(
+                id=agent_id,
+                name=display_name,
+                description=f"{display_name} agent",
+                source="installed",
+                conversation_starters=[],
+                factory=_sidecar_factory,
+                agent_dir=None,
+                models=[],
+                hidden=False,
+                required_connections=list(required_connections),
+                namespaced_agent_id=f"installed:{agent_id}",
+            )
+        )
+        logger.info(
+            "registry: Registered sidecar agent: %s (namespaced installed:%s)",
+            agent_id,
+            agent_id,
+        )
+
     def list(self) -> List[AgentRegistration]:
         """Return all registered agents."""
         return list(self._agents.values())

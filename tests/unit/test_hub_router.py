@@ -97,7 +97,7 @@ def test_install_returns_202_and_schedules(client, monkeypatch):
 
     def fake_install(agent_id, **kwargs):
         called["id"] = agent_id
-        called["trust_native"] = kwargs.get("trust_native")
+        called["trusted"] = kwargs.get("trusted")
 
     monkeypatch.setattr(
         catalog_mod,
@@ -112,21 +112,22 @@ def test_install_returns_202_and_schedules(client, monkeypatch):
     assert resp.json()["status"] == "queued"
     # BackgroundTasks run after the response in TestClient.
     assert called.get("id") == "demo"
-    assert called.get("trust_native") is True
+    assert called.get("trusted") is True
 
 
-def test_install_native_non_verified_refused_403(client, monkeypatch):
-    # A community native agent without trust_native is refused synchronously.
+def test_install_non_verified_python_refused_403(client, monkeypatch):
+    # A non-verified PYTHON (community) agent without the trust opt-in is refused
+    # synchronously at the router — the gate is not native-only.
     monkeypatch.setattr(
         catalog_mod,
         "fetch_manifest",
         lambda *a, **k: {
-            "id": "native",
-            "language": "cpp",
+            "id": "demo",
+            "language": "python",
             "security_tier": "community",
         },
     )
-    resp = client.post("/api/agents/install", json={"id": "native"}, headers=UI)
+    resp = client.post("/api/agents/install", json={"id": "demo"}, headers=UI)
     assert resp.status_code == 403
     assert "trust" in resp.json()["detail"].lower()
 
@@ -396,6 +397,7 @@ def test_install_error_surfaces_via_install_status(client, monkeypatch):
     manifest = {
         "id": "email",
         "language": "python",
+        "security_tier": "verified",  # isolate this test from the trust gate
         "latest_version": "0.1.0",
         "requirements": {"platforms": []},
         "versions": {
@@ -439,7 +441,11 @@ def test_email_install_shuts_down_running_sidecar_first(client, monkeypatch):
     monkeypatch.setattr(
         catalog_mod,
         "fetch_manifest",
-        lambda *a, **k: {"id": "email", "language": "python"},
+        lambda *a, **k: {
+            "id": "email",
+            "language": "python",
+            "security_tier": "verified",
+        },
     )
     monkeypatch.setattr(installer_mod, "install", lambda agent_id, **k: None)
     resp = client.post("/api/agents/install", json={"id": "email"}, headers=UI)
@@ -477,7 +483,11 @@ def test_email_install_proceeds_when_stop_sidecar_noops(client, monkeypatch):
     monkeypatch.setattr(
         catalog_mod,
         "fetch_manifest",
-        lambda *a, **k: {"id": "email", "language": "python"},
+        lambda *a, **k: {
+            "id": "email",
+            "language": "python",
+            "security_tier": "verified",
+        },
     )
     called = {}
     monkeypatch.setattr(
@@ -498,7 +508,11 @@ def test_email_install_aborts_when_stop_fails(client, monkeypatch):
     monkeypatch.setattr(
         catalog_mod,
         "fetch_manifest",
-        lambda *a, **k: {"id": "email", "language": "python"},
+        lambda *a, **k: {
+            "id": "email",
+            "language": "python",
+            "security_tier": "verified",
+        },
     )
     called = {}
     monkeypatch.setattr(
@@ -516,7 +530,11 @@ def test_non_email_install_does_not_shutdown_sidecar(client, monkeypatch):
     monkeypatch.setattr(
         catalog_mod,
         "fetch_manifest",
-        lambda *a, **k: {"id": "demo", "language": "python"},
+        lambda *a, **k: {
+            "id": "demo",
+            "language": "python",
+            "security_tier": "verified",
+        },
     )
     monkeypatch.setattr(installer_mod, "install", lambda agent_id, **k: None)
     resp = client.post("/api/agents/install", json={"id": "demo"}, headers=UI)

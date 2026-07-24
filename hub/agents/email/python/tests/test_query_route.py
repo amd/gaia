@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 import uuid
 
 import pytest
@@ -139,6 +138,79 @@ class _RaisingFakeAgent:
         raise RuntimeError("Lemonade Server is not reachable at http://localhost:13305")
 
 
+class _ConnectionErrorFakeAgent:
+    """Raises a realistic ``requests`` ConnectionError — the raw urllib3 repr a
+    user actually sees when Lemonade is down, NOT a hand-written friendly
+    string (issue #2139 acceptance)."""
+
+    def __init__(self):
+        self.conversation_history = []
+        self.console = None
+        self._cancel_event = None
+
+    def process_query(self, query, max_steps=None):
+        self.console.print_processing_start(query, 20, "fake-model")
+        import requests
+
+        raise requests.exceptions.ConnectionError(
+            "HTTPConnectionPool(host='localhost', port=8000): Max retries "
+            "exceeded with url: /api/v1/chat/completions (Caused by "
+            "NewConnectionError('<urllib3.connection.HTTPConnection object at "
+            "0x10a>: Failed to establish a new connection: [Errno 61] "
+            "Connection refused'))"
+        )
+
+
+class _BuiltinConnRefusedFakeAgent:
+    """Raises a builtin ``ConnectionRefusedError`` (an OS-level transport error,
+    not a friendly string) — classified by type, not string shape."""
+
+    def __init__(self):
+        self.conversation_history = []
+        self.console = None
+        self._cancel_event = None
+
+    def process_query(self, query, max_steps=None):
+        self.console.print_processing_start(query, 20, "fake-model")
+        raise ConnectionRefusedError(61, "Connection refused")
+
+
+class _UnrelatedErrorFakeAgent:
+    """Raises an error that has nothing to do with connectivity — it must pass
+    through verbatim, never masked behind Lemonade copy (issue #2139)."""
+
+    def __init__(self):
+        self.conversation_history = []
+        self.console = None
+        self._cancel_event = None
+
+    def process_query(self, query, max_steps=None):
+        self.console.print_processing_start(query, 20, "fake-model")
+        raise ValueError("triage produced malformed JSON at row 4")
+
+
+class _InternalErrorFakeAgent:
+    """Mimics the base agent's Lemonade-down branch: it sets an actionable
+    ``final_answer`` and returns a failed result WITHOUT calling
+    ``print_final_answer`` — so no ``answer`` event ever reaches the stream (#2444).
+    """
+
+    ANSWER = (
+        "Local Lemonade Server is not reachable at http://localhost:13305 — "
+        "start it with `lemonade-server serve` (or run `gaia init`), then retry."
+    )
+
+    def __init__(self):
+        self.conversation_history = []
+        self.console = None
+        self._cancel_event = None
+
+    def process_query(self, query, max_steps=None):
+        self.console.print_processing_start(query, 20, "fake-model")
+        # Note: no print_final_answer — the real loop breaks on the error branch.
+        return {"status": "failed", "result": self.ANSWER, "error_count": 1}
+
+
 # ---------------------------------------------------------------------------
 # Happy path — the canonical event SEQUENCE
 # ---------------------------------------------------------------------------
@@ -217,11 +289,16 @@ def test_confirmation_step_ends_with_needs_confirmation_then_final_refusal(
     nc = events[types.index("needs_confirmation")]
     assert nc["action"] == "send_now"
     assert "confirm_url" not in nc  # stateless stop-and-hand-off (D1)
-    # The run ends with a final refusal that points at the fixed-function route.
+    # The run ends with a plain-language refusal — no internal REST contract or
+    # architecture jargon leaked to the chat user (issue #2404).
     assert events[-1]["type"] == "final"
-    assert "/v1/email/send" in events[-1]["answer"]
+    answer = events[-1]["answer"]
+    assert "confirmation" in answer.lower()
+    assert "/v1/email" not in answer
+    assert "D1" not in answer
+    assert "POST" not in answer
     # The gated tool never actually "sent".
-    assert "Sent." not in events[-1]["answer"]
+    assert "Sent." not in answer
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +361,129 @@ def test_run_failure_ends_with_terminal_error(app_client, monkeypatch):
     assert events[-1]["type"] == "error"
     assert events[-1]["status"] == 500
     assert "Lemonade" in events[-1]["detail"]
+
+
+def test_internal_error_branch_surfaces_agent_answer(app_client, monkeypatch):
+    # The loop set an actionable answer but never emitted an ``answer`` event.
+    # The stream must surface that copy, not a generic "no final answer" (#2444).
+    fake = _InternalErrorFakeAgent()
+    monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
+    resp = app_client.post("/v1/email/query", json=_req())
+    assert resp.status_code == 200
+    events = _parse_sse(resp.text)
+    assert events[-1]["type"] == "error"
+    assert events[-1]["status"] == 500
+    assert events[-1]["detail"] == _InternalErrorFakeAgent.ANSWER
+    assert "producing a final answer" not in events[-1]["detail"]
+
+
+def _assert_actionable_lemonade_detail(detail: str) -> None:
+    """The three-part actionable contract (#2139): what failed, what to do,
+    where to look."""
+    lower = detail.lower()
+    assert "lemonade server is not reachable" in lower  # what failed
+    # what to do — start it (either remediation is acceptable copy).
+    assert "lemonade-server serve" in lower or "gaia init" in lower
+    assert "amd-gaia.ai/docs/guides/email" in lower  # where to look
+
+
+def test_lemonade_down_connection_error_gets_actionable_detail(app_client, monkeypatch):
+    """A realistic requests ConnectionError → actionable guidance, with the raw
+    exception appended for debugging (not replacing it)."""
+    fake = _ConnectionErrorFakeAgent()
+    monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
+    resp = app_client.post("/v1/email/query", json=_req())
+    assert resp.status_code == 200
+
+    events = _parse_sse(resp.text)
+    assert events[-1]["type"] == "error"
+    assert events[-1]["status"] == 500
+    detail = events[-1]["detail"]
+    _assert_actionable_lemonade_detail(detail)
+    # The original exception text is preserved for debugging — appended, never
+    # dropped (the guidance leads, the raw repr trails).
+    assert "Technical details:" in detail
+    assert "Connection refused" in detail
+    assert detail.lower().index("not reachable") < detail.index("Technical details:")
+
+
+def test_lemonade_down_builtin_connection_error_gets_actionable_detail(
+    app_client, monkeypatch
+):
+    """A builtin ConnectionRefusedError is classified by TYPE (its str carries
+    no 'Lemonade' token), proving detection isn't just substring luck."""
+    fake = _BuiltinConnRefusedFakeAgent()
+    monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
+    resp = app_client.post("/v1/email/query", json=_req())
+    assert resp.status_code == 200
+
+    events = _parse_sse(resp.text)
+    assert events[-1]["type"] == "error"
+    _assert_actionable_lemonade_detail(events[-1]["detail"])
+    assert "Connection refused" in events[-1]["detail"]
+
+
+def test_unrelated_error_passes_through_unmasked(app_client, monkeypatch):
+    """A non-connectivity failure is surfaced verbatim — never rewritten as a
+    Lemonade message (no silent masking of unrelated bugs)."""
+    fake = _UnrelatedErrorFakeAgent()
+    monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
+    resp = app_client.post("/v1/email/query", json=_req())
+    assert resp.status_code == 200
+
+    events = _parse_sse(resp.text)
+    assert events[-1]["type"] == "error"
+    assert events[-1]["status"] == 500
+    assert events[-1]["detail"] == "triage produced malformed JSON at row 4"
+    assert "Lemonade" not in events[-1]["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Classification helper — pure-function coverage (no TestClient)
+# ---------------------------------------------------------------------------
+
+
+def test_terminal_error_detail_classifies_wrapped_connection_cause():
+    """A transport error hidden behind ``raise ... from`` is still classified
+    unreachable — the cause chain is walked, not just ``str(exc)``."""
+    try:
+        raise ConnectionRefusedError(61, "Connection refused")
+    except ConnectionRefusedError as cause:
+        wrapped = RuntimeError("triage tool failed")
+        wrapped.__cause__ = cause
+
+    assert query_routes._is_lemonade_unreachable(wrapped) is True
+    detail = query_routes._terminal_error_detail(wrapped)
+    _assert_actionable_lemonade_detail(detail)
+    # The wrapper's own message is preserved in the appended technical details.
+    assert "triage tool failed" in detail
+
+
+def test_terminal_error_detail_leaves_unrelated_errors_verbatim():
+    exc = ValueError("some unrelated parse failure")
+    assert query_routes._is_lemonade_unreachable(exc) is False
+    assert query_routes._terminal_error_detail(exc) == "some unrelated parse failure"
+
+
+def test_timeout_is_not_classified_as_lemonade_down():
+    """A timeout means up-but-slow, or a *different* host (the Gmail/Outlook
+    backends use httpx with their own timeouts) — never a not-running local
+    Lemonade, which refuses instantly. Such errors must pass through verbatim so
+    the user isn't told to restart Lemonade when Gmail is merely slow (#2139)."""
+
+    class _ReadTimeout(Exception):
+        """Stands in for httpx.ReadTimeout — its repr carries 'timeout'."""
+
+    for exc in (
+        _ReadTimeout("The read operation timed out"),
+        _ReadTimeout(""),  # empty str → class-name fallback still says nothing Lemonade
+        TimeoutError("timed out"),
+        RuntimeError("Gmail API call: connect timeout after 15s"),
+        RuntimeError("host is unreachable via the proxy"),
+    ):
+        assert query_routes._is_lemonade_unreachable(exc) is False, exc
+        # And the actionable Lemonade copy is NOT prepended.
+        assert "Lemonade" not in query_routes._terminal_error_detail(exc)
 
 
 # ---------------------------------------------------------------------------

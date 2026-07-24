@@ -218,6 +218,9 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     padding: 16px;
+    /* Self-contained alignment: don't inherit center from a centered ancestor
+       (e.g. .welcome-inner when embedded on the home screen). */
+    text-align: left;
     cursor: pointer;
     transition: all 200ms ease;
     position: relative;

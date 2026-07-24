@@ -933,6 +933,69 @@ class TestReadToolsSandbox:
         assert self._denied(result)
         assert "999999" not in str(result)
 
+    def test_analyze_data_file_denies_before_existence_probe(
+        self, sandboxed_read_tools
+    ):
+        """A nonexistent out-of-sandbox path returns access-denied, not a
+        'File not found' existence oracle."""
+        tools, _, secret_dir = sandboxed_read_tools
+        missing = str(secret_dir / "does_not_exist.csv")
+
+        result = tools["analyze_data_file"](missing)
+
+        assert self._denied(result)
+        assert "not found" not in result.get("error", "").lower()
+
+    def test_analyze_data_file_denies_unsupported_ext_before_sandbox(
+        self, sandboxed_read_tools
+    ):
+        """An out-of-sandbox file with an unsupported extension returns the same
+        access-denied refusal as a supported one — no file-type oracle."""
+        tools, _, secret_dir = sandboxed_read_tools
+        secret = secret_dir / "notes.txt"
+        secret.write_text("nobody should learn this file exists", encoding="utf-8")
+
+        result = tools["analyze_data_file"](str(secret))
+
+        assert self._denied(result)
+        assert "unsupported" not in result.get("error", "").lower()
+
+    def test_analyze_data_file_rag_fallback_resolves_only_in_sandbox(
+        self, tmp_path, monkeypatch
+    ):
+        """The indexed-basename fallback still resolves a document inside the
+        sandbox, but a basename with no in-sandbox index match is denied — so the
+        fallback cannot launder an out-of-sandbox existence probe."""
+        from types import SimpleNamespace
+
+        from gaia import security as _security
+        from gaia.security import PathValidator
+
+        monkeypatch.setattr(_security, "_is_interactive", lambda: False)
+
+        safe_dir = tmp_path / "safe"
+        safe_dir.mkdir()
+        secret_dir = tmp_path / "secret"
+        secret_dir.mkdir()
+        indexed = safe_dir / "report.csv"
+        indexed.write_text("name,amount\nalice,10\n", encoding="utf-8")
+
+        inst = _StubMixin()
+        inst.path_validator = PathValidator(allowed_paths=[str(safe_dir)])
+        inst.rag = SimpleNamespace(indexed_files=[str(indexed)])
+        inst.register_file_search_tools()
+        analyze = _TOOL_REGISTRY["analyze_data_file"]["function"]
+
+        # An out-of-sandbox path whose basename matches an in-sandbox indexed
+        # document resolves to that document (fuzzy fallback preserved).
+        ok = analyze(str(secret_dir / "report.csv"))
+        assert ok.get("status") == "success"
+        assert ok.get("row_count") == 1
+
+        # A basename with no in-sandbox index match is denied uniformly.
+        denied = analyze(str(secret_dir / "other.csv"))
+        assert self._denied(denied)
+
     def test_read_file_no_validator_still_reads(self, read_file_fn, tmp_path):
         """A mixin host with no PathValidator keeps working (backward compat)."""
         f = tmp_path / "plain.txt"

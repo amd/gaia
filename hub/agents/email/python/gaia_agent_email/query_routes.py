@@ -50,6 +50,7 @@ from __future__ import annotations
 import asyncio
 import json
 import queue
+import re
 import threading
 import uuid
 from typing import Any, Dict, List, Optional
@@ -102,6 +103,10 @@ class _QueryRun:
         self.agent = agent
         self.handler = handler
         self.cancel_event = threading.Event()
+        # ``process_query``'s return dict, captured so the stream can surface the
+        # agent's own computed answer if the run ends without streaming a
+        # terminal event (see ``_terminal_from_run_result``, #2444).
+        self.result: Optional[Dict[str, Any]] = None
 
 
 class _RunRegistry:
@@ -226,17 +231,167 @@ def _sse(event: Dict[str, Any]) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
+def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Build a terminal event from ``process_query``'s return dict (#2444).
+
+    The base agent handles some failures — Lemonade unreachable being the most
+    common for ``gaia email -q`` — *inside* its loop: it sets an actionable
+    ``final_answer`` and breaks WITHOUT calling ``print_final_answer``, so no
+    ``answer`` event ever reaches the SSE handler. The Agent UI surfaces that
+    copy because the loop returns it; the CLI's terminal-error path used to fall
+    back to a generic "no final answer" here, dropping the actionable message.
+    Surface the agent's own ``result`` so both front-doors show the same copy.
+    """
+    text: Optional[str] = None
+    status: Optional[str] = None
+    if isinstance(result, dict):
+        raw = result.get("result") or result.get("answer")
+        if isinstance(raw, str) and raw.strip():
+            text = raw.strip()
+        status = result.get("status")
+    if text is None:
+        # No computed answer either — keep failing loudly, never silently.
+        return {
+            "type": "error",
+            "detail": "The agent finished without producing a final answer.",
+            "status": 500,
+        }
+    if status == "success":
+        return {"type": "final", "answer": text}
+    return {"type": "error", "detail": text, "status": 500}
+
+
+# ---------------------------------------------------------------------------
+# Terminal-error classification (issue #2139)
+# ---------------------------------------------------------------------------
+
+# Connection-establishment fragments of the ``requests`` / ``urllib3`` /
+# ``httpx`` error reprs a down Lemonade Server produces. Those transport errors
+# are siblings of the builtin ``ConnectionError`` (under ``OSError``, or under
+# ``httpx.HTTPError``), so an ``isinstance`` check alone misses them — the string
+# shape is the reliable signal. Deliberately narrow: a non-match falls through to
+# the raw exception text so unrelated failures are never masked.
+#
+# Timeouts are intentionally NOT matched. A not-running local Lemonade refuses
+# the connection instantly (ECONNREFUSED) — it does not time out; a *timeout*
+# means a server is up-but-slow, or the fault is a different host entirely (the
+# Gmail/Outlook backends use ``httpx`` with their own timeouts, so a Gmail
+# ``ReadTimeout`` must NOT be relabelled "Lemonade unreachable — start it").
+_LEMONADE_DOWN_RE = re.compile(
+    r"connection\s+(?:refused|reset|aborted|error)"
+    r"|connectionerror"
+    r"|connection\s*pool"
+    r"|failed to establish a new connection"
+    r"|max retries exceeded"
+    r"|newconnectionerror"
+    r"|could\s*n[o']t\s+(?:reach|connect|resolve)"
+    r"|no route to host"
+    r"|name or service not known"
+    r"|not reachable",
+    re.IGNORECASE,
+)
+
+#: Where a user looks next — kept as a constant so tests assert on it and the
+#: copy stays stable. Matches the sidecar's other Lemonade-down guidance
+#: (``api_routes._assert_lemonade_reachable``).
+_LEMONADE_DOCS_URL = "https://amd-gaia.ai/docs/guides/email"
+
+
+def _flatten_exception_text(exc: BaseException) -> str:
+    """Join ``str()`` of *exc* and its ``__cause__`` / ``__context__`` chain.
+
+    A transport error is often wrapped (``raise ... from e``), so the
+    connection-shaped detail can live on a cause rather than the outer
+    exception. Cycle-guarded against pathological exception graphs.
+    """
+    parts: List[str] = []
+    cur: Optional[BaseException] = exc
+    seen: set = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        text = str(cur)
+        parts.append(text if text else type(cur).__name__)
+        cur = cur.__cause__ or cur.__context__
+    return "\n".join(parts)
+
+
+def _is_lemonade_unreachable(exc: BaseException) -> bool:
+    """True when *exc* (or its cause chain) is a Lemonade-unreachable failure.
+
+    Two signals: a builtin ``ConnectionError`` anywhere in the cause chain
+    (``ConnectionRefusedError`` / ``ConnectionResetError`` all subclass it),
+    and — for the ``requests`` / ``httpx`` / ``urllib3`` errors that are NOT
+    builtin ``ConnectionError`` subclasses — the connection-shaped repr.
+    """
+    cur: Optional[BaseException] = exc
+    seen: set = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, ConnectionError):
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return bool(_LEMONADE_DOWN_RE.search(_flatten_exception_text(exc)))
+
+
+def _terminal_error_detail(exc: BaseException) -> str:
+    """Build the ``agent_error`` content for a failed ``/query`` run.
+
+    A Lemonade-unreachable failure — the most common consumer failure — gets
+    the standard actionable guidance (what failed, what to do, where to look),
+    with the original exception appended (never replacing it) for debugging.
+    Every other exception passes through as ``str(exc)`` so a genuinely
+    unexpected failure is surfaced verbatim, not masked behind a Lemonade
+    message.
+    """
+    if not _is_lemonade_unreachable(exc):
+        return str(exc)
+
+    try:
+        from gaia_agent_email.model_select import _resolve_probe_base
+
+        target = _resolve_probe_base(None)
+    except Exception as resolve_exc:  # noqa: BLE001
+        # Naming the exact URL is cosmetic; never let message-building throw and
+        # lose the original error. Log so the resolution failure isn't silent.
+        logger.debug(
+            "could not resolve Lemonade base URL for error copy: %s", resolve_exc
+        )
+        target = "the local Lemonade Server"
+
+    raw = str(exc) or type(exc).__name__
+    return (
+        f"Local Lemonade Server is not reachable at {target}. The email agent "
+        "runs local inference, so it needs Lemonade Server running. Start it "
+        "with `lemonade-server serve` (or run `gaia init`), then retry. "
+        f"Docs: {_LEMONADE_DOCS_URL}"
+        f"\n\nTechnical details: {raw}"
+    )
+
+
+#: Human labels for the confirmation-gated actions the chat surface can end on.
+_CONFIRMATION_LABELS = {
+    "send_now": "Sending this email",
+    "send_draft": "Sending this draft",
+    "forward_message": "Forwarding this email",
+    "quarantine_phishing_message": "Quarantining this message",
+    "unquarantine_message": "Restoring this message from quarantine",
+    "archive_message": "Archiving this message",
+}
+
+
 def _confirmation_refusal(action: str) -> Dict[str, Any]:
-    """The terminal ``final`` that ends the stateless-stub confirmation flow (D1)."""
+    """The terminal ``final`` that ends a confirmation-gated step (spec D1).
+
+    Plain-language for the chat surface — no internal REST contract, no jargon.
+    The gate itself is deliberate; the message states nothing was sent.
+    """
+    subject = _CONFIRMATION_LABELS.get(action, f"The '{action}' action")
     return {
         "type": "final",
         "answer": (
-            f"This step needs your confirmation to run '{action}', which the "
-            "/query endpoint does not perform yet (it runs stateless, per epic "
-            "decision D1 — no server-side resume). To complete a destructive or "
-            "external action, use the fixed-function route: POST /v1/email/draft "
-            "to mint a single-use confirmation token, then POST /v1/email/send "
-            "(or the matching /archive, /quarantine, /calendar route) with it."
+            f"{subject} needs your explicit confirmation before it runs — an "
+            "intentional safety gate on sending email and other external or "
+            "destructive actions. Nothing has been sent."
         ),
     }
 
@@ -340,12 +495,17 @@ async def query(request: QueryRequest) -> StreamingResponse:
     def _run_agent() -> None:
         try:
             if max_steps is not None:
-                agent.process_query(user_query, max_steps=max_steps)
+                run.result = agent.process_query(user_query, max_steps=max_steps)
             else:
-                agent.process_query(user_query)
+                run.result = agent.process_query(user_query)
         except Exception as exc:  # surface loudly as a terminal error event
             logger.exception("email /query run failed for run_id=%s", run.run_id)
-            handler._emit({"type": "agent_error", "content": str(exc)})
+            # Lemonade-down is the most common failure; emit actionable copy
+            # (never the raw urllib3/requests repr) while leaving genuinely
+            # unexpected errors verbatim — see _terminal_error_detail (#2139).
+            handler._emit(
+                {"type": "agent_error", "content": _terminal_error_detail(exc)}
+            )
         finally:
             handler.signal_done()
 
@@ -390,14 +550,12 @@ async def query(request: QueryRequest) -> StreamingResponse:
                 if canonical.get("type") in TERMINAL_TYPES:
                     terminated = True
             if not terminated:
-                # No final/error was produced — fail loud rather than close silently.
-                yield _sse(
-                    {
-                        "type": "error",
-                        "detail": "The agent finished without producing a final answer.",
-                        "status": 500,
-                    }
-                )
+                # No final/error streamed — the loop may have set an actionable
+                # answer on an internal error branch (e.g. Lemonade unreachable)
+                # and returned it without emitting an ``answer`` event. Surface
+                # that computed message so the CLI shows the same copy the Agent
+                # UI does, falling back to a loud generic error (#2444).
+                yield _sse(_terminal_from_run_result(run.result))
         finally:
             # If the client disconnected mid-run, ask the loop to stop.
             handler.cancelled.set()

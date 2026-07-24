@@ -15,17 +15,21 @@ from gaia.ui.server import create_app
 def make_mock_registry(*agent_specs):
     """Create a mock AgentRegistry with the given agents.
 
-    Each spec is ``(agent_id, name)`` or ``(agent_id, name, min_memory_gb)``
-    for tests that exercise the memory-requirement field.
+    Each spec is ``(agent_id, name)``, ``(agent_id, name, min_memory_gb)``,
+    or ``(agent_id, name, min_memory_gb, required_connections)`` for tests
+    that exercise the memory-requirement or required-connections fields.
     """
     registry = MagicMock(spec=AgentRegistry)
     registrations = []
     for spec in agent_specs:
-        if len(spec) == 3:
+        min_memory_gb = None
+        required_connections = []
+        if len(spec) == 4:
+            agent_id, name, min_memory_gb, required_connections = spec
+        elif len(spec) == 3:
             agent_id, name, min_memory_gb = spec
         else:
             agent_id, name = spec
-            min_memory_gb = None
         reg = AgentRegistration(
             id=agent_id,
             name=name,
@@ -36,6 +40,7 @@ def make_mock_registry(*agent_specs):
             agent_dir=None,
             models=[],
             min_memory_gb=min_memory_gb,
+            required_connections=required_connections or [],
         )
         registrations.append(reg)
 
@@ -194,9 +199,23 @@ class TestInstalledSidecarAgentsMerge:
         assert data["agents"][0]["name"] == "Email"  # spec.display_name
 
     def test_registry_entry_wins_over_sidecar(self):
-        """A registered (wheel) email is not duplicated by the sidecar merge."""
+        """A registered (wheel) email is not duplicated by the sidecar merge.
+
+        Gives the mock registration a non-empty required_connections (#2408)
+        so this also locks in that a registry-sourced sidecar registration
+        (e.g. from register_installed_sidecars) surfaces its connector
+        requirements through this same union path, not just its name.
+        """
+        from gaia.connectors.providers.base import ConnectorRequirement
+
+        cr = ConnectorRequirement(
+            connector_id="google",
+            scopes=["https://www.googleapis.com/auth/gmail.modify"],
+        )
         app = create_app(db_path=":memory:")
-        app.state.agent_registry = make_mock_registry(("email", "Email (wheel)"))
+        app.state.agent_registry = make_mock_registry(
+            ("email", "Email (wheel)", None, [cr])
+        )
         client = TestClient(app)
         with (
             patch(
@@ -209,6 +228,7 @@ class TestInstalledSidecarAgentsMerge:
         emails = [a for a in data["agents"] if a["id"] == "email"]
         assert len(emails) == 1
         assert emails[0]["name"] == "Email (wheel)"
+        assert emails[0]["required_connections"] != []
 
     def test_uninstalled_sidecar_agent_absent(self):
         """No install sentinel → the agent is NOT phantom-listed."""

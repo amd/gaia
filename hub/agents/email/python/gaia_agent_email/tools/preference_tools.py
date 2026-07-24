@@ -3,12 +3,18 @@
 """Persistent preference tools mixin for ``EmailTriageAgent``.
 
 These tools mutate ``self._session_preferences`` on the agent instance and
-persist the current snapshot to the agent's MemoryStore so that preferences
-survive across restarts.  On agent construction, ``_load_persisted_preferences``
-seeds ``_session_preferences`` from the stored snapshot.
+persist the current snapshot to the agent's ``state.db`` (the same durable
+SQLite store the trust ledger uses) so that preferences survive across
+restarts.  On agent construction, ``_load_persisted_preferences`` seeds
+``_session_preferences`` from the stored snapshot.
 
-When memory is disabled (``self._memory_store is None``) the tools still work
-in-process — they just cannot persist between sessions.
+Preferences are structured key/values, so they live in ``state.db`` and do
+NOT depend on the embedding model or the embedding-backed MemoryStore — they
+persist even when memory v2 is unavailable (e.g. the embedding model 404s
+from Lemonade). Persistence is skipped only in incognito mode (deliberate,
+privacy) or when the ``state.db`` handle is not ready (degraded); both are
+genuine session-only states, and the tools report them honestly via a
+``persisted`` flag rather than claiming a durable save.
 
 Tools registered:
 
@@ -24,7 +30,8 @@ The first three tools are consulted by ``triage_inbox`` and
 from __future__ import annotations
 
 import json
-from typing import Any, Dict
+import time
+from typing import Any, Dict, Optional
 
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email.tools.triage_heuristics import (
@@ -37,12 +44,103 @@ from gaia.logger import get_logger
 
 log = get_logger(__name__)
 
-# Stable entity key used to store the single preferences record in MemoryStore.
-# Using a unique entity means get_by_entity() always returns at most one record,
-# giving us a clean upsert path: retrieve → update(id) if exists, store() if not.
-_PREF_ENTITY = "email:preferences"
-_PREF_DOMAIN = "email_agent_prefs"
-_PREF_CATEGORY = "preference"
+# Single-row key under which the JSON preferences snapshot is stored in the
+# ``email_preferences`` table. One fixed key means the upsert always touches at
+# most one row, so the record count stays at one.
+_PREF_STATE_KEY = "session_preferences"
+
+# Legacy entity key: versions <= v0.5.0 stored the preferences snapshot in the
+# embedding-backed MemoryStore under this key. On the first load after upgrade,
+# ``_load_persisted_preferences`` reads it once (when ``state.db`` has no row)
+# and writes it through to ``state.db`` so nothing is silently dropped (#2427).
+_LEGACY_PREF_ENTITY = "email:preferences"
+
+# state.db schema for preferences. Mirrors the trust ledger's storage choice:
+# structured operational state lives in ``state.db`` via ``DatabaseMixin``, not
+# in the embedding-backed MemoryStore — so preferences persist without the
+# embedding model. A single JSON blob keeps the round-trip identical to the
+# prior ``_snapshot`` serialization; the read path consumes the whole snapshot.
+EMAIL_PREFERENCES_DDL = """
+CREATE TABLE IF NOT EXISTS email_preferences (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at REAL NOT NULL
+);
+"""
+
+# Persistence outcome, surfaced to the caller so the assistant can be honest
+# about whether a rule is durable or session-only.
+_PERSIST_OK = "persisted"  # written durably to state.db
+_PERSIST_INCOGNITO = "incognito"  # deliberate session-only (privacy, #1666)
+_PERSIST_UNAVAILABLE = "unavailable"  # state.db handle not ready (degraded)
+
+# Human-readable note the tools attach when a rule could NOT be persisted, so
+# the LLM tells the user it is session-only instead of claiming "going forward".
+_SESSION_ONLY_NOTE = {
+    _PERSIST_INCOGNITO: (
+        "Incognito mode is on, so this rule applies for THIS SESSION ONLY "
+        "and was not saved."
+    ),
+    _PERSIST_UNAVAILABLE: (
+        "Persistent storage is unavailable, so this rule applies for THIS "
+        "SESSION ONLY and was not saved."
+    ),
+}
+
+
+def init_preferences_schema(db: Any) -> None:
+    """Create the single-row ``email_preferences`` table if absent. Idempotent.
+
+    Called from ``EmailTriageAgent.__init__`` alongside the other
+    ``init_schema`` calls (action/schedule/task/trust), before ``init_memory``
+    and ``_load_persisted_preferences``.
+    """
+    db.execute(EMAIL_PREFERENCES_DDL)
+
+
+def _save_preferences_to_db(
+    db: Any, snapshot: Dict[str, Any], now: Optional[float] = None
+) -> None:
+    """Upsert the one preferences row (JSON blob) into ``state.db``.
+
+    Wrapped in a transaction so the write commits — ``db.query()`` alone does
+    not (matches ``trust.record_outcome``). The atomic ``ON CONFLICT`` upsert
+    keeps the row count at one even if a scheduler-built agent and the live
+    session agent write concurrently to the shared on-disk DB.
+    """
+    ts = time.time() if now is None else now
+    content = json.dumps(snapshot)
+    with db.transaction():
+        db.query(
+            "INSERT INTO email_preferences (key, value, updated_at) "
+            "VALUES (:k, :v, :ts) "
+            "ON CONFLICT(key) DO UPDATE SET value = :v, updated_at = :ts",
+            {"k": _PREF_STATE_KEY, "v": content, "ts": ts},
+        )
+
+
+def _load_preferences_from_db(db: Any) -> Optional[Dict[str, Any]]:
+    """Return the persisted snapshot dict, or None if absent/corrupt.
+
+    A corrupt row is tolerated (logged, treated as absent) rather than crashing
+    agent startup — it is a local cache read, and the empty defaults are a safe
+    starting point. This is fail-soft on a read, not a silent write fallback.
+    """
+    row = db.query(
+        "SELECT value FROM email_preferences WHERE key = :k",
+        {"k": _PREF_STATE_KEY},
+        one=True,
+    )
+    if not row:
+        return None
+    try:
+        return json.loads(row["value"])
+    except (json.JSONDecodeError, TypeError):
+        log.warning(
+            "preference_tools: failed to parse persisted preferences from "
+            "state.db; starting with empty defaults"
+        )
+        return None
 
 
 # Categories that accept a session-level default action. Keep this set
@@ -104,47 +202,60 @@ def _snapshot(prefs: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _persist_preferences(agent: Any) -> None:
-    """Write the current snapshot to MemoryStore under a stable entity key.
+def _persist_preferences(agent: Any) -> str:
+    """Write the current snapshot to ``state.db``; return a ``_PERSIST_*`` status.
 
-    Uses an idempotent upsert:
-    - If a record already exists for ``_PREF_ENTITY``, update it in-place
-      (``store.update(id, content=...)``) so the record count stays at one.
-    - If no record exists yet, create it with ``store.store(...)``.
+    Preferences are structured key/values stored in the agent's ``state.db``
+    (like the trust ledger), so persistence does NOT depend on the embedding
+    model or MemoryStore — they survive even when the embedder is absent. The
+    write is skipped only in two genuine session-only states, each reported to
+    the caller so it is surfaced honestly rather than as a durable save:
 
-    When ``agent._memory_store is None`` (memory disabled via
-    ``GAIA_MEMORY_DISABLED=1`` or Lemonade unreachable at startup),
-    the write is silently skipped — preferences remain in-process only.
-    This is an explicit opt-out / degraded state, not a generic fallback.
+    - ``_PERSIST_UNAVAILABLE`` — the ``state.db`` handle is not ready
+      (``db_ready`` is False, or ``_session_preferences`` is unset).
+    - ``_PERSIST_INCOGNITO`` — a *deliberate* incognito session: ``_incognito``
+      is True AND a real ``_memory_store`` exists (the #1666 runtime privacy
+      toggle, or ``config.memory_enabled=False``). Such a session must not
+      write to persistent storage.
 
-    When the agent is in incognito mode (``agent._incognito is True``),
-    the write is also skipped — incognito sessions never write to persistent
-    storage, matching the MemoryMixin invariant.
+    Crucially, ``_memory_store is None`` is NOT treated as incognito even though
+    ``memory.py`` flips ``_incognito`` True when it tears memory down: that
+    happens on *involuntary* degradation (embedding model absent /
+    ``GAIA_MEMORY_DISABLED=1``), which is the very case #2427 is about. There
+    the preference still persists to state.db — the same store the trust/action
+    ledgers already write to in that state.
+
+    Otherwise the snapshot is upserted and ``_PERSIST_OK`` is returned.
     """
+    if not getattr(agent, "db_ready", False):
+        return _PERSIST_UNAVAILABLE
+
     store = getattr(agent, "_memory_store", None)
-    if store is None or getattr(agent, "_incognito", False):
-        return
+    if getattr(agent, "_incognito", False) and store is not None:
+        return _PERSIST_INCOGNITO
 
     prefs = getattr(agent, "_session_preferences", None)
     if prefs is None:
-        return
+        return _PERSIST_UNAVAILABLE
 
-    content = json.dumps(_snapshot(prefs))
-    context = getattr(agent, "_memory_context", "email")
+    _save_preferences_to_db(agent, _snapshot(prefs))
+    return _PERSIST_OK
 
-    existing = store.get_by_entity(_PREF_ENTITY)
-    if existing:
-        store.update(existing[0]["id"], content=content)
-    else:
-        store.store(
-            category=_PREF_CATEGORY,
-            content=content,
-            domain=_PREF_DOMAIN,
-            entity=_PREF_ENTITY,
-            context=context,
-            confidence=1.0,
-            source="preference_tools",
-        )
+
+def _persistence_fields(status: str) -> Dict[str, Any]:
+    """Envelope fields describing whether a preference write was durable.
+
+    ``persisted`` is the boolean the assistant keys off: True → the rule is
+    saved and honored in future sessions; False → session-only, and ``note``
+    explains why so the assistant never claims the rule applies "going forward".
+    """
+    fields: Dict[str, Any] = {
+        "persisted": status == _PERSIST_OK,
+        "persistence": status,
+    }
+    if status != _PERSIST_OK:
+        fields["note"] = _SESSION_ONLY_NOTE[status]
+    return fields
 
 
 class PreferenceToolsMixin:
@@ -156,33 +267,34 @@ class PreferenceToolsMixin:
     """
 
     def _load_persisted_preferences(self) -> None:
-        """Seed ``_session_preferences`` from the persisted memory record.
+        """Seed ``_session_preferences`` from the ``state.db`` snapshot.
 
-        Called from ``EmailTriageAgent.__init__`` after ``init_memory()`` so
-        that preferences set in a previous session are immediately available.
+        Called from ``EmailTriageAgent.__init__`` after ``init_db()`` /
+        ``init_preferences_schema()`` so that preferences set in a previous
+        session are immediately available — independent of the embedding model.
 
         When no record exists (first run or after ``clear_session_preferences``
-        wiped everything) or when memory is off, the empty default set by
-        ``init_session_preferences()`` is left untouched. "Off" means either
-        ``_memory_store is None`` (never initialized) or ``_incognito`` (the
-        runtime toggle, #1666) — an incognito agent must not read stored
-        personalization back into the session.
+        wiped everything), the empty default set by ``init_session_preferences()``
+        is left untouched. The read is skipped when the ``state.db`` handle is
+        not ready, and in a *deliberate* incognito session (``_incognito`` with a
+        real ``_memory_store`` — the #1666 privacy toggle) so stored
+        personalization is not read back. It mirrors ``_persist_preferences``:
+        an involuntary memory-off state (``_memory_store is None``, embedder
+        absent) still loads persisted preferences.
         """
+        if not getattr(self, "db_ready", False):
+            return
         store = getattr(self, "_memory_store", None)
-        if store is None or getattr(self, "_incognito", False):
+        if getattr(self, "_incognito", False) and store is not None:
             return
 
-        existing = store.get_by_entity(_PREF_ENTITY)
-        if not existing:
-            return
-
-        try:
-            data = json.loads(existing[0]["content"])
-        except (json.JSONDecodeError, KeyError, TypeError):
-            log.warning(
-                "preference_tools: failed to parse persisted preferences; "
-                "starting with empty defaults"
-            )
+        data = _load_preferences_from_db(self)
+        if not data:
+            # One-time upgrade path: no state.db row yet, but a pre-v0.5.1 build
+            # may have persisted preferences to the MemoryStore. Migrate them so
+            # they are not silently dropped on upgrade.
+            data = self._migrate_legacy_preferences()
+        if not data:
             return
 
         prefs = getattr(self, "_session_preferences", None)
@@ -195,12 +307,54 @@ class PreferenceToolsMixin:
         prefs["low_priority_senders"] = set(data.get("low_priority_senders") or [])
         prefs["category_defaults"] = dict(data.get("category_defaults") or {})
 
+    def _migrate_legacy_preferences(self) -> Optional[Dict[str, Any]]:
+        """Seed from the legacy MemoryStore preferences record, once.
+
+        Versions <= v0.5.0 stored the preferences snapshot in the embedding-backed
+        MemoryStore under ``_LEGACY_PREF_ENTITY``. When ``state.db`` has no row
+        (fresh after upgrade) and that legacy record exists, read it, write it
+        through to ``state.db`` so future loads use the state.db fast path, and
+        return the snapshot. Returns ``None`` when there is nothing to migrate.
+
+        A corrupt legacy record is treated as absent (logged) rather than
+        crashing startup — a fail-soft read, not a silent write fallback.
+        """
+        store = getattr(self, "_memory_store", None)
+        if store is None or not hasattr(store, "get_by_entity"):
+            return None
+        existing = store.get_by_entity(_LEGACY_PREF_ENTITY)
+        if not existing:
+            return None
+        try:
+            data = json.loads(existing[0]["content"])
+        except (json.JSONDecodeError, KeyError, TypeError, IndexError):
+            log.warning(
+                "preference_tools: legacy MemoryStore preferences record is "
+                "unreadable; starting with empty defaults"
+            )
+            return None
+        snapshot = {
+            "priority_senders": sorted(data.get("priority_senders") or []),
+            "low_priority_senders": sorted(data.get("low_priority_senders") or []),
+            "category_defaults": dict(data.get("category_defaults") or {}),
+        }
+        _save_preferences_to_db(self, snapshot)
+        log.info(
+            "preference_tools: migrated %d priority / %d low-priority sender(s) "
+            "and %d category default(s) from the legacy MemoryStore record to "
+            "state.db (#2427)",
+            len(snapshot["priority_senders"]),
+            len(snapshot["low_priority_senders"]),
+            len(snapshot["category_defaults"]),
+        )
+        return snapshot
+
     def _register_preference_tools(self) -> None:
         agent = self  # captured for live access to ``_session_preferences``
 
         @tool
         def set_priority_sender(email: str) -> str:
-            """Mark a sender as always urgent across sessions.
+            """Mark a sender as always urgent.
 
             Senders flagged here bypass the triage heuristic entirely —
             ``triage_inbox`` and ``pre_scan_inbox`` will classify their
@@ -208,7 +362,14 @@ class PreferenceToolsMixin:
             Gmail labels. Useful for high-signal senders the heuristic
             can't recognize on its own (e.g. ``boss@company.com``).
 
-            Preferences persist across agent restarts.
+            On a normally-provisioned install this rule is saved to the
+            agent's local state database and is honored in future sessions.
+            The result reports the outcome: ``persisted: true`` means the
+            rule is durable; ``persisted: false`` (incognito, or persistent
+            storage unavailable — see ``note``) means it applies to THIS
+            SESSION ONLY. When ``persisted`` is false, tell the user the rule
+            is session-only and was not saved — never that it applies
+            "going forward".
 
             Args:
                 email: A bare email address, e.g. ``alice@example.com``.
@@ -229,11 +390,12 @@ class PreferenceToolsMixin:
                 # priority designation supersedes — silently drop the
                 # contradicting flag.
                 prefs["low_priority_senders"].discard(normalized)
-                _persist_preferences(agent)
+                status = _persist_preferences(agent)
                 return _envelope_ok(
                     {
                         "added": normalized,
                         "preferences": _snapshot(prefs),
+                        **_persistence_fields(status),
                     }
                 )
             except Exception as exc:
@@ -242,14 +404,21 @@ class PreferenceToolsMixin:
 
         @tool
         def set_low_priority_sender(email: str) -> str:
-            """Mark a sender as always low-priority across sessions.
+            """Mark a sender as always low-priority.
 
             Senders flagged here are classified as ``low priority`` and
             surfaced in ``pre_scan_inbox``'s ``suggested_archives``
             section. Useful for newsletters or bot accounts the
             heuristic can't recognize on its own.
 
-            Preferences persist across agent restarts.
+            On a normally-provisioned install this rule is saved to the
+            agent's local state database and is honored in future sessions.
+            The result reports the outcome: ``persisted: true`` means the
+            rule is durable; ``persisted: false`` (incognito, or persistent
+            storage unavailable — see ``note``) means it applies to THIS
+            SESSION ONLY. When ``persisted`` is false, tell the user the rule
+            is session-only and was not saved — never that it applies
+            "going forward".
 
             Args:
                 email: A bare email address, e.g.
@@ -268,11 +437,12 @@ class PreferenceToolsMixin:
                 # Same conflict resolution as set_priority_sender —
                 # later wins.
                 prefs["priority_senders"].discard(normalized)
-                _persist_preferences(agent)
+                status = _persist_preferences(agent)
                 return _envelope_ok(
                     {
                         "added": normalized,
                         "preferences": _snapshot(prefs),
+                        **_persistence_fields(status),
                     }
                 )
             except Exception as exc:
@@ -281,7 +451,7 @@ class PreferenceToolsMixin:
 
         @tool
         def set_category_default(category: str, action: str) -> str:
-            """Set a default action for a triage category, persisted across restarts.
+            """Set a default action for a triage category.
 
             Currently supports two categories — ``FYI`` and
             ``PROMOTIONAL`` — with two possible actions: ``archive``
@@ -291,7 +461,14 @@ class PreferenceToolsMixin:
             ``keep``: the safety cost of silently archiving important
             mail is too high.
 
-            Preferences persist across agent restarts.
+            On a normally-provisioned install this default is saved to the
+            agent's local state database and is honored in future sessions.
+            The result reports the outcome: ``persisted: true`` means it is
+            durable; ``persisted: false`` (incognito, or persistent storage
+            unavailable — see ``note``) means it applies to THIS SESSION ONLY.
+            When ``persisted`` is false, tell the user the default is
+            session-only and was not saved — never that it applies
+            "going forward".
 
             Args:
                 category: One of ``"FYI"`` or ``"PROMOTIONAL"``.
@@ -319,12 +496,13 @@ class PreferenceToolsMixin:
                     prefs["category_defaults"].pop(cat, None)
                 else:
                     prefs["category_defaults"][cat] = act
-                _persist_preferences(agent)
+                status = _persist_preferences(agent)
                 return _envelope_ok(
                     {
                         "category": cat,
                         "action": act,
                         "preferences": _snapshot(prefs),
+                        **_persistence_fields(status),
                     }
                 )
             except Exception as exc:
@@ -337,8 +515,12 @@ class PreferenceToolsMixin:
 
             Resets ``priority_senders``, ``low_priority_senders``, and
             ``category_defaults`` to empty without restarting the agent.
-            The cleared state is also persisted so a fresh session starts
-            empty. Use when the user wants a clean slate.
+            On a normally-provisioned install the cleared state is also
+            saved so a fresh session starts empty; the result's
+            ``persisted`` flag reports whether that durable clear happened
+            (``false`` in incognito or when storage is unavailable — in
+            which case only the current session was cleared). Use when the
+            user wants a clean slate.
 
             Mutates the existing dict in place rather than rebinding to
             a fresh one. Read-side tools currently look up the dict via
@@ -355,11 +537,12 @@ class PreferenceToolsMixin:
                 prefs["priority_senders"].clear()
                 prefs["low_priority_senders"].clear()
                 prefs["category_defaults"].clear()
-                _persist_preferences(agent)
+                status = _persist_preferences(agent)
                 return _envelope_ok(
                     {
                         "cleared": True,
                         "preferences": _snapshot(prefs),
+                        **_persistence_fields(status),
                     }
                 )
             except Exception as exc:

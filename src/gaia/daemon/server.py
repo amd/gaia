@@ -167,6 +167,15 @@ def run(host: str = HOST) -> None:
         custody_base_url=custody_base_url,
     )
 
+    from gaia.daemon.forward_refresh import ForwardRefresher
+
+    # Keep forwarded connector tokens fresh for the life of each sidecar (#2388
+    # / #2159). Without this the on-spawn forward is the ONLY forward, so the
+    # token expires (~1h) and the sidecar 401s until restarted. Started after
+    # the port is up; stopped before shutdown_all so it never re-forwards to a
+    # sidecar that is about to die.
+    refresher = ForwardRefresher(registry, forwarder)
+
     from gaia.daemon.broker import ModelSlotBroker
     from gaia.daemon.constants import BROKER_URL_ENV_VAR
 
@@ -188,9 +197,11 @@ def run(host: str = HOST) -> None:
                 pid=pid, port=port, token=token, host=host, started_at=started_at
             )
         )
+        refresher.start()
         logger.info("daemon: registered instance pid=%s port=%s", pid, port)
 
     def _deregister() -> None:
+        refresher.stop()
         registry.shutdown_all()
         custody_store.close()
         remove_instance(only_pid=pid)

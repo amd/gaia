@@ -620,7 +620,7 @@ def render_endpoint_spec_html() -> str:
     archive_block = _endpoint_block(
         path="/v1/email/archive",
         description=(
-            "Archive a message — gated on confirmation, reversible for 30s. The "
+            "Archive a message — gated on confirmation, reversible for 120s. The "
             "gate fires FIRST: no valid token for this (action='archive', "
             "message_id) is rejected with HTTP 403 before any backend call. "
             "Returns a batch_id undo handle and the post_archive_id (the id a "
@@ -646,7 +646,7 @@ def render_endpoint_spec_html() -> str:
         path="/v1/email/quarantine",
         description=(
             "Quarantine a phishing message — gated on confirmation, reversible "
-            "for 30s. Applies the GAIA_PHISHING_QUARANTINE label and removes the "
+            "for 120s. Applies the GAIA_PHISHING_QUARANTINE label and removes the "
             "message from the inbox. The gate fires FIRST (HTTP 403 without a "
             "valid token). Refuses is_phishing=false with HTTP 400."
         ),
@@ -913,7 +913,8 @@ def render_endpoint_spec_html() -> str:
   Reversible mailbox mutations exposed on the contract (#1779). Each acts on the
   mailbox connected in GAIA on the host and is gated on a single-use confirmation
   token from <code>/v1/email/confirm</code> — the same explicit-confirmation rule as
-  <code>/v1/email/send</code>. Both are reversible within a 30-second undo window via
+  <code>/v1/email/send</code>. Both are reversible within a 120-second undo
+  window (configurable via <code>GAIA_EMAIL_UNDO_WINDOW_SECONDS</code>) via
   the ungated <code>/unarchive</code> · <code>/unquarantine</code>.
 </p>
 

@@ -491,8 +491,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                                 status.model_loaded = m_name
                             status.model_device = m.get("device")
                             # Actual loaded context size (preferred over catalog
-                            # default). Use `is not None` so ctx_size=0 triggers
-                            # a warning.
+                            # default).
                             ctx = m.get("recipe_options", {}).get("ctx_size")
                             if ctx is not None:
                                 status.model_context_size = ctx
@@ -578,9 +577,13 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                     except Exception:
                         pass  # Don't block status on catalog failure
 
-                # Validate context size sufficiency only when we have a real value.
-                # Use `is not None` so ctx_size=0 correctly triggers a warning.
-                if status.model_context_size is not None:
+                # Validate context size sufficiency only when we have a real,
+                # positive reading. A ctx of 0 means "not yet measured" —
+                # Lemonade reports 0/absent until the model's real context is
+                # populated — so treat it as unknown and keep the safe default
+                # (don't warn) rather than firing a false "too small" alarm on
+                # load. Once a genuine ctx arrives, the next poll re-evaluates.
+                if status.model_context_size:
                     status.context_size_sufficient = (
                         status.model_context_size >= _MIN_CONTEXT_SIZE
                     )

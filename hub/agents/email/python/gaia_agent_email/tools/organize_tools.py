@@ -28,6 +28,9 @@ from gaia.logger import get_logger
 
 log = get_logger(__name__)
 
+# The Gmail system label whose removal defines "archived / out of the inbox".
+_INBOX_LABEL = "INBOX"
+
 
 # ---------------------------------------------------------------------------
 # Pure impls
@@ -55,6 +58,23 @@ def archive_message_impl(
         prior_labels = list(prior.get("labelIds", []))
         # Gmail call — if this raises, NO db row is written.
         result = gmail.archive_message(message_id)
+        # Verify the archive actually took effect before claiming success.
+        # Gmail's modify response echoes the post-mutation labelIds; if INBOX
+        # is still present the archive silently no-op'd (wrong id resolved or
+        # the provider rejected the change) — fail loudly rather than record a
+        # false success (#2406). Raising here, before record_action, preserves
+        # the no-phantom-undo-row ordering invariant. Folder-based backends
+        # (Outlook) return an id-only result with no labelIds; there the
+        # returned post-archive id is the confirmation, so skip the label check.
+        post_labels = (result or {}).get("labelIds")
+        if post_labels is not None and _INBOX_LABEL in post_labels:
+            raise RuntimeError(
+                f"Archive did not take effect for message {message_id!r}: it is "
+                "still in the inbox (INBOX label present after the archive call). "
+                "This usually means the wrong message id was resolved or the mail "
+                "provider rejected the change. Re-run the search to confirm the "
+                "target message, or archive it manually in your mail client."
+            )
         # Capture the post-archive id: for folder-based backends (Outlook)
         # the move returns a new id; for label-based backends (Gmail) it
         # equals the pre-archive id.
@@ -71,10 +91,15 @@ def archive_message_impl(
             mailbox=mailbox,
         )
         st["result_summary"] = {"action_id": action_id}
+        # Surface the identity of the message actually archived so the success
+        # message can cite it (id/subject/sender), not just the sender name the
+        # user typed (#2406 AC b).
         return {
             "action_id": action_id,
             "message_id": message_id,
             "post_archive_id": post_archive_id,
+            "subject": _extract_subject(prior),
+            "sender": _extract_sender(prior),
         }
 
 
@@ -142,6 +167,54 @@ def remove_star_impl(
         return {"action_id": action_id, "message_id": message_id}
 
 
+def _resolve_label_id(
+    backend, label: str, cache: Optional[Dict[Any, Dict[str, str]]] = None
+) -> str:
+    """Resolve a label display name OR id to a concrete label id for ``backend``.
+
+    Gmail user labels are addressed by id (``Label_###``), not display name; the
+    modify API rejects a bare name with ``Invalid label: <name>``. ``list_labels``
+    returns both id and name, and the model feeds a name back into the apply call
+    (#2428) — so accept either: an exact id match passes through (already an id),
+    an exact display-name match resolves to its id, and a unique case-insensitive
+    match is the last resort (models vary label casing). Anything else fails loud —
+    never silently forwarded to the backend, never auto-created (this agent has no
+    create-label capability; the caller must reference an existing label).
+
+    ``cache`` (optional) memoizes resolutions **keyed by backend** so a batch that
+    reuses one backend hits ``list_labels`` once, not once per message. It MUST be
+    backend-keyed, not label-keyed: a mixed Gmail+Outlook batch resolves the same
+    name to a Gmail ``Label_###`` for one message and to the Outlook category name
+    (id == name) for another — a label-only key would cross-feed the wrong id.
+    """
+    label = label.strip()
+    if cache is not None and backend in cache and label in cache[backend]:
+        return cache[backend][label]
+    labels = backend.list_labels()
+    resolved: Optional[str] = None
+    if label in {lb.get("id") for lb in labels}:  # already a valid id
+        resolved = label
+    else:
+        for lb in labels:  # exact display-name match
+            if lb.get("name") == label:
+                resolved = lb.get("id")
+                break
+    if resolved is None:  # unique case-insensitive match (tolerate model casing)
+        ci = [lb for lb in labels if (lb.get("name") or "").lower() == label.lower()]
+        if len(ci) == 1:
+            resolved = ci[0].get("id")
+    if resolved is None:
+        names = sorted({lb.get("name") for lb in labels if lb.get("name")})
+        raise ValueError(
+            f"Invalid label: {label!r} — no existing label has that id or display "
+            f"name. Existing labels: {names}. Applying requires an existing label; "
+            "call list_labels to see valid names (this agent cannot create labels)."
+        )
+    if cache is not None:
+        cache.setdefault(backend, {})[label] = resolved
+    return resolved
+
+
 def label_message_impl(
     gmail,
     db,
@@ -156,6 +229,9 @@ def label_message_impl(
         {"message_id": message_id, "label_id": label_id},
         debug=debug,
     ) as st:
+        # Resolve a display name (what the model gets from list_labels) to the
+        # id Gmail's modify API requires; record the resolved id for undo (#2428).
+        label_id = _resolve_label_id(gmail, label_id)
         gmail.add_label(message_id, label_id)
         action_id = action_store.record_action(
             db,
@@ -191,6 +267,8 @@ def move_to_label_impl(
         {"message_id": message_id, "label_id": label_id},
         debug=debug,
     ) as st:
+        # Resolve a display name to the id Gmail requires before any call (#2428).
+        label_id = _resolve_label_id(gmail, label_id)
         if prior is None:
             prior = gmail.get_message(message_id)
         prior_labels = list(prior.get("labelIds", []))
@@ -239,9 +317,10 @@ def undo_archive_batch_impl(
         )
         if not rows:
             raise RuntimeError(
-                f"undo window has expired ({window_seconds} s) or batch_id "
-                f"{batch_id!r} has no undoable archive actions. Use your mail "
-                "client to move the messages back to the inbox manually."
+                f"undo window has expired ({window_seconds} s after the batch "
+                f"completed) or batch_id {batch_id!r} has no undoable archive "
+                "actions. Use your mail client to move the messages back to the "
+                "inbox manually."
             )
         restored: List[Dict[str, Any]] = []
         failed: List[Dict[str, Any]] = []
@@ -308,6 +387,14 @@ def _extract_sender(msg: Dict[str, Any]) -> str:
     return ""
 
 
+def _extract_subject(msg: Dict[str, Any]) -> str:
+    """Pull the ``Subject`` header out of a Gmail-API-shape message."""
+    for h in (msg.get("payload") or {}).get("headers", []):
+        if (h.get("name") or "").lower() == "subject":
+            return h.get("value", "")
+    return ""
+
+
 # Sentinel error envelope returned by every organize closure when the
 # Phase I3 batch threshold trips. The LLM must surface this to the user
 # and ask for batch confirmation (the agent's planning loop sees this
@@ -326,15 +413,31 @@ _BATCH_THRESHOLD_ERROR = (
 # ---------------------------------------------------------------------------
 
 
+def _clean_id(x) -> str:
+    # LLMs wrap ids in quotes/brackets (e.g. '"id1"', '[id1'); strip them so
+    # Gmail doesn't reject the literal punctuation as an "Invalid id value".
+    return str(x).strip().strip("'\"[] ")
+
+
 def _coerce_ids(message_ids):
-    """Ensure message_ids is a list of strings. LLMs send comma-separated strings."""
+    """Ensure message_ids is a list of bare id strings.
+
+    LLMs send ids in several shapes — a Python list, a comma-joined string, a
+    quoted comma-joined string (``"id1","id2"``), or a JSON-array-shaped string
+    (``["id1","id2"]``). Normalize every token to a bare id in all cases.
+    """
     if message_ids is None:
         return []
     if isinstance(message_ids, list):
-        return message_ids
+        return [cleaned for x in message_ids if (cleaned := _clean_id(x))]
     if isinstance(message_ids, str):
+        s = message_ids.strip()
+        if s.startswith("[") and s.endswith("]"):
+            s = s[1:-1]
         return [
-            x.strip() for x in message_ids.replace(";", ",").split(",") if x.strip()
+            cleaned
+            for x in s.replace(";", ",").split(",")
+            if (cleaned := _clean_id(x))
         ]
     return []
 
@@ -351,6 +454,7 @@ def _run_batch(
     payload: dict | None = None,
     batch_id: str,
     debug: bool = False,
+    arg_resolver=None,
 ) -> dict:
     """Execute a mailbox mutation for each message_id, recording each action.
 
@@ -360,6 +464,12 @@ def _run_batch(
     positional args (e.g. the label id). ``action_mailbox(mid) -> str`` records
     which mailbox the action hit so undo routes correctly.
 
+    ``arg_resolver(backend) -> (op_args, payload)`` (optional) computes the
+    positional args and action payload per backend — used by the label batches to
+    resolve a display name to each provider's label id (#2428). When omitted, the
+    static ``op_args``/``payload`` are used unchanged (the mark/star/archive
+    batches are untouched).
+
     Returns ``{"succeeded": [...], "failed": [...]}``.
     """
     succeeded: list[dict] = []
@@ -367,12 +477,16 @@ def _run_batch(
     for mid in message_ids:
         try:
             backend = resolve_backend(mid)
-            getattr(backend, op_name)(mid, *op_args)
+            if arg_resolver is not None:
+                op_args_eff, payload_eff = arg_resolver(backend)
+            else:
+                op_args_eff, payload_eff = op_args, dict(payload or {})
+            getattr(backend, op_name)(mid, *op_args_eff)
             aid = action_store.record_action(
                 db,
                 action_type=action_type,
                 message_id=mid,
-                payload=dict(payload or {}),
+                payload=dict(payload_eff),
                 batch_id=batch_id,
                 mailbox=action_mailbox(mid) if action_mailbox else None,
             )
@@ -433,7 +547,7 @@ class OrganizeToolsMixin:
     def _register_organize_tools(self) -> None:
         db = self
         debug_flag = bool(getattr(self.config, "debug", False))
-        window = int(getattr(self.config, "undo_window_seconds", 30))
+        window = int(getattr(self.config, "undo_window_seconds", 120))
         agent = self  # batch-threshold counter + per-message backend routing
 
         def _check_threshold() -> Optional[str]:
@@ -472,16 +586,22 @@ class OrganizeToolsMixin:
                 # (counter). Avoids a redundant round-trip.
                 prior = backend.get_message(message_id)
                 agent._record_organize_op(message_id, _extract_sender(prior))
-                return _envelope_ok(
-                    archive_message_impl(
-                        backend,
-                        db,
-                        message_id=message_id,
-                        prior=prior,
-                        mailbox=provider,
-                        debug=debug_flag,
-                    )
+                payload = archive_message_impl(
+                    backend,
+                    db,
+                    message_id=message_id,
+                    prior=prior,
+                    mailbox=provider,
+                    # #2163 — share the per-turn undo batch so a loop of single
+                    # archives is undoable as ONE batch (undo_archive_batch),
+                    # with a completion-anchored window instead of a per-op
+                    # window that expires mid-run.
+                    batch_id=agent._organize_batch_id,
+                    debug=debug_flag,
                 )
+                # #2456 — remember this batch so a next-turn "undo that" can find it.
+                agent._last_archive_batch_id = agent._organize_batch_id
+                return _envelope_ok(payload)
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
             except Exception as exc:
@@ -586,9 +706,12 @@ class OrganizeToolsMixin:
 
         @tool
         def label_message(message_id: str, label_id: str, mailbox: str = "") -> str:
-            """Add a label to a message. Pass the label id (e.g. ``Label_1``).
+            """Add a label to a message.
 
-            ``mailbox`` (optional) routes when multiple mailboxes are connected.
+            ``label_id`` may be the label's display name (e.g. ``Newsletters``, as
+            returned by ``list_labels``) or its id (e.g. ``Label_1``); the name is
+            resolved to an id automatically. ``mailbox`` (optional) routes when
+            multiple mailboxes are connected.
             """
             try:
                 if (err := _check_threshold()) is not None:
@@ -615,7 +738,9 @@ class OrganizeToolsMixin:
         def move_to_label(message_id: str, label_id: str, mailbox: str = "") -> str:
             """Move a message out of INBOX into a label.
 
-            ``mailbox`` (optional) routes when multiple mailboxes are connected.
+            ``label_id`` may be the label's display name or its id; the name is
+            resolved to an id automatically. ``mailbox`` (optional) routes when
+            multiple mailboxes are connected.
             """
             try:
                 if (err := _check_threshold()) is not None:
@@ -826,6 +951,8 @@ class OrganizeToolsMixin:
                 )
                 for _mid in message_ids:
                     agent._record_organize_op(_mid, "")
+                # #2456 — remember this batch so a next-turn "undo that" can find it.
+                agent._last_archive_batch_id = batch_id
                 return _envelope_ok(
                     {
                         "batch_id": batch_id,
@@ -841,10 +968,33 @@ class OrganizeToolsMixin:
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def undo_archive_batch(batch_id: str) -> str:
-            """Undo a batch archive by its batch_id, restoring every message
-            to the inbox within the undo window. Reverses archive_message_batch."""
+        def undo_archive_batch(batch_id: str = "") -> str:
+            """Undo a batch archive, restoring every message to the inbox within
+            the undo window. Reverses archive_message_batch. Omit batch_id to undo
+            the MOST RECENT archive — use this for a conversational "undo that" /
+            "put those back" with no id given (recalled from the persisted action
+            log, so it works even across separate agent requests)."""
             try:
+                batch_id = (batch_id or "").strip()
+                if not batch_id:
+                    # Fast path: same agent instance, same turn (e.g. two tool
+                    # calls in one process_query run). The sidecar builds a
+                    # brand-new agent per /query request (#2456), so this
+                    # in-memory handle is discarded before the next request —
+                    # the DB lookup below is the cross-request source of truth.
+                    batch_id = agent._last_archive_batch_id or ""
+                if not batch_id:
+                    batch_id = (
+                        action_store.fetch_last_undoable_batch_id(
+                            db, window_seconds=window
+                        )
+                        or ""
+                    )
+                if not batch_id:
+                    return _envelope_err(
+                        "No recent archive to undo in this session. Archive some "
+                        "messages first, then say 'undo that' to restore them."
+                    )
                 result = undo_archive_batch_impl(
                     agent._backend_for_action,
                     db,
@@ -870,7 +1020,12 @@ class OrganizeToolsMixin:
 
         @tool
         def label_message_batch(message_ids: list[str], label_id: str) -> str:
-            """Add a label to multiple messages in one call. Use for 3+ messages."""
+            """Add a label to multiple messages in one call. Use for 3+ messages.
+
+            ``label_id`` may be a label display name (e.g. ``Newsletters``) or an
+            id (e.g. ``Label_1``); the name is resolved to each message's provider
+            id automatically.
+            """
             if not message_ids:
                 return _envelope_ok({"total": 0, "succeeded": [], "failed": []})
             message_ids = _coerce_ids(message_ids)
@@ -879,18 +1034,22 @@ class OrganizeToolsMixin:
             try:
                 batch_id = uuid.uuid4().hex
                 label_id_local = label_id  # closure capture
+                label_cache: dict = {}  # backend-keyed memo (see _resolve_label_id)
+
+                def _label_resolver(backend):
+                    resolved = _resolve_label_id(backend, label_id_local, label_cache)
+                    return (resolved,), {"label_id": resolved}
 
                 result = _run_batch(
                     _batch_backend,
                     db,
                     message_ids,
                     op_name="add_label",
-                    op_args=(label_id_local,),
                     action_type="add_label",
                     action_mailbox=_batch_provider,
-                    payload={"label_id": label_id_local},
                     batch_id=batch_id,
                     debug=debug_flag,
+                    arg_resolver=_label_resolver,
                 )
                 for _mid in message_ids:
                     agent._record_organize_op(_mid, "")
@@ -910,7 +1069,11 @@ class OrganizeToolsMixin:
 
         @tool
         def move_to_label_batch(message_ids: list[str], label_id: str) -> str:
-            """Move multiple messages out of INBOX into a label in one call. Use for 3+ messages."""
+            """Move multiple messages out of INBOX into a label in one call. Use for 3+ messages.
+
+            ``label_id`` may be a label display name or an id; the name is
+            resolved to each message's provider id automatically.
+            """
             if not message_ids:
                 return _envelope_ok({"total": 0, "succeeded": [], "failed": []})
             message_ids = _coerce_ids(message_ids)
@@ -919,10 +1082,13 @@ class OrganizeToolsMixin:
             try:
                 batch_id = uuid.uuid4().hex
                 label_id_local = label_id
+                label_cache: dict = {}  # backend-keyed memo (see _resolve_label_id)
 
-                def _move_op(backend, mid: str) -> None:
-                    backend.add_label(mid, label_id_local)
+                def _move_op(backend, mid: str) -> str:
+                    resolved = _resolve_label_id(backend, label_id_local, label_cache)
+                    backend.add_label(mid, resolved)
                     backend.archive_message(mid)
+                    return resolved
 
                 def _move_prior_fn(msg: Dict[str, Any]) -> List[str]:
                     return list(msg.get("labelIds", []))
@@ -930,10 +1096,10 @@ class OrganizeToolsMixin:
                 def _move_payload_fn(
                     _msg: Dict[str, Any],
                     prior_labels: List[str],
-                    _op_result: Optional[Dict[str, Any]] = None,
+                    op_result: Optional[str] = None,
                 ) -> Dict[str, Any]:
                     return {
-                        "label_id": label_id_local,
+                        "label_id": op_result or label_id_local,
                         "prior_labels": prior_labels,
                     }
 

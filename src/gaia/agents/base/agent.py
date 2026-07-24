@@ -2016,6 +2016,36 @@ Do NOT wrap conversational replies in JSON.
             logger.error(error_msg)
             return {"status": "error", "error": error_msg}
 
+        # Reject arguments the tool does not accept before dispatch. A model that
+        # hallucinates a kwarg (e.g. mailbox= on archive_message_batch) would
+        # otherwise raise a bare TypeError inside tool(**tool_args); surface a
+        # structured, recoverable error naming the accepted parameters instead.
+        # Tools declaring **kwargs accept anything, so they opt out.
+        accepts_var_keyword = any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in sig.parameters.values()
+        )
+        if not accepts_var_keyword:
+            accepted_args = {
+                name
+                for name, param in sig.parameters.items()
+                if name != "return"
+                and param.kind
+                not in (
+                    inspect.Parameter.VAR_KEYWORD,
+                    inspect.Parameter.VAR_POSITIONAL,
+                )
+            }
+            unexpected_args = [arg for arg in tool_args if arg not in accepted_args]
+            if unexpected_args:
+                error_msg = (
+                    f"Unexpected argument(s) for {tool_name}: "
+                    f"{', '.join(sorted(unexpected_args))}. "
+                    f"Accepted argument(s): {', '.join(sorted(accepted_args)) or 'none'}."
+                )
+                logger.error(error_msg)
+                return {"status": "error", "error": error_msg}
+
         try:
             result = self._call_tool_bounded(tool, tool_args, tool_name)
             logger.debug(f"Tool execution result: {result}")
@@ -3899,9 +3929,15 @@ Do NOT wrap conversational replies in JSON.
                             messages.append({"role": "user", "content": dedup_msg})
 
                     # Input-based dedup for mutation tools (#1317): catch an
-                    # identical mutation re-issue at the first repeat.
+                    # identical mutation re-issue at the first repeat. Errored
+                    # calls are skipped so a rejected retry isn't mistaken for
+                    # an applied change (#2464).
                     self._dedup_mutation_call(
-                        tool_name, tool_args, mutation_call_cache, messages
+                        tool_name,
+                        tool_args,
+                        mutation_call_cache,
+                        messages,
+                        tool_result,
                     )
 
                     # Domain hooks. A returned plan switches the agent into
@@ -4125,9 +4161,11 @@ Do NOT wrap conversational replies in JSON.
                         messages.append({"role": "user", "content": dedup_msg})
 
                 # Input-based dedup for mutation tools (#1317): catch an
-                # identical mutation re-issue at the first repeat.
+                # identical mutation re-issue at the first repeat. Errored calls
+                # are skipped so a rejected retry isn't mistaken for an applied
+                # change (#2464).
                 self._dedup_mutation_call(
-                    tool_name, tool_args, mutation_call_cache, messages
+                    tool_name, tool_args, mutation_call_cache, messages, tool_result
                 )
 
                 # Handle domain-specific post-processing.
@@ -4767,6 +4805,7 @@ Do NOT wrap conversational replies in JSON.
         tool_args: Dict[str, Any],
         mutation_call_cache: Dict[str, int],
         messages: List[Dict[str, Any]],
+        tool_result: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Catch a repeated identical mutation at the FIRST repeat (#1317).
 
@@ -4780,6 +4819,15 @@ Do NOT wrap conversational replies in JSON.
         on instead of waiting for the slow reactive loop-detector.
         """
         if tool_name not in _MUTATION_TOOLS:
+            return
+        # A mutation that ERRORED never took effect, so re-issuing it is a
+        # legitimate retry — not a redundant repeat. Deduping it would inject
+        # "the change is already applied — move on", falsely reporting success
+        # and abandoning the operation (#2464: batch archive/star dead-ended
+        # ~50% of the time when the model re-sent a spurious ``mailbox`` kwarg
+        # the dispatcher rejects, and the 2nd rejection was mistaken for a
+        # completed mutation). Only dedup calls that actually applied.
+        if self._is_error_result(tool_result):
             return
         # Normalize so {"a":1,"b":2} and {"b":2,"a":1} hash identically.
         try:

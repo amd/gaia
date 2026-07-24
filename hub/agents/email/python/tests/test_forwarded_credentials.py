@@ -98,6 +98,23 @@ def test_get_expired_token_raises_loudly():
     assert "expired" in str(exc.value).lower()
 
 
+def test_reforward_overwrites_expired_and_recovers(monkeypatch):
+    """The daemon re-forward timer (#2388/#2159) overwrites an about-to-expire
+    forwarded token with a fresh one; the sidecar recovers WITHOUT a restart.
+    This is the store-layer half of the self-recovery guarantee."""
+    # An expired token poisons reads (the ~1h/~2.6h failure state).
+    forwarded_credentials.set_forwarded(
+        "google", access_token="stale", scopes=["s1"], expires_at=_PAST
+    )
+    with pytest.raises(ConnectorsError):
+        forwarded_credentials.get_forwarded_token("google", ["s1"])
+    # The daemon re-forwards a fresh token to the same intake -> instant recovery.
+    forwarded_credentials.set_forwarded(
+        "google", access_token="fresh", scopes=["s1"], expires_at=_FUTURE
+    )
+    assert forwarded_credentials.get_forwarded_token("google", ["s1"]) == "fresh"
+
+
 def test_get_scope_short_token_raises_and_names_missing():
     forwarded_credentials.set_forwarded(
         "google", access_token="tok", scopes=["s1"], expires_at=_FUTURE

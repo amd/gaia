@@ -82,7 +82,12 @@ export interface TrustGate {
      * (unsandboxed C++) and deprecated agents are always gated too.
      */
     requiresOverride: boolean;
-    /** Whether installing sends ``trust_native`` (non-verified native agent). */
+    /**
+     * Whether installing sends ``trust_native`` to the backend. Mirrors
+     * ``requiresOverride`` — any agent the user had to explicitly override
+     * (non-verified, native, or deprecated) installs with the trust flag set,
+     * not just native packages.
+     */
     trustNative: boolean;
     /** Declared permission scopes, e.g. ``["fs:read", "net:fetch"]``. */
     permissions: string[];
@@ -108,9 +113,11 @@ export function trustTier(agent: AgentInfo): TrustTier {
  */
 export function trustGateFor(agent: AgentInfo): TrustGate {
     const tier = trustTier(agent);
-    const isNative =
-        agent.requires_trust === true ||
-        (agent.language === 'cpp' && tier !== 'verified');
+    // Native = ships an unsandboxed C++ binary. Deliberately NOT keyed off
+    // agent.requires_trust — that field now covers ANY non-verified agent,
+    // not just native ones, so folding it in here would mislabel a
+    // non-verified python agent as "ships a native binary".
+    const isNative = agent.language === 'cpp' && tier !== 'verified';
     const reasons: string[] = [];
 
     if (tier !== 'verified') {
@@ -127,10 +134,14 @@ export function trustGateFor(agent: AgentInfo): TrustGate {
         reasons.push('Deprecated by the publisher — may be unmaintained or superseded.');
     }
 
+    const requiresOverride = tier !== 'verified' || isNative || !!agent.deprecated;
+
     return {
         tier,
-        requiresOverride: tier !== 'verified' || isNative || !!agent.deprecated,
-        trustNative: isNative,
+        requiresOverride,
+        // Send the trust override whenever the user had to acknowledge one —
+        // covers every non-verified agent, not just native packages.
+        trustNative: requiresOverride,
         permissions: agent.permissions ?? [],
         platforms: agent.requirements?.platforms ?? [],
         reasons,

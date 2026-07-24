@@ -90,6 +90,37 @@ def _urgent_message(message_id: str, sender: str) -> dict:
     }
 
 
+def _security_important_message(
+    message_id: str, sender: str = "no-reply@accounts.google.com"
+) -> dict:
+    """A provider-IMPORTANT message from an account-security sender that triage
+    (mis)classifies PROMOTIONAL — the #2426 auto-archive trap.
+
+    The ``IMPORTANT`` + ``CATEGORY_PROMOTIONS`` label pair makes the heuristic
+    confidently PROMOTIONAL (an archive candidate) with no LLM, while the
+    ``IMPORTANT`` label and the account-security sender are exactly what the
+    guard must refuse to auto-archive. Subject/snippet are deliberately benign
+    (no urgent/commitment/phishing keywords) so the confident-PROMOTIONAL
+    short-circuit is not vetoed.
+    """
+    internal_ms = int(time.time() * 1000)
+    return {
+        "id": message_id,
+        "threadId": f"thread_{message_id}",
+        "labelIds": ["INBOX", "UNREAD", "IMPORTANT", "CATEGORY_PROMOTIONS"],
+        "internalDate": str(internal_ms),
+        "snippet": "Here is a summary of recent activity on your account.",
+        "payload": {
+            "headers": [
+                {"name": "From", "value": f"Google <{sender}>"},
+                {"name": "Subject", "value": "Your Google Account: monthly summary"},
+                {"name": "Message-ID", "value": f"<{message_id}@accounts.google.com>"},
+                {"name": "Date", "value": "Mon, 12 Jun 2026 10:00:00 +0000"},
+            ],
+        },
+    }
+
+
 def _build_agent(tmp_path: Path, messages, *, level: str, **cfg_kw) -> EmailTriageAgent:
     backend = FakeGmailBackend(user_email="me@example.com")
     for msg in messages:
@@ -235,6 +266,63 @@ def test_mixed_inbox_splits_correctly(tmp_path):
     executed_ids = {e["message_id"] for e in report["executed"]}
     assert executed_ids == {"p1"}
     assert report["skipped"] == 1
+
+
+def test_full_cycle_never_auto_archives_important_security_message(tmp_path):
+    """#2426 (AC-1/2/3): at ``full``, a provider-IMPORTANT message from an
+    account-security sender that triage mis-labels PROMOTIONAL must be PROPOSED,
+    not auto-archived — while ordinary promo clutter still auto-archives."""
+    agent = _build_agent(
+        tmp_path,
+        [
+            _promo_message("p1", "deals@shop.com"),
+            _security_important_message("s1"),
+        ],
+        level=LEVEL_FULL,
+    )
+    report = agent._run_email_autonomy_cycle()
+
+    executed_ids = {e["message_id"] for e in report["executed"]}
+    assert executed_ids == {"p1"}, "ordinary promo should still auto-archive"
+    assert "s1" not in executed_ids, "IMPORTANT security mail must NOT auto-archive"
+
+    proposed = " ".join(p.action for p in report["proposals"])
+    assert "s1" in proposed, "the IMPORTANT security message must be proposed"
+
+    # AC-3: it survived in the inbox.
+    assert "INBOX" in agent._gmail.get_message("s1").get("labelIds", [])
+
+
+def test_full_cycle_security_sender_without_important_still_proposed(tmp_path):
+    """#2426 (AC-2 standalone): an account-security sender is never auto-archived
+    unattended even without the provider IMPORTANT label."""
+    msg = _security_important_message("s2")
+    # Drop the IMPORTANT label — the security sender alone must still gate it.
+    msg["labelIds"] = ["INBOX", "UNREAD", "CATEGORY_PROMOTIONS"]
+    agent = _build_agent(tmp_path, [msg], level=LEVEL_FULL)
+    report = agent._run_email_autonomy_cycle()
+
+    assert report["executed"] == []
+    assert len(report["proposals"]) == 1
+    assert "INBOX" in agent._gmail.get_message("s2").get("labelIds", [])
+
+
+def test_triage_row_carries_label_ids(tmp_path):
+    """The autonomy guard reads the provider IMPORTANT flag off ``row['label_ids']``.
+    Lock the plumbing so a future triage edit can't silently drop it and disable
+    the guard."""
+    agent = _build_agent(
+        tmp_path,
+        [_promo_message("p1", "deals@shop.com"), _security_important_message("s1")],
+        level=LEVEL_OFF,
+    )
+    triage = agent._triage_all_backends(max_messages=10)
+    rows = triage["results"]
+    assert rows, "expected triage rows"
+    for row in rows:
+        assert isinstance(row.get("label_ids"), list), row
+    by_id = {r["id"]: r for r in rows}
+    assert "IMPORTANT" in by_id["s1"]["label_ids"]
 
 
 # ---------------------------------------------------------------------------

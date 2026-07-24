@@ -228,12 +228,14 @@ runs at a time per session. Memory uses FAISS locally; embeddings still go over 
 HTTP, so the frozen binary stays free of torch/transformers.
 
 **Full autonomy (earn-trust).** At `earn_trust` the agent auto-executes only *reversible*
-actions (archive/label/mark-read) and only once a sender/category has crossed the trust
-bar (`autonomy_trust_min_samples` decisions at ≥ `autonomy_trust_threshold` accuracy);
-everything else is proposed. The destructive floor — send, forward, permanent-delete,
-RSVP, quarantine — **always requires confirmation, at every level**. Undoing an
-auto-action feeds the trust ledger as a correction, so the agent adapts to you. See
-`docs/plans/email-full-autonomy.mdx`.
+actions (archive/label/mark-read), and only where your explicit preferences sanction it
+(a low-priority sender, or a category defaulted to archive) or a sender/category has crossed
+the trust bar (`autonomy_trust_min_samples` decisions at ≥ `autonomy_trust_threshold`
+accuracy); everything else is proposed. The destructive floor — send, forward,
+permanent-delete, RSVP, quarantine — **always requires confirmation, at every level**.
+Undoing an auto-action feeds the trust ledger as a correction (a negative outcome), so
+trust ratchets *down* on a mistake; positive-outcome accrual that would let a scope cross
+the bar through earned trust is not yet wired. See `docs/plans/email-full-autonomy.mdx`.
 
 ### Mailbox actions (archive / quarantine, schema 2.1)
 

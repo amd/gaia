@@ -19,10 +19,10 @@ from gaia.hub import catalog as catalog_mod
 from gaia.hub import installer
 from gaia.hub.installer import (
     TrustRequiredError,
-    ensure_native_trust,
+    ensure_trust_ack,
     install,
     read_sentinel,
-    requires_native_trust,
+    requires_trust_ack,
 )
 
 BASE = "https://hub.test"
@@ -40,6 +40,10 @@ def _python_manifest(agent_id="demo", version="1.0.0", **extra):
     return {
         "id": agent_id,
         "language": "python",
+        # Default to verified so helpers that don't care about the trust gate
+        # (e.g. the deprecation-warning test) install without an opt-in; callers
+        # that test the gate pass an explicit security_tier via **extra.
+        "security_tier": "verified",
         "latest_version": version,
         "requirements": {"platforms": []},
         "versions": {
@@ -119,7 +123,7 @@ def _clean_state():
 
 
 # ---------------------------------------------------------------------------
-# requires_native_trust / ensure_native_trust
+# requires_trust_ack / ensure_trust_ack
 # ---------------------------------------------------------------------------
 
 
@@ -129,30 +133,31 @@ def _clean_state():
         ("cpp", "experimental", True),
         ("cpp", "community", True),
         ("cpp", "verified", False),
-        ("python", "experimental", False),
-        ("python", "community", False),
+        ("python", "experimental", True),
+        ("python", "community", True),
+        ("python", "verified", False),
     ],
 )
-def test_requires_native_trust_matrix(language, tier, expected):
+def test_requires_trust_ack_matrix(language, tier, expected):
     manifest = {"language": language, "security_tier": tier}
-    assert requires_native_trust(manifest) is expected
+    assert requires_trust_ack(manifest) is expected
 
 
-def test_ensure_native_trust_raises_without_optin():
+def test_ensure_trust_ack_raises_without_optin():
     manifest = {"language": "cpp", "security_tier": "community"}
     with pytest.raises(TrustRequiredError):
-        ensure_native_trust("native", manifest, trust_native=False)
+        ensure_trust_ack("native", manifest, trusted=False)
 
 
-def test_ensure_native_trust_allows_with_optin():
+def test_ensure_trust_ack_allows_with_optin():
     manifest = {"language": "cpp", "security_tier": "community"}
     # Should not raise.
-    ensure_native_trust("native", manifest, trust_native=True)
+    ensure_trust_ack("native", manifest, trusted=True)
 
 
-def test_ensure_native_trust_allows_verified_native_without_optin():
+def test_ensure_trust_ack_allows_verified_native_without_optin():
     manifest = {"language": "cpp", "security_tier": "verified"}
-    ensure_native_trust("native", manifest, trust_native=False)
+    ensure_trust_ack("native", manifest, trusted=False)
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +188,7 @@ def test_install_native_non_verified_succeeds_with_trust(tmp_path):
         base_url=BASE,
         fetcher=fetcher,
         install_root=tmp_path,
-        trust_native=True,
+        trusted=True,
     )
     assert result.language == "cpp"
     assert (tmp_path / "native" / "bin" / "native").exists()
@@ -199,6 +204,49 @@ def test_install_native_verified_succeeds_without_trust(tmp_path):
         install_root=tmp_path,
     )
     assert result.language == "cpp"
+
+
+def test_install_python_non_verified_refused_without_trust(tmp_path):
+    # A non-verified PYTHON agent also runs third-party code on the user's
+    # machine, so it must require the same explicit trust opt-in as a native one.
+    manifest = _python_manifest(security_tier="experimental")
+    with pytest.raises(TrustRequiredError):
+        install(
+            "demo",
+            manifest=manifest,
+            base_url=BASE,
+            fetcher=_python_fetcher(manifest),
+            run_pip=lambda args: None,
+            install_root=tmp_path,
+        )
+    assert read_sentinel("demo", tmp_path) is None
+
+
+def test_install_python_non_verified_succeeds_with_trust(tmp_path):
+    manifest = _python_manifest(security_tier="community")
+    result = install(
+        "demo",
+        manifest=manifest,
+        base_url=BASE,
+        fetcher=_python_fetcher(manifest),
+        run_pip=lambda args: None,
+        install_root=tmp_path,
+        trusted=True,
+    )
+    assert result.language == "python"
+
+
+def test_install_python_verified_succeeds_without_trust(tmp_path):
+    manifest = _python_manifest(security_tier="verified")
+    result = install(
+        "demo",
+        manifest=manifest,
+        base_url=BASE,
+        fetcher=_python_fetcher(manifest),
+        run_pip=lambda args: None,
+        install_root=tmp_path,
+    )
+    assert result.language == "python"
 
 
 # ---------------------------------------------------------------------------
@@ -244,7 +292,7 @@ def test_catalog_surfaces_security_tier_and_requires_trust():
     assert by_id["verified-cpp"]["security_tier"] == "verified"
     assert by_id["verified-cpp"]["requires_trust"] is False
     assert by_id["community-cpp"]["requires_trust"] is True
-    assert by_id["experimental-py"]["requires_trust"] is False
+    assert by_id["experimental-py"]["requires_trust"] is True
 
 
 def test_catalog_hides_deprecated_available_by_default():

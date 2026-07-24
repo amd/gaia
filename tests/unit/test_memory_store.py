@@ -165,6 +165,23 @@ class TestBasicCRUD:
         fake_id = str(uuid.uuid4())
         assert store.update(fake_id, content="new content") is False
 
+    def test_update_rejects_self_supersede(self, store):
+        """update() refuses to point superseded_by at the row's own id.
+
+        A self-supersede would hide the row from every active query
+        (recall, get_by_category) — see issue #2446.
+        """
+        entry_id = store.store(
+            category="preference",
+            content="Prioritize email from alice@example.com",
+        )
+        with pytest.raises(ValueError, match="must not equal"):
+            store.update(entry_id, superseded_by=entry_id)
+
+        # The row must remain recallable — the rejected update changed nothing.
+        results = store.get_by_category("preference")
+        assert any(r["id"] == entry_id for r in results)
+
     def test_delete_entry(self, store):
         """delete() removes an entry."""
         entry_id = store.store(category="fact", content="Temporary fact")
@@ -3963,13 +3980,15 @@ class TestSupersededBy:
 
     def test_get_all_knowledge_includes_superseded_when_requested(self, store):
         """get_all_knowledge(include_superseded=True) includes superseded items."""
+        # Contents must be distinct enough to NOT dedup into one row, else
+        # store() returns the same id and the supersede would be a self-supersede.
         old_id = store.store(
             category="fact",
-            content="Superseded item included when requested test",
+            content="Historical note about the old deployment target",
         )
         new_id = store.store(
             category="fact",
-            content="Active item included when requested test",
+            content="Fresh replacement pointing at a brand new value",
         )
         store.update(old_id, superseded_by=new_id)
 

@@ -597,9 +597,12 @@ class TestOrderingInvariantParameterized:
                 lambda gmail, db: archive_message_impl(gmail, db, message_id="nope"),
             ),
             (
+                # Use a real label so resolution (#2428) passes and the failure
+                # still lands at the Gmail mutation for the missing message —
+                # the ordering invariant this case exists to prove.
                 "label",
                 lambda gmail, db: label_message_impl(
-                    gmail, db, message_id="nope", label_id="Label_1"
+                    gmail, db, message_id="nope", label_id="STARRED"
                 ),
             ),
             (
