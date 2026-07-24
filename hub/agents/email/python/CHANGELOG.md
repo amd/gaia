@@ -28,6 +28,19 @@ contract version is tracked separately as
   fixes apply on the REST surface (`/v1/email/archive`, `/v1/email/search`) as
   well as the agent's in-loop tools — a no-op archive returns an actionable 409,
   not a bare 500.
+- **Draft/reply resolves a target from a sender or topic (#2403).**
+  `draft_reply` no longer demands a concrete message id or the exact subject
+  line. Its `message_id` argument now accepts a natural reference — a sender
+  address (`rocm-ci@amd.com`), a topic/incident token (`SIC-4482`), or a subject
+  keyword — and resolves it by searching the connected mailboxes and drafting
+  against the best-matching thread. A concrete id (or one already tagged from
+  triage/scan/read) still passes straight through (no search, no regression).
+  Ambiguity fails LOUD with a candidate list to pick from, and no match fails
+  LOUD with "not found" — never a silent wrong-target and never a bare
+  "give me a message ID / exact subject" wall. The concrete-id probe only treats
+  a genuine 404 (or an in-memory miss) as "not an id here"; a transient backend
+  error (auth expiry, rate-limit, 5xx, network) on a valid id propagates instead
+  of being masked as a misleading "no message found".
 - **IMPORTANT / account-security mail is never auto-archived unattended (#2426).**
   At autonomy `full`, one cycle could auto-archive a provider-flagged IMPORTANT
   message (e.g. a Google security alert) the local model mislabeled as promotional.
@@ -51,7 +64,10 @@ contract version is tracked separately as
   keeping the original exception appended as `Technical details:` for debugging.
   Every `/query` client (CLI, `gaia api`, third-party) benefits, not just the Agent
   UI relay (which mitigated host-side in #2136). Unrelated errors pass through
-  verbatim, never masked behind a Lemonade message.
+  verbatim, never masked behind a Lemonade message — including timeouts, which are
+  deliberately not treated as Lemonade-down (a stopped local server refuses
+  instantly; a timeout means up-but-slow, or a different host such as the Gmail
+  backend, so it must not be relabelled "restart Lemonade").
 
 - **Applying an existing label by its display name no longer fails with
   `Invalid label` (#2428).** `label_message` / `move_to_label` (and their batch
