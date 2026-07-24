@@ -7,7 +7,7 @@ daemon can supervise more than one kind of sidecar (issue #2142, T1).
 Modes (``spec.mode_env_var``):
   user (default) — spawn the verified frozen binary: a Hub-installed one when
                    present (#2095), else lazy-fetched via binaries.lock.json.
-  dev            — spawn ``uvicorn <spec.dev_module> --reload --app-dir
+  dev            — spawn ``uvicorn <spec.dev_module> --app-dir
                    <spec.dev_src_dir>/<spec.dev_app_dir>`` from source. Loaded
                    as a TOP-LEVEL module (NOT ``packaging.server:app``, which
                    would resolve to the PyPI ``packaging`` library — the
@@ -325,12 +325,17 @@ class AgentSidecarManager:
                 "it is missing. Run from a source checkout, or install it: "
                 "`uv pip install -e hub/agents/email/python`."
             )
+        # No ``--reload``: it makes uvicorn run its own multiprocessing-spawn
+        # reload supervisor on top of a sidecar the daemon already supervises,
+        # and that spawn child's app re-import is what fails on macOS with
+        # "Empty module name" (#2441). Without it uvicorn imports the app in the
+        # same process that ``--app-dir`` prepends to ``sys.path`` — robust
+        # cross-OS, and the daemon supervises the real ASGI process directly.
         argv = [
             sys.executable,
             "-m",
             "uvicorn",
             self.spec.dev_module,
-            "--reload",
             "--app-dir",
             str(app_dir),
             "--host",
