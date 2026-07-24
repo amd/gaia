@@ -267,11 +267,16 @@ def test_confirmation_step_ends_with_needs_confirmation_then_final_refusal(
     nc = events[types.index("needs_confirmation")]
     assert nc["action"] == "send_now"
     assert "confirm_url" not in nc  # stateless stop-and-hand-off (D1)
-    # The run ends with a final refusal that points at the fixed-function route.
+    # The run ends with a plain-language refusal — no internal REST contract or
+    # architecture jargon leaked to the chat user (issue #2404).
     assert events[-1]["type"] == "final"
-    assert "/v1/email/send" in events[-1]["answer"]
+    answer = events[-1]["answer"]
+    assert "confirmation" in answer.lower()
+    assert "/v1/email" not in answer
+    assert "D1" not in answer
+    assert "POST" not in answer
     # The gated tool never actually "sent".
-    assert "Sent." not in events[-1]["answer"]
+    assert "Sent." not in answer
 
 
 # ---------------------------------------------------------------------------

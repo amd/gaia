@@ -332,17 +332,30 @@ def _terminal_error_detail(exc: BaseException) -> str:
     )
 
 
+#: Human labels for the confirmation-gated actions the chat surface can end on.
+_CONFIRMATION_LABELS = {
+    "send_now": "Sending this email",
+    "send_draft": "Sending this draft",
+    "forward_message": "Forwarding this email",
+    "quarantine_phishing_message": "Quarantining this message",
+    "unquarantine_message": "Restoring this message from quarantine",
+    "archive_message": "Archiving this message",
+}
+
+
 def _confirmation_refusal(action: str) -> Dict[str, Any]:
-    """The terminal ``final`` that ends the stateless-stub confirmation flow (D1)."""
+    """The terminal ``final`` that ends a confirmation-gated step (spec D1).
+
+    Plain-language for the chat surface — no internal REST contract, no jargon.
+    The gate itself is deliberate; the message states nothing was sent.
+    """
+    subject = _CONFIRMATION_LABELS.get(action, f"The '{action}' action")
     return {
         "type": "final",
         "answer": (
-            f"This step needs your confirmation to run '{action}', which the "
-            "/query endpoint does not perform yet (it runs stateless, per epic "
-            "decision D1 — no server-side resume). To complete a destructive or "
-            "external action, use the fixed-function route: POST /v1/email/draft "
-            "to mint a single-use confirmation token, then POST /v1/email/send "
-            "(or the matching /archive, /quarantine, /calendar route) with it."
+            f"{subject} needs your explicit confirmation before it runs — an "
+            "intentional safety gate on sending email and other external or "
+            "destructive actions. Nothing has been sent."
         ),
     }
 

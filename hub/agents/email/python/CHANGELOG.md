@@ -31,6 +31,17 @@ contract version is tracked separately as
   UI relay (which mitigated host-side in #2136). Unrelated errors pass through
   verbatim, never masked behind a Lemonade message.
 
+- **Applying an existing label by its display name no longer fails with
+  `Invalid label` (#2428).** `label_message` / `move_to_label` (and their batch
+  variants) resolve a label's display name to its provider id via `list_labels`
+  before calling the backend — mirroring the quarantine-label resolver. The model
+  gets display names from `list_labels` and feeds them back into the apply call;
+  Gmail's modify API addresses user labels by id (`Label_###`) and rejected the
+  name, so the very label the agent had just enumerated as valid came back
+  `Invalid label: <name>`. Passing a raw id still works; resolution is memoized
+  per backend so a mixed Gmail+Outlook batch maps each message to its own
+  provider's id; a name matching no existing label now fails with an actionable
+  "here are your labels" error instead of Gmail's cryptic rejection.
 - **Re-proposal dedup survives headless/scheduled teardown (#2381).**
   `record_proposal` wrote its dedup row through `query()`, which never commits,
   so when the scheduler rebuilt the agent between fires (closing the DB
