@@ -89,10 +89,22 @@ def _inbox_message(message_id: str, sender: str) -> dict:
     }
 
 
-def _build_agent_with_fake_gmail(tmp_path: Path, messages: list[dict]):
-    backend = FakeGmailBackend(user_email="me@example.com")
-    for msg in messages:
-        backend.add_message(msg)
+def _build_agent_with_fake_gmail(
+    tmp_path: Path, messages: list[dict], *, backend: FakeGmailBackend | None = None
+):
+    """Build one ``EmailTriageAgent``.
+
+    ``backend`` (optional) lets a caller build a SECOND, wholly separate agent
+    instance against the SAME live mailbox object and the SAME ``state.db`` —
+    exactly what ``query_routes.build_query_agent`` does per HTTP request in
+    production (a fresh agent, reconnected to the same real Gmail account and
+    the same ``~/.gaia/email/state.db``). When omitted, a fresh backend is
+    created and seeded with ``messages``.
+    """
+    if backend is None:
+        backend = FakeGmailBackend(user_email="me@example.com")
+        for msg in messages:
+            backend.add_message(msg)
 
     cfg = EmailAgentConfig(
         gmail_backend=backend,
@@ -191,6 +203,49 @@ def test_undo_with_no_id_restores_single_archive_loop(tmp_path, monkeypatch):
             assert "INBOX" in backend.get_message(m["id"]).get("labelIds", [])
     finally:
         agent.close_db()
+
+
+def test_undo_with_no_id_restores_across_fresh_agent_instance(tmp_path, monkeypatch):
+    """The REAL per-request boundary: ``query_routes.build_query_agent`` mints a
+    brand-new ``EmailTriageAgent`` for every ``/v1/email/query`` call
+    (module docstring: "the sidecar stays stateless") — an in-memory
+    ``_last_archive_batch_id`` on one instance is gone before the very next
+    HTTP request even starts. Archive through agent A here, then build a
+    SEPARATE agent B (same live mailbox + same ``state.db``, exactly like a
+    fresh per-request instance would be), and confirm a bare "undo that" on
+    B still finds and restores A's batch — because the recall must be
+    DB-backed (``action_store``), not agent-instance-scoped."""
+    clock = _Clock(1000.0)
+    monkeypatch.setattr(action_store, "time", clock)
+
+    msgs = [_inbox_message(f"m{i}", f"s{i}@x.com") for i in range(3)]
+    backend = FakeGmailBackend(user_email="me@example.com")
+    for msg in msgs:
+        backend.add_message(msg)
+    ids = [m["id"] for m in msgs]
+
+    agent_a, _ = _build_agent_with_fake_gmail(tmp_path, [], backend=backend)
+    try:
+        agent_a._reset_organize_counter()
+        arch = _call_tool("archive_message_batch", ids)
+        assert arch["ok"] is True
+    finally:
+        agent_a.close_db()
+
+    # A fresh instance, as build_query_agent mints per HTTP request — its
+    # in-memory _last_archive_batch_id starts at None. Nothing survives from
+    # agent A except what's on disk in state.db.
+    agent_b, _ = _build_agent_with_fake_gmail(tmp_path, [], backend=backend)
+    try:
+        assert agent_b._last_archive_batch_id is None
+        undo = _call_tool("undo_archive_batch")  # no id — cross-instance "undo that"
+        assert undo["ok"] is True, f"cross-instance id-less undo should succeed: {undo}"
+        assert undo["data"]["restored"] == 3
+        for mid in ids:
+            labels = backend.get_message(mid).get("labelIds", [])
+            assert "INBOX" in labels, f"{mid} not restored: {labels}"
+    finally:
+        agent_b.close_db()
 
 
 def test_undo_with_no_id_and_no_prior_archive_errors(tmp_path):

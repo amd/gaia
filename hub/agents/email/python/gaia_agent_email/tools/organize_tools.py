@@ -955,10 +955,25 @@ class OrganizeToolsMixin:
         def undo_archive_batch(batch_id: str = "") -> str:
             """Undo a batch archive, restoring every message to the inbox within
             the undo window. Reverses archive_message_batch. Omit batch_id to undo
-            the MOST RECENT archive from this session — use this for a
-            conversational "undo that" / "put those back" with no id given."""
+            the MOST RECENT archive — use this for a conversational "undo that" /
+            "put those back" with no id given (recalled from the persisted action
+            log, so it works even across separate agent requests)."""
             try:
-                batch_id = (batch_id or "").strip() or agent._last_archive_batch_id
+                batch_id = (batch_id or "").strip()
+                if not batch_id:
+                    # Fast path: same agent instance, same turn (e.g. two tool
+                    # calls in one process_query run). The sidecar builds a
+                    # brand-new agent per /query request (#2456), so this
+                    # in-memory handle is discarded before the next request —
+                    # the DB lookup below is the cross-request source of truth.
+                    batch_id = agent._last_archive_batch_id or ""
+                if not batch_id:
+                    batch_id = (
+                        action_store.fetch_last_undoable_batch_id(
+                            db, window_seconds=window
+                        )
+                        or ""
+                    )
                 if not batch_id:
                     return _envelope_err(
                         "No recent archive to undo in this session. Archive some "

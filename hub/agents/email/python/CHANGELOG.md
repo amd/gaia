@@ -21,12 +21,16 @@ contract version is tracked separately as
 ### Fixed
 
 - **Two-turn "archive several… then undo" is now actually reachable (#2456).**
-  "Undo that" with no id no longer demands the internal batch uuid: the agent
-  tracks the last archive `batch_id` per session, and `undo_archive_batch`
-  recalls it when none is supplied — restoring the most recently archived
-  batch. Paired with the undo window already raised to a chat-speed 120s
-  (#2447), a normal two-turn "archive several… then undo" flow now completes
-  without the user ever seeing or typing a batch id.
+  "Undo that" with no id no longer demands the internal batch uuid:
+  `undo_archive_batch` recalls the most recently archived, still-undoable
+  batch from the persisted action log when none is supplied. The recall is
+  DB-backed (`action_store.fetch_last_undoable_batch_id`), not an in-memory
+  agent attribute — the sidecar builds a brand-new agent per `/v1/email/query`
+  request, so anything kept only on the Python instance is gone before the
+  very next turn even starts. Paired with the undo window already raised to a
+  chat-speed 120s (#2447), a normal two-turn "archive several… then undo" flow
+  now completes without the user ever seeing or typing a batch id, and it
+  survives the real per-request agent boundary, not just a same-instance test.
 
 - **Archive verifies it took effect, and same-day search finds today's mail (#2406).**
   Archiving now inspects the provider's post-mutation `INBOX` label and fails

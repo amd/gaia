@@ -534,10 +534,12 @@ class EmailTriageAgent(
         # mid-run. Re-minted per turn by _reset_organize_counter.
         self._organize_batch_id = uuid.uuid4().hex
 
-        # #2456 — the batch_id of the most recent archive in THIS session. Unlike
-        # ``_organize_batch_id`` (re-minted every turn), this survives across
-        # turns so a conversational "undo that" in the NEXT turn can restore the
-        # last archive without the user quoting an internal batch uuid.
+        # #2456 — same-instance fast path only: the batch_id of the most recent
+        # archive on THIS agent object. The sidecar builds a fresh agent per
+        # request, so this does NOT survive across turns in production —
+        # ``undo_archive_batch`` falls back to
+        # ``action_store.fetch_last_undoable_batch_id`` (the persisted, cross-
+        # request source of truth) when this is unset.
         self._last_archive_batch_id: Optional[str] = None
 
         # Session-scoped triage preferences — sender priorities and
