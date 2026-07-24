@@ -69,6 +69,15 @@ contract version is tracked separately as
   instantly; a timeout means up-but-slow, or a different host such as the Gmail
   backend, so it must not be relabelled "restart Lemonade").
 
+- **`gaia email -q` surfaces the actionable Lemonade-down message instead of a
+  generic "no final answer" (#2444).** When the agent loop handles a failure
+  internally (Lemonade unreachable being the common case for the CLI) it sets an
+  actionable `final_answer` and returns it *without* emitting an `answer` event,
+  so the `/query` stream ended with no terminal event and the CLI fell back to
+  "The agent finished without producing a final answer." The route now captures
+  the loop's return value and surfaces that computed message as the terminal
+  event — CLI↔Agent-UI parity on the Lemonade-down error copy.
+
 - **Applying an existing label by its display name no longer fails with
   `Invalid label` (#2428).** `label_message` / `move_to_label` (and their batch
   variants) resolve a label's display name to its provider id via `list_labels`
