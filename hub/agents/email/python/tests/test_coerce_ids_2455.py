@@ -29,6 +29,14 @@ def test_coerce_ids_normalizes_to_bare_ids(raw):
     assert _coerce_ids(raw) == _EXPECTED
 
 
+def test_coerce_ids_single_bare_id():
+    # Single-message batches: no comma to split on, so this exercises a
+    # different branch than the multi-id cases above.
+    assert _coerce_ids("id1") == ["id1"]
+    assert _coerce_ids(["id1"]) == ["id1"]
+    assert _coerce_ids('"id1"') == ["id1"]
+
+
 def test_coerce_ids_empty_and_none():
     assert _coerce_ids(None) == []
     assert _coerce_ids("") == []
