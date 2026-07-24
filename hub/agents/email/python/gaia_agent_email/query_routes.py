@@ -103,6 +103,10 @@ class _QueryRun:
         self.agent = agent
         self.handler = handler
         self.cancel_event = threading.Event()
+        # ``process_query``'s return dict, captured so the stream can surface the
+        # agent's own computed answer if the run ends without streaming a
+        # terminal event (see ``_terminal_from_run_result``, #2444).
+        self.result: Optional[Dict[str, Any]] = None
 
 
 class _RunRegistry:
@@ -225,6 +229,36 @@ class QueryCancelResponse(_Strict):
 def _sse(event: Dict[str, Any]) -> str:
     """Frame one canonical event as a single SSE ``data:`` line."""
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+
+def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Build a terminal event from ``process_query``'s return dict (#2444).
+
+    The base agent handles some failures — Lemonade unreachable being the most
+    common for ``gaia email -q`` — *inside* its loop: it sets an actionable
+    ``final_answer`` and breaks WITHOUT calling ``print_final_answer``, so no
+    ``answer`` event ever reaches the SSE handler. The Agent UI surfaces that
+    copy because the loop returns it; the CLI's terminal-error path used to fall
+    back to a generic "no final answer" here, dropping the actionable message.
+    Surface the agent's own ``result`` so both front-doors show the same copy.
+    """
+    text: Optional[str] = None
+    status: Optional[str] = None
+    if isinstance(result, dict):
+        raw = result.get("result") or result.get("answer")
+        if isinstance(raw, str) and raw.strip():
+            text = raw.strip()
+        status = result.get("status")
+    if text is None:
+        # No computed answer either — keep failing loudly, never silently.
+        return {
+            "type": "error",
+            "detail": "The agent finished without producing a final answer.",
+            "status": 500,
+        }
+    if status == "success":
+        return {"type": "final", "answer": text}
+    return {"type": "error", "detail": text, "status": 500}
 
 
 # ---------------------------------------------------------------------------
@@ -459,9 +493,9 @@ async def query(request: QueryRequest) -> StreamingResponse:
     def _run_agent() -> None:
         try:
             if max_steps is not None:
-                agent.process_query(user_query, max_steps=max_steps)
+                run.result = agent.process_query(user_query, max_steps=max_steps)
             else:
-                agent.process_query(user_query)
+                run.result = agent.process_query(user_query)
         except Exception as exc:  # surface loudly as a terminal error event
             logger.exception("email /query run failed for run_id=%s", run.run_id)
             # Lemonade-down is the most common failure; emit actionable copy
@@ -514,14 +548,12 @@ async def query(request: QueryRequest) -> StreamingResponse:
                 if canonical.get("type") in TERMINAL_TYPES:
                     terminated = True
             if not terminated:
-                # No final/error was produced — fail loud rather than close silently.
-                yield _sse(
-                    {
-                        "type": "error",
-                        "detail": "The agent finished without producing a final answer.",
-                        "status": 500,
-                    }
-                )
+                # No final/error streamed — the loop may have set an actionable
+                # answer on an internal error branch (e.g. Lemonade unreachable)
+                # and returned it without emitting an ``answer`` event. Surface
+                # that computed message so the CLI shows the same copy the Agent
+                # UI does, falling back to a loud generic error (#2444).
+                yield _sse(_terminal_from_run_result(run.result))
         finally:
             # If the client disconnected mid-run, ask the loop to stop.
             handler.cancelled.set()

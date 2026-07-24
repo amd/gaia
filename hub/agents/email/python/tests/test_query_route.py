@@ -189,6 +189,28 @@ class _UnrelatedErrorFakeAgent:
         raise ValueError("triage produced malformed JSON at row 4")
 
 
+class _InternalErrorFakeAgent:
+    """Mimics the base agent's Lemonade-down branch: it sets an actionable
+    ``final_answer`` and returns a failed result WITHOUT calling
+    ``print_final_answer`` — so no ``answer`` event ever reaches the stream (#2444).
+    """
+
+    ANSWER = (
+        "Local Lemonade Server is not reachable at http://localhost:13305 — "
+        "start it with `lemonade-server serve` (or run `gaia init`), then retry."
+    )
+
+    def __init__(self):
+        self.conversation_history = []
+        self.console = None
+        self._cancel_event = None
+
+    def process_query(self, query, max_steps=None):
+        self.console.print_processing_start(query, 20, "fake-model")
+        # Note: no print_final_answer — the real loop breaks on the error branch.
+        return {"status": "failed", "result": self.ANSWER, "error_count": 1}
+
+
 # ---------------------------------------------------------------------------
 # Happy path — the canonical event SEQUENCE
 # ---------------------------------------------------------------------------
@@ -339,6 +361,20 @@ def test_run_failure_ends_with_terminal_error(app_client, monkeypatch):
     assert events[-1]["type"] == "error"
     assert events[-1]["status"] == 500
     assert "Lemonade" in events[-1]["detail"]
+
+
+def test_internal_error_branch_surfaces_agent_answer(app_client, monkeypatch):
+    # The loop set an actionable answer but never emitted an ``answer`` event.
+    # The stream must surface that copy, not a generic "no final answer" (#2444).
+    fake = _InternalErrorFakeAgent()
+    monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
+    resp = app_client.post("/v1/email/query", json=_req())
+    assert resp.status_code == 200
+    events = _parse_sse(resp.text)
+    assert events[-1]["type"] == "error"
+    assert events[-1]["status"] == 500
+    assert events[-1]["detail"] == _InternalErrorFakeAgent.ANSWER
+    assert "producing a final answer" not in events[-1]["detail"]
 
 
 def _assert_actionable_lemonade_detail(detail: str) -> None:
