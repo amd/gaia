@@ -31,7 +31,15 @@ contract version is tracked separately as
   chat-speed 120s (#2447), a normal two-turn "archive several… then undo" flow
   now completes without the user ever seeing or typing a batch id, and it
   survives the real per-request agent boundary, not just a same-instance test.
-
+- **Batch archive/organize tools accept LLM-quoted, comma-joined ids (#2455).**
+  Asking the agent to archive several inbox messages in one call ("Archive
+  these three emails…") failed silently: the model emits its ids as a quoted,
+  comma-joined string (`"id1","id2","id3"`), and `_coerce_ids` split on the
+  comma without stripping the quotes, so Gmail rejected every id with "Invalid
+  id value" and nothing was archived. `_coerce_ids` now strips surrounding
+  quotes/brackets from every id — list or string, single id or batch — so the
+  archive (and the other batch organize tools built on the same helper)
+  succeeds.
 - **Archive verifies it took effect, and same-day search finds today's mail (#2406).**
   Archiving now inspects the provider's post-mutation `INBOX` label and fails
   loudly instead of reporting a false success when the message is still in the
