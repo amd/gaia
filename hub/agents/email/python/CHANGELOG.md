@@ -20,6 +20,14 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Archive verifies it took effect, and same-day search finds today's mail (#2406).**
+  Archiving now inspects the provider's post-mutation `INBOX` label and fails
+  loudly instead of reporting a false success when the message is still in the
+  inbox; and `after:today` / relative-day operators normalize to a
+  timezone-robust `newer_than:1d` window so today's mail is reliably found. Both
+  fixes apply on the REST surface (`/v1/email/archive`, `/v1/email/search`) as
+  well as the agent's in-loop tools — a no-op archive returns an actionable 409,
+  not a bare 500.
 - **Re-proposal dedup survives headless/scheduled teardown (#2381).**
   `record_proposal` wrote its dedup row through `query()`, which never commits,
   so when the scheduler rebuilt the agent between fires (closing the DB

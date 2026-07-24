@@ -1892,3 +1892,85 @@ def test_spec_page_serves_html(client):
     resp = client.get("/v1/email/spec")
     assert resp.status_code == 200
     assert "<html" in resp.text.lower()
+
+
+# ---------------------------------------------------------------------------
+# 8. REST parity for the #2406 fixes — the same-day search normalization and
+#    the archive-verify guard must reach the REST endpoints, not just the
+#    in-loop tool path (both surfaces close #2406).
+# ---------------------------------------------------------------------------
+
+
+def test_search_rest_normalizes_same_day_operator(client):
+    # A raw `after:today` from a REST caller must be normalized to the
+    # timezone-robust `newer_than:1d` window before it reaches the backend —
+    # parity with the agent's in-loop search (#2406).
+    fake = _FakeSearchBackend([])
+    client.app.dependency_overrides[api_routes.get_search_backend] = lambda: fake
+    try:
+        resp = client.post("/v1/email/search", json={"query": "from:alice after:today"})
+    finally:
+        client.app.dependency_overrides.pop(api_routes.get_search_backend, None)
+    assert resp.status_code == 200, resp.text
+    assert fake.calls == [
+        {
+            "query": "from:alice newer_than:1d",
+            "label_ids": None,
+            "max_results": 25,
+            "page_token": None,
+        }
+    ]
+
+
+class _NoOpArchiveMailbox(_FakeMailbox):
+    """Archive is a silent no-op — the modify response still echoes INBOX, the
+    false-success case #2406 guards against (mirrors the label-based backend
+    whose post-mutation labelIds still contain INBOX)."""
+
+    def archive_message(self, message_id):
+        # Return the (unchanged) message so post_labels still carries INBOX,
+        # tripping archive_message_impl's verify guard.
+        return {
+            "id": message_id,
+            "labelIds": list(self.messages[message_id]["labelIds"]),
+        }
+
+
+def test_archive_rest_surfaces_actionable_error_not_500(monkeypatch):
+    # When the provider no-ops the archive (message still in INBOX),
+    # archive_message_impl raises RuntimeError. The REST handler must translate
+    # that to a 4xx carrying the actionable message — not leak a bare 500 with
+    # the guidance stripped (#2406).
+    from gaia_agent_email import action_store
+    from gaia_agent_email import api_routes as email_routes
+
+    from gaia.database.mixin import DatabaseMixin
+
+    class _DB(DatabaseMixin):
+        pass
+
+    db = _DB()
+    db.init_db(":memory:")
+    action_store.init_schema(db)
+
+    mailbox = _NoOpArchiveMailbox()
+    monkeypatch.setattr(email_routes, "resolve_action_db", lambda: db)
+    monkeypatch.setattr(
+        email_routes, "_resolve_mutate_backend", lambda provider: (mailbox, "google")
+    )
+    client = TestClient(export_openapi.build_app())
+
+    tok = client.post(
+        "/v1/email/confirm", json={"action": "archive", "message_id": "m1"}
+    ).json()["confirmation_token"]
+    resp = client.post(
+        "/v1/email/archive", json={"message_id": "m1", "confirmation_token": tok}
+    )
+
+    assert resp.status_code == 409, resp.text  # not 500
+    assert "archive" in resp.json()["detail"].lower()
+    # The message is genuinely still in the inbox — no false "archived".
+    assert "INBOX" in mailbox.messages["m1"]["labelIds"]
+    # No phantom undo row was recorded for a failed archive.
+    rows = db.query("SELECT COUNT(*) AS n FROM email_actions", one=True)
+    assert rows["n"] == 0
