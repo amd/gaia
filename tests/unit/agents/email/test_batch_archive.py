@@ -226,8 +226,9 @@ class TestBatchArchive20Plus:
 
 
 class TestFetchBatchUndoable:
-    """``action_store.fetch_batch_undoable`` returns the in-window,
-    not-yet-undone rows for a batch and excludes stale / undone ones.
+    """``action_store.fetch_batch_undoable`` returns the not-yet-undone rows for
+    a batch while the batch's window (anchored to COMPLETION — the latest op —
+    since #2163) is still open, and excludes undone ones.
     """
 
     @pytest.fixture
@@ -259,28 +260,34 @@ class TestFetchBatchUndoable:
         rows = action_store.fetch_batch_undoable(db, batch_id="b1", window_seconds=30)
         assert {r["message_id"] for r in rows} == {"m0", "m1", "m2"}
 
-    def test_excludes_stale_and_undone_rows(self, db):
+    def test_undone_excluded_and_window_anchored_to_completion(self, db):
+        # #2163 — the window is anchored to batch COMPLETION (the latest op), not
+        # per row. An individually-older row that shares a batch whose latest op
+        # is fresh stays undoable, so the earliest items of a multi-second run no
+        # longer expire mid-run. Already-undone rows are still excluded per row.
         a_fresh = action_store.record_action(
             db, action_type="archive", message_id="fresh", batch_id="b1"
         )
-        a_stale = action_store.record_action(
-            db, action_type="archive", message_id="stale", batch_id="b1"
+        a_early = action_store.record_action(
+            db, action_type="archive", message_id="early", batch_id="b1"
         )
         a_undone = action_store.record_action(
             db, action_type="archive", message_id="undone", batch_id="b1"
         )
+        # ``early`` is older than the window in isolation, but the batch's latest
+        # op (``fresh``) is well within it — so the whole batch is still undoable.
         db.update(
             "email_actions",
-            {"created_at": time.time() - 3600},
+            {"created_at": time.time() - 20},
             "action_id = :id",
-            {"id": a_stale},
+            {"id": a_early},
         )
         action_store.mark_undone(db, action_id=a_undone)
 
         rows = action_store.fetch_batch_undoable(db, batch_id="b1", window_seconds=30)
         ids = {r["action_id"] for r in rows}
         assert a_fresh in ids
-        assert a_stale not in ids
+        assert a_early in ids  # #2163: kept — window runs from completion
         assert a_undone not in ids
 
     def test_unknown_batch_returns_empty(self, db):

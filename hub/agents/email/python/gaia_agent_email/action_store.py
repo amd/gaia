@@ -189,21 +189,32 @@ def fetch_batch_undoable(
 ) -> list[Dict[str, Any]]:
     """Return every action row in ``batch_id`` that is still undoable.
 
-    A row is undoable when it has not been undone and is inside the window.
-    Stale or already-undone rows are filtered out — this is the bulk
-    analogue of ``fetch_undoable`` for the batch-undo follow-up (#1270).
-    Returns ``[]`` for an unknown batch.
+    The undo window is measured from batch **completion** (the latest
+    ``created_at`` in the batch), NOT per row (#2163). A multi-item bulk run
+    takes real time; anchoring per row let the earliest items' windows expire
+    mid-run, so the closing "undo within the window" offer was already false for
+    them. Anchoring to completion keeps every item undoable for
+    ``window_seconds`` after the last op — all-or-nothing per batch. The window
+    still genuinely expires (from completion), so undo is not unbounded.
+
+    Already-undone rows are still filtered out per row. Returns ``[]`` for an
+    unknown batch or once the whole-batch window has elapsed.
     """
-    rows = db.query(
-        "SELECT * FROM email_actions WHERE batch_id = :b ORDER BY created_at",
-        {"b": batch_id},
+    rows = list(
+        db.query(
+            "SELECT * FROM email_actions WHERE batch_id = :b ORDER BY created_at",
+            {"b": batch_id},
+        )
+        or ()
     )
-    cutoff = time.time() - window_seconds
+    if not rows:
+        return []
+    completed_at = max(row["created_at"] for row in rows)
+    if time.time() - completed_at > window_seconds:
+        return []
     out: list[Dict[str, Any]] = []
-    for row in rows or ():
+    for row in rows:
         if row["undone_at"] is not None:
-            continue
-        if row["created_at"] < cutoff:
             continue
         payload = json.loads(row["payload_json"]) if row["payload_json"] else {}
         out.append(
