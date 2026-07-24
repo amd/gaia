@@ -413,15 +413,31 @@ _BATCH_THRESHOLD_ERROR = (
 # ---------------------------------------------------------------------------
 
 
+def _clean_id(x) -> str:
+    # LLMs wrap ids in quotes/brackets (e.g. '"id1"', '[id1'); strip them so
+    # Gmail doesn't reject the literal punctuation as an "Invalid id value".
+    return str(x).strip().strip("'\"[] ")
+
+
 def _coerce_ids(message_ids):
-    """Ensure message_ids is a list of strings. LLMs send comma-separated strings."""
+    """Ensure message_ids is a list of bare id strings.
+
+    LLMs send ids in several shapes — a Python list, a comma-joined string, a
+    quoted comma-joined string (``"id1","id2"``), or a JSON-array-shaped string
+    (``["id1","id2"]``). Normalize every token to a bare id in all cases.
+    """
     if message_ids is None:
         return []
     if isinstance(message_ids, list):
-        return message_ids
+        return [cleaned for x in message_ids if (cleaned := _clean_id(x))]
     if isinstance(message_ids, str):
+        s = message_ids.strip()
+        if s.startswith("[") and s.endswith("]"):
+            s = s[1:-1]
         return [
-            x.strip() for x in message_ids.replace(";", ",").split(",") if x.strip()
+            cleaned
+            for x in s.replace(";", ",").split(",")
+            if (cleaned := _clean_id(x))
         ]
     return []
 
