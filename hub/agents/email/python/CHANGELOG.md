@@ -28,6 +28,14 @@ contract version is tracked separately as
   fixes apply on the REST surface (`/v1/email/archive`, `/v1/email/search`) as
   well as the agent's in-loop tools — a no-op archive returns an actionable 409,
   not a bare 500.
+- **IMPORTANT / account-security mail is never auto-archived unattended (#2426).**
+  At autonomy `full`, one cycle could auto-archive a provider-flagged IMPORTANT
+  message (e.g. a Google security alert) the local model mislabeled as promotional.
+  `TrustPolicy.decide` now applies a one-directional floor: an `archive` candidate
+  that is Gmail-`IMPORTANT` / Outlook high-importance, or from a narrow set of
+  account-security senders, is downgraded to a proposal at every level — a higher
+  level or earned trust can widen what runs silently but can never override it.
+  Ordinary promotional clutter still auto-archives.
 - **Preferences persist without the embedder, and survive upgrade (#2427).**
   Priority/low-priority senders and category defaults now persist in the agent's
   `state.db` (like the trust ledger) instead of the embedding-backed MemoryStore,
