@@ -71,6 +71,12 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+          # checkout@v7 refuses fork-PR checkout under pull_request_target by default (pwn-request
+          # guard). Safe to opt in HERE because the fork tree is only diffed and READ as review
+          # input — never executed. The ONLY step that runs PR code (the evidence stage below) is
+          # gated to head.repo.fork == false. INVARIANT: any future step that builds/installs/runs
+          # the checked-out tree MUST carry that same fork gate, or this opt-in becomes an RCE.
+          allow-unsafe-pr-checkout: true
 
       - name: Generate PR diff
         if: github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review_comment'
