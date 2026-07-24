@@ -2371,6 +2371,40 @@ class TestLLMExtraction:
         assert "permission" not in cats
         assert "system" not in cats
 
+    def test_update_dedup_does_not_self_supersede(self, extract_host):
+        """Update-consolidation over near-identical content stays recallable.
+
+        Regression for #2446: store() dedups near-identical content back into
+        the same row and returns old_id; the update path must NOT then mark the
+        row as superseded_by=old_id, which would hide it from recall.
+        """
+        extract_host._memory_context = "global"
+        store = extract_host._memory_store
+
+        old_id = store.store(
+            category="preference",
+            content="Prioritize email from alice@example.com",
+            source="llm_extract",
+            context="global",
+        )
+
+        # An "update" whose content dedups back into the same row.
+        ops = [
+            {
+                "op": "update",
+                "knowledge_id": old_id,
+                "category": "preference",
+                "content": "Prioritize email from alice@example.com",
+            }
+        ]
+        existing_items = [{"id": old_id, "category": "preference", "confidence": 0.4}]
+        extract_host._execute_extraction_operations(ops, existing_items)
+
+        # The preference must still be recallable — not self-superseded.
+        results = store.get_by_category("preference", context="global")
+        assert any(r["id"] == old_id for r in results)
+        assert all(r["superseded_by"] is None for r in results)
+
     def test_after_process_query_stores_conversation(self, extract_host):
         """_after_process_query() stores both user and assistant turns."""
         extract_host._memory_session_id = "test-session-extraction"
