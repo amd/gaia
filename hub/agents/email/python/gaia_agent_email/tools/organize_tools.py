@@ -586,21 +586,22 @@ class OrganizeToolsMixin:
                 # (counter). Avoids a redundant round-trip.
                 prior = backend.get_message(message_id)
                 agent._record_organize_op(message_id, _extract_sender(prior))
-                return _envelope_ok(
-                    archive_message_impl(
-                        backend,
-                        db,
-                        message_id=message_id,
-                        prior=prior,
-                        mailbox=provider,
-                        # #2163 — share the per-turn undo batch so a loop of single
-                        # archives is undoable as ONE batch (undo_archive_batch),
-                        # with a completion-anchored window instead of a per-op
-                        # window that expires mid-run.
-                        batch_id=agent._organize_batch_id,
-                        debug=debug_flag,
-                    )
+                payload = archive_message_impl(
+                    backend,
+                    db,
+                    message_id=message_id,
+                    prior=prior,
+                    mailbox=provider,
+                    # #2163 — share the per-turn undo batch so a loop of single
+                    # archives is undoable as ONE batch (undo_archive_batch),
+                    # with a completion-anchored window instead of a per-op
+                    # window that expires mid-run.
+                    batch_id=agent._organize_batch_id,
+                    debug=debug_flag,
                 )
+                # #2456 — remember this batch so a next-turn "undo that" can find it.
+                agent._last_archive_batch_id = agent._organize_batch_id
+                return _envelope_ok(payload)
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
             except Exception as exc:
@@ -950,6 +951,8 @@ class OrganizeToolsMixin:
                 )
                 for _mid in message_ids:
                     agent._record_organize_op(_mid, "")
+                # #2456 — remember this batch so a next-turn "undo that" can find it.
+                agent._last_archive_batch_id = batch_id
                 return _envelope_ok(
                     {
                         "batch_id": batch_id,
@@ -965,10 +968,33 @@ class OrganizeToolsMixin:
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def undo_archive_batch(batch_id: str) -> str:
-            """Undo a batch archive by its batch_id, restoring every message
-            to the inbox within the undo window. Reverses archive_message_batch."""
+        def undo_archive_batch(batch_id: str = "") -> str:
+            """Undo a batch archive, restoring every message to the inbox within
+            the undo window. Reverses archive_message_batch. Omit batch_id to undo
+            the MOST RECENT archive — use this for a conversational "undo that" /
+            "put those back" with no id given (recalled from the persisted action
+            log, so it works even across separate agent requests)."""
             try:
+                batch_id = (batch_id or "").strip()
+                if not batch_id:
+                    # Fast path: same agent instance, same turn (e.g. two tool
+                    # calls in one process_query run). The sidecar builds a
+                    # brand-new agent per /query request (#2456), so this
+                    # in-memory handle is discarded before the next request —
+                    # the DB lookup below is the cross-request source of truth.
+                    batch_id = agent._last_archive_batch_id or ""
+                if not batch_id:
+                    batch_id = (
+                        action_store.fetch_last_undoable_batch_id(
+                            db, window_seconds=window
+                        )
+                        or ""
+                    )
+                if not batch_id:
+                    return _envelope_err(
+                        "No recent archive to undo in this session. Archive some "
+                        "messages first, then say 'undo that' to restore them."
+                    )
                 result = undo_archive_batch_impl(
                     agent._backend_for_action,
                     db,

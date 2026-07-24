@@ -223,7 +223,8 @@ td:nth-child(3) {
   Reversible mailbox mutations exposed on the contract (#1779). Each acts on the
   mailbox connected in GAIA on the host and is gated on a single-use confirmation
   token from <code>/v1/email/confirm</code> — the same explicit-confirmation rule as
-  <code>/v1/email/send</code>. Both are reversible within a 30-second undo window via
+  <code>/v1/email/send</code>. Both are reversible within a 120-second undo
+  window (configurable via <code>GAIA_EMAIL_UNDO_WINDOW_SECONDS</code>) via
   the ungated <code>/unarchive</code> · <code>/unquarantine</code>.
 </p>
 

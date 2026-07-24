@@ -110,10 +110,10 @@ class EmailAgentConfig:
     - ``silent_mode``: suppress all console output (for JSON-only API
       usage).
     - ``output_dir``: where the agent dumps transcripts / artifacts.
-    - ``undo_window_seconds``: how long after a soft-delete the user has
-      to ``restore_message``. After this window ``restore_message``
-      raises with a "use Trash to recover" message. Defaults to 120 (a
-      chat-speed floor) but is overridable via the
+    - ``undo_window_seconds``: how long after a soft-delete/archive the user
+      has to ``restore_message`` / ``undo_archive_batch``. After this window
+      the reversal raises with a "use Trash to recover" message. Defaults to
+      120 (a chat-speed floor) but is overridable via the
       ``GAIA_EMAIL_UNDO_WINDOW_SECONDS`` env var so chat-mediated bulk
       operations — which run through the slower LLM tool-loop — stay
       undoable after completion (#2447).
