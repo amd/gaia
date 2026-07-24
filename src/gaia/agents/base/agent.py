@@ -2016,6 +2016,36 @@ Do NOT wrap conversational replies in JSON.
             logger.error(error_msg)
             return {"status": "error", "error": error_msg}
 
+        # Reject arguments the tool does not accept before dispatch. A model that
+        # hallucinates a kwarg (e.g. mailbox= on archive_message_batch) would
+        # otherwise raise a bare TypeError inside tool(**tool_args); surface a
+        # structured, recoverable error naming the accepted parameters instead.
+        # Tools declaring **kwargs accept anything, so they opt out.
+        accepts_var_keyword = any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in sig.parameters.values()
+        )
+        if not accepts_var_keyword:
+            accepted_args = {
+                name
+                for name, param in sig.parameters.items()
+                if name != "return"
+                and param.kind
+                not in (
+                    inspect.Parameter.VAR_KEYWORD,
+                    inspect.Parameter.VAR_POSITIONAL,
+                )
+            }
+            unexpected_args = [arg for arg in tool_args if arg not in accepted_args]
+            if unexpected_args:
+                error_msg = (
+                    f"Unexpected argument(s) for {tool_name}: "
+                    f"{', '.join(sorted(unexpected_args))}. "
+                    f"Accepted argument(s): {', '.join(sorted(accepted_args)) or 'none'}."
+                )
+                logger.error(error_msg)
+                return {"status": "error", "error": error_msg}
+
         try:
             result = self._call_tool_bounded(tool, tool_args, tool_name)
             logger.debug(f"Tool execution result: {result}")
