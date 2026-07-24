@@ -1292,7 +1292,10 @@ def _search_inbox(
     a list view, not a read. Imported lazily so the OpenAPI export stays
     dependency-light (it never pulls the live-mail machinery).
     """
-    from gaia_agent_email.tools.read_tools import _format_message_for_llm
+    from gaia_agent_email.tools.read_tools import (
+        _format_message_for_llm,
+        normalize_gmail_date_operators,
+    )
 
     # With neither a query nor explicit labels, scope to the INBOX so the
     # empty-search default actually lists the inbox. Without this, live Gmail
@@ -1304,7 +1307,9 @@ def _search_inbox(
         effective_labels = ["INBOX"]
 
     listing = backend.list_messages(
-        query=query,
+        # Normalize same-day/relative date operators (after:today → newer_than:1d)
+        # so REST search matches the agent's in-loop path (#2406).
+        query=normalize_gmail_date_operators(query) if query else query,
         label_ids=effective_labels,
         max_results=max_results,
         page_token=page_token,
@@ -2410,10 +2415,24 @@ async def confirm_action(
     )
 
 
+_ARCHIVE_VERIFY_409 = {
+    409: {
+        "description": (
+            "The archive did not take effect — the message is still in the inbox "
+            "(the provider's modify call did not remove the INBOX label)."
+        )
+    }
+}
+
+
 @router.post(
     "/archive",
     response_model=EmailArchiveResponse,
-    responses={**_CONNECTOR_ERROR_RESPONSES, **_AMBIGUOUS_PROVIDER_400},
+    responses={
+        **_CONNECTOR_ERROR_RESPONSES,
+        **_AMBIGUOUS_PROVIDER_400,
+        **_ARCHIVE_VERIFY_409,
+    },
 )
 async def archive_email(request: EmailArchiveRequest) -> EmailArchiveResponse:
     """Archive a message — gated on confirmation, reversible for 30s.
@@ -2448,6 +2467,10 @@ async def archive_email(request: EmailArchiveRequest) -> EmailArchiveResponse:
             mailbox=provider,
             batch_id=batch_id,
         )
+    except RuntimeError as e:
+        # Archive did not take effect (message still in inbox) — surface the
+        # actionable message instead of a bare 500 (#2406). Mirrors archive_folder.
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except (AuthRequiredError, ScopeMismatchError, ConnectionRevokedError) as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ConfigurationError as e:

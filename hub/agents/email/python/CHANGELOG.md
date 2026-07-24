@@ -20,6 +20,14 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Archive verifies it took effect, and same-day search finds today's mail (#2406).**
+  Archiving now inspects the provider's post-mutation `INBOX` label and fails
+  loudly instead of reporting a false success when the message is still in the
+  inbox; and `after:today` / relative-day operators normalize to a
+  timezone-robust `newer_than:1d` window so today's mail is reliably found. Both
+  fixes apply on the REST surface (`/v1/email/archive`, `/v1/email/search`) as
+  well as the agent's in-loop tools — a no-op archive returns an actionable 409,
+  not a bare 500.
 - **Draft/reply resolves a target from a sender or topic (#2403).**
   `draft_reply` no longer demands a concrete message id or the exact subject
   line. Its `message_id` argument now accepts a natural reference — a sender
