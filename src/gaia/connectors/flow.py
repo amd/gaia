@@ -543,6 +543,22 @@ async def start_device_flow(provider_id: str, scopes: Iterable[str]) -> Dict[str
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.post(device_code_url, data=body)
     if resp.status_code != 200:
+        # AADSTS9002346: the app registration is scoped to personal Microsoft
+        # accounts only, so the ``common`` endpoint (the default since v0.23.0)
+        # rejects it. Name the exact migration step instead of making the user
+        # decode the raw AADSTS error — a personal-account-only app must use the
+        # ``consumers`` tenant.
+        if "AADSTS9002346" in resp.text:
+            raise ConnectorsError(
+                f"Device-code request for {provider_id} was rejected: this app "
+                "registration is configured for personal Microsoft accounts only "
+                "(Outlook.com / Hotmail / Live), but GAIA now defaults to the "
+                "'common' tenant. Set GAIA_MICROSOFT_TENANT=consumers and connect "
+                "again, e.g.:\n"
+                "  GAIA_MICROSOFT_TENANT=consumers gaia connectors connect "
+                f"{provider_id} --device\n"
+                "See docs/connectors/microsoft."
+            )
         raise ConnectorsError(
             f"Device-code request for {provider_id} failed with status "
             f"{resp.status_code}: {resp.text[:300]}. Check the client id / "
