@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import os
 import re
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional
 
@@ -514,6 +515,12 @@ class EmailTriageAgent(
         # because the agent loop tear-down happens between turns.
         self._organize_op_count = 0
         self._organize_distinct_senders: set[str] = set()
+        # #2163 — per-turn undo batch. A loop of single archive_message calls in
+        # one turn shares this handle, so the set is undoable as ONE batch whose
+        # window is anchored to completion (see action_store.fetch_batch_undoable),
+        # not per-op — otherwise the earliest archives' undo windows expired
+        # mid-run. Re-minted per turn by _reset_organize_counter.
+        self._organize_batch_id = uuid.uuid4().hex
 
         # Session-scoped triage preferences — sender priorities and
         # category defaults that survive across queries within one agent
@@ -1516,6 +1523,9 @@ class EmailTriageAgent(
     def _reset_organize_counter(self) -> None:
         self._organize_op_count = 0
         self._organize_distinct_senders = set()
+        # Fresh per-turn undo batch handle (#2163) — a new turn's archives must
+        # not join the prior turn's (already-completed) undo batch.
+        self._organize_batch_id = uuid.uuid4().hex
 
     def _record_organize_op(self, _message_id: str, sender: str) -> None:
         """Bump the per-turn organize counters. Called by organize-tool

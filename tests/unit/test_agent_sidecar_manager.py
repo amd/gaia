@@ -87,6 +87,32 @@ def test_email_spec_dev_src_dir_resolves_under_repo_root():
     assert builtin_specs()["email"].dev_src_dir == expected
 
 
+def test_real_email_spec_dev_spawn_has_nonempty_module_and_existing_app_dir(
+    monkeypatch,
+):
+    """Regression guard for #2441's misdiagnosis: the dev-mode spawn was NEVER
+    the source of the "Empty module name" crash (that was an invalid
+    PYTHON_KEYRING_BACKEND). Prove it here against the REAL builtin email spec —
+    the dev spawn always yields a non-empty import module and an app-dir that
+    exists on disk in a source checkout."""
+    monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
+    spec = builtin_specs()["email"]
+    # Non-empty import module (the value uvicorn __import__s).
+    module = spec.dev_module.split(":", 1)[0]
+    assert module, "dev_module import path must not be empty"
+    assert spec.dev_module == "server:app"
+
+    m = mgr.AgentSidecarManager(spec)
+    argv, kwargs = m.build_spawn_command(port=9127)
+    app_dir = Path(argv[argv.index("--app-dir") + 1])
+    assert app_dir == spec.dev_src_dir / spec.dev_app_dir
+    # In this source checkout the app-dir (and server.py) really exist.
+    assert app_dir.is_dir(), f"dev app-dir does not exist: {app_dir}"
+    assert (app_dir / "server.py").is_file()
+    # The module uvicorn loads is the non-empty top-level `server`, not empty.
+    assert "server:app" in argv and "" not in argv
+
+
 # ---------------------------------------------------------------------------
 # errors.py — relocated hierarchy + backward-compat shim
 # ---------------------------------------------------------------------------
