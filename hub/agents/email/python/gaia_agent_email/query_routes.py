@@ -231,13 +231,18 @@ def _sse(event: Dict[str, Any]) -> str:
 # Terminal-error classification (issue #2139)
 # ---------------------------------------------------------------------------
 
-# Connection/timeout-shaped fragments of the ``requests`` / ``urllib3`` /
-# ``httpx`` error reprs a down or unreachable Lemonade Server produces. Those
-# transport errors are siblings of the builtin ``ConnectionError`` (under
-# ``OSError``, or under ``httpx.HTTPError``), so an ``isinstance`` check alone
-# misses them — the string shape is the reliable signal. Deliberately narrow:
-# a non-match falls through to the raw exception text so unrelated failures are
-# never masked behind a Lemonade message.
+# Connection-establishment fragments of the ``requests`` / ``urllib3`` /
+# ``httpx`` error reprs a down Lemonade Server produces. Those transport errors
+# are siblings of the builtin ``ConnectionError`` (under ``OSError``, or under
+# ``httpx.HTTPError``), so an ``isinstance`` check alone misses them — the string
+# shape is the reliable signal. Deliberately narrow: a non-match falls through to
+# the raw exception text so unrelated failures are never masked.
+#
+# Timeouts are intentionally NOT matched. A not-running local Lemonade refuses
+# the connection instantly (ECONNREFUSED) — it does not time out; a *timeout*
+# means a server is up-but-slow, or the fault is a different host entirely (the
+# Gmail/Outlook backends use ``httpx`` with their own timeouts, so a Gmail
+# ``ReadTimeout`` must NOT be relabelled "Lemonade unreachable — start it").
 _LEMONADE_DOWN_RE = re.compile(
     r"connection\s+(?:refused|reset|aborted|error)"
     r"|connectionerror"
@@ -248,10 +253,7 @@ _LEMONADE_DOWN_RE = re.compile(
     r"|could\s*n[o']t\s+(?:reach|connect|resolve)"
     r"|no route to host"
     r"|name or service not known"
-    r"|not reachable"
-    r"|unreachable"
-    r"|(?:read |connect(?:ion)? )?timed?\s*out"
-    r"|timeout",
+    r"|not reachable",
     re.IGNORECASE,
 )
 

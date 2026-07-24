@@ -56,7 +56,10 @@ contract version is tracked separately as
   keeping the original exception appended as `Technical details:` for debugging.
   Every `/query` client (CLI, `gaia api`, third-party) benefits, not just the Agent
   UI relay (which mitigated host-side in #2136). Unrelated errors pass through
-  verbatim, never masked behind a Lemonade message.
+  verbatim, never masked behind a Lemonade message — including timeouts, which are
+  deliberately not treated as Lemonade-down (a stopped local server refuses
+  instantly; a timeout means up-but-slow, or a different host such as the Gmail
+  backend, so it must not be relabelled "restart Lemonade").
 
 - **Applying an existing label by its display name no longer fails with
   `Invalid label` (#2428).** `label_message` / `move_to_label` (and their batch
