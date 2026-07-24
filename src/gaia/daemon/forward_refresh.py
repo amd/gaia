@@ -23,10 +23,11 @@ a freshly-refreshed token is always re-forwarded in time.
 Fail loudly, no silent fallbacks (CLAUDE.md): the per-tick loop is resilient
 (one wedged sidecar or a transient blip must not kill the timer and end recovery
 for all sidecars), but nothing is swallowed silently — every failure is logged
-with context and ``exc_info``. A revoked connection surfaces loudly through the
-forwarder (it withdraws the stale forward so the sidecar cannot keep running on
-it) and the sidecar's own resolver still raises an actionable error at
-mailbox-use time if a token never arrives.
+with context and ``exc_info``. A revoked or disconnected provider stops being
+re-forwarded — its per-tick ``forward_all`` reports the error (logged loudly),
+this timer never fabricates a token to keep it alive, and the sidecar's own
+resolver still raises an actionable error at mailbox-use time once the last
+forwarded token expires.
 """
 
 from __future__ import annotations
