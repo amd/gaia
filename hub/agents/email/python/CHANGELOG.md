@@ -33,6 +33,12 @@ contract version is tracked separately as
   a genuine 404 (or an in-memory miss) as "not an id here"; a transient backend
   error (auth expiry, rate-limit, 5xx, network) on a valid id propagates instead
   of being masked as a misleading "no message found".
+- **Preferences persist without the embedder, and survive upgrade (#2427).**
+  Priority/low-priority senders and category defaults now persist in the agent's
+  `state.db` (like the trust ledger) instead of the embedding-backed MemoryStore,
+  so they survive restarts even when the embedding model is absent. On first load
+  after upgrade, a one-time read-through migrates any preferences a prior version
+  wrote to the MemoryStore into `state.db` — nothing is silently dropped.
 - **`/query` Lemonade-down errors are now actionable, not a raw traceback (#2139).**
   When the local LLM backend was unreachable, the `/query` SSE stream's terminal
   `error` event led with the raw `requests`/`urllib3` exception repr, giving the
