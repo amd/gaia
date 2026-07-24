@@ -1,0 +1,221 @@
+---
+title: "v0.23.0"
+description: "The Agent UI gets in-app install, auto-update, and a first-run wizard so a new user never touches a terminal; the email agent gains a full-autonomy engine that files low-signal mail on its own while always confirming anything destructive; and every agent runs as its own daemon-supervised process instead of living inside the UI."
+---
+
+# GAIA v0.23.0 Release Notes
+
+GAIA v0.23.0 is a large release built around making the Agent UI a real application instead of a developer tool with a browser front end. It can now install and update itself, walk a new user through hardware checks and model download on first launch, and run every agent as an isolated process supervised by a background daemon instead of code loaded into the UI. The email agent grows a full-autonomy mode that decides what to handle silently and what to ask about, and Outlook support extends to work and school accounts with a zero-setup sign-in flow. Underneath, every agent now shares one model and one context size so switching between them is instant, Lemonade Server moves to 11.0.0, and a dedicated security-audit pipeline replaces a general weekly pass with deterministic scanning plus reasoning over CWE-specific classes.
+
+**Why upgrade:**
+- **Install agents from inside the app** — the Agent UI's Hub install now actually works (a real backend install, not the old "not yet implemented" stub), verified end to end.
+- **The email agent can run your inbox for you (beta)** — turn on autonomy and it files low-signal mail on its own, always asks before anything destructive, and pulls back the moment you correct it.
+- **Agents run as their own processes** — each agent is a daemon-supervised sidecar instead of code living inside the Agent UI, so a running agent (a long chat or an in-flight job) survives closing the window.
+- **Agents share one model** — every agent now resolves to the same model and context size, so switching between them no longer forces Lemonade to unload and reload a different model.
+
+<Note>
+**Email autonomy is beta.** It only auto-executes reversible actions, each with undo, and the confirmation floor for anything destructive (send, forward, permanent delete, RSVP, quarantine) never relaxes — not even for a fully-trusted sender. It's genuinely useful, but it's new this release: watch what it does for the first few days rather than trusting it blind, and report anything that looks wrong. **Platform this release:** the email agent installs and runs on **Linux**; the **Windows** binary isn't available yet (#1648). Autonomy is turned on and inspected through the API/CLI — there's no Agent-UI control for it yet.
+</Note>
+
+<Note>
+**This release moves a lot of the platform onto a new foundation.** Agents now run under an always-on `gaia` daemon, and the desktop app installs and updates itself in place. Both are built and tested, but this is the first release they ship in and they're still settling — so if a sidecar gets stuck or an in-app update doesn't apply cleanly, restarting the daemon (`gaia daemon stop`) or reinstalling the app are the fallbacks. Please report anything that looks off.
+</Note>
+
+---
+
+## Breaking Changes
+
+### Closing the Agent UI no longer stops the email agent
+
+Sidecar agents (currently email) are now supervised by the always-on `gaia` daemon, not the Agent UI backend process. Before, closing the UI killed the email sidecar along with it. Now the sidecar keeps running — so an in-flight job or a long chat survives the window closing — and you stop it explicitly: `gaia daemon stop-agent email` or `gaia daemon stop` (PR [#2144](https://github.com/amd/gaia/pull/2144)).
+
+### Hub agent packages moved to an agent-first layout
+
+Hub packages used to be split by language first — `hub/agents/python/email/` and `hub/agents/npm/agent-email/` for the same agent. They're now grouped by agent first: `hub/agents/<id>/{python,npm}/` (e.g. `hub/agents/email/python/`, `hub/agents/email/npm/`). The published wheel name (`gaia-agent-email`) and npm package name (`@amd-gaia/agent-email`) are unchanged — only the on-disk source paths moved. If you have local scripts, forks, or docs referencing the old `hub/agents/python/<id>/` or `hub/agents/npm/<id>/` paths, update them to `hub/agents/<id>/<lang>/` (PR [#2060](https://github.com/amd/gaia/pull/2060)). `gaia agent init --layout hub` was added afterward so scaffolding a new agent produces the correct layout in one command (PR [#2295](https://github.com/amd/gaia/pull/2295)).
+
+---
+
+## What's New
+
+### Install agents from the Hub — Agent UI
+
+Clicking install on a Hub agent used to hit an IPC handler that threw "not yet implemented"; now it drives the real backend install runtime with streaming progress, so importing an agent from the Hub actually works — verified end to end (install → a real binary on disk → it runs) (PR [#2196](https://github.com/amd/gaia/pull/2196)). The in-app Hub is also reorganized into Apps, Components, and Agents lanes (PR [#2201](https://github.com/amd/gaia/pull/2201)).
+
+---
+
+### The email agent can decide for itself — full autonomy (beta)
+
+Until now the email agent only ever acted when you asked it to. Turn on autonomy and it triages and files low-signal mail on its own, and it learns from your corrections — correct it once and it's back to asking for that sender immediately. (The complementary direction — growing quieter as a sender earns trust — is scaffolded in this release but not yet active.) It never silently sends, forwards, permanently deletes, quarantines, or RSVPs; those always wait for your confirmation regardless of how much trust a sender has earned. Every auto-executed action is reversible and comes with undo (PR [#2363](https://github.com/amd/gaia/pull/2363)):
+
+```
+POST /v1/email/agent/autonomy      {"level": "earn_trust"}   # "off" is the kill switch
+GET  /v1/email/agent/autonomy/{id}                           # inspect earned trust
+```
+
+---
+
+### Agents run as isolated, daemon-supervised processes
+
+Agents used to run as code loaded directly into whatever hosted them — the email agent's sidecar lived and died with the Agent UI backend, and every future agent would have needed to reinvent that lifecycle plumbing. Now the always-on `gaia` daemon owns agent supervision: the UI, `gaia email` on the CLI, and `gaia api` are all thin clients of the same daemon-managed sidecar, so they share one running instance instead of each spawning their own. A killed daemon reaps its orphaned sidecars on the next start instead of leaking processes (PR [#2144](https://github.com/amd/gaia/pull/2144)).
+
+Behind that one architectural move: `gaia email` and `gaia api` now both relay through the daemon instead of running the email agent in-process (PRs [#2191](https://github.com/amd/gaia/pull/2191), [#2205](https://github.com/amd/gaia/pull/2205)), chat streams over a proper SSE reverse proxy (PR [#2188](https://github.com/amd/gaia/pull/2188)), a per-agent-scoped custody API keeps one agent from ever reading another's memory or sessions (PR [#2197](https://github.com/amd/gaia/pull/2197)), OAuth tokens forward from the daemon to a sidecar as short-lived access tokens rather than the sidecar holding your refresh token (PR [#2203](https://github.com/amd/gaia/pull/2203)), and existing `~/.gaia` sessions and memory migrate into the new layout automatically, once, without data loss (PR [#2200](https://github.com/amd/gaia/pull/2200)).
+
+---
+
+### Every agent shares one model
+
+Agents that left their model unset used to default to a different model than chat and email, so moving between agents forced Lemonade to unload and cold-reload the model. Every agent now resolves to Gemma-4-E4B at one context size per device profile, so the resident model is reused across a switch instead of reloaded (PR [#2284](https://github.com/amd/gaia/pull/2284)).
+
+---
+
+### Lemonade Server 11.0.0
+
+The pinned Lemonade Server moves 10.10.0 → 11.0.0 (PR [#2130](https://github.com/amd/gaia/pull/2130)). This doesn't move existing installs — a machine already on a 10.x that clears every profile's minimum is left alone — but it fixes a version-check bug found while crossing the major boundary: GAIA compared Lemonade's major version for equality, so every 10.x install was about to start seeing a false "version mismatch" warning on every run, the exact opposite of what `gaia init` reported. The check is now a floor (10.2.0), not an equality check, so a newer server is never flagged as wrong.
+
+---
+
+## Bug Fixes
+
+- **Bulk `gaia agent init` scaffolding put files in the wrong place after the hub layout move** (PR [#2295](https://github.com/amd/gaia/pull/2295)) — `--output` had no way to produce the new agent-first layout, and could even set the agent's id to the literal string `"python"`.
+- **Lemonade device validation didn't recognize grouped GPU device keys** (PR [#2368](https://github.com/amd/gaia/pull/2368)) — `amd_gpu`/`nvidia_gpu` now returning as lists broke hardware capability checks.
+- **A missing hub-installed agent binary produced a confusing error** (PR [#2357](https://github.com/amd/gaia/pull/2357)) — the message now names what's missing and how to fix it instead of a generic failure.
+- **`gaia init` output ate bracketed text** (PR [#2340](https://github.com/amd/gaia/pull/2340)) — Rich markup parsing swallowed tokens like `[some-model]` from status lines instead of printing them.
+- **Unknown-language routing killed the process** (PR [#2337](https://github.com/amd/gaia/pull/2337)) — an unrecognized language now defaults to TypeScript instead of crashing.
+- **GPU wasn't detected on every platform** (PR [#2244](https://github.com/amd/gaia/pull/2244), [#2285](https://github.com/amd/gaia/pull/2285)) — detection now reads Lemonade's real payload shape and honors `default_device` everywhere.
+- **The builder agent returned a generic error for a missing model** (PR [#2245](https://github.com/amd/gaia/pull/2245)) — a 404 from Lemonade now surfaces as a specific "model not found," not boilerplate.
+- **The Agent UI blamed Lemonade for turns the user cancelled** (PR [#2141](https://github.com/amd/gaia/pull/2141)) — a cancelled or empty turn is no longer reported as a backend failure.
+- **Stop didn't actually stop generation** (PR [#2166](https://github.com/amd/gaia/pull/2166)) — clicking Stop now aborts the in-flight streaming turn instead of leaving it running in the background.
+- **Outlook inbox pre-scan failed with more than one mailbox connected** (PR [#2129](https://github.com/amd/gaia/pull/2129)) — pre-scan now consolidates across every connected mailbox instead of erroring.
+- **REST triage ignored the model's own spam verdict** (PR [#2125](https://github.com/amd/gaia/pull/2125)) — the endpoint now honors what the LLM actually decided instead of a narrow sender-based check.
+- **Outlook thread fetches could fail with a Graph API error** (PR [#2140](https://github.com/amd/gaia/pull/2140)) — an unnecessary `$orderby` triggered Microsoft Graph's `InefficientFilter` rejection on some threads.
+- **Calendar listing without an explicit date range returned nothing useful** (PR [#2168](https://github.com/amd/gaia/pull/2168)) — it now defaults to a forward-looking window.
+- **Explicitly targeting an unconnected mailbox silently used a different one** (PR [#2172](https://github.com/amd/gaia/pull/2172)) — it now errors instead of substituting.
+- **A model-load failure could fail silently** (PR [#2185](https://github.com/amd/gaia/pull/2185)) — `_ensure_model_loaded` now raises loudly instead of swallowing the error.
+- **The `amd-gaia[agents]` extra could downgrade the core wheel** (PR [#2262](https://github.com/amd/gaia/pull/2262)) — pip's resolver could pull in an older core package than the one already installed.
+- **Security: the MCP bridge bound to all interfaces** (PR [#2246](https://github.com/amd/gaia/pull/2246)) — it now binds to loopback only.
+- **Security: the API allowed a wildcard CORS origin with credentials** (PR [#2238](https://github.com/amd/gaia/pull/2238)) — that combination is now rejected.
+- **Security: SQL wasn't parameterized and some logs leaked sensitive values** (PR [#2239](https://github.com/amd/gaia/pull/2239)) — SQL is parameterized and those values are redacted.
+- **Security suppressions are now review-gated** (PR [#2343](https://github.com/amd/gaia/pull/2343)) — a reviewed allowlist replaces silently-accepted suppressions.
+
+---
+
+## Contributors
+
+Thanks to the community member who contributed to this release:
+
+- [@alexey-tyurin](https://github.com/alexey-tyurin) — adaptive, review-gated onboarding conversation for agent memory (PR [#2143](https://github.com/amd/gaia/pull/2143))
+
+---
+
+## Full Changelog
+
+**106 commits** since v0.22.0:
+
+- `5f624706` — fix(hub): importable CLI wheel agents + chat distribution via gaia init (#2373)
+- `3ad39e60` — fix(sidecar): actionable user-mode binary error (#2347) (#2357)
+- `bfc0f5b8` — fix(lemonade): recognize grouped amd_gpu/nvidia_gpu device keys in validation (#2368)
+- `0553c8b0` — feat(email): full autonomy — earn-trust engine, learning loop, scheduled driver (#2363)
+- `0284300b` — feat(connectors): support work/school Outlook + zero-setup device-code sign-in (#2364)
+- `1aaba5cc` — feat(lint): require security suppressions to be reviewed in an allowlist (#2343)
+- `19b1a4c5` — test(daemon): de-flake sidecar stop test on the pid-liveness check (#2349)
+- `174e9d0c` — refactor(chat): extract ProfileSpec, honest manifest, lazy RAG — one class → separable profiles (#2323) (#2362)
+- `57f970b0` — chore(audit): drop the security dimension from the weekly audit (#2348)
+- `23181040` — feat(security): proactive Claude security-audit workflow + CVSS/SARIF tooling (#2346)
+- `d605caec` — fix(security): enforce --allowed-paths sandbox on file read tools (#2344)
+- `1c8a91c9` — fix(security): remove pre-existing bandit HIGH findings and enable the HIGH gate (#2350)
+- `4b5c16b7` — ci(labeler): add tui/daemon/sidecar auto-label rules (#2356)
+- `a905b057` — chore(deps): bump the github-actions group with 2 updates (#2341)
+- `b3f793af` — fix(routing): default unknown language to TypeScript, not a process kill (#2337)
+- `48286dbd` — fix(init): stop Rich eating bracketed tokens in gaia init output (#2340)
+- `638a7643` — docs(skills): add porting-agent-to-hub — the legacy-agent port flow (#2338)
+- `d2c00b55` — fix(hub): harden agent-archive extraction against path traversal (#2342)
+- `a4417656` — fix(ci): repair the startup-failing GAIA CLI aggregate workflow (#2307)
+- `0835a250` — fix(ci): make the weekly eval and runner heartbeat monitor actually run (#2306)
+- `977c158f` — fix(cli): add --layout hub to gaia agent init for the agent-first hub tree (#2295)
+- `558a73e6` — chore(deps): bump the github-actions group with 3 updates (#2294)
+- `f8bff000` — chore(deps-dev): bump electron from 43.1.0 to 43.1.1 in the root-npm-dependencies group (#2292)
+- `fb179e32` — ci(eval): gate the Gemma-4-E4B consolidation on agent evals (#2283)
+- `6b2aa2db` — chore(deps-dev): bump electron from 43.1.0 to 43.1.1 in /src/gaia/apps/jira/webui in the jira-app-dependencies group (#2291)
+- `5837bdac` — chore(deps-dev): bump electron from 43.1.0 to 43.1.1 in /src/gaia/apps/example/webui in the example-app-dependencies group (#2290)
+- `3ce4f790` — test(agents): stub live Lemonade probe in context-overflow tests (#2288)
+- `1886a92f` — chore(deps): bump electron from 43.1.0 to 43.1.1 in /hub/agents/emr/python/gaia_agent_emr/dashboard/electron in the emr-dashboard-dependencies group (#2289)
+- `0a308449` — feat(agents): consolidate every agent onto Gemma-4-E4B at one context size (#2284)
+- `4392e06a` — chore(deps-dev): bump the agent-ui-dependencies group in /src/gaia/apps/webui with 3 updates (#2293)
+- `d9b11ec7` — refactor(hub): agent-first layout — hub/agents/\<id>/\<lang> (#2060)
+- `5f15b333` — feat(daemon): broker-wire the remaining direct model-load surfaces (#2286)
+- `3affe149` — fix(ui): detect GPU from real Lemonade payload shapes (#2285)
+- `4f888b78` — fix(hub): report file-based custom agents' real health, not always 'error' (#2277)
+- `36c29873` — fix(cli): detect GPU on all platforms and honour default_device (#2244)
+- `6c6f8a34` — test(audit): coverage for schedule CLI, perf-vis, VLM extraction, PDF gen/export; fix silent table-row loss (#2259)
+- `2425afe8` — fix(builder): surface model-not-found (404) instead of a generic placeholder (#2245)
+- `3a0eebe7` — ci(hub): wire nine hub package test suites into CI; fix .cjs docs-link guard gap (#2258)
+- `3e82ca61` — docs(connectors): correct the client_id_hash claim in the OAuth runbook (#2264)
+- `9f7dca84` — fix(ci): fix Lemonade startup and bash-on-PATH in the doc walkthrough (#2281)
+- `53f4b529` — fix(daemon): owner-only DACL for the Windows launch secret (#2250) (#2282)
+- `ee8825fa` — fix(security): require allowed_dir in compute_file_hash (#2280)
+- `46fb7687` — spec(factory): define the dogfooding loop — Claudia as live validation runtime (#2234)
+- `1a679f02` — feat(ui): always-available OAuth client field in Settings (#2104 interim) (#2265)
+- `45c796b1` — test(jira): unit tests for JiraAgent HTTP boundary and config discovery (#1991) (#2263)
+- `bed702eb` — feat(ci): execution-based weekly doc walkthrough (#2278)
+- `f8f309e6` — fix(ui): stop silently accepting unimplemented agent_mode 'autonomous' (#2257)
+- `3b0938ed` — fix(ci): weekly audit cross-links the prior parent instead of auto-closing it (#2254)
+- `78306480` — test(audit): risk-bearing coverage — jira, trust-gate, flag-precedence, #1655 boundaries (#2253)
+- `1aa39ca2` — fix(observability): real system-metrics polling + real rollbackAction (#2251)
+- `384b3ca8` — fix(security): bind MCP bridge to loopback, not all interfaces (#2246)
+- `037f4370` — fix(cli): implement/gate stubbed api-status, eval flags, schedule --skill (#2247)
+- `2b6ed53e` — fix(security): rate-limit exposed routes, harden JS ReDoS/XSS/cleartext-logging (#2237)
+- `6c6b3baf` — fix(packaging): stop the amd-gaia[agents] extra from downgrading the core wheel (#2262)
+- `8744a51a` — fix(security): validate user-influenced file paths (py/path-injection) (#2252)
+- `c921fa7b` — feat(email): quality + robustness batch (#2110/#2113/#2114/#2115/#2116) (#2192)
+- `b9391ec2` — fix(security): parameterize SQL, redact sensitive logs, harden ReDoS regexes (#2239)
+- `09e0bac4` — fix(security): stop leaking stack traces at API boundaries + least-privilege workflow permissions (#2236)
+- `3df5a3db` — fix(security): tighten API CORS — no wildcard origin with credentials (#2238)
+- `a3db04ef` — feat(connectors): OAuth forward-out to sidecars (V2-14) (#2203)
+- `e0886cbf` — refactor(daemon): reconcile the clocks into one daemon-owned scheduler (V2-15) (#2199)
+- `15459153` — feat(daemon): /host/v1 custody API v1 with per-agent scoping (V2-12) (#2197)
+- `e226d584` — feat(webui): group session sidebar by agent + session-state polish (#2193)
+- `6e48cb22` — feat(daemon): host-owned model-slot broker serializes loads (V2-11) (#2194)
+- `c42bb354` — fix(website): correct hub install command and clarify agent availability (#2207)
+- `2f18de85` — fix(tests): align email CLI dispatch test with #2191 thin-client contract (#2209)
+- `a2ad4eff` — fix(tests): repair stale gaia.ui.email_sidecar.manager import after #2144 (#2208)
+- `2b89643c` — fix(webui): repair broken main — AgentHubView imported deleted AgentHubGrid (#2206)
+- `68773d46` — test(eval): sidecar eval harness + distributed-seams suite (V2-19) (#2202)
+- `d7cffc72` — feat(agent-ui): first-run onboarding wizard — hardware pre-flight, in-app model download, connect-on-install (#2204)
+- `5bc7d325` — feat(electron): in-app install, R2 auto-update feed, gaia:// deep links (#2196)
+- `eb6b34bf` — feat(daemon): one-time versioned migration of ~/.gaia state (V2-13) (#2200)
+- `73b8f98c` — refactor(api): remove the last in-process email mount; relay via daemon (#2176) (#2205)
+- `e4ea0e33` — feat(connectors): grant the mailbox to the email agent in the same connect flow (#2195)
+- `2bf405db` — feat(webui): in-app Hub page with catalog lanes + install trust gate (#2201)
+- `459efba9` — feat(api): relay /v1/\<agent>/query through the daemon (V2-17) (#2198)
+- `ada5b95a` — feat(cli): gaia email attaches to the daemon — thin client (V2-8) (#2191)
+- `a49d257d` — fix(webui): reachable Agent Hub + installed-agent discovery and per-session picker (#2190)
+- `7c98b51a` — docs(connectors): rewrite the Google client-ID walkthrough for the current console (#2189)
+- `a94a8126` — feat(daemon): deliver sidecar launch secret via 0600 file, not bare env (#2149) (#2186)
+- `5601e2a5` — feat(daemon): streaming SSE reverse-proxy for agent routes (#2150) (#2188)
+- `1465bc73` — feat(agents): proactive lifecycle hooks with approval-gated proposals (#1484) (#2187)
+- `2c4ff395` — test(chat): mirror the amd-gaia floor guard from #2169; harden version parsing (#2184)
+- `2271278c` — fix(llm): make swallowed model-load failures loud in _ensure_model_loaded (#2185)
+- `2e0294f9` — feat(hub): add multi-component type discriminator to the manifest (#1716) (#2183)
+- `b78b71d1` — test(chat): guard the amd-gaia dependency floor against #2112 regression (#2174)
+- `33caec54` — refactor(ui): extract _best_effort_cancel helper for the relay cancel paths (#2173)
+- `ba58e31a` — feat(email): fast dev-iteration loop for the email agent SDK (#2083)
+- `f79c4177` — fix(webui): pin explicitly-set session titles — stop auto-retitle churn (#2165) (#2171)
+- `ae741690` — fix(email): error on an explicitly-targeted unconnected mailbox instead of substituting (#2164) (#2172)
+- `4dafa091` — fix(email): normalize date operators in search_messages (#2161) (#2170)
+- `dd2fa328` — fix(email): raise amd-gaia floor to match get_embedding_model_for_device (#2112) (#2169)
+- `011b6e3c` — fix(email): default calendar list to a forward window when range args are absent (#2162) (#2168)
+- `ed7d2969` — fix(ui): propagate cancel to the email sidecar on relay timeout/crash (#2158) (#2167)
+- `d8daf66d` — fix(agent): abort in-flight streaming generation on Agent-UI Stop (#2166)
+- `c907f6c4` — feat(memory): adaptive, review-gated onboarding conversation (#1955) (#2143)
+- `def5e979` — fix(ui): stop blaming Lemonade for cancelled/empty chat turns (#2141)
+- `553cb541` — fix(email): consolidate Agent UI pre-scan across every connected mailbox (#2129)
+- `5446af2c` — fix(agent-email): drop $orderby from Outlook get_thread to avoid Graph InefficientFilter (#2140)
+- `8ba66f4d` — fix(email): REST triage honors the LLM's is_spam verdict (#2125)
+- `aa44c2c8` — refactor(daemon): daemon-supervised agent sidecars (V2-6) (#2144)
+- `ac3cc4cd` — fix(eval): fail the briefing eval loudly on a zero-case/zero-judged run (#2123)
+- `c9566b19` — chore(deps): bump Lemonade Server to v11.0.0 (#2130)
+- `47c1142a` — feat(ui): route email chat through the sidecar /v1/email/query loop (V2-10) (#2136)
+- `b340427d` — docs(skill): correct the release skill against what v0.22.0 actually did (#2133)
+- `9f1ece0f` — feat(webui): render→component map + generic render primitives (V2-9) (#2131)
+
+Full Changelog: [v0.22.0...v0.23.0](https://github.com/amd/gaia/compare/v0.22.0...v0.23.0)
