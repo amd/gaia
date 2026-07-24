@@ -142,6 +142,54 @@ def remove_star_impl(
         return {"action_id": action_id, "message_id": message_id}
 
 
+def _resolve_label_id(
+    backend, label: str, cache: Optional[Dict[Any, Dict[str, str]]] = None
+) -> str:
+    """Resolve a label display name OR id to a concrete label id for ``backend``.
+
+    Gmail user labels are addressed by id (``Label_###``), not display name; the
+    modify API rejects a bare name with ``Invalid label: <name>``. ``list_labels``
+    returns both id and name, and the model feeds a name back into the apply call
+    (#2428) — so accept either: an exact id match passes through (already an id),
+    an exact display-name match resolves to its id, and a unique case-insensitive
+    match is the last resort (models vary label casing). Anything else fails loud —
+    never silently forwarded to the backend, never auto-created (this agent has no
+    create-label capability; the caller must reference an existing label).
+
+    ``cache`` (optional) memoizes resolutions **keyed by backend** so a batch that
+    reuses one backend hits ``list_labels`` once, not once per message. It MUST be
+    backend-keyed, not label-keyed: a mixed Gmail+Outlook batch resolves the same
+    name to a Gmail ``Label_###`` for one message and to the Outlook category name
+    (id == name) for another — a label-only key would cross-feed the wrong id.
+    """
+    label = label.strip()
+    if cache is not None and backend in cache and label in cache[backend]:
+        return cache[backend][label]
+    labels = backend.list_labels()
+    resolved: Optional[str] = None
+    if label in {lb.get("id") for lb in labels}:  # already a valid id
+        resolved = label
+    else:
+        for lb in labels:  # exact display-name match
+            if lb.get("name") == label:
+                resolved = lb.get("id")
+                break
+    if resolved is None:  # unique case-insensitive match (tolerate model casing)
+        ci = [lb for lb in labels if (lb.get("name") or "").lower() == label.lower()]
+        if len(ci) == 1:
+            resolved = ci[0].get("id")
+    if resolved is None:
+        names = sorted({lb.get("name") for lb in labels if lb.get("name")})
+        raise ValueError(
+            f"Invalid label: {label!r} — no existing label has that id or display "
+            f"name. Existing labels: {names}. Applying requires an existing label; "
+            "call list_labels to see valid names (this agent cannot create labels)."
+        )
+    if cache is not None:
+        cache.setdefault(backend, {})[label] = resolved
+    return resolved
+
+
 def label_message_impl(
     gmail,
     db,
@@ -156,6 +204,9 @@ def label_message_impl(
         {"message_id": message_id, "label_id": label_id},
         debug=debug,
     ) as st:
+        # Resolve a display name (what the model gets from list_labels) to the
+        # id Gmail's modify API requires; record the resolved id for undo (#2428).
+        label_id = _resolve_label_id(gmail, label_id)
         gmail.add_label(message_id, label_id)
         action_id = action_store.record_action(
             db,
@@ -191,6 +242,8 @@ def move_to_label_impl(
         {"message_id": message_id, "label_id": label_id},
         debug=debug,
     ) as st:
+        # Resolve a display name to the id Gmail requires before any call (#2428).
+        label_id = _resolve_label_id(gmail, label_id)
         if prior is None:
             prior = gmail.get_message(message_id)
         prior_labels = list(prior.get("labelIds", []))
@@ -351,6 +404,7 @@ def _run_batch(
     payload: dict | None = None,
     batch_id: str,
     debug: bool = False,
+    arg_resolver=None,
 ) -> dict:
     """Execute a mailbox mutation for each message_id, recording each action.
 
@@ -360,6 +414,12 @@ def _run_batch(
     positional args (e.g. the label id). ``action_mailbox(mid) -> str`` records
     which mailbox the action hit so undo routes correctly.
 
+    ``arg_resolver(backend) -> (op_args, payload)`` (optional) computes the
+    positional args and action payload per backend — used by the label batches to
+    resolve a display name to each provider's label id (#2428). When omitted, the
+    static ``op_args``/``payload`` are used unchanged (the mark/star/archive
+    batches are untouched).
+
     Returns ``{"succeeded": [...], "failed": [...]}``.
     """
     succeeded: list[dict] = []
@@ -367,12 +427,16 @@ def _run_batch(
     for mid in message_ids:
         try:
             backend = resolve_backend(mid)
-            getattr(backend, op_name)(mid, *op_args)
+            if arg_resolver is not None:
+                op_args_eff, payload_eff = arg_resolver(backend)
+            else:
+                op_args_eff, payload_eff = op_args, dict(payload or {})
+            getattr(backend, op_name)(mid, *op_args_eff)
             aid = action_store.record_action(
                 db,
                 action_type=action_type,
                 message_id=mid,
-                payload=dict(payload or {}),
+                payload=dict(payload_eff),
                 batch_id=batch_id,
                 mailbox=action_mailbox(mid) if action_mailbox else None,
             )
@@ -586,9 +650,12 @@ class OrganizeToolsMixin:
 
         @tool
         def label_message(message_id: str, label_id: str, mailbox: str = "") -> str:
-            """Add a label to a message. Pass the label id (e.g. ``Label_1``).
+            """Add a label to a message.
 
-            ``mailbox`` (optional) routes when multiple mailboxes are connected.
+            ``label_id`` may be the label's display name (e.g. ``Newsletters``, as
+            returned by ``list_labels``) or its id (e.g. ``Label_1``); the name is
+            resolved to an id automatically. ``mailbox`` (optional) routes when
+            multiple mailboxes are connected.
             """
             try:
                 if (err := _check_threshold()) is not None:
@@ -615,7 +682,9 @@ class OrganizeToolsMixin:
         def move_to_label(message_id: str, label_id: str, mailbox: str = "") -> str:
             """Move a message out of INBOX into a label.
 
-            ``mailbox`` (optional) routes when multiple mailboxes are connected.
+            ``label_id`` may be the label's display name or its id; the name is
+            resolved to an id automatically. ``mailbox`` (optional) routes when
+            multiple mailboxes are connected.
             """
             try:
                 if (err := _check_threshold()) is not None:
@@ -870,7 +939,12 @@ class OrganizeToolsMixin:
 
         @tool
         def label_message_batch(message_ids: list[str], label_id: str) -> str:
-            """Add a label to multiple messages in one call. Use for 3+ messages."""
+            """Add a label to multiple messages in one call. Use for 3+ messages.
+
+            ``label_id`` may be a label display name (e.g. ``Newsletters``) or an
+            id (e.g. ``Label_1``); the name is resolved to each message's provider
+            id automatically.
+            """
             if not message_ids:
                 return _envelope_ok({"total": 0, "succeeded": [], "failed": []})
             message_ids = _coerce_ids(message_ids)
@@ -879,18 +953,22 @@ class OrganizeToolsMixin:
             try:
                 batch_id = uuid.uuid4().hex
                 label_id_local = label_id  # closure capture
+                label_cache: dict = {}  # backend-keyed memo (see _resolve_label_id)
+
+                def _label_resolver(backend):
+                    resolved = _resolve_label_id(backend, label_id_local, label_cache)
+                    return (resolved,), {"label_id": resolved}
 
                 result = _run_batch(
                     _batch_backend,
                     db,
                     message_ids,
                     op_name="add_label",
-                    op_args=(label_id_local,),
                     action_type="add_label",
                     action_mailbox=_batch_provider,
-                    payload={"label_id": label_id_local},
                     batch_id=batch_id,
                     debug=debug_flag,
+                    arg_resolver=_label_resolver,
                 )
                 for _mid in message_ids:
                     agent._record_organize_op(_mid, "")
@@ -910,7 +988,11 @@ class OrganizeToolsMixin:
 
         @tool
         def move_to_label_batch(message_ids: list[str], label_id: str) -> str:
-            """Move multiple messages out of INBOX into a label in one call. Use for 3+ messages."""
+            """Move multiple messages out of INBOX into a label in one call. Use for 3+ messages.
+
+            ``label_id`` may be a label display name or an id; the name is
+            resolved to each message's provider id automatically.
+            """
             if not message_ids:
                 return _envelope_ok({"total": 0, "succeeded": [], "failed": []})
             message_ids = _coerce_ids(message_ids)
@@ -919,10 +1001,13 @@ class OrganizeToolsMixin:
             try:
                 batch_id = uuid.uuid4().hex
                 label_id_local = label_id
+                label_cache: dict = {}  # backend-keyed memo (see _resolve_label_id)
 
-                def _move_op(backend, mid: str) -> None:
-                    backend.add_label(mid, label_id_local)
+                def _move_op(backend, mid: str) -> str:
+                    resolved = _resolve_label_id(backend, label_id_local, label_cache)
+                    backend.add_label(mid, resolved)
                     backend.archive_message(mid)
+                    return resolved
 
                 def _move_prior_fn(msg: Dict[str, Any]) -> List[str]:
                     return list(msg.get("labelIds", []))
@@ -930,10 +1015,10 @@ class OrganizeToolsMixin:
                 def _move_payload_fn(
                     _msg: Dict[str, Any],
                     prior_labels: List[str],
-                    _op_result: Optional[Dict[str, Any]] = None,
+                    op_result: Optional[str] = None,
                 ) -> Dict[str, Any]:
                     return {
-                        "label_id": label_id_local,
+                        "label_id": op_result or label_id_local,
                         "prior_labels": prior_labels,
                     }
 
