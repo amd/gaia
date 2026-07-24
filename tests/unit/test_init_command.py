@@ -795,14 +795,16 @@ class TestEnsureLemonadeInstalledSkipsWhenPresent(unittest.TestCase):
     def test_skip_when_installed_at_newer_version(
         self, mock_urlopen, mock_urlretrieve, mock_subprocess
     ):
-        """Case 4 (CRITICAL): installed at NEWER version (e.g. 11.0.0) -> no download.
+        """Case 4 (CRITICAL): installed at a NEWER version -> no download.
 
-        Scenario: the bundled NSIS installer dropped Lemonade v10.2.0 but the
-        user has since upgraded to v11.0.0. ``gaia init`` must treat this as
-        compatible (newer is fine), NOT downgrade or re-download.
+        Scenario: the bundled NSIS installer dropped an older Lemonade but the
+        user has since upgraded past ``LEMONADE_VERSION``. ``gaia init`` must
+        treat this as compatible (newer is fine), NOT downgrade or re-download.
         """
-        # Pick a version definitively newer than LEMONADE_VERSION (10.2.0)
-        newer_version = "11.0.0"
+        # Derive a version strictly newer than LEMONADE_VERSION so this test
+        # never drifts on a version bump (bump the major).
+        _major = int(LEMONADE_VERSION.lstrip("v").split(".")[0])
+        newer_version = f"{_major + 1}.0.0"
         info = LemonadeInfo(
             installed=True,
             version=newer_version,
