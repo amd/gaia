@@ -89,6 +89,14 @@ contract version is tracked separately as
   per backend so a mixed Gmail+Outlook batch maps each message to its own
   provider's id; a name matching no existing label now fails with an actionable
   "here are your labels" error instead of Gmail's cryptic rejection.
+- **Undo window default raised to 120s for chat-speed undo (#2447).** The
+  archive/delete undo window default is now 120s, not 30s. The old 30s
+  default was calibrated for an instant-UI-button undo; a chat-mediated bulk
+  operation runs through the slower LLM tool-loop and could already exceed
+  30s by the time it finished, leaving the "undo within the window" offer
+  stale on arrival. Still overridable via `GAIA_EMAIL_UNDO_WINDOW_SECONDS`
+  for deployments that need a different value.
+
 - **Re-proposal dedup survives headless/scheduled teardown (#2381).**
   `record_proposal` wrote its dedup row through `query()`, which never commits,
   so when the scheduler rebuilt the agent between fires (closing the DB

@@ -531,7 +531,7 @@ class OrganizeToolsMixin:
     def _register_organize_tools(self) -> None:
         db = self
         debug_flag = bool(getattr(self.config, "debug", False))
-        window = int(getattr(self.config, "undo_window_seconds", 30))
+        window = int(getattr(self.config, "undo_window_seconds", 120))
         agent = self  # batch-threshold counter + per-message backend routing
 
         def _check_threshold() -> Optional[str]:

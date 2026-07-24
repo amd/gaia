@@ -1387,7 +1387,7 @@ def _require_gmail_quarantine(provider: str) -> None:
     ``quarantine_phishing_message`` applies the ``GAIA_PHISHING_QUARANTINE``
     *label* and restores by re-adding labels on undo. Outlook archives by a
     *folder move* that mints a new message id and isn't reversed by label edits,
-    so quarantining an Outlook message would perform a destructive move its 30s
+    so quarantining an Outlook message would perform a destructive move its 120s
     undo cannot reverse (#1738). We reject it up front instead of shipping a
     silently-irreversible path — no silent fallback.
     """
@@ -1405,7 +1405,7 @@ def _require_gmail_quarantine(provider: str) -> None:
 
 # Process-wide action-log DB for the REST surface. Archive/quarantine record a
 # reversible row here (the same ``email_actions`` table the agent uses) so the
-# undo endpoints can reverse them within the 30s window. Lazily built so import
+# undo endpoints can reverse them within the 120s window. Lazily built so import
 # stays cheap and tests can override ``resolve_action_db`` before first use.
 _action_db = None
 _action_db_lock = threading.Lock()
@@ -1454,7 +1454,7 @@ resolve_action_db = get_action_db
 
 
 def _undo_window_seconds() -> int:
-    """The undo window the action log honors (default 30s, #1738)."""
+    """The undo window the action log honors (default 120s, #1738)."""
     from gaia_agent_email.config import EmailAgentConfig
 
     return int(EmailAgentConfig().undo_window_seconds)
@@ -2435,7 +2435,7 @@ _ARCHIVE_VERIFY_409 = {
     },
 )
 async def archive_email(request: EmailArchiveRequest) -> EmailArchiveResponse:
-    """Archive a message — gated on confirmation, reversible for 30s.
+    """Archive a message — gated on confirmation, reversible for 120s.
 
     The gate fires FIRST: a request without a valid token for this exact
     ``(action='archive', message_id)`` is rejected with 403 before any backend
@@ -2562,7 +2562,7 @@ async def unarchive_email(request: EmailUnarchiveRequest) -> EmailUnarchiveRespo
 async def quarantine_email(
     request: EmailQuarantineRequest,
 ) -> EmailQuarantineResponse:
-    """Quarantine a phishing message — gated on confirmation, reversible for 30s.
+    """Quarantine a phishing message — gated on confirmation, reversible for 120s.
 
     Applies the ``GAIA_PHISHING_QUARANTINE`` label and removes the message from
     the inbox (capability #9). The gate fires FIRST (403 without a valid token

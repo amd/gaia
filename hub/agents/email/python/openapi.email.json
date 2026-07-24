@@ -858,7 +858,7 @@
       },
       "EmailArchiveResponse": {
         "additionalProperties": false,
-        "description": "Result of an archive — carries the undo handle for the 30s window.",
+        "description": "Result of an archive — carries the undo handle for the 120s window.",
         "properties": {
           "action_id": {
             "description": "Action-log id for this archive.",
@@ -1273,7 +1273,7 @@
       },
       "EmailQuarantineResponse": {
         "additionalProperties": false,
-        "description": "Result of a quarantine — carries the action id for the 30s undo.",
+        "description": "Result of a quarantine — carries the action id for the 120s undo.",
         "properties": {
           "action_id": {
             "description": "Undo handle: pass to POST /v1/email/unquarantine within the undo window to restore the message's prior labels.",
@@ -2884,7 +2884,7 @@
     },
     "/v1/email/archive": {
       "post": {
-        "description": "Archive a message — gated on confirmation, reversible for 30s.\n\nThe gate fires FIRST: a request without a valid token for this exact\n``(action='archive', message_id)`` is rejected with 403 before any backend\ncall. On success a ``batch_id`` undo handle is returned; pass it to\nPOST /v1/email/unarchive within the window to restore the message. The\nresponse also surfaces ``post_archive_id`` (the id a folder backend mints on\nthe move) so a caller can track the message after Outlook changes its id.",
+        "description": "Archive a message — gated on confirmation, reversible for 120s.\n\nThe gate fires FIRST: a request without a valid token for this exact\n``(action='archive', message_id)`` is rejected with 403 before any backend\ncall. On success a ``batch_id`` undo handle is returned; pass it to\nPOST /v1/email/unarchive within the window to restore the message. The\nresponse also surfaces ``post_archive_id`` (the id a folder backend mints on\nthe move) so a caller can track the message after Outlook changes its id.",
         "operationId": "archive_email_v1_email_archive_post",
         "requestBody": {
           "content": {
@@ -3400,7 +3400,7 @@
     },
     "/v1/email/quarantine": {
       "post": {
-        "description": "Quarantine a phishing message — gated on confirmation, reversible for 30s.\n\nApplies the ``GAIA_PHISHING_QUARANTINE`` label and removes the message from\nthe inbox (capability #9). The gate fires FIRST (403 without a valid token\nfor this ``(action='quarantine', message_id)``). The action refuses\n``is_phishing=False`` (400) — only phishing-flagged mail may be quarantined.\nReverse with POST /v1/email/unquarantine using the returned ``action_id``.",
+        "description": "Quarantine a phishing message — gated on confirmation, reversible for 120s.\n\nApplies the ``GAIA_PHISHING_QUARANTINE`` label and removes the message from\nthe inbox (capability #9). The gate fires FIRST (403 without a valid token\nfor this ``(action='quarantine', message_id)``). The action refuses\n``is_phishing=False`` (400) — only phishing-flagged mail may be quarantined.\nReverse with POST /v1/email/unquarantine using the returned ``action_id``.",
         "operationId": "quarantine_email_v1_email_quarantine_post",
         "requestBody": {
           "content": {
