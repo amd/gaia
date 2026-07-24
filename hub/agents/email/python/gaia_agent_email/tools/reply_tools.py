@@ -203,6 +203,16 @@ def _candidate_line(provider: str, msg: Dict[str, Any]) -> str:
     )
 
 
+def _is_message_not_found(exc: Exception) -> bool:
+    """True when a backend ``get_message`` error means "no message with that id"
+    (HTTP 404), as opposed to auth / rate-limit / 5xx / network failures that
+    must propagate. Both the Gmail and Outlook backends collapse every non-2xx
+    into a ``ConnectorsError`` whose message carries the status, so the 404 is
+    matched on the rendered text (``... returned 404 ...``)."""
+    text = str(exc).lower()
+    return "404" in text or "not found" in text
+
+
 def resolve_message_target(
     backends: Dict[str, Any],
     *,
@@ -260,16 +270,21 @@ def resolve_message_target(
 
     # 1b. Concrete-id probe: a single-token target may itself be a message id.
     # Probe ``get_message`` — a hit means it is a real id (pass through, no
-    # search). Any failure just means "not a valid id here", so fall through to
-    # search; a genuinely missing target still fails loud below.
+    # search). Only a genuine "no such id" (in-memory ``KeyError``, or an HTTP
+    # 404) falls through to search: a transient backend failure (auth expiry,
+    # rate-limit, 5xx, network) on a *valid* id must NOT be swallowed, or the id
+    # would leak into the search query and come back as a misleading
+    # "no message found" (#2403 review; CLAUDE.md no-silent-fallback).
     if not any(c.isspace() for c in target):
         for provider, backend in scoped.items():
-            # Probe only: any failure means "not a valid id here" — fall
-            # through to search, which fails loud if nothing matches.
             try:
                 msg = backend.get_message(target)
-            except Exception:  # noqa: BLE001
-                continue
+            except KeyError:
+                continue  # in-memory backend: not a real id here → search
+            except ConnectorsError as exc:
+                if _is_message_not_found(exc):
+                    continue  # 404: not a real id in this mailbox → search
+                raise  # auth / rate-limit / transient: fail loud, never mask
             if msg:
                 return target, provider, msg
 

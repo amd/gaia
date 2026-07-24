@@ -29,7 +29,10 @@ contract version is tracked separately as
   triage/scan/read) still passes straight through (no search, no regression).
   Ambiguity fails LOUD with a candidate list to pick from, and no match fails
   LOUD with "not found" — never a silent wrong-target and never a bare
-  "give me a message ID / exact subject" wall.
+  "give me a message ID / exact subject" wall. The concrete-id probe only treats
+  a genuine 404 (or an in-memory miss) as "not an id here"; a transient backend
+  error (auth expiry, rate-limit, 5xx, network) on a valid id propagates instead
+  of being masked as a misleading "no message found".
 - **`/query` Lemonade-down errors are now actionable, not a raw traceback (#2139).**
   When the local LLM backend was unreachable, the `/query` SSE stream's terminal
   `error` event led with the raw `requests`/`urllib3` exception repr, giving the

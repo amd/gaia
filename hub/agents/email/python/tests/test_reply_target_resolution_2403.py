@@ -35,6 +35,7 @@ pytest.importorskip("gaia_agent_email")
 
 from gaia_agent_email.tools.reply_tools import resolve_message_target  # noqa: E402
 
+from gaia.connectors.errors import ConnectorsError  # noqa: E402
 from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -277,3 +278,53 @@ def test_multi_mailbox_same_sender_disambiguates_across_providers():
     text = str(exc.value)
     assert "Gmail freeze SIC-4482" in text
     assert "Outlook freeze SIC-4482" in text
+
+
+# ---------------------------------------------------------------------------
+# Concrete-id probe must not swallow transient errors as "not found" (#2403
+# review; CLAUDE.md no-silent-fallback)
+# ---------------------------------------------------------------------------
+
+
+class _TransientGetBackend(FakeGmailBackend):
+    """``get_message`` hits a transient backend failure (rate-limit / 5xx) —
+    a real error on a possibly-valid id that must propagate, never be masked."""
+
+    def get_message(self, message_id: str) -> dict:
+        raise ConnectorsError(
+            f"Gmail API GET /messages/{message_id} returned 429: rate limited"
+        )
+
+
+class _NotFound404Backend(FakeGmailBackend):
+    """``get_message`` 404s for the probed id (genuinely absent) but works for
+    real stub ids the search returns — the 404 must fall through to search."""
+
+    def get_message(self, message_id: str) -> dict:
+        if message_id == "deadbeefcafe0404":
+            raise ConnectorsError(
+                "Gmail API GET /messages/deadbeefcafe0404 returned 404: Not Found"
+            )
+        return super().get_message(message_id)
+
+
+def test_transient_probe_error_propagates_not_masked_as_not_found():
+    # A valid-looking id whose fetch hits a 429 must raise the backend error,
+    # not fall through and come back as a misleading "no message found".
+    backend = _TransientGetBackend(user_email="user@example.com")
+    backend.add_message(_msg("m1", sender="rocm-ci@amd.com", subject="Freeze SIC-4482"))
+    with pytest.raises(ConnectorsError) as exc:
+        resolve_message_target({"google": backend}, target="deadbeefcafe1234")
+    assert "429" in str(exc.value)
+
+
+def test_probe_404_falls_through_to_search():
+    # A 404 on the probe means "not a real id here" — it must fall through to
+    # search and end in the actionable not-found ValueError, never surface the
+    # raw 404 ConnectorsError.
+    backend = _NotFound404Backend(user_email="user@example.com")
+    backend.add_message(_msg("m1", sender="rocm-ci@amd.com", subject="Freeze SIC-4482"))
+    with pytest.raises(ValueError) as exc:
+        resolve_message_target({"google": backend}, target="deadbeefcafe0404")
+    text = str(exc.value).lower()
+    assert "no message" in text or "not found" in text
