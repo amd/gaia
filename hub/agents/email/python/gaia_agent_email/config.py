@@ -55,16 +55,16 @@ def _allowed_hosts() -> set[str]:
     return out
 
 
-# The 30s default is calibrated for an instant-UI-button undo. Chat-mediated
-# bulk operations run through the LLM tool-loop and take real time (a multi-item
-# archive can exceed 30s on a slow local model, #2447), so the floor is
-# overridable via GAIA_EMAIL_UNDO_WINDOW_SECONDS.
+# The 120s default is a chat-speed floor. Chat-mediated bulk operations run
+# through the LLM tool-loop and take real time (a multi-item archive could
+# exceed the old 30s default on a slow local model, #2447), so the default is
+# raised and remains overridable via GAIA_EMAIL_UNDO_WINDOW_SECONDS.
 _UNDO_WINDOW_ENV = "GAIA_EMAIL_UNDO_WINDOW_SECONDS"
-_DEFAULT_UNDO_WINDOW_SECONDS = 30
+_DEFAULT_UNDO_WINDOW_SECONDS = 120
 
 
 def default_undo_window_seconds() -> int:
-    """Resolve the undo window from ``GAIA_EMAIL_UNDO_WINDOW_SECONDS``, else 30.
+    """Resolve the undo window from ``GAIA_EMAIL_UNDO_WINDOW_SECONDS``, else 120.
 
     A malformed or non-positive override raises ``ConfigurationError`` rather
     than silently falling back to the default — a bad env value is a
@@ -112,8 +112,8 @@ class EmailAgentConfig:
     - ``output_dir``: where the agent dumps transcripts / artifacts.
     - ``undo_window_seconds``: how long after a soft-delete the user has
       to ``restore_message``. After this window ``restore_message``
-      raises with a "use Trash to recover" message. Defaults to 30 (the
-      instant-UI-button floor) but is overridable via the
+      raises with a "use Trash to recover" message. Defaults to 120 (a
+      chat-speed floor) but is overridable via the
       ``GAIA_EMAIL_UNDO_WINDOW_SECONDS`` env var so chat-mediated bulk
       operations — which run through the slower LLM tool-loop — stay
       undoable after completion (#2447).
@@ -228,7 +228,7 @@ class EmailAgentConfig:
                 f"EmailAgentConfig.undo_window_seconds must be a positive "
                 f"integer number of seconds, got {self.undo_window_seconds!r}. "
                 f"Set {_UNDO_WINDOW_ENV} to a positive value or leave it unset "
-                "for the 30s default."
+                f"for the {_DEFAULT_UNDO_WINDOW_SECONDS}s default."
             )
         if not isinstance(self.followup_window_days, int) or (
             self.followup_window_days <= 0
