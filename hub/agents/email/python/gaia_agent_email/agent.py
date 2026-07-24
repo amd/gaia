@@ -534,6 +534,12 @@ class EmailTriageAgent(
         # mid-run. Re-minted per turn by _reset_organize_counter.
         self._organize_batch_id = uuid.uuid4().hex
 
+        # #2456 — the batch_id of the most recent archive in THIS session. Unlike
+        # ``_organize_batch_id`` (re-minted every turn), this survives across
+        # turns so a conversational "undo that" in the NEXT turn can restore the
+        # last archive without the user quoting an internal batch uuid.
+        self._last_archive_batch_id: Optional[str] = None
+
         # Session-scoped triage preferences — sender priorities and
         # category defaults that survive across queries within one agent
         # instance and are wiped on restart. See ``preference_tools.py``

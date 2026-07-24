@@ -20,6 +20,14 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Two-turn "archive several… then undo" is now actually reachable (#2456).**
+  "Undo that" with no id no longer demands the internal batch uuid: the agent
+  tracks the last archive `batch_id` per session, and `undo_archive_batch`
+  recalls it when none is supplied — restoring the most recently archived
+  batch. Paired with the undo window already raised to a chat-speed 120s
+  (#2447), a normal two-turn "archive several… then undo" flow now completes
+  without the user ever seeing or typing a batch id.
+
 - **Archive verifies it took effect, and same-day search finds today's mail (#2406).**
   Archiving now inspects the provider's post-mutation `INBOX` label and fails
   loudly instead of reporting a false success when the message is still in the
