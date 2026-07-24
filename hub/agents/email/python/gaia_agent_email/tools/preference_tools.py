@@ -49,6 +49,12 @@ log = get_logger(__name__)
 # most one row, so the record count stays at one.
 _PREF_STATE_KEY = "session_preferences"
 
+# Legacy entity key: versions <= v0.5.0 stored the preferences snapshot in the
+# embedding-backed MemoryStore under this key. On the first load after upgrade,
+# ``_load_persisted_preferences`` reads it once (when ``state.db`` has no row)
+# and writes it through to ``state.db`` so nothing is silently dropped (#2427).
+_LEGACY_PREF_ENTITY = "email:preferences"
+
 # state.db schema for preferences. Mirrors the trust ledger's storage choice:
 # structured operational state lives in ``state.db`` via ``DatabaseMixin``, not
 # in the embedding-backed MemoryStore — so preferences persist without the
@@ -284,6 +290,11 @@ class PreferenceToolsMixin:
 
         data = _load_preferences_from_db(self)
         if not data:
+            # One-time upgrade path: no state.db row yet, but a pre-v0.5.1 build
+            # may have persisted preferences to the MemoryStore. Migrate them so
+            # they are not silently dropped on upgrade.
+            data = self._migrate_legacy_preferences()
+        if not data:
             return
 
         prefs = getattr(self, "_session_preferences", None)
@@ -295,6 +306,48 @@ class PreferenceToolsMixin:
         prefs["priority_senders"] = set(data.get("priority_senders") or [])
         prefs["low_priority_senders"] = set(data.get("low_priority_senders") or [])
         prefs["category_defaults"] = dict(data.get("category_defaults") or {})
+
+    def _migrate_legacy_preferences(self) -> Optional[Dict[str, Any]]:
+        """Seed from the legacy MemoryStore preferences record, once.
+
+        Versions <= v0.5.0 stored the preferences snapshot in the embedding-backed
+        MemoryStore under ``_LEGACY_PREF_ENTITY``. When ``state.db`` has no row
+        (fresh after upgrade) and that legacy record exists, read it, write it
+        through to ``state.db`` so future loads use the state.db fast path, and
+        return the snapshot. Returns ``None`` when there is nothing to migrate.
+
+        A corrupt legacy record is treated as absent (logged) rather than
+        crashing startup — a fail-soft read, not a silent write fallback.
+        """
+        store = getattr(self, "_memory_store", None)
+        if store is None or not hasattr(store, "get_by_entity"):
+            return None
+        existing = store.get_by_entity(_LEGACY_PREF_ENTITY)
+        if not existing:
+            return None
+        try:
+            data = json.loads(existing[0]["content"])
+        except (json.JSONDecodeError, KeyError, TypeError, IndexError):
+            log.warning(
+                "preference_tools: legacy MemoryStore preferences record is "
+                "unreadable; starting with empty defaults"
+            )
+            return None
+        snapshot = {
+            "priority_senders": sorted(data.get("priority_senders") or []),
+            "low_priority_senders": sorted(data.get("low_priority_senders") or []),
+            "category_defaults": dict(data.get("category_defaults") or {}),
+        }
+        _save_preferences_to_db(self, snapshot)
+        log.info(
+            "preference_tools: migrated %d priority / %d low-priority sender(s) "
+            "and %d category default(s) from the legacy MemoryStore record to "
+            "state.db (#2427)",
+            len(snapshot["priority_senders"]),
+            len(snapshot["low_priority_senders"]),
+            len(snapshot["category_defaults"]),
+        )
+        return snapshot
 
     def _register_preference_tools(self) -> None:
         agent = self  # captured for live access to ``_session_preferences``

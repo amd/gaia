@@ -577,3 +577,81 @@ class TestHonestPersistenceStatus:
             assert cleared["data"]["persistence"] == "persisted"
         finally:
             agent.close_db()
+
+
+class TestLegacyMemoryStoreMigration:
+    """#2427 upgrade path: preferences that a pre-v0.5.1 build persisted to the
+    embedding-backed MemoryStore must be migrated to state.db on first load,
+    not silently dropped."""
+
+    _LEGACY_ENTITY = "email:preferences"
+
+    def _plant_legacy_record(self, agent, snapshot: dict) -> None:
+        """Write a legacy preferences record into the agent's MemoryStore under
+        the old entity key (the shape pre-v0.5.1 stored)."""
+        assert agent._memory_store is not None, "test needs a real MemoryStore"
+        agent._memory_store.store(
+            category="preference",
+            content=json.dumps(snapshot),
+            domain="email",
+            entity=self._LEGACY_ENTITY,
+            context="global",
+            confidence=1.0,
+            source="test-legacy",
+        )
+
+    def test_legacy_prefs_migrate_to_state_db(self, tmp_path):
+        # Session A: no preference set via the tool (so state.db has no row),
+        # but a legacy MemoryStore record exists from a prior version.
+        agent_a = _build_agent(tmp_path)
+        try:
+            # state.db genuinely empty of preferences at this point.
+            assert not agent_a._session_preferences["priority_senders"]
+            self._plant_legacy_record(
+                agent_a,
+                {
+                    "priority_senders": ["legacy@x.com"],
+                    "low_priority_senders": ["noise@y.com"],
+                    "category_defaults": {"FYI": "archive"},
+                },
+            )
+        finally:
+            agent_a.close_db()
+
+        # Session B: fresh agent, same db paths. Load must migrate from the
+        # legacy record and seed the session.
+        agent_b = _build_agent(tmp_path)
+        try:
+            assert agent_b._session_preferences["priority_senders"] == {"legacy@x.com"}
+            assert agent_b._session_preferences["low_priority_senders"] == {
+                "noise@y.com"
+            }
+            assert agent_b._session_preferences["category_defaults"] == {
+                "FYI": "archive"
+            }
+            # And it was written through to state.db (not re-read from memory
+            # every start): the fast-path row now exists.
+            row = agent_b.query(
+                "SELECT value FROM email_preferences WHERE key = :k",
+                {"k": "session_preferences"},
+                one=True,
+            )
+            assert row is not None, "migration did not write through to state.db"
+            assert "legacy@x.com" in row["value"]
+        finally:
+            agent_b.close_db()
+
+    def test_no_legacy_record_is_a_noop(self, tmp_path):
+        # With no legacy record and no state.db row, load leaves empty defaults
+        # and writes nothing.
+        agent = _build_agent(tmp_path)
+        try:
+            assert not agent._session_preferences["priority_senders"]
+            row = agent.query(
+                "SELECT value FROM email_preferences WHERE key = :k",
+                {"k": "session_preferences"},
+                one=True,
+            )
+            assert row is None, "no migration should occur without a legacy record"
+        finally:
+            agent.close_db()
