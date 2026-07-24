@@ -2913,6 +2913,9 @@
           "403": {
             "description": "Authorization failed — the account's auth is missing, expired, or revoked (reconnect via Settings → Connectors), or a confirmation gate rejected the request (mint a fresh confirmation token)."
           },
+          "409": {
+            "description": "The archive did not take effect — the message is still in the inbox (the provider's modify call did not remove the INBOX label)."
+          },
           "422": {
             "content": {
               "application/json": {

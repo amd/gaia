@@ -2415,10 +2415,24 @@ async def confirm_action(
     )
 
 
+_ARCHIVE_VERIFY_409 = {
+    409: {
+        "description": (
+            "The archive did not take effect — the message is still in the inbox "
+            "(the provider's modify call did not remove the INBOX label)."
+        )
+    }
+}
+
+
 @router.post(
     "/archive",
     response_model=EmailArchiveResponse,
-    responses={**_CONNECTOR_ERROR_RESPONSES, **_AMBIGUOUS_PROVIDER_400},
+    responses={
+        **_CONNECTOR_ERROR_RESPONSES,
+        **_AMBIGUOUS_PROVIDER_400,
+        **_ARCHIVE_VERIFY_409,
+    },
 )
 async def archive_email(request: EmailArchiveRequest) -> EmailArchiveResponse:
     """Archive a message — gated on confirmation, reversible for 30s.
