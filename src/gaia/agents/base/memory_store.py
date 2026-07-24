@@ -1324,6 +1324,15 @@ class MemoryStore:
                 When set, this item is considered historical/inactive and will be
                 excluded from active queries (search, get_by_*, system prompt).
         """
+        # A row may never supersede itself — that would set superseded_by to its
+        # own id and hide it from every active query (recall, get_by_category).
+        if superseded_by is not None and superseded_by == knowledge_id:
+            raise ValueError(
+                f"update(): superseded_by ({superseded_by}) must not equal the "
+                f"row's own id; a self-supersede makes the row unrecallable. "
+                f"Only supersede when a genuinely new row was created."
+            )
+
         # Normalize empty strings to None — same semantics as store().
         # An empty-string entity or domain would differ from NULL in SQL and
         # break entity-scoped dedup, index filtering, and stats queries.
