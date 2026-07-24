@@ -211,7 +211,7 @@ class PhishingToolsMixin:
         gmail = self._gmail
         db = self
         debug_flag = bool(getattr(self.config, "debug", False))
-        window = int(getattr(self.config, "undo_window_seconds", 30))
+        window = int(getattr(self.config, "undo_window_seconds", 120))
 
         @tool
         def quarantine_phishing_message(message_id: str, is_phishing: bool) -> str:

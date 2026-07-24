@@ -66,9 +66,45 @@ def test_permission_request_maps_to_needs_confirmation_without_confirm_url():
     assert out[0]["type"] == "needs_confirmation"
     assert out[0]["run_id"] == RUN_ID
     assert out[0]["action"] == "send_now"
-    assert "a@b.com" in out[0]["summary"]
+    # Human-readable headline, not a raw key=value dump (issue #2404).
+    summary = out[0]["summary"]
+    assert "a@b.com" in summary
+    assert "Send this email" in summary
+    assert 'subject "Hi"' in summary
+    assert "send_now:" not in summary
+    assert "body=" not in summary
     # Stateless stop-and-hand-off (D1): confirm_url is omitted.
     assert "confirm_url" not in out[0]
+
+
+def test_permission_request_summary_omits_body_and_is_human_readable():
+    out = _tr().translate(
+        {
+            "type": "permission_request",
+            "tool": "send_now",
+            "args": {
+                "to": "rocm-ci@amd.com",
+                "subject": "Re: Security Incident SIC-4482",
+                "body": "Acknowledged. I will review the security incident.",
+            },
+        }
+    )
+    summary = out[0]["summary"]
+    assert summary.startswith("Send this email to rocm-ci@amd.com")
+    # The verbatim body must never reach the confirmation headline.
+    assert "Acknowledged" not in summary
+    assert "body=" not in summary
+
+
+def test_permission_request_summary_for_non_send_action():
+    out = _tr().translate(
+        {
+            "type": "permission_request",
+            "tool": "quarantine_phishing_message",
+            "args": {"message_id": "abc123"},
+        }
+    )
+    assert out[0]["summary"] == "Quarantine this message as phishing?"
 
 
 # ---------------------------------------------------------------------------

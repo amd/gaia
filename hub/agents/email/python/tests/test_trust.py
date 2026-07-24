@@ -24,6 +24,7 @@ from gaia_agent_email.trust import (  # noqa: E402
     TrustLedger,
     TrustPolicy,
     category_scope,
+    is_security_sender,
     sender_scope,
 )
 
@@ -299,6 +300,124 @@ def test_earn_trust_negative_evidence_keeps_suggesting(db):
     assert d.confidence == pytest.approx(5 / 8)
 
 
+# ---------------------------------------------------------------------------
+# #2426 — the auto-archive importance / security-sender guard
+# ---------------------------------------------------------------------------
+
+
+def test_full_level_never_auto_archives_important(db):
+    """A provider-IMPORTANT message is proposed, not auto-archived, even at full."""
+    policy = _policy(LEVEL_FULL)
+    d = policy.decide(
+        tool="archive_message",
+        action_type="archive",
+        sender="deals@shop.com",
+        db=db,
+        is_important=True,
+    )
+    assert d.action == "suggest"
+    assert "IMPORTANT" in d.reason
+
+
+def test_full_level_never_auto_archives_security_sender(db):
+    """An account-security sender is never auto-archived unattended, even at full."""
+    policy = _policy(LEVEL_FULL)
+    d = policy.decide(
+        tool="archive_message",
+        action_type="archive",
+        sender="no-reply@accounts.google.com",
+        db=db,
+        is_important=False,
+    )
+    assert d.action == "suggest"
+    assert "security" in d.reason.lower()
+
+
+def test_earn_trust_important_beats_ledger_trust(db):
+    """The importance guard overrides an already-earned (ledger-trusted) scope."""
+    policy = _policy(LEVEL_EARN_TRUST, db_min=3, threshold=0.85)
+    scope = sender_scope("deals@shop.com")
+    for _ in range(3):
+        TrustLedger.record_outcome(
+            db, action_type="archive", scope=scope, positive=True
+        )
+    # Without the guard this would be `auto` (trusted). With it: proposed.
+    d = policy.decide(
+        tool="archive_message",
+        action_type="archive",
+        sender="deals@shop.com",
+        db=db,
+        is_important=True,
+    )
+    assert d.action == "suggest"
+
+
+def test_earn_trust_important_beats_explicit_preference(db):
+    """The importance guard overrides even an explicit low-priority-sender pref."""
+    policy = _policy(LEVEL_EARN_TRUST)
+    prefs = {"low_priority_senders": {"deals@shop.com"}, "category_defaults": {}}
+    d = policy.decide(
+        tool="archive_message",
+        action_type="archive",
+        sender="deals@shop.com",
+        db=db,
+        preferences=prefs,
+        is_important=True,
+    )
+    assert d.action == "suggest"
+
+
+def test_full_level_still_auto_archives_normal_sender(db):
+    """The guard is narrow: an ordinary, non-important sender still auto-archives."""
+    policy = _policy(LEVEL_FULL)
+    d = policy.decide(
+        tool="archive_message",
+        action_type="archive",
+        sender="deals@shop.com",
+        db=db,
+        is_important=False,
+    )
+    assert d.action == "auto"
+
+
+def test_importance_guard_does_not_lower_send_floor(db):
+    """The importance guard never touches the destructive confirm-floor — a floor
+    tool stays ``confirm`` regardless of the IMPORTANT flag."""
+    policy = _policy(LEVEL_FULL)
+    d = policy.decide(
+        tool="send_now",
+        action_type="send",
+        sender="no-reply@accounts.google.com",
+        db=db,
+        is_important=True,
+    )
+    assert d.action == "confirm"
+
+
+@pytest.mark.parametrize(
+    "sender, expected",
+    [
+        ("no-reply@accounts.google.com", True),
+        ("noreply@accounts.anybank.com", True),
+        ("security@company.com", True),
+        ("account-security@example.org", True),
+        ("security-alert@bank.com", True),
+        ("foo@id.apple.com", True),
+        ("alerts@accountprotection.microsoft.com", True),
+        ("No-Reply@Accounts.Google.Com", True),  # case-insensitive
+        ("deals@shop.com", False),
+        ("boss@company.com", False),
+        ("newsletters@techcrunch.com", False),
+        ("securityweekly@news.com", False),  # not the exact 'security' local-part
+        ("accounts-payable@vendor.com", False),  # billing, not account-security
+        ("", False),
+        ("not-an-email", False),
+    ],
+)
+def test_is_security_sender_matrix(sender, expected):
+    assert is_security_sender(sender) is expected
+
+
 def test_policy_rejects_unknown_level():
     with pytest.raises(ValueError):
         TrustPolicy(level="turbo", ledger=TrustLedger(), confirm_floor=FLOOR)
@@ -339,7 +458,5 @@ def test_record_proposal_commits_across_connection_teardown(tmp_path):
     # Fire 2: fresh agent against the same DB must see the earlier proposal.
     second = _DB()
     second.init_db(db_path)
-    assert trust.has_open_proposal(
-        second, message_id="msg-1", action_type="archive"
-    )
+    assert trust.has_open_proposal(second, message_id="msg-1", action_type="archive")
     second.close_db()

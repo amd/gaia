@@ -139,6 +139,25 @@ class TestStartDeviceFlow:
             asyncio.run(flow_mod.start_device_flow("microsoft", [MAIL_READ]))
         assert "Device-code request" in str(exc.value)
 
+    def test_personal_account_only_app_names_consumers_tenant(self, monkeypatch):
+        # AADSTS9002346: personal-account-only app rejected on the 'common'
+        # endpoint (the v0.23.0 default). The error must name the exact
+        # migration step, not dump the raw AADSTS code.
+        aad_error = (
+            "AADSTS9002346: Application 'x' is configured for use by Microsoft "
+            "Account users only. Please use the /consumers endpoint to serve "
+            "this request."
+        )
+        _install_responses(
+            monkeypatch,
+            [_FakeResp(400, {"error": "invalid_request"}, aad_error)],
+        )
+        with pytest.raises(ConnectorsError) as exc:
+            asyncio.run(flow_mod.start_device_flow("microsoft", [MAIL_READ]))
+        msg = str(exc.value)
+        assert "GAIA_MICROSOFT_TENANT=consumers" in msg
+        assert "personal Microsoft accounts only" in msg
+
     def test_provider_without_device_support_raises(self, monkeypatch):
         # Google has no device_code_url -> loud, actionable error.
         monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "g")

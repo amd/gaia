@@ -189,21 +189,32 @@ def fetch_batch_undoable(
 ) -> list[Dict[str, Any]]:
     """Return every action row in ``batch_id`` that is still undoable.
 
-    A row is undoable when it has not been undone and is inside the window.
-    Stale or already-undone rows are filtered out — this is the bulk
-    analogue of ``fetch_undoable`` for the batch-undo follow-up (#1270).
-    Returns ``[]`` for an unknown batch.
+    The undo window is measured from batch **completion** (the latest
+    ``created_at`` in the batch), NOT per row (#2163). A multi-item bulk run
+    takes real time; anchoring per row let the earliest items' windows expire
+    mid-run, so the closing "undo within the window" offer was already false for
+    them. Anchoring to completion keeps every item undoable for
+    ``window_seconds`` after the last op — all-or-nothing per batch. The window
+    still genuinely expires (from completion), so undo is not unbounded.
+
+    Already-undone rows are still filtered out per row. Returns ``[]`` for an
+    unknown batch or once the whole-batch window has elapsed.
     """
-    rows = db.query(
-        "SELECT * FROM email_actions WHERE batch_id = :b ORDER BY created_at",
-        {"b": batch_id},
+    rows = list(
+        db.query(
+            "SELECT * FROM email_actions WHERE batch_id = :b ORDER BY created_at",
+            {"b": batch_id},
+        )
+        or ()
     )
-    cutoff = time.time() - window_seconds
+    if not rows:
+        return []
+    completed_at = max(row["created_at"] for row in rows)
+    if time.time() - completed_at > window_seconds:
+        return []
     out: list[Dict[str, Any]] = []
-    for row in rows or ():
+    for row in rows:
         if row["undone_at"] is not None:
-            continue
-        if row["created_at"] < cutoff:
             continue
         payload = json.loads(row["payload_json"]) if row["payload_json"] else {}
         out.append(
@@ -219,6 +230,43 @@ def fetch_batch_undoable(
             }
         )
     return out
+
+
+def fetch_last_undoable_batch_id(db, *, window_seconds: int) -> Optional[str]:
+    """Return the most recently completed archive ``batch_id`` still undoable.
+
+    Backs a bare "undo that" with no id (``undo_archive_batch``). The sidecar
+    builds a brand-new agent per request (#2456) — an in-memory "last batch"
+    attribute never survives past a single request — so this is the
+    cross-request source of truth: one ``state.db`` per local install
+    (``EmailAgentConfig.resolved_db_path``) already scopes "most recent batch
+    in this db" to "most recent batch for this user"; no separate session/
+    account key is needed or available at this layer.
+
+    Ranks batches by completion time (latest ``created_at`` in the batch,
+    matching ``fetch_batch_undoable``'s completion-anchored window) and only
+    considers a batch a candidate while it still has at least one row with
+    ``undone_at IS NULL``. Returns ``None`` if no archive batch exists or the
+    most recent one's window has elapsed.
+    """
+    row = db.query(
+        """
+        SELECT batch_id, MAX(created_at) AS completed_at
+        FROM email_actions
+        WHERE action_type = 'archive' AND batch_id IS NOT NULL
+        GROUP BY batch_id
+        HAVING SUM(CASE WHEN undone_at IS NULL THEN 1 ELSE 0 END) > 0
+        ORDER BY completed_at DESC
+        LIMIT 1
+        """,
+        {},
+        one=True,
+    )
+    if row is None:
+        return None
+    if time.time() - row["completed_at"] > window_seconds:
+        return None
+    return row["batch_id"]
 
 
 def mark_undone(db, *, action_id: str) -> None:
@@ -350,6 +398,7 @@ __all__ = [
     "delete_voice_profile",
     "fetch_batch_undoable",
     "fetch_draft",
+    "fetch_last_undoable_batch_id",
     "fetch_undoable",
     "fetch_voice_profile",
     "init_schema",

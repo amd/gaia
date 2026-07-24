@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import httpx
 import pytest
-
-from gaia_agent_email.outlook_backend import LiveOutlookBackend
+from gaia_agent_email.outlook_backend import (
+    LiveOutlookBackend,
+    graph_message_to_gmail,
+)
 
 
 def _backend(handler):
@@ -87,6 +89,32 @@ def test_get_thread_sorts_messages_ascending_client_side():
 
     ids = [m["id"] for m in thread["messages"]]
     assert ids == ["older", "newer"]
+
+
+@pytest.mark.parametrize(
+    "importance, expect_important",
+    [
+        ("high", True),
+        ("High", True),
+        ("normal", False),
+        ("low", False),
+        (None, False),
+    ],
+)
+def test_graph_high_importance_maps_to_important_label(importance, expect_important):
+    """#2426 (AC-1, Outlook equivalent): a Graph high-importance message carries
+    the ``IMPORTANT`` label the auto-archive guard keys off; normal/low/absent
+    importance does not."""
+    msg = {
+        "id": "m1",
+        "conversationId": "c1",
+        "isRead": True,
+        "receivedDateTime": "2026-07-16T12:00:00Z",
+    }
+    if importance is not None:
+        msg["importance"] = importance
+    label_ids = graph_message_to_gmail(msg)["labelIds"]
+    assert ("IMPORTANT" in label_ids) is expect_important
 
 
 if __name__ == "__main__":

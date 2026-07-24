@@ -251,6 +251,18 @@ class SidecarRegistry:
                 return agent_id
         return None
 
+    def running_connections(self) -> "list[tuple[str, str, str]]":
+        """``(agent_id, base_url, bearer)`` for every RUNNING sidecar that has a
+        base_url — the enumeration the re-forward timer (#2388) iterates so it
+        never has to reach into the registry's private manager map."""
+        with self._lock:
+            holders = list(self._managers.items())
+        return [
+            (agent_id, manager.base_url, manager.auth_token)
+            for agent_id, (manager, _) in holders
+            if manager.is_running and manager.base_url
+        ]
+
     def list_agents(self) -> "list[dict]":
         """One entry per registered spec, running or not. NEVER includes tokens."""
         with self._lock:

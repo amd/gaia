@@ -8,7 +8,7 @@ REST verbs, MCP tools, eval-gate coverage), renders a committed
 ``CAPABILITY_MATRIX.md``, and asserts nothing drifts silently:
 
 - AC1: the committed matrix doc is byte-identical to a freshly regenerated one.
-- AC2: ``tools_count`` (55) is identical across ``gaia-agent.yaml``,
+- AC2: ``tools_count`` (56) is identical across ``gaia-agent.yaml``,
   ``gaia_agent_email.__init__.build_registration()``, and an AST-derived count.
 - AC3: every one of the 25 exposed ops (21 REST + 4 MCP) is annotated with an
   eval suite name or the "no quality eval" sentinel — closed-set, bidirectional.
@@ -59,7 +59,7 @@ _spec.loader.exec_module(capability_matrix)
 # see the plan for issue #2013 §1 for the derivation of every number below).
 # ---------------------------------------------------------------------------
 
-# 13 mixins in gaia_agent_email/tools/, keyed by module stem, 55 tools total.
+# 14 mixins in gaia_agent_email/tools/, keyed by module stem, 56 tools total.
 _EXPECTED_TOOLS_BY_MIXIN = {
     "read_tools": 8,
     "organize_tools": 15,
@@ -74,8 +74,9 @@ _EXPECTED_TOOLS_BY_MIXIN = {
     "followup_tools": 1,
     "profile_tools": 1,
     "summarize_tools": 1,
+    "connection_tools": 1,
 }
-_EXPECTED_TOOLS_TOTAL = 55
+_EXPECTED_TOOLS_TOTAL = 56
 assert sum(_EXPECTED_TOOLS_BY_MIXIN.values()) == _EXPECTED_TOOLS_TOTAL
 
 _EXPECTED_MCP_COUNT = 4
@@ -162,7 +163,7 @@ def test_committed_capability_matrix_is_up_to_date(matrix):
 
 
 # ---------------------------------------------------------------------------
-# AC2 — tools_count defined + asserted (55, 3 independent sources)
+# AC2 — tools_count defined + asserted (56, 3 independent sources)
 # ---------------------------------------------------------------------------
 
 

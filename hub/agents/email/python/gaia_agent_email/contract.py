@@ -759,7 +759,7 @@ class EmailSearchResponse(_Strict):
 #
 # These are MUTATING operations on the live mailbox, so — like /send — every
 # one is gated on a single-use confirmation token (minted by the confirm step
-# below). Both are reversible inside a 30s undo window via their reversal
+# below). Both are reversible inside a 120s undo window via their reversal
 # endpoints; the reversal path is itself NOT gated (it restores, never
 # destroys). The shapes preserve the two #1738 gotchas: archive returns the
 # ``batch_id`` undo handle AND the ``post_archive_id`` (the id a folder-based
@@ -837,7 +837,7 @@ class EmailArchiveRequest(_Strict):
 
 
 class EmailArchiveResponse(_Strict):
-    """Result of an archive — carries the undo handle for the 30s window."""
+    """Result of an archive — carries the undo handle for the 120s window."""
 
     schema_version: str = Field(
         default=SCHEMA_VERSION, description="Echoes the contract version."
@@ -945,7 +945,7 @@ class EmailQuarantineRequest(_Strict):
 
 
 class EmailQuarantineResponse(_Strict):
-    """Result of a quarantine — carries the action id for the 30s undo."""
+    """Result of a quarantine — carries the action id for the 120s undo."""
 
     schema_version: str = Field(
         default=SCHEMA_VERSION, description="Echoes the contract version."
