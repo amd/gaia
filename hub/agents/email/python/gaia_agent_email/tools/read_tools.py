@@ -1210,7 +1210,10 @@ class ReadToolsMixin:
             When multiple mailboxes are connected, lists from ALL of them with a
             shared total budget (never per-mailbox-doubled). Each returned message
             carries a ``mailbox`` field ('google' / 'microsoft') so downstream
-            tools can route actions without re-asking.
+            tools can route actions without re-asking. One mailbox failing (e.g. a
+            broken token) does not abort the others — its messages are omitted and
+            a ``mailbox_errors`` entry is added; only if EVERY mailbox fails does
+            the tool return an error.
 
             Args:
                 max_results: How many messages to return in total (default 25, max 100).
@@ -1220,6 +1223,8 @@ class ReadToolsMixin:
                 id, thread_id, subject, from, to, date, label_ids,
                 snippet, body (wrapped in untrusted-input delimiters),
                 body_truncated, body_chars_dropped, attachments, mailbox.
+                A ``mailbox_errors`` list is present when a connected mailbox
+                failed but at least one other returned results.
             """
             try:
                 max_results = max(1, min(int(max_results or 25), 100))
@@ -1228,20 +1233,45 @@ class ReadToolsMixin:
                     return _envelope_err(NO_MAILBOX_CONNECTED_MESSAGE)
                 per_backend = max(1, max_results // len(backends))
                 merged: List[Dict[str, Any]] = []
+                mailbox_errors: List[Dict[str, Any]] = []
                 for provider, backend in backends.items():
                     if len(merged) >= max_results:
                         break
-                    result = list_inbox_impl(
-                        backend, max_results=per_backend, debug=debug_flag
-                    )
+                    # Isolate per-provider failures: a broken token on one
+                    # mailbox (e.g. Microsoft invalid_request on refresh) must
+                    # not abort the listing across a healthy Google mailbox.
+                    try:
+                        result = list_inbox_impl(
+                            backend, max_results=per_backend, debug=debug_flag
+                        )
+                    except ConnectorsError as exc:
+                        msg = format_connector_error(exc)
+                        mailbox_errors.append({"mailbox": provider, "error": msg})
+                        log.warning(
+                            "email list_inbox: skipping %s mailbox — %s", provider, msg
+                        )
+                        continue
                     for msg in result.get("messages", []):
                         msg["mailbox"] = provider
                         agent._remember_message_mailbox(msg.get("id"), provider)
                         agent._remember_message_mailbox(msg.get("thread_id"), provider)
                         merged.append(msg)
-                return _envelope_ok(
-                    {"messages": merged[:max_results], "next_page_token": None}
-                )
+                if mailbox_errors and len(mailbox_errors) == len(backends):
+                    # Every connected mailbox failed — surface it loudly rather
+                    # than returning ok with zero results (reads as empty inbox).
+                    raise ConnectorsError(
+                        "All connected mailboxes failed during list_inbox: "
+                        + "; ".join(
+                            f"{e['mailbox']}: {e['error']}" for e in mailbox_errors
+                        )
+                    )
+                out: Dict[str, Any] = {
+                    "messages": merged[:max_results],
+                    "next_page_token": None,
+                }
+                if mailbox_errors:
+                    out["mailbox_errors"] = mailbox_errors
+                return _envelope_ok(out)
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
             except Exception as exc:
@@ -1356,7 +1386,10 @@ class ReadToolsMixin:
 
             When multiple mailboxes are connected, searches both with a shared
             total budget. Each returned message carries a ``mailbox`` field so
-            downstream tools route actions without re-asking.
+            downstream tools route actions without re-asking. One mailbox failing
+            (e.g. a broken token) does not abort the others — its hits are omitted
+            and a ``mailbox_errors`` entry is added to the envelope; only if EVERY
+            mailbox fails does the tool return an error.
 
             ``query`` uses Gmail search syntax. ALWAYS prefer operators over a
             verbatim user phrase — a literal phrase like
@@ -1383,18 +1416,47 @@ class ReadToolsMixin:
                     return _envelope_err(NO_MAILBOX_CONNECTED_MESSAGE)
                 per_backend = max(1, max_results // len(backends))
                 merged: List[Dict[str, Any]] = []
+                mailbox_errors: List[Dict[str, Any]] = []
                 for provider, backend in backends.items():
                     if len(merged) >= max_results:
                         break
-                    result = search_messages_impl(
-                        backend, query=query, max_results=per_backend, debug=debug_flag
-                    )
+                    # Isolate per-provider failures: a broken token on one
+                    # mailbox (e.g. Microsoft invalid_request on refresh) must
+                    # not abort the search across a healthy Google mailbox.
+                    try:
+                        result = search_messages_impl(
+                            backend,
+                            query=query,
+                            max_results=per_backend,
+                            debug=debug_flag,
+                        )
+                    except ConnectorsError as exc:
+                        msg = format_connector_error(exc)
+                        mailbox_errors.append({"mailbox": provider, "error": msg})
+                        log.warning(
+                            "email search_messages: skipping %s mailbox — %s",
+                            provider,
+                            msg,
+                        )
+                        continue
                     for msg in result.get("messages", []):
                         msg["mailbox"] = provider
                         agent._remember_message_mailbox(msg.get("id"), provider)
                         agent._remember_message_mailbox(msg.get("thread_id"), provider)
                         merged.append(msg)
-                return _envelope_ok({"messages": merged[:max_results]})
+                if mailbox_errors and len(mailbox_errors) == len(backends):
+                    # Every connected mailbox failed — surface it loudly rather
+                    # than returning ok with zero results (reads as no matches).
+                    raise ConnectorsError(
+                        "All connected mailboxes failed during search: "
+                        + "; ".join(
+                            f"{e['mailbox']}: {e['error']}" for e in mailbox_errors
+                        )
+                    )
+                out: Dict[str, Any] = {"messages": merged[:max_results]}
+                if mailbox_errors:
+                    out["mailbox_errors"] = mailbox_errors
+                return _envelope_ok(out)
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
             except Exception as exc:
