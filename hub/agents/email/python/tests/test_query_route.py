@@ -429,6 +429,27 @@ def test_terminal_error_detail_leaves_unrelated_errors_verbatim():
     assert query_routes._terminal_error_detail(exc) == "some unrelated parse failure"
 
 
+def test_timeout_is_not_classified_as_lemonade_down():
+    """A timeout means up-but-slow, or a *different* host (the Gmail/Outlook
+    backends use httpx with their own timeouts) — never a not-running local
+    Lemonade, which refuses instantly. Such errors must pass through verbatim so
+    the user isn't told to restart Lemonade when Gmail is merely slow (#2139)."""
+
+    class _ReadTimeout(Exception):
+        """Stands in for httpx.ReadTimeout — its repr carries 'timeout'."""
+
+    for exc in (
+        _ReadTimeout("The read operation timed out"),
+        _ReadTimeout(""),  # empty str → class-name fallback still says nothing Lemonade
+        TimeoutError("timed out"),
+        RuntimeError("Gmail API call: connect timeout after 15s"),
+        RuntimeError("host is unreachable via the proxy"),
+    ):
+        assert query_routes._is_lemonade_unreachable(exc) is False, exc
+        # And the actionable Lemonade copy is NOT prepended.
+        assert "Lemonade" not in query_routes._terminal_error_detail(exc)
+
+
 # ---------------------------------------------------------------------------
 # Request validation (fail loud, before the stream)
 # ---------------------------------------------------------------------------
