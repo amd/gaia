@@ -3929,9 +3929,15 @@ Do NOT wrap conversational replies in JSON.
                             messages.append({"role": "user", "content": dedup_msg})
 
                     # Input-based dedup for mutation tools (#1317): catch an
-                    # identical mutation re-issue at the first repeat.
+                    # identical mutation re-issue at the first repeat. Errored
+                    # calls are skipped so a rejected retry isn't mistaken for
+                    # an applied change (#2464).
                     self._dedup_mutation_call(
-                        tool_name, tool_args, mutation_call_cache, messages
+                        tool_name,
+                        tool_args,
+                        mutation_call_cache,
+                        messages,
+                        tool_result,
                     )
 
                     # Domain hooks. A returned plan switches the agent into
@@ -4155,9 +4161,11 @@ Do NOT wrap conversational replies in JSON.
                         messages.append({"role": "user", "content": dedup_msg})
 
                 # Input-based dedup for mutation tools (#1317): catch an
-                # identical mutation re-issue at the first repeat.
+                # identical mutation re-issue at the first repeat. Errored calls
+                # are skipped so a rejected retry isn't mistaken for an applied
+                # change (#2464).
                 self._dedup_mutation_call(
-                    tool_name, tool_args, mutation_call_cache, messages
+                    tool_name, tool_args, mutation_call_cache, messages, tool_result
                 )
 
                 # Handle domain-specific post-processing.
@@ -4797,6 +4805,7 @@ Do NOT wrap conversational replies in JSON.
         tool_args: Dict[str, Any],
         mutation_call_cache: Dict[str, int],
         messages: List[Dict[str, Any]],
+        tool_result: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Catch a repeated identical mutation at the FIRST repeat (#1317).
 
@@ -4810,6 +4819,15 @@ Do NOT wrap conversational replies in JSON.
         on instead of waiting for the slow reactive loop-detector.
         """
         if tool_name not in _MUTATION_TOOLS:
+            return
+        # A mutation that ERRORED never took effect, so re-issuing it is a
+        # legitimate retry — not a redundant repeat. Deduping it would inject
+        # "the change is already applied — move on", falsely reporting success
+        # and abandoning the operation (#2464: batch archive/star dead-ended
+        # ~50% of the time when the model re-sent a spurious ``mailbox`` kwarg
+        # the dispatcher rejects, and the 2nd rejection was mistaken for a
+        # completed mutation). Only dedup calls that actually applied.
+        if self._is_error_result(tool_result):
             return
         # Normalize so {"a":1,"b":2} and {"b":2,"a":1} hash identically.
         try:
