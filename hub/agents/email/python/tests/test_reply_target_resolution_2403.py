@@ -328,3 +328,69 @@ def test_probe_404_falls_through_to_search():
         resolve_message_target({"google": backend}, target="deadbeefcafe0404")
     text = str(exc.value).lower()
     assert "no message" in text or "not found" in text
+
+
+# ---------------------------------------------------------------------------
+# Search loop must skip a stub that vanished (TOCTOU 404) but propagate a
+# transient error — consistent with the concrete-id probe (#2403 review)
+# ---------------------------------------------------------------------------
+
+
+class _StubVanishedBackend(FakeGmailBackend):
+    """A search stub whose ``get_message`` then 404s — the message was deleted
+    between ``list_messages`` and the fetch. That candidate must be skipped, not
+    abort resolution of the healthy match."""
+
+    _VANISHED = "vanished0404"
+
+    def list_messages(self, *, query=None, max_results=25, page_token=None):
+        base = super().list_messages(
+            query=query, max_results=max_results, page_token=page_token
+        )
+        base["messages"] = [{"id": self._VANISHED, "threadId": "tV"}] + base.get(
+            "messages", []
+        )
+        return base
+
+    def get_message(self, message_id: str) -> dict:
+        if message_id == self._VANISHED:
+            raise ConnectorsError(
+                "Gmail API GET /messages/vanished0404 returned 404: Not Found"
+            )
+        return super().get_message(message_id)
+
+
+class _SearchStubTransientBackend(FakeGmailBackend):
+    """A search stub whose ``get_message`` hits a transient 429 — must propagate,
+    never be silently dropped from the candidate set."""
+
+    def list_messages(self, *, query=None, max_results=25, page_token=None):
+        return {
+            "messages": [{"id": "stub429", "threadId": "t1"}],
+            "nextPageToken": None,
+        }
+
+    def get_message(self, message_id: str) -> dict:
+        if message_id == "stub429":
+            raise ConnectorsError(
+                "Gmail API GET /messages/stub429 returned 429: rate limited"
+            )
+        return super().get_message(message_id)  # probe target → KeyError
+
+
+def test_search_skips_stub_that_vanished_after_listing():
+    backend = _StubVanishedBackend(user_email="user@example.com")
+    backend.add_message(_msg("m1", sender="rocm-ci@amd.com", subject="Freeze SIC-4482"))
+    # Topic target → probe misses (KeyError) → search returns [vanished, m1];
+    # the vanished stub 404s and is skipped, leaving m1 as the sole candidate.
+    resolved_id, provider, _ = resolve_message_target(
+        {"google": backend}, target="SIC-4482"
+    )
+    assert resolved_id == "m1"
+
+
+def test_search_stub_transient_error_propagates():
+    backend = _SearchStubTransientBackend(user_email="user@example.com")
+    with pytest.raises(ConnectorsError) as exc:
+        resolve_message_target({"google": backend}, target="SIC-4482")
+    assert "429" in str(exc.value)

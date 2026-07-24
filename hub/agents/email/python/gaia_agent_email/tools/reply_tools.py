@@ -300,7 +300,19 @@ def resolve_message_target(
                 listing = backend.list_messages(query=retried, max_results=max_results)
                 stubs = listing.get("messages", [])
         for stub in stubs:
-            matches.append((provider, backend.get_message(stub["id"])))
+            # A stub can vanish between list_messages and get_message (TOCTOU:
+            # the message was deleted/moved) — skip that candidate rather than
+            # abort the whole resolution. A transient/auth error, though, is a
+            # real failure and must propagate, not be silently dropped
+            # (consistent with the concrete-id probe above; CLAUDE.md fail-loud).
+            try:
+                matches.append((provider, backend.get_message(stub["id"])))
+            except KeyError:
+                continue  # in-memory backend: stub gone → skip
+            except ConnectorsError as exc:
+                if _is_message_not_found(exc):
+                    continue  # 404: message vanished after listing → skip
+                raise
 
     # Collapse to one candidate per thread (latest message wins).
     threads: Dict[Tuple[str, str], Tuple[str, Dict[str, Any]]] = {}
