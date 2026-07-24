@@ -20,6 +20,14 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **IMPORTANT / account-security mail is never auto-archived unattended (#2426).**
+  At autonomy `full`, one cycle could auto-archive a provider-flagged IMPORTANT
+  message (e.g. a Google security alert) the local model mislabeled as promotional.
+  `TrustPolicy.decide` now applies a one-directional floor: an `archive` candidate
+  that is Gmail-`IMPORTANT` / Outlook high-importance, or from a narrow set of
+  account-security senders, is downgraded to a proposal at every level — a higher
+  level or earned trust can widen what runs silently but can never override it.
+  Ordinary promotional clutter still auto-archives.
 - **Re-proposal dedup survives headless/scheduled teardown (#2381).**
   `record_proposal` wrote its dedup row through `query()`, which never commits,
   so when the scheduler rebuilt the agent between fires (closing the DB
