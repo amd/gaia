@@ -97,6 +97,15 @@ THREAD_MIN_PER_MESSAGE_CHARS = 200
 UNTRUSTED_BODY_OPEN = "<<<UNTRUSTED_EMAIL_BODY_START>>>"
 UNTRUSTED_BODY_CLOSE = "<<<UNTRUSTED_EMAIL_BODY_END>>>"
 
+# Actionable empty-state error for read tools that scan the connected set
+# directly. Construction now tolerates zero connectors (agent constructs so
+# conversational questions still reach the LLM), so these tools must fail loudly
+# per call instead of dividing the per-mailbox budget by zero.
+NO_MAILBOX_CONNECTED_MESSAGE = (
+    "No mailbox connected — connect Google or Microsoft in "
+    "Settings → Connectors to read your inbox."
+)
+
 
 def wrap_untrusted_body(body: str) -> str:
     """Wrap a body in the untrusted-input delimiter pair."""
@@ -1196,6 +1205,8 @@ class ReadToolsMixin:
             try:
                 max_results = max(1, min(int(max_results or 25), 100))
                 backends = agent._backends
+                if not backends:
+                    return _envelope_err(NO_MAILBOX_CONNECTED_MESSAGE)
                 per_backend = max(1, max_results // len(backends))
                 merged: List[Dict[str, Any]] = []
                 for provider, backend in backends.items():
@@ -1349,6 +1360,8 @@ class ReadToolsMixin:
             try:
                 max_results = max(1, min(int(max_results or 25), 100))
                 backends = agent._backends
+                if not backends:
+                    return _envelope_err(NO_MAILBOX_CONNECTED_MESSAGE)
                 per_backend = max(1, max_results // len(backends))
                 merged: List[Dict[str, Any]] = []
                 for provider, backend in backends.items():
