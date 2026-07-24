@@ -401,10 +401,13 @@ class TestSystemStatus:
         assert data["model_downloaded"] is True
 
     @patch("httpx.AsyncClient")
-    def test_system_status_context_size_zero_is_insufficient(
-        self, mock_httpx_cls, client
-    ):
-        """ctx_size=0 must trigger context_size_sufficient=False (not silently pass)."""
+    def test_system_status_context_size_zero_is_unknown(self, mock_httpx_cls, client):
+        """ctx_size=0 means "not yet measured" — treat as unknown, don't warn.
+
+        Lemonade reports ctx_size=0/absent until the model's real context is
+        populated, so a 0 on load must NOT flip context_size_sufficient to
+        False and fire a false "context too small" banner (issue #2400).
+        """
         mock_client = AsyncMock()
 
         def make_response(status_code, json_data):
@@ -440,7 +443,8 @@ class TestSystemStatus:
         resp = client.get("/api/system/status")
         data = resp.json()
         assert data["model_context_size"] == 0
-        assert data["context_size_sufficient"] is False  # 0 < 32768
+        # Unknown ctx (0) keeps the safe default — no false "too small" warning.
+        assert data["context_size_sufficient"] is True
 
     @patch("httpx.AsyncClient")
     def test_system_status_model_downloaded_unknown_when_catalog_fails(
