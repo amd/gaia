@@ -5,7 +5,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
 )
 
@@ -176,3 +178,93 @@ func TestRunOneShotHandlesLegacyEvents(t *testing.T) {
 type errFake string
 
 func (e errFake) Error() string { return string(e) }
+
+// stallingClient accepts the query and then never says anything: the channel is
+// never written to and never closed. This is the failure a readiness check
+// cannot catch — the dependency was reachable, it just stopped answering — so
+// the caller's deadline is the only thing standing between it and a hang.
+type stallingClient struct {
+	// first is emitted before the silence, so the partial-line handling is
+	// exercised too.
+	first interface{}
+}
+
+func (s *stallingClient) Send(context.Context, string) (<-chan interface{}, error) {
+	ch := make(chan interface{}, 1)
+	if s.first != nil {
+		ch <- s.first
+	}
+	return ch, nil
+}
+
+func (s *stallingClient) Close() error { return nil }
+
+// runOneShotAsync runs a turn off the test goroutine so a hang fails the test
+// instead of wedging the suite.
+func runOneShotAsync(
+	t *testing.T,
+	ctx context.Context,
+	c client.AgentClient,
+	out, errW *bytes.Buffer,
+) OneShotResult {
+	t.Helper()
+	done := make(chan OneShotResult, 1)
+	go func() { done <- RunOneShot(ctx, c, "triage my inbox", out, errW) }()
+	select {
+	case res := <-done:
+		return res
+	case <-time.After(15 * time.Second):
+		t.Fatal("RunOneShot never returned after its context was done — this is issue #2483")
+		return OneShotResult{}
+	}
+}
+
+// The bug: an agent that accepts the query and then goes quiet used to hang
+// forever, with nothing on either stream.
+func TestRunOneShotAbandonsAStalledStreamAtTheDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	var out, errW bytes.Buffer
+	c := &stallingClient{first: event.CanonicalTokenEvent{Type: "token", Delta: "Look"}}
+	res := runOneShotAsync(t, ctx, c, &out, &errW)
+
+	if res.ExitCode != 1 {
+		t.Errorf("exit code = %d, want 1 — an abandoned turn is a failure", res.ExitCode)
+	}
+	if res.TerminalType != event.CanonicalTypeError {
+		t.Errorf("terminal = %q, want error", res.TerminalType)
+	}
+	// The partial answer keeps its own line; the diagnosis belongs on stderr.
+	if out.String() != "Look\n" {
+		t.Errorf("stdout = %q, want the streamed text terminated by a newline", out.String())
+	}
+	for _, want := range []string{"gave up", "triage my inbox", "gaia daemon logs"} {
+		if !strings.Contains(errW.String(), want) {
+			t.Errorf("stderr must say what happened and where to look, missing %q:\n%s", want, errW.String())
+		}
+	}
+}
+
+// A cancelled parent context is reported as a cancellation, not as a deadline —
+// the two send the reader to different places.
+func TestRunOneShotReportsACancelledTurnDistinctly(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	var out, errW bytes.Buffer
+	res := runOneShotAsync(t, ctx, &stallingClient{}, &out, &errW)
+
+	if res.ExitCode != 1 {
+		t.Errorf("exit code = %d, want 1", res.ExitCode)
+	}
+	if !strings.Contains(errW.String(), "cancelled") {
+		t.Errorf("stderr = %q, want it to name the cancellation", errW.String())
+	}
+	if strings.Contains(errW.String(), "gave up") {
+		t.Errorf("a cancellation must not be reported as a deadline: %q", errW.String())
+	}
+	if out.String() != "" {
+		t.Errorf("stdout = %q, want empty", out.String())
+	}
+}
