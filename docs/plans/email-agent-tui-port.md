@@ -283,7 +283,33 @@ table, so a "tasks" pane needs backend work.
 
 ---
 
-### Phase 6 (v2) — Agent-led connector onboarding · **file as an issue, do not build now**
+### Phase 5b — Retire `gaia email` from the legacy Python CLI
+
+Once the TUI can install, run, and configure the email agent, the `gaia email` subcommand
+is a second front door to the same sidecar with none of the UI. Remove it.
+
+**This is a decommission, not a rewrite.** Only the `email` subcommand goes. The rest of
+the legacy Python CLI stays exactly as it is — it will be retired separately, later.
+
+- Remove the `email` subparser (`src/gaia/cli.py:1772-1829`), `handle_email_command`
+  (`:5012-5095`), and `_email_interactive` (`:5098-5134`).
+- **Keep `src/gaia/daemon/agent_query.py`.** It is the generic daemon thin-client used by
+  more than email and it is the reference implementation the TUI's Go transport mirrors.
+- `--spec` needs a home before the removal lands — it is the only email surface that
+  needs no daemon and no LLM. Either move it under `gaia hub` or expose it in the TUI.
+- Delete the now-dead tests, and update `docs/reference/cli.mdx`, `docs/guides/email.mdx`,
+  and every doc that shows a `gaia email ...` invocation. The doc-sync rule in `CLAUDE.md`
+  applies: grep the old command across all of them, including the email package's own
+  `README.md` / `SPEC.md` / `SKILL.md` / `CHANGELOG.md`.
+- Print a clear pointer to the replacement rather than a bare "unknown command".
+
+**Sequencing is the whole risk here.** This must not merge until Phases 1-3 are verified
+working end to end, or we remove the only working entry point before the replacement
+exists. Prepare it early, land it last.
+
+---
+
+### Phase 6 (v2) — Agent-led connector onboarding · **filed as #2469, do not build now**
 
 Today, connecting a mailbox means the user finds Settings, obtains a Google OAuth client
 id and secret, and pastes both into a terminal. That is the worst moment in the product.
