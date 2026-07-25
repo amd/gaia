@@ -82,3 +82,28 @@ class CapacityError(SidecarError):
 
 class StopFailedError(SidecarError):
     """The sidecar process survived a tree-kill — it is still alive."""
+
+
+class UnsupervisedAgentError(SidecarError):
+    """The agent cannot be installed/managed by the daemon.
+
+    Either a reserved framework built-in (never installable) or an agent the
+    daemon has no sidecar spec for, so installing it would leave something the
+    daemon then refuses to start.
+    """
+
+
+class InstallBusyError(SidecarError):
+    """An install for this agent id is already running (one install per id)."""
+
+
+class AgentNotInstalledError(SidecarError):
+    """The agent has no ``.installed`` sentinel — there is nothing to remove."""
+
+
+class InstallFailedError(SidecarError):
+    """An install/uninstall could not complete (disk, permissions, bad manifest)."""
+
+
+class HubUnavailableError(SidecarError):
+    """The Agent Hub could not be reached and no usable offline cache exists."""
