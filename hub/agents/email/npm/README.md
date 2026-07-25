@@ -128,7 +128,7 @@ Full architecture, the complete API, authentication, and every endpoint are in
 
 ## How good is the triage?
 
-Scores **83.4 / 100** on a labeled benchmark inbox — see the **Scorecard** tab (or
+Scores **84.53 / 100** on a labeled benchmark inbox — see the **Scorecard** tab (or
 [`SCORECARD.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.5.0/hub/agents/email/npm/SCORECARD.md))
 for the full breakdown, and the **Evaluation** tab for how it's measured.
 
