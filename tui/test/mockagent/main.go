@@ -100,6 +100,27 @@ func handleQuery(query string) {
 	})
 	delay(50, 100)
 
+	if strings.Contains(strings.ToLower(query), "fail the tool") {
+		// A tool that fails with its own actionable remedy — the shape that used
+		// to reach the user only as the model's paraphrase of it.
+		emit(map[string]interface{}{
+			"type": "tool_result", "title": tool, "success": false,
+			"summary": "the tool could not run",
+			"result_data": map[string]interface{}{
+				"status": "error",
+				"code":   "CONNECTOR_ERROR",
+				"error": "no forwarded 'google' credential is available to the email sidecar.\n" +
+					"Connect and grant it in one command — no Agent UI required:\n" +
+					"`gaia connectors connect google --scopes gmail.readonly --grant-agent installed:email`",
+			},
+		})
+		delay(50, 100)
+		emit(map[string]interface{}{
+			"type": "answer", "content": "I could not reach your mailbox.", "steps": 3, "tools_used": 1,
+		})
+		return
+	}
+
 	emit(map[string]interface{}{
 		"type": "tool_result", "title": tool, "success": true,
 		"command_output": map[string]string{"stdout": stdout},

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -33,13 +34,21 @@ type OneShotResult struct {
 // captures exactly the answer and nothing else. This is the same split the
 // `gaia <agent>` CLI uses, and it is what makes the transport testable from a
 // script and from CI.
+//
+// debugf receives every event as it arrives, raw payloads included; nil is
+// silent. It is what --debug reaches for when a turn answers with nothing.
 func RunOneShot(
 	ctx context.Context,
 	c client.AgentClient,
 	query string,
 	out, errW io.Writer,
+	debugf func(format string, args ...any),
 ) OneShotResult {
+	if debugf == nil {
+		debugf = func(string, ...any) {}
+	}
 	started := time.Now()
+	debugf("one-shot: query=%q", query)
 
 	ch, err := c.Send(ctx, query)
 	if err != nil {
@@ -63,6 +72,7 @@ func RunOneShot(
 	handle := func(evt interface{}) {
 		switch e := evt.(type) {
 		case event.CanonicalStatusEvent:
+			debugf("status %q", e.Message)
 			if msg := strings.TrimSpace(e.Message); msg != "" {
 				fmt.Fprintf(errW, "  … %s\n", msg)
 			}
@@ -76,11 +86,19 @@ func RunOneShot(
 			fmt.Fprint(out, e.Delta)
 
 		case event.CanonicalToolCallEvent:
+			debugf("tool_call %s args=%s", e.Tool, rawOrDash(e.Args))
 			fmt.Fprintf(errW, "  🔧 %s\n", e.Tool)
 
 		case event.CanonicalToolResultEvent:
+			debugf("tool_result %s render=%q data=%s", e.Tool, e.Render, rawOrDash(e.Data))
+			// A tool's own error is the most actionable text in the run — it is
+			// the tool author's remedy, not the model's paraphrase of it.
+			if toolErr, failed := event.ToolErrorOf(e); failed {
+				writeToolError(errW, e.Tool, toolErr)
+				return
+			}
 			// Not a tick: the canonical tool_result event carries no success
-			// flag, so a failed tool looks exactly like one that worked.
+			// flag, so a result with no error signal proves nothing more.
 			if e.Render != "" {
 				fmt.Fprintf(errW, "  ← %s returned (%s)\n", e.Tool, e.Render)
 			} else {
@@ -95,6 +113,7 @@ func RunOneShot(
 			fmt.Fprintln(errW, line)
 
 		case event.CanonicalFinalEvent:
+			debugf("final: %d chars, usage=%s", len(e.Answer), rawOrDash(e.Usage))
 			res.TerminalType = event.CanonicalTypeFinal
 			// `answer` is authoritative; the streamed tokens are the fallback for
 			// a sidecar that streams and then closes with an empty final.
@@ -113,6 +132,7 @@ func RunOneShot(
 			}
 
 		case event.CanonicalErrorEvent:
+			debugf("error: status=%d source=%q", e.Status, e.Source)
 			res.TerminalType = event.CanonicalTypeError
 			res.ErrorDetail = e.Detail
 			if sawTokens {
@@ -139,6 +159,33 @@ func RunOneShot(
 			fmt.Fprintf(errW, "❌ %s\n", e.Content)
 		case event.ToolStartEvent:
 			fmt.Fprintf(errW, "  🔧 %s\n", e.Tool)
+		case event.StepEvent:
+			fmt.Fprintf(errW, "  … Step %d/%d\n", e.Step, e.Total)
+		case event.ThinkingEvent:
+			// Reasoning is not progress a script needs; --debug keeps it.
+			debugf("thinking: %s", e.Content)
+		case event.ToolArgsEvent:
+			debugf("tool_args %s: %s", e.Tool, rawOrDash(e.Args))
+		case event.ToolEndEvent:
+			// tool_result already reported the outcome.
+			debugf("tool_end success=%t", e.Success)
+		case event.ErrorEvent:
+			res.TerminalType = event.CanonicalTypeError
+			res.ErrorDetail = e.Content
+			fmt.Fprintf(errW, "❌ %s\n", e.Content)
+		case event.ToolResultEvent:
+			// Was falling through to "[unhandled event]", so a subprocess
+			// agent's tool failure never reached the user at all.
+			debugf("tool_result %s success=%t data=%s", e.Title, e.Success, rawOrDash(e.ResultData))
+			if toolErr, failed := event.LegacyToolErrorOf(e); failed {
+				writeToolError(errW, e.Title, toolErr)
+				return
+			}
+			if e.Summary != "" {
+				fmt.Fprintf(errW, "  ← %s returned (%s)\n", e.Title, e.Summary)
+			} else {
+				fmt.Fprintf(errW, "  ← %s returned\n", e.Title)
+			}
 		case event.StatusEvent:
 			if msg := strings.TrimSpace(e.Message); msg != "" {
 				fmt.Fprintf(errW, "  … %s\n", msg)
@@ -198,6 +245,34 @@ func RunOneShot(
 			return res
 		}
 	}
+}
+
+// writeToolError prints a tool's own failure verbatim. The message keeps its
+// line breaks: a remedy is often a command on its own line, and reflowing it
+// would break the one thing the user came for.
+func writeToolError(w io.Writer, tool string, te event.ToolError) {
+	head := "  ✗ " + tool + " failed"
+	if te.Code != "" {
+		head += " — " + te.Code
+	}
+	message := strings.TrimRight(te.Message, "\n")
+	if message == "" {
+		fmt.Fprintf(w, "%s (the tool reported no detail)\n", head)
+		return
+	}
+	lines := strings.Split(message, "\n")
+	fmt.Fprintf(w, "%s: %s\n", head, lines[0])
+	for _, line := range lines[1:] {
+		fmt.Fprintf(w, "    %s\n", line)
+	}
+}
+
+// rawOrDash renders a raw JSON payload for a debug line.
+func rawOrDash(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "-"
+	}
+	return string(raw)
 }
 
 // finishOneShot applies the terminal-event contract to a stream that closed.

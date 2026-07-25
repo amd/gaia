@@ -84,6 +84,69 @@ func TestRunQueryIsAGenuineOneShot(t *testing.T) {
 	}
 }
 
+// A tool's own error carries the remedy its author wrote — for the mailbox it
+// is a `gaia connectors connect …` line explicitly marked "no Agent UI
+// required". Relayed through the model it came back as "use Settings →
+// Connections in the Agent UI", a GUI a terminal user cannot reach. It has to
+// reach stderr verbatim, straight off the wire.
+func TestFailedToolRemedyReachesStderrVerbatim(t *testing.T) {
+	gaiaBin, binDir := buildBinaries(t)
+
+	cmd := exec.Command(gaiaBin, "run", "bash", "--query", "please fail the tool")
+	cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	_ = cmd.Run()
+
+	const remedy = "`gaia connectors connect google --scopes gmail.readonly --grant-agent installed:email`"
+	if !strings.Contains(stderr.String(), remedy) {
+		t.Errorf("the tool's remedy did not reach stderr:\n%s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "CONNECTOR_ERROR") {
+		t.Errorf("stderr does not carry the error code:\n%s", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "unhandled event") {
+		t.Errorf("an agent event was rendered as a placeholder instead of progress:\n%s", stderr.String())
+	}
+	// The remedy is progress, not the answer: `--query X > answer.txt` must
+	// still capture exactly the answer.
+	if strings.Contains(stdout.String(), "CONNECTOR_ERROR") {
+		t.Errorf("the tool error leaked into stdout:\n%s", stdout.String())
+	}
+}
+
+// --debug is documented as "enable debug logging to stderr" and produced output
+// byte-identical to a run without it on the one-shot path — the path it is most
+// needed on.
+func TestDebugAddsDiagnosticsToTheOneShotPath(t *testing.T) {
+	gaiaBin, binDir := buildBinaries(t)
+
+	run := func(args ...string) string {
+		cmd := exec.Command(gaiaBin, args...)
+		cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		_ = cmd.Run()
+		return stderr.String()
+	}
+
+	quiet := run("run", "bash", "--query", "list the files")
+	loud := run("run", "bash", "--query", "list the files", "--debug")
+
+	if !strings.Contains(loud, "[DEBUG]") {
+		t.Fatalf("--debug produced no diagnostics on the one-shot path:\n%s", loud)
+	}
+	if len(loud) <= len(quiet) {
+		t.Errorf("--debug output is no richer than the plain run:\n%s", loud)
+	}
+	for _, want := range []string{"one-shot: agent=bash", "tool_result"} {
+		if !strings.Contains(loud, want) {
+			t.Errorf("--debug output is missing %q:\n%s", want, loud)
+		}
+	}
+}
+
 // A one-shot against an agent that does not exist must fail loudly and exit
 // non-zero rather than print nothing and succeed.
 func TestRunUnknownAgentExitsNonZero(t *testing.T) {

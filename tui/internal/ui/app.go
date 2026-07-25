@@ -179,6 +179,9 @@ func RunAgent(agentID, query, model string, debug bool, timeout time.Duration) (
 	defer c.Close()
 
 	if query != "" {
+		logf("one-shot: agent=%s transport=%s model=%q timeout=%s",
+			agent.ID, agent.Transport, orDefault(model, "the agent's default"), timeout)
+
 		// A one-shot runs unattended, so an unmet precondition has to be
 		// reported and refused rather than waited on. Interactive is left alone
 		// on purpose: a person can read a half-answer and press ctrl+c, and the
@@ -190,6 +193,12 @@ func RunAgent(agentID, query, model string, debug bool, timeout time.Duration) (
 			t := preflight.NewDaemonTransport(daemon.New(daemon.Options{Logf: logf}))
 			rep := ReportReadiness(context.Background(), t,
 				preflight.ConfigFor(agent.ID, agent.Name), os.Stderr)
+			// Every row, not just the blocker: a turn that answers nothing is
+			// usually explained by a row that passed for the wrong reason.
+			for _, row := range rep.Rows {
+				logf("readiness %s: state=%v %s | remedy=%q",
+					row.Key, row.State, row.Line, row.Remedy.Command)
+			}
 			if rep.Blocked() {
 				return 1, nil
 			}
@@ -197,7 +206,7 @@ func RunAgent(agentID, query, model string, debug bool, timeout time.Duration) (
 
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		res := RunOneShot(ctx, c, query, os.Stdout, os.Stderr)
+		res := RunOneShot(ctx, c, query, os.Stdout, os.Stderr, logf)
 		return res.ExitCode, nil
 	}
 
@@ -253,6 +262,15 @@ func canStart(a catalog.Agent) bool {
 	}
 	_, err := catalog.ResolveExecutable(a.BinaryPath, a.ID)
 	return err == nil
+}
+
+// orDefault names what will actually be used when a flag was left unset, so a
+// debug line never reads "model=\"\"".
+func orDefault(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func agentNameFromPath(path string) string {
