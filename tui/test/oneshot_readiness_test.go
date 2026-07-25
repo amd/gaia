@@ -437,9 +437,29 @@ func assertRefusalCommandRunnable(t *testing.T, stderr string) {
 }
 
 // commandProgram is the program a command line invokes, honouring the quoting the
-// gate applies to a path containing a space.
+// gate applies to a path containing a space and stepping over the
+// context-window prefix — otherwise this would only ever check that `env`
+// exists, which is always true and never the point.
 func commandProgram(cmd string) string {
 	cmd = strings.TrimSpace(cmd)
+	if rest, ok := strings.CutPrefix(cmd, `set "`); ok {
+		if _, after, found := strings.Cut(rest, "&&"); found {
+			cmd = strings.TrimSpace(after)
+		}
+	}
+	for {
+		rest, ok := strings.CutPrefix(cmd, "env ")
+		if !ok {
+			break
+		}
+		rest = strings.TrimSpace(rest)
+		word, after, _ := strings.Cut(rest, " ")
+		if !strings.Contains(word, "=") {
+			cmd = rest
+			break
+		}
+		cmd = strings.TrimSpace(after)
+	}
 	if after, ok := strings.CutPrefix(cmd, `"`); ok {
 		if end := strings.Index(after, `"`); end >= 0 {
 			return after[:end]

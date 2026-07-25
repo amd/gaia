@@ -58,6 +58,14 @@ type launcher struct {
 	// Foreground is true when Start occupies the terminal it is run in. The
 	// remedy then must not say "and press r" as though the shell came back.
 	Foreground bool
+	// ServiceManaged is true when a unit file, launchd plist, app bundle, or the
+	// command's own flags own the server's environment. The context window then
+	// comes from THAT definition, and prefixing the command with an env
+	// assignment would change nothing while looking like it did.
+	ServiceManaged bool
+	// CtxSize is the context window the server must come up with, for the
+	// remedy's prose. Always resolved, even when the command cannot carry it.
+	CtxSize int
 	// BadOverride is a LEMONADE_SERVER_PATH that names something absent. It is
 	// its own state: the fix is to correct the variable, not to install anything.
 	BadOverride string
@@ -76,6 +84,7 @@ type hostProbe struct {
 	exists   func(string) bool
 	getenv   func(string) string
 	homeDir  func() (string, error)
+	readFile func(string) ([]byte, error)
 }
 
 // realHostProbe is a var so a test can resolve against a machine it does not
@@ -88,8 +97,9 @@ var realHostProbe = func() hostProbe {
 			_, err := os.Stat(path)
 			return err == nil
 		},
-		getenv:  os.Getenv,
-		homeDir: os.UserHomeDir,
+		getenv:   os.Getenv,
+		homeDir:  os.UserHomeDir,
+		readFile: osReadFile,
 	}
 }
 
@@ -126,7 +136,23 @@ var macDaemonBinaries = []string{"/usr/local/bin/lemond", "/opt/homebrew/bin/lem
 // handful of stat and PATH lookups, no network.
 func resolveLemonade() launcher { return resolveLemonadeWith(realHostProbe()) }
 
+// resolveLemonadeWith resolves the launcher AND the context window it has to come
+// up with. Those are one answer, not two: a start command without the window
+// produces a server that answers /health and 502s every agent query, which would
+// take this row green and fail on first use.
 func resolveLemonadeWith(p hostProbe) launcher {
+	l := resolveLauncherWith(p)
+	if l.Found {
+		l.CtxSize = profileCtxSize(p)
+		if !l.ServiceManaged {
+			prefix := ctxPrefix(p.goos, l.CtxSize)
+			l.Start, l.Restart = prefix+l.Start, prefix+l.Restart
+		}
+	}
+	return l
+}
+
+func resolveLauncherWith(p hostProbe) launcher {
 	// 1. An explicit override wins — but only if it is THERE. The Python runs it
 	// verbatim and lets the exec fail loudly; this advises a human, and a `run:`
 	// line for a file that does not exist is the bug this file exists to remove.
@@ -167,8 +193,11 @@ func resolveLemonadeWith(p hostProbe) launcher {
 	// 3. Legacy CLI, if this machine really does still have it.
 	for _, name := range legacyBinaries {
 		if _, err := p.lookPath(name); err == nil {
-			cmd := name + " serve"
-			return launcher{Start: cmd, Restart: cmd, Found: true}
+			// The legacy CLI takes the window as a FLAG, not an environment
+			// variable (build_start_command's legacy branch), so it appends its
+			// own and opts out of the env prefix.
+			cmd := name + " serve" + legacyCtxFlag(profileCtxSize(p))
+			return launcher{Start: cmd, Restart: cmd, ServiceManaged: true, Found: true}
 		}
 	}
 
@@ -235,10 +264,13 @@ func resolveLinux(p hostProbe) (launcher, bool) {
 	// no unit all answer `systemctl` with an error. Require both halves, or name
 	// the binary instead.
 	if _, err := p.lookPath("systemctl"); err == nil && p.exists(unitPath(p)) {
+		// systemd: the unit file owns the service environment, so the context
+		// window belongs there and an inline `env` prefix would be inert.
 		return launcher{
-			Start:   "systemctl --user start lemond",
-			Restart: "systemctl --user restart lemond",
-			Found:   true,
+			Start:          "systemctl --user start lemond",
+			Restart:        "systemctl --user restart lemond",
+			ServiceManaged: true,
+			Found:          true,
 		}, true
 	}
 	if daemon != "" {
@@ -300,7 +332,12 @@ func resolveDarwin(p hostProbe) (launcher, bool) {
 			full := filepath.Join(dir, bundle)
 			if p.exists(full) {
 				cmd := "open " + quoteCommand(full)
-				return launcher{Start: cmd, Restart: cmd, AppHint: appHintFor("darwin"), Found: true}, true
+				return launcher{
+					Start: cmd, Restart: cmd,
+					AppHint:        appHintFor("darwin"),
+					ServiceManaged: true,
+					Found:          true,
+				}, true
 			}
 		}
 	}
@@ -312,10 +349,11 @@ func resolveDarwin(p hostProbe) (launcher, bool) {
 		if _, err := p.lookPath("launchctl"); err == nil {
 			target := "system/" + macDaemonLabel
 			return launcher{
-				Start:   "sudo launchctl kickstart " + target,
-				Restart: "sudo launchctl kickstart -k " + target,
-				AppHint: appHintFor("darwin"),
-				Found:   true,
+				Start:          "sudo launchctl kickstart " + target,
+				Restart:        "sudo launchctl kickstart -k " + target,
+				AppHint:        appHintFor("darwin"),
+				ServiceManaged: true,
+				Found:          true,
 			}, true
 		}
 	}
@@ -368,7 +406,7 @@ func lemonadeStartRemedy() Remedy {
 		}
 	}
 	return Remedy{
-		Action:  "Start it" + orTheApp(l) + comeBack(l),
+		Action:  "Start it" + orTheApp(l) + comeBack(l) + ctxNote(l),
 		Command: l.Start,
 		Where:   lemonadeDocs,
 	}
@@ -395,7 +433,7 @@ func lemonadeRestartRemedy() Remedy {
 	}
 	if l.Restart != l.Start {
 		return Remedy{
-			Action:  "Restart it, then press r to re-check.",
+			Action:  "Restart it, then press r to re-check." + ctxNote(l),
 			Command: l.Restart,
 			Where:   lemonadeDocs,
 		}
@@ -403,7 +441,7 @@ func lemonadeRestartRemedy() Remedy {
 	// No distinct restart form: quitting first is on the user, and a remedy that
 	// hides that reads as "this one command is enough".
 	return Remedy{
-		Action:  "Quit it, then start it again" + orTheApp(l) + comeBack(l),
+		Action:  "Quit it, then start it again" + orTheApp(l) + comeBack(l) + ctxNote(l),
 		Command: l.Restart,
 		Where:   lemonadeDocs,
 	}
@@ -435,4 +473,18 @@ func comeBack(l launcher) string {
 		return " — it keeps that terminal, so press r back here once it is up."
 	}
 	return ", then press r to re-check."
+}
+
+// ctxNote is added ONLY where the command cannot carry the context window
+// itself — a systemd unit, a launchd plist, an app bundle. Those own their own
+// environment, so the window has to be set there, and a server started without
+// it answers /health while 502-ing every agent query. Saying nothing would leave
+// the user reading that as an agent bug.
+func ctxNote(l launcher) string {
+	if !l.ServiceManaged || l.CtxSize <= 0 || strings.Contains(l.Start, "--ctx-size") {
+		return ""
+	}
+	return fmt.Sprintf(" It has to come up with %s=%d — that is set in the service's own "+
+		"configuration, and without it queries fail even though the server looks healthy.",
+		ctxSizeEnv, l.CtxSize)
 }

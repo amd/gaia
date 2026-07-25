@@ -360,8 +360,12 @@ func assertRunnable(t *testing.T, cmd string) {
 
 // firstWord is the program a command line invokes, honouring the quoting
 // quoteCommand applies to a path with a space in it.
+//
+// It steps over the context-window prefix first. Without that it would check
+// that `env` exists — which it always does — and stop checking the binary that
+// actually has to be there, turning the guard off exactly where it matters.
 func firstWord(cmd string) string {
-	cmd = strings.TrimSpace(cmd)
+	cmd = strings.TrimSpace(stripEnvPrefix(cmd))
 	if strings.HasPrefix(cmd, `"`) {
 		if end := strings.Index(cmd[1:], `"`); end >= 0 {
 			return cmd[1 : end+1]
@@ -371,6 +375,33 @@ func firstWord(cmd string) string {
 		return cmd[:i]
 	}
 	return cmd
+}
+
+// stripEnvPrefix removes `env VAR=V ` (POSIX) or `set VAR=V && ` (cmd.exe) from
+// the front of a command, leaving the program it actually runs.
+func stripEnvPrefix(cmd string) string {
+	cmd = strings.TrimSpace(cmd)
+	if rest, ok := strings.CutPrefix(cmd, `set "`); ok {
+		if _, after, found := strings.Cut(rest, "&&"); found {
+			return strings.TrimSpace(after)
+		}
+	}
+	for {
+		rest, ok := strings.CutPrefix(cmd, "env ")
+		if !ok {
+			return cmd
+		}
+		rest = strings.TrimSpace(rest)
+		// Only an assignment is part of the prefix; the next token is the program.
+		word, after, _ := strings.Cut(rest, " ")
+		if !strings.Contains(word, "=") {
+			return rest
+		}
+		cmd = "env " + strings.TrimSpace(after)
+		if strings.TrimSpace(after) == "" {
+			return ""
+		}
+	}
 }
 
 func TestCheck(t *testing.T) {

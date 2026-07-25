@@ -63,7 +63,14 @@ func TestTheLadderNamesACommandThisMachineHas(t *testing.T) {
 
 // fakeHostFor builds a probe for a machine this test is not running on, so the
 // Windows and Linux answers are provable from anywhere.
+// fakeHostFor builds a probe for a machine this test is not running on. With no
+// ~/.gaia/config.json it resolves the GPU window, matching GaiaConfig's own
+// default; fakeHostWithDevice covers the NPU profile.
 func fakeHostFor(goos string, onPath []string, files []string, env map[string]string) hostProbe {
+	return fakeHostWithDevice(goos, onPath, files, env, "")
+}
+
+func fakeHostWithDevice(goos string, onPath, files []string, env map[string]string, device string) hostProbe {
 	has := func(list []string, want string) bool {
 		for _, s := range list {
 			if s == want {
@@ -87,6 +94,12 @@ func fakeHostFor(goos string, onPath []string, files []string, env map[string]st
 		exists:  func(path string) bool { return has(files, path) },
 		getenv:  func(key string) string { return env[key] },
 		homeDir: func() (string, error) { return "/home/jane", nil },
+		readFile: func(string) ([]byte, error) {
+			if device == "" {
+				return nil, errors.New("no config")
+			}
+			return []byte(`{"profile":"x","default_device":"` + device + `"}`), nil
+		},
 	}
 }
 
@@ -118,13 +131,13 @@ func TestEveryPlatformGetsALauncherThatExistsThere(t *testing.T) {
 			name: "Linux without systemd names the daemon binary instead",
 			probe: fakeHostFor("linux", nil,
 				[]string{"/usr/bin/lemonade", "/usr/bin/lemond"}, nil),
-			wantStart: "/usr/bin/lemond",
+			wantStart: "env LEMONADE_CTX_SIZE=65536 /usr/bin/lemond",
 		},
 		{
 			name: "Linux with systemctl but no unit file names the binary too",
 			probe: fakeHostFor("linux", []string{"systemctl"},
 				[]string{"/usr/bin/lemond"}, nil),
-			wantStart: "/usr/bin/lemond",
+			wantStart: "env LEMONADE_CTX_SIZE=65536 /usr/bin/lemond",
 		},
 		{
 			// No PATH entry at all: a TUI launched from a GUI session inherits
@@ -133,7 +146,7 @@ func TestEveryPlatformGetsALauncherThatExistsThere(t *testing.T) {
 			// over a server that is merely stopped.
 			name:      "macOS resolves lemond by absolute path, not PATH",
 			probe:     fakeHostFor("darwin", nil, []string{"/usr/local/bin/lemond"}, nil),
-			wantStart: "/usr/local/bin/lemond",
+			wantStart: "env LEMONADE_CTX_SIZE=65536 /usr/local/bin/lemond",
 			wantHint:  "Applications folder",
 		},
 		{
@@ -144,7 +157,7 @@ func TestEveryPlatformGetsALauncherThatExistsThere(t *testing.T) {
 			probe: fakeHostFor("darwin", []string{"launchctl"},
 				[]string{macDaemonPlist, "/usr/local/bin/lemond",
 					"/Applications/lemonade-app.app"}, nil),
-			wantStart: "/usr/local/bin/lemond",
+			wantStart: "env LEMONADE_CTX_SIZE=65536 /usr/local/bin/lemond",
 			wantHint:  "Applications folder",
 		},
 		{
@@ -164,7 +177,7 @@ func TestEveryPlatformGetsALauncherThatExistsThere(t *testing.T) {
 				map[string]string{"LOCALAPPDATA": `C:\Users\Jane Doe\AppData\Local`}),
 			// Quoted: the canonical path sits under the user profile, which can
 			// contain a space, and an unquoted one is not copy-pasteable.
-			wantStart: `"` + filepath.Join(`C:\Users\Jane Doe\AppData\Local`, "lemonade_server", "bin", "LemonadeServer.exe") + `" --silent`,
+			wantStart: `set "LEMONADE_CTX_SIZE=65536" && ` + `"` + filepath.Join(`C:\Users\Jane Doe\AppData\Local`, "lemonade_server", "bin", "LemonadeServer.exe") + `" --silent`,
 			wantHint:  "tray icon",
 		},
 		{
@@ -180,12 +193,12 @@ func TestEveryPlatformGetsALauncherThatExistsThere(t *testing.T) {
 		{
 			name:      "a legacy machine still gets the legacy CLI",
 			probe:     fakeHostFor("linux", []string{"lemonade-server"}, nil, nil),
-			wantStart: "lemonade-server serve",
+			wantStart: "lemonade-server serve --ctx-size 65536",
 		},
 		{
 			name:      "the pip/CI variant counts as legacy too",
 			probe:     fakeHostFor("linux", []string{"lemonade-server-dev"}, nil, nil),
-			wantStart: "lemonade-server-dev serve",
+			wantStart: "lemonade-server-dev serve --ctx-size 65536",
 		},
 		{
 			name: "an explicit override is run verbatim, never rerouted",
@@ -193,7 +206,7 @@ func TestEveryPlatformGetsALauncherThatExistsThere(t *testing.T) {
 				[]string{"/usr/bin/lemonade", "/usr/lib/systemd/user/lemond.service",
 					"/opt/mine/lemonade-server"},
 				map[string]string{serverPathEnv: "/opt/mine/lemonade-server"}),
-			wantStart: "/opt/mine/lemonade-server",
+			wantStart: "env LEMONADE_CTX_SIZE=65536 /opt/mine/lemonade-server",
 		},
 	}
 
@@ -230,7 +243,7 @@ func TestAnOverrideBeatsTheModernPackageOnTheSameMachine(t *testing.T) {
 		map[string]string{serverPathEnv: "/opt/lemonade/bin/lemond"})
 
 	got := resolveLemonadeWith(probe)
-	if got.Start != "/opt/lemonade/bin/lemond" {
+	if got.Start != "env LEMONADE_CTX_SIZE=65536 /opt/lemonade/bin/lemond" {
 		t.Errorf("start = %q, want the override run verbatim", got.Start)
 	}
 	if strings.Contains(got.Start, "systemctl") {
@@ -242,7 +255,7 @@ func TestAnOverrideBeatsTheModernPackageOnTheSameMachine(t *testing.T) {
 func TestAnOverridePathWithASpaceIsQuoted(t *testing.T) {
 	probe := fakeHostFor("darwin", nil, []string{"/Users/jane/My Tools/lemond"},
 		map[string]string{serverPathEnv: "/Users/jane/My Tools/lemond"})
-	if got := resolveLemonadeWith(probe).Start; got != `"/Users/jane/My Tools/lemond"` {
+	if got := resolveLemonadeWith(probe).Start; got != `env LEMONADE_CTX_SIZE=65536 "/Users/jane/My Tools/lemond"` {
 		t.Errorf("start = %q, want it quoted", got)
 	}
 }
@@ -331,7 +344,7 @@ func TestTheLauncherIsNotCachedAcrossChecks(t *testing.T) {
 	if withProbe(missing, lemonadeStartRemedy).Command != "gaia init" {
 		t.Fatal("baseline: a machine with no Lemonade should be sent to the installer")
 	}
-	if got := withProbe(installed, lemonadeStartRemedy).Command; got != "/usr/local/bin/lemond" {
+	if got := withProbe(installed, lemonadeStartRemedy).Command; got != "env LEMONADE_CTX_SIZE=65536 /usr/local/bin/lemond" {
 		t.Errorf("after an install the remedy is still %q — the resolver was cached", got)
 	}
 }
@@ -436,7 +449,7 @@ func TestMacOSPrefersWhatWasActuallyVerifiedToWork(t *testing.T) {
 		[]string{macDaemonPlist, "/Applications/lemonade-app.app", "/usr/local/bin/lemond"}, nil)
 
 	l := resolveLemonadeWith(everything)
-	if l.Start != "/usr/local/bin/lemond" {
+	if !strings.HasSuffix(l.Start, "/usr/local/bin/lemond") {
 		t.Errorf("start = %q, want the binary that was verified to serve", l.Start)
 	}
 	if strings.Contains(l.Start, "sudo") {
@@ -453,5 +466,167 @@ func TestMacOSPrefersWhatWasActuallyVerifiedToWork(t *testing.T) {
 	}
 	if !strings.Contains(r.Action, "Applications folder") {
 		t.Errorf("the no-terminal alternative is not offered: %q", r.Action)
+	}
+}
+
+// --- the context window -----------------------------------------------------
+
+// A bare `lemond` comes up HEALTHY — /api/v1/health answers 200 — and then 502s
+// every agent query, because the agent asks for a context the server was never
+// started with. A remedy that produces that is worse than a dead command: the
+// gate's own Local AI row goes green off the healthy server and hands the user
+// into a chat where the first real request fails. Verified on a live 10.10.0
+// machine and recorded in CLAUDE.md.
+func TestAStartCommandCarriesTheContextWindow(t *testing.T) {
+	cases := map[string]struct {
+		probe hostProbe
+		want  string
+	}{
+		"macOS binary":  {fakeHostFor("darwin", nil, []string{"/usr/local/bin/lemond"}, nil), "LEMONADE_CTX_SIZE=65536"},
+		"Linux binary":  {fakeHostFor("linux", nil, []string{"/usr/bin/lemond"}, nil), "LEMONADE_CTX_SIZE=65536"},
+		"Windows exe":   {windowsProbe(), "LEMONADE_CTX_SIZE=65536"},
+		"legacy CLI":    {fakeHostFor("linux", []string{"lemonade-server"}, nil, nil), "--ctx-size 65536"},
+		"path override": {overrideProbe(), "LEMONADE_CTX_SIZE=65536"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			l := resolveLemonadeWith(tc.probe)
+			if !strings.Contains(l.Start, tc.want) {
+				t.Errorf("start = %q, want it to carry %q", l.Start, tc.want)
+			}
+			if !strings.Contains(l.Restart, tc.want) {
+				t.Errorf("restart = %q, want it to carry %q", l.Restart, tc.want)
+			}
+		})
+	}
+}
+
+func windowsProbe() hostProbe {
+	exe := filepath.Join(`C:\Users\jane\AppData\Local`, "lemonade_server", "bin", "LemonadeServer.exe")
+	return fakeHostFor("windows", nil, []string{exe},
+		map[string]string{"LOCALAPPDATA": `C:\Users\jane\AppData\Local`})
+}
+
+func overrideProbe() hostProbe {
+	return fakeHostFor("linux", nil, []string{"/opt/x/lemond"},
+		map[string]string{serverPathEnv: "/opt/x/lemond"})
+}
+
+// A launch whose environment belongs to a unit file, a plist, or an app bundle
+// cannot carry the window on the command line — prefixing one would look like it
+// did something and change nothing. Those say where it comes from instead.
+func TestAServiceLaunchNamesTheWindowRatherThanFakingAPrefix(t *testing.T) {
+	cases := map[string]hostProbe{
+		"systemd unit": fakeHostFor("linux", []string{"systemctl"},
+			[]string{"/usr/bin/lemond", "/usr/lib/systemd/user/lemond.service"}, nil),
+		"macOS app bundle": fakeHostFor("darwin", nil, []string{"/Applications/lemonade-app.app"}, nil),
+		"launchd job": fakeHostFor("darwin", []string{"launchctl"},
+			[]string{macDaemonPlist}, nil),
+	}
+	for name, probe := range cases {
+		t.Run(name, func(t *testing.T) {
+			l := resolveLemonadeWith(probe)
+			if strings.Contains(l.Start, "env "+ctxSizeEnv) || strings.Contains(l.Start, `set "`+ctxSizeEnv) {
+				t.Errorf("an inert env prefix was attached to a service launch: %q", l.Start)
+			}
+			if l.CtxSize != gpuCtxSize {
+				t.Errorf("ctx = %d, want it resolved even when the command cannot carry it", l.CtxSize)
+			}
+			// …and the remedy says so, or the user reads the 502 as an agent bug.
+			r := withProbe(probe, lemonadeStartRemedy)
+			if !strings.Contains(r.Action, ctxSizeEnv) {
+				t.Errorf("the remedy never mentions the window: %q", r.Action)
+			}
+			if !strings.Contains(r.Action, "looks healthy") {
+				t.Errorf("the remedy does not warn that the failure looks like health: %q", r.Action)
+			}
+		})
+	}
+}
+
+// The window is DERIVED from the machine's recorded device profile, never
+// hardcoded: the NPU's FastFlowLM build is registered at 32768 and cannot reach
+// 65536, so handing it the GPU window fails the load outright.
+func TestTheWindowComesFromTheRecordedDeviceProfile(t *testing.T) {
+	for device, want := range map[string]int{
+		"npu":      npuCtxSize,
+		"NPU":      npuCtxSize, // case-insensitive, like profile_ctx_size
+		"gpu":      gpuCtxSize,
+		"cpu":      gpuCtxSize,
+		"":         gpuCtxSize, // no config at all — GaiaConfig's own default
+		"nonsense": gpuCtxSize,
+	} {
+		probe := fakeHostWithDevice("darwin", nil, []string{"/usr/local/bin/lemond"}, nil, device)
+		if got := resolveLemonadeWith(probe).CtxSize; got != want {
+			t.Errorf("default_device=%q resolved to %d, want %d", device, got, want)
+		}
+	}
+}
+
+// These MUST equal lemonade_client.GPU_CTX_SIZE / NPU_CTX_SIZE. Collapsing them
+// to one number would cap GPU doc-Q&A at 32K and re-open the #1030 overflow;
+// swapping them would fail the NPU load outright.
+func TestTheWindowConstantsMatchTheirPythonSource(t *testing.T) {
+	if gpuCtxSize != 65536 {
+		t.Errorf("gpuCtxSize = %d, want lemonade_client.GPU_CTX_SIZE (65536)", gpuCtxSize)
+	}
+	if npuCtxSize != 32768 {
+		t.Errorf("npuCtxSize = %d, want lemonade_client.NPU_CTX_SIZE (32768)", npuCtxSize)
+	}
+}
+
+// A user who already set the variable has chosen; telling them a different
+// number would contradict their own environment.
+func TestAnExplicitWindowOverrideIsHonoured(t *testing.T) {
+	probe := fakeHostWithDevice("darwin", nil, []string{"/usr/local/bin/lemond"},
+		map[string]string{ctxSizeEnv: "16384"}, "npu")
+	if got := resolveLemonadeWith(probe).CtxSize; got != 16384 {
+		t.Errorf("ctx = %d, want the caller's own 16384", got)
+	}
+	// Garbage falls back to the profile rather than propagating into a command.
+	bad := fakeHostWithDevice("darwin", nil, []string{"/usr/local/bin/lemond"},
+		map[string]string{ctxSizeEnv: "not-a-number"}, "npu")
+	if got := resolveLemonadeWith(bad).CtxSize; got != npuCtxSize {
+		t.Errorf("ctx = %d, want the npu profile window", got)
+	}
+}
+
+// The config path contract mirrors gaia.config exactly, or the TUI reads a
+// different file than `gaia init` writes and silently disagrees with it.
+func TestTheConfigPathMirrorsGaiaConfig(t *testing.T) {
+	base := fakeHostWithDevice("darwin", nil, nil, nil, "")
+	base.homeDir = func() (string, error) { return "/home/jane", nil }
+
+	if got := configPath(base); got != filepath.Join("/home/jane", ".gaia", "config.json") {
+		t.Errorf("default path = %q", got)
+	}
+	withDir := base
+	withDir.getenv = func(k string) string { return map[string]string{configDirEnv: "/custom"}[k] }
+	if got := configPath(withDir); got != filepath.Join("/custom", "config.json") {
+		t.Errorf("GAIA_CONFIG_DIR path = %q", got)
+	}
+	withFile := base
+	withFile.getenv = func(k string) string {
+		return map[string]string{configDirEnv: "/custom", configFileEnv: "/exact/c.json"}[k]
+	}
+	if got := configPath(withFile); got != "/exact/c.json" {
+		t.Errorf("GAIA_CONFIG_FILE must win over the dir, got %q", got)
+	}
+}
+
+// The runnable check must step over the window prefix. Checking that `env`
+// exists is always true and would stop checking the binary that has to be there.
+func TestTheRunnableCheckLooksPastTheWindowPrefix(t *testing.T) {
+	for cmd, want := range map[string]string{
+		"env LEMONADE_CTX_SIZE=65536 /usr/local/bin/lemond":               "/usr/local/bin/lemond",
+		`env LEMONADE_CTX_SIZE=65536 "/Users/j/My Tools/lemond"`:          "/Users/j/My Tools/lemond",
+		`set "LEMONADE_CTX_SIZE=65536" && "C:\a b\Lemonade.exe" --silent`: `C:\a b\Lemonade.exe`,
+		"lemonade-server serve --ctx-size 65536":                          "lemonade-server",
+		"systemctl --user start lemond":                                   "systemctl",
+		"/usr/local/bin/lemond":                                           "/usr/local/bin/lemond",
+	} {
+		if got := firstWord(cmd); got != want {
+			t.Errorf("firstWord(%q) = %q, want %q", cmd, got, want)
+		}
 	}
 }
