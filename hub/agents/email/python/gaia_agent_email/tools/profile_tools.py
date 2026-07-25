@@ -153,7 +153,16 @@ class ProfileToolsMixin:
             row = existing[0]
             try:
                 payload = json.loads(row["content"])
-            except (json.JSONDecodeError, KeyError):
+            except (json.JSONDecodeError, KeyError) as exc:
+                # Row id, never the address: this is WARNING, and gaia
+                # diagnostics bundles default-level logs into bug reports.
+                log.warning(
+                    "profile_tools: reply record %s is unreadable (%s) — "
+                    "restarting it; that sender's reply-latency history is "
+                    "lost and priority promotion restarts from zero.",
+                    row.get("id"),
+                    exc,
+                )
                 payload = {
                     "sender": sender,
                     "reply_latencies_seconds": [],
@@ -261,7 +270,14 @@ class ProfileToolsMixin:
             row = existing[0]
             try:
                 payload = json.loads(row["content"])
-            except (json.JSONDecodeError, KeyError):
+            except (json.JSONDecodeError, KeyError) as exc:
+                log.warning(
+                    "profile_tools: interaction record %s is unreadable (%s) — "
+                    "restarting it; that sender's interaction count and "
+                    "category history are lost.",
+                    row.get("id"),
+                    exc,
+                )
                 payload = {
                     "sender": sender,
                     "count": 0,
