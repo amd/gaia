@@ -113,9 +113,25 @@ func TestCanonicalToolCallAndResult(t *testing.T) {
 	if !strings.Contains(item.Content, "search_email") || !strings.Contains(item.Content, "invoice") {
 		t.Errorf("tool line lost its detail: %q", item.Content)
 	}
-	// The render key must stay visible until Phase 5 draws the real card.
-	if !strings.Contains(item.Content, "render:table") {
-		t.Errorf("render hint not surfaced: %q", item.Content)
+	// The render key is no longer echoed onto the activity line — it now draws a
+	// real card in the transcript, which is where the detail belongs.
+	if strings.Contains(item.Content, "render:") {
+		t.Errorf("tool line still echoes the raw render key: %q", item.Content)
+	}
+	var card *Message
+	for i := range m.messages {
+		if m.messages[i].Role == RoleCard {
+			card = &m.messages[i]
+		}
+	}
+	if card == nil {
+		t.Fatal("render=table produced no card message")
+	}
+	if card.Render != "table" {
+		t.Errorf("card render = %q, want table", card.Render)
+	}
+	if rendered := m.renderMessage(*card); !strings.Contains(rendered, "a@b.c") {
+		t.Errorf("table card did not draw its row:\n%s", rendered)
 	}
 }
 

@@ -1,6 +1,9 @@
 package chat
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type MessageRole string
 
@@ -10,6 +13,9 @@ const (
 	RoleTool      MessageRole = "tool"
 	RoleError     MessageRole = "error"
 	RoleStatus    MessageRole = "status"
+	// RoleCard is a typed `tool_result.render` card, drawn inline in the
+	// transcript at the point the tool returned so work and results stay in order.
+	RoleCard MessageRole = "card"
 )
 
 type Message struct {
@@ -22,6 +28,11 @@ type Message struct {
 	TTFT      time.Duration // time to first event (model load + first inference)
 	Steps     int           // agent steps taken
 	ToolsUsed int           // tools invoked
+
+	// Render / Data carry a RoleCard message's payload straight off the wire;
+	// the cards package decides how (and whether) it can be drawn.
+	Render string
+	Data   json.RawMessage
 }
 
 type ActivityItem struct {
@@ -29,4 +40,7 @@ type ActivityItem struct {
 	Content string
 	Done    bool
 	Success *bool
+	// Repeat counts additional consecutive occurrences folded into this item by
+	// the live work log; 0 means it happened once.
+	Repeat int
 }
