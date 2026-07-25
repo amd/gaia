@@ -89,6 +89,14 @@ Everything else depends on this. `client.AgentClient` is already transport-agnos
    accumulate `[{role, content}]` and push it as `context` each turn, appending a turn
    only when it terminated in `final` (so a failed turn doesn't poison the next).
 
+   ⚠️ **`context` must marshal to `[]`, never `null`, and this breaks on the first turn.**
+   `QueryRequest.context` is a *required* `List` (`query_routes.py:175`), and the model
+   forbids extras — `null` is a 422. A Go nil slice marshals to `null`, so the natural
+   implementation (`var ctx []ContextItem`) fails on exactly the cold-start case where there
+   is no history yet, and passes every later turn. Initialize to `make([]ContextItem, 0)`
+   and add a test asserting the serialized body contains `"context":[]` on turn one. A mock
+   that returns 200 will not catch this — assert the wire bytes.
+
 *Known sharp edges to fix while here:* `strings.Fields` command splitting breaks on paths
 with spaces; cancellation doesn't actually stop the child; unparsed events are silently
 dropped rather than surfaced.
