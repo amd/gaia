@@ -35,6 +35,7 @@ a remedy.
 
 from __future__ import annotations
 
+import os
 import re
 import threading
 from contextlib import contextmanager
@@ -406,14 +407,37 @@ def assert_no_live_process_in(install_dir: Path, agent_id: str) -> None:
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             continue
     if survivors:
-        pids = ", ".join(str(p) for p in sorted(set(survivors)))
+        unique = sorted(set(survivors))
         raise StopFailedError(
-            f"process(es) {pids} are still running from {install_dir} even though "
-            f"the daemon believes '{agent_id}' is stopped. Refusing to rewrite or "
-            f"delete a directory a live process is using. Kill them (`gaia kill`, "
-            f"or `kill {pids}`) and retry; if they came back on their own, report "
-            "it — a sidecar the daemon lost track of is a supervision bug."
+            f"process(es) {', '.join(str(p) for p in unique)} are still running "
+            f"from {install_dir} even though the daemon believes '{agent_id}' is "
+            f"stopped. Refusing to rewrite or delete a directory a live process "
+            f"is using. Kill them and retry:\n"
+            f"  {kill_command(unique)}\n"
+            f"{_kill_note()}If they came back on their own, report it — a sidecar "
+            "the daemon lost track of is a supervision bug."
         )
+
+
+def kill_command(pids: "list[int]") -> str:
+    """A paste-able command that actually kills *pids* on this platform.
+
+    Space-separated (a comma-separated list is rejected: ``kill: illegal pid``),
+    and SIGKILL rather than the default SIGTERM — a frozen one-file sidecar
+    spawns a child that survives SIGTERM, which is precisely how these
+    processes outlived the daemon that spawned them. ``gaia kill`` is
+    deliberately NOT offered: it only takes ``--port``/``--lemonade`` and
+    cannot target an agent by install path.
+    """
+    if os.name == "nt":
+        return " ".join(["taskkill", "/F"] + [f"/PID {p}" for p in pids])
+    return "kill -9 " + " ".join(str(p) for p in pids)
+
+
+def _kill_note() -> str:
+    if os.name == "nt":
+        return ""
+    return "Plain `kill` is not enough — these ignore SIGTERM. "
 
 
 @contextmanager
@@ -472,7 +496,7 @@ def start_install(
     error) is then polled via :func:`install_status`.
 
     *trusted* is the caller's explicit opt-in to install a non-verified agent
-    (``gaia hub install --trust`` / a UI "Trust & Install" confirmation). It
+    (``gaia hub install <id> --trust`` / a UI "Trust & Install" confirmation). It
     defaults to False and is never inferred: a non-verified package runs
     third-party code on the user's machine, so the refusal has to be the
     default. ``email`` is in the ``experimental`` tier, so it needs it.
