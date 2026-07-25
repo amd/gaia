@@ -11,12 +11,17 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/root"
 )
 
+// windowSize is the resize message every hub test starts with.
+func windowSize(w, h int) tea.WindowSizeMsg {
+	return tea.WindowSizeMsg{Width: w, Height: h}
+}
+
 func TestHubModelRenders(t *testing.T) {
 	cat := catalog.NewCatalog()
-	m := hub.NewHubModel(cat, false)
+	m := hub.NewHubModel(cat, nil, false)
 
 	// Simulate window size
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	updated, _ := m.Update(windowSize(120, 40))
 	hubModel := updated.(hub.HubModel)
 
 	view := hubModel.View()
@@ -38,39 +43,83 @@ func TestHubModelRenders(t *testing.T) {
 	t.Logf("Hub view length: %d chars", len(view))
 }
 
+// This used to send the three runes t, a, b — not the Tab key — and then assert
+// only that nothing panicked (§5 bug 8).
 func TestHubTabSwitching(t *testing.T) {
-	cat := catalog.NewCatalog()
-	m := hub.NewHubModel(cat, false)
+	d := newDriver(t, nil, 120, 40)
 
-	// Set window size
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	m = updated.(hub.HubModel)
+	_, first := d.m.ActiveTab()
+	firstRows := d.m.VisibleAgentIDs()
 
-	// Tab to Available section
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("tab")})
+	d.send(keyTab())
 
-	// Verify no panic
-	view := updated.(hub.HubModel).View()
-	if view == "" {
-		t.Fatal("view empty after tab")
+	idx, second := d.m.ActiveTab()
+	if second == first {
+		t.Fatalf("Tab did not change the active tab (still %q)", first)
+	}
+	if idx != 1 {
+		t.Errorf("Tab moved to index %d, want 1", idx)
+	}
+	secondRows := d.m.VisibleAgentIDs()
+	if sameIDs(firstRows, secondRows) {
+		t.Errorf("tab %q shows the same rows as %q: %v", second, first, secondRows)
+	}
+	if !contains(stripAnsi(d.m.View()), second) {
+		t.Errorf("view does not show the active tab %q", second)
+	}
+
+	d.send(keyShiftTab())
+	if _, back := d.m.ActiveTab(); back != first {
+		t.Errorf("Shift+Tab landed on %q, want back on %q", back, first)
 	}
 }
 
+// This used to send the three runes /, and then assert only "didn't panic".
 func TestHubSearch(t *testing.T) {
-	cat := catalog.NewCatalog()
-	m := hub.NewHubModel(cat, false)
+	d := newDriver(t, nil, 120, 40)
+	d.gotoTab("Coming Soon")
 
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	m = updated.(hub.HubModel)
-
-	// Press / to enter search mode
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
-
-	// Verify no panic
-	view := updated.(hub.HubModel).View()
-	if view == "" {
-		t.Fatal("view empty after search")
+	before := len(d.m.VisibleAgentIDs())
+	if before < 2 {
+		t.Fatalf("need at least 2 rows to prove filtering narrows them, got %d", before)
 	}
+
+	d.send(key("/"))
+	if !d.m.IsFiltering() {
+		t.Fatal("/ did not enter filter mode")
+	}
+	for _, r := range "browser" {
+		d.send(key(string(r)))
+	}
+	d.send(keyEnter())
+
+	after := d.m.VisibleAgentIDs()
+	if len(after) >= before {
+		t.Fatalf("filtering for 'browser' left %d of %d rows visible", len(after), before)
+	}
+	if len(after) == 0 || after[0] != "browser" {
+		t.Fatalf("filtered rows = %v, want browser first", after)
+	}
+
+	d.send(keyEsc())
+	if d.m.IsFiltering() {
+		t.Error("esc did not clear the filter")
+	}
+	if got := len(d.m.VisibleAgentIDs()); got != before {
+		t.Errorf("clearing the filter left %d rows, want the original %d", got, before)
+	}
+}
+
+func sameIDs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestRootModelStartsWithHub(t *testing.T) {
