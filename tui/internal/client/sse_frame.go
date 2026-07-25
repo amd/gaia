@@ -49,8 +49,10 @@ func (r *sseFrameReader) Next() (payload []byte, ok bool) {
 		if strings.HasPrefix(line, ":") {
 			continue
 		}
-		field, value, found := strings.Cut(line, ":")
-		if !found || field != "data" {
+		// A field line with no colon carries an empty value, per the SSE spec
+		// (and matching the reference implementation's str.partition).
+		field, value, _ := strings.Cut(line, ":")
+		if field != "data" {
 			continue
 		}
 		r.data = append(r.data, strings.TrimPrefix(value, " "))

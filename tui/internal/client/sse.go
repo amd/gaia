@@ -177,8 +177,20 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 	handle := &runHandle{runID: runID, cancel: cancel}
 	s.mu.Lock()
 	s.inst = inst
-	s.active = handle
+	// Close() may have landed while the request was in flight; registering the
+	// handle unconditionally would leave that run un-cancellable.
+	closedMidFlight := s.closed
+	if !closedMidFlight {
+		s.active = handle
+	}
 	s.mu.Unlock()
+
+	if closedMidFlight {
+		cancel()
+		resp.Body.Close()
+		return nil, fmt.Errorf(
+			"the %s agent connection was closed while the query was being sent", s.agentID)
+	}
 
 	ch := make(chan interface{}, 32)
 	go s.consume(ctx, runCtx, handle, resp, ch, query)

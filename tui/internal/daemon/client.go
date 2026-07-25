@@ -19,6 +19,11 @@ const (
 	// A live daemon answers loopback in milliseconds; a longer wait only delays
 	// reclaiming a dead one.
 	defaultProbeTimeout = 1500 * time.Millisecond
+	// Default for a general Do() call. Deliberately NOT the probe timeout: a
+	// relay call does real work (e.g. GET /v1/<agent>/init checks Lemonade, the
+	// model, and connectors) and 1.5s times it out. Callers with a known-slow or
+	// streaming call still pass their own client.
+	defaultRequestTimeout = 60 * time.Second
 	// Daemon start: spawn + bind + import.
 	defaultStartTimeout = 30 * time.Second
 	// Ensure: a first-run ensure may lazily fetch the sidecar binary before answering.
@@ -58,8 +63,12 @@ type Options struct {
 // every daemon restart, so it is never cached for the process lifetime.
 type Client struct {
 	opts Options
-	// control is used for short control-plane calls (the status probe).
+	// control is used ONLY for the status probe, whose timeout is deliberately
+	// tiny — a live daemon answers loopback in milliseconds.
 	control *http.Client
+	// request is the default for Do(): everything that is not a probe, not an
+	// ensure, and not a stream.
+	request *http.Client
 	// ensure is used for the possibly-very-slow ensure call.
 	ensure *http.Client
 	// cancel is used for the best-effort run-cancel POST, which must not be cut
@@ -90,6 +99,7 @@ func New(opts Options) *Client {
 	return &Client{
 		opts:    opts,
 		control: &http.Client{Timeout: opts.ProbeTimeout},
+		request: &http.Client{Timeout: defaultRequestTimeout},
 		ensure:  &http.Client{Timeout: opts.EnsureTimeout},
 		cancel:  &http.Client{Timeout: defaultCancelTimeout},
 	}
@@ -327,7 +337,8 @@ type Request struct {
 	Body []byte
 	// Header carries extra request headers; Authorization is always set by Do.
 	Header http.Header
-	// HTTPClient overrides the client used for this call (streaming needs its own).
+	// HTTPClient overrides the client used for this call. Required for a
+	// streaming call, and for anything that can outlast defaultRequestTimeout.
 	HTTPClient *http.Client
 	// Op names the operation for error messages, e.g. "stream the 'email' query".
 	Op string
@@ -403,7 +414,7 @@ func (c *Client) send(ctx context.Context, inst *Instance, r Request) (*http.Res
 	}
 	httpClient := r.HTTPClient
 	if httpClient == nil {
-		httpClient = c.control
+		httpClient = c.request
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -506,6 +517,13 @@ func (c *Client) CancelRun(inst *Instance, agentID, runID string) {
 		return
 	}
 	defer drainAndClose(resp)
+	// 404 is the documented answer for a run that is no longer in flight, which
+	// is exactly the case when we abandon a stream that already ended — that is
+	// success, not a failure worth reporting as one.
+	if resp.StatusCode == http.StatusNotFound {
+		c.opts.Logf("daemon: '%s' run_id=%s had already finished; nothing to cancel", agentID, runID)
+		return
+	}
 	if resp.StatusCode != http.StatusOK {
 		c.opts.Logf("daemon: best-effort cancel for '%s' run_id=%s answered HTTP %d",
 			agentID, runID, resp.StatusCode)
