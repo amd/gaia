@@ -1,4 +1,4 @@
-.PHONY: build build-release test lint clean cross-compile mock-agent dev
+.PHONY: build build-release test test-race lint vet cover clean cross-compile mock-agent dev
 
 VERSION ?= dev
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -15,8 +15,57 @@ build-release:
 test:
 	go test ./... -v
 
+# What CI runs. The TUI is concurrent throughout (SSE streaming, the loopback
+# control API, daemon polling), so -race is where its real bugs are.
+test-race:
+	go test ./... -v -count=1 -race -timeout=15m
+
+# `lint` needs golangci-lint (see .golangci.yml); `vet` is the subset that needs
+# no extra tool, so a contributor without it can still run the old check.
 lint:
+	golangci-lint run ./...
+
+vet:
 	go vet ./...
+
+# Statement coverage, rolled up per package.
+#
+# A plain `go test -cover` reports internal/ui/hub and internal/ui/root as 0%
+# because their tests live in the test/ integration package. -coverpkg=./...
+# attributes coverage back to the package that owns the code, so those report
+# their real numbers (~77% and ~90%) instead of a zero that invites deletion.
+# `go tool cover` writes to a file rather than piping into tail: a pipeline
+# reports the LAST command's status, so `go tool cover ... | tail` would read as
+# success even when it failed. make checks the redirected command directly.
+cover:
+	go test ./... -count=1 -coverpkg=./... -coverprofile=coverage.out
+	@go tool cover -func=coverage.out > coverage.txt
+	@echo ""
+	@tail -1 coverage.txt
+	@echo ""
+	@awk "$$COV_ROLLUP" coverage.out | sed 's|github.com/amd/gaia/tui/||' | sort -k2
+
+# Per-package rollup. Exported so awk receives it verbatim; `$$` is a literal
+# `$` after make expands the define.
+define COV_ROLLUP
+NR == 1 { next }
+{
+  if (!($$1 in seen)) seen[$$1] = $$2
+  if ($$3 > 0) hit[$$1] = 1
+}
+END {
+  for (blk in seen) {
+    split(blk, a, ":")
+    n = split(a[1], p, "/")
+    pkg = ""
+    for (i = 1; i < n; i++) pkg = pkg (i > 1 ? "/" : "") p[i]
+    stmts[pkg] += seen[blk]
+    if (blk in hit) covered[pkg] += seen[blk]
+  }
+  for (pkg in stmts) printf "%.1f%%\t%s\n", 100 * covered[pkg] / stmts[pkg], pkg
+}
+endef
+export COV_ROLLUP
 
 mock-agent:
 	go build -o bin/mock-agent ./test/mockagent
