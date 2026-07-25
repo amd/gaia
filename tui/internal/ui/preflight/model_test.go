@@ -2,6 +2,7 @@ package preflight
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -340,5 +341,59 @@ func TestAnIndeterminateReportProceedsButSaysWhatItCouldNotVerify(t *testing.T) 
 	}
 	if _, ok := cmd().(proceedTickMsg); !ok {
 		t.Fatalf("scheduled %T", cmd())
+	}
+}
+
+// Leaving the screen must cancel work that is ALREADY RUNNING, not just detach
+// from it. An abandoned ensure keeps a sidecar-spawning request alive for its
+// full 15-minute budget — the user sees a process start minutes after they
+// walked away.
+func TestCancelStopsAnInFlightFix(t *testing.T) {
+	f := newFake().with("GET /daemon/v1/agents", 200, agentsStopped)
+
+	started := make(chan struct{})
+	finished := make(chan error, 1)
+	f.ensureFn = func(ctx context.Context) error {
+		close(started)
+		<-ctx.Done() // a real ensure blocks here for as long as the daemon takes
+		finished <- ctx.Err()
+		return ctx.Err()
+	}
+
+	m := newModel(t, f)
+	if m.FocusKey() != KeySidecar {
+		t.Fatalf("focus = %q, want the sidecar row", m.FocusKey())
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("pressing f produced no command")
+	}
+	// The runtime executes a batch's children; do the same so the ensure is
+	// genuinely in flight when esc arrives.
+	if batch, ok := cmd().(tea.BatchMsg); ok {
+		for _, c := range batch {
+			go c() //nolint:errcheck // the message is irrelevant; the call is the point
+		}
+	} else {
+		t.Fatalf("f produced %T, want a batch", cmd())
+	}
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the ensure never started")
+	}
+
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	select {
+	case err := <-finished:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("the in-flight fix ended with %v, want a cancellation", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("esc did not cancel the in-flight fix — it is still running")
 	}
 }

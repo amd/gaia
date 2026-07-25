@@ -16,6 +16,26 @@
 //     check, not a pass, and it renders as its own state.
 //   - No raw HTTP status ever reaches the user. Ladder maps a failed call to
 //     {cause, remedy, where-to-look}, specific causes before generic ones.
+//
+// # What an indeterminate row does, and why that is not the gate going soft
+//
+// Three separate questions get three separate answers, and conflating them is
+// what makes a gate either dishonest or useless:
+//
+//   - Is it proven ready?   Report.Ready() — false for an unknown row, always.
+//   - Is it proven broken?  Report.Blocked() — false for an unknown row.
+//   - Does the launch stop? Only on Blocked.
+//
+// So an unknown row renders `[?]`, keeps Ready() false, is named on screen
+// while the agent starts, and does not stop the launch. The alternative —
+// demanding a keypress every time — was rejected deliberately: the condition is
+// one the user cannot fix (their Lemonade build simply does not report a
+// version), so the prompt would fire on every single launch forever. A prompt
+// that always fires and never means anything is dismissed reflexively, and it
+// devalues every other prompt in the product. The signal is kept; the ritual is
+// not.
+//
+// A row that is genuinely broken still blocks, and no keystroke moves past it.
 package preflight
 
 import (

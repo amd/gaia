@@ -120,6 +120,10 @@ type fakeTransport struct {
 	streamBody   string
 	streamErr    error
 
+	// ensureFn overrides EnsureAgent so a test can hold the call open and prove
+	// the screen's context really reaches it.
+	ensureFn func(context.Context) error
+
 	calls []call
 }
 
@@ -155,7 +159,12 @@ func (f *fakeTransport) Start(context.Context) (DaemonInfo, error) {
 	return f.info, nil
 }
 
-func (f *fakeTransport) EnsureAgent(context.Context, string) error { return f.ensureErr }
+func (f *fakeTransport) EnsureAgent(ctx context.Context, _ string) error {
+	if f.ensureFn != nil {
+		return f.ensureFn(ctx)
+	}
+	return f.ensureErr
+}
 
 func (f *fakeTransport) Do(_ context.Context, method, path string, _ []byte) (Response, error) {
 	key := method + " " + path
@@ -844,5 +853,39 @@ func TestConnectCommandRequestsTheFullScopeUnion(t *testing.T) {
 func TestNonASCIIAgentIDDoesNotCorruptTheDisplayName(t *testing.T) {
 	if got := ConfigFor("émail", "").AgentName; got != "Émail" {
 		t.Errorf("display name = %q, want %q", got, "Émail")
+	}
+}
+
+// The three questions an indeterminate row answers differently. Pinned as a
+// test because "unknown does not block" is one refactor away from becoming
+// "unknown passes", which is the exact dishonesty this state exists to prevent.
+func TestIndeterminateIsNeitherReadyNorBlocking(t *testing.T) {
+	unknown := Check(context.Background(),
+		newFake().with("GET /v1/email/init", 200, initUnknownVersion), EmailConfig())
+	broken := Check(context.Background(),
+		newFake().with("GET /v1/email/init", 503, initUnreachable), EmailConfig())
+	ready := Check(context.Background(), newFake(), EmailConfig())
+
+	for _, tc := range []struct {
+		name                  string
+		rep                   Report
+		wantReady, wantBlocks bool
+	}{
+		{"proven ready", ready, true, false},
+		{"indeterminate", unknown, false, false},
+		{"proven broken", broken, false, true},
+	} {
+		if got := tc.rep.Ready(); got != tc.wantReady {
+			t.Errorf("%s: Ready() = %v, want %v", tc.name, got, tc.wantReady)
+		}
+		if got := tc.rep.Blocked(); got != tc.wantBlocks {
+			t.Errorf("%s: Blocked() = %v, want %v", tc.name, got, tc.wantBlocks)
+		}
+	}
+
+	// And the unknown row is visibly distinct from an ok one, without colour.
+	row, _ := unknown.Find(KeyLemonade)
+	if row.State.Marker() == StateOK.Marker() || row.State.Word() == StateOK.Word() {
+		t.Error("an indeterminate row is indistinguishable from a passing one")
 	}
 }
