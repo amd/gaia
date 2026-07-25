@@ -25,7 +25,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClientError,
     _get_lemonade_config,
 )
-from gaia.llm.lemonade_launcher import describe_start_hint
+from gaia.llm.lemonade_launcher import describe_client_hint, describe_start_hint
 from gaia.logger import get_logger
 from gaia.perf_analysis import run_perf_visualization
 from gaia.version import version
@@ -5450,7 +5450,7 @@ def handle_sd_command(args):
         print(f"Error: {health.get('error', 'SD endpoint unavailable')}")
         print("Make sure Lemonade Server is running and SD model is available:")
         print(f"  {describe_start_hint().instruction}")
-        print("  gaia download SD-Turbo")
+        print(f"  {describe_client_hint('pull', args.sd_model).instruction}")
         sys.exit(1)
 
     print()

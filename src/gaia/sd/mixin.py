@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+from gaia.llm.lemonade_launcher import describe_client_hint
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -563,7 +564,10 @@ class SDToolsMixin:
                 return {
                     "status": "unavailable",
                     "endpoint": f"{self.sd_client.base_url}/images/generations",
-                    "error": "No SD models available. Download with: gaia download SD-Turbo",
+                    "error": (
+                        "No SD models available. "
+                        f"{describe_client_hint('pull', 'SD-Turbo').instruction}"
+                    ),
                 }
         except LemonadeClientError as e:
             return {

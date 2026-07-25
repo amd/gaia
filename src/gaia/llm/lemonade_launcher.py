@@ -377,3 +377,37 @@ def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
             "or set LEMONADE_SERVER_PATH to an existing install."
         )
     )
+
+
+# Lemonade client sub-commands GAIA points users at, mapped to the verb used
+# in the prose. `gaia download` is NOT an alternative: it takes no positional
+# model argument, so `gaia download <model>` is rejected by argparse.
+_CLIENT_ACTIONS = {"pull": "downloaded", "load": "loaded"}
+
+
+def describe_client_hint(action: str, model: str) -> StartHint:
+    """Describe how to pull/load *model* with the resolved Lemonade client.
+
+    Modern ships ``lemonade`` and legacy ships ``lemonade-server``; both take
+    ``<client> pull|load <model>``. Returns prose with ``command=None`` when
+    no client binary resolved, rather than naming one that isn't there.
+    """
+    if action not in _CLIENT_ACTIONS:
+        raise ValueError(
+            f"Unsupported Lemonade client action {action!r} "
+            f"(expected one of {sorted(_CLIENT_ACTIONS)})."
+        )
+
+    tooling = resolve_lemonade()
+    # An explicit LEMONADE_SERVER_PATH names a *server*; using it as the
+    # client would be a guess, so only a probed install yields a command.
+    if tooling.found and tooling.client_path and tooling.source == "probe":
+        command = _render_command([tooling.client_path, action, model], {})
+        return StartHint(instruction=f"Run: {command}", command=command)
+
+    return StartHint(
+        instruction=(
+            f"{model} is not {_CLIENT_ACTIONS[action]}, and no Lemonade client "
+            f"CLI was found to do it — see {_DOWNLOAD_URL}."
+        )
+    )
