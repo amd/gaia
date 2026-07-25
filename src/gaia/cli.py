@@ -2778,6 +2778,22 @@ Examples:
         help="Use stdio transport instead of HTTP (for Claude Code / eval runner integration)",
     )
 
+    mcp_tui_parser = mcp_subparsers.add_parser(
+        "tui",
+        help="Start TUI control MCP server (drives a running `gaia tui --control`)",
+    )
+    mcp_tui_parser.add_argument(
+        "--host", default="localhost", help="Host to bind to (default: localhost)"
+    )
+    mcp_tui_parser.add_argument(
+        "--port", type=int, default=8767, help="Port to listen on (default: 8767)"
+    )
+    mcp_tui_parser.add_argument(
+        "--stdio",
+        action="store_true",
+        help="Use stdio transport instead of HTTP (for Claude Code integration)",
+    )
+
     # MCP Client commands (connect to external MCP servers).
     # `add` and `remove` moved to `gaia connectors mcp add/remove` (#977) so
     # configuration goes through the connectors framework with keyring-backed
@@ -7508,6 +7524,8 @@ def handle_mcp_command(args):
         handle_mcp_docker(args)
     elif args.mcp_action == "serve":
         handle_mcp_serve(args)
+    elif args.mcp_action == "tui":
+        handle_mcp_tui(args)
     elif args.mcp_action == "list":
         handle_mcp_list(args)
     elif args.mcp_action == "tools":
@@ -8135,6 +8153,55 @@ def handle_mcp_serve(args):
     except Exception as e:
         log.error(f"Error starting Agent UI MCP server: {e}")
         print(f"❌ Error starting Agent UI MCP server: {e}")
+
+
+def handle_mcp_tui(args):
+    """Start the TUI control MCP server (drives a running `gaia tui --control`)."""
+    log = get_logger(__name__)
+
+    try:
+        from gaia.mcp.servers.tui_mcp import create_tui_mcp, route_logging_to_stderr
+
+        mcp = create_tui_mcp()
+
+        if args.stdio:
+            # stdout carries JSON-RPC only; GAIA's root log handler writes there.
+            route_logging_to_stderr()
+            print(
+                "Starting GAIA TUI Control MCP Server (stdio mode)...",
+                file=__import__("sys").stderr,
+            )
+            mcp.run(transport="stdio")
+        else:
+            mcp.settings.host = args.host
+            mcp.settings.port = args.port
+
+            print("=" * 60)
+            print("🖥️  GAIA TUI Control MCP Server")
+            print("=" * 60)
+            print("   Target  : the running `gaia tui --control` session")
+            print(f"   MCP     : http://{args.host}:{args.port}/mcp")
+            try:
+                tool_count = len(
+                    mcp._tool_manager._tools
+                )  # pylint: disable=protected-access
+                print(f"   Tools   : {tool_count} registered")
+            except AttributeError:
+                log.debug("FastMCP tool registry layout changed; skipping tool count")
+            print("\nPress Ctrl+C to stop")
+            print("=" * 60)
+            mcp.run(transport="streamable-http")
+
+    except KeyboardInterrupt:
+        print("\n✅ TUI control MCP server stopped")
+    except ImportError as e:
+        log.error(f"Failed to import TUI control MCP server: {e}")
+        print("❌ Error: Could not load the TUI control MCP server")
+        print(f"   {e}")
+        print('   Install the MCP extras: uv pip install -e ".[mcp]"')
+    except Exception as e:
+        log.error(f"Error starting TUI control MCP server: {e}")
+        print(f"❌ Error starting TUI control MCP server: {e}")
 
 
 def handle_mcp_list(args):

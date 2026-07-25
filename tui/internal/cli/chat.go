@@ -44,7 +44,11 @@ var chatCmd = &cobra.Command{
 				"       gaia tui chat --agent email --query \"triage my inbox\"\n" +
 				"       gaia tui chat --subprocess \"./gaia-bash --json-events\"")
 		}
-		return ui.RunChat(subprocess, query, debug)
+		ctrl, err := controlOptionsFor(cmd)
+		if err != nil {
+			return err
+		}
+		return ui.RunChat(subprocess, query, debug, ctrl)
 	},
 }
 
