@@ -195,6 +195,10 @@ Rules an integration must respect:
   `QueryStreamError` for a non-SSE response / malformed event / stream that closes
   without a terminal). Never treat iterator completion without a `final` as success —
   the client already throws for you.
+- **Gate `can_answer_questions` on the peer's version.** Call `version()` first:
+  a sidecar below `apiVersion` 2.6 does not know the field and answers `422` to
+  every request carrying it — including `false`. Omit it below 2.6 and treat
+  mid-run questions as unavailable.
 - **Declare `can_answer_questions` honestly.** It defaults to `false`. Set it
   `true` only when a human is watching a UI that renders the question; a one-shot
   or batch job must leave it off, and then gets an immediate actionable refusal

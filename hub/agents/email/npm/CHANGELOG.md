@@ -16,6 +16,9 @@ behind any entry — API shapes, endpoints, and version semantics — see
   browser at all. Connecting Google still needs your own OAuth client ID and
   secret — the agent now tells you that up front with a link, instead of failing
   later (#2469).
+  Integrators: `can_answer_questions` is only understood from 2.6 onward, so
+  check `version()` before sending it — an older sidecar rejects the unknown
+  field outright rather than ignoring it.
 - **New: the agent can ask you a question mid-run** — schema 2.6, additive. A new
   non-terminal SSE event `needs_input` carries a question, 2-4 labelled options
   each with a description of what choosing it does, and a free-text escape;

@@ -80,6 +80,13 @@ type SSEClient struct {
 	transcript []Turn
 	closed     bool
 	active     *runHandle
+	// peer is what negotiation learned about the sidecar's contract version;
+	// peerProbed guards the one-shot probe. See negotiate.go.
+	peer       peerContract
+	peerProbed bool
+	// noticedOldPeer records that the "this agent cannot be asked anything"
+	// notice has already been shown, so it appears once per launch, not per turn.
+	noticedOldPeer bool
 }
 
 // runHandle is the cancel side of the currently streaming run.
@@ -116,9 +123,12 @@ type queryRequest struct {
 	Context  []Turn `json:"context"`
 	Model    string `json:"model,omitempty"`
 	MaxSteps int    `json:"max_steps,omitempty"`
-	// Always sent, including when false — the agent branches on it, so it must
-	// not be omitted and left to a default the two sides could disagree about.
-	CanAnswerQuestions bool `json:"can_answer_questions"`
+	// A POINTER, so nil omits the key entirely. Sidecar request models are
+	// strict: a peer that predates this field 422s EVERY request carrying it,
+	// including `false`. Only set once negotiation proves the peer accepts it,
+	// and then send it explicitly — including `false`, which is a real answer
+	// the agent branches on, not an absence.
+	CanAnswerQuestions *bool `json:"can_answer_questions,omitempty"`
 }
 
 // Send starts one turn. The returned channel carries the canonical event types
@@ -155,13 +165,23 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 	history = append(history, s.transcript...)
 	s.mu.Unlock()
 
+	// Ask what the peer speaks BEFORE sending it an optional field (negotiate.go).
+	// A published sidecar is routinely older than the source this TUI was built
+	// from, and its strict request model rejects an unknown key outright.
+	peer := s.negotiate(ctx, inst)
+	var canAnswer *bool
+	if peer.canAnswerQuestions {
+		interactive := s.opts.Interactive
+		canAnswer = &interactive
+	}
+
 	payload, err := json.Marshal(queryRequest{
 		Query:              query,
 		RunID:              runID,
 		Context:            history,
 		Model:              s.opts.Model,
 		MaxSteps:           s.opts.MaxSteps,
-		CanAnswerQuestions: s.opts.Interactive,
+		CanAnswerQuestions: canAnswer,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("could not encode the '%s' query request: %w", s.agentID, err)
@@ -234,8 +254,28 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 	}
 
 	ch := make(chan interface{}, 32)
+	// Say it once, on the channel the UI already renders: a user at an
+	// interactive session whose agent cannot be asked anything would otherwise
+	// just never be offered the in-conversation fix, with no way to know why.
+	if notice := s.oldPeerNotice(peer); notice != "" {
+		ch <- event.CanonicalNoticeEvent{Text: notice}
+	}
 	go s.consume(ctx, runCtx, handle, resp, ch, query)
 	return ch, nil
+}
+
+// oldPeerNotice returns the one-time warning text, or "" when none is due.
+func (s *SSEClient) oldPeerNotice(peer peerContract) string {
+	if peer.canAnswerQuestions || !s.opts.Interactive {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.noticedOldPeer {
+		return ""
+	}
+	s.noticedOldPeer = true
+	return noticeForMissingCapability(s.agentID, peer.version)
 }
 
 // consume reads the SSE response and enforces the terminal-event contract.

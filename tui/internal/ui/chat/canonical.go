@@ -126,6 +126,9 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			Content: fmt.Sprintf("unsupported event %q from the agent (update GAIA to render it)", e.EventType),
 		})
 
+	case event.CanonicalNoticeEvent:
+		m.messages = append(m.messages, Message{Role: RoleStatus, Content: e.Text})
+
 	case event.CanonicalMalformedEvent:
 		m.messages = append(m.messages, Message{
 			Role:    RoleStatus,

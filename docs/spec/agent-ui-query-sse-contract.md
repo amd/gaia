@@ -79,7 +79,7 @@ net-new agent instrumentation.
 | `model` | string | no | Model id override. Omitted ⇒ the sidecar's default (e.g. `Gemma-4-E4B-it-GGUF` for the email agent). |
 | `provider` | string | no | LLM provider override (`lemonade` / `claude` / `openai`). Omitted ⇒ sidecar default. |
 | `max_steps` | integer ≥ 1 | no | Agent-loop step ceiling. Omitted ⇒ the sidecar's configured default. |
-| `can_answer_questions` | boolean | no | Whether **this caller** can render a `needs_input` event and POST the answer (§5.1). Defaults to **false** — the safe answer. A caller that cannot answer would otherwise park the run until the question times out, which is indistinguishable from a hang. When false, a step that would ask instead fails immediately with what the user should do on that surface. |
+| `can_answer_questions` | boolean | no | Whether **this caller** can render a `needs_input` event and POST the answer (§5.1). **Send only to a peer at contract ≥ 2.6** — an older sidecar 422s the unknown field (see §7). Defaults to **false** — the safe answer. A caller that cannot answer would otherwise park the run until the question times out, which is indistinguishable from a hang. When false, a step that would ask instead fails immediately with what the user should do on that surface. |
 
 ```jsonc
 // JSON Schema (draft 2020-12) — request body
@@ -443,6 +443,19 @@ The seven types are the frozen v1 vocabulary. Evolution rules:
   unknown-`render` fallback (§4.2).
 - **Unknown `render` type → generic result card.** An unrecognized
   `tool_result.render` degrades to the generic result card, never a blank.
+- **A client MUST NOT send an optional request field the peer has not agreed
+  to.** Sidecar request models are strict (`extra="forbid"`), so an unknown
+  field is a hard `422` on *every* request — the correct fail-loudly behaviour on
+  the receiving side, and the reason the sending side has to ask first. The two
+  halves of a feature reach users on different clocks: a host/TUI change ships
+  when the host builds, a sidecar change only when a new agent is **published**
+  and the user installs it, so a current host routinely talks to an older
+  sidecar. Read `GET /v1/<agent>/version` (`{apiVersion, agentVersion}`),
+  compare against the version that introduced the field, and omit it below that
+  floor — `omitempty` alone is not enough, because the interesting value is
+  often `true`. Not claiming an absent capability is **negotiation**, not a
+  silent fallback; when the missing capability changes what the user can do, say
+  so where they can act on it.
 - **Additive is MINOR; removal needs a sunset window.** Adding an event type,
   a `render` type, or a request field is a backward-compatible **MINOR**.
   Removing one requires a stated **deprecation/sunset window**, not a silent

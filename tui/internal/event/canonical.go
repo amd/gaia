@@ -136,6 +136,14 @@ type CanonicalMalformedEvent struct {
 	Reason  string
 }
 
+// CanonicalNoticeEvent — something the CLIENT has to say about this run, not a
+// wire event. Used when contract negotiation finds the installed agent too old
+// for a capability the user is about to want: the alternative is a feature that
+// silently never appears, which reads as broken rather than as out of date.
+type CanonicalNoticeEvent struct {
+	Text string
+}
+
 // CanonicalUsageOf decodes a final event's usage object. A missing or unreadable
 // usage payload yields the zero value — it is display metadata, not an outcome.
 func CanonicalUsageOf(e CanonicalFinalEvent) CanonicalUsage {

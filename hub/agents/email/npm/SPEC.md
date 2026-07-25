@@ -170,7 +170,10 @@ Server-side resume is not wired yet, so `confirm_url` is omitted.
 **Mid-run questions (schema 2.6, #2469):** set `can_answer_questions: true` on the
 request only when your UI can render a question and answer it — it defaults to
 `false`, and a caller that leaves it off gets an immediate refusal rather than a run
-parked on a question it cannot show. the agent can ask the user something *while
+parked on a question it cannot show. **Check the peer first:** the sidecar's request
+model is strict, so sending this field to a sidecar below 2.6 is a `422` on every
+request. Read `version()` (`apiVersion`) and omit the field below 2.6 — the
+installed sidecar is often older than the client you built against. the agent can ask the user something *while
 it runs* — most importantly to set up or repair mailbox access instead of ending the run
 with a shell command for the user to go run elsewhere. It emits `needs_input` carrying
 the question, 0-4 mutually exclusive `options` (each with a `label` to pick and a

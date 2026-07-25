@@ -117,6 +117,12 @@ func RunOneShot(
 		case event.CanonicalMalformedEvent:
 			fmt.Fprintf(errW, "  [unreadable event skipped: %s]\n", e.Reason)
 
+		case event.CanonicalNoticeEvent:
+			// A one-shot does not claim it can answer questions, so it should
+			// never be sent one — but a notice the client raises must still land
+			// somewhere rather than falling to the unhandled-event branch.
+			fmt.Fprintf(errW, "  %s\n", e.Text)
+
 		// The legacy in-process vocabulary, so this renderer also works when
 		// pointed at a subprocess agent.
 		case event.AnswerEvent:
