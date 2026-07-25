@@ -153,7 +153,17 @@ class ProfileToolsMixin:
             row = existing[0]
             try:
                 payload = json.loads(row["content"])
-            except (json.JSONDecodeError, KeyError):
+            except (json.JSONDecodeError, KeyError) as exc:
+                # Restarting the record is the only way forward, but it drops
+                # every latency this sender had accumulated — which feeds
+                # priority-sender promotion, so say so.
+                log.warning(
+                    "profile_tools: reply record for %s is unreadable (%s) — "
+                    "restarting it; prior reply-latency history for this sender "
+                    "is lost and promotion restarts from zero.",
+                    entity,
+                    exc,
+                )
                 payload = {
                     "sender": sender,
                     "reply_latencies_seconds": [],
@@ -261,7 +271,14 @@ class ProfileToolsMixin:
             row = existing[0]
             try:
                 payload = json.loads(row["content"])
-            except (json.JSONDecodeError, KeyError):
+            except (json.JSONDecodeError, KeyError) as exc:
+                log.warning(
+                    "profile_tools: interaction record for %s is unreadable "
+                    "(%s) — restarting it; prior interaction count and category "
+                    "history for this sender are lost.",
+                    entity,
+                    exc,
+                )
                 payload = {
                     "sender": sender,
                     "count": 0,

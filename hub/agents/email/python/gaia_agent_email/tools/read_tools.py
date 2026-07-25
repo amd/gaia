@@ -62,14 +62,33 @@ DEFAULT_INBOX_SCAN_CEILING = 100
 
 
 def _inbox_scan_ceiling() -> int:
-    """Per-call ceiling for triage/pre-scan, overridable for the eval harness."""
-    raw = os.environ.get("GAIA_EMAIL_TRIAGE_MAX_MESSAGES")
+    """Per-call ceiling for triage/pre-scan, overridable for the eval harness.
+
+    A malformed or non-positive override raises ``ConfigurationError`` rather
+    than reverting to the default — mirrors ``config._undo_window_seconds``.
+    Silently defaulting meant a typo'd ceiling in an eval harness produced a
+    quietly different scan size and therefore a quietly different score.
+    """
+    from gaia_agent_email.config import ConfigurationError
+
+    env = "GAIA_EMAIL_TRIAGE_MAX_MESSAGES"
+    raw = os.environ.get(env)
     if not raw:
         return DEFAULT_INBOX_SCAN_CEILING
     try:
-        return max(1, int(raw))
-    except (TypeError, ValueError):
-        return DEFAULT_INBOX_SCAN_CEILING
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ConfigurationError(
+            f"{env}={raw!r} is not an integer. Set it to a positive message "
+            f"count (e.g. 250), or unset it to use the "
+            f"{DEFAULT_INBOX_SCAN_CEILING}-message default."
+        ) from exc
+    if value <= 0:
+        raise ConfigurationError(
+            f"{env}={raw!r} must be a positive message count. Unset it to use "
+            f"the {DEFAULT_INBOX_SCAN_CEILING}-message default."
+        )
+    return value
 
 
 # Maximum body length sent to the LLM. Larger messages are truncated with
