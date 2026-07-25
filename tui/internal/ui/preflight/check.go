@@ -484,13 +484,59 @@ func checkInit(ctx context.Context, t Transport, cfg Config, rep *Report) State 
 
 	model.State = StateOK
 	model.Line = body.Model.ID
-	if body.Model.CtxSize != nil && *body.Model.CtxSize > 0 {
-		model.Line += fmt.Sprintf(" · %s context", humanCtx(*body.Model.CtxSize))
-	} else {
+	switch {
+	case body.Model.CtxSize == nil || *body.Model.CtxSize <= 0:
+		// Not loaded right now, so there is no window to judge. `/init` reports
+		// only what the server says it loaded — never a config echo — so silence
+		// here is "not known yet", not "fine".
 		model.Line += " · downloaded, not loaded yet"
+	case *body.Model.CtxSize < profileCtxTarget():
+		markCtxShortfall(&model, *body.Model.CtxSize)
+	default:
+		model.Line += fmt.Sprintf(" · %s context", humanCtx(*body.Model.CtxSize))
 	}
 	setRow(rep, model)
 	return model.State
+}
+
+// markCtxShortfall reports a model loaded into a smaller context window than this
+// machine's profile pins.
+//
+// This is the mailbox bug one layer down: the row was green, the server was
+// healthy, short turns worked — and a document-sized request came back
+// `context_length_exceeded`. Measured on a 10.10.0 machine, the model loaded at
+// 25037 with the server started bare and 32527 with the profile's 65536
+// requested; a 40k-token request fails against both. So the number is real, it
+// varies with free memory, and it is invisible unless the row says it.
+//
+// It is StateUnknown, deliberately, not StateFailed: the agent works perfectly
+// for ordinary turns, so blocking the launch would be worse than the shortfall.
+// Unknown is the state this package already has for "not proven ready, not
+// proven broken" — it renders [?], keeps Ready() false, is named on screen while
+// the agent starts, and stops nothing.
+func markCtxShortfall(model *Row, loaded int) {
+	target := profileCtxTarget()
+	model.State = StateUnknown
+	model.Line = fmt.Sprintf("%s · %s of %s context",
+		model.Line, humanCtx(loaded), humanCtx(target))
+	model.Detail = fmt.Sprintf(
+		"The model is loaded with room for about %d tokens, but this machine's profile "+
+			"pins %d. Ordinary turns are unaffected; a long document or a large paste "+
+			"comes back as a context-length error rather than an answer.",
+		loaded, target)
+
+	// The restart command is the resolved one, so it carries the window on a
+	// launcher that can take it and names where it lives on one that cannot. It
+	// is not promised as a cure: on the machine above, asking for 65536 still
+	// only got 32527, because the limit was memory rather than the request.
+	r := lemonadeRestartRemedy()
+	r.Action = "Restart the local model server so it asks for the full window — if it " +
+		"still comes up short, this machine did not have the memory for more, and " +
+		"only long inputs are affected."
+	model.Remedy = r
+	// Nothing here is safe to do from the TUI: restarting the model server is a
+	// host-level action, exactly as it is on the Local AI row.
+	model.Fix = FixNone
 }
 
 // modelListUnreadable reports the one readiness failure the structured fields

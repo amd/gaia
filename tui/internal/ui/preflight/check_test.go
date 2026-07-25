@@ -8,7 +8,11 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/daemon"
 )
@@ -34,7 +38,7 @@ const (
 	initReady = `{"ready":true,"lemonade":{"reachable":true,` +
 		`"base_url":"http://localhost:8000/api/v1","version":"8.1.10","min_version":"8.1.0",` +
 		`"compatible":true},"model":{"id":"Gemma-4-E4B-it-GGUF","present":true,"loadable":null,` +
-		`"ctx_size":16384},"hint":null}`
+		`"ctx_size":65536},"hint":null}`
 
 	initUnreachable = `{"ready":false,"lemonade":{"reachable":false,` +
 		`"base_url":"http://localhost:8000/api/v1","version":null,"min_version":"8.1.0",` +
@@ -54,7 +58,7 @@ const (
 	initUnknownVersion = `{"ready":true,"lemonade":{"reachable":true,` +
 		`"base_url":"http://localhost:8000/api/v1","version":null,"min_version":"8.1.0",` +
 		`"compatible":null},"model":{"id":"Gemma-4-E4B-it-GGUF","present":true,"loadable":null,` +
-		`"ctx_size":16384},"hint":null}`
+		`"ctx_size":65536},"hint":null}`
 
 	// Captured from a live sidecar: when ctx_size is null the serializer OMITS
 	// the key entirely, so the parser must not depend on it being present.
@@ -63,6 +67,16 @@ const (
 		`"compatible":true},"model":{"id":"Gemma-4-E4B-it-GGUF","present":false,"loadable":null},` +
 		"\"hint\":\"Model `Gemma-4-E4B-it-GGUF` not downloaded — run `gaia init` " +
 		`(or pull it via Lemonade), then retry."}`
+
+	// CAPTURED LIVE: the model is downloaded and loaded, the server is healthy,
+	// short turns work — and it came up with a window well under the 65536 this
+	// machine's profile pins, so a document-sized request is refused. Measured at
+	// 25037 with the server started bare (32527 when the window was requested);
+	// llama.cpp clamps to the memory free at load time, so the figure moves.
+	initCtxShortfall = `{"ready":true,"lemonade":{"reachable":true,` +
+		`"base_url":"http://localhost:13305/api/v1","version":"10.10.0","min_version":"10.2.0",` +
+		`"compatible":true},"model":{"id":"Gemma-4-E4B-it-GGUF","present":true,"loadable":null,` +
+		`"ctx_size":25037},"hint":null}`
 
 	// Lemonade answered /health but its /models read failed. `present:false` here
 	// means "could not tell" — the hint is the ONLY thing that says so.
@@ -1527,4 +1541,147 @@ func TestTruncationNeverSplitsAMultibyteCharacter(t *testing.T) {
 	if got := clip(long, 7); len([]rune(got)) > 8 {
 		t.Errorf("clip(…, 7) returned %d runes: %q", len([]rune(got)), got)
 	}
+}
+
+// --- the context-window shortfall -------------------------------------------
+
+// The mailbox bug one layer down. The server is healthy, the model is
+// downloaded, short turns work — and it came up with a window far under the one
+// this machine's profile pins, so a document-sized request comes back as a
+// context-length error. The row used to render that as a plain green
+// "· 25037 context", which reads as a fact about a working system rather than a
+// warning about one that fails on large input.
+func TestAModelLoadedBelowTheProfileWindowIsNotReportedAsReady(t *testing.T) {
+	rep := Check(context.Background(),
+		newFake().with("GET /v1/email/init", 200, initCtxShortfall), EmailConfig())
+	row, ok := rep.Find(KeyModel)
+	if !ok {
+		t.Fatalf("no model row:\n%s", rep)
+	}
+
+	if row.State != StateUnknown {
+		t.Fatalf("state = %s, want unknown\n%s", row.State.Word(), rep)
+	}
+	if row.State.Marker() == StateOK.Marker() {
+		t.Error("a short window renders with the ok marker")
+	}
+	if rep.Ready() {
+		t.Error("a report with a short window called itself ready")
+	}
+
+	// Not a hard fail: ordinary turns work, so blocking the launch would be worse
+	// than the shortfall it is warning about.
+	if rep.Blocked() {
+		t.Errorf("a short window blocked the launch\n%s", rep)
+	}
+	if _, blocked := rep.Blocker(); blocked {
+		t.Error("a short window was reported as a blocker")
+	}
+}
+
+// The row has to show BOTH numbers. A colour or a marker says something is off;
+// only "25037 of 64K" tells the user which inputs will fail.
+func TestTheShortfallRowShowsTheActualWindowAndTheExpectedOne(t *testing.T) {
+	rep := Check(context.Background(),
+		newFake().with("GET /v1/email/init", 200, initCtxShortfall), EmailConfig())
+	row, _ := rep.Find(KeyModel)
+
+	for _, want := range []string{"25037", humanCtx(profileCtxTarget())} {
+		if !strings.Contains(row.Line, want) {
+			t.Errorf("line = %q, want it to show %q", row.Line, want)
+		}
+	}
+	// And the detail says what actually breaks, in terms of what a user does.
+	for _, want := range []string{"long document", "context-length error"} {
+		if !strings.Contains(row.Detail, want) {
+			t.Errorf("detail = %q, want it to mention %q", row.Detail, want)
+		}
+	}
+	if row.Remedy.Command == "" {
+		t.Error("the shortfall row has nothing to run")
+	}
+	assertRealCommand(t, row)
+	assertRunnable(t, row.Remedy.Command)
+	// The window in the command is the DERIVED one, never a literal.
+	if strings.Contains(row.Remedy.Command, ctxSizeEnv) &&
+		!strings.Contains(row.Remedy.Command, fmt.Sprint(profileCtxTarget())) {
+		t.Errorf("the remedy names a window other than the profile's: %q", row.Remedy.Command)
+	}
+	// It must not promise a cure it cannot deliver: asking for the full window
+	// still came up short on the machine this was measured on.
+	if !strings.Contains(row.Remedy.Action, "still comes up short") {
+		t.Errorf("the remedy over-promises: %q", row.Remedy.Action)
+	}
+	// Nothing here is safe to do from the TUI.
+	if row.Fix != FixNone {
+		t.Errorf("the shortfall row offers a one-key fix: %v", row.Fix)
+	}
+}
+
+// A window AT or ABOVE the profile is simply fine, and a model that is not
+// loaded yet has no window to judge — reporting either as a shortfall would make
+// the warning fire constantly and mean nothing.
+func TestAnAdequateOrUnknownWindowIsNotWarnedAbout(t *testing.T) {
+	target := profileCtxTarget()
+	cases := map[string]struct {
+		body      string
+		wantState State
+		wantLine  string
+	}{
+		"exactly the profile window": {
+			body: fmt.Sprintf(`{"ready":true,"lemonade":{"reachable":true,`+
+				`"base_url":"http://x","version":"10.10.0","min_version":"10.2.0","compatible":true},`+
+				`"model":{"id":"M","present":true,"ctx_size":%d},"hint":null}`, target),
+			wantState: StateOK,
+		},
+		"above the profile window": {
+			body: fmt.Sprintf(`{"ready":true,"lemonade":{"reachable":true,`+
+				`"base_url":"http://x","version":"10.10.0","min_version":"10.2.0","compatible":true},`+
+				`"model":{"id":"M","present":true,"ctx_size":%d},"hint":null}`, target*2),
+			wantState: StateOK,
+		},
+		"downloaded but not loaded": {
+			body: `{"ready":true,"lemonade":{"reachable":true,` +
+				`"base_url":"http://x","version":"10.10.0","min_version":"10.2.0","compatible":true},` +
+				`"model":{"id":"M","present":true},"hint":null}`,
+			wantState: StateOK,
+			wantLine:  "not loaded yet",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			rep := Check(context.Background(),
+				newFake().with("GET /v1/email/init", 200, tc.body), EmailConfig())
+			row, _ := rep.Find(KeyModel)
+			if row.State != tc.wantState {
+				t.Errorf("state = %s, want %s (line %q)", row.State.Word(), tc.wantState.Word(), row.Line)
+			}
+			if tc.wantLine != "" && !strings.Contains(row.Line, tc.wantLine) {
+				t.Errorf("line = %q, want it to mention %q", row.Line, tc.wantLine)
+			}
+		})
+	}
+}
+
+// The shortfall row is named while the agent starts, rather than passing by in
+// the 800ms an all-green screen gets. That naming is the whole point: it is the
+// only place the user learns which inputs will fail.
+func TestTheShortfallIsNamedDuringTheHandoff(t *testing.T) {
+	f := newFake().with("GET /v1/email/init", 200, initCtxShortfall)
+	m := New(f, EmailConfig(), Options{ReadyHold: time.Millisecond})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	updated, cmd := updated.(Model).Update(reportMsg{rep: Check(context.Background(), f, EmailConfig())})
+	m = updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("a short window stopped the hand-off; it must not block the launch")
+	}
+	screen := ansi.Strip(m.View())
+	if !strings.Contains(screen, "Starting anyway") {
+		t.Errorf("the shortfall is not named while the agent starts:\n%s", screen)
+	}
+	if !strings.Contains(screen, "25037") {
+		t.Errorf("the hand-off never shows the window that will fail:\n%s", screen)
+	}
+	assertFits(t, splitLines(screen), 80, 24)
 }

@@ -12,21 +12,25 @@ import (
 // Why a start command has to carry the context window.
 //
 // A bare `lemond` comes up HEALTHY — /api/v1/health answers 200 — and small
-// requests even succeed, so nothing looks wrong until a real one arrives.
-// Measured on a 10.10.0 machine: started bare the model loads at n_ctx 37888 and
-// a 40k-token request comes back `context_length_exceeded`; started with the
-// window it loads at 43227 and the same request fits.
+// requests even succeed, so nothing looks wrong until a real one arrives. On a
+// 10.10.0 machine, across repeated runs, the model loaded at 25037-37888 tokens
+// started bare and 32527-43227 with the profile's 65536 requested. A 40k-token
+// request came back `context_length_exceeded` against the low end of both.
 //
 // That is the worst shape this package exists to prevent: the Local AI row goes
 // green off the healthy server, hands the user into chat, and the first real
 // request fails. A remedy that produces it is a wrong remedy, not merely an
 // incomplete one.
 //
-// Note the second number though: the variable is a REQUEST, not a guarantee —
-// that machine clamped 65536 to what memory allowed. Asking for the profile's
-// window is still strictly better than asking for nothing, and the AI model row
-// reports whatever the server actually loaded, so the screen never claims the
-// window it asked for.
+// Two things those ranges say, and both are load-bearing:
+//
+//   - Asking for the window RAISES it. Every paired measurement put the
+//     requested run above the bare one, so the prefix earns its place.
+//   - It does not GUARANTEE it. The figure moves run to run and never reached
+//     65536, because llama.cpp clamps to the memory actually free at load time.
+//     So nothing here promises the target — the AI model row reports the window
+//     the server really loaded, and says so when it falls short (see
+//     markCtxShortfall).
 //
 // The value is DERIVED, never hardcoded. GAIA pins one context window per device
 // profile (lemonade_client.GPU_CTX_SIZE / NPU_CTX_SIZE) and `gaia init` records
@@ -144,3 +148,7 @@ func legacyCtxFlag(ctx int) string {
 
 // osReadFile is the real file reader for hostProbe.
 func osReadFile(path string) ([]byte, error) { return os.ReadFile(path) }
+
+// profileCtxTarget is the window this machine's profile pins, for callers that
+// have no probe of their own.
+func profileCtxTarget() int { return profileCtxSize(realHostProbe()) }

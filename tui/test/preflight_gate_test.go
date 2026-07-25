@@ -64,7 +64,9 @@ func readyGateTransport() *gateTransport {
 				"version": "8.2.0", "min_version": "8.1.0", "compatible": true,
 			},
 			"model": map[string]any{
-				"id": "Gemma-4-E4B-it-GGUF", "present": true, "ctx_size": 32768,
+				// At the profile window: below it the AI model row reports a shortfall,
+				// which is a real answer but not the "everything ready" this fixture means.
+				"id": "Gemma-4-E4B-it-GGUF", "present": true, "ctx_size": 65536,
 			},
 		},
 		// The real shape: connector_routes returns the NAMESPACED grant id, and

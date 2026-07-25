@@ -110,7 +110,7 @@ func TestRenderAllReadyAt80x24(t *testing.T) {
 		"running (pid 41822)",
 		"0.5.0",
 		"Lemonade 8.1.10",
-		"Gemma-4-E4B-it-GGUF · 16K context",
+		"Gemma-4-E4B-it-GGUF · 64K context",
 		"you@gmail.com (Gmail) · can read and send",
 	} {
 		if !strings.Contains(screen, want) {
