@@ -63,5 +63,4 @@ const chatHelpText = `  GAIA Chat
   ──────────────────
   /help       Show this help
   /hub        Return to Agent Hub
-  /init       Initialize agent LLM
   /clear      Clear conversation`
