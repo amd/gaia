@@ -112,9 +112,25 @@ jobs:
           version: v2.12.2
           working-directory: tui
 
+      # Both linters only analyze the host GOOS, so internal/daemon/lock_windows.go
+      # and pid_windows.go are invisible to every BLOCKING job — the only leg that
+      # compiles them is the advisory Windows one, which cannot fail the run. Vet
+      # them here so Windows-only code has enforcement that bites. darwin needs no
+      # equivalent: the macos test leg blocks and vets natively.
+      - name: Vet Windows-only sources
+        working-directory: tui
+        env:
+          GOOS: windows
+        run: go vet ./...
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
+    # Genuinely non-blocking, not just labelled that way. `make cover` runs the
+    # whole suite to produce a profile, so without this a test failure would
+    # paint this job red too — a second, duplicate X for something the `test`
+    # job already reports. Nothing `needs:` this job.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
 

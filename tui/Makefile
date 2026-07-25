@@ -15,8 +15,10 @@ build-release:
 test:
 	go test ./... -v
 
-# What CI runs. The TUI is concurrent throughout (SSE streaming, the loopback
-# control API, daemon polling), so -race is where its real bugs are.
+# Mirrors the test job in .github/workflows/build_tui.yml, which inlines this
+# command rather than calling make (windows-latest has no make). Keep the two in
+# sync. The TUI is concurrent throughout (SSE streaming, the loopback control
+# API, daemon polling), so -race is where its real bugs are.
 test-race:
 	go test ./... -v -count=1 -race -timeout=15m
 
