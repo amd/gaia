@@ -26,6 +26,7 @@ import logging
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -36,6 +37,15 @@ log = logging.getLogger(__name__)
 
 # Legacy CLI names, in probe order. lemonade-server-dev is the pip/CI variant.
 _LEGACY_BINARIES = ("lemonade-server", "lemonade-server-dev")
+
+# macOS ships an app bundle (plus /usr/local/bin/lemond); there is no
+# installer support and no canonical probe in resolve_lemonade().
+_MACOS_APP_CANDIDATES = (
+    "/Applications/lemonade-app.app",
+    "~/Applications/lemonade-app.app",
+)
+
+_DOWNLOAD_URL = "https://lemonade-server.ai"
 
 _VERSION_RE = re.compile(r"(\d+\.\d+\.\d+)")
 
@@ -65,6 +75,23 @@ class StartSpec:
 
     argv: List[str]
     env: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class StartHint:
+    """A remedy a user can actually act on to get Lemonade Server running.
+
+    ``instruction`` is always safe to print verbatim and embeds ``command``
+    when one exists. ``command`` is None whenever the platform has no start
+    command a user would run (Windows tray, macOS app) — call sites must not
+    invent one.
+    """
+
+    instruction: str
+    command: Optional[str] = None
+    # True when ``command`` occupies the terminal until the server stops, so
+    # a caller that needs the shell back can append " &".
+    foreground: bool = False
 
 
 def _classify_kind_from_name(path_str: str) -> str:
@@ -221,4 +248,94 @@ def build_start_command(tooling: LemonadeTooling, ctx_size: Optional[int]) -> St
     raise ValueError(
         f"Unknown Lemonade tooling kind {tooling.kind!r} "
         "(expected 'modern' or 'legacy')."
+    )
+
+
+def _macos_app_installed() -> bool:
+    """True if the macOS Lemonade app bundle is present."""
+    return any(Path(p).expanduser().exists() for p in _MACOS_APP_CANDIDATES)
+
+
+def _render_command(argv: List[str], env: Dict[str, str]) -> str:
+    """Render argv+env as a copy-pasteable command line for this shell.
+
+    ``shlex.join`` would wrap a Windows path in POSIX single quotes, which
+    cmd.exe cannot run — so join (and prefix env) the Windows way there.
+    """
+    items = sorted(env.items())
+    if platform.system() == "Windows":
+        rendered = subprocess.list2cmdline(argv)
+        if items:
+            prefix = " && ".join(f"set {k}={v}" for k, v in items)
+            rendered = f"{prefix} && {rendered}"
+        return rendered
+
+    rendered = shlex.join(argv)
+    if items:
+        rendered = " ".join(f"{k}={v}" for k, v in items) + f" {rendered}"
+    return rendered
+
+
+def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
+    """Describe how to start Lemonade Server on THIS machine.
+
+    The single source of user-facing "here's how to start it" advice. It
+    never names a command that does not exist on the host: on platforms
+    started from a GUI (Windows tray, macOS app) it returns prose with
+    ``command=None`` rather than guessing a shell command, and the legacy
+    ``lemonade-server serve`` CLI is only ever named when a legacy install
+    was actually resolved.
+    """
+    tooling = resolve_lemonade()
+    system = platform.system()
+
+    if tooling.found:
+        launcher = (tooling.server_launcher or "").lower()
+        if tooling.kind == "modern" and launcher.endswith(".exe"):
+            # LemonadeServer.exe --silent is what GAIA's auto-start runs; a
+            # user starts it from the tray instead.
+            return StartHint(
+                instruction=(
+                    "Start Lemonade Server from the Lemonade tray icon, or "
+                    "search for 'Lemonade' in the Start menu."
+                )
+            )
+        spec = build_start_command(tooling, ctx_size)
+        command = _render_command(spec.argv, spec.env)
+        return StartHint(
+            instruction=f"Run: {command}",
+            command=command,
+            foreground=spec.argv[0] != "systemctl",
+        )
+
+    if system == "Darwin":
+        # resolve_lemonade() has no Darwin probe, so a working macOS install
+        # still lands here — fall back to what macOS actually ships.
+        lemond = shutil.which("lemond")
+        if lemond:
+            env = {"LEMONADE_CTX_SIZE": str(ctx_size)} if ctx_size is not None else {}
+            command = _render_command([lemond], env)
+            return StartHint(
+                instruction=(
+                    f"Start the Lemonade app from Applications, or run: {command}"
+                ),
+                command=command,
+                foreground=True,
+            )
+        if _macos_app_installed():
+            return StartHint(
+                instruction="Start the Lemonade app from Applications, then retry."
+            )
+        return StartHint(
+            instruction=(
+                f"Lemonade Server is not installed. Download it from {_DOWNLOAD_URL} "
+                "and start the Lemonade app."
+            )
+        )
+
+    return StartHint(
+        instruction=(
+            "Lemonade Server is not installed. Run `gaia init` to install it, "
+            "or set LEMONADE_SERVER_PATH to an existing install."
+        )
     )

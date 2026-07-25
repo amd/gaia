@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL
+from gaia.llm.lemonade_launcher import describe_start_hint
 
 log = logging.getLogger(__name__)
 
@@ -689,9 +690,9 @@ class CodeIndexSDK:
             raise RuntimeError(
                 f"Could not load embedding model "
                 f"{self.config.embedding_model!r}: {e}. "
-                "Verify Lemonade Server is running "
-                "(`lemonade-server serve`) and that the model is "
-                "downloaded (`gaia download <model>`)."
+                f"Verify Lemonade Server is running "
+                f"({describe_start_hint().instruction}) and that the model is "
+                f"downloaded (`gaia download <model>`)."
             ) from e
 
         self._embedder = self._llm_client

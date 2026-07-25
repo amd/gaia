@@ -25,6 +25,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClientError,
     _get_lemonade_config,
 )
+from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.logger import get_logger
 from gaia.perf_analysis import run_perf_visualization
 from gaia.version import version
@@ -987,7 +988,7 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
             print(
                 "     1. Models downloaded  : gaia init --profile chat  (first time only, ~25 GB)"
             )
-            print("     2. Lemonade running   : lemonade-server serve")
+            print(f"     2. Lemonade running   : {describe_start_hint().instruction}")
             print()
 
         import uvicorn
@@ -4130,7 +4131,8 @@ Let me know your answer!
                         "   1. Close any running GAIA commands (gaia chat, gaia code, etc.)"
                     )
                     print(
-                        "   2. Restart Lemonade Server (close window and run: lemonade-server serve)"
+                        f"   2. Restart Lemonade Server "
+                        f"({describe_start_hint().instruction})"
                     )
                     print("   3. Run: gaia download --clear-cache")
                     print()
@@ -5418,7 +5420,9 @@ def handle_sd_command(args):
         getattr(args, "use_claude", False) or getattr(args, "use_chatgpt", False)
     ):
         print("Failed to initialize Lemonade Server with required 8K context.")
-        print("Try: lemonade-server serve --ctx-size 8192")
+        print(
+            f"Restart it with an 8192 token context. {describe_start_hint(8192).instruction}"
+        )
         sys.exit(1)
 
     # Create config - ensure LLM model is set
@@ -5445,8 +5449,8 @@ def handle_sd_command(args):
     if health["status"] != "healthy":
         print(f"Error: {health.get('error', 'SD endpoint unavailable')}")
         print("Make sure Lemonade Server is running and SD model is available:")
-        print("  lemonade-server serve")
-        print("  lemonade-server pull SD-Turbo")
+        print(f"  {describe_start_hint().instruction}")
+        print("  gaia download SD-Turbo")
         sys.exit(1)
 
     print()
@@ -6354,7 +6358,9 @@ def _bootstrap_infer():
             raw_response = "".join(raw_response)
     except Exception as e:
         print(f"\n\n  ❌ LLM call failed: {e}")
-        print("  Make sure Lemonade Server is running: lemonade-server serve")
+        print(
+            f"  Make sure Lemonade Server is running. {describe_start_hint().instruction}"
+        )
         return
 
     print(" done.")

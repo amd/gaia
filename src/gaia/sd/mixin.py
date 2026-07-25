@@ -563,7 +563,7 @@ class SDToolsMixin:
                 return {
                     "status": "unavailable",
                     "endpoint": f"{self.sd_client.base_url}/images/generations",
-                    "error": "No SD models available. Download with: lemonade-server pull SD-Turbo",
+                    "error": "No SD models available. Download with: gaia download SD-Turbo",
                 }
         except LemonadeClientError as e:
             return {

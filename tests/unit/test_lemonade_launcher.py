@@ -303,5 +303,228 @@ def test_caller_env_merge_pattern_preserves_existing_path(mocker):
     assert merged["LEMONADE_CTX_SIZE"] == "32768"
 
 
+# ---------------------------------------------------------------------------
+# describe_start_hint() — the user-facing remedy must never name a command
+# that does not exist on the host (issue #1867)
+# ---------------------------------------------------------------------------
+
+
+def test_start_hint_modern_linux_names_systemctl_not_lemonade_server(mocker):
+    """Modern Linux remedy is the systemd unit, never `lemonade-server serve`."""
+    from gaia.llm.lemonade_launcher import LemonadeTooling, describe_start_hint
+
+    mocker.patch("platform.system", return_value="Linux")
+    mocker.patch(
+        "gaia.llm.lemonade_launcher.resolve_lemonade",
+        return_value=LemonadeTooling(
+            found=True,
+            kind="modern",
+            client_path="/usr/bin/lemonade",
+            server_launcher="/usr/bin/lemond",
+        ),
+    )
+
+    hint = describe_start_hint(ctx_size=32768)
+
+    assert hint.command == "LEMONADE_CTX_SIZE=32768 systemctl --user start lemond"
+    assert "lemonade-server" not in hint.instruction
+    # systemctl returns immediately — callers must not append " &".
+    assert hint.foreground is False
+
+
+def test_start_hint_legacy_still_names_lemonade_server_serve(mocker):
+    """A real legacy install DOES have the CLI — keep telling it the truth."""
+    from gaia.llm.lemonade_launcher import LemonadeTooling, describe_start_hint
+
+    mocker.patch("platform.system", return_value="Linux")
+    mocker.patch(
+        "gaia.llm.lemonade_launcher.resolve_lemonade",
+        return_value=LemonadeTooling(
+            found=True,
+            kind="legacy",
+            client_path="/usr/local/bin/lemonade-server",
+            server_launcher="/usr/local/bin/lemonade-server",
+        ),
+    )
+
+    hint = describe_start_hint(ctx_size=8192)
+
+    assert hint.command == "/usr/local/bin/lemonade-server serve --ctx-size 8192"
+    assert hint.foreground is True
+
+
+def test_start_hint_modern_windows_points_at_the_tray_not_a_shell_command(mocker):
+    """Modern Windows has no start command a user would run — the server is
+    launched from the tray icon, so emit prose and NO command."""
+    from gaia.llm.lemonade_launcher import LemonadeTooling, describe_start_hint
+
+    mocker.patch("platform.system", return_value="Windows")
+    mocker.patch(
+        "gaia.llm.lemonade_launcher.resolve_lemonade",
+        return_value=LemonadeTooling(
+            found=True,
+            kind="modern",
+            client_path=r"C:\lemonade_server\bin\lemonade.exe",
+            server_launcher=r"C:\lemonade_server\bin\LemonadeServer.exe",
+        ),
+    )
+
+    hint = describe_start_hint(ctx_size=32768)
+
+    assert hint.command is None
+    assert "lemonade-server" not in hint.instruction
+    assert "tray" in hint.instruction.lower()
+
+
+def test_start_hint_legacy_windows_path_is_joined_for_cmd_not_posix(mocker):
+    """A Windows path must not come back wrapped in POSIX single quotes —
+    `'C:\\x\\lemonade-server.exe' serve` is not runnable in cmd.exe."""
+    from gaia.llm.lemonade_launcher import LemonadeTooling, describe_start_hint
+
+    mocker.patch("platform.system", return_value="Windows")
+    mocker.patch(
+        "gaia.llm.lemonade_launcher.resolve_lemonade",
+        return_value=LemonadeTooling(
+            found=True,
+            kind="legacy",
+            client_path=r"C:\Program Files\lemonade\lemonade-server.exe",
+            server_launcher=r"C:\Program Files\lemonade\lemonade-server.exe",
+        ),
+    )
+
+    hint = describe_start_hint(ctx_size=None)
+
+    assert hint.command is not None
+    assert "'" not in hint.command
+    assert hint.command.startswith('"C:\\Program Files')
+
+
+def test_start_hint_windows_renders_env_the_cmd_way_never_drops_it(mocker):
+    """A ctx-carrying env var must survive into the rendered command on
+    Windows too — as `set VAR=...`, not the POSIX `VAR=... cmd` form (which
+    cmd.exe would treat as the program name)."""
+    from gaia.llm.lemonade_launcher import LemonadeTooling, describe_start_hint
+
+    mocker.patch("platform.system", return_value="Windows")
+    mocker.patch(
+        "gaia.llm.lemonade_launcher.resolve_lemonade",
+        return_value=LemonadeTooling(
+            found=True,
+            kind="modern",
+            client_path=r"C:\lemonade\lemonade.exe",
+            server_launcher=r"C:\lemonade\lemond",  # non-.exe modern launcher
+            source="env",
+        ),
+    )
+
+    hint = describe_start_hint(ctx_size=32768)
+
+    assert hint.command is not None
+    assert "LEMONADE_CTX_SIZE=32768" in hint.command
+    assert not hint.command.startswith("LEMONADE_CTX_SIZE")
+    assert hint.command.startswith("set LEMONADE_CTX_SIZE=32768 && ")
+
+
+def test_start_hint_macos_names_lemond_not_the_missing_legacy_cli(mocker):
+    """macOS: resolve_lemonade() has no Darwin probe, so it reports
+    not-found even on a working install. The remedy must still be real —
+    `lemond` (the shipped daemon), never `lemonade-server serve`."""
+    from gaia.llm.lemonade_launcher import LemonadeTooling, describe_start_hint
+
+    mocker.patch("platform.system", return_value="Darwin")
+    mocker.patch(
+        "gaia.llm.lemonade_launcher.resolve_lemonade",
+        return_value=LemonadeTooling(found=False, kind="none"),
+    )
+    mocker.patch(
+        "gaia.llm.lemonade_launcher.shutil.which",
+        side_effect=lambda name: "/usr/local/bin/lemond" if name == "lemond" else None,
+    )
+
+    hint = describe_start_hint(ctx_size=32768)
+
+    assert hint.command == "LEMONADE_CTX_SIZE=32768 /usr/local/bin/lemond"
+    assert "lemonade-server" not in hint.instruction
+    assert hint.foreground is True
+
+
+def test_start_hint_macos_without_daemon_on_path_describes_the_app(mocker):
+    """macOS with the app bundle but no `lemond` on PATH: describe the app,
+    do NOT invent a shell command."""
+    from gaia.llm.lemonade_launcher import LemonadeTooling, describe_start_hint
+
+    mocker.patch("platform.system", return_value="Darwin")
+    mocker.patch(
+        "gaia.llm.lemonade_launcher.resolve_lemonade",
+        return_value=LemonadeTooling(found=False, kind="none"),
+    )
+    mocker.patch("gaia.llm.lemonade_launcher.shutil.which", return_value=None)
+    mocker.patch("gaia.llm.lemonade_launcher._macos_app_installed", return_value=True)
+
+    hint = describe_start_hint()
+
+    assert hint.command is None
+    assert "lemonade-server" not in hint.instruction
+    assert "Lemonade app" in hint.instruction
+
+
+def test_start_hint_macos_nothing_installed_points_at_the_download(mocker):
+    """macOS is not a `gaia init` platform — never suggest it there."""
+    from gaia.llm.lemonade_launcher import LemonadeTooling, describe_start_hint
+
+    mocker.patch("platform.system", return_value="Darwin")
+    mocker.patch(
+        "gaia.llm.lemonade_launcher.resolve_lemonade",
+        return_value=LemonadeTooling(found=False, kind="none"),
+    )
+    mocker.patch("gaia.llm.lemonade_launcher.shutil.which", return_value=None)
+    mocker.patch("gaia.llm.lemonade_launcher._macos_app_installed", return_value=False)
+
+    hint = describe_start_hint()
+
+    assert hint.command is None
+    assert "gaia init" not in hint.instruction
+    assert "lemonade-server.ai" in hint.instruction
+
+
+def test_start_hint_not_installed_on_linux_points_at_gaia_init(mocker):
+    """Nothing installed on a supported platform: `gaia init` is the remedy,
+    not a start command for software that isn't there."""
+    from gaia.llm.lemonade_launcher import LemonadeTooling, describe_start_hint
+
+    mocker.patch("platform.system", return_value="Linux")
+    mocker.patch(
+        "gaia.llm.lemonade_launcher.resolve_lemonade",
+        return_value=LemonadeTooling(found=False, kind="none"),
+    )
+
+    hint = describe_start_hint()
+
+    assert hint.command is None
+    assert "gaia init" in hint.instruction
+    assert "lemonade-server serve" not in hint.instruction
+
+
+def test_start_hint_instruction_embeds_the_command_verbatim(mocker):
+    """`instruction` is the single string call sites print — when a command
+    exists it must contain it, so no call site has to re-render it."""
+    from gaia.llm.lemonade_launcher import LemonadeTooling, describe_start_hint
+
+    mocker.patch("platform.system", return_value="Linux")
+    mocker.patch(
+        "gaia.llm.lemonade_launcher.resolve_lemonade",
+        return_value=LemonadeTooling(
+            found=True,
+            kind="modern",
+            client_path="/usr/bin/lemonade",
+            server_launcher="/usr/bin/lemond",
+        ),
+    )
+
+    hint = describe_start_hint(ctx_size=65536)
+
+    assert hint.command in hint.instruction
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
