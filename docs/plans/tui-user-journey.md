@@ -33,6 +33,23 @@ Three things in the current TUI break the bar before email is even involved:
 3. **Connection state is signalled by color alone.** `RenderStatusBar` draws the same `●`
    for connected and disconnected and changes only the color (`statusbar.go:24-25`).
 
+### What exists today vs. what this design assumes
+
+Every screen below is drawn against real endpoints wherever one exists. These are the
+exceptions — assume nothing here is implemented:
+
+| Named in this doc | Status |
+|---|---|
+| `gaia tui` (and `gaia tui run/install/list/status`) | **Proposed.** No `tui` subparser exists in `src/gaia/cli.py`. Today the Go binary's own cobra root is `Use: "gaia"` (`tui/internal/cli/root.go:15`), so installing it alongside the wheel produces two different `gaia` commands. Naming is open decision D4 in the engineering plan and should be closed before Step 2. |
+| `GET /daemon/v1/catalog`, `POST /daemon/v1/agents/{id}/install`, `DELETE /daemon/v1/agents/{id}` | **Proposed** (plan Phase 2). Live daemon routes are `/daemon/v1/status`, `/shutdown`, `/agents`, `/agents/{id}/ensure`, `/agents/{id}/stop`. |
+| `GET/PUT /v1/email/config`, `GET/DELETE /v1/email/jobs` | **Proposed** (§6 Tier 3). |
+| `POST /v1/email/query/{run_id}/confirm` (approval resume) | **Proposed** (plan Phase 3.2). The `cancel` sibling exists. |
+| `~/.gaia/tui/config.json`, `--glyphs` / `GAIA_TUI_GLYPHS` | **Proposed**, TUI-local, no backend. |
+
+Everything else named — `/v1/email/init` (GET and POST), `/connectors`, `/briefing`,
+`/search`, `/calendar/events`, `/v1/email/agent/memory`, `/daemon/v1/status`,
+`/daemon/v1/agents`, `/v1/email/query/{run_id}/cancel` — exists today.
+
 ---
 
 ## 1. Journey map
@@ -169,7 +186,10 @@ immediately; the rest fill in:
   enter run · / search · ? help · q quit
 ```
 
-Daemon unreachable (the catalog comes from `/daemon/v1/catalog`):
+Daemon unreachable. The catalog comes from `GET /daemon/v1/catalog`, which **does not
+exist yet** — it is proposed in the engineering plan's Phase 2; only
+`/daemon/v1/status`, `/daemon/v1/agents`, and the two agent start/stop routes are live
+today:
 
 ```
   G A I A  ·  Local AI Agent Hub                            [!] offline
@@ -711,7 +731,7 @@ status bar.
   [ok] Email · connected                    2 background · tab focus · ?
 ```
 
-The activity screen, reached with `ctrl+b` from chat or `b` from home:
+The activity screen, reached with `ctrl+g` from chat or `b` from home:
 
 ```
   Background activity                                     Email · you@gmail.com
@@ -881,7 +901,7 @@ this screen from three groups into the real thing.
 ### Stage 10 — Errors and dead ends
 
 Every failure gets a plain first line, a remedy, and a key. The ladder is a direct port of
-`diagnose()` (`playground_html.py:358-370`) — specific causes before generic ones — and
+`diagnose()` (`playground_html.py:358-367`) — specific causes before generic ones — and
 lives in one Go function used by preflight, chat, and the activity screen alike.
 
 | Failure | What the user sees | Key |
@@ -917,7 +937,7 @@ scheduled email was delivered has been surprised by their own tool. State it onc
 
 ```
   Closed. GAIA keeps running in the background so scheduled sends and your
-  briefing still work.   Stop it with:  gaia kill
+  briefing still work.   Stop it with:  gaia daemon stop
 ```
 
 One line, printed to stdout after the alt-screen is torn down. Not a modal.
@@ -1012,10 +1032,17 @@ or lives inside focus mode.
 | `pgup` / `pgdn` | Scroll transcript | existing |
 | `tab` | Enter focus mode on the newest card | new — **requires disabling the textarea's tab handling** |
 | `ctrl+z` | Undo the last reversible action, while its window is open | new — free |
-| `ctrl+b` | Background activity | new — free |
-| `ctrl+t` | Expand / collapse the work log of the last turn | new — free |
+| `ctrl+g` | Background activity | new — free |
+| `ctrl+r` | Expand / collapse the work log of the last turn | new — free |
 | `ctrl+l` | Clear transcript (same as `/clear`) | new — free |
 | `1`-`9` | Send suggestion N — **only when the input is empty and no messages yet** | new, contextual |
+
+**The textarea owns more chords than the GAIA code does.** `bubbles/textarea`'s default
+keymap reserves `ctrl+a e f b n p k u w v d h m t` and most `alt+` letters, and
+`chat/model.go:323-327` forwards every unhandled key straight into it. Checking only
+`chat/model.go` for collisions is not enough — the chords above are free *after* excluding
+that keymap. `ctrl+g`, `ctrl+l`, `ctrl+r`, `ctrl+z` are the safe ones used here; avoid
+`ctrl+s` / `ctrl+q`, which terminals swallow as flow control.
 
 Slash commands: `/help` `/hub` `/clear` exist. **`/init` must be removed or wired** — today
 it prints "Initializing <agent>..." and does nothing (`chat/model.go:299-305`). Point it at
@@ -1105,7 +1132,7 @@ Proposal — a bounded, self-collapsing work log:
 - **Collapse repeats by tool name with a counter**: `triage_message ×14`.
 - **A "still working" line after 20 seconds** with the expected duration. This single line
   removes most premature cancellations.
-- **On completion the whole log collapses to one summary line**: `4 tools · 51s · ctrl+t to
+- **On completion the whole log collapses to one summary line**: `4 tools · 51s · ctrl+r to
   show`. The transcript stays readable; the evidence stays reachable.
 
 All of this is agent-agnostic and fixes the general "is it stuck?" problem, not an email
@@ -1164,7 +1191,7 @@ config file first).
 | # | Improvement | Tag |
 |---|---|---|
 | 7 | Model provisioning inside the TUI via streaming `POST /v1/email/init` | **[now]** |
-| 8 | Bounded work log + "still working" hint + `ctrl+t` collapse | **[now]** |
+| 8 | Bounded work log + "still working" hint + `ctrl+r` collapse | **[now]** |
 | 9 | Generic `table` / `key_value` / `list` renderers with the mandated fallbacks | **[now]** |
 | 10 | Generic undo affordance keyed on `undo_window_seconds` + an id handle | **[now]** |
 | 11 | Briefing on launch via `GET /v1/email/briefing`; 404 → `s scan now` | **[now]** |
