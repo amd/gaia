@@ -704,6 +704,54 @@ func TestSSEClientCancelPostsToCancelEndpoint(t *testing.T) {
 	}
 }
 
+// A turn abandoned while still streaming — the one-shot hitting its deadline —
+// must have its relay cancel delivered by the time Close returns. Firing it in a
+// goroutine would race the caller's exit and usually never land, leaving the
+// sidecar working for a client that is gone. So this asserts the cancel is
+// already recorded immediately after Close, with no polling.
+func TestSSEClientCloseCancelsInFlightRunSynchronously(t *testing.T) {
+	f := newFakeRelay(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+		frame(w, `{"type":"status","message":"thinking"}`)
+		flush()
+		close(started)
+		<-release // never sends a terminal event, like a wedged sidecar
+	}
+
+	c := f.client(t)
+	ch, err := c.Send(context.Background(), "triage")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if _, ok := <-ch; !ok {
+		t.Fatal("expected the status event before abandoning")
+	}
+	<-started
+
+	// The caller abandons without draining the channel — exactly what RunOneShot
+	// does when its deadline fires. Close must deliver the cancel before it
+	// returns, not hand it to a goroutine.
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	f.mu.Lock()
+	cancelled := append([]string(nil), f.cancelled...)
+	f.mu.Unlock()
+	if len(cancelled) != 1 {
+		t.Fatalf("Close must post exactly one cancel synchronously, got %d: %v", len(cancelled), cancelled)
+	}
+	if cancelled[0] != f.lastQuery().RunID {
+		t.Errorf("cancelled run_id %q, want %q", cancelled[0], f.lastQuery().RunID)
+	}
+
+	for range ch { // let consume finish and close the channel
+	}
+}
+
 // The read-idle watchdog must abandon a silent stream with an actionable error.
 func TestSSEClientReadIdleTimeout(t *testing.T) {
 	f := newFakeRelay(t)

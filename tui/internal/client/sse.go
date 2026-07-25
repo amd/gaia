@@ -81,6 +81,10 @@ type SSEClient struct {
 type runHandle struct {
 	runID  string
 	cancel context.CancelFunc
+	// cancelOnce guards the relay cancel POST so consume() and Close() can both
+	// ask for it without sending two — and so Close() can wait out the one that
+	// consume() may already have started in flight.
+	cancelOnce sync.Once
 }
 
 // NewSSEClient builds a daemon-transport client for agentID (the path segment in
@@ -379,7 +383,15 @@ func (s *SSEClient) readTimeoutDetail() string {
 // context so a cancelled caller context cannot kill the cancel itself, and it
 // lives here rather than in the daemon package because the cancel path is part
 // of the AGENT wire contract, not the daemon control plane.
+//
+// Idempotent: the POST fires at most once per run, so consume() and a
+// synchronous Close() cannot both send it. A second caller blocks in Do until
+// the first finishes, which is what lets Close() wait for delivery before exit.
 func (s *SSEClient) cancelRun(handle *runHandle) {
+	handle.cancelOnce.Do(func() { s.doCancelRun(handle) })
+}
+
+func (s *SSEClient) doCancelRun(handle *runHandle) {
 	s.mu.Lock()
 	inst := s.inst
 	s.mu.Unlock()
@@ -463,7 +475,14 @@ func (s *SSEClient) Close() error {
 		close(s.done)
 	}
 	if active != nil {
+		// Unblock consume()'s read, then deliver the relay cancel synchronously.
+		// A one-shot abandoning its turn at the deadline exits the moment Close
+		// returns, so firing the POST in a goroutine (as consume does) would race
+		// process exit and usually never land — leaving the sidecar working for a
+		// client that is gone. cancelRun is idempotent and bounded by
+		// cancelTimeout, so this waits out delivery without double-sending.
 		active.cancel()
+		s.cancelRun(active)
 	}
 	return nil
 }

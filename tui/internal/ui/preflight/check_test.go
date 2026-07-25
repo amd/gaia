@@ -235,6 +235,20 @@ func assertRealCommand(t *testing.T, row Row) {
 	t.Fatalf("row %q remedy names a command that does not exist: %q", row.Key, cmd)
 }
 
+// The one-shot renders these same remedies to a terminal that has no keyboard,
+// so a shared remedy must never tell the reader to press a key. The interactive
+// gate re-adds each affordance in its own footer instead.
+func assertKeystrokeFree(t *testing.T, row Row) {
+	t.Helper()
+	lower := strings.ToLower(row.Remedy.Action)
+	for _, phrase := range []string{"press r", "press f", "press d", "press enter"} {
+		if strings.Contains(lower, phrase) {
+			t.Errorf("row %q remedy tells the reader to press a key (%q): %q",
+				row.Key, phrase, row.Remedy.Action)
+		}
+	}
+}
+
 func TestCheck(t *testing.T) {
 	tests := []struct {
 		name string
@@ -513,6 +527,7 @@ func TestEveryFailedRowIsActionable(t *testing.T) {
 				switch row.State {
 				case StateFailed:
 					assertRealCommand(t, row)
+					assertKeystrokeFree(t, row)
 					if row.Detail == "" {
 						t.Errorf("failed row %q says nothing about what went wrong", row.Key)
 					}

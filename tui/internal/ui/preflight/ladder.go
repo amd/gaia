@@ -149,7 +149,7 @@ func (l Ladder) Error(op string, err error) Diagnosis {
 	if errors.Is(err, context.Canceled) {
 		return Diagnosis{
 			Cause:  op + " was cancelled.",
-			Remedy: "Press r to run the checks again.",
+			Remedy: "Run the readiness checks again.",
 		}
 	}
 
@@ -175,14 +175,14 @@ func (l Ladder) transport(op, text string) Diagnosis {
 	case containsAny(body, "refused", "connection reset", "no such host", "connect:", "eof"):
 		return Diagnosis{
 			Cause:   "The GAIA background service stopped answering — it may have restarted on a new port.",
-			Remedy:  "Check it, then press r to re-check.",
+			Remedy:  "Check it.",
 			Command: "gaia daemon status",
 			Where:   daemonLog(),
 		}
 	case containsAny(body, "timed out", "timeout", "deadline exceeded", "context canceled"):
 		return Diagnosis{
 			Cause:   op + " did not finish in time.",
-			Remedy:  "Check the background service is healthy, then press r to re-check.",
+			Remedy:  "Check the background service is healthy.",
 			Command: "gaia daemon status",
 			Where:   daemonLog(),
 		}
@@ -193,7 +193,7 @@ func (l Ladder) transport(op, text string) Diagnosis {
 	}
 	return Diagnosis{
 		Cause:   cause,
-		Remedy:  "Check the background service, then press r to re-check.",
+		Remedy:  "Check the background service.",
 		Command: "gaia daemon status",
 		Where:   daemonLog(),
 	}
@@ -230,7 +230,7 @@ func (l Ladder) Status(op string, status int, body string) Diagnosis {
 		}
 		return Diagnosis{
 			Cause:   op + " is not ready yet.",
-			Remedy:  "Start the agent's sidecar, then re-check.",
+			Remedy:  "Start the agent's sidecar.",
 			Command: l.agentCommand("gaia daemon start-agent", "gaia daemon agents"),
 			Where:   l.sidecarLog(),
 		}
@@ -243,7 +243,7 @@ func (l Ladder) Status(op string, status int, body string) Diagnosis {
 		}
 		return Diagnosis{
 			Cause:   fmt.Sprintf("The background service could not reach the %s agent. %s", l.agent(), detailSuffix(trimmed)),
-			Remedy:  "Restart the agent's sidecar, then re-check.",
+			Remedy:  "Restart the agent's sidecar.",
 			Command: l.agentCommand("gaia daemon start-agent", "gaia daemon agents"),
 			Where:   l.sidecarLog(),
 		}
@@ -278,14 +278,14 @@ func (l Ladder) Text(op, text string) Diagnosis {
 	case containsAny(body, "not reachable", "refused", "connection error", "connect:", "no such host"):
 		return Diagnosis{
 			Cause:   "The local model server (Lemonade) is not running.",
-			Remedy:  "Start it, then press r to re-check.",
+			Remedy:  "Start it.",
 			Command: "lemonade-server serve",
 			Where:   "https://amd-gaia.ai/docs/guides/install",
 		}
 	case containsAny(body, "older than the required", "min_version", "upgrade it"):
 		return Diagnosis{
 			Cause:   "The local model server is older than this agent requires.",
-			Remedy:  "Upgrade it, then re-check.",
+			Remedy:  "Upgrade it.",
 			Command: "gaia init",
 			Where:   "https://lemonade-server.ai",
 		}
@@ -293,7 +293,7 @@ func (l Ladder) Text(op, text string) Diagnosis {
 		return Diagnosis{
 			Cause: "The background service gave up relaying the agent's answer. A large " +
 				"model download exceeds what it will hold open.",
-			Remedy:  "Download the model in a terminal instead, then press r to re-check.",
+			Remedy:  "Download the model in a terminal instead.",
 			Command: "gaia init",
 			Where:   daemonLog(),
 		}
@@ -322,7 +322,7 @@ func (l Ladder) Text(op, text string) Diagnosis {
 	}
 	return Diagnosis{
 		Cause:   cause,
-		Remedy:  "Restart the agent's sidecar, then press r to re-check.",
+		Remedy:  "Restart the agent's sidecar.",
 		Command: l.agentCommand("gaia daemon start-agent", "gaia daemon agents"),
 		Where:   l.sidecarLog(),
 	}

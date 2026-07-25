@@ -227,7 +227,7 @@ func waitProvision(ch chan provisionEvent, cfg Config) tea.Cmd {
 				Final: "✗ the download stopped before it finished",
 				Diagnosis: Diagnosis{
 					Cause:   "The model download was cancelled, or ran past the time limit.",
-					Remedy:  "Download it in a terminal instead, then press r to re-check.",
+					Remedy:  "Download it in a terminal instead.",
 					Command: "gaia init",
 					Where:   fmt.Sprintf("~/.gaia/agents/%s/logs/", cfg.AgentID),
 				},

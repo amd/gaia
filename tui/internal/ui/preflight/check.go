@@ -278,7 +278,7 @@ func checkSidecar(ctx context.Context, t Transport, cfg Config, rep *Report) Sta
 	row.Line = "not installed"
 	row.Detail = fmt.Sprintf("The background service has no agent registered as %q.", cfg.AgentID)
 	row.Remedy = Remedy{
-		Action:  "Install it from the hub, then re-check.",
+		Action:  "Install it from the hub.",
 		Command: "gaia hub install " + cfg.AgentID,
 		Where:   daemonLog(),
 	}
@@ -408,7 +408,7 @@ func checkInit(ctx context.Context, t Transport, cfg Config, rep *Report) State 
 		lemonade.Line = "running, but not answering properly"
 		lemonade.Detail = body.hint()
 		lemonade.Remedy = Remedy{
-			Action:  "Restart the local model server, then re-check.",
+			Action:  "Restart the local model server.",
 			Command: "lemonade-server serve",
 			Where:   "https://amd-gaia.ai/docs/guides/install",
 		}
@@ -423,7 +423,7 @@ func checkInit(ctx context.Context, t Transport, cfg Config, rep *Report) State 
 			"The %s agent needs Lemonade %s or newer; upgrading keeps every other GAIA agent working too.",
 			cfg.AgentName, body.Lemonade.MinVersion)
 		lemonade.Remedy = Remedy{
-			Action:  "Upgrade the local model server, then re-check.",
+			Action:  "Upgrade the local model server.",
 			Command: "gaia init",
 			Where:   "https://lemonade-server.ai",
 		}
@@ -460,7 +460,7 @@ func checkInit(ctx context.Context, t Transport, cfg Config, rep *Report) State 
 		model.Detail = "About 4 GB. Once downloaded it is reused by every GAIA agent."
 		model.Fix = FixPullModel
 		model.Remedy = Remedy{
-			Action:  "Download it — press f to pull it here, or run the command.",
+			Action:  "Download it — run the command below.",
 			Command: "gaia init",
 			Where:   "https://amd-gaia.ai/docs/guides/install",
 		}
@@ -610,7 +610,7 @@ func runMailboxCheck(ctx context.Context, t Transport, cfg Config) Row {
 		row.State, row.Line = StateFailed, "unreadable answer"
 		row.Detail = "The mailbox connector list could not be read."
 		row.Remedy = Remedy{
-			Action:  "Restart the agent's sidecar, then re-check.",
+			Action:  "Restart the agent's sidecar.",
 			Command: "gaia daemon start-agent " + cfg.AgentID,
 			Where:   fmt.Sprintf("~/.gaia/agents/%s/logs/", cfg.AgentID),
 		}
@@ -645,7 +645,7 @@ func runMailboxCheck(ctx context.Context, t Transport, cfg Config) Row {
 		row.Fix = FixConnectMailbox
 		row.Provider = connected.Provider
 		row.Remedy = Remedy{
-			Action:  "Reconnect it — press f, or run the command. Takes about a minute.",
+			Action:  "Reconnect it — run the command below. Takes about a minute.",
 			Command: connectCommand(connected.Provider),
 			Where:   "https://amd-gaia.ai/docs/guides/email",
 		}
@@ -661,7 +661,7 @@ func runMailboxCheck(ctx context.Context, t Transport, cfg Config) Row {
 	// route an Outlook user into a Google sign-in.
 	row.Provider = ""
 	row.Remedy = Remedy{
-		Action:  "Connect Gmail or Outlook — press f to choose. For Outlook, swap `google` for `microsoft` below.",
+		Action:  "Connect Gmail or Outlook — run the command below. For Outlook, swap `google` for `microsoft`.",
 		Command: connectCommand("google"),
 		Where:   "https://amd-gaia.ai/docs/guides/email",
 	}

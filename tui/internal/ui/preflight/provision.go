@@ -92,7 +92,7 @@ func Provision(ctx context.Context, t Transport, cfg Config, onLine func(string)
 	case res.Final == "":
 		res.Diagnosis = Diagnosis{
 			Cause:   "The download ended without saying whether it worked.",
-			Remedy:  "Press r to re-check whether the model landed, then retry.",
+			Remedy:  "Re-check whether the model landed, then retry.",
 			Command: "gaia init",
 			Where:   fmt.Sprintf("~/.gaia/agents/%s/logs/", cfg.AgentID),
 		}

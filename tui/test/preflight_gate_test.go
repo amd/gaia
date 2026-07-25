@@ -571,9 +571,10 @@ func TestConnectMailboxNamesTheCommandToRun(t *testing.T) {
 			t.Errorf("the hand-off does not show %q:\n%s", want, d.screen())
 		}
 	}
-	// The gate's own advice for this row is "press f to choose" — repeating it
-	// here would send the user back around the loop they just came through.
-	if strings.Contains(screen, "press f to choose") {
+	// The gate surfaces the fix key in its footer, not in the row's remedy, so
+	// the hand-off must not tell the user to press f again — that would send them
+	// back around the loop they just came through.
+	if strings.Contains(screen, "press f") {
 		t.Errorf("the hand-off tells the user to press f again:\n%s", d.screen())
 	}
 	if strings.Contains(strings.ToLower(screen), "coming soon") {
