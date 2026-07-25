@@ -111,7 +111,7 @@ dropped rather than surfaced.
 server (`src/gaia/ui/routers/hub.py:166,232`, port 4200). The daemon has no install API.
 There is no `gaia hub install` CLI. The lazy binary fetch in
 `src/gaia/daemon/sidecars/fetch.py` is **dead** — the committed
-`hub/agents/npm/agent-email/binaries.lock.json` has `PENDING-1648-replace-with-real-sha256`
+`hub/agents/email/npm/binaries.lock.json` has `PENDING-1648-replace-with-real-sha256`
 for all four platforms, and the file isn't shipped in the wheel at all.
 
 **Decision (D2):** add install/uninstall to the **daemon**, not to the TUI. Three clients
@@ -147,7 +147,7 @@ for all four platforms, and the file isn't shipped in the wheel at all.
    0/1) — today `chat --query` still opens the alt-screen, which makes it useless for
    scripts and CI.
 5. **Housekeeping:** flip `interfaces.tui: false → true` in
-   `hub/agents/python/email/gaia-agent.yaml:44`. `catalog_test.go` and `smoke_test.go`
+   `hub/agents/email/python/gaia-agent.yaml:44`. `catalog_test.go` and `smoke_test.go`
    both hardcode `installed == 1` — they will fail the moment email becomes installable.
    That's the canary; update both.
 
@@ -404,21 +404,42 @@ real — and chat's `/init` prints a message and does nothing.
   `gaia tui` is even invoked, and whether Go tests run in CI (they don't today).
 - **D5** — email-only v1, or generic-agent v1? `builtin_specs()` currently knows only email.
 
-## 5. Pre-existing bugs found during review (worth filing regardless)
+## 5. Pre-existing bugs found during review
 
-1. `AgentConsole` auto-approves every gated tool on the CLI path — send, forward,
-   permanent delete, RSVP (`src/gaia/agents/base/console.py:219`). **Security.**
-2. `binaries.lock.json` ships placeholder SHAs, so daemon lazy-fetch always fails; and the
-   file isn't in the wheel, so pip installs can't reach it either.
-3. `gaia email -q X -i` silently discards `-q` (`cli.py:5083`).
-4. `--trace`, `--stats`, `--stream`, `--list-tools`, `--max-steps` are parsed and ignored on
-   `gaia email`. `--use-claude` / `--use-chatgpt` are accepted and silently ignored — the
-   local-only guarantee rests on non-consumption, not rejection.
+Status as of integration. Items 3-6 are all `gaia email` flag behaviour, and Phase 5b deletes
+that subcommand — fixing them would be work on a command being removed, so they are closed as
+moot rather than fixed.
+
+**Fixed**
+
+1. ~~`AgentConsole` auto-approves every gated tool on the CLI path — send, forward, permanent
+   delete, RSVP.~~ **Security.** Base handler now denies by default and the terminal console
+   genuinely prompts; unattended hosts opt in with `GAIA_AUTO_APPROVE_TOOLS=1`, which a `.env`
+   cannot grant.
+7. ~~`gaia_agent_email/cli.py` is dead code (117 lines, no entry point, no importer) whose
+   docstring describes a dispatch path that no longer exists.~~ Deleted.
+
+**Still open**
+
+2. `binaries.lock.json` ships placeholder SHAs, so daemon lazy-fetch always fails; and the file
+   isn't in the wheel, so pip installs can't reach it either. (The install-API work may have
+   superseded this by driving install from the hub manifest — confirm when it lands.)
+8. `TestHubTabSwitching` / `TestHubSearch` send the three runes `t`,`a`,`b` instead of the Tab
+   key and only assert "didn't panic" (`tui/test/smoke_test.go:50`).
+9. `findBinaryInRepo` only looks in `cpp/build/*` for `.exe` — can never find a Python or
+   frozen agent on macOS/Linux (`tui/internal/catalog/catalog.go:68`).
+
+**Closed as moot** (the `gaia email` subcommand is being removed, Phase 5b)
+
+3. `gaia email -q X -i` silently discards `-q`.
+4. `--trace`, `--stats`, `--stream`, `--list-tools`, `--max-steps` parsed and ignored;
+   `--use-claude` / `--use-chatgpt` accepted and silently ignored — the local-only guarantee
+   rested on non-consumption rather than rejection.
 5. `gaia email "query"` (positional) doesn't work despite the handler docstring saying it does.
 6. `--spec` with the package missing raises a raw traceback instead of a clean error.
-7. `hub/agents/python/email/gaia_agent_email/cli.py` is dead code (117 lines, no entry point,
-   no importer) and its docstring describes a dispatch path that no longer exists.
-8. `TestHubTabSwitching` / `TestHubSearch` send the three runes `t`,`a`,`b` instead of the Tab
-   key and only assert "didn't panic".
-9. `findBinaryInRepo` only looks in `cpp/build/*` for `.exe` — can never find a Python or
-   frozen agent on macOS/Linux.
+   *Note: `--spec` still needs rehoming before the subcommand goes.*
+
+**Found later, during integration**
+
+10. Switching hub tabs doesn't reset the list cursor, so `tab, down, down, shift+tab` lands on
+    a tab with nothing selected. Surfaced by the control API's own end-to-end driving.
