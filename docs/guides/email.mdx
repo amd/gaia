@@ -270,7 +270,7 @@ This is detection only, distinct from autonomous follow-ups ([#555](https://gith
 
 ### Reply / send (require confirmation)
 
-`draft_reply`, `draft_forward` — drafts are harmless. `send_draft`, `send_now`, `forward_message` — gated by user confirmation; the UI shows the literal recipient/subject/body before you approve.
+`draft_reply`, `draft_forward` — drafts are harmless. `send_draft`, `send_now`, `forward_message` — gated by user confirmation; you always see the literal recipient/subject/body before you approve, in the UI's permission dialog or as a terminal prompt on the CLI. With no way to ask you — output piped or redirected, CI, an unattended host — these tools are **denied**, never sent silently (see [troubleshooting](/reference/troubleshooting)).
 
 ### Scheduled send & snooze
 

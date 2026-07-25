@@ -124,6 +124,38 @@ export GAIA_AGENT_TOOL_TIMEOUT=300
 
 Tools that legitimately run longer opt out in code via `@tool(timeout=...)` — for example image generation, which may need to download a model on first use. An invalid `GAIA_AGENT_TOOL_TIMEOUT` value (non-numeric or ≤ 0) fails fast with an actionable error rather than silently removing the guard.
 
+### Confirming dangerous tools
+
+Shell commands, file writes, and an agent's own destructive tools (email send /
+forward / permanent delete, calendar RSVP) prompt before they run:
+
+```
+⚠️  Confirm: send_now
+{
+  "subject": "Q3 budget",
+  "to": "boss@example.com"
+}
+Allow this? [y]es / [N]o / [a]lways for this tool:
+```
+
+The default is **no** — a bare Enter, Ctrl-C, or EOF denies. `a` remembers that
+one tool until the command exits (not offered for `run_shell_command` /
+`run_cli_command`).
+
+When GAIA is not attached to a terminal — output piped or redirected, a CI job, a
+host process — there is nobody to ask, so gated tools are **denied** with an
+actionable error rather than run silently. For an unattended run you trust, set
+`GAIA_AUTO_APPROVE_TOOLS=1` in the launching environment:
+
+```bash
+# CI / batch use only — the model can then send mail and run shell commands
+# without asking. Every approval is logged with the tool name.
+GAIA_AUTO_APPROVE_TOOLS=1 gaia analyze data.csv --json > report.json
+```
+
+A `.env` file cannot set this variable; it must come from the real process
+environment, so a project directory can never switch off your prompts.
+
 ---
 
 ## Initialization

@@ -841,21 +841,23 @@ class SSEOutputHandler(OutputHandler):
         """
         # Background mode: immediately deny — no semaphore hold, no waiting.
         if self.background_mode:
+            unattended_message = (
+                f"'{tool_name}' requires live user approval and cannot run "
+                "unattended. Use request_user_input() to notify the user, "
+                "then retry in a subsequent turn."
+            )
             self._emit(
                 {
                     "type": "tool_confirm_denied",
                     "tool": tool_name,
                     "reason": "unattended",
-                    "message": (
-                        f"'{tool_name}' requires live user approval and cannot run "
-                        "unattended. Use request_user_input() to notify the user, "
-                        "then retry in a subsequent turn."
-                    ),
+                    "message": unattended_message,
                 }
             )
             logger.info(
                 "Background mode: immediately denied confirmation for '%s'", tool_name
             )
+            self._last_denial = (tool_name, unattended_message)
             return False
 
         confirm_id = str(uuid.uuid4())
@@ -863,6 +865,7 @@ class SSEOutputHandler(OutputHandler):
             self._confirm_event = threading.Event()
             self._confirm_result = False
         self._confirm_id = confirm_id
+        self._last_denial = None
 
         self._emit(
             {
@@ -880,6 +883,11 @@ class SSEOutputHandler(OutputHandler):
             if self.cancelled.is_set():
                 self._confirm_id = None
                 self._confirm_event = None
+                self._last_denial = (
+                    tool_name,
+                    f"Confirmation for '{tool_name}' was abandoned: the run was "
+                    "cancelled before the user answered.",
+                )
                 return False
             if self._confirm_event.wait(timeout=0.5):
                 break
@@ -895,11 +903,22 @@ class SSEOutputHandler(OutputHandler):
             logger.warning("Tool confirmation timed out for '%s'", tool_name)
             self._confirm_id = None
             self._confirm_event = None
+            self._last_denial = (
+                tool_name,
+                f"Confirmation for '{tool_name}' timed out after "
+                f"{TOOL_CONFIRM_TIMEOUT_SECONDS} s with no user response. "
+                "Execution denied.",
+            )
             return False
 
         result = self._confirm_result
         self._confirm_id = None
         self._confirm_event = None
+        if not result:
+            self._last_denial = (
+                tool_name,
+                f"Tool '{tool_name}' was denied by the user.",
+            )
         return result
 
     def print_policy_alert(
