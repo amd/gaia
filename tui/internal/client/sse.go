@@ -46,6 +46,11 @@ type SSEOptions struct {
 	// idle timeout: it fires only if no byte of the stream arrives within it.
 	ConnectTimeout time.Duration
 	ReadTimeout    time.Duration
+	// Interactive declares that a human is watching and this client will render
+	// a `needs_input` question and POST the answer. Default false: an agent that
+	// asks a question nobody can answer parks the run until it times out, which
+	// is indistinguishable from a hang. Only the interactive chat view sets it.
+	Interactive bool
 	// Logf receives progress and best-effort-failure notes. Never given a token.
 	Logf func(format string, args ...any)
 }
@@ -111,6 +116,9 @@ type queryRequest struct {
 	Context  []Turn `json:"context"`
 	Model    string `json:"model,omitempty"`
 	MaxSteps int    `json:"max_steps,omitempty"`
+	// Always sent, including when false — the agent branches on it, so it must
+	// not be omitted and left to a default the two sides could disagree about.
+	CanAnswerQuestions bool `json:"can_answer_questions"`
 }
 
 // Send starts one turn. The returned channel carries the canonical event types
@@ -148,11 +156,12 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 	s.mu.Unlock()
 
 	payload, err := json.Marshal(queryRequest{
-		Query:    query,
-		RunID:    runID,
-		Context:  history,
-		Model:    s.opts.Model,
-		MaxSteps: s.opts.MaxSteps,
+		Query:              query,
+		RunID:              runID,
+		Context:            history,
+		Model:              s.opts.Model,
+		MaxSteps:           s.opts.MaxSteps,
+		CanAnswerQuestions: s.opts.Interactive,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("could not encode the '%s' query request: %w", s.agentID, err)
@@ -373,6 +382,66 @@ func (s *SSEClient) readTimeoutDetail() string {
 		s.agentID, s.opts.ReadTimeout)
 }
 
+// Respond answers the question the in-flight run is paused on.
+//
+// It is NOT best-effort like cancelRun: a swallowed answer looks exactly like an
+// agent that stopped thinking, so every failure comes back to the caller with
+// something the user can act on. The run continues on the stream Send() already
+// returned — there is no second channel to read.
+func (s *SSEClient) Respond(ctx context.Context, requestID, value string) error {
+	s.mu.Lock()
+	inst := s.inst
+	active := s.active
+	s.mu.Unlock()
+	if inst == nil || active == nil {
+		return fmt.Errorf(
+			"there is no live '%s' run to answer — the question expired when the turn ended. Ask again",
+			s.agentID)
+	}
+
+	payload, err := json.Marshal(respondRequest{RequestID: requestID, Value: value})
+	if err != nil {
+		return fmt.Errorf("could not encode the answer for '%s': %w", s.agentID, err)
+	}
+
+	resp, _, err := s.daemon.Do(ctx, inst, daemon.Request{
+		Method: http.MethodPost,
+		Path: fmt.Sprintf("/v1/%s/query/%s/respond",
+			url.PathEscape(s.agentID), url.PathEscape(active.runID)),
+		Body: payload,
+		Header: http.Header{
+			"Content-Type": []string{"application/json"},
+		},
+		HTTPClient: s.cancelHTTP,
+		Op:         fmt.Sprintf("answer the '%s' agent's question", s.agentID),
+	})
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return nil
+	case http.StatusNotFound:
+		return fmt.Errorf(
+			"the '%s' run had already ended, so the answer arrived too late. Ask again",
+			s.agentID)
+	case http.StatusConflict:
+		return fmt.Errorf(
+			"the '%s' agent is no longer waiting on that question — it timed out or was already answered. Ask again",
+			s.agentID)
+	default:
+		return fmt.Errorf("answering the '%s' agent failed (%s)",
+			s.agentID, daemon.ErrorDetail(resp))
+	}
+}
+
+type respondRequest struct {
+	RequestID string `json:"request_id"`
+	Value     string `json:"value"`
+}
+
 // cancelRun asks the relay to drop a run we are abandoning.
 //
 // Best-effort: the sidecar may already be gone. It owns its own background
@@ -484,5 +553,6 @@ func newRunID() (string, error) {
 // subprocess one.
 var (
 	_ AgentClient        = (*SSEClient)(nil)
+	_ AgentResponder     = (*SSEClient)(nil)
 	_ TranscriptResetter = (*SSEClient)(nil)
 )

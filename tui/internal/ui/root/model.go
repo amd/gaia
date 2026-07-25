@@ -221,7 +221,11 @@ func (m RootModel) logf(format string, args ...any) {
 }
 
 func (m RootModel) launchAgent(agent catalog.Agent) (tea.Model, tea.Cmd) {
-	c, err := client.ForAgent(agent, client.ForAgentOptions{Debug: m.debug, Logf: m.logf})
+	// Interactive: this launch opens the chat view, which renders a mid-run
+	// question and answers it.
+	c, err := client.ForAgent(agent, client.ForAgentOptions{
+		Debug: m.debug, Logf: m.logf, Interactive: true,
+	})
 	if err != nil {
 		// Stay in the hub and say why, rather than opening a chat that cannot talk.
 		m.hub.SetStatus(err.Error())

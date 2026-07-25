@@ -115,6 +115,11 @@ type ChatModel struct {
 	width  int
 	height int
 
+	// question is the mid-run question the agent is parked on, if any. Non-nil
+	// means the run is alive and waiting on THIS client — keystrokes go to it,
+	// not to the composer.
+	question *components.QuestionModel
+
 	connected    bool
 	totalSteps   int
 	initialQuery string
@@ -206,6 +211,7 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streaming = false
 		m.events = nil
 		m.cancelFn = nil
+		m.question = nil
 		m.flushBuffer()
 		m.activity = nil
 		m.updateViewport()
@@ -215,12 +221,36 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streaming = false
 		m.events = nil
 		m.cancelFn = nil
+		m.question = nil
 		m.err = msg.err
 		m.messages = append(m.messages, Message{
 			Role:    RoleError,
 			Content: msg.err.Error(),
 		})
 		m.activity = nil
+		m.updateViewport()
+		return m, nil
+
+	case components.QuestionAnsweredMsg:
+		q := m.question
+		if q == nil || q.RequestID() != msg.RequestID {
+			// A late answer for a question that is no longer up — dropping it is
+			// correct, but never silently: the agent moved on.
+			return m, nil
+		}
+		m.messages = append(m.messages, Message{
+			Role:    RoleUser,
+			Content: q.AnswerLabel(msg.Value),
+		})
+		m.question = nil
+		m.updateViewport()
+		return m, m.answerQuestion(msg.RequestID, msg.Value)
+
+	case questionFailedMsg:
+		m.messages = append(m.messages, Message{
+			Role:    RoleError,
+			Content: msg.err.Error(),
+		})
 		m.updateViewport()
 		return m, nil
 
@@ -245,6 +275,16 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// A pending question owns the keyboard: the run is blocked on it, so a
+	// keystroke that fell through to the composer would go nowhere. Ctrl+C and
+	// Esc still cancel the turn — abandoning a question must stay possible.
+	if m.question != nil && msg.Type != tea.KeyCtrlC && msg.Type != tea.KeyEsc {
+		q, cmd := m.question.Update(msg)
+		m.question = &q
+		m.updateViewport()
+		return m, cmd
+	}
+
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		if m.streaming && m.cancelFn != nil {
@@ -253,6 +293,7 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.events = nil
 			m.cancelFn = nil
 			m.activity = nil
+			m.question = nil
 			m.messages = append(m.messages, Message{
 				Role:    RoleStatus,
 				Content: "cancelled",
@@ -269,6 +310,7 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.events = nil
 			m.cancelFn = nil
 			m.activity = nil
+			m.question = nil
 			m.messages = append(m.messages, Message{
 				Role:    RoleStatus,
 				Content: "cancelled",
@@ -402,6 +444,7 @@ func (m *ChatModel) CancelActiveTurn() {
 	}
 	m.streaming = false
 	m.events = nil
+	m.question = nil
 }
 
 func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
@@ -586,6 +629,9 @@ func (m *ChatModel) resize() {
 	m.input.SetWidth(vpWidth - 2)
 
 	components.SetWordWrap(vpWidth - 4)
+	if m.question != nil {
+		m.question.SetWidth(m.cardWidth())
+	}
 	m.updateViewport()
 }
 
@@ -609,6 +655,11 @@ func (m *ChatModel) updateViewport() {
 	// blank screen reads as a hang.
 	if m.streaming {
 		sb.WriteString(m.renderLiveRegion())
+		sb.WriteString("\n")
+	}
+
+	if m.question != nil {
+		sb.WriteString(m.question.View())
 		sb.WriteString("\n")
 	}
 

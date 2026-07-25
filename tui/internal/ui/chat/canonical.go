@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -8,9 +9,17 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/ui/components"
 )
+
+// answerTimeout bounds the out-of-band POST that delivers an answer. Short: the
+// daemon is local, and a hung answer must not look like a hung agent.
+const answerTimeout = 15 * time.Second
+
+// questionFailedMsg reports that an answer never reached the agent.
+type questionFailedMsg struct{ err error }
 
 // handleCanonicalEvent renders the canonical `/query` SSE vocabulary — what the
 // daemon transport streams. handled is false for anything else, so the legacy
@@ -47,6 +56,17 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			})
 		}
 
+	case event.CanonicalNeedsInputEvent:
+		// The run is parked waiting for this answer, on the stream we are still
+		// reading. Put the question up and keep reading — the answer goes back
+		// out of band (see answerQuestion) and the same stream resumes.
+		m.question = questionFromEvent(e)
+		m.question.SetWidth(m.cardWidth())
+		m.messages = append(m.messages, Message{
+			Role:    RoleStatus,
+			Content: "the agent needs an answer to continue",
+		})
+
 	case event.CanonicalNeedsConfirmationEvent:
 		// The approval UI is a later phase. Until then the pause is surfaced as a
 		// message the user can actually read — never swallowed — and the run
@@ -80,6 +100,10 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		})
 		m.streaming = false
 		m.activity = nil
+		// The turn is over, so any question it was waiting on is dead. Leaving
+		// the panel up would swallow every keystroke into a question nobody is
+		// listening to — the composer becomes unreachable and Esc quits the app.
+		m.question = nil
 		if usage.Steps > 0 {
 			m.totalSteps = usage.Steps
 		}
@@ -91,6 +115,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		m.messages = append(m.messages, Message{Role: RoleError, Content: e.Detail})
 		m.streaming = false
 		m.activity = nil
+		m.question = nil
 		m.updateViewport()
 		return m, nil, true
 
@@ -113,6 +138,52 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 
 	m.updateViewport()
 	return m, waitForEvent(m.events), true
+}
+
+// questionFromEvent builds the picker from the wire event.
+func questionFromEvent(e event.CanonicalNeedsInputEvent) *components.QuestionModel {
+	opts := make([]components.QuestionOption, 0, len(e.Options))
+	for _, o := range e.Options {
+		label := o.Label
+		if label == "" {
+			label = o.Value
+		}
+		opts = append(opts, components.QuestionOption{
+			Value:       o.Value,
+			Label:       label,
+			Description: o.Description,
+		})
+	}
+	question := strings.TrimSpace(e.Question)
+	if question == "" {
+		question = "The agent needs an answer to continue."
+	}
+	q := components.NewQuestionModel(e.RequestID, question, opts, e.AllowFreeText, e.Sensitive)
+	return &q
+}
+
+// answerQuestion delivers the answer on the transport's out-of-band seam.
+//
+// A transport with no Respond is a real dead end for the user — the agent is
+// waiting on something this client structurally cannot send — so it says so
+// rather than dropping the keystroke.
+func (m ChatModel) answerQuestion(requestID, value string) tea.Cmd {
+	responder, ok := m.client.(client.AgentResponder)
+	if !ok {
+		return func() tea.Msg {
+			return questionFailedMsg{err: fmt.Errorf(
+				"this agent connection cannot answer questions mid-run; " +
+					"relaunch the agent through the GAIA daemon transport")}
+		}
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), answerTimeout)
+		defer cancel()
+		if err := responder.Respond(ctx, requestID, value); err != nil {
+			return questionFailedMsg{err: err}
+		}
+		return nil
+	}
 }
 
 // markToolDone closes out the activity line opened by the matching tool_call.

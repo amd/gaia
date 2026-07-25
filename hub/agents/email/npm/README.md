@@ -98,6 +98,11 @@ for await (const ev of sidecar.client.query({
   context: [],
 })) {
   if (ev.type === "status") console.log(ev.message);
+  // The agent can ask you something mid-run — answer it and the same stream
+  // carries on. This is how it sets up mailbox access without sending you away.
+  if (ev.type === "needs_input") {
+    await sidecar.client.respondToQuery(runId, ev.request_id, await askUser(ev));
+  }
   if (ev.type === "final") console.log(ev.answer); // last event
 }
 ```
@@ -105,7 +110,11 @@ for await (const ev of sidecar.client.query({
 Triage classifies and drafts using only the local model — no mailbox connection
 needed. Reading or acting on a live inbox (search, send, archive, calendar) uses
 the **Google or Microsoft connector** you set up in GAIA under
-*Settings → Connectors*. (Inside the full GAIA Agent UI daemon the connector token
+*Settings → Connectors* — or, from 2.6, that the agent sets up **with you, in the
+conversation**: if it has no usable mailbox it works out which of the four
+problems it has and offers to fix that one, asking through `needs_input` rather
+than returning a command for you to go run (#2469). Connecting Google still
+requires your own OAuth client ID and secret; the agent says so up front. (Inside the full GAIA Agent UI daemon the connector token
 is forwarded to the agent by the daemon — sidecar contract 2.5, #2154; a standalone
 integrator using this package is unaffected and resolves the mailbox from the local
 GAIA connector store.)
