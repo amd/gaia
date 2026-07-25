@@ -179,6 +179,11 @@ async def upload_by_path(
     Small files (<5 MB) are indexed synchronously. Larger files are
     indexed in the background so the UI stays responsive.
     """
+    # Security: reject null bytes before resolve() — it raises an unhandled
+    # ValueError on an embedded NUL, bypassing every check below.
+    if "\x00" in request.filepath:
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
     # Resolve once — used for both the lock key and safe_open validation
     resolved = Path(request.filepath).resolve()
     lock = upload_locks.setdefault(str(resolved), asyncio.Lock())
