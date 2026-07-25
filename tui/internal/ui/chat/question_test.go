@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -252,4 +253,55 @@ func stripANSIChat(s string) string {
 		i++
 	}
 	return b.String()
+}
+
+// A status line longer than the pane must WRAP, not clip. The viewport does not
+// soft-wrap, so the tail is simply lost — and on the capability notice the tail
+// is the remedy: the version that fixes it and the command to run. Losing that
+// leaves an error that says what broke and nothing about what to do.
+func TestLongStatusLineWrapsInsteadOfLosingItsTail(t *testing.T) {
+	notice := "the installed 'email' agent speaks contract 2.5, so it cannot ask " +
+		"questions mid-task — in-conversation mailbox setup needs 2.6 or newer. " +
+		"Update it with `gaia hub uninstall email` then `gaia hub install email`."
+
+	for _, cols := range []int{80, 100, 120} {
+		t.Run(fmt.Sprintf("%dcols", cols), func(t *testing.T) {
+			m := modelWith(t, &respondingClient{})
+			m.width, m.height = cols, 24
+			m.resize()
+			m = feed(t, m, event.CanonicalNoticeEvent{Text: notice})
+
+			view := stripANSIChat(m.View())
+			// The remedy — the actionable half — has to be on screen somewhere.
+			for _, want := range []string{"2.6 or newer", "gaia hub install email"} {
+				if !strings.Contains(view, want) {
+					t.Errorf("the notice lost %q at %d cols:\n%s", want, cols, view)
+				}
+			}
+			for _, line := range strings.Split(view, "\n") {
+				if w := len([]rune(line)); w > cols {
+					t.Errorf("line is %d cols wide (max %d): %q", w, cols, line)
+				}
+			}
+		})
+	}
+}
+
+// A long free-text answer is echoed into the transcript as a user line, which is
+// rendered bare — so it needs the same wrap.
+func TestLongUserLineWraps(t *testing.T) {
+	m := modelWith(t, &respondingClient{})
+	m.width, m.height = 80, 24
+	m.resize()
+	m.messages = append(m.messages, Message{
+		Role:    RoleUser,
+		Content: strings.Repeat("some-long-client-id.apps.googleusercontent.com ", 3),
+	})
+	m.updateViewport()
+
+	for _, line := range strings.Split(stripANSIChat(m.View()), "\n") {
+		if w := len([]rune(line)); w > 80 {
+			t.Errorf("line is %d cols wide (max 80): %q", w, line)
+		}
+	}
 }

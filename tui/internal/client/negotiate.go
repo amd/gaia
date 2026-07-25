@@ -166,6 +166,20 @@ func noticeForMissingCapability(agentID, version string) string {
 	return fmt.Sprintf(
 		"the installed '%s' agent speaks %s, so it cannot ask questions mid-task — "+
 			"in-conversation mailbox setup needs %d.%d or newer. "+
-			"Update it with `gaia uninstall %s` then `gaia install %s`.",
-		agentID, have, questionsContractMajor, questionsContractMinor, agentID, agentID)
+			"Update it with `%s` then `%s`.",
+		agentID, have, questionsContractMajor, questionsContractMinor,
+		updateCommand("uninstall", agentID), updateCommand("install", agentID))
+}
+
+// updateCommand names the AGENT-scoped hub command, never the bare verb.
+//
+// `gaia install` / `gaia uninstall` also exist and look right, which is the
+// trap: they are GAIA-wide — `gaia uninstall` is the tiered cleanup of the GAIA
+// install itself, one flag away from `--purge`. They reject a trailing agent id,
+// so a user handed `gaia uninstall email` sees an argparse error and may
+// reasonably retry without the argument, straight at the wrong tool. `gaia hub
+// <verb> <id>` takes the agent id and is the same command whether the TUI was
+// launched standalone or through the Python CLI.
+func updateCommand(verb, agentID string) string {
+	return fmt.Sprintf("gaia hub %s %s", verb, agentID)
 }

@@ -703,10 +703,20 @@ func (m ChatModel) cardWidth() int {
 	return w
 }
 
+// wrapForPane wraps text to the visible pane, leaving it untouched before the
+// first WindowSizeMsg (when no width is known yet).
+func (m ChatModel) wrapForPane(s string) string {
+	if m.width <= 0 {
+		return s
+	}
+	return components.WrapText(s, m.cardWidth())
+}
+
 func (m ChatModel) renderMessage(msg *Message) string {
 	switch msg.Role {
 	case RoleUser:
-		return userStyle.Render("▶ You: ") + msg.Content
+		// A free-text answer to a mid-run question lands here and can be long.
+		return m.wrapForPane(userStyle.Render("▶ You: ") + msg.Content)
 
 	case RoleAssistant:
 		content := msg.Content
@@ -759,7 +769,10 @@ func (m ChatModel) renderMessage(msg *Message) string {
 		return errorPanelStyle.Width(panelWidth).Render("[!] " + msg.Content)
 
 	case RoleStatus:
-		return statusMsgStyle.Render("  " + msg.Content)
+		// Wrapped, not clipped: the viewport does not soft-wrap, so a status
+		// line longer than the pane loses its tail — and for the ones that
+		// carry a remedy, the tail IS the remedy.
+		return statusMsgStyle.Render(m.wrapForPane("  " + msg.Content))
 
 	default:
 		return msg.Content

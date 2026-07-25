@@ -147,7 +147,7 @@ func TestInteractiveUserIsToldWhenThePeerIsTooOld(t *testing.T) {
 	if notice == "" {
 		t.Fatalf("no notice on the first turn: %#v", first)
 	}
-	for _, want := range []string{"2.4", "cannot ask questions", "gaia install email"} {
+	for _, want := range []string{"2.4", "cannot ask questions", "gaia hub install email"} {
 		if !strings.Contains(notice, want) {
 			t.Errorf("notice is missing %q: %s", want, notice)
 		}
@@ -243,4 +243,39 @@ func firstNotice(events []interface{}) string {
 		}
 	}
 	return ""
+}
+
+// The remedy must name an AGENT-scoped command. `gaia install` / `gaia uninstall`
+// exist and look right — which is the trap — but they are GAIA-WIDE: bare
+// `gaia uninstall` is the tiered cleanup of the GAIA install itself, one flag
+// from `--purge`. They also reject a trailing agent id, so a user handed
+// `gaia uninstall email` gets an argparse error and may retry without the
+// argument, landing on the wrong tool entirely.
+func TestRemedyNamesTheAgentScopedCommand(t *testing.T) {
+	notice := noticeForMissingCapability("email", "2.4")
+
+	for _, want := range []string{"gaia hub uninstall email", "gaia hub install email"} {
+		if !strings.Contains(notice, want) {
+			t.Errorf("remedy does not name %q: %s", want, notice)
+		}
+	}
+	// The bare forms must not appear even as a substring of the advice.
+	for _, forbidden := range []string{"`gaia install ", "`gaia uninstall ", "gaia install email", "gaia uninstall email"} {
+		if strings.Contains(notice, forbidden) && !strings.Contains(notice, "hub "+strings.TrimPrefix(forbidden, "`")) {
+			t.Errorf("remedy names the GAIA-wide command %q: %s", forbidden, notice)
+		}
+	}
+	if strings.Contains(notice, "`gaia install") || strings.Contains(notice, "`gaia uninstall") {
+		t.Errorf("remedy opens a command with the bare verb: %s", notice)
+	}
+}
+
+// Every agent id the notice is built for keeps the scoped form.
+func TestRemedyIsScopedForAnyAgent(t *testing.T) {
+	for _, id := range []string{"email", "analyst", "code"} {
+		notice := noticeForMissingCapability(id, "2.5")
+		if !strings.Contains(notice, "gaia hub install "+id) {
+			t.Errorf("remedy for %q is not agent-scoped: %s", id, notice)
+		}
+	}
 }

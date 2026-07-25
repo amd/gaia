@@ -221,7 +221,7 @@ func (m QuestionModel) View() string {
 	// The "? " marker occupies two columns on the first line, so the text wraps
 	// two columns narrower and continuation lines hang under it.
 	b.WriteString(questionTitleStyle.Render(
-		hang(wrapPlain(m.question, inner-2), "? ", "  ")))
+		hang(WrapText(m.question, inner-2), "? ", "  ")))
 
 	for i, opt := range m.options {
 		b.WriteString("\n")
@@ -237,7 +237,7 @@ func (m QuestionModel) View() string {
 		if opt.Description != "" {
 			b.WriteString("\n")
 			b.WriteString(questionDescStyle.Render(
-				wrapPlain("      "+opt.Description, inner)))
+				WrapText("      "+opt.Description, inner)))
 		}
 	}
 
@@ -259,7 +259,7 @@ func (m QuestionModel) View() string {
 	if len(m.options) > 0 {
 		hint = "1-" + fmt.Sprint(len(m.options)) + " pick · " + hint
 	}
-	b.WriteString("\n" + questionHintStyle.Render(wrapPlain(hint, inner)))
+	b.WriteString("\n" + questionHintStyle.Render(WrapText(hint, inner)))
 
 	return questionPanelStyle.Width(m.width).Render(b.String())
 }
@@ -278,10 +278,14 @@ func hang(s, first, rest string) string {
 	return strings.Join(lines, "\n")
 }
 
-// wrapPlain hard-wraps text at limit columns on word boundaries. lipgloss's own
-// width styling wraps the whole block; this keeps individual lines (an option
-// description) from blowing the panel out at 80 columns.
-func wrapPlain(s string, limit int) string {
+// WrapText hard-wraps text at limit columns on word boundaries, preserving each
+// line's leading indent on its continuations.
+//
+// The viewport does NOT soft-wrap: a line longer than the pane is CLIPPED, and a
+// clipped message loses its tail — which for an actionable message is exactly
+// the part that says what to do. Anything rendered as a bare line rather than
+// inside a width-constrained lipgloss block has to come through here.
+func WrapText(s string, limit int) string {
 	if limit <= 0 {
 		return s
 	}
