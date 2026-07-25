@@ -73,9 +73,15 @@ func (m RootModel) gateIsFor(agentID string) bool {
 		m.pending != nil && m.pending.ID == agentID
 }
 
-// closeGate tears the gate down. Cancel first: the screen owns a probe, a
-// sidecar start, or a model pull, and leaving one running would keep writing
-// into a screen that no longer exists.
+// closeGate tears the gate down, cancelling what it started: a re-check, a
+// sidecar start, a model pull.
+//
+// It does NOT stop the FIRST probe. preflight.Model.Init has a value receiver, so
+// the cancel func for the check it launches is parked on a copy that dies with
+// the call, and the model this host keeps has none. That probe therefore runs to
+// its own 90s timeout after the user leaves; its result is dropped by
+// updatePreflight rather than allowed to drive whatever is on screen. Fixing it
+// properly needs a pointer-receiver initialiser in the preflight package.
 func (m *RootModel) closeGate() {
 	if m.preflight != nil {
 		m.preflight.Cancel()
@@ -124,13 +130,26 @@ func (m RootModel) sizeCmd() tea.Cmd {
 	return func() tea.Msg { return tea.WindowSizeMsg{Width: w, Height: h} }
 }
 
-// updatePreflight forwards a message to the gate.
+// updatePreflight forwards a message to the gate, then refuses any result that
+// turns out to belong to a gate the user already left.
+//
+// The gate's async results are unexported types, so they cannot be filtered
+// before the fact — a probe started for agent A and answered after the user
+// backed out and launched agent B lands on B's gate. Its report is exported and
+// names its agent, so the check is done after the update: a report for the wrong
+// agent is dropped along with whatever command it wanted to run. Without this, an
+// all-green report for A drives B's screen, and B's gate hands off — opening a
+// chat for an agent nothing ever probed, which is the one outcome this gate
+// exists to prevent.
 func (m RootModel) updatePreflight(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.preflight == nil {
 		return m, nil
 	}
 	updated, cmd := m.preflight.Update(msg)
 	gate := updated.(preflight.Model)
+	if id := gate.Report().AgentID; id != "" && m.pending != nil && id != m.pending.ID {
+		return m, nil
+	}
 	m.preflight = &gate
 	return m, cmd
 }
@@ -171,8 +190,11 @@ func (m RootModel) openConnectHandoff(provider string) (tea.Model, tea.Cmd) {
 func (m RootModel) handleConnectKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "ctrl+c":
-		// Same as everywhere else: ctrl+c leaves the app, not just the screen.
+		// Same as everywhere else: ctrl+c leaves the app, not just the screen. The
+		// view goes back to the hub so the last frame is never a view whose model
+		// has just been torn out from under it.
 		m.closeGate()
+		m.activeView = viewHub
 		return m, tea.Quit
 	case "r":
 		// Dismiss, then let the gate's own `r` do the re-check — the screen that
@@ -213,20 +235,23 @@ func (h connectHandoff) view(width, height int) string {
 		title = fmt.Sprintf("Reconnect %s for %s", providerLabel(h.provider), h.agentName)
 	}
 
-	out := []string{
+	head := []string{
 		"  " + connectTitle.Render(title),
 		"  " + connectDivider.Render(strings.Repeat("─", w-4)),
 	}
+	var body []block
+	cur := dropContext
 	add := func(style lipgloss.Style, text string, indent int) {
 		prefix := strings.Repeat(" ", indent)
 		for _, line := range wrapLines(text, w-indent-2) {
-			out = append(out, prefix+style.Render(line))
+			body = append(body, block{line: prefix + style.Render(line), drop: cur})
 		}
 	}
+	blank := func() { body = append(body, block{line: "", drop: cur}) }
 
 	if h.row.Detail != "" {
 		add(connectDim, h.row.Detail, 2)
-		out = append(out, "")
+		blank()
 	}
 
 	switch {
@@ -235,16 +260,29 @@ func (h connectHandoff) view(width, height int) string {
 		// a bug, and it must not read as a shrug.
 		add(connectText, "The readiness check asked for a mailbox connection but recorded no "+
 			"command for it. Report that, then connect from a terminal:", 2)
+		cur = dropNever
 		add(connectCmd, "gaia connectors list", 4)
+		cur = dropContext
 		add(connectDim, "look:  https://amd-gaia.ai/docs/guides/email", 4)
 
 	case h.provider != "":
 		add(connectText, "This cannot be done from here — it opens a browser sign-in. Run this in "+
 			"another terminal, then come back and press r.", 2)
-		out = append(out, "")
+		// The command is printed verbatim, so if the check produced one for a
+		// different provider than the mailbox it is talking about, say so rather
+		// than let the title vouch for it.
+		if named := providerFromCommand(h.row.Remedy.Command); named != "" && named != h.provider {
+			cur = dropNever
+			add(connectText, fmt.Sprintf(
+				"Heads up: the check produced a %s command for a %s mailbox. Check it before "+
+					"running it, and report it.", providerLabel(named), providerLabel(h.provider)), 2)
+		}
+		cur = dropNever
+		blank()
 		add(connectCmd, h.row.Remedy.Command, 4)
+		cur = dropContext
 		if h.row.Remedy.Where != "" {
-			out = append(out, "")
+			blank()
 			add(connectDim, "look:  "+h.row.Remedy.Where, 4)
 		}
 
@@ -253,32 +291,73 @@ func (h connectHandoff) view(width, height int) string {
 		// Both paths are named, and neither is a command that would fail.
 		add(connectText, "This cannot be done from here — it opens a browser sign-in. "+
 			"Pick one, run it in another terminal, then come back and press r.", 2)
-		out = append(out, "")
 		offered := providerFromCommand(h.row.Remedy.Command)
 		heading := "Run this:"
 		if offered != "" {
 			heading = providerLabel(offered) + " — one command, about a minute:"
 		}
+		cur = dropNever
+		blank()
 		add(connectText, heading, 2)
 		add(connectCmd, h.row.Remedy.Command, 4)
 		if offered != "microsoft" {
-			out = append(out, "")
+			cur = dropAlternative
+			blank()
 			add(connectText, "Outlook — needs a one-time Microsoft app setup first:", 2)
 			add(connectDim, outlookSetupDoc, 4)
 		}
 	}
 
-	out = append(out, "")
-	out = append(out, "  "+connectKey.Render("r")+" "+connectDim.Render("re-check")+
-		connectDim.Render(" · ")+connectKey.Render("esc")+" "+connectDim.Render("back to the checks"))
+	foot := "  " + connectKey.Render("r") + " " + connectDim.Render("re-check") +
+		connectDim.Render(" · ") + connectKey.Render("esc") + " " + connectDim.Render("back to the checks")
 
-	if height > 0 && len(out) > height {
-		// Keep the footer: a screen whose only exit hint was trimmed reads as a
-		// dead end. Drop from the body instead.
-		keep := out[:height-1]
-		out = append(keep[:len(keep):len(keep)], out[len(out)-1])
+	out := append(head, fitBody(body, height-len(head)-2)...)
+	return strings.Join(append(out, "", foot), "\n")
+}
+
+// Which lines the hand-off gives up first when the terminal is too short. The
+// command sits in the MIDDLE of the screen, so trimming by position — from
+// either end — can eat the one thing the user came here for. Lines are dropped
+// by what they are instead.
+const (
+	// dropNever is the command itself and the sentence that introduces it.
+	dropNever = iota
+	// dropAlternative is the second way to do it (the Outlook pointer).
+	dropAlternative
+	// dropContext is explanation: why this is needed, where to read more.
+	dropContext
+)
+
+// block is one rendered line plus how readily it can be dropped.
+type block struct {
+	line string
+	drop int
+}
+
+// fitBody drops whole categories of line, least important first, until the body
+// fits room rows. Below that it hard-trims and lets the caller's footer stand —
+// a terminal that short is under every size this app supports.
+func fitBody(body []block, room int) []string {
+	if room < 1 {
+		room = 1
 	}
-	return strings.Join(out, "\n")
+	for prio := dropContext; prio > dropNever && len(body) > room; prio-- {
+		kept := body[:0:0]
+		for _, b := range body {
+			if b.drop != prio {
+				kept = append(kept, b)
+			}
+		}
+		body = kept
+	}
+	lines := make([]string, 0, len(body))
+	for _, b := range body {
+		lines = append(lines, b.line)
+	}
+	if len(lines) > room {
+		lines = lines[:room]
+	}
+	return lines
 }
 
 // providerFromCommand reads the connector id out of a

@@ -36,6 +36,9 @@ type gateTransport struct {
 	// initStatus and initBody are the answer to GET /v1/<agent>/init.
 	initStatus int
 	initBody   map[string]any
+	// initByAgent overrides the init answer per agent id, so one gate can be
+	// green while another is blocked.
+	initByAgent map[string]initAnswer
 	// connectors is the answer to GET /v1/<agent>/connectors.
 	connectors map[string]any
 
@@ -92,13 +95,18 @@ func (g *gateTransport) Do(_ context.Context, _, path string, _ []byte) (preflig
 		agents := []map[string]any{}
 		if g.agentState != "" {
 			pid := 5150
-			agents = append(agents, map[string]any{
-				"agent_id": "email", "state": g.agentState, "pid": pid,
-				"agent_version": "0.5.0", "api_version": "1.0",
-			})
+			for _, id := range []string{"email", "analyst"} {
+				agents = append(agents, map[string]any{
+					"agent_id": id, "state": g.agentState, "pid": pid,
+					"agent_version": "0.5.0", "api_version": "1.0",
+				})
+			}
 		}
 		return jsonResponse(http.StatusOK, map[string]any{"agents": agents})
 	case strings.HasSuffix(path, "/init"):
+		if answer, ok := g.initByAgent[agentFromPath(path)]; ok {
+			return jsonResponse(answer.status, answer.body)
+		}
 		return jsonResponse(g.initStatus, g.initBody)
 	case strings.HasSuffix(path, "/connectors"):
 		return jsonResponse(http.StatusOK, g.connectors)
@@ -108,6 +116,21 @@ func (g *gateTransport) Do(_ context.Context, _, path string, _ []byte) (preflig
 
 func (g *gateTransport) Stream(context.Context, string, string, []byte) (preflight.Stream, error) {
 	return preflight.Stream{}, fmt.Errorf("gateTransport: streaming is not wired in this test")
+}
+
+// initAnswer is one agent's canned /init reply.
+type initAnswer struct {
+	status int
+	body   map[string]any
+}
+
+// agentFromPath pulls the agent id out of "/v1/<agent>/init".
+func agentFromPath(path string) string {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) >= 2 {
+		return parts[1]
+	}
+	return ""
 }
 
 func jsonResponse(status int, body map[string]any) (preflight.Response, error) {
@@ -147,17 +170,34 @@ type rootDriver struct {
 	t   *testing.T
 	m   root.RootModel
 	cat *catalog.Catalog
+	tr  preflight.Transport
+}
+
+// transport is the fake the gate is pointed at, for asserting what the gate did
+// or did not ask the daemon to do.
+func (d *rootDriver) transport() *gateTransport {
+	g, ok := d.tr.(*gateTransport)
+	if !ok {
+		d.t.Fatalf("the driver's transport is %T, not a gateTransport", d.tr)
+	}
+	return g
 }
 
 // newRootDriver builds a root model whose gate is pointed at g, with the ready
 // hold squeezed to keep the tests fast.
 func newRootDriver(t *testing.T, g preflight.Transport, w, h int) *rootDriver {
 	t.Helper()
+	return newRootDriverOpts(t, g, w, h, preflight.Options{ReadyHold: time.Millisecond})
+}
+
+// newRootDriverOpts is newRootDriver with the gate's options spelled out —
+// ManualProceed keeps an all-green gate on screen so it can be looked at.
+func newRootDriverOpts(t *testing.T, g preflight.Transport, w, h int, opts preflight.Options) *rootDriver {
+	t.Helper()
 	cat := catalog.NewCatalog()
 	cat.MarkInstalled("email", "0.5.0")
-	m := root.NewRootModelWithHub(cat, nil, false).
-		WithPreflight(g, preflight.Options{ReadyHold: time.Millisecond})
-	d := &rootDriver{t: t, m: m, cat: cat}
+	m := root.NewRootModelWithHub(cat, nil, false).WithPreflight(g, opts)
+	d := &rootDriver{t: t, m: m, cat: cat, tr: g}
 	d.send(windowSize(w, h))
 	return d
 }
@@ -167,6 +207,15 @@ func (d *rootDriver) send(msg tea.Msg) {
 	updated, cmd := d.m.Update(msg)
 	d.m = updated.(root.RootModel)
 	d.pump(cmd)
+}
+
+// sendNoPump delivers one message and hands back the command it produced WITHOUT
+// running it — for the tests where the point is work that is still in flight.
+func (d *rootDriver) sendNoPump(msg tea.Msg) tea.Cmd {
+	d.t.Helper()
+	updated, cmd := d.m.Update(msg)
+	d.m = updated.(root.RootModel)
+	return cmd
 }
 
 // pump runs every command the model produced, feeding results back in.
@@ -309,6 +358,40 @@ func TestAFailingPreconditionKeepsTheUserOnTheGate(t *testing.T) {
 	if !strings.Contains(d.flat(), "cannot start yet") {
 		t.Errorf("enter on a blocked gate said nothing:\n%s", d.screen())
 	}
+	// "Did not launch" is about the agent, not just the view: nothing may have
+	// asked the daemon to spawn a sidecar behind that failure.
+	if g := d.transport(); g.ensures != 0 || g.starts != 0 {
+		t.Errorf("a blocked gate started things anyway: %d ensures, %d daemon starts", g.ensures, g.starts)
+	}
+	if got := d.cat.Get("email").Status; got == catalog.StatusActive {
+		t.Error("a blocked gate marked the agent active")
+	}
+}
+
+// `f` on a stopped sidecar is the gate's most-used fix. Root has to carry the
+// fix's result back to it, or the screen spins forever on work that finished.
+func TestFixingAStoppedSidecarFromTheGateReachesChat(t *testing.T) {
+	g := readyGateTransport()
+	g.agentState = "stopped"
+	d := newRootDriver(t, g, 80, 24)
+	d.launchEmail()
+
+	screen := d.flat()
+	if !strings.Contains(screen, "installed, not started") {
+		t.Fatalf("the gate does not report the stopped sidecar:\n%s", d.screen())
+	}
+	if !strings.Contains(screen, "f start the agent") {
+		t.Errorf("the stopped-sidecar row offers no fix:\n%s", d.screen())
+	}
+
+	d.send(key("f"))
+	if g.ensures != 1 {
+		t.Fatalf("f asked the daemon to start the agent %d times, want 1", g.ensures)
+	}
+	// The fix re-checks and everything else was already green, so it hands off.
+	if got := d.view(); got != "chat" {
+		t.Fatalf("after the fix the gate landed on %q, want chat\n%s", got, d.screen())
+	}
 }
 
 // esc backs out to a hub that still has a highlighted row (#2481), and says why
@@ -386,6 +469,61 @@ func TestALateProceedFromAnAbandonedGateLaunchesNothing(t *testing.T) {
 	}
 	if got := d.cat.Get("email").Status; got == catalog.StatusActive {
 		t.Error("a late ProceedMsg launched the agent anyway")
+	}
+}
+
+// analystAgent is a second daemon-backed agent, for the two-gates race below.
+func analystAgent() catalog.Agent {
+	return catalog.Agent{
+		ID: "analyst", Name: "Analyst", Status: catalog.StatusInstalled,
+		Transport: catalog.TransportDaemon,
+	}
+}
+
+// The nastiest race in this seam: a probe started for one agent, answered after
+// the user backed out and launched another. Its report must not drive the second
+// agent's gate — an all-green report for A would otherwise green-light B and open
+// a chat for an agent nothing ever probed.
+func TestAnAbandonedGatesReportCannotGreenLightAnotherAgent(t *testing.T) {
+	g := readyGateTransport()
+	// Email would pass; Analyst is blocked on its model. So if Email's stale
+	// report reaches Analyst's gate, it turns a blocked screen into a launch.
+	g.initByAgent = map[string]initAnswer{
+		"analyst": {status: http.StatusServiceUnavailable, body: readyGateTransport().modelMissing().initBody},
+	}
+	d := newRootDriver(t, g, 80, 24)
+
+	// Gate 1 for email, its probe captured and NOT run yet — this is the in-flight
+	// probe the user walks away from.
+	emailProbe := d.sendNoPump(hub.LaunchAgentMsg{Agent: *d.cat.Get("email")})
+	d.send(keyEsc())
+
+	// Gate 2 for a different agent, blocked and waiting for the user.
+	d.send(hub.LaunchAgentMsg{Agent: analystAgent()})
+	if got := d.view(); got != "preflight" {
+		t.Fatalf("the second launch landed on %q, want preflight\n%s", got, d.screen())
+	}
+
+	// Email's probe finally answers, into Analyst's gate.
+	d.pump(emailProbe)
+
+	if got := d.view(); got != "preflight" {
+		t.Fatalf("a stale report launched %q\n%s", got, d.screen())
+	}
+	screen := d.flat()
+	if !strings.Contains(screen, "Getting Analyst ready") {
+		t.Errorf("the gate is no longer the one that was on screen:\n%s", d.screen())
+	}
+	// The Mailbox row exists only in email's report: seeing it here means the
+	// stale report was adopted.
+	if strings.Contains(screen, "Mailbox") {
+		t.Errorf("email's rows are being shown on the Analyst gate:\n%s", d.screen())
+	}
+	if !strings.Contains(screen, "not downloaded") {
+		t.Errorf("Analyst's own blocked row was replaced:\n%s", d.screen())
+	}
+	if got := d.cat.Get("email").Status; got == catalog.StatusActive {
+		t.Error("the abandoned gate launched email anyway")
 	}
 }
 
@@ -468,6 +606,60 @@ func TestConnectMailboxForAConnectedProviderShowsThatProvider(t *testing.T) {
 	}
 	if strings.Contains(screen, "connect google") {
 		t.Errorf("the hand-off offers Gmail to an Outlook user:\n%s", d.screen())
+	}
+}
+
+// On a terminal too short for the whole hand-off, the command is the last thing
+// that may be dropped — a screen that keeps the explanation and loses the fix
+// names a problem and takes away the answer.
+func TestAShortTerminalKeepsTheHandoffCommand(t *testing.T) {
+	for _, rows := range []int{24, 16, 12, 10} {
+		d := newRootDriver(t, readyGateTransport().mailboxMissing(), 80, 24)
+		d.launchEmail()
+		d.send(key("f"))
+		d.send(windowSize(80, rows))
+
+		screen := d.screen()
+		if got := len(strings.Split(screen, "\n")); got > rows {
+			t.Errorf("at %d rows the hand-off renders %d lines:\n%s", rows, got, screen)
+		}
+		flat := strings.Join(strings.Fields(screen), " ")
+		// The whole command, scopes included — a half-command is worse than none.
+		for _, want := range []string{
+			"gaia connectors connect google --grant-agent installed:email",
+			"gmail.send",
+			"esc back to the checks",
+		} {
+			if !strings.Contains(flat, want) {
+				t.Errorf("at %d rows the hand-off lost %q:\n%s", rows, want, screen)
+			}
+		}
+	}
+}
+
+// If the check ever produces a command for a different provider than the mailbox
+// it is describing, the screen must not let its own title vouch for it.
+func TestAMismatchedProviderCommandIsFlagged(t *testing.T) {
+	g := readyGateTransport()
+	// A provider the connect-command builder has no scope list for: it falls back
+	// to the Google command, which is not what this mailbox needs.
+	g.connectors = map[string]any{
+		"agent_id": "email",
+		"providers": []map[string]any{
+			{"provider": "yahoo", "connected": true, "account_email": "user@yahoo.com",
+				"can_send": false, "scopes": []string{}},
+		},
+	}
+	d := newRootDriver(t, g, 80, 24)
+	d.launchEmail()
+	d.send(key("f"))
+
+	flat := d.flat()
+	if !strings.Contains(flat, "Heads up") {
+		t.Errorf("a Gmail command under a yahoo mailbox is presented as correct:\n%s", d.screen())
+	}
+	if !strings.Contains(flat, "report it") {
+		t.Errorf("the mismatch is not reportable:\n%s", d.screen())
 	}
 }
 
@@ -558,31 +750,49 @@ func TestTheGateIsBornAtTheTerminalSize(t *testing.T) {
 
 // The hub was fixed to fit the minimum terminal; the gate in front of it has to
 // fit too, in every state a user can be in.
+//
+// Row count alone is a tautology here — both views clamp themselves to the height
+// they are given, so they can always "fit" by dropping the very thing the user
+// needs. Each case therefore names what has to still be on screen at 80x24.
 func TestEveryGateStateFitsEightyByTwentyFour(t *testing.T) {
 	cases := []struct {
 		name  string
 		build func() *gateTransport
 		keys  []tea.KeyMsg
+		// hold keeps an all-green gate on screen; without it the case would
+		// measure the chat view the gate hands off to.
+		hold bool
+		// wants is what must survive the fit at the minimum size.
+		wants []string
 	}{
-		{"all ready", readyGateTransport, nil},
-		{"model missing", func() *gateTransport { return readyGateTransport().modelMissing() }, nil},
-		{"model missing, details", func() *gateTransport { return readyGateTransport().modelMissing() },
-			[]tea.KeyMsg{key("d")}},
-		{"mailbox missing", func() *gateTransport { return readyGateTransport().mailboxMissing() }, nil},
-		{"mailbox hand-off", func() *gateTransport { return readyGateTransport().mailboxMissing() },
-			[]tea.KeyMsg{key("f")}},
-		{"daemon down", func() *gateTransport {
+		{name: "all ready", build: readyGateTransport, hold: true,
+			wants: []string{"Getting Email ready", "ready", "Mailbox", "esc back"}},
+		{name: "model missing", build: func() *gateTransport { return readyGateTransport().modelMissing() },
+			wants: []string{"AI model", "not downloaded", "run: gaia init", "esc back"}},
+		{name: "model missing, details", build: func() *gateTransport { return readyGateTransport().modelMissing() },
+			keys:  []tea.KeyMsg{key("d")},
+			wants: []string{"AI model — failed", "esc back"}},
+		{name: "mailbox missing", build: func() *gateTransport { return readyGateTransport().mailboxMissing() },
+			wants: []string{"Mailbox", "not connected", "gaia connectors connect google", "esc back"}},
+		{name: "mailbox hand-off", build: func() *gateTransport { return readyGateTransport().mailboxMissing() },
+			keys:  []tea.KeyMsg{key("f")},
+			wants: []string{"Connect a mailbox for Email", "gmail.send", "esc back to the checks"}},
+		{name: "daemon down", build: func() *gateTransport {
 			g := readyGateTransport()
 			g.attachErr = &daemon.NotRunningError{Path: "/tmp/instance.json"}
 			return g
-		}, nil},
+		}, wants: []string{"Background service", "not running", "f start it for me", "esc back"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			d := newRootDriver(t, tc.build(), 80, 24)
+			opts := preflight.Options{ReadyHold: time.Millisecond, ManualProceed: tc.hold}
+			d := newRootDriverOpts(t, tc.build(), 80, 24, opts)
 			d.launchEmail()
 			for _, k := range tc.keys {
 				d.send(k)
+			}
+			if got := d.view(); got != "preflight" {
+				t.Fatalf("this case is not measuring the gate — view = %q\n%s", got, d.screen())
 			}
 			lines := strings.Split(d.screen(), "\n")
 			if len(lines) > 24 {
@@ -591,6 +801,12 @@ func TestEveryGateStateFitsEightyByTwentyFour(t *testing.T) {
 			for i, line := range lines {
 				if w := ansi.StringWidth(line); w > 80 {
 					t.Errorf("line %d is %d columns wide: %q", i, w, line)
+				}
+			}
+			flat := strings.Join(strings.Fields(d.screen()), " ")
+			for _, want := range tc.wants {
+				if !strings.Contains(flat, want) {
+					t.Errorf("at 80x24 the screen lost %q:\n%s", want, d.screen())
 				}
 			}
 		})
