@@ -25,6 +25,73 @@ type OneShotResult struct {
 	TerminalType string
 	Answer       string
 	ErrorDetail  string
+	// FailedTools are the tools whose last definite result was a failure. A
+	// turn that ends with one is not a success, whatever the agent wrote.
+	FailedTools []string
+	// UndeterminedTools ran without saying whether they worked. Reported, never
+	// counted either way.
+	UndeterminedTools []string
+}
+
+// toolLedger records what each tool call proved, in first-seen order.
+//
+// The exit code needs "did anything fail and stay failed", and an agent that
+// retries a tool must be able to clear its own earlier failure. Only a DEFINITE
+// later outcome supersedes an earlier one: an unknown result never clears a
+// failure, because it is not evidence of recovery.
+type toolLedger struct {
+	order    []string
+	outcomes map[string]event.ToolOutcome
+	unknown  map[string]bool
+}
+
+func newToolLedger() *toolLedger {
+	return &toolLedger{outcomes: map[string]event.ToolOutcome{}, unknown: map[string]bool{}}
+}
+
+func (l *toolLedger) record(tool string, outcome event.ToolOutcome) {
+	if tool == "" {
+		tool = "an unnamed tool"
+	}
+	if !containsString(l.order, tool) {
+		l.order = append(l.order, tool)
+	}
+	if outcome == event.ToolOutcomeUnknown {
+		l.unknown[tool] = true
+		return
+	}
+	l.outcomes[tool] = outcome
+}
+
+// failed lists the tools whose last definite outcome was a failure.
+func (l *toolLedger) failed() []string {
+	var out []string
+	for _, tool := range l.order {
+		if l.outcomes[tool] == event.ToolOutcomeFailed {
+			out = append(out, tool)
+		}
+	}
+	return out
+}
+
+// undetermined lists tools that ran and never said whether they worked.
+func (l *toolLedger) undetermined() []string {
+	var out []string
+	for _, tool := range l.order {
+		if _, definite := l.outcomes[tool]; !definite && l.unknown[tool] {
+			out = append(out, tool)
+		}
+	}
+	return out
+}
+
+func containsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
 }
 
 // RunOneShot drives a single turn and renders it to plain streams — no alt
@@ -67,6 +134,7 @@ func RunOneShot(
 		res       OneShotResult
 		streamed  strings.Builder
 		sawTokens bool
+		tools     = newToolLedger()
 	)
 
 	handle := func(evt interface{}) {
@@ -90,10 +158,13 @@ func RunOneShot(
 			fmt.Fprintf(errW, "  🔧 %s\n", e.Tool)
 
 		case event.CanonicalToolResultEvent:
-			debugf("tool_result %s render=%q data=%s", e.Tool, e.Render, rawOrDash(e.Data))
+			outcome, toolErr := event.ToolOutcomeOf(e)
+			tools.record(e.Tool, outcome)
+			debugf("tool_result %s outcome=%s render=%q data=%s",
+				e.Tool, outcome, e.Render, rawOrDash(e.Data))
 			// A tool's own error is the most actionable text in the run — it is
 			// the tool author's remedy, not the model's paraphrase of it.
-			if toolErr, failed := event.ToolErrorOf(e); failed {
+			if outcome == event.ToolOutcomeFailed {
 				writeToolError(errW, e.Tool, toolErr)
 				return
 			}
@@ -176,8 +247,11 @@ func RunOneShot(
 		case event.ToolResultEvent:
 			// Was falling through to "[unhandled event]", so a subprocess
 			// agent's tool failure never reached the user at all.
-			debugf("tool_result %s success=%t data=%s", e.Title, e.Success, rawOrDash(e.ResultData))
-			if toolErr, failed := event.LegacyToolErrorOf(e); failed {
+			outcome, toolErr := event.LegacyToolOutcomeOf(e)
+			tools.record(e.Title, outcome)
+			debugf("tool_result %s outcome=%s success=%t data=%s",
+				e.Title, outcome, e.Success, rawOrDash(e.ResultData))
+			if outcome == event.ToolOutcomeFailed {
 				writeToolError(errW, e.Title, toolErr)
 				return
 			}
@@ -205,7 +279,7 @@ func RunOneShot(
 		case evt, open := <-ch:
 			if !open {
 				// The stream closed; the terminal-event check decides.
-				return finishOneShot(res, query, errW)
+				return finishOneShot(res, tools, query, errW)
 			}
 			handle(evt)
 
@@ -225,14 +299,14 @@ func RunOneShot(
 				select {
 				case evt, open := <-ch:
 					if !open {
-						return finishOneShot(res, query, errW)
+						return finishOneShot(res, tools, query, errW)
 					}
 					handle(evt)
 				default:
 				}
 			}
 			if res.TerminalType != "" {
-				return finishOneShot(res, query, errW)
+				return finishOneShot(res, tools, query, errW)
 			}
 
 			if sawTokens {
@@ -275,8 +349,17 @@ func rawOrDash(raw json.RawMessage) string {
 	return string(raw)
 }
 
-// finishOneShot applies the terminal-event contract to a stream that closed.
-func finishOneShot(res OneShotResult, query string, errW io.Writer) OneShotResult {
+// finishOneShot applies the terminal-event contract, then the tool-outcome one.
+//
+// `run --help` promises exit 0 on an answer and 1 on an error, and that promise
+// is what makes the flag usable from a script. A turn whose only tool call came
+// back `{"ok": false, …}` and which then wrote an apology is not a success —
+// exiting 0 there fired the caller's `&& next-step` over work that never
+// happened.
+func finishOneShot(res OneShotResult, tools *toolLedger, query string, errW io.Writer) OneShotResult {
+	res.FailedTools = tools.failed()
+	res.UndeterminedTools = tools.undetermined()
+
 	if res.TerminalType == "" {
 		// Exactly one terminal event is mandatory; a stream that ends without one
 		// is a failure, reported loudly rather than as an empty success.
@@ -286,6 +369,23 @@ func finishOneShot(res OneShotResult, query string, errW io.Writer) OneShotResul
 	}
 	if res.TerminalType != event.CanonicalTypeFinal {
 		res.ExitCode = 1
+	}
+
+	// Never silent, even when it changes nothing: an outcome nobody stated is
+	// not evidence the work happened, and reporting it green on the agent's
+	// behalf is the failure this whole sweep has been about.
+	if len(res.UndeterminedTools) > 0 {
+		fmt.Fprintf(errW,
+			"  ⚠️  %s did not report whether the work succeeded, so this answer is unverified\n",
+			strings.Join(res.UndeterminedTools, ", "))
+	}
+
+	if len(res.FailedTools) > 0 && res.ExitCode == 0 {
+		res.ExitCode = 1
+		fmt.Fprintf(errW,
+			"❌ %s failed and nothing recovered it, so this turn did not do what was asked "+
+				"(exit 1). The agent's answer is on stdout; the tool's own error is above.\n",
+			strings.Join(res.FailedTools, ", "))
 	}
 	return res
 }

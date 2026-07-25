@@ -276,3 +276,46 @@ func TestInstallHelpDocumentsTheTrustFlag(t *testing.T) {
 		t.Errorf("install --help does not say what --trust means:\n%s", text)
 	}
 }
+
+// `run --help` promises "exit 0 on a final answer / 1 on an error", and that
+// promise is the whole point of --query. A turn whose only tool call came back
+// `{"ok": false, …}` and which then wrote an apology exited 0, so a caller's
+// `gaia tui run … && next-step` fired over work that never happened.
+func TestFailedToolExitsNonZeroEvenWithAnAnswer(t *testing.T) {
+	gaiaBin, binDir := buildBinaries(t)
+
+	cmd := exec.Command(gaiaBin, "run", "bash", "--query", "please fail the tool")
+	cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+
+	if err == nil {
+		t.Fatalf("a turn whose only tool failed exited 0\nstdout:\n%s\nstderr:\n%s",
+			stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "exit 1") {
+		t.Errorf("stderr does not explain why the turn failed:\n%s", stderr.String())
+	}
+	// The agent's answer still belongs on stdout — only the verdict changed.
+	if !strings.Contains(stdout.String(), "could not reach") {
+		t.Errorf("the answer was dropped from stdout:\n%s", stdout.String())
+	}
+}
+
+// The ordinary successful run must stay exit 0 and stay quiet.
+func TestSuccessfulToolRunStaysZeroAndQuiet(t *testing.T) {
+	gaiaBin, binDir := buildBinaries(t)
+
+	cmd := exec.Command(gaiaBin, "run", "bash", "--query", "list the files")
+	cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("a successful run exited non-zero: %v\nstderr:\n%s", err, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "unverified") || strings.Contains(stderr.String(), "exit 1") {
+		t.Errorf("a successful run was judged:\n%s", stderr.String())
+	}
+}

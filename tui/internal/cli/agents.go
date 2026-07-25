@@ -284,6 +284,10 @@ var runCmd = &cobra.Command{
 		"--query makes it a genuine non-interactive one-shot: no alt screen, the " +
 		"answer on stdout, progress on stderr, and exit 0 on a final answer / 1 on " +
 		"an error. That is what makes it usable from a script or from CI.\n\n" +
+		"A turn whose tool calls failed exits 1 even when the agent still wrote an " +
+		"answer, so `gaia tui run … && next-step` does not fire over work that never " +
+		"happened. A tool that reports no outcome at all is named on stderr as " +
+		"unverified rather than counted as a success.\n\n" +
 		"A one-shot checks its preconditions first and refuses in seconds — naming " +
 		"the unmet one and the command that fixes it on stderr — rather than waiting " +
 		"on a model server that is not there. The turn itself is bounded too, so an " +

@@ -20,6 +20,86 @@ type ToolError struct {
 	Message string
 }
 
+// ToolOutcome is what a tool result PROVES about its call.
+//
+// Unknown is a real answer, never a pass: `ok` is an agent convention today
+// (documented for the email agent as `{"ok": true, "data": …}` /
+// `{"ok": false, "error": …}`), not a contract guarantee, so an agent that
+// sends no outcome at all must not be reported green on its behalf.
+type ToolOutcome int
+
+const (
+	// ToolOutcomeUnknown — the payload says nothing either way.
+	ToolOutcomeUnknown ToolOutcome = iota
+	// ToolOutcomeSucceeded — the payload says so explicitly.
+	ToolOutcomeSucceeded
+	// ToolOutcomeFailed — the payload carries an error.
+	ToolOutcomeFailed
+)
+
+func (o ToolOutcome) String() string {
+	switch o {
+	case ToolOutcomeSucceeded:
+		return "succeeded"
+	case ToolOutcomeFailed:
+		return "failed"
+	default:
+		return "unknown"
+	}
+}
+
+// ToolOutcomeOf classifies a canonical tool result, returning the error when
+// there is one. Failure is checked first: the email sidecar sends `success:
+// true` on the event while the tool's own envelope says `ok: false`, so a
+// positive field proves nothing until the error checks have run.
+func ToolOutcomeOf(e CanonicalToolResultEvent) (ToolOutcome, ToolError) {
+	if te, failed := ToolErrorOf(e); failed {
+		return ToolOutcomeFailed, te
+	}
+	if toolSucceeded(e.Data) {
+		return ToolOutcomeSucceeded, ToolError{}
+	}
+	return ToolOutcomeUnknown, ToolError{}
+}
+
+// LegacyToolOutcomeOf classifies a subprocess-vocabulary tool result. That
+// event carries `success` as a required field, so the answer is never unknown.
+func LegacyToolOutcomeOf(e ToolResultEvent) (ToolOutcome, ToolError) {
+	if te, failed := LegacyToolErrorOf(e); failed {
+		return ToolOutcomeFailed, te
+	}
+	return ToolOutcomeSucceeded, ToolError{}
+}
+
+// toolSucceeded reports an EXPLICIT positive: `ok: true` or `status: "ok"`,
+// at the top level or inside a string-encoded envelope. Silence is not a yes.
+func toolSucceeded(data json.RawMessage) bool {
+	if len(data) == 0 {
+		return false
+	}
+	var payload map[string]json.RawMessage
+	if json.Unmarshal(data, &payload) != nil {
+		return false
+	}
+	if raw, ok := payload["ok"]; ok {
+		var b bool
+		if json.Unmarshal(raw, &b) == nil && b {
+			return true
+		}
+	}
+	if s, ok := stringField(payload, "status"); ok &&
+		(strings.EqualFold(s, "ok") || strings.EqualFold(s, "success")) {
+		return true
+	}
+	if summary, ok := stringField(payload, "summary"); ok {
+		trimmed := strings.TrimSpace(summary)
+		if strings.HasPrefix(trimmed, "{") && json.Valid([]byte(trimmed)) {
+			return toolSucceeded(json.RawMessage(trimmed))
+		}
+	}
+	return false
+}
+
 // ToolErrorOf reports the error inside a canonical tool_result payload.
 //
 // The canonical event has no `ok` field (#2495), so failure is read from the

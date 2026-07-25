@@ -107,6 +107,7 @@ func handleQuery(query string) {
 			"type": "tool_result", "title": tool, "success": false,
 			"summary": "the tool could not run",
 			"result_data": map[string]interface{}{
+				"ok":     false,
 				"status": "error",
 				"code":   "CONNECTOR_ERROR",
 				"error": "no forwarded 'google' credential is available to the email sidecar.\n" +
