@@ -692,7 +692,9 @@ func (m HubModel) catalogBadge() string {
 	case catalogLoading:
 		return idleLabel.Render("[..] loading list")
 	case catalogUnavailable:
-		return idleLabel.Render("[!] hub offline")
+		// Not "hub offline": the list can fail to load for local reasons too,
+		// and the badge must not pick a culprit the status row may contradict.
+		return idleLabel.Render("[!] list unavailable")
 	default:
 		if m.catalogNote != "" {
 			return idleLabel.Render("[!] cached list")
@@ -742,13 +744,15 @@ func (m HubModel) emptyState() string {
 		}
 	case catalog.SectionAvailable:
 		if m.catalogState == catalogUnavailable {
+			// The headline stays neutral: the service may be unreachable, or
+			// reachable but too old for this build. The note below says which,
+			// and claiming the wrong one sends the user after the wrong thing.
 			lines = []string{
-				accent.Render("  Can't reach the GAIA background service,"),
-				accent.Render("  so the agent list can't be loaded."),
+				accent.Render("  The agent list can't be loaded."),
 				"",
 				dim.Render("  " + firstLine(m.catalogNote)),
 				"",
-				dim.Render("  Press " + accent.Render("r") + dim.Render(" to start it and retry.")),
+				dim.Render("  Press " + accent.Render("r") + dim.Render(" to retry.")),
 			}
 		} else {
 			lines = []string{
@@ -766,12 +770,14 @@ func (m HubModel) emptyState() string {
 func (m HubModel) renderStatus() string {
 	// One row is always reserved so the list height never changes underneath
 	// the user when a message appears or clears.
+	// The specific note beats the generic line: it carries the actual diagnosis
+	// (an old daemon, a cached list), and the generic one guessed "can't reach".
 	text := m.status
-	if text == "" && m.catalogState == catalogUnavailable {
-		text = "Agent list unavailable — press r to start the background service and retry"
-	}
 	if text == "" && m.catalogNote != "" {
 		text = m.catalogNote
+	}
+	if text == "" && m.catalogState == catalogUnavailable {
+		text = "Agent list unavailable — press r to start the background service and retry"
 	}
 	if text == "" {
 		return ""

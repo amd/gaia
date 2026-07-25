@@ -38,6 +38,40 @@ type fakeDaemon struct {
 	// installedAfterTrust flips the catalog entry to installed once a trusted
 	// install has been accepted.
 	trustedAccepted bool
+
+	// missingRoutes are paths this daemon does not have — a build older than the
+	// client talking to it. They answer the way a web framework answers an
+	// unrouted path: a bare 404, with no explanation of its own.
+	missingRoutes map[string]bool
+	// refusals are paths that exist and answer with their own explanation.
+	refusals map[string]refusal
+}
+
+// refusals are routes that answer with their own explanation — a 404 the route
+// ITSELF sends, about the thing being asked for rather than about the daemon.
+type refusal struct {
+	status int
+	detail string
+}
+
+// refuseRoute makes a route answer with its own structured refusal.
+func (f *fakeDaemon) refuseRoute(path string, status int, detail string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.refusals == nil {
+		f.refusals = map[string]refusal{}
+	}
+	f.refusals[path] = refusal{status: status, detail: detail}
+}
+
+// omitRoute makes the fake behave like a daemon predating that route.
+func (f *fakeDaemon) omitRoute(path string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.missingRoutes == nil {
+		f.missingRoutes = map[string]bool{}
+	}
+	f.missingRoutes[path] = true
 }
 
 func newFakeDaemon(t *testing.T) *fakeDaemon {
@@ -97,6 +131,21 @@ func (f *fakeDaemon) handle(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Authorization") != daemon.AuthScheme+" test-token" {
 		w.WriteHeader(http.StatusUnauthorized)
 		writeJSON(w, map[string]any{"detail": "invalid client token"})
+		return
+	}
+
+	f.mu.Lock()
+	absent := f.missingRoutes[r.URL.Path]
+	refused, isRefused := f.refusals[r.URL.Path]
+	f.mu.Unlock()
+	if absent {
+		w.WriteHeader(http.StatusNotFound)
+		writeJSON(w, map[string]any{"detail": "Not Found"})
+		return
+	}
+	if isRefused {
+		w.WriteHeader(refused.status)
+		writeJSON(w, map[string]any{"detail": refused.detail})
 		return
 	}
 
