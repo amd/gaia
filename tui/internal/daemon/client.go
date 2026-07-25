@@ -28,8 +28,6 @@ const (
 	defaultStartTimeout = 30 * time.Second
 	// Ensure: a first-run ensure may lazily fetch the sidecar binary before answering.
 	defaultEnsureTimeout = 900 * time.Second
-	// Cancel must never wait out a stream read timeout.
-	defaultCancelTimeout = 10 * time.Second
 	// Cap on captured launcher output quoted back in an error.
 	maxLauncherOutput = 4096
 )
@@ -71,9 +69,6 @@ type Client struct {
 	request *http.Client
 	// ensure is used for the possibly-very-slow ensure call.
 	ensure *http.Client
-	// cancel is used for the best-effort run-cancel POST, which must not be cut
-	// short by the probe timeout nor wait out a stream read timeout.
-	cancel *http.Client
 }
 
 // New builds a Client, filling unset options with their defaults.
@@ -101,7 +96,6 @@ func New(opts Options) *Client {
 		control: &http.Client{Timeout: opts.ProbeTimeout},
 		request: &http.Client{Timeout: defaultRequestTimeout},
 		ensure:  &http.Client{Timeout: opts.EnsureTimeout},
-		cancel:  &http.Client{Timeout: defaultCancelTimeout},
 	}
 }
 
@@ -131,10 +125,14 @@ func (c *Client) Attach(ctx context.Context) (*Instance, error) {
 func (c *Client) verify(ctx context.Context, inst *Instance) error {
 	path, _ := InstancePath()
 	if !c.opts.PIDAlive(inst.PID) {
-		return &StaleError{Path: path, Reason: fmt.Sprintf("its pid %d is not running", inst.PID)}
+		return &StaleError{
+			Kind:   StalePIDDead,
+			Path:   path,
+			Reason: fmt.Sprintf("its pid %d is not running", inst.PID),
+		}
 	}
-	if err := c.probe(ctx, inst); err != nil {
-		return &StaleError{Path: path, Reason: err.Error()}
+	if kind, err := c.probe(ctx, inst); err != nil {
+		return &StaleError{Kind: kind, Path: path, Reason: err.Error()}
 	}
 	return nil
 }
@@ -144,38 +142,48 @@ type statusBody struct {
 	PID     int    `json:"pid"`
 }
 
-// probe checks the recorded port with the recorded token. It returns nil only if
-// the server answers 200 with our service id and the pid from the registry.
-func (c *Client) probe(ctx context.Context, inst *Instance) error {
+// probe checks the recorded port with the recorded token. It returns a nil error
+// only if the server answers 200 with our service id and the pid from the
+// registry. The returned StaleKind says whether a failure looks like OUR daemon
+// misbehaving or an unrelated process holding a recycled port.
+func (c *Client) probe(ctx context.Context, inst *Instance) (StaleKind, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.opts.ProbeTimeout)
 	defer cancel()
 
 	req, err := c.newRequest(ctx, inst, http.MethodGet, APIPrefix+"/status", nil, nil)
 	if err != nil {
-		return err
+		return StaleUnresponsive, err
 	}
 	resp, err := c.control.Do(req)
 	if err != nil {
-		return fmt.Errorf("port %d did not answer a status probe (%v)", inst.Port, err)
+		// Refused / timed out: nothing is serving, so this is our own daemon
+		// wedged or dying rather than a foreign process.
+		return StaleUnresponsive, fmt.Errorf("port %d did not answer a status probe (%v)", inst.Port, err)
 	}
 	defer drainAndClose(resp)
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("port %d answered the status probe with HTTP %d", inst.Port, resp.StatusCode)
+		// 401 and 5xx are shapes OUR daemon produces; any other 4xx is most
+		// likely a foreign HTTP server that does not know this route.
+		kind := StaleForeign
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode >= 500 {
+			kind = StaleUnresponsive
+		}
+		return kind, fmt.Errorf("port %d answered the status probe with HTTP %d", inst.Port, resp.StatusCode)
 	}
 	var body statusBody
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&body); err != nil {
-		return fmt.Errorf("port %d answered the status probe with an unreadable body (%v)", inst.Port, err)
+		return StaleForeign, fmt.Errorf("port %d answered the status probe with an unreadable body (%v)", inst.Port, err)
 	}
 	if body.Service != ServiceID {
-		return fmt.Errorf("port %d is served by %q, not %q — an unrelated process took the freed port",
+		return StaleForeign, fmt.Errorf("port %d is served by %q, not %q — an unrelated process took the freed port",
 			inst.Port, body.Service, ServiceID)
 	}
 	if body.PID != inst.PID {
-		return fmt.Errorf("port %d is served by pid %d but the registry records pid %d",
+		return StaleForeign, fmt.Errorf("port %d is served by pid %d but the registry records pid %d",
 			inst.Port, body.PID, inst.PID)
 	}
-	return nil
+	return StaleCorrupt, nil
 }
 
 // StartOrAttach returns the running daemon, starting one only if needed.
@@ -214,14 +222,22 @@ func (c *Client) StartOrAttach(ctx context.Context) (*Instance, error) {
 		return nil, err
 	}
 
-	// A recorded pid that is alive but unresponsive is a daemon gone bad. The TUI
-	// deliberately does NOT kill it (unlike the Python client, which can verify
-	// the cmdline via psutil first): killing a possibly-recycled pid from a UI is
-	// worse than telling the user exactly what to run.
-	if rec, rerr := ReadInstance(); rerr == nil && c.opts.PIDAlive(rec.PID) {
-		return nil, &StartError{Reason: fmt.Sprintf(
-			"the recorded daemon pid %d is running but does not answer a status probe on port %d. "+
-				"Run `gaia daemon restart` to reclaim it", rec.PID, rec.Port)}
+	// A recorded pid that is alive AND whose port looks like our own wedged
+	// daemon must not be silently replaced. The TUI deliberately does NOT kill it
+	// (unlike the Python client, which can verify the cmdline via psutil first):
+	// killing a possibly-recycled pid from a UI is worse than telling the user
+	// exactly what to run.
+	//
+	// A FOREIGN answer on that port is different: the probe already proved the
+	// record is garbage (recycled pid, port taken by something else), so blocking
+	// on it would leave the TUI permanently unable to start a daemon.
+	var stale *StaleError
+	if errors.As(err, &stale) && stale.Kind == StaleUnresponsive {
+		if rec, rerr := ReadInstance(); rerr == nil && c.opts.PIDAlive(rec.PID) {
+			return nil, &StartError{Reason: fmt.Sprintf(
+				"the recorded daemon pid %d is running but does not answer a status probe on port %d. "+
+					"Run `gaia daemon restart` to reclaim it", rec.PID, rec.Port)}
+		}
 	}
 
 	return c.spawnAndWait(ctx)
@@ -250,6 +266,11 @@ func (c *Client) spawnAndWait(ctx context.Context) (*Instance, error) {
 	cmd, err := c.opts.StartCommand(startCtx)
 	if err != nil {
 		return nil, err
+	}
+	if cmd == nil {
+		return nil, &StartError{
+			Reason: "the configured daemon start command returned no command to run",
+		}
 	}
 	var out bytes.Buffer
 	if cmd.Stdout == nil {
@@ -362,7 +383,7 @@ func (c *Client) Do(ctx context.Context, inst *Instance, r Request) (*http.Respo
 	}
 	drainAndClose(resp)
 
-	fresh, err := c.refresh(ctx, inst)
+	fresh, err := c.refresh(ctx, inst, r.Path)
 	if err != nil {
 		return nil, inst, err
 	}
@@ -386,12 +407,23 @@ func (c *Client) Do(ctx context.Context, inst *Instance, r Request) (*http.Respo
 // refresh re-reads instance.json after a 401 and re-verifies it. An unchanged
 // token means the 401 was not a rotation, so retrying would just 401 again —
 // that surfaces as a loud error instead.
-func (c *Client) refresh(ctx context.Context, old *Instance) (*Instance, error) {
+func (c *Client) refresh(ctx context.Context, old *Instance, path string) (*Instance, error) {
 	fresh, err := ReadInstance()
 	if err != nil {
 		return nil, err
 	}
 	if fresh.Token == old.Token {
+		// A 401 on a RELAYED path may be the sidecar refusing its own bearer,
+		// which a daemon restart does not fix — pointing the user at
+		// `gaia daemon restart` would send them down the wrong path.
+		if !strings.HasPrefix(path, APIPrefix) {
+			return nil, &RequestError{
+				Op: fmt.Sprintf("authenticate the relayed call to %s", path),
+				Detail: "the daemon client token is current, so the 401 came from the agent sidecar " +
+					"rather than the daemon. Restart the sidecar with " +
+					"`gaia daemon stop-agent <id>` and retry",
+			}
+		}
 		return nil, &RequestError{
 			Op: "authenticate against the daemon",
 			Detail: "it rejected the client token (HTTP 401) but instance.json still records the same token. " +
@@ -500,34 +532,11 @@ func (c *Client) EnsureAgent(ctx context.Context, agentID string) (*Instance, er
 	return inst, nil
 }
 
-// CancelRun asks the relay to cancel a streaming run. Best-effort: the sidecar
-// may already be gone, so failures are logged, never raised.
-func (c *Client) CancelRun(inst *Instance, agentID, runID string) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultCancelTimeout)
-	defer cancel()
-
-	resp, _, err := c.Do(ctx, inst, Request{
-		Method:     http.MethodPost,
-		Path:       fmt.Sprintf("/v1/%s/query/%s/cancel", agentID, runID),
-		HTTPClient: c.cancel,
-		Op:         fmt.Sprintf("cancel the '%s' run", agentID),
-	})
-	if err != nil {
-		c.opts.Logf("daemon: best-effort cancel for '%s' run_id=%s failed: %v", agentID, runID, err)
-		return
-	}
-	defer drainAndClose(resp)
-	// 404 is the documented answer for a run that is no longer in flight, which
-	// is exactly the case when we abandon a stream that already ended — that is
-	// success, not a failure worth reporting as one.
-	if resp.StatusCode == http.StatusNotFound {
-		c.opts.Logf("daemon: '%s' run_id=%s had already finished; nothing to cancel", agentID, runID)
-		return
-	}
-	if resp.StatusCode != http.StatusOK {
-		c.opts.Logf("daemon: best-effort cancel for '%s' run_id=%s answered HTTP %d",
-			agentID, runID, resp.StatusCode)
-	}
+// Logf emits a diagnostic through the client's configured logger. Exported so
+// callers that own an agent-contract call (e.g. the SSE transport's cancel) log
+// through the same channel. Never pass a raw token.
+func (c *Client) Logf(format string, args ...any) {
+	c.opts.Logf(format, args...)
 }
 
 // ErrorDetail extracts the actionable `detail` from a daemon error response,
@@ -554,11 +563,18 @@ func ErrorDetail(resp *http.Response) string {
 // fast (a dead daemon should fail quickly), then hold the stream open — a single
 // upstream chunk can span a whole agent-loop step, so read pacing is enforced by
 // the caller's own idle watchdog rather than a client-wide timeout.
-func StreamHTTPClient(connectTimeout time.Duration) *http.Client {
+//
+// headerTimeout bounds the wait for the response STATUS LINE only, which no
+// client-wide timeout can express without also capping the stream. Without it a
+// daemon that completes the handshake and never answers hangs the caller
+// forever — the reference implementation gets this for free because requests'
+// read timeout also covers the header wait.
+func StreamHTTPClient(connectTimeout, headerTimeout time.Duration) *http.Client {
 	return &http.Client{
 		Transport: &http.Transport{
-			DialContext:         (&net.Dialer{Timeout: connectTimeout}).DialContext,
-			TLSHandshakeTimeout: connectTimeout,
+			DialContext:           (&net.Dialer{Timeout: connectTimeout}).DialContext,
+			TLSHandshakeTimeout:   connectTimeout,
+			ResponseHeaderTimeout: headerTimeout,
 			// Loopback only, one stream at a time — no pooling benefit, and a
 			// pooled connection would outlive the run.
 			DisableKeepAlives: true,

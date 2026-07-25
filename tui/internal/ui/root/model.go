@@ -8,7 +8,6 @@ import (
 
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/client"
-	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/ui/chat"
 	"github.com/amd/gaia/tui/internal/ui/components"
 	"github.com/amd/gaia/tui/internal/ui/hub"
@@ -128,18 +127,6 @@ func (m RootModel) View() string {
 	return base
 }
 
-// newAgentClient builds the transport the catalog entry asks for.
-func (m RootModel) newAgentClient(agent catalog.Agent) client.AgentClient {
-	if agent.Transport == catalog.TransportDaemon {
-		// HTTP sidecar behind the daemon relay: no binary, no stdin/stdout.
-		return client.NewSSEClient(agent.ID, daemon.New(daemon.Options{Logf: m.logf}), client.SSEOptions{
-			Logf: m.logf,
-		})
-	}
-	// catalog.TransportSubprocess (the zero value): spawn the binary directly.
-	return client.NewSubprocessClient(agent.BinaryPath, agent.BinaryArgs, m.debug)
-}
-
 // logf writes transport diagnostics to stderr in debug mode. It must never be
 // given a daemon token — daemon.Instance redacts its own token when formatted.
 func (m RootModel) logf(format string, args ...any) {
@@ -150,7 +137,12 @@ func (m RootModel) logf(format string, args ...any) {
 }
 
 func (m RootModel) launchAgent(agent catalog.Agent) (tea.Model, tea.Cmd) {
-	c := m.newAgentClient(agent)
+	c, err := client.ForAgent(agent, client.ForAgentOptions{Debug: m.debug, Logf: m.logf})
+	if err != nil {
+		// Stay in the hub and say why, rather than opening a chat that cannot talk.
+		m.hub.SetStatus(err.Error())
+		return m, nil
+	}
 	m.chatClient = c
 
 	m.catalog.SetStatus(agent.ID, catalog.StatusActive)
@@ -174,6 +166,12 @@ func (m RootModel) launchAgent(agent catalog.Agent) (tea.Model, tea.Cmd) {
 func (m RootModel) returnToHub(agentID string) (tea.Model, tea.Cmd) {
 	m.catalog.SetStatus(agentID, catalog.StatusIdle)
 
+	// Cancel before closing: the chat model owns the per-turn context, so closing
+	// the transport without cancelling it can leave a reader streaming into a
+	// screen that no longer exists.
+	if m.chat != nil {
+		m.chat.CancelActiveTurn()
+	}
 	if m.chatClient != nil {
 		m.chatClient.Close()
 		m.chatClient = nil

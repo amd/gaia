@@ -47,13 +47,16 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 
 	case event.CanonicalFinalEvent:
 		usage := event.CanonicalUsageOf(e)
-		// Tokens already streamed the answer into the buffer; the terminal
-		// `final` must not print it a second time.
-		content := m.buffer
-		m.buffer = ""
+		// `answer` is the contract's authoritative field (§4), so it wins over the
+		// streamed tokens rather than the other way round — otherwise the view and
+		// the transcript pushed back as `context` could disagree. The buffered
+		// tokens are the fallback for a sidecar that streams and then sends an
+		// empty `final`. Either way the text is replaced, never printed twice.
+		content := e.Answer
 		if content == "" {
-			content = e.Answer
+			content = m.buffer
 		}
+		m.buffer = ""
 		m.messages = append(m.messages, Message{
 			Role:      RoleAssistant,
 			Content:   content,

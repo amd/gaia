@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,6 +22,8 @@ import (
 const (
 	defaultConnectTimeout = 10 * time.Second
 	defaultReadTimeout    = 300 * time.Second
+	// A cancel POST must never wait out a stream read timeout.
+	cancelTimeout = 10 * time.Second
 )
 
 // Turn is one entry of the host-owned transcript.
@@ -58,6 +62,13 @@ type SSEClient struct {
 	opts    SSEOptions
 	// stream is reused across turns: one Transport per client, not per turn.
 	stream *http.Client
+	// cancelHTTP is the short-timeout client for the cancel POST.
+	cancelHTTP *http.Client
+
+	// done is closed by Close(). It is the only way to unblock a consume()
+	// goroutine whose consumer has stopped reading and whose buffer is full —
+	// without it, Close() could not deliver the shutdown it advertises.
+	done chan struct{}
 
 	mu         sync.Mutex
 	inst       *daemon.Instance
@@ -85,10 +96,12 @@ func NewSSEClient(agentID string, dc *daemon.Client, opts SSEOptions) *SSEClient
 		opts.Logf = func(string, ...any) {}
 	}
 	return &SSEClient{
-		agentID: agentID,
-		daemon:  dc,
-		opts:    opts,
-		stream:  daemon.StreamHTTPClient(opts.ConnectTimeout),
+		agentID:    agentID,
+		daemon:     dc,
+		opts:       opts,
+		done:       make(chan struct{}),
+		stream:     daemon.StreamHTTPClient(opts.ConnectTimeout, opts.ReadTimeout),
+		cancelHTTP: &http.Client{Timeout: cancelTimeout},
 	}
 }
 
@@ -152,7 +165,7 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 
 	resp, inst, err := s.daemon.Do(runCtx, inst, daemon.Request{
 		Method: http.MethodPost,
-		Path:   fmt.Sprintf("/v1/%s/query", s.agentID),
+		Path:   fmt.Sprintf("/v1/%s/query", url.PathEscape(s.agentID)),
 		Body:   payload,
 		Header: http.Header{
 			"Content-Type": []string{"application/json"},
@@ -167,8 +180,20 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 	}
 	if resp.StatusCode != http.StatusOK {
 		detail := daemon.ErrorDetail(resp)
+		status := resp.StatusCode
 		resp.Body.Close()
 		cancel()
+		if status == http.StatusNotFound {
+			// A 404 on the query path is specifically "this route does not exist
+			// there" — most often a sidecar predating the canonical /query
+			// endpoint. Saying so beats making the user decode a bare 404.
+			return nil, fmt.Errorf(
+				"the '%s' agent has no /query endpoint (%s). Either the installed sidecar "+
+					"predates the canonical query contract — check its version with "+
+					"`gaia daemon agents` and reinstall/update the agent — or no agent with "+
+					"that id is registered with the daemon",
+				s.agentID, detail)
+		}
 		return nil, fmt.Errorf(
 			"the daemon relay refused the '%s' query (%s). Check `gaia daemon status`",
 			s.agentID, detail)
@@ -180,10 +205,17 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 	// Close() may have landed while the request was in flight; registering the
 	// handle unconditionally would leave that run un-cancellable.
 	closedMidFlight := s.closed
+	superseded := s.active
 	if !closedMidFlight {
 		s.active = handle
 	}
 	s.mu.Unlock()
+
+	// Send() is documented as serialized, but an orphaned run would keep a
+	// sidecar working with nobody listening — cancel it rather than trust the doc.
+	if superseded != nil {
+		superseded.cancel()
+	}
 
 	if closedMidFlight {
 		cancel()
@@ -229,15 +261,19 @@ func (s *SSEClient) consume(
 			return true
 		case <-ctx.Done():
 			return false
+		case <-s.done:
+			return false
 		}
 	}
 
 	reader := newSSEFrameReader(resp.Body, func() { watchdog.Reset(s.opts.ReadTimeout) })
 
 	var (
-		terminal  string
-		answer    string
-		streamed  string
+		terminal string
+		answer   string
+		// A local Builder is never copied, so it is safe here (unlike one held in
+		// a value-copied Bubble Tea model) and avoids quadratic reallocation.
+		streamed  strings.Builder
 		delivered = true
 	)
 
@@ -252,7 +288,7 @@ func (s *SSEClient) consume(
 			s.opts.Logf("sse: unparseable '%s' frame (%s) — skipped", s.agentID, malformed.Reason)
 		}
 		if tok, isToken := evt.(event.CanonicalTokenEvent); isToken {
-			streamed += tok.Delta
+			streamed.WriteString(tok.Delta)
 		}
 		if fin, isFinal := evt.(event.CanonicalFinalEvent); isFinal {
 			answer = fin.Answer
@@ -272,7 +308,7 @@ func (s *SSEClient) consume(
 			if answer == "" {
 				// The sidecar streamed the answer as tokens and closed with an
 				// empty `final` — keep the streamed text as the turn's answer.
-				answer = streamed
+				answer = streamed.String()
 			}
 			s.appendTurn(query, answer)
 		}
@@ -324,7 +360,10 @@ func (s *SSEClient) consume(
 		})
 	}
 
-	s.cancelRun(handle)
+	// Deliberately not inline: cancelRun runs before every deferred cleanup,
+	// including close(ch), so a slow or hung daemon would hold the channel open
+	// and let a superseded turn's completion land on the next turn.
+	go s.cancelRun(handle)
 }
 
 func (s *SSEClient) readTimeoutDetail() string {
@@ -334,7 +373,12 @@ func (s *SSEClient) readTimeoutDetail() string {
 		s.agentID, s.opts.ReadTimeout)
 }
 
-// cancelRun tells the relay to drop a run we are abandoning. Best-effort.
+// cancelRun asks the relay to drop a run we are abandoning.
+//
+// Best-effort: the sidecar may already be gone. It owns its own background
+// context so a cancelled caller context cannot kill the cancel itself, and it
+// lives here rather than in the daemon package because the cancel path is part
+// of the AGENT wire contract, not the daemon control plane.
 func (s *SSEClient) cancelRun(handle *runHandle) {
 	s.mu.Lock()
 	inst := s.inst
@@ -342,7 +386,35 @@ func (s *SSEClient) cancelRun(handle *runHandle) {
 	if inst == nil {
 		return
 	}
-	s.daemon.CancelRun(inst, s.agentID, handle.runID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), cancelTimeout)
+	defer cancel()
+
+	resp, _, err := s.daemon.Do(ctx, inst, daemon.Request{
+		Method: http.MethodPost,
+		Path: fmt.Sprintf("/v1/%s/query/%s/cancel",
+			url.PathEscape(s.agentID), url.PathEscape(handle.runID)),
+		HTTPClient: s.cancelHTTP,
+		Op:         fmt.Sprintf("cancel the '%s' run", s.agentID),
+	})
+	if err != nil {
+		s.opts.Logf("sse: best-effort cancel for '%s' run_id=%s failed: %v",
+			s.agentID, handle.runID, err)
+		return
+	}
+	defer resp.Body.Close()
+	// 404 is the documented answer for a run that is no longer in flight — which
+	// is exactly the case when we abandon a stream that already ended. That is
+	// success, not a failure worth reporting as one.
+	if resp.StatusCode == http.StatusNotFound {
+		s.opts.Logf("sse: '%s' run_id=%s had already finished; nothing to cancel",
+			s.agentID, handle.runID)
+		return
+	}
+	if resp.StatusCode != http.StatusOK {
+		s.opts.Logf("sse: cancel for '%s' run_id=%s answered HTTP %d",
+			s.agentID, handle.runID, resp.StatusCode)
+	}
 }
 
 func (s *SSEClient) clearActive(handle *runHandle) {
@@ -381,11 +453,15 @@ func (s *SSEClient) ResetTranscript() {
 // Close cancels any in-flight run and refuses further sends.
 func (s *SSEClient) Close() error {
 	s.mu.Lock()
+	alreadyClosed := s.closed
 	s.closed = true
 	active := s.active
 	s.active = nil
 	s.mu.Unlock()
 
+	if !alreadyClosed {
+		close(s.done)
+	}
 	if active != nil {
 		active.cancel()
 	}

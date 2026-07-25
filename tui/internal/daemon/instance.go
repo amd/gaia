@@ -76,39 +76,43 @@ func ReadInstance() (*Instance, error) {
 		return nil, &NotRunningError{Path: path}
 	}
 	if err != nil {
-		return nil, &StaleError{Path: path, Reason: fmt.Sprintf("it cannot be read (%v)", err)}
+		return nil, &StaleError{Kind: StaleCorrupt, Path: path, Reason: fmt.Sprintf("it cannot be read (%v)", err)}
 	}
 
 	var inst Instance
 	if err := json.Unmarshal(raw, &inst); err != nil {
 		return nil, &StaleError{
+			Kind:   StaleCorrupt,
 			Path:   path,
 			Reason: fmt.Sprintf("it is not valid JSON (%v) — a crash mid-write leaves a truncated file", err),
 		}
 	}
 	if inst.PID <= 0 {
-		return nil, &StaleError{Path: path, Reason: "it records no usable pid"}
+		return nil, &StaleError{Kind: StaleCorrupt, Path: path, Reason: "it records no usable pid"}
 	}
 	if inst.Port <= 0 || inst.Port > 65535 {
-		return nil, &StaleError{Path: path, Reason: fmt.Sprintf("it records an invalid port (%d)", inst.Port)}
+		return nil, &StaleError{Kind: StaleCorrupt, Path: path, Reason: fmt.Sprintf("it records an invalid port (%d)", inst.Port)}
 	}
 	if inst.Port == ReservedPort {
 		return nil, &StaleError{
+			Kind:   StaleCorrupt,
 			Path:   path,
 			Reason: fmt.Sprintf("it records port %d, which is reserved and never used by GAIA", ReservedPort),
 		}
 	}
 	if inst.Token == "" {
-		return nil, &StaleError{Path: path, Reason: "it records no client token, so no request could be authenticated"}
+		return nil, &StaleError{Kind: StaleCorrupt, Path: path, Reason: "it records no client token, so no request could be authenticated"}
 	}
 	if inst.Service != "" && inst.Service != ServiceID {
 		return nil, &StaleError{
+			Kind:   StaleCorrupt,
 			Path:   path,
 			Reason: fmt.Sprintf("it was written by service %q, not %q", inst.Service, ServiceID),
 		}
 	}
 	if inst.APIVersion == "" {
 		return nil, &StaleError{
+			Kind:   StaleCorrupt,
 			Path:   path,
 			Reason: "it records no api_version, so the daemon contract version cannot be verified",
 		}

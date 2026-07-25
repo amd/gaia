@@ -732,3 +732,173 @@ func containsAuth(seen []string, token string) bool {
 	}
 	return false
 }
+
+// A recycled pid whose port is answered by an UNRELATED service means the record
+// is garbage — the probe already proved it. Blocking on it (as an earlier version
+// did, keying only off pid liveness) left the TUI permanently unable to start a
+// daemon until the user intervened.
+func TestStartOrAttachReclaimsARecycledPortFromAForeignService(t *testing.T) {
+	f := newFakeDaemon(t)
+	f.writeInstance(nil)
+	f.mu.Lock()
+	f.service = "some-unrelated-server" // the freed port was taken by something else
+	f.mu.Unlock()
+
+	// The launcher registers a fresh, healthy instance.
+	fresh := &Instance{
+		PID: os.Getpid(), Port: f.port(), Token: "token-A",
+		Host: DefaultHost, APIVersion: "1.1", Service: ServiceID,
+	}
+	payload, err := json.Marshal(fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	spawned := false
+	c := testClient(t, func(o *Options) {
+		// The recorded pid IS alive (it is this test process).
+		o.StartCommand = func(ctx context.Context) (*exec.Cmd, error) {
+			spawned = true
+			f.mu.Lock()
+			f.service = ServiceID // the new daemon answers properly
+			f.mu.Unlock()
+			return launcher(t, f.dir, string(payload), "")(ctx)
+		}
+	})
+
+	if _, err := c.StartOrAttach(context.Background()); err != nil {
+		t.Fatalf("StartOrAttach must reclaim a garbage record, got: %v", err)
+	}
+	if !spawned {
+		t.Error("a foreign service on the recorded port must not block starting a daemon")
+	}
+}
+
+// The mirror case: our OWN pid alive and the port refusing/erroring is a wedged
+// daemon, which must NOT be silently replaced.
+func TestStaleKindClassification(t *testing.T) {
+	f := newFakeDaemon(t)
+	f.writeInstance(nil)
+
+	cases := []struct {
+		name   string
+		setup  func()
+		want   StaleKind
+		reason string
+	}{
+		{"foreign service", func() { f.mu.Lock(); f.service = "other"; f.mu.Unlock() }, StaleForeign, "took the freed port"},
+		{"pid mismatch", func() {
+			f.mu.Lock()
+			f.service = ServiceID
+			f.reportedPID = os.Getpid() + 100000
+			f.mu.Unlock()
+		}, StaleForeign, "registry records pid"},
+		{"our daemon 5xx", func() {
+			f.mu.Lock()
+			f.reportedPID = os.Getpid()
+			f.statusCode = http.StatusInternalServerError
+			f.mu.Unlock()
+		}, StaleUnresponsive, "HTTP 500"},
+		{"foreign 404", func() { f.mu.Lock(); f.statusCode = http.StatusNotFound; f.mu.Unlock() }, StaleForeign, "HTTP 404"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.setup()
+			_, err := testClient(t, nil).Attach(context.Background())
+			var se *StaleError
+			if !asError(err, &se) {
+				t.Fatalf("expected *StaleError, got %#v (%v)", err, err)
+			}
+			if se.Kind != tc.want {
+				t.Errorf("Kind = %d, want %d (%v)", se.Kind, tc.want, err)
+			}
+			if !strings.Contains(err.Error(), tc.reason) {
+				t.Errorf("error %q must mention %q", err, tc.reason)
+			}
+		})
+	}
+}
+
+func TestStartOrAttachRejectsANilStartCommand(t *testing.T) {
+	newFakeDaemon(t) // no instance.json written
+
+	c := testClient(t, func(o *Options) {
+		o.StartCommand = func(context.Context) (*exec.Cmd, error) { return nil, nil }
+	})
+	_, err := c.StartOrAttach(context.Background())
+	var se *StartError
+	if !asError(err, &se) {
+		t.Fatalf("expected *StartError rather than a panic, got %#v (%v)", err, err)
+	}
+}
+
+// A 401 on a RELAYED path is the sidecar refusing its bearer, which a daemon
+// restart does not fix — the remedy must not point at the daemon.
+func TestRelayed401BlamesTheSidecarNotTheDaemon(t *testing.T) {
+	f := newFakeDaemon(t)
+	f.writeInstance(nil)
+
+	c := testClient(t, nil)
+	inst, err := c.Attach(context.Background())
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	f.mu.Lock()
+	f.token = "server-only-token" // every request now 401s, file unchanged
+	f.mu.Unlock()
+
+	_, _, err = c.Do(context.Background(), inst, Request{
+		Method: http.MethodPost, Path: "/v1/email/query",
+	})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "sidecar") {
+		t.Errorf("a relayed 401 must blame the sidecar: %v", err)
+	}
+	if strings.Contains(err.Error(), "gaia daemon restart") {
+		t.Errorf("a relayed 401 must not send the user to restart the daemon: %v", err)
+	}
+
+	// The daemon-plane equivalent keeps the daemon remedy.
+	_, _, err = c.Do(context.Background(), inst, Request{
+		Method: http.MethodGet, Path: APIPrefix + "/status",
+	})
+	if err == nil || !strings.Contains(err.Error(), "gaia daemon restart") {
+		t.Errorf("a daemon-plane 401 must keep the daemon remedy: %v", err)
+	}
+}
+
+// If the daemon still rejects the refreshed token, that must surface as a loud
+// error rather than an endless retry loop.
+func TestDoFailsWhenTheRefreshedTokenIsAlsoRejected(t *testing.T) {
+	f := newFakeDaemon(t)
+	f.writeInstance(nil)
+
+	c := testClient(t, nil)
+	inst, err := c.Attach(context.Background())
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+
+	// instance.json rotates to token-B (so the retry is attempted) but the server
+	// requires a third token neither side has.
+	f.writeInstance(func(i *Instance) { i.Token = "token-B" })
+	f.mu.Lock()
+	f.token = "token-C"
+	f.mu.Unlock()
+
+	_, _, err = c.Do(context.Background(), inst, Request{
+		Method: http.MethodGet,
+		Path:   APIPrefix + "/status",
+	})
+	if err == nil {
+		t.Fatal("expected an error when the refreshed token is also rejected")
+	}
+	// The refreshed instance cannot pass the liveness probe either, so the failure
+	// must name the stale registry rather than loop.
+	if !strings.Contains(err.Error(), "cannot be trusted") && !strings.Contains(err.Error(), "401") {
+		t.Errorf("error should explain the auth failure: %v", err)
+	}
+}

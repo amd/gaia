@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -51,6 +53,63 @@ func RunChat(subprocess string, query string, debug bool) error {
 		return fmt.Errorf("TUI error: %w", err)
 	}
 	return nil
+}
+
+// RunAgent launches one catalog agent by id, over whatever transport that entry
+// declares — so the daemon/SSE transport is reachable without waiting for the
+// hub's install flow.
+//
+// With query != "" this is a genuine non-interactive one-shot: no alt screen, the
+// answer on stdout, progress on stderr, and a real exit code. That is what makes
+// the transport exercisable from a script, from CI, and against a live daemon.
+// Returns the process exit code.
+func RunAgent(agentID, query, model string, debug bool) (int, error) {
+	cat := catalog.NewCatalog()
+	cat.DiscoverBinaries()
+
+	agent := cat.Get(agentID)
+	if agent == nil {
+		return 1, fmt.Errorf("no agent %q in the catalog — known ids: %s",
+			agentID, strings.Join(agentIDs(cat), ", "))
+	}
+
+	logf := func(string, ...any) {}
+	if debug {
+		logf = func(format string, args ...any) {
+			fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
+		}
+	}
+
+	c, err := client.ForAgent(*agent, client.ForAgentOptions{
+		Debug: debug,
+		Model: model,
+		Logf:  logf,
+	})
+	if err != nil {
+		return 1, err
+	}
+	defer c.Close()
+
+	if query != "" {
+		res := RunOneShot(context.Background(), c, query, os.Stdout, os.Stderr)
+		return res.ExitCode, nil
+	}
+
+	model_ := chat.NewChatModel(c, agent.Name, "", debug)
+	p := tea.NewProgram(model_, tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
+		return 1, fmt.Errorf("TUI error: %w", err)
+	}
+	return 0, nil
+}
+
+func agentIDs(cat *catalog.Catalog) []string {
+	all := cat.All()
+	ids := make([]string, 0, len(all))
+	for _, a := range all {
+		ids = append(ids, a.ID)
+	}
+	return ids
 }
 
 func agentNameFromPath(path string) string {

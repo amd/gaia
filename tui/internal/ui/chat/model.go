@@ -18,9 +18,16 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/components"
 )
 
-type eventMsg struct{ event interface{} }
+// eventMsg and doneMsg carry the channel they came from. Bubble Tea cannot
+// cancel an already-dispatched Cmd, so a cancelled turn's waitForEvent goroutine
+// stays parked on its old channel and delivers late — without the tag, that late
+// delivery would tear down whatever turn is running by then.
+type eventMsg struct {
+	ch    <-chan interface{}
+	event interface{}
+}
 type errMsg struct{ err error }
-type doneMsg struct{}
+type doneMsg struct{ ch <-chan interface{} }
 type sendQueryMsg struct{ query string }
 type channelReadyMsg struct{ ch <-chan interface{} }
 
@@ -187,9 +194,15 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForEvent(m.events)
 
 	case eventMsg:
+		if m.supersededTurn(msg.ch) {
+			return m, nil
+		}
 		return m.handleEvent(msg.event)
 
 	case doneMsg:
+		if m.supersededTurn(msg.ch) {
+			return m, nil
+		}
 		m.streaming = false
 		m.events = nil
 		m.cancelFn = nil
@@ -374,10 +387,28 @@ func waitForEvent(ch <-chan interface{}) tea.Cmd {
 		}
 		evt, ok := <-ch
 		if !ok {
-			return doneMsg{}
+			return doneMsg{ch: ch}
 		}
-		return eventMsg{event: evt}
+		return eventMsg{ch: ch, event: evt}
 	}
+}
+
+// supersededTurn reports whether a message belongs to a turn that is no longer
+// the current one, so it must be ignored rather than allowed to end the live turn.
+func (m ChatModel) supersededTurn(ch <-chan interface{}) bool {
+	return ch != nil && ch != m.events
+}
+
+// CancelActiveTurn stops any in-flight turn. The UI owns the per-turn context, so
+// tearing this view down has to cancel it — otherwise the transport keeps
+// streaming into a screen nobody is watching and the agent run stays alive.
+func (m *ChatModel) CancelActiveTurn() {
+	if m.cancelFn != nil {
+		m.cancelFn()
+		m.cancelFn = nil
+	}
+	m.streaming = false
+	m.events = nil
 }
 
 func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {

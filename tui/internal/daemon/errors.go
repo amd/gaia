@@ -14,12 +14,32 @@ func (e *NotRunningError) Error() string {
 			"Start one with `gaia daemon start`.", e.Path)
 }
 
+// StaleKind classifies WHY a recorded instance cannot be trusted, because the
+// remedy differs: a garbage record is reclaimed by starting a fresh daemon,
+// whereas our own live-but-wedged daemon must not be silently replaced.
+type StaleKind int
+
+const (
+	// StaleCorrupt — the file is missing fields, unreadable, or not JSON.
+	StaleCorrupt StaleKind = iota
+	// StalePIDDead — the recorded pid is gone.
+	StalePIDDead
+	// StaleUnresponsive — the pid is alive but the recorded port does not answer
+	// as a healthy daemon. Probably our own daemon gone bad.
+	StaleUnresponsive
+	// StaleForeign — the port answers as a different service, or as a different
+	// pid. After a hard crash the OS reused the pid AND something else took the
+	// freed port, so the record is garbage and can be reclaimed.
+	StaleForeign
+)
+
 // StaleError means instance.json exists but must not be trusted: it is corrupt,
 // its pid is dead, or the recorded port answers as something other than our
-// daemon. Reason names which check failed.
+// daemon. Reason names which check failed; Kind drives the recovery decision.
 type StaleError struct {
 	Path   string
 	Reason string
+	Kind   StaleKind
 }
 
 func (e *StaleError) Error() string {

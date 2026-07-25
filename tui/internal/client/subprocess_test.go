@@ -435,3 +435,69 @@ func TestSubprocessClient_UnparseableLineIsVisible(t *testing.T) {
 		t.Error("the turn must still reach its answer after an unreadable line")
 	}
 }
+
+// A cancelled turn kills the child on purpose, so the resulting non-zero exit /
+// closed pipe must NOT surface as an agent error — that put a spurious
+// "exited with code -1" bubble under the "cancelled" line about half the time.
+func TestSubprocessClient_CancelEmitsNoSpuriousError(t *testing.T) {
+	bin := buildAgentFrom(t, t.TempDir(), "slow_cancel_agent", slowAgentSrc)
+
+	const runs = 8
+	for i := 0; i < runs; i++ {
+		c := NewSubprocessClient(bin, nil, false)
+		ctx, cancel := context.WithCancel(context.Background())
+
+		ch, err := c.Send(ctx, "start")
+		if err != nil {
+			t.Fatalf("run %d: Send: %v", i, err)
+		}
+		if _, ok := <-ch; !ok {
+			t.Fatalf("run %d: expected an event before cancelling", i)
+		}
+		cancel()
+
+		for evt := range ch {
+			if ae, ok := evt.(event.AgentErrorEvent); ok {
+				t.Fatalf("run %d: cancelling emitted a spurious agent error: %q", i, ae.Content)
+			}
+		}
+		c.Close()
+	}
+}
+
+// The turn after a cancel must respawn cleanly: the cancel path clears the
+// client's pipes from another goroutine, so an unsynchronised read of them in
+// Send was both a data race and a nil-deref.
+func TestSubprocessClient_SendAfterCancelRespawns(t *testing.T) {
+	bin := buildAgentFrom(t, t.TempDir(), "respawn_agent", echoAgentSrc)
+
+	c := NewSubprocessClient(bin, nil, false)
+	defer c.Close()
+
+	for i := 0; i < 10; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		ch, err := c.Send(ctx, "cancel me")
+		if err != nil {
+			t.Fatalf("iteration %d: Send: %v", i, err)
+		}
+		cancel()
+		for range ch {
+		}
+
+		// A full turn immediately afterwards, while the cancel teardown may
+		// still be running.
+		ch2, err := c.Send(context.Background(), "real turn")
+		if err != nil {
+			t.Fatalf("iteration %d: Send after cancel: %v", i, err)
+		}
+		var answered bool
+		for evt := range ch2 {
+			if _, ok := evt.(event.AnswerEvent); ok {
+				answered = true
+			}
+		}
+		if !answered {
+			t.Fatalf("iteration %d: the turn after a cancel produced no answer", i)
+		}
+	}
+}

@@ -15,6 +15,10 @@ import (
 	"github.com/amd/gaia/tui/internal/event"
 )
 
+// closeGrace bounds how long Close() waits for an in-flight turn's reader to
+// finish before giving up on a clean reap.
+const closeGrace = 2 * time.Second
+
 // detectLemonadeURL probes common Lemonade Server ports and returns the first reachable URL.
 func detectLemonadeURL() string {
 	ports := []string{"13305", "8000"}
@@ -33,16 +37,21 @@ func detectLemonadeURL() string {
 	return ""
 }
 
-// procHandle owns one child process so exactly one Wait() ever runs for it —
-// the reader goroutine, a cancellation kill, and Close() all funnel through it.
+// procHandle owns one child process.
+//
+// Reaping is the READER's job: os/exec forbids calling Wait before all reads
+// from a pipe have completed, so a kill from elsewhere must not also reap — it
+// would close the stdout pipe under the reader and turn a deliberate kill into a
+// spurious "file already closed" read error.
 type procHandle struct {
 	cmd      *exec.Cmd
 	waitOnce sync.Once
 	state    *os.ProcessState
 }
 
-// wait reaps the child and returns its final state (nil if it was never started).
-func (p *procHandle) wait() *os.ProcessState {
+// reap waits for the child and returns its final state. Safe to call more than
+// once; only the first call waits. Call it only once reads are done.
+func (p *procHandle) reap() *os.ProcessState {
 	p.waitOnce.Do(func() {
 		_ = p.cmd.Wait()
 		p.state = p.cmd.ProcessState
@@ -50,12 +59,11 @@ func (p *procHandle) wait() *os.ProcessState {
 	return p.state
 }
 
-// kill terminates the child and reaps it.
+// kill signals the child without reaping it.
 func (p *procHandle) kill() {
 	if p.cmd.Process != nil {
 		_ = p.cmd.Process.Kill()
 	}
-	p.wait()
 }
 
 // SubprocessClient communicates with a local agent binary via stdin/stdout JSONL.
@@ -71,6 +79,9 @@ type SubprocessClient struct {
 	stdout  *bufio.Scanner
 	stderr  *bytes.Buffer
 	started bool
+	// turnDone is closed by the in-flight turn's reader when it exits. nil when
+	// no turn is running.
+	turnDone chan struct{}
 }
 
 // NewSubprocessClient creates a client for an agent binary and its arguments.
@@ -87,21 +98,31 @@ func NewSubprocessClient(path string, args []string, debug bool) *SubprocessClie
 	}
 }
 
-// start spawns the subprocess if not already running.
-func (s *SubprocessClient) start() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// turnState is everything one turn needs, captured under a single lock so it can
+// never be read while a concurrent cancel is clearing the client's fields.
+type turnState struct {
+	stdin    io.WriteCloser
+	scanner  *bufio.Scanner
+	proc     *procHandle
+	stderr   *bytes.Buffer
+	turnDone chan struct{}
+}
 
+// startLocked spawns the subprocess if needed and returns the turn's handles.
+// The caller MUST hold s.mu.
+func (s *SubprocessClient) startLocked() (turnState, error) {
 	if s.started {
-		return nil
+		done := make(chan struct{})
+		s.turnDone = done
+		return turnState{s.stdin, s.stdout, s.proc, s.stderr, done}, nil
 	}
 	if s.path == "" {
-		return fmt.Errorf("no agent binary was given, so nothing can be launched")
+		return turnState{}, fmt.Errorf("no agent binary was given, so nothing can be launched")
 	}
 
 	cmd := exec.Command(s.path, s.args...)
-	s.stderr = &bytes.Buffer{}
-	cmd.Stderr = s.stderr
+	stderr := &bytes.Buffer{}
+	cmd.Stderr = stderr
 
 	// Auto-detect Lemonade URL if not set in environment
 	if os.Getenv("LEMONADE_BASE_URL") == "" {
@@ -115,67 +136,80 @@ func (s *SubprocessClient) start() error {
 
 	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {
-		return fmt.Errorf("failed to create stdin pipe: %w", err)
+		return turnState{}, fmt.Errorf("failed to create stdin pipe: %w", err)
 	}
-	s.stdin = stdinPipe
-
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
-		return fmt.Errorf("failed to create stdout pipe: %w", err)
+		return turnState{}, fmt.Errorf("failed to create stdout pipe: %w", err)
 	}
 
 	scanner := bufio.NewScanner(stdoutPipe)
 	// 1MB buffer for large tool outputs
 	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
-	s.stdout = scanner
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start agent %q: %w", s.path, err)
+		return turnState{}, fmt.Errorf("failed to start agent %q: %w", s.path, err)
 	}
 
+	done := make(chan struct{})
+	s.stdin = stdinPipe
+	s.stdout = scanner
+	s.stderr = stderr
 	s.proc = &procHandle{cmd: cmd}
 	s.started = true
-	return nil
+	s.turnDone = done
+	return turnState{stdinPipe, scanner, s.proc, stderr, done}, nil
 }
 
 // Send writes a query to stdin and returns a channel of parsed events.
 func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan interface{}, error) {
-	if err := s.start(); err != nil {
+	s.mu.Lock()
+	st, err := s.startLocked()
+	debug := s.debug
+	s.mu.Unlock()
+	if err != nil {
 		return nil, err
 	}
 
-	if _, err := fmt.Fprintln(s.stdin, query); err != nil {
+	if _, err := fmt.Fprintln(st.stdin, query); err != nil {
 		return nil, fmt.Errorf("failed to write to agent stdin: %w", err)
 	}
-
-	// Capture references under lock so the goroutine doesn't race with Close().
-	s.mu.Lock()
-	scanner := s.stdout
-	proc := s.proc
-	stderrBuf := s.stderr
-	debug := s.debug
-	s.mu.Unlock()
 
 	ch := make(chan interface{}, 32)
 
 	// A cancelled turn must actually stop the child. Abandoning the read while
 	// the agent keeps writing leaves the tail of this turn's output in the pipe,
-	// which the NEXT turn would read as its own — so the process is killed and
-	// respawned instead.
-	turnDone := make(chan struct{})
+	// which the NEXT turn would read as its own. Kill only — the reader reaps.
 	go func() {
 		select {
 		case <-ctx.Done():
-			s.terminate()
-		case <-turnDone:
+			st.proc.kill()
+		case <-st.turnDone:
 		}
 	}()
 
 	go func() {
 		defer close(ch)
-		defer close(turnDone)
+		defer close(st.turnDone)
 
+		// Registered last so it runs FIRST: every exit path from this goroutine
+		// — including the early returns mid-loop — must reset the client when the
+		// turn was cancelled, or the next Send reuses the child we just killed
+		// and reads nothing.
+		defer func() {
+			if ctx.Err() != nil {
+				st.proc.reap()
+				s.discard(st.proc)
+			}
+		}()
+
+		// Deterministic: once the turn is cancelled nothing is pushed into the
+		// abandoned channel. Selecting on both a ready send and a ready
+		// ctx.Done() would pick randomly and leak events into the next turn.
 		emit := func(evt interface{}) bool {
+			if ctx.Err() != nil {
+				return false
+			}
 			select {
 			case ch <- evt:
 				return true
@@ -184,23 +218,23 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 			}
 		}
 
-		for scanner.Scan() {
-			line := scanner.Bytes()
+		for st.scanner.Scan() {
+			line := st.scanner.Bytes()
 			if len(line) == 0 {
 				continue
 			}
 
-			evt, err := event.ParseEvent(line)
-			if err != nil {
+			evt, perr := event.ParseEvent(line)
+			if perr != nil {
 				// Visible, not dropped: a status warning keeps the turn alive
 				// while making a bad producer obvious.
 				if debug {
-					fmt.Fprintf(os.Stderr, "[DEBUG] parse error: %v (line: %s)\n", err, string(line))
+					fmt.Fprintf(os.Stderr, "[DEBUG] parse error: %v (line: %s)\n", perr, string(line))
 				}
 				if !emit(event.StatusEvent{
 					Type:    "status",
 					Status:  "warning",
-					Message: fmt.Sprintf("unreadable agent event (%v): %s", err, truncateLine(string(line))),
+					Message: fmt.Sprintf("unreadable agent event (%v): %s", perr, truncateLine(string(line))),
 				}) {
 					return
 				}
@@ -227,8 +261,14 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 			}
 		}
 
-		// Scanner stopped — check for read errors or unexpected process exit.
-		if err := scanner.Err(); err != nil {
+		// The read is over, so reaping is safe from here on. A cancelled turn
+		// killed the child on purpose: a dead child is the expected outcome, not
+		// an error to report, and the deferred reset above respawns next time.
+		if ctx.Err() != nil {
+			return
+		}
+
+		if err := st.scanner.Err(); err != nil {
 			emit(event.AgentErrorEvent{
 				Type:    "agent_error",
 				Content: fmt.Sprintf("agent stdout read error: %v", err),
@@ -236,10 +276,12 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 			return
 		}
 
-		// Process exited — reap it to get the exit code, then report if non-zero.
-		state := proc.wait()
+		// The child exited on its own — reap it for the exit code and report a
+		// non-zero one. The next Send respawns.
+		state := st.proc.reap()
+		s.discard(st.proc)
 		if state != nil && !state.Success() {
-			stderrContent := stderrBuf.String()
+			stderrContent := st.stderr.String()
 			msg := fmt.Sprintf("agent process exited with code %d", state.ExitCode())
 			if stderrContent != "" {
 				msg += "\n" + stderrContent
@@ -254,42 +296,66 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 	return ch, nil
 }
 
-// detach clears the client's process state and hands back what it was holding.
-func (s *SubprocessClient) detach() (*procHandle, io.WriteCloser) {
+// discard clears the client's process state, but only if it still refers to
+// proc — a newer Send may already have respawned.
+func (s *SubprocessClient) discard(proc *procHandle) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	proc, stdin := s.proc, s.stdin
+	if s.proc != proc {
+		return
+	}
 	s.proc = nil
 	s.stdin = nil
 	s.stdout = nil
 	s.stderr = nil
 	s.started = false
-	return proc, stdin
-}
-
-// terminate kills the child and resets the client so the next Send respawns it
-// against a clean pipe.
-func (s *SubprocessClient) terminate() {
-	proc, stdin := s.detach()
-	if stdin != nil {
-		stdin.Close()
-	}
-	if proc != nil {
-		proc.kill()
-	}
+	s.turnDone = nil
 }
 
 // Close terminates the subprocess.
 func (s *SubprocessClient) Close() error {
-	proc, stdin := s.detach()
-	// Close stdin to signal EOF to the child process.
+	s.mu.Lock()
+	if !s.started {
+		s.mu.Unlock()
+		return nil
+	}
+	proc, stdin, turnDone := s.proc, s.stdin, s.turnDone
+	s.proc = nil
+	s.stdin = nil
+	s.stdout = nil
+	s.stderr = nil
+	s.started = false
+	s.turnDone = nil
+	s.mu.Unlock()
+
+	// Closing stdin is how a well-behaved agent is asked to exit.
 	if stdin != nil {
 		stdin.Close()
 	}
-	if proc != nil {
-		proc.wait()
+	if proc == nil {
+		return nil
 	}
+
+	// If a turn's reader is still in flight it owns the reap (os/exec forbids
+	// Wait before reads complete), so wait for it rather than racing it.
+	if turnDone != nil {
+		select {
+		case <-turnDone:
+		case <-time.After(closeGrace):
+			// The agent ignored EOF. Kill it and let the reader finish.
+			proc.kill()
+			select {
+			case <-turnDone:
+			case <-time.After(closeGrace):
+				// The reader is wedged; leave the child to the OS rather than
+				// calling Wait underneath an active read.
+				return nil
+			}
+		}
+		return nil
+	}
+
+	proc.reap()
 	return nil
 }
 
