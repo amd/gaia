@@ -344,6 +344,43 @@ Phases 1 and 2 are independent of each other and can run in parallel (one Go-hea
 Python-heavy). Phase 5.1 should jump the queue — it is small and it is the difference
 between "it didn't work" and "here's what to fix".
 
+## 3b. Design review outcome — amendments to this plan
+
+The user-journey design (`docs/plans/tui-user-journey.md`) reviewed this plan and pushed back
+on ten points. Accepted amendments, in order of how much they change the build:
+
+- **Preflight moves into Phase 1 as its exit test.** It was scoped here as Phase 5.1 polish
+  that "should jump the queue". That undersold it: without the readiness gate, every failure
+  of the new transport — daemon down, token rotated, version gate failed, model missing —
+  reaches the user as a raw HTTP status. Phase 1 isn't done when the stream parses; it's done
+  when a stream that *can't start* explains itself.
+- **Drop "always allow" from the approval UI.** The nine gated tools are gated precisely
+  because they're irreversible, and "this session" has no boundary a user can hold in a TUI
+  that stays open for days. Attack approval *cost* — two keystrokes, no scrolling — not
+  approval count.
+- **Replace the three-level autonomy enum with two plain controls.** `manual | assisted |
+  autonomous` is implementer vocabulary; approvals are identical across the top two levels by
+  design, so the only real axis is whether background jobs run. Ship fixed "always ask before
+  irreversible things" plus a background-work checklist. Same code, nothing to teach, and it
+  doesn't promise a goal engine that doesn't exist.
+- **No background timers inside the TUI.** The TUI is closed most of the time, so a timer in
+  it means "autonomous while you watch" — the one case where just asking is easier. Scan on
+  launch instead: simpler, and it's what produces the day-5 screen.
+- **`builtin_specs()` — filter, explicitly.** Label unrunnable catalog entries as such rather
+  than offering them as Available. Zero cost, closes the dead end. Synthesis becomes real work
+  when the second installable agent arrives.
+- **Three render primitives, not four.** `image` is base64 raster and can't render in a
+  terminal; `diff` has no producer. Build `table`, `key_value`, `list` plus the fallback.
+- **Settings screen shrinks to what persists** (accounts, memory, app-local prefs), with the
+  budget moved to the config file that makes the rest real. Filed as #2470; scheduled-jobs
+  API as #2471.
+
+Three further pre-existing bugs found on the first-run path, added to §5: the hub opens on an
+empty `Installed` tab on a fresh machine; its 26-row chrome budget overflows an 80x24
+terminal; and connection state is signalled by colour alone. Also `backspace` currently
+triggers uninstall alongside `d`/`delete` — harmless today, destructive once uninstall is
+real — and chat's `/init` prints a message and does nothing.
+
 ## 4. Open decisions
 
 - **D1** — `/query` + resume, or `/agent/query` + `confirm-tool`? Resume is the better
