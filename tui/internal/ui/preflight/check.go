@@ -509,6 +509,13 @@ func checkInit(ctx context.Context, t Transport, cfg Config, rep *Report) State 
 // requested; a 40k-token request fails against both. So the number is real, it
 // varies with free memory, and it is invisible unless the row says it.
 //
+// What it is NOT is a property of the machine. Enumerating every llama-server
+// still alive on that same box and reading the --ctx-size each was launched
+// with gave 5 × 65536, 3 × 32768, 1 × 36807 across twelve hours — the full
+// profile window, reached five separate times. So a short load is a bad moment,
+// not a ceiling, and the remedy must not tell the user their hardware cannot do
+// it. That sentence was here and it was wrong.
+//
 // It is StateUnknown, deliberately, not StateFailed: the agent works perfectly
 // for ordinary turns, so blocking the launch would be worse than the shortfall.
 // Unknown is the state this package already has for "not proven ready, not
@@ -533,12 +540,22 @@ func markCtxShortfall(model *Row, loaded int) {
 	// produces this row: lemond has no stop or restart verb, and a second instance
 	// exits with "Port … is already in use".
 	//
-	// Only the shortfall-specific caveat is appended, and it is deliberately not a
-	// promise: asking for the full window raised it on the measured machine but
-	// never reached the target, because the limit was memory rather than the ask.
+	// The appended caveat keeps the hedge — a restart may not fix it — without
+	// claiming why. "This machine did not have the memory for more" was a
+	// conclusion the data never supported, and it ends the interaction: there is
+	// nothing a user does about hardware. Naming the load moment instead is both
+	// true and leaves them somewhere to go.
+	//
+	// It deliberately does NOT name what to close. The only concrete suspects on
+	// the measured machine were orphaned llama-servers totalling ~35 MB, which the
+	// memory evidence does not support as the cause — and pointing a user at the
+	// wrong processes is a worse remedy than a vague one. This package also has no
+	// way to see them: it dials the daemon and nothing else (see Ladder.Error), and
+	// the relayed /init reports the model, not the machine.
 	r := lemonadeRestartRemedy()
-	r.Action += " If it still comes up short after that, this machine did not have the " +
-		"memory for more — only long inputs are affected."
+	r.Action += " The window is chosen when the model loads, out of whatever memory is " +
+		"free at that moment — so a short one is usually a busy moment rather than a " +
+		"limit, and loading again on a quieter machine often gets more."
 	model.Remedy = r
 	// Nothing here is safe to do from the TUI: restarting the model server is a
 	// host-level action, exactly as it is on the Local AI row.

@@ -26,11 +26,13 @@ import (
 //
 //   - Asking for the window RAISES it. Every paired measurement put the
 //     requested run above the bare one, so the prefix earns its place.
-//   - It does not GUARANTEE it. The figure moves run to run and never reached
-//     65536, because llama.cpp clamps to the memory actually free at load time.
-//     So nothing here promises the target — the AI model row reports the window
-//     the server really loaded, and says so when it falls short (see
-//     markCtxShortfall).
+//   - It does not GUARANTEE it. The figure moved run to run and none of those
+//     runs reached 65536, because llama.cpp clamps to the memory actually free at
+//     load time. That is a load-moment effect, NOT a ceiling: other loads on the
+//     same machine the same day did reach 65536, five of them. So nothing here
+//     promises the target, and nothing here blames the hardware — the AI model
+//     row reports the window the server really loaded, and says so when it falls
+//     short (see markCtxShortfall).
 //
 // The value is DERIVED, never hardcoded. GAIA pins one context window per device
 // profile (lemonade_client.GPU_CTX_SIZE / NPU_CTX_SIZE) and `gaia init` records

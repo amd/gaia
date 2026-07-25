@@ -1607,11 +1607,14 @@ func TestTheShortfallRowShowsTheActualWindowAndTheExpectedOne(t *testing.T) {
 		!strings.Contains(row.Remedy.Command, fmt.Sprint(profileCtxTarget())) {
 		t.Errorf("the remedy names a window other than the profile's: %q", row.Remedy.Command)
 	}
-	// It must not promise a cure it cannot deliver: asking for the full window
-	// still came up short on the machine this was measured on.
-	if !strings.Contains(row.Remedy.Action, "still comes up short") {
-		t.Errorf("the remedy over-promises: %q", row.Remedy.Action)
-	}
+	// It must not promise a cure it cannot deliver — the window is set at load
+	// time, so a restart is a good bet and not a guarantee.
+	assertHedged(t, row.Remedy.Action)
+	// And it must not blame the hardware. Enumerating every llama-server alive on
+	// the measured machine found 5 loads at the full 65536 across the same twelve
+	// hours the 36807 one happened in, so "this machine cannot" was false — and it
+	// is the one wording that leaves the user nothing to do.
+	assertNoCapacityClaim(t, row.Remedy.Action)
 	// And it must be runnable FROM THIS STATE. The row only exists once a model
 	// is loaded, so a server already holds the port; lemond has no stop or
 	// restart verb, and a second instance exits with "already in use". A restart
@@ -1761,4 +1764,68 @@ func TestALauncherThatRestartsInPlaceIsNotToldToStopFirst(t *testing.T) {
 			systemd.Action)
 	}
 	assertSaysToStopFirst(t, systemd)
+}
+
+// assertHedged checks a remedy for a load-time-variable outcome promises a
+// likelihood, not a fix.
+func assertHedged(t *testing.T, action string) {
+	t.Helper()
+	for _, hedge := range []string{"usually", "often", "may", "might"} {
+		if strings.Contains(action, hedge) {
+			return
+		}
+	}
+	t.Errorf("the remedy reads as a guaranteed fix for something set at load time: %q", action)
+}
+
+// assertNoCapacityClaim rejects wording that attributes a short window to the
+// machine's capacity.
+//
+// The claim is false — the same box reached the full window five times the same
+// day — and it is uniquely bad wording: every other remedy in this package ends
+// with something the user can do, and "your machine cannot" ends the interaction
+// instead. Guarded rather than merely fixed, because it reads plausibly and the
+// data that disproves it is not in front of whoever edits this next.
+func assertNoCapacityClaim(t *testing.T, action string) {
+	t.Helper()
+	for _, claim := range []string{
+		"did not have the memory",
+		"does not have the memory",
+		"not enough memory",
+		"machine cannot",
+		"hardware",
+	} {
+		if strings.Contains(strings.ToLower(action), strings.ToLower(claim)) {
+			t.Errorf("the remedy blames the machine's capacity (%q), which the measurements "+
+				"contradict and which leaves the user nowhere to go: %q", claim, action)
+		}
+	}
+}
+
+// The shortfall remedy has to leave the user somewhere to go. It names WHEN the
+// window is decided, which is the actionable part, and it does not name specific
+// processes to close — the only candidates on the measured machine were ~35 MB of
+// orphaned llama-servers that the memory evidence does not implicate, and this
+// package cannot see them anyway: it dials the daemon and nothing else.
+func TestTheShortfallRemedyPointsAtTheLoadMomentNotTheHardware(t *testing.T) {
+	rep := Check(context.Background(),
+		newFake().with("GET /v1/email/init", 200, initCtxShortfall), EmailConfig())
+	row, _ := rep.Find(KeyModel)
+
+	assertNoCapacityClaim(t, row.Remedy.Action)
+	assertHedged(t, row.Remedy.Action)
+
+	// It says when the window is decided, which is what makes "try again" sensible
+	// rather than superstitious.
+	if !strings.Contains(row.Remedy.Action, "when the model loads") {
+		t.Errorf("the remedy never says when the window is chosen: %q", row.Remedy.Action)
+	}
+	// A vague "check for other processes" would be worse than nothing, so there is
+	// no such hint — and no invented one.
+	for _, vague := range []string{"other processes", "close other", "llama-server"} {
+		if strings.Contains(strings.ToLower(row.Remedy.Action), vague) {
+			t.Errorf("the remedy points at processes it cannot see and did not measure: %q",
+				row.Remedy.Action)
+		}
+	}
 }
