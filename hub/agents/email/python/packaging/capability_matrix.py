@@ -68,8 +68,9 @@ _GATE_FIXTURES_DIR = _REPO_ROOT / "tests" / "fixtures" / "email"
 # Committed, generated artifact.
 ARTIFACT_PATH = _EMAIL_ROOT / "CAPABILITY_MATRIX.md"
 
-# REST path suffixes that are probe/utility endpoints, not part of the 16
-# functional verbs (still counted in the 19-operation frozen contract).
+# REST path suffixes that are probe/utility endpoints. Excluded from the
+# functional-verb count, still counted in the frozen contract's total. Both
+# numbers are derived, never written down here — see _derive_rest().
 _PROBE_SUFFIXES = frozenset({"health", "version", "init"})
 
 # Suite -> the report/gate script whose presence means CI actually consumes
@@ -91,14 +92,25 @@ _SUITE_REPORT_FILENAMES: Dict[str, str] = {
 # quality eval, so a reviewed mapping is the only truthful mechanism.
 # ---------------------------------------------------------------------------
 
+# Template, not a finished string: the two surface counts are DERIVED (see
+# _derive_rest / _derive_mcp) and interpolated by tools_count_definition().
+# They were once literals here, which is how this file came to state "16 REST
+# verbs" in its Definitions section while computing 21 forty lines later.
 TOOLS_COUNT_DEFINITION = (
     "tools_count = the number of internal @tool-decorated agent-loop "
     "functions across gaia_agent_email/tools/*.py mixins (one per capability "
     "the agent's own LLM tool-calling loop can invoke). This is distinct "
-    "from, and larger than, the REST API's 16 functional verbs and the MCP "
-    "interface's 4 task-level tools -- both smaller, purpose-built surfaces "
-    "for external callers, not agent-loop tools."
+    "from, and larger than, the REST API's {rest_functional} functional verbs "
+    "and the MCP interface's {mcp_tools} task-level tools -- both smaller, "
+    "purpose-built surfaces for external callers, not agent-loop tools."
 )
+
+
+def tools_count_definition(rest_functional: int, mcp_tools: int) -> str:
+    """Render :data:`TOOLS_COUNT_DEFINITION` against the derived surface counts."""
+    return TOOLS_COUNT_DEFINITION.format(
+        rest_functional=rest_functional, mcp_tools=mcp_tools
+    )
 
 _NO_EVAL_SENTINEL = "no quality eval (contract-tested only)"
 
@@ -481,7 +493,9 @@ def render_markdown(matrix: CapabilityMatrix) -> str:
     lines.append("")
     # The constant leads with "tools_count = " (right for the yaml comment);
     # the bullet already labels it, so strip the prefix to avoid doubling.
-    definition_body = TOOLS_COUNT_DEFINITION.removeprefix("tools_count = ")
+    definition_body = tools_count_definition(
+        matrix.rest_functional_count, len(matrix.mcp_tools)
+    ).removeprefix("tools_count = ")
     lines.append(f"- **tools_count**: {definition_body}")
     lines.append(
         f"- **no quality eval sentinel**: `{_NO_EVAL_SENTINEL}` -- the op is "
