@@ -209,6 +209,37 @@ class TestLemonadeInstaller(unittest.TestCase):
         self.assertEqual(info.version, "10.7.0")
         self.assertEqual(info.path, r"C:\lemonade_server\bin\lemonade.exe")
 
+    @patch("gaia.installer.lemonade_installer.get_installed_version")
+    def test_check_installation_finds_macos_install(self, mock_get_version):
+        """`gaia init` reported "not installed" on a macOS box where lemond was
+        answering requests on the port GAIA itself probes (issue #1867).
+
+        Drives the REAL resolver through injected platform + filesystem probes
+        — patching resolve_lemonade here would only prove it was called, not
+        that macOS detection works.
+        """
+        from pathlib import Path
+
+        real_exists = Path.exists
+        present = {"/usr/local/bin/lemond", "/usr/local/bin/lemonade"}
+
+        mock_get_version.return_value = "10.10.0"
+        with (
+            patch("platform.system", return_value="Darwin"),
+            patch.dict("os.environ", {}, clear=True),
+            patch("shutil.which", return_value=None),
+            patch.object(
+                Path, "exists", lambda self: str(self.expanduser()) in present
+            ),
+        ):
+            info = LemonadeInstaller().check_installation()
+
+        self.assertIs(Path.exists, real_exists, "Path.exists must be restored")
+        self.assertTrue(info.installed, f"macOS install missed: {info.error}")
+        self.assertEqual(info.version, "10.10.0")
+        self.assertEqual(info.path, "/usr/local/bin/lemonade")
+        self.assertIsNone(info.error)
+
 
 class TestInstallResult(unittest.TestCase):
     """Test InstallResult dataclass."""

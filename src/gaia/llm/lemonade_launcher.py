@@ -10,6 +10,9 @@ Modern Lemonade Server (10.7/10.8) removed the ``lemonade-server`` CLI:
   ``%LOCALAPPDATA%\\lemonade_server\\bin``.
 * Linux ships ``/usr/bin/lemonade`` (client) and ``/usr/bin/lemond``
   (daemon) managed by the ``lemond`` systemd unit.
+* macOS ships ``lemond`` (daemon) + ``lemonade`` (client) under
+  ``/usr/local/bin``, installed by the Lemonade app. There is no systemd
+  unit, so the daemon is started directly (or from the app).
 * Context size is passed via the ``LEMONADE_CTX_SIZE`` environment
   variable, NOT a ``serve --ctx-size`` flag.
 
@@ -38,8 +41,13 @@ log = logging.getLogger(__name__)
 # Legacy CLI names, in probe order. lemonade-server-dev is the pip/CI variant.
 _LEGACY_BINARIES = ("lemonade-server", "lemonade-server-dev")
 
-# macOS ships an app bundle (plus /usr/local/bin/lemond); there is no
-# installer support and no canonical probe in resolve_lemonade().
+# macOS: the Lemonade app installs the daemon + client into a standard bin
+# dir. /usr/local/bin is where the official installer puts them; the
+# Apple-Silicon Homebrew prefix is probed too.
+_MACOS_BIN_DIRS = ("/usr/local/bin", "/opt/homebrew/bin")
+_MACOS_DAEMON_NAME = "lemond"
+_MACOS_CLIENT_NAME = "lemonade"
+
 _MACOS_APP_CANDIDATES = (
     "/Applications/lemonade-app.app",
     "~/Applications/lemonade-app.app",
@@ -117,8 +125,10 @@ def resolve_lemonade() -> LemonadeTooling:
        ``shutil.which`` is never consulted.
     2. Modern tooling by CANONICAL path probe (not PATH order):
        Windows ``%LOCALAPPDATA%\\lemonade_server\\bin\\LemonadeServer.exe``,
-       Linux ``/usr/bin/lemonade``. Modern wins even when a stale legacy
-       ``lemonade-server`` binary is also on PATH.
+       Linux ``/usr/bin/lemonade``, macOS ``/usr/local/bin/lemond``
+       (falling back to ``lemond`` on PATH for a non-standard prefix).
+       Modern wins even when a stale legacy ``lemonade-server`` binary is
+       also on PATH.
     3. Legacy ``shutil.which("lemonade-server")`` (also tolerates the
        pip/CI ``lemonade-server-dev`` variant).
     """
@@ -156,6 +166,31 @@ def resolve_lemonade() -> LemonadeTooling:
                 kind="modern",
                 client_path=str(client),
                 server_launcher="/usr/bin/lemond",
+            )
+    elif system == "Darwin":
+        # Probe the daemon (what we start), not the client — the client is
+        # only needed for the version query and may be absent.
+        for bin_dir in _MACOS_BIN_DIRS:
+            daemon = Path(bin_dir) / _MACOS_DAEMON_NAME
+            if not daemon.exists():
+                continue
+            client = Path(bin_dir) / _MACOS_CLIENT_NAME
+            log.debug("Found modern Lemonade at canonical path: %s", daemon)
+            return LemonadeTooling(
+                found=True,
+                kind="modern",
+                client_path=str(client) if client.exists() else None,
+                server_launcher=str(daemon),
+            )
+        # Installed under a non-standard prefix but still on PATH.
+        daemon_on_path = shutil.which(_MACOS_DAEMON_NAME)
+        if daemon_on_path:
+            log.debug("Found modern Lemonade daemon on PATH: %s", daemon_on_path)
+            return LemonadeTooling(
+                found=True,
+                kind="modern",
+                client_path=shutil.which(_MACOS_CLIENT_NAME),
+                server_launcher=daemon_on_path,
             )
 
     for name in _LEGACY_BINARIES:
@@ -210,6 +245,8 @@ def build_start_command(tooling: LemonadeTooling, ctx_size: Optional[int]) -> St
     Modern Windows -> ``LemonadeServer.exe --silent`` with
     ``LEMONADE_CTX_SIZE`` in env. Modern Linux -> best-effort
     ``systemctl --user start lemond`` (the daemon is normally already up).
+    Modern macOS -> the ``lemond`` daemon directly; macOS has no systemd, so
+    the Linux form must never leak there.
     Legacy -> ``lemonade-server serve --ctx-size N`` (+ ``--no-tray`` on
     Windows), byte-identical to the historical argv.
 
@@ -232,6 +269,14 @@ def build_start_command(tooling: LemonadeTooling, ctx_size: Optional[int]) -> St
         if tooling.source == "env":
             # Explicit LEMONADE_SERVER_PATH override — run the named binary
             # verbatim rather than silently rerouting to systemctl.
+            return StartSpec(argv=[launcher], env=env)
+        if platform.system() == "Darwin":
+            # No systemd on macOS — start the daemon directly.
+            if not launcher:
+                raise ValueError(
+                    "Modern macOS Lemonade tooling has no server_launcher; "
+                    f"expected the {_MACOS_DAEMON_NAME!r} daemon path."
+                )
             return StartSpec(argv=[launcher], env=env)
         # Linux daemon — best-effort user-unit start; the server is
         # normally already running under systemd.
@@ -302,26 +347,19 @@ def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
             )
         spec = build_start_command(tooling, ctx_size)
         command = _render_command(spec.argv, spec.env)
+        if system == "Darwin":
+            # The app is the normal macOS path; the daemon is the CLI way.
+            instruction = f"Start the Lemonade app from Applications, or run: {command}"
+        else:
+            instruction = f"Run: {command}"
         return StartHint(
-            instruction=f"Run: {command}",
+            instruction=instruction,
             command=command,
             foreground=spec.argv[0] != "systemctl",
         )
 
     if system == "Darwin":
-        # resolve_lemonade() has no Darwin probe, so a working macOS install
-        # still lands here — fall back to what macOS actually ships.
-        lemond = shutil.which("lemond")
-        if lemond:
-            env = {"LEMONADE_CTX_SIZE": str(ctx_size)} if ctx_size is not None else {}
-            command = _render_command([lemond], env)
-            return StartHint(
-                instruction=(
-                    f"Start the Lemonade app from Applications, or run: {command}"
-                ),
-                command=command,
-                foreground=True,
-            )
+        # macOS has no `gaia init` install path, so never suggest it here.
         if _macos_app_installed():
             return StartHint(
                 instruction="Start the Lemonade app from Applications, then retry."
