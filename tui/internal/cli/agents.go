@@ -287,7 +287,10 @@ var runCmd = &cobra.Command{
 		"A turn whose tool calls failed exits 1 even when the agent still wrote an " +
 		"answer, so `gaia tui run … && next-step` does not fire over work that never " +
 		"happened. A tool that reports no outcome at all is named on stderr as " +
-		"unverified rather than counted as a success.\n\n" +
+		"unverified rather than counted as a success. A turn that stopped at a " +
+		"confirmation gate — a destructive action held back for approval this run " +
+		"cannot give — exits 3, distinct from 1 because nothing broke and nothing " +
+		"was done.\n\n" +
 		"A one-shot checks its preconditions first and refuses in seconds — naming " +
 		"the unmet one and the command that fixes it on stderr — rather than waiting " +
 		"on a model server that is not there. The turn itself is bounded too, so an " +

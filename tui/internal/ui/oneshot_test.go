@@ -149,7 +149,7 @@ func TestRunOneShotSurfacesUnsupportedAndMalformed(t *testing.T) {
 }
 
 func TestRunOneShotSurfacesNeedsConfirmation(t *testing.T) {
-	_, _, errW := captureOneShot(t,
+	res, _, errW := captureOneShot(t,
 		event.CanonicalNeedsConfirmationEvent{
 			Type: "needs_confirmation", Action: "send_draft",
 			Summary: "Send reply to alice@example.com",
@@ -158,6 +158,12 @@ func TestRunOneShotSurfacesNeedsConfirmation(t *testing.T) {
 	)
 	if !strings.Contains(errW, "send_draft") || !strings.Contains(errW, "alice@example.com") {
 		t.Errorf("a pending approval must never be swallowed: %q", errW)
+	}
+	// The fixture says it: the answer is "skipped". Reporting that as success
+	// let `gaia tui run … && next-step` fire over an action a safety gate
+	// deliberately withheld.
+	if res.ExitCode == 0 {
+		t.Errorf("a withheld action exited 0; stderr was:\n%s", errW)
 	}
 }
 

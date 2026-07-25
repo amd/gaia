@@ -14,6 +14,16 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 )
 
+// ExitApprovalRequired is the exit code for a turn that stopped at a
+// confirmation gate.
+//
+// Distinct from 1 on purpose: 1 means something went wrong, this means nothing
+// went wrong and nothing was done — the run reached a deliberate safety gate it
+// has no way to answer. A script that wants to route those to an approval flow
+// can tell them apart; one that only checks for zero is unaffected either way.
+// (0/1/130 are already taken by the contract this mirrors.)
+const ExitApprovalRequired = 3
+
 // OneShotResult is the outcome of one non-interactive turn. It mirrors
 // gaia.daemon.agent_query.QueryOutcome so the Go and Python thin clients report
 // the same thing.
@@ -31,6 +41,9 @@ type OneShotResult struct {
 	// UndeterminedTools ran without saying whether they worked. Reported, never
 	// counted either way.
 	UndeterminedTools []string
+	// WithheldActions are confirmation-gated actions the run stopped at and
+	// could not perform. Not failures — refusals held open on purpose.
+	WithheldActions []string
 }
 
 // toolLedger records what each tool call proved, in first-seen order.
@@ -43,11 +56,46 @@ type toolLedger struct {
 	order    []string
 	outcomes map[string]event.ToolOutcome
 	unknown  map[string]bool
+
+	// pending confirmations, in the order they were asked for. A gate is
+	// cleared only by a DEFINITE outcome for the same action: the tool ran, so
+	// approval was given somewhere.
+	gateOrder []string
+	gates     map[string]string // action -> confirm URL, empty when there is none
 }
 
 func newToolLedger() *toolLedger {
-	return &toolLedger{outcomes: map[string]event.ToolOutcome{}, unknown: map[string]bool{}}
+	return &toolLedger{
+		outcomes: map[string]event.ToolOutcome{},
+		unknown:  map[string]bool{},
+		gates:    map[string]string{},
+	}
 }
+
+// gate records a confirmation the run stopped at.
+func (l *toolLedger) gate(action, confirmURL string) {
+	if action == "" {
+		action = "an unnamed action"
+	}
+	if _, seen := l.gates[action]; !seen {
+		l.gateOrder = append(l.gateOrder, action)
+	}
+	l.gates[action] = confirmURL
+}
+
+// withheld lists the gates nothing resolved.
+func (l *toolLedger) withheld() []string {
+	var out []string
+	for _, action := range l.gateOrder {
+		if _, ran := l.outcomes[action]; !ran {
+			out = append(out, action)
+		}
+	}
+	return out
+}
+
+// confirmURLFor is the approval link for a gate, when the agent sent one.
+func (l *toolLedger) confirmURLFor(action string) string { return l.gates[action] }
 
 func (l *toolLedger) record(tool string, outcome event.ToolOutcome) {
 	if tool == "" {
@@ -177,6 +225,8 @@ func RunOneShot(
 			}
 
 		case event.CanonicalNeedsConfirmationEvent:
+			tools.gate(e.Action, e.ConfirmURL)
+			debugf("needs_confirmation %s run_id=%s confirm_url=%q", e.Action, e.RunID, e.ConfirmURL)
 			line := "  ⚠️  confirmation needed: " + e.Action
 			if summary := strings.TrimSpace(e.Summary); summary != "" {
 				line += " — " + summary
@@ -359,6 +409,7 @@ func rawOrDash(raw json.RawMessage) string {
 func finishOneShot(res OneShotResult, tools *toolLedger, query string, errW io.Writer) OneShotResult {
 	res.FailedTools = tools.failed()
 	res.UndeterminedTools = tools.undetermined()
+	res.WithheldActions = tools.withheld()
 
 	if res.TerminalType == "" {
 		// Exactly one terminal event is mandatory; a stream that ends without one
@@ -387,7 +438,35 @@ func finishOneShot(res OneShotResult, tools *toolLedger, query string, errW io.W
 				"(exit 1). The agent's answer is on stdout; the tool's own error is above.\n",
 			strings.Join(res.FailedTools, ", "))
 	}
+
+	// A gate is not an error, so it is reported after any real failure and only
+	// decides the exit code when nothing else did. Either way the turn is
+	// non-zero: the action did not happen, and `… && next-step` must not run.
+	if len(res.WithheldActions) > 0 {
+		if res.ExitCode == 0 {
+			res.ExitCode = ExitApprovalRequired
+		}
+		writeWithheld(errW, res.WithheldActions, res.ExitCode, tools.confirmURLFor)
+	}
 	return res
+}
+
+// writeWithheld says what was not done, and does not invent a way to approve
+// it. The interactive chat cannot answer a gate either (ui/chat: "the approval
+// UI is a later phase"), and the agent's own final answer already explains the
+// route for that agent — naming a command that does not exist is how four wrong
+// remedies got shipped today.
+func writeWithheld(w io.Writer, actions []string, exitCode int, confirmURL func(string) string) {
+	fmt.Fprintf(w,
+		"⛔ %s needed approval and a --query run has no way to give it, so it was NOT "+
+			"performed (exit %d). Nothing changed. The agent's answer on stdout says how to "+
+			"approve it.\n",
+		strings.Join(actions, ", "), exitCode)
+	for _, action := range actions {
+		if url := confirmURL(action); url != "" {
+			fmt.Fprintf(w, "    approve %s at: %s\n", action, url)
+		}
+	}
 }
 
 // Bounds on the non-interactive path. Every one of these replaced an unbounded
