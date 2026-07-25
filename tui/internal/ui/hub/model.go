@@ -125,12 +125,14 @@ func (m HubModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "tab":
 		m.activeTab = (m.activeTab + 1) % len(m.tabs)
 		m.refreshList()
+		m.list.ResetSelected()
 		m.status = ""
 		return m, nil
 
 	case "shift+tab":
 		m.activeTab = (m.activeTab - 1 + len(m.tabs)) % len(m.tabs)
 		m.refreshList()
+		m.list.ResetSelected()
 		m.status = ""
 		return m, nil
 
@@ -351,6 +353,13 @@ func (m HubModel) renderFooter() string {
 func (m *HubModel) refreshList() {
 	items := agentsToItems(m.catalog.BySection(m.tabs[m.activeTab]))
 	m.list.SetItems(items)
+	// SetItems keeps the old cursor index; clamp it so a shorter list (e.g. after
+	// a tab switch or a delete) can't strand the selection out of range (#2481).
+	if n := len(m.list.VisibleItems()); n == 0 {
+		m.list.Select(0)
+	} else if m.list.Index() >= n {
+		m.list.Select(n - 1)
+	}
 }
 
 func (m *HubModel) resizeList() {
