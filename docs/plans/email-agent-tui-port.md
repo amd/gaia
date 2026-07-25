@@ -13,7 +13,7 @@ browser plus a chat screen. It knows how to do exactly one thing: launch a local
 executable and trade newline-delimited JSON with it over stdin/stdout
 (`tui/internal/client/subprocess.go`). Its agent list is a hardcoded Go slice
 (`tui/internal/catalog/catalog.go:179`). Email is already in that list at
-`catalog.go:230` — marked `StatusAvailable` with no binary, i.e. visible but dead.
+`catalog.go:231` — marked `StatusAvailable` with no binary, i.e. visible but dead.
 
 **The email agent** does not work that way. Since #2191 it runs as a long-lived HTTP
 service (a "sidecar") that the GAIA daemon starts, supervises, and proxies for.
@@ -139,7 +139,7 @@ for all four platforms, and the file isn't shipped in the wheel at all.
    0/1) — today `chat --query` still opens the alt-screen, which makes it useless for
    scripts and CI.
 5. **Housekeeping:** flip `interfaces.tui: false → true` in
-   `hub/agents/python/email/gaia-agent.yaml:47`. `catalog_test.go` and `smoke_test.go`
+   `hub/agents/python/email/gaia-agent.yaml:44`. `catalog_test.go` and `smoke_test.go`
    both hardcode `installed == 1` — they will fail the moment email becomes installable.
    That's the canary; update both.
 
@@ -293,8 +293,13 @@ the legacy Python CLI stays exactly as it is — it will be retired separately, 
 
 - Remove the `email` subparser (`src/gaia/cli.py:1772-1829`), `handle_email_command`
   (`:5012-5095`), and `_email_interactive` (`:5098-5134`).
-- **Keep `src/gaia/daemon/agent_query.py`.** It is the generic daemon thin-client used by
-  more than email and it is the reference implementation the TUI's Go transport mirrors.
+- **`src/gaia/daemon/agent_query.py` becomes dead code — decide deliberately.** Its
+  `run_query` / `ConsoleRenderer` have exactly two callers, both inside the email handler
+  being deleted, so removing the subcommand orphans all 346 lines. It is *not* shared
+  infrastructure. Two defensible options: keep it as the reference implementation the Go
+  transport mirrors and the thin-client the next agent will reuse (then say so in a module
+  docstring, so the next reader doesn't delete it as unused), or delete it with the
+  subcommand and let the Go client stand alone. Pick one; do not leave it unexplained.
 - `--spec` needs a home before the removal lands — it is the only email surface that
   needs no daemon and no LLM. Either move it under `gaia hub` or expose it in the TUI.
 - Delete the now-dead tests, and update `docs/reference/cli.mdx`, `docs/guides/email.mdx`,
