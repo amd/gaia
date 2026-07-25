@@ -53,8 +53,14 @@ func appendRawDump(b *box, data json.RawMessage) {
 func prettyJSONLines(data json.RawMessage) []string {
 	var buf bytes.Buffer
 	if err := json.Indent(&buf, data, "", "  "); err != nil {
-		// Not valid JSON at all — show the bytes verbatim rather than nothing.
-		return strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+		// Not valid JSON at all. Show the bytes rather than nothing, but scrub
+		// them first — unlike the json.Indent path (which leaves an escape as the
+		// literal text ``), these are raw bytes headed for the terminal.
+		lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+		for i := range lines {
+			lines[i] = clean(lines[i])
+		}
+		return lines
 	}
 	return strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
 }

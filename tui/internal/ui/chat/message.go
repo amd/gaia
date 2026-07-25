@@ -3,6 +3,8 @@ package chat
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/amd/gaia/tui/internal/ui/cards"
 )
 
 type MessageRole string
@@ -33,6 +35,24 @@ type Message struct {
 	// the cards package decides how (and whether) it can be drawn.
 	Render string
 	Data   json.RawMessage
+
+	// cardCache memoizes the drawn card. updateViewport re-renders every message
+	// on each streamed token, and laying a card out means re-parsing its JSON —
+	// so without this a long answer re-parses every card on screen per token.
+	// Keyed by width; a resize invalidates it.
+	cardCache      string
+	cardCacheWidth int
+}
+
+// renderCard draws the card at w, reusing the last render when the width has not
+// changed.
+func (m *Message) renderCard(w int) string {
+	if m.cardCache != "" && m.cardCacheWidth == w {
+		return m.cardCache
+	}
+	m.cardCache = cards.Render(m.Render, m.Data, w)
+	m.cardCacheWidth = w
+	return m.cardCache
 }
 
 type ActivityItem struct {

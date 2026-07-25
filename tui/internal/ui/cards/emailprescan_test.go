@@ -141,7 +141,7 @@ func TestPreScanMailboxErrorsBanner(t *testing.T) {
 	assertContains(t, out,
 		// The broken grant is a warning banner, not a failed card.
 		"[!] Outlook wasn't scanned: token expired",
-		"Results from the other accounts below are unaffected.",
+		"Results below are unaffected.",
 		// Results that DID arrive are still shown.
 		"URGENT", "Sarah Chen", "Prod incident",
 		// Rows are tagged with their account, because more than one is in play.
@@ -207,11 +207,7 @@ func TestPreScanDegradesAtNarrowWidth(t *testing.T) {
 	// Narrow terminals truncate; they never break the frame.
 	for _, w := range []int{20, 24, 32, 40, 60, 76, 120} {
 		out := Render("email_pre_scan", raw(t, populatedPreScan), w)
-		want := w
-		if want < minCardWidth {
-			want = minCardWidth
-		}
-		assertWidth(t, out, want)
+		assertWidth(t, out, w)
 		if !strings.Contains(plain(out), "URGENT") {
 			t.Errorf("width %d dropped the URGENT section:\n%s", w, plain(out))
 		}

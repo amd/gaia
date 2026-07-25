@@ -1,10 +1,36 @@
 package cards
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
 )
+
+// clean makes an agent-supplied string safe to measure and to print.
+//
+// Card values are plain text (contract §4.3), never a styling channel, so
+// everything the terminal would interpret is removed rather than passed through:
+// ANSI escapes (a payload can carry a real ESC — "" is legal JSON), and
+// C0/DEL controls, which have no width but move the cursor. Leaving either in
+// means the width math and the terminal disagree and the card's borders shear.
+func clean(s string) string {
+	if s == "" {
+		return s
+	}
+	if strings.ContainsRune(s, 0x1b) {
+		s = ansi.Strip(s)
+	}
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\t' || r == '\n' || r == '\r':
+			return ' ' // keep the word break, drop the cursor movement
+		case r < 0x20 || r == 0x7f:
+			return -1
+		}
+		return r
+	}, s)
+}
 
 // Minimum outer width a card can be drawn at. Below this the borders eat the
 // content, so callers get an unboxed plain-text rendering instead.
@@ -26,22 +52,33 @@ type box struct {
 }
 
 func newBox(title string, width int) *box {
-	if width < minCardWidth {
-		width = minCardWidth
+	if width < 1 {
+		width = 1
 	}
 	return &box{title: title, width: width}
 }
 
-// inner is the usable content width between "│ " and " │".
+// boxed reports whether there is room to draw a frame. Below minCardWidth the
+// borders would eat the content, so the card degrades to plain indented text
+// rather than a 24-column frame overflowing a narrower terminal.
+func (b *box) boxed() bool { return b.width >= minCardWidth }
+
+// inner is the usable content width — between "│ " and " │" when framed, the
+// whole width when not.
 func (b *box) inner() int {
-	w := b.width - 4
+	w := b.width
+	if b.boxed() {
+		w -= 4
+	}
 	if w < 1 {
 		w = 1
 	}
 	return w
 }
 
-func (b *box) add(line string) { b.lines = append(b.lines, line) }
+// add appends one interior line. Every line lands here, so this is the choke
+// point where agent-supplied text stops being able to move the cursor.
+func (b *box) add(line string) { b.lines = append(b.lines, clean(line)) }
 
 func (b *box) blank() { b.lines = append(b.lines, "") }
 
@@ -55,6 +92,21 @@ func (b *box) addWrapped(indent, s string) {
 
 func (b *box) render() string {
 	var sb strings.Builder
+
+	if !b.boxed() {
+		// Unframed: title first, then the content, each clamped to the width.
+		if title := strings.TrimSpace(clean(b.title)); title != "" {
+			sb.WriteString(padTo(truncTo(title, b.width), b.width))
+		} else {
+			sb.WriteString(strings.Repeat(" ", b.width))
+		}
+		for _, line := range b.lines {
+			sb.WriteString("\n")
+			sb.WriteString(padTo(truncTo(line, b.width), b.width))
+		}
+		return sb.String()
+	}
+
 	sb.WriteString(b.top())
 	for _, line := range b.lines {
 		sb.WriteString("\n│ ")
@@ -68,7 +120,7 @@ func (b *box) render() string {
 }
 
 func (b *box) top() string {
-	title := strings.TrimSpace(b.title)
+	title := strings.TrimSpace(clean(b.title))
 	// "┌─ " + title + " " + fill + "┐"
 	fill := b.width - 5 - visualLen(title)
 	if title == "" || fill < 1 {
@@ -87,6 +139,9 @@ func (b *box) top() string {
 // The sender column is sized off the available width so an 80-column terminal
 // still shows a usable amount of both.
 func (b *box) row(index int, sender, subject string) {
+	// Clean before measuring, not just before printing: a tab in a subject line
+	// has no width here but does on screen, which would misalign the columns.
+	sender, subject = clean(sender), clean(subject)
 	avail := b.inner() - 5 // " NN  "
 	if avail < 4 {
 		b.addWrapped("  ", sender+" — "+subject)
@@ -162,8 +217,7 @@ func wrap(s string, w int) []string {
 	if w < 1 {
 		w = 1
 	}
-	s = strings.ReplaceAll(s, "\t", "    ")
-	fields := strings.Fields(s)
+	fields := strings.Fields(clean(s))
 	if len(fields) == 0 {
 		return []string{""}
 	}
@@ -172,7 +226,11 @@ func wrap(s string, w int) []string {
 	for _, f := range fields {
 		for visualLen(f) > w {
 			head := ansi.Truncate(f, w, "")
-			if head == "" {
+			rest := strings.TrimPrefix(f, head)
+			// ansi.Truncate re-emits a terminating reset, so head is not always a
+			// literal prefix; without this guard the loop makes no progress and
+			// spins forever on the UI goroutine.
+			if head == "" || rest == f {
 				break
 			}
 			if cur != "" {
@@ -180,11 +238,12 @@ func wrap(s string, w int) []string {
 				cur = ""
 			}
 			out = append(out, head)
-			f = strings.TrimPrefix(f, head)
+			f = rest
 		}
 		if f == "" {
 			continue
 		}
+		f = truncTo(f, w) // a word the loop above could not split still must fit
 		switch {
 		case cur == "":
 			cur = f
@@ -204,24 +263,4 @@ func wrap(s string, w int) []string {
 	return out
 }
 
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
-}
+func itoa(n int) string { return strconv.Itoa(n) }

@@ -15,7 +15,6 @@ import (
 
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
-	"github.com/amd/gaia/tui/internal/ui/cards"
 	"github.com/amd/gaia/tui/internal/ui/components"
 )
 
@@ -599,8 +598,9 @@ func (m *ChatModel) updateViewport() {
 		sb.WriteString("\n")
 	}
 
-	for _, msg := range m.messages {
-		sb.WriteString(m.renderMessage(msg))
+	for i := range m.messages {
+		// By index, not by value: rendering a card memoizes onto the message.
+		sb.WriteString(m.renderMessage(&m.messages[i]))
 		sb.WriteString("\n")
 	}
 
@@ -639,16 +639,20 @@ func (m ChatModel) renderWelcome() string {
 
 // cardWidth is the outer width a render card may occupy. The viewport keeps a
 // couple of columns for its own gutter, so a card sized to the raw terminal
-// width wraps and the borders shear.
+// width wraps and the borders shear. It never exceeds the viewport itself —
+// a card wider than the window it lives in is the same shear by another route.
 func (m ChatModel) cardWidth() int {
 	w := m.width - 4
-	if w < 24 {
-		w = 24
+	if w > m.viewport.Width && m.viewport.Width > 0 {
+		w = m.viewport.Width
+	}
+	if w < 1 {
+		w = 1
 	}
 	return w
 }
 
-func (m ChatModel) renderMessage(msg Message) string {
+func (m ChatModel) renderMessage(msg *Message) string {
 	switch msg.Role {
 	case RoleUser:
 		return userStyle.Render("▶ You: ") + msg.Content
@@ -694,7 +698,7 @@ func (m ChatModel) renderMessage(msg Message) string {
 		return panel
 
 	case RoleCard:
-		return cards.Render(msg.Render, msg.Data, m.cardWidth())
+		return msg.renderCard(m.cardWidth())
 
 	case RoleError:
 		panelWidth := m.width - 4
@@ -720,15 +724,12 @@ const workLogLines = 5
 // the user's next move is ctrl+c.
 const stillWorkingAfter = 20 * time.Second
 
-// renderLiveRegion renders a bounded, self-collapsing work log for the running
-// turn: a header line with the current step and elapsed time, then the last few
-// activity lines with consecutive repeats folded into a counter.
+// renderLiveRegion draws a bounded work log for the running turn: a header with
+// the current step and elapsed time, then the last few activity lines with
+// consecutive repeats folded into a counter.
 //
-// The old two-line region (latest step + latest action) was right for a shell
-// agent running one command and wrong for anything that touches dozens of items:
-// two static lines are indistinguishable from a hang, the discarded steps ARE
-// the evidence for the card that follows, and twenty collapsed tool calls read
-// as one slow call. The bound is what keeps that honest without unbounded growth.
+// Bounded, not two lines: on a turn touching dozens of messages, two static
+// lines are indistinguishable from a hang.
 func (m ChatModel) renderLiveRegion() string {
 	var lines []string
 

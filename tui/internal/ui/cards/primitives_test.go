@@ -180,9 +180,19 @@ func TestImageDegradesToCaption(t *testing.T) {
 	t.Logf("\n%s", plain(out))
 
 	assertWidth(t, out, width80)
-	assertContains(t, out, "[image: Weekly volume]", "Not shown — a terminal cannot display it.")
+	// Both caption and alt appear — the picture is never drawn, so every word
+	// describing it is all the reader gets.
+	assertContains(t, out, "[image: Weekly volume — chart]", "Not shown — a terminal cannot display it.")
 	// The base64 payload is never dumped into the transcript.
 	assertNotContains(t, out, "iVBORw0KGgo=")
+
+	// A caption that merely repeats the alt text is not printed twice.
+	same := Render("image", raw(t, `{"src":"data:image/png;base64,iVBORw0KGgo=","alt":"chart","caption":"chart"}`), width80)
+	assertContains(t, same, "[image: chart]")
+
+	// Neither present still names the card rather than blanking.
+	none := Render("image", raw(t, `{"src":"data:image/gif;base64,R0lGOD"}`), width80)
+	assertContains(t, none, "[image: untitled]")
 }
 
 func TestImageRejectsRemoteAndSVGSrc(t *testing.T) {
@@ -205,11 +215,7 @@ func TestPrimitivesDegradeAtNarrowWidth(t *testing.T) {
 	for key, payload := range payloads {
 		for _, w := range []int{18, 24, 40, 76} {
 			out := Render(key, raw(t, payload), w)
-			want := w
-			if want < minCardWidth {
-				want = minCardWidth
-			}
-			assertWidth(t, out, want)
+			assertWidth(t, out, w)
 			if strings.TrimSpace(plain(out)) == "" {
 				t.Errorf("%s at width %d rendered nothing", key, w)
 			}

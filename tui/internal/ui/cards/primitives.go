@@ -42,37 +42,47 @@ type scalar struct{ text string }
 
 func (s *scalar) UnmarshalJSON(b []byte) error {
 	trimmed := strings.TrimSpace(string(b))
-	if trimmed == "null" {
+	switch trimmed {
+	case "null":
 		s.text = ""
+		return nil
+	case "true", "false":
+		s.text = trimmed
 		return nil
 	}
 	var str string
 	if err := json.Unmarshal(b, &str); err == nil {
-		s.text = str
+		s.text = clean(str)
 		return nil
 	}
-	var f float64
-	if err := json.Unmarshal(b, &f); err == nil {
-		s.text = trimNumber(f)
-		return nil
-	}
-	var bl bool
-	if err := json.Unmarshal(b, &bl); err == nil {
-		if bl {
-			s.text = "true"
-		} else {
-			s.text = "false"
-		}
+	// Numbers keep their literal token. Decoding through float64 silently
+	// rewrites the value the producer sent — 1234567890123456789 comes back as
+	// …768, and 1e-7 as 0 — and §4.3 says the value renders as plain text, so
+	// the token IS the text.
+	if json.Valid(b) && isJSONNumber(trimmed) {
+		s.text = trimmed
 		return nil
 	}
 	return fmt.Errorf("value %s is not a string, number, boolean or null", truncTo(trimmed, 40))
 }
 
-func trimNumber(f float64) string {
-	if f == float64(int64(f)) {
-		return itoa(int(int64(f)))
+func isJSONNumber(s string) bool {
+	if s == "" {
+		return false
 	}
-	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%f", f), "0"), ".")
+	for i, r := range s {
+		switch {
+		case r >= '0' && r <= '9':
+		case r == '-' || r == '+':
+		case r == '.' || r == 'e' || r == 'E':
+		default:
+			return false
+		}
+		if i == 0 && (r == '.' || r == 'e' || r == 'E' || r == '+') {
+			return false
+		}
+	}
+	return true
 }
 
 // ---------------------------------------------------------------------------
@@ -108,8 +118,18 @@ func renderTable(data json.RawMessage, width int) string {
 	// chrome: the column header row, its rule, and the truncation line.
 	rows = rows[:visibleRows(len(rows), 3)]
 
-	widths := columnWidths(p.Columns, rows, b.inner()-2)
-	b.add("  " + joinCells(p.Columns, widths))
+	// A table with more columns than the terminal has room for renders every
+	// cell as a bare "…" — technically not sheared, but no data and no hint that
+	// anything was lost. Show the columns that can carry content and say so.
+	columns := p.Columns
+	hiddenCols := 0
+	if maxCols := (b.inner() - 2 + 1) / (minColumnWidth + 1); len(columns) > maxCols && maxCols > 0 {
+		hiddenCols = len(columns) - maxCols
+		columns = columns[:maxCols]
+	}
+
+	widths := columnWidths(columns, rows, b.inner()-2)
+	b.add("  " + joinCells(columns, widths))
 	seps := make([]string, len(widths))
 	for i, w := range widths {
 		seps[i] = strings.Repeat("─", w)
@@ -127,11 +147,18 @@ func renderTable(data json.RawMessage, width int) string {
 	if len(rows) == 0 {
 		b.add("  (no rows)")
 	}
+	if hiddenCols > 0 {
+		b.add("  +" + itoa(hiddenCols) + " column(s) too narrow to show")
+	}
 	if line := truncationLine(total, len(rows)); line != "" {
 		b.add(line)
 	}
 	return b.render()
 }
+
+// minColumnWidth is the narrowest a table column can be and still show anything
+// beyond an ellipsis.
+const minColumnWidth = 4
 
 // columnWidths shares total columns out proportionally to the widest cell in
 // each, so a narrow "id" column does not get the same space as a subject line.
@@ -216,18 +243,26 @@ func joinCells(cells []string, widths []int) string {
 // key_value
 // ---------------------------------------------------------------------------
 
+type keyValueItem struct {
+	Key   string `json:"key"`
+	Value scalar `json:"value"`
+}
+
 type keyValuePayload struct {
 	Title string `json:"title"`
-	Items []struct {
-		Key   string `json:"key"`
-		Value scalar `json:"value"`
-	} `json:"items"`
+	// A pointer so an absent `items` is distinguishable from an explicit `[]`.
+	// §4.3 marks only `title` optional, so a missing one is schema-invalid — not
+	// an empty card that reads as "the agent found nothing".
+	Items *[]keyValueItem `json:"items"`
 }
 
 func renderKeyValue(data json.RawMessage, width int) string {
 	var p keyValuePayload
 	if err := json.Unmarshal(data, &p); err != nil {
 		return renderInvalid("key_value", err.Error(), data, width)
+	}
+	if p.Items == nil {
+		return renderInvalid("key_value", "items is required", data, width)
 	}
 
 	title := p.Title
@@ -236,8 +271,8 @@ func renderKeyValue(data json.RawMessage, width int) string {
 	}
 	b := newBox(title, width)
 
-	total := len(p.Items)
-	items := p.Items
+	total := len(*p.Items)
+	items := *p.Items
 	if len(items) > renderCap {
 		items = items[:renderCap]
 	}
@@ -278,15 +313,20 @@ func renderKeyValue(data json.RawMessage, width int) string {
 // ---------------------------------------------------------------------------
 
 type listPayload struct {
-	Title   string   `json:"title"`
-	Ordered bool     `json:"ordered"`
-	Items   []scalar `json:"items"`
+	Title   string `json:"title"`
+	Ordered bool   `json:"ordered"`
+	// Pointer for the same reason as key_value: absent is invalid, empty is a
+	// legitimate empty card.
+	Items *[]scalar `json:"items"`
 }
 
 func renderList(data json.RawMessage, width int) string {
 	var p listPayload
 	if err := json.Unmarshal(data, &p); err != nil {
 		return renderInvalid("list", err.Error(), data, width)
+	}
+	if p.Items == nil {
+		return renderInvalid("list", "items is required", data, width)
 	}
 
 	title := p.Title
@@ -295,8 +335,8 @@ func renderList(data json.RawMessage, width int) string {
 	}
 	b := newBox(title, width)
 
-	total := len(p.Items)
-	items := p.Items
+	total := len(*p.Items)
+	items := *p.Items
 	if len(items) > renderCap {
 		items = items[:renderCap]
 	}
@@ -352,7 +392,12 @@ func renderImage(data json.RawMessage, width int) string {
 		return renderInvalid("image", "src must be an inline base64 raster data: URI", data, width)
 	}
 
-	label := firstNonEmpty(p.Caption, p.Alt, "untitled")
+	// Both caption and alt when both exist: the picture is never drawn, so every
+	// word describing it is the only thing the reader gets.
+	label := strings.Join(dedupeNonEmpty(p.Caption, p.Alt), " — ")
+	if label == "" {
+		label = "untitled"
+	}
 	b := newBox("Image", width)
 	b.addWrapped("  ", "[image: "+label+"]")
 	b.addWrapped("  ", "Not shown — a terminal cannot display it.")
@@ -370,6 +415,27 @@ func isInlineRaster(src string) bool {
 		}
 	}
 	return false
+}
+
+func dedupeNonEmpty(vals ...string) []string {
+	var out []string
+	for _, v := range vals {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		dup := false
+		for _, seen := range out {
+			if seen == v {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func firstNonEmpty(vals ...string) string {

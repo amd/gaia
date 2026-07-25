@@ -29,9 +29,6 @@ func TestDiffRidesTheUnsupportedFallback(t *testing.T) {
 	out := Render("diff", raw(t, `{"title":"config","unified":"@@ -1 +1 @@\n-a\n+b\n"}`), width80)
 	assertWidth(t, out, width80)
 	assertContains(t, out, `Unsupported card type: "diff"`, "raw data:")
-	if Supported("diff") {
-		t.Error("Supported(\"diff\") = true; diff has no renderer and must report unsupported")
-	}
 }
 
 func TestEmptyRenderKeyStillDrawsSomething(t *testing.T) {
@@ -91,25 +88,8 @@ func TestRenderNeverReturnsEmpty(t *testing.T) {
 				if strings.TrimSpace(plain(out)) == "" {
 					t.Fatalf("Render(%q, %s, %d) returned nothing", key, payload, w)
 				}
-				want := w
-				if want < minCardWidth {
-					want = minCardWidth
-				}
-				assertWidth(t, out, want)
+				assertWidth(t, out, w)
 			}
-		}
-	}
-}
-
-func TestSupported(t *testing.T) {
-	for _, key := range []string{"email_pre_scan", "table", "key_value", "list", "image"} {
-		if !Supported(key) {
-			t.Errorf("Supported(%q) = false, want true", key)
-		}
-	}
-	for _, key := range []string{"diff", "", "nope"} {
-		if Supported(key) {
-			t.Errorf("Supported(%q) = true, want false", key)
 		}
 	}
 }

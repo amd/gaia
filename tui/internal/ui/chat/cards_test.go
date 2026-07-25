@@ -64,7 +64,7 @@ func TestToolResultWithRenderDrawsACard(t *testing.T) {
 		t.Errorf("card = {render:%q tool:%q}, want {email_pre_scan pre_scan_inbox}", card.Render, card.ToolName)
 	}
 
-	rendered := ansi.Strip(m.renderMessage(*card))
+	rendered := ansi.Strip(m.renderMessage(card))
 	t.Logf("\n%s", rendered)
 	for _, want := range []string{"Inbox · 9 scanned", "URGENT", "Sarah Chen", "asked for a reply by Friday"} {
 		if !strings.Contains(rendered, want) {
@@ -88,7 +88,7 @@ func TestUnknownRenderStillDrawsACard(t *testing.T) {
 	})
 
 	card := lastCard(t, m)
-	rendered := ansi.Strip(m.renderMessage(card))
+	rendered := ansi.Strip(m.renderMessage(&card))
 	t.Logf("\n%s", rendered)
 	if !strings.Contains(rendered, "Unsupported card type") {
 		t.Errorf("unknown render did not degrade to the generic card:\n%s", rendered)
@@ -145,7 +145,7 @@ func TestCardFitsAn80ColumnTerminal(t *testing.T) {
 		Render: "email_pre_scan", Data: json.RawMessage(prescanPayload),
 	})
 
-	rendered := ansi.Strip(m.renderMessage(lastCard(t, m)))
+	rendered := func() string { c := lastCard(t, m); return ansi.Strip(m.renderMessage(&c)) }()
 	for i, line := range strings.Split(rendered, "\n") {
 		if w := ansi.StringWidth(line); w > 80 {
 			t.Errorf("card line %d is %d columns wide, overflowing an 80-column terminal: %q", i, w, line)
@@ -187,4 +187,29 @@ func lastCard(t *testing.T, m ChatModel) Message {
 	}
 	t.Fatal("no card message was produced")
 	return Message{}
+}
+
+// The card render is memoized per width to keep streaming cheap. A resize must
+// invalidate it — serving the old layout at a new width shears the border.
+func TestCardCacheInvalidatesOnResize(t *testing.T) {
+	m := feed(t, newTestChat(t), event.CanonicalToolResultEvent{
+		Type: "tool_result", Tool: "pre_scan_inbox",
+		Render: "email_pre_scan", Data: json.RawMessage(prescanPayload),
+	})
+
+	card := lastCard(t, m)
+	wide := ansi.Strip(card.renderCard(76))
+	again := ansi.Strip(card.renderCard(76))
+	if wide != again {
+		t.Error("same width returned a different render")
+	}
+	narrow := ansi.Strip(card.renderCard(40))
+	if narrow == wide {
+		t.Fatal("a new width returned the cached render for the old one")
+	}
+	for i, line := range strings.Split(narrow, "\n") {
+		if w := ansi.StringWidth(line); w != 40 {
+			t.Errorf("line %d after resize is %d columns, want 40: %q", i, w, line)
+		}
+	}
 }

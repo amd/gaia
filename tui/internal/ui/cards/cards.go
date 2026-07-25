@@ -44,14 +44,3 @@ func Render(renderKey string, data json.RawMessage, width int) string {
 		return renderUnsupported(key, data, width)
 	}
 }
-
-// Supported reports whether Render draws a purpose-built card for key, as
-// opposed to the unsupported-card fallback. Callers use it for labelling only —
-// Render is safe for every key.
-func Supported(renderKey string) bool {
-	switch strings.TrimSpace(renderKey) {
-	case "email_pre_scan", "table", "key_value", "list", "image":
-		return true
-	}
-	return false
-}

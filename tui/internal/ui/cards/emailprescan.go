@@ -95,20 +95,16 @@ func sectionCost(itemRows []int, show, total int) int {
 	return cost
 }
 
-// fitSections trims per-section row counts until the card fits its budget.
+// fitSections trims per-section row counts until the card fits its budget, and
+// returns the counts plus the rows they occupy.
 //
-// Rows come off whichever section currently shows the most, so a long reply list
-// cannot starve the urgent one and vice versa; a lowest-priority-first order
-// would leave the pathological "5 urgent, 1 reply" split. Ties break toward the
-// lower-priority section. No non-empty section ever drops below one row, so
-// every bucket that has anything in it stays visible.
+// Rows come off whichever section shows the most (ties to the lower-priority
+// one), so a long reply list cannot starve the urgent one. No non-empty section
+// drops below one row. Trimmed rows are still counted: the caller derives
+// "N of M" and "+N more" from the pre-cap `totals`.
 //
-// Trimmed rows are not lost: the caller derives "N of M" and "+N more" from the
-// pre-cap `totals`, so a row hidden by this budget is counted exactly like one
-// the agent capped away.
-// It returns the chosen per-section counts and the rows they occupy. The cost
-// can exceed budget when every non-empty section is already down to one row —
-// the caller reclaims the difference elsewhere rather than hiding a bucket.
+// The returned cost can exceed budget once every section is at one row; the
+// caller reclaims the difference rather than hiding a bucket.
 func fitSections(itemRows [][]int, totals []int, budget int) ([]int, int) {
 	show := make([]int, len(itemRows))
 	for i := range itemRows {
@@ -130,9 +126,11 @@ func fitSections(itemRows [][]int, totals []int, budget int) ([]int, int) {
 	}
 
 	for cost() > budget {
-		// Scan low-priority-first so an equal-sized tie gives up the archive row.
+		// Scan last section first so an equal-sized tie gives up the row from the
+		// lowest-priority bucket. Derived from len(show), not a fixed list, so a
+		// future fourth section cannot silently skip the scan.
 		victim := -1
-		for _, i := range []int{2, 1, 0} {
+		for i := len(show) - 1; i >= 0; i-- {
 			if show[i] > 1 && (victim == -1 || show[i] > show[victim]) {
 				victim = i
 			}
@@ -145,6 +143,24 @@ func fitSections(itemRows [][]int, totals []int, budget int) ([]int, int) {
 	return show, cost()
 }
 
+// isPreScanEnvelope reports whether the payload actually claims to be a
+// pre-scan, rather than merely failing to contradict one.
+func isPreScanEnvelope(data json.RawMessage) bool {
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(data, &probe); err != nil || probe == nil {
+		return false
+	}
+	for _, field := range []string{
+		"kind", "urgent", "actionable", "informational_count",
+		"suggested_archives", "suggested_drafts", "totals",
+	} {
+		if _, ok := probe[field]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 func renderEmailPreScan(data json.RawMessage, width int) string {
 	var p emailPreScan
 	if err := json.Unmarshal(data, &p); err != nil {
@@ -152,6 +168,12 @@ func renderEmailPreScan(data json.RawMessage, width int) string {
 	}
 	if k := strings.TrimSpace(p.Kind); k != "" && k != "email_pre_scan" {
 		return renderInvalid("email_pre_scan", "kind is "+k+", expected email_pre_scan", data, width)
+	}
+	// `null` and `{}` both unmarshal cleanly into the zero envelope, which would
+	// render as "Nothing needs you" — a malformed payload telling the user their
+	// inbox is clear. Require the envelope to actually be one.
+	if !isPreScanEnvelope(data) {
+		return renderInvalid("email_pre_scan", "payload carries no pre-scan fields", data, width)
 	}
 
 	totals := p.totalsOrDerived()
@@ -177,12 +199,22 @@ func renderEmailPreScan(data json.RawMessage, width int) string {
 	// the sections, so the footer gives up its lines instead — losing the
 	// preferences note beats hiding a whole bucket of mail.
 	footer := p.footerLines(totals)
+	full := len(footer)
 	var shown []int
 	for {
-		rows := footerRows(b, footer)
+		// Every other truncation on this card leaves a visible marker, so a
+		// dropped footer line gets one too — and it is budgeted here rather than
+		// appended afterwards, or it would push the card back over the bound.
+		candidate := footer
+		if len(candidate) < full {
+			candidate = append(append([]string(nil), candidate...),
+				"+"+itoa(full-len(candidate))+" more line(s) not shown")
+		}
+		rows := footerRows(b, candidate)
 		s, cost := fitSections(itemRows, sectionTotals, budget-rows)
 		shown = s
 		if cost+rows <= budget || len(footer) == 0 {
+			footer = candidate
 			break
 		}
 		footer = footer[:len(footer)-1]
@@ -216,31 +248,23 @@ func (p emailPreScan) renderMailboxErrors(b *box) {
 		return
 	}
 
-	var lines []string
-	drawn := 0
-	for _, me := range p.MailboxErrors {
-		wrapped := wrap("[!] "+mailboxLabel(me.Mailbox)+" wasn't scanned: "+strings.TrimSpace(me.Error), b.inner()-2)
-		if len(lines)+len(wrapped) > maxBannerRows {
-			break
-		}
-		lines = append(lines, wrapped...)
-		drawn++
-	}
-	// Never drop every warning silently: if even the first one does not fit,
-	// truncate it to a single line rather than showing nothing.
-	if drawn == 0 {
+	// One failure gets its full message — that is the case where the text says
+	// what to do about it. Several get named but summarised: four wrapped error
+	// strings would take a third of the card to annotate results the user can
+	// still act on.
+	tail := "Results below are unaffected."
+	if len(p.MailboxErrors) == 1 {
 		me := p.MailboxErrors[0]
-		lines = append(lines, "[!] "+mailboxLabel(me.Mailbox)+" wasn't scanned: "+strings.TrimSpace(me.Error))
-		drawn = 1
+		b.addWrapped("  ", "[!] "+mailboxLabel(me.Mailbox)+" wasn't scanned: "+strings.TrimSpace(me.Error))
+	} else {
+		names := make([]string, len(p.MailboxErrors))
+		for i, me := range p.MailboxErrors {
+			names[i] = mailboxLabel(me.Mailbox)
+		}
+		b.addWrapped("  ", "[!] "+itoa(len(names))+" accounts weren't scanned: "+strings.Join(names, ", "))
+		tail = "Reconnect them in settings. " + tail
 	}
-
-	for _, line := range lines {
-		b.add("  " + line)
-	}
-	if hidden := len(p.MailboxErrors) - drawn; hidden > 0 {
-		b.add("  [!] +" + itoa(hidden) + " more accounts failed to scan")
-	}
-	b.addWrapped("      ", "Results from the other accounts below are unaffected.")
+	b.addWrapped("      ", tail)
 	b.blank()
 }
 
@@ -276,13 +300,6 @@ func footerRows(b *box, footer []string) int {
 		rows += len(wrap(line, b.inner()-2))
 	}
 	return rows
-}
-
-func boolToInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }
 
 func (p emailPreScan) footerLines(t preScanTotals) []string {
