@@ -197,6 +197,7 @@ func (f *fakeTransport) called(method, path string) bool {
 // something outside this set sends the user somewhere that does not work, which
 // is worse than no remedy at all.
 var realCommands = []string{
+	"gaia daemon status",
 	"gaia daemon start",
 	"gaia daemon restart",
 	"gaia daemon start-agent ",
@@ -237,6 +238,8 @@ func TestCheck(t *testing.T) {
 		wantBlocker string
 		// wantIn asserts substrings on the blocking row's rendered remedy.
 		wantIn []string
+		// wantNotIn asserts what the remedy must NOT say.
+		wantNotIn []string
 		// wantFix is the fix the blocking row offers.
 		wantFix FixKind
 		// mustNotCall names paths the walk must not reach (stop at first failure).
@@ -365,8 +368,14 @@ func TestCheck(t *testing.T) {
 				KeyModel: StateOK, KeyMailbox: StateFailed,
 			},
 			wantBlocker: KeyMailbox,
-			wantIn:      []string{"gaia connectors connect google", "installed:email"},
-			wantFix:     FixConnectMailbox,
+			wantIn: []string{
+				"gaia connectors connect google", "installed:email",
+				// The union, not just the send scope: --scopes REPLACES the
+				// provider defaults, so a short list authorizes a mailbox the
+				// agent can no longer read.
+				"openid", "https://www.googleapis.com/auth/gmail.modify",
+			},
+			wantFix: FixConnectMailbox,
 		},
 		{
 			name: "mailbox connected but send not granted",
@@ -377,10 +386,12 @@ func TestCheck(t *testing.T) {
 			wantBlocker: KeyMailbox,
 			wantIn: []string{
 				"you@gmail.com", "send not allowed",
-				"gaia connectors grants grant google installed:email",
+				"gaia connectors connect google --grant-agent installed:email",
+				"https://www.googleapis.com/auth/gmail.modify",
 				"https://www.googleapis.com/auth/gmail.send",
 			},
-			wantFix: FixConnectMailbox,
+			wantNotIn: []string{"grants grant"},
+			wantFix:   FixConnectMailbox,
 		},
 		{
 			// present:false must NOT be reported as "download the model" when the
@@ -457,6 +468,11 @@ func TestCheck(t *testing.T) {
 				for _, want := range tt.wantIn {
 					if !strings.Contains(text, want) {
 						t.Errorf("blocking row does not mention %q; it says: %s", want, text)
+					}
+				}
+				for _, unwanted := range tt.wantNotIn {
+					if strings.Contains(text, unwanted) {
+						t.Errorf("blocking row must not mention %q; it says: %s", unwanted, text)
 					}
 				}
 			}
@@ -615,8 +631,14 @@ func TestProvisionSurfacesATransportFailure(t *testing.T) {
 	if res.OK {
 		t.Fatal("a transport failure reported success")
 	}
-	if res.Diagnosis.Command != "lemonade-server serve" {
-		t.Errorf("remedy = %q, want the lemonade command", res.Diagnosis.Command)
+	// The TUI only ever dials the daemon, so a refused connection here is the
+	// daemon being unreachable — telling the user to start Lemonade would send
+	// them to the one process that is not involved.
+	if res.Diagnosis.Command != "gaia daemon status" {
+		t.Errorf("remedy = %q, want the daemon command", res.Diagnosis.Command)
+	}
+	if strings.Contains(res.Diagnosis.Cause, "Lemonade") {
+		t.Errorf("a daemon transport failure was blamed on Lemonade: %q", res.Diagnosis.Cause)
 	}
 }
 
@@ -654,7 +676,7 @@ func TestCheckSurfacesATransportError(t *testing.T) {
 		t.Fatalf("state = %s, want failed", row.State.Word())
 	}
 	assertRealCommand(t, row)
-	if !strings.Contains(row.Detail, "did not respond") {
+	if !strings.Contains(row.Detail, "did not finish in time") {
 		t.Errorf("a timeout should be diagnosed as one, got %q", row.Detail)
 	}
 }
@@ -744,5 +766,83 @@ func TestConfigForAddsTheEmailExtrasOnlyForEmail(t *testing.T) {
 	}
 	if got := ConfigFor("analyst", ""); got.AgentName != "Analyst" {
 		t.Errorf("missing display name = %q, want it derived from the id", got.AgentName)
+	}
+}
+
+// The relay answers 503 with `{"detail": ...}` and NO readiness object when the
+// sidecar dies between the agents listing and this probe. Decoded into value
+// structs that read as "Lemonade unreachable" — the wrong subject AND the wrong
+// remedy, pointing away from the process that actually died.
+func TestARelayErrorIsNotReportedAsLemonadeBeingDown(t *testing.T) {
+	f := newFake().with("GET /v1/email/init", 503,
+		`{"detail":"agent 'email' is registered but its sidecar is not running (POST /daemon/v1/agents/email/ensure), then retry."}`)
+
+	rep := Check(context.Background(), f, EmailConfig())
+	row, _ := rep.Find(KeyLemonade)
+
+	if row.State != StateFailed {
+		t.Fatalf("state = %s, want failed", row.State.Word())
+	}
+	if strings.Contains(row.Remedy.Command, "lemonade-server") {
+		t.Errorf("a dead sidecar was blamed on Lemonade: %q", row.Remedy.Command)
+	}
+	if !strings.Contains(row.Remedy.Command, "start-agent") {
+		t.Errorf("remedy = %q, want the sidecar restart", row.Remedy.Command)
+	}
+	if strings.Contains(row.Line, "not running at ") && !strings.Contains(row.Line, "http") {
+		t.Errorf("the row shows an empty base URL: %q", row.Line)
+	}
+	assertRealCommand(t, row)
+}
+
+// `d` on the model row has to show the body the probe actually saw, even when
+// an earlier row is what failed.
+func TestTheModelRowKeepsItsRawAnswerWhenLemonadeFails(t *testing.T) {
+	f := newFake().with("GET /v1/email/init", 503, initUnreachable)
+	rep := Check(context.Background(), f, EmailConfig())
+
+	row, _ := rep.Find(KeyModel)
+	if !strings.Contains(row.Raw, "lemonade") {
+		t.Errorf("the model row lost the probe body it was answered with: %q", row.Raw)
+	}
+	if row.Detail == "" {
+		t.Error("the model row does not say what it is waiting on")
+	}
+}
+
+// The connect remedy must request the SAME scope union the sidecar's own
+// /configure builds — --scopes replaces the provider defaults, so a short list
+// authorizes a mailbox the agent cannot read.
+func TestConnectCommandRequestsTheFullScopeUnion(t *testing.T) {
+	for provider, want := range map[string][]string{
+		"google": {
+			"openid", "email", "profile",
+			"https://www.googleapis.com/auth/gmail.modify",
+			"https://www.googleapis.com/auth/gmail.send",
+		},
+		"microsoft": {
+			"openid", "offline_access", "https://graph.microsoft.com/User.Read",
+			"https://graph.microsoft.com/Mail.ReadWrite",
+			"https://graph.microsoft.com/Mail.Send",
+		},
+	} {
+		cmd := connectCommand(provider)
+		for _, scope := range want {
+			if !strings.Contains(cmd, scope) {
+				t.Errorf("%s connect command is missing %q: %s", provider, scope, cmd)
+			}
+		}
+		if !strings.Contains(cmd, "--grant-agent "+emailAgentGrantID) {
+			t.Errorf("%s connect command does not grant the agent: %s", provider, cmd)
+		}
+		if strings.Contains(cmd, "grants grant") {
+			t.Errorf("%s uses the overwrite-scopes path: %s", provider, cmd)
+		}
+	}
+}
+
+func TestNonASCIIAgentIDDoesNotCorruptTheDisplayName(t *testing.T) {
+	if got := ConfigFor("émail", "").AgentName; got != "Émail" {
+		t.Errorf("display name = %q, want %q", got, "Émail")
 	}
 }

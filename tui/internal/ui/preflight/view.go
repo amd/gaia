@@ -225,7 +225,9 @@ func (m Model) trailerLines(w int) []string {
 		}
 	case m.note != "":
 		return append([]string{""}, indentAll(wrap(m.note, w-2*indentW), indentW)...)
-	case m.rep.Ready():
+	case m.phase == phaseDone:
+		// Only when a hand-off is actually scheduled — under ManualProceed
+		// nothing is starting, and saying so would be a lie.
 		return []string{"", pad(dimStyle.Render("Starting " + m.cfg.AgentName + "…"))}
 	}
 	return nil

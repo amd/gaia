@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -111,7 +112,6 @@ func TestRenderAllReadyAt80x24(t *testing.T) {
 		"Lemonade 8.1.10",
 		"Gemma-4-E4B-it-GGUF · 16K context",
 		"you@gmail.com (Gmail) · can send",
-		"Starting Email…",
 	} {
 		if !strings.Contains(screen, want) {
 			t.Errorf("screen does not show %q:\n%s", want, screen)
@@ -120,6 +120,30 @@ func TestRenderAllReadyAt80x24(t *testing.T) {
 	if strings.Contains(screen, "[!]") {
 		t.Errorf("an all-ready screen shows a failure marker:\n%s", screen)
 	}
+	// This capture is under ManualProceed, where nothing is being launched, so
+	// the hand-off line must be absent — claiming "Starting Email…" while the
+	// screen just sits there is a lie the user would wait on.
+	if strings.Contains(screen, "Starting Email") {
+		t.Errorf("ManualProceed screen claims it is starting the agent:\n%s", screen)
+	}
+}
+
+// The auto-proceed path is where "Starting Email…" is true.
+func TestReadyScreenSaysItIsStartingOnlyWhenItIs(t *testing.T) {
+	f := newFake()
+	m := New(f, EmailConfig(), Options{ReadyHold: time.Millisecond})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	updated, cmd := updated.(Model).Update(reportMsg{rep: Check(context.Background(), f, EmailConfig())})
+	m = updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("a ready report did not schedule the hand-off")
+	}
+	screen := ansi.Strip(m.View())
+	if !strings.Contains(screen, "Starting Email…") {
+		t.Errorf("the auto-proceed screen does not say what happens next:\n%s", screen)
+	}
+	assertFits(t, splitLines(screen), 80, 24)
 }
 
 // The screen has to survive every failure mode, not just the one that fits.
@@ -209,7 +233,10 @@ func TestKeysDriveTheRightActions(t *testing.T) {
 		if !ok {
 			t.Fatalf("f produced %T, want ConnectMailboxMsg", cmd())
 		}
-		if msg.Provider != "google" || msg.AgentID != "email" {
+		// No provider: with nothing connected, choosing Gmail vs Outlook is the
+		// user's call and belongs to the connector flow. Naming one here would
+		// walk an Outlook user into a Google sign-in.
+		if msg.Provider != "" || msg.AgentID != "email" {
 			t.Errorf("connect message = %+v", msg)
 		}
 	})

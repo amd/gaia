@@ -38,7 +38,9 @@ func (c Config) withDefaults() Config {
 		c.AgentID = "email"
 	}
 	if c.AgentName == "" {
-		c.AgentName = strings.ToUpper(c.AgentID[:1]) + c.AgentID[1:]
+		// Rune-wise: byte-slicing corrupts a non-ASCII id into mojibake.
+		r := []rune(c.AgentID)
+		c.AgentName = strings.ToUpper(string(r[:1])) + string(r[1:])
 	}
 	return c
 }
@@ -301,8 +303,12 @@ func describeSidecar(version *string, pid *int) string {
 // ---------------------------------------------------------------------------
 
 type initBody struct {
-	Ready    bool `json:"ready"`
-	Lemonade struct {
+	Ready bool `json:"ready"`
+	// Pointers on purpose. A 503 from the RELAY (the sidecar died between the
+	// agents listing and this call) carries `{"detail": ...}` and no `lemonade`
+	// object at all; decoding that into a value struct would read as
+	// "reachable:false" and send the user to start Lemonade over a dead sidecar.
+	Lemonade *struct {
 		Reachable  bool    `json:"reachable"`
 		BaseURL    string  `json:"base_url"`
 		Version    *string `json:"version"`
@@ -311,7 +317,7 @@ type initBody struct {
 		// is an indeterminate check, NOT a pass.
 		Compatible *bool `json:"compatible"`
 	} `json:"lemonade"`
-	Model struct {
+	Model *struct {
 		ID       string `json:"id"`
 		Present  bool   `json:"present"`
 		Loadable *bool  `json:"loadable"`
@@ -353,15 +359,27 @@ func checkInit(ctx context.Context, t Transport, cfg Config, rep *Report) State 
 		return StateFailed
 	}
 
+	// Whatever happens below, the model row keeps the body it was probed with —
+	// `d` on that row must show what the probe saw, not "(no raw answer)". It
+	// stays Pending with the placeholder line so markPending can still tell the
+	// user what it is waiting on.
+	model.State, model.Line = StatePending, "—"
+	setRow(rep, model)
+
 	var body initBody
-	if err := json.Unmarshal(resp.Body, &body); err != nil {
-		lemonade.State, lemonade.Line = StateFailed, "unreadable answer"
-		lemonade.Detail = fmt.Sprintf("The %s agent's readiness answer could not be read.", cfg.AgentName)
-		lemonade.Remedy = Remedy{
-			Action:  "Restart the agent's sidecar, then re-check.",
-			Command: "gaia daemon start-agent " + cfg.AgentID,
-			Where:   fmt.Sprintf("~/.gaia/agents/%s/logs/", cfg.AgentID),
+	if err := json.Unmarshal(resp.Body, &body); err != nil || body.Lemonade == nil || body.Model == nil {
+		// Either unparseable, or parseable but not a readiness answer at all —
+		// the relay's own 503/502 (`{"detail": ...}`) lands here. Diagnosing it
+		// as "Lemonade is down" would name the wrong subject AND the wrong fix.
+		d := l.Status("check whether the local AI is ready", resp.Status, raw)
+		if err == nil {
+			d.Cause = fmt.Sprintf(
+				"The %s agent answered the readiness check without saying anything about "+
+					"the local AI — it is most likely no longer running. %s",
+				cfg.AgentName, d.Cause)
 		}
+		lemonade.State, lemonade.Line, lemonade.Detail, lemonade.Remedy =
+			StateFailed, "cannot be checked", d.Cause, d.AsRemedy()
 		setRow(rep, lemonade)
 		return StateFailed
 	}
@@ -510,14 +528,50 @@ type connectorsBody struct {
 	Providers []connectorEntry `json:"providers"`
 }
 
-// Send scopes, mirroring gaia_agent_email.scopes / .outlook_scopes. Quoted in a
-// remedy, so a wrong value would send the user down a dead end.
-const (
-	gmailSendScope   = "https://www.googleapis.com/auth/gmail.send"
-	outlookSendScope = "https://graph.microsoft.com/Mail.Send"
-	// emailAgentGrantID mirrors connector_routes.EMAIL_AGENT_ID.
-	emailAgentGrantID = "installed:email"
-)
+// emailAgentGrantID mirrors connector_routes.EMAIL_AGENT_ID.
+const emailAgentGrantID = "installed:email"
+
+// connectScopes is the EXACT scope list a reconnect must request, per provider:
+// the connector's default_scopes ∪ the agent's mail scopes, mirroring
+// connector_routes._build_scope_union.
+//
+// The union is not decoration. `gaia connectors connect --scopes` REPLACES the
+// provider defaults rather than adding to them (flow.py: `list(scopes) or
+// list(provider.default_scopes)`), so a remedy naming only the send scope
+// authorizes an account the agent can no longer read — and the mailbox row
+// would then go green over a mailbox that is worse off than before.
+var connectScopes = map[string][]string{
+	"google": {
+		// catalog/google.py default_scopes
+		"openid", "email", "profile",
+		// gaia_agent_email.scopes.GMAIL_SCOPES
+		"https://www.googleapis.com/auth/gmail.modify",
+		"https://www.googleapis.com/auth/gmail.send",
+	},
+	"microsoft": {
+		// catalog/microsoft.py default_scopes
+		"openid", "offline_access", "https://graph.microsoft.com/User.Read",
+		// gaia_agent_email.outlook_scopes.OUTLOOK_MAIL_SCOPES
+		"https://graph.microsoft.com/Mail.ReadWrite",
+		"https://graph.microsoft.com/Mail.Send",
+	},
+}
+
+// connectCommand is the one command that fixes every mailbox state: it
+// re-authorizes with the full scope set AND grants them to the agent in the
+// same flow, so the token and the grant can never disagree.
+//
+// Deliberately NOT `gaia connectors grants grant`: that overwrites the agent's
+// existing scopes (grants.py grant_agent) and cannot add a scope the stored
+// token never carried, so it would trade "cannot send" for "cannot read".
+func connectCommand(provider string) string {
+	scopes, ok := connectScopes[provider]
+	if !ok {
+		provider, scopes = "google", connectScopes["google"]
+	}
+	return fmt.Sprintf("gaia connectors connect %s --grant-agent %s --scopes %s",
+		provider, emailAgentGrantID, strings.Join(scopes, " "))
+}
 
 // MailboxCheck is the email agent's extra precondition.
 //
@@ -591,10 +645,9 @@ func runMailboxCheck(ctx context.Context, t Transport, cfg Config) Row {
 		row.Fix = FixConnectMailbox
 		row.Provider = connected.Provider
 		row.Remedy = Remedy{
-			Action: "Grant the send scope — press f to reconnect, or run the command.",
-			Command: fmt.Sprintf("gaia connectors grants grant %s %s --scopes %s",
-				connected.Provider, emailAgentGrantID, sendScope(connected.Provider)),
-			Where: "https://amd-gaia.ai/docs/guides/email",
+			Action:  "Reconnect it — press f, or run the command. Takes about a minute.",
+			Command: connectCommand(connected.Provider),
+			Where:   "https://amd-gaia.ai/docs/guides/email",
 		}
 		return row
 	}
@@ -603,21 +656,16 @@ func runMailboxCheck(ctx context.Context, t Transport, cfg Config) Row {
 	row.Line = "not connected"
 	row.Detail = fmt.Sprintf("%s cannot do anything until it can read a mailbox. Connecting takes about three minutes.", cfg.AgentName)
 	row.Fix = FixConnectMailbox
-	row.Provider = "google"
+	// No provider: nothing is connected, so the choice between Gmail and Outlook
+	// is the user's and belongs to the connector flow. Naming one here would
+	// route an Outlook user into a Google sign-in.
+	row.Provider = ""
 	row.Remedy = Remedy{
-		Action: "Connect Gmail or Outlook — press f to start, or run the command.",
-		Command: fmt.Sprintf("gaia connectors connect google --grant-agent %s --scopes %s",
-			emailAgentGrantID, gmailSendScope),
-		Where: "https://amd-gaia.ai/docs/guides/email",
+		Action:  "Connect Gmail or Outlook — press f to choose. For Outlook, swap `google` for `microsoft` below.",
+		Command: connectCommand("google"),
+		Where:   "https://amd-gaia.ai/docs/guides/email",
 	}
 	return row
-}
-
-func sendScope(provider string) string {
-	if provider == "microsoft" {
-		return outlookSendScope
-	}
-	return gmailSendScope
 }
 
 func providerName(provider string) string {

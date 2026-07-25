@@ -50,12 +50,16 @@ type Transport interface {
 	Stream(ctx context.Context, method, path string, body []byte) (Stream, error)
 }
 
-// Connect+header timeouts for the provisioning stream. A model pull can run for
-// many minutes, so only the handshake is bounded here; the caller's context
-// bounds the rest.
+// Connect+header timeouts for the provisioning stream.
+//
+// The header budget is deliberately huge because the daemon relay BUFFERS every
+// non-SSE response (relay.py reads the whole upstream body before answering),
+// so NO response header arrives until the model pull has finished. A handshake
+// timeout here would abort every real download and blame the wrong thing. The
+// caller's context is what actually bounds the pull.
 const (
 	streamConnectTimeout = 10 * time.Second
-	streamHeaderTimeout  = 120 * time.Second
+	streamHeaderTimeout  = 60 * time.Minute
 )
 
 // daemonTransport adapts internal/daemon's client to Transport.
@@ -103,6 +107,10 @@ func info(inst *daemon.Instance) DaemonInfo {
 func (t *daemonTransport) Attach(ctx context.Context) (DaemonInfo, error) {
 	inst, err := t.c.Attach(ctx)
 	if err != nil {
+		// Drop the cached instance: a failed attach means the record we were
+		// using is no longer trustworthy, and reusing it would send the next
+		// call to a port the daemon may have left.
+		t.set(nil)
 		return DaemonInfo{}, err
 	}
 	if err := verify(inst); err != nil {
@@ -167,6 +175,9 @@ func (t *daemonTransport) do(ctx context.Context, method, path, accept string, b
 		t.set(fresh)
 	}
 	if err != nil {
+		// Force a fresh attach next time rather than retrying against an
+		// instance that just failed to answer.
+		t.set(nil)
 		return 0, nil, err
 	}
 	return resp.StatusCode, resp.Body, nil

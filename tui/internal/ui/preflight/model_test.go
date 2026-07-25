@@ -1,6 +1,7 @@
 package preflight
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -201,5 +202,143 @@ func TestCtrlCQuitsTheApp(t *testing.T) {
 	}
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Fatalf("ctrl+c produced %T, want tea.QuitMsg", cmd())
+	}
+}
+
+// A tick scheduled by a ready report must not launch an agent the user backed
+// out of in the 800 ms before it fired.
+func TestProceedTickAfterCancelDoesNotLaunch(t *testing.T) {
+	f := newFake()
+	m := New(f, EmailConfig(), Options{ReadyHold: time.Second})
+	updated, cmd := m.Update(reportMsg{rep: Check(t.Context(), f, EmailConfig())})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("a ready report did not schedule the hand-off")
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+
+	if _, tick := m.Update(proceedTickMsg{}); tick != nil {
+		t.Fatalf("a stale tick launched the agent after esc: %T", tick())
+	}
+}
+
+// esc must leave the screen usable: a phase left at "provisioning" makes Busy()
+// true forever and a re-shown gate rejects every key.
+func TestCancelLeavesTheScreenUsable(t *testing.T) {
+	f := newFake().with("GET /v1/email/init", 503, initModelMissing)
+	m := newModel(t, f)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	m = updated.(Model)
+	if !m.Busy() {
+		t.Fatal("the download did not mark the screen busy")
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.Busy() {
+		t.Error("after esc the screen is still busy, so r/f/enter would be refused")
+	}
+
+	// And the keys really do work again.
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}}); cmd == nil {
+		t.Error("r was refused on a screen the user came back to")
+	}
+}
+
+// A pull that ends without a terminal event still owes the user a cause and a
+// remedy — "Download failed." with nothing after it is the failure mode the
+// fail-loudly rule exists to prevent.
+func TestAClosedProvisionChannelStillExplainsItself(t *testing.T) {
+	f := newFake().with("GET /v1/email/init", 503, initModelMissing)
+	m := newModel(t, f)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	m = updated.(Model)
+
+	ch := m.provisionCh
+	if ch == nil {
+		t.Fatal("no provisioning channel")
+	}
+	// Simulate the producer closing without delivering a result.
+	closed := make(chan provisionEvent)
+	close(closed)
+	msg := waitProvision(closed, m.cfg)
+	ev, ok := msg().(provisionMsg)
+	if !ok {
+		t.Fatalf("waitProvision produced %T", msg())
+	}
+	if !ev.event.done {
+		t.Fatal("a closed channel did not produce a terminal event")
+	}
+	if ev.event.result.Diagnosis.Cause == "" || ev.event.result.Diagnosis.Command == "" {
+		t.Fatalf("a closed channel produced an empty diagnosis: %+v", ev.event.result.Diagnosis)
+	}
+
+	updated, _ = m.Update(provisionMsg{ch: m.provisionCh, event: ev.event})
+	m = updated.(Model)
+	note := strings.Join(strings.Fields(ansi.Strip(m.View())), " ")
+	if !strings.Contains(note, "gaia init") {
+		t.Errorf("the failed download does not tell the user what to run:\n%s", note)
+	}
+}
+
+// The terminal result must survive a context that expired at the same moment —
+// a uniform select would drop it half the time.
+func TestSendPrefersDeliveryOverACancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	for i := 0; i < 200; i++ {
+		ch := make(chan provisionEvent, 1)
+		send(ctx, ch, provisionEvent{done: true, result: ProvisionResult{OK: true}})
+		select {
+		case ev := <-ch:
+			if !ev.done {
+				t.Fatal("delivered the wrong event")
+			}
+		default:
+			t.Fatalf("iteration %d: the result was dropped despite a free buffer", i)
+		}
+	}
+}
+
+// Pressing enter on a blocked report must say why, not silently do nothing.
+func TestEnterOnABlockedReportSaysWhy(t *testing.T) {
+	f := newFake().with("GET /v1/email/connectors", 200, connectorsNone)
+	m := newModel(t, f)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if cmd != nil {
+		t.Fatalf("enter proceeded past a blocked report: %T", cmd())
+	}
+	screen := strings.Join(strings.Fields(ansi.Strip(m.View())), " ")
+	if !strings.Contains(screen, "cannot start yet") || !strings.Contains(screen, "Mailbox") {
+		t.Errorf("enter was a silent no-op:\n%s", screen)
+	}
+}
+
+// Nothing failed but something could not be verified: the launch proceeds (the
+// sidecar does not treat it as fatal) while naming what went unproven.
+func TestAnIndeterminateReportProceedsButSaysWhatItCouldNotVerify(t *testing.T) {
+	f := newFake().with("GET /v1/email/init", 200, initUnknownVersion)
+	m := New(f, EmailConfig(), Options{ReadyHold: time.Millisecond})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	updated, cmd := updated.(Model).Update(reportMsg{rep: Check(t.Context(), f, EmailConfig())})
+	m = updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("an unblocked report did not schedule the hand-off")
+	}
+	if m.Ready() {
+		t.Fatal("an indeterminate row was counted as ready")
+	}
+	screen := strings.Join(strings.Fields(ansi.Strip(m.View())), " ")
+	if !strings.Contains(screen, "Starting anyway") || !strings.Contains(screen, "Local AI") {
+		t.Errorf("the hand-off does not name what could not be verified:\n%s", screen)
+	}
+	if _, ok := cmd().(proceedTickMsg); !ok {
+		t.Fatalf("scheduled %T", cmd())
 	}
 }

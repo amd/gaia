@@ -59,9 +59,18 @@ type Ladder struct {
 
 func (l Ladder) agent() string {
 	if l.AgentID == "" {
-		return "<agent-id>"
+		return "the agent"
 	}
 	return l.AgentID
+}
+
+// agentCommand builds an agent-scoped command, falling back to one that needs
+// no id. A remedy a user cannot copy verbatim is not a remedy.
+func (l Ladder) agentCommand(verb, fallback string) string {
+	if l.AgentID == "" {
+		return fallback
+	}
+	return verb + " " + l.AgentID
 }
 
 // daemonLog is the daemon's own log path, resolved for embedding in a remedy.
@@ -135,12 +144,7 @@ func (l Ladder) Error(op string, err error) Diagnosis {
 
 	// 2. Context deadlines: the caller gave up, which is not the same as refused.
 	if errors.Is(err, context.DeadlineExceeded) {
-		return Diagnosis{
-			Cause:   op + " timed out.",
-			Remedy:  "Check the local model server is running and responsive on its expected port.",
-			Command: "lemonade-server serve",
-			Where:   daemonLog(),
-		}
+		return l.transport(op, "timed out")
 	}
 	if errors.Is(err, context.Canceled) {
 		return Diagnosis{
@@ -149,12 +153,50 @@ func (l Ladder) Error(op string, err error) Diagnosis {
 		}
 	}
 
-	// 3. Everything else: read the message with the text ladder.
+	// 3. Everything else is a Go transport error, and the TUI dials exactly one
+	// host: the daemon on loopback. So "connection refused" here means the
+	// DAEMON is unreachable — never Lemonade, which this process never talks to
+	// directly. Routing it through the body ladder would answer
+	// "start lemonade-server" to a daemon that moved to a new port.
 	var reqErr *daemon.RequestError
 	if errors.As(err, &reqErr) {
-		return l.Text(op, reqErr.Detail)
+		return l.transport(op, reqErr.Detail)
 	}
-	return l.Text(op, err.Error())
+	return l.transport(op, err.Error())
+}
+
+// transport diagnoses a failure to REACH the daemon, as opposed to something a
+// service told us. Kept separate from Text on purpose: the same words mean
+// different things depending on who produced them.
+func (l Ladder) transport(op, text string) Diagnosis {
+	body := strings.ToLower(text)
+
+	switch {
+	case containsAny(body, "refused", "connection reset", "no such host", "connect:", "eof"):
+		return Diagnosis{
+			Cause:   "The GAIA background service stopped answering — it may have restarted on a new port.",
+			Remedy:  "Check it, then press r to re-check.",
+			Command: "gaia daemon status",
+			Where:   daemonLog(),
+		}
+	case containsAny(body, "timed out", "timeout", "deadline exceeded", "context canceled"):
+		return Diagnosis{
+			Cause:   op + " did not finish in time.",
+			Remedy:  "Check the background service is healthy, then press r to re-check.",
+			Command: "gaia daemon status",
+			Where:   daemonLog(),
+		}
+	}
+	cause := op + " failed."
+	if strings.TrimSpace(text) != "" {
+		cause = fmt.Sprintf("%s failed: %s", op, strings.TrimSpace(text))
+	}
+	return Diagnosis{
+		Cause:   cause,
+		Remedy:  "Check the background service, then press r to re-check.",
+		Command: "gaia daemon status",
+		Where:   daemonLog(),
+	}
 }
 
 // Status diagnoses a response the daemon (or a relayed sidecar) actually
@@ -177,7 +219,7 @@ func (l Ladder) Status(op string, status int, body string) Diagnosis {
 			Cause: fmt.Sprintf("The background service does not know the agent %q.", l.agent()),
 			Remedy: "Install it, then check it is registered. " +
 				detailSuffix(trimmed),
-			Command: "gaia hub install " + l.agent(),
+			Command: l.agentCommand("gaia hub install", "gaia daemon agents"),
 			Where:   daemonLog(),
 		}
 	case http.StatusServiceUnavailable:
@@ -189,14 +231,20 @@ func (l Ladder) Status(op string, status int, body string) Diagnosis {
 		return Diagnosis{
 			Cause:   op + " is not ready yet.",
 			Remedy:  "Start the agent's sidecar, then re-check.",
-			Command: "gaia daemon start-agent " + l.agent(),
+			Command: l.agentCommand("gaia daemon start-agent", "gaia daemon agents"),
 			Where:   l.sidecarLog(),
 		}
 	case http.StatusBadGateway:
+		// A 502 whose body says the relay itself gave up mid-response is NOT a
+		// dead sidecar — it is the daemon refusing to hold a long buffered call
+		// (a model pull) open. Restarting the sidecar would fix nothing.
+		if containsAny(strings.ToLower(trimmed), "mid-response", "readtimeout", "read timeout") {
+			return l.Text(op, trimmed)
+		}
 		return Diagnosis{
 			Cause:   fmt.Sprintf("The background service could not reach the %s agent. %s", l.agent(), detailSuffix(trimmed)),
 			Remedy:  "Restart the agent's sidecar, then re-check.",
-			Command: "gaia daemon start-agent " + l.agent(),
+			Command: l.agentCommand("gaia daemon start-agent", "gaia daemon agents"),
 			Where:   l.sidecarLog(),
 		}
 	}
@@ -205,7 +253,7 @@ func (l Ladder) Status(op string, status int, body string) Diagnosis {
 		return Diagnosis{
 			Cause:   fmt.Sprintf("%s failed inside the %s agent. %s", op, l.agent(), detailSuffix(trimmed)),
 			Remedy:  "Read the agent's log, then restart its sidecar.",
-			Command: "gaia daemon start-agent " + l.agent(),
+			Command: l.agentCommand("gaia daemon start-agent", "gaia daemon agents"),
 			Where:   l.sidecarLog(),
 		}
 	}
@@ -241,7 +289,15 @@ func (l Ladder) Text(op, text string) Diagnosis {
 			Command: "gaia init",
 			Where:   "https://lemonade-server.ai",
 		}
-	case containsAny(body, "not downloaded", "model", "download"):
+	case containsAny(body, "dropped the connection mid-response", "did not answer"):
+		return Diagnosis{
+			Cause: "The background service gave up relaying the agent's answer. A large " +
+				"model download exceeds what it will hold open.",
+			Remedy:  "Download the model in a terminal instead, then press r to re-check.",
+			Command: "gaia init",
+			Where:   daemonLog(),
+		}
+	case containsAny(body, "not downloaded", "not present", "download"):
 		return Diagnosis{
 			Cause:   "The AI model is not downloaded.",
 			Remedy:  "Download it once — every GAIA agent reuses the same model.",
@@ -257,14 +313,18 @@ func (l Ladder) Text(op, text string) Diagnosis {
 		}
 	}
 
+	// Fallback: something answered, but with nothing this ladder recognises.
+	// The answer came from the agent's sidecar, so restarting it is the honest
+	// next step — never a remedy-less dead end.
 	cause := op + " failed."
-	if text != "" {
+	if strings.TrimSpace(text) != "" {
 		cause = fmt.Sprintf("%s failed: %s", op, strings.TrimSpace(text))
 	}
 	return Diagnosis{
-		Cause:  cause,
-		Remedy: "Re-check with r; if it keeps failing, read the log below.",
-		Where:  daemonLog(),
+		Cause:   cause,
+		Remedy:  "Restart the agent's sidecar, then press r to re-check.",
+		Command: l.agentCommand("gaia daemon start-agent", "gaia daemon agents"),
+		Where:   l.sidecarLog(),
 	}
 }
 

@@ -2,6 +2,7 @@ package preflight
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -33,6 +34,9 @@ const (
 	// defaultReadyHold is how long an all-green screen is held so the user sees
 	// what was verified before chat replaces it.
 	defaultReadyHold = 800 * time.Millisecond
+	// unknownHold is the longer hold used when nothing failed but something
+	// could not be verified — long enough to read what went unproven.
+	unknownHold = 2500 * time.Millisecond
 )
 
 type phase int
@@ -169,20 +173,27 @@ type proceedTickMsg struct{}
 
 // --- commands --------------------------------------------------------------
 
-func (m Model) checkCmd() tea.Cmd {
-	t, cfg := m.t, m.cfg
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), checkTimeout)
-		defer cancel()
-		return reportMsg{rep: Check(ctx, t, cfg)}
-	}
+// begin builds the context for a piece of background work and parks its cancel
+// on the model, so Cancel() stops EVERYTHING the screen started — not just a
+// download. An abandoned ensure would otherwise keep spawning a sidecar minutes
+// after the user left.
+func (m *Model) begin(timeout time.Duration) context.Context {
+	m.Cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	m.cancel = cancel
+	return ctx
 }
 
-func (m Model) startDaemonCmd() tea.Cmd {
+func (m *Model) checkCmd() tea.Cmd {
+	ctx := m.begin(checkTimeout)
+	t, cfg := m.t, m.cfg
+	return func() tea.Msg { return reportMsg{rep: Check(ctx, t, cfg)} }
+}
+
+func (m *Model) startDaemonCmd() tea.Cmd {
+	ctx := m.begin(startTimeout)
 	t := m.t
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), startTimeout)
-		defer cancel()
 		if _, err := t.Start(ctx); err != nil {
 			return fixDoneMsg{key: KeyDaemon, err: err}
 		}
@@ -190,11 +201,10 @@ func (m Model) startDaemonCmd() tea.Cmd {
 	}
 }
 
-func (m Model) ensureAgentCmd() tea.Cmd {
+func (m *Model) ensureAgentCmd() tea.Cmd {
+	ctx := m.begin(ensureTimeout)
 	t, cfg := m.t, m.cfg
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), ensureTimeout)
-		defer cancel()
 		if err := t.EnsureAgent(ctx, cfg.AgentID); err != nil {
 			return fixDoneMsg{key: KeySidecar, err: err}
 		}
@@ -202,21 +212,53 @@ func (m Model) ensureAgentCmd() tea.Cmd {
 	}
 }
 
-func waitProvision(ch chan provisionEvent) tea.Cmd {
+func waitProvision(ch chan provisionEvent, cfg Config) tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-ch
-		if !ok {
-			return provisionMsg{ch: ch, event: provisionEvent{done: true}}
+		if ok {
+			return provisionMsg{ch: ch, event: ev}
 		}
-		return provisionMsg{ch: ch, event: ev}
+		// The producer closed without a terminal event: the only way here is a
+		// cancelled or timed-out pull. Say so — an empty "Download failed." with
+		// no cause and no remedy is exactly the silent failure the rules forbid.
+		return provisionMsg{ch: ch, event: provisionEvent{
+			done: true,
+			result: ProvisionResult{
+				Final: "✗ the download stopped before it finished",
+				Diagnosis: Diagnosis{
+					Cause:   "The model download was cancelled, or ran past the time limit.",
+					Remedy:  "Download it in a terminal instead, then press r to re-check.",
+					Command: "gaia init",
+					Where:   fmt.Sprintf("~/.gaia/agents/%s/logs/", cfg.AgentID),
+				},
+			},
+		}}
+	}
+}
+
+// send delivers ev, preferring delivery over an already-cancelled context.
+//
+// A plain `select { case ch <- ev: case <-ctx.Done(): }` picks UNIFORMLY when
+// both are ready, so a pull that finished exactly as its deadline expired lost
+// its result half the time — and the screen then had a failure with no cause
+// and no remedy. The non-blocking attempt first makes delivery deterministic
+// whenever the buffer has room; the fallback still refuses to park forever on a
+// reader that is gone.
+func send(ctx context.Context, ch chan provisionEvent, ev provisionEvent) {
+	select {
+	case ch <- ev:
+		return
+	default:
+	}
+	select {
+	case ch <- ev:
+	case <-ctx.Done():
 	}
 }
 
 func (m Model) startProvision() (Model, tea.Cmd) {
 	ch := make(chan provisionEvent, 64)
-	ctx, cancel := context.WithTimeout(context.Background(), provisionTimeout)
-	m.Cancel()
-	m.cancel = cancel
+	ctx := m.begin(provisionTimeout)
 	m.provisionCh = ch
 	// The daemon relay BUFFERS non-SSE responses (src/gaia/daemon/relay.py), so
 	// the sidecar's progress lines all arrive at the end of the pull rather than
@@ -230,19 +272,11 @@ func (m Model) startProvision() (Model, tea.Cmd) {
 	go func() {
 		defer close(ch)
 		res := Provision(ctx, t, cfg, func(line string) {
-			// Never block on a screen that stopped reading — a cancelled gate
-			// must not park this goroutine for the length of a model pull.
-			select {
-			case ch <- provisionEvent{line: line}:
-			case <-ctx.Done():
-			}
+			send(ctx, ch, provisionEvent{line: line})
 		})
-		select {
-		case ch <- provisionEvent{done: true, result: res}:
-		case <-ctx.Done():
-		}
+		send(ctx, ch, provisionEvent{done: true, result: res})
 	}()
-	return m, tea.Batch(waitProvision(ch), m.spin.Tick)
+	return m, tea.Batch(waitProvision(ch, m.cfg), m.spin.Tick)
 }
 
 // --- update ----------------------------------------------------------------
@@ -271,13 +305,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.focus = 0
 		}
-		if m.rep.Ready() && !m.opts.ManualProceed {
+		if !m.rep.Blocked() && !m.opts.ManualProceed {
+			// Nothing failed. Indeterminate rows do not block the launch — the
+			// sidecar itself does not treat an unadvertised version as fatal, and
+			// making the user press enter on EVERY launch against such a server
+			// would train them to press it without reading. They are held longer
+			// and named, not silently skipped.
+			hold := m.opts.ReadyHold
+			if !m.rep.Ready() {
+				hold = unknownHold
+				m.note = "Starting anyway — " + m.unverifiedSummary()
+			}
 			m.phase = phaseDone
-			return m, tea.Tick(m.opts.ReadyHold, func(time.Time) tea.Msg { return proceedTickMsg{} })
+			return m, tea.Tick(hold, func(time.Time) tea.Msg { return proceedTickMsg{} })
 		}
 		return m, nil
 
 	case proceedTickMsg:
+		// A tick already in flight when the user pressed esc or r must not
+		// launch the agent they backed out of.
+		if m.phase != phaseDone {
+			return m, nil
+		}
 		return m, m.proceed()
 
 	case fixDoneMsg:
@@ -299,7 +348,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if !msg.event.done {
 			m.provisionLine = msg.event.line
-			return m, waitProvision(msg.ch)
+			return m, waitProvision(msg.ch, m.cfg)
 		}
 		m.provisionCh = nil
 		m.Cancel()
@@ -327,12 +376,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c":
 		// Matches the hub and chat: ctrl+c leaves the app, not just the screen.
 		m.Cancel()
-		m.provisionCh = nil
+		m.provisionCh, m.phase = nil, phaseIdle
 		return m, tea.Quit
 
 	case "esc", "q":
 		m.Cancel()
-		m.provisionCh = nil
+		// Back to idle, not left in phaseProvisioning/phaseDone: Busy() would
+		// otherwise stay true forever and a re-shown gate would refuse every key.
+		m.provisionCh, m.phase = nil, phaseIdle
+		m.note = ""
 		agentID := m.cfg.AgentID
 		return m, func() tea.Msg { return CancelMsg{AgentID: agentID} }
 
@@ -363,9 +415,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.checkCmd(), m.spin.Tick)
 
 	case "enter":
-		if m.Busy() || m.rep.Blocked() {
+		if m.Busy() {
 			return m, nil
 		}
+		if blocker, blocked := m.rep.Blocker(); blocked {
+			m.note = fmt.Sprintf("%s cannot start yet: %s is %s. Fix that row first.",
+				m.cfg.AgentName, blocker.Label, blocker.Line)
+			return m, nil
+		}
+		m.phase = phaseIdle
 		return m, m.proceed()
 
 	case "f":
@@ -404,6 +462,17 @@ func (m Model) applyFix() (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+}
+
+// unverifiedSummary names what could not be proved, for the line shown while an
+// indeterminate report is handed off.
+func (m Model) unverifiedSummary() string {
+	for _, row := range m.rep.Rows {
+		if row.State == StateUnknown {
+			return row.Label + " could not be verified (" + row.Line + ")."
+		}
+	}
+	return "not everything could be verified."
 }
 
 func (m Model) proceed() tea.Cmd {
