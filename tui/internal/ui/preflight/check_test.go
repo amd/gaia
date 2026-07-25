@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/amd/gaia/tui/internal/daemon"
 )
@@ -93,10 +94,88 @@ const (
 		"\"hint\":\"Model `Gemma-4-E4B-it-GGUF` not downloaded — run `gaia init` " +
 		`(or pull it via Lemonade), then retry."}`
 
+	// can_send is false and the sign-in ITSELF never carried the send scope: no
+	// grant can add it, only a new sign-in.
 	connectorsNoSend = `{"agent_id":"installed:email","providers":[` +
 		`{"provider":"google","connected":true,"account_email":"you@gmail.com",` +
 		`"scopes":["https://www.googleapis.com/auth/gmail.readonly"],"can_send":false},` +
 		`{"provider":"microsoft","connected":false,"account_email":null,"scopes":[],"can_send":false}]}`
+
+	// can_send is false but the sign-in DOES carry the send scope — the agent was
+	// never granted it. A different half is missing, so a different sentence.
+	connectorsNoGrant = `{"agent_id":"installed:email","providers":[` +
+		`{"provider":"google","connected":true,"account_email":"you@gmail.com",` +
+		`"scopes":["https://www.googleapis.com/auth/gmail.modify","https://www.googleapis.com/auth/gmail.send"],` +
+		`"can_send":false},` +
+		`{"provider":"microsoft","connected":false,"account_email":null,"scopes":[],"can_send":false}]}`
+
+	// Both mailboxes linked and granted. The read route refuses to guess between
+	// them, so nothing about either can be proven.
+	connectorsBoth = `{"agent_id":"installed:email","providers":[` +
+		`{"provider":"google","connected":true,"account_email":"you@gmail.com","scopes":[],"can_send":true},` +
+		`{"provider":"microsoft","connected":true,"account_email":"you@outlook.com","scopes":[],"can_send":true}]}`
+
+	// --- POST /v1/email/search: the credential probe ------------------------
+	//
+	// EmailSearchResponse (contract.py) for a one-message page. `count` is a
+	// REQUIRED field there, so a fixture without it is not the real shape.
+	searchOK = `{"schema_version":"2.5","query":null,"count":1,"messages":[{"id":"18f0",` +
+		`"thread_id":"18f0","subject":"Welcome","from":"a@b.com","to":"you@gmail.com",` +
+		`"date":"Tue, 1 Jul 2026 09:00:00 -0700","snippet":"hello","label_ids":["INBOX"]}],` +
+		`"next_page_token":null}`
+
+	// An inbox with nothing in it still proves the credential works.
+	searchEmptyInbox = `{"schema_version":"2.5","query":null,"count":0,"messages":[],` +
+		`"next_page_token":null}`
+
+	// CAPTURED LIVE from this machine's broken Google connector — the exact body
+	// that made the old row go green. The daemon owns the refresh token and
+	// forwards short-lived access tokens to the sidecar; the connector list still
+	// says connected:true, can_send:true while no token ever arrives.
+	searchNoForwardedCredential = `{"detail":"no forwarded 'google' credential is available to the ` +
+		`email sidecar. The connection may not be granted to this agent, or it was ` +
+		"revoked/withdrawn. Connect and grant it in one command — no Agent UI required: " +
+		"`gaia connectors connect google --scopes <scopes> --grant-agent installed:email`, " +
+		`or use Settings -> Connections in the Agent UI. The daemon forwards a token on the next use."}`
+
+	// ConnectionRevokedError -> 403 (api_routes.search_inbox's except-ladder).
+	searchRevoked = `{"detail":"the stored 'google' connection was revoked upstream. ` +
+		`Reconnect it, then retry."}`
+
+	// The forwarded token lapsed between the daemon's re-forwards. The sidecar
+	// says so itself ("Retry in a moment") — this one clears on its own, so it
+	// must not cost the user a browser sign-in.
+	// VERBATIM from forwarded_credentials._require_forwarded.
+	searchTokenLapsed = `{"detail":"the forwarded 'google' access token has expired and the ` +
+		"daemon has not re-forwarded a fresh one yet. Retry in a moment; if it persists, " +
+		"reconnect with `gaia connectors connect google --scopes <scopes>` (or Settings -> " +
+		`Connections in the Agent UI)."}`
+
+	// The RELAY's own 502: the sidecar died between the agents listing and this
+	// call. Says nothing about the mailbox, so it must not fail the row.
+	// VERBATIM from relay.py's httpx.HTTPError handler — the "sidecar for agent"
+	// marker relayGaveUp keys on is not pinned on the Python side, so a reword
+	// there has to break a test here.
+	searchRelayDown = `{"detail":"sidecar for agent 'email' at http://127.0.0.1:57193 did not ` +
+		`answer (ConnectError: All connection attempts failed). It may have died after ` +
+		"registration — re-ensure it (POST /daemon/v1/agents/email/ensure) and retry.\"}"
+
+	// The relay's own 503, when the sidecar is gone by the time the probe lands.
+	// VERBATIM from sidecars/registry.connection. Reported as a broken mailbox it
+	// would send the user through OAuth for a sidecar they need to restart.
+	searchRelay503 = `{"detail":"agent 'email' has no running sidecar to relay to. Start it ` +
+		"first (`gaia daemon start-agent email` or POST /daemon/v1/agents/email/ensure), " +
+		`then retry."}`
+
+	// get_search_backend refuses to pick between two connected mailboxes.
+	searchAmbiguous = `{"detail":"Multiple mailboxes connected (google, microsoft); the search ` +
+		`API can't choose which inbox to search. Search from the agent/UI, or disconnect all ` +
+		`but one mailbox."}`
+
+	// FastAPI's validation shape: `detail` is an ARRAY, not a string. Only the
+	// `msg` fields are readable language; the array must never reach a row.
+	searchUnprocessable = `{"detail":[{"type":"missing","loc":["body","max_results"],` +
+		`"msg":"Field required","input":{}}]}`
 )
 
 // --- fake transport ---------------------------------------------------------
@@ -134,6 +213,7 @@ func newFake() *fakeTransport {
 			"GET /daemon/v1/agents":    {Status: 200, Body: []byte(agentsRunning)},
 			"GET /v1/email/init":       {Status: 200, Body: []byte(initReady)},
 			"GET /v1/email/connectors": {Status: 200, Body: []byte(connectorsReady)},
+			"POST /v1/email/search":    {Status: 200, Body: []byte(searchOK)},
 		},
 		errs: map[string]error{},
 	}
@@ -387,20 +467,142 @@ func TestCheck(t *testing.T) {
 			wantFix: FixConnectMailbox,
 		},
 		{
-			name: "mailbox connected but send not granted",
+			name: "mailbox signed in without the send scope",
 			build: func() *fakeTransport {
 				return newFake().with("GET /v1/email/connectors", 200, connectorsNoSend)
 			},
 			wantStates:  map[string]State{KeyMailbox: StateFailed},
 			wantBlocker: KeyMailbox,
 			wantIn: []string{
-				"you@gmail.com", "send not allowed",
+				"you@gmail.com", "sign-in has no send access",
+				"signed in without the send scope",
 				"gaia connectors connect google --grant-agent installed:email",
 				"https://www.googleapis.com/auth/gmail.modify",
 				"https://www.googleapis.com/auth/gmail.send",
 			},
 			wantNotIn: []string{"grants grant"},
 			wantFix:   FixConnectMailbox,
+			// A mailbox metadata already proves unusable is never probed.
+			mustNotCall: []call{{"POST", "/v1/email/search"}},
+		},
+		{
+			// Same can_send:false, different missing half, different sentence: the
+			// sign-in HAS send, the agent was never handed it. One remedy for both
+			// would send this user to re-authorize something already authorized.
+			name: "mailbox signed in with send but the agent was never granted it",
+			build: func() *fakeTransport {
+				return newFake().with("GET /v1/email/connectors", 200, connectorsNoGrant)
+			},
+			wantStates:  map[string]State{KeyMailbox: StateFailed},
+			wantBlocker: KeyMailbox,
+			wantIn: []string{
+				"you@gmail.com", "send access not granted",
+				"does include send permission",
+				"gaia connectors connect google --grant-agent installed:email",
+			},
+			// `grants grant` OVERWRITES the ledger entry with whatever scopes it is
+			// given, so naming it here would trade a calendar grant for a mail one.
+			wantNotIn:   []string{"grants grant"},
+			wantFix:     FixConnectMailbox,
+			mustNotCall: []call{{"POST", "/v1/email/search"}},
+		},
+		{
+			// THE BUG. Linked, granted, `connected: true`, `can_send: true` — and
+			// the first read fails. The row used to say "can send".
+			name: "mailbox connected and granted but its credentials are rejected",
+			build: func() *fakeTransport {
+				return newFake().with("POST /v1/email/search", 502, searchNoForwardedCredential)
+			},
+			wantStates: map[string]State{
+				KeyModel: StateOK, KeyMailbox: StateFailed,
+			},
+			wantBlocker: KeyMailbox,
+			wantIn: []string{
+				"sign-in no longer works",
+				"no forwarded 'google' credential is available",
+				"gaia connectors connect google --grant-agent installed:email",
+			},
+			// The sidecar's own detail carries a `<scopes>` placeholder; showing it
+			// hands the user a command they cannot copy.
+			wantNotIn: []string{"<scopes>"},
+			wantFix:   FixConnectMailbox,
+		},
+		{
+			name: "mailbox connection was revoked upstream",
+			build: func() *fakeTransport {
+				return newFake().with("POST /v1/email/search", 403, searchRevoked)
+			},
+			wantStates:  map[string]State{KeyMailbox: StateFailed},
+			wantBlocker: KeyMailbox,
+			wantIn:      []string{"revoked upstream", "gaia connectors connect google"},
+			wantFix:     FixConnectMailbox,
+		},
+		{
+			// The RELAY gave up, not the mailbox. Blaming the mailbox would hand the
+			// user a browser sign-in for a dead sidecar.
+			name: "the relay drops the probe on the way to the sidecar",
+			build: func() *fakeTransport {
+				return newFake().with("POST /v1/email/search", 502, searchRelayDown)
+			},
+			wantStates: map[string]State{KeyMailbox: StateUnknown},
+			// Unknown never blocks — nothing here proved the mailbox broken.
+			wantReady:   false,
+			wantBlocker: "",
+		},
+		{
+			// The relay's OTHER self-authored answer: the sidecar is gone by the
+			// time the probe lands, so it 503s. Reported as a broken mailbox it
+			// would send the user through OAuth for a sidecar to restart.
+			name: "the sidecar is gone by the time the probe lands",
+			build: func() *fakeTransport {
+				return newFake().with("POST /v1/email/search", 503, searchRelay503)
+			},
+			wantStates:  map[string]State{KeyMailbox: StateUnknown},
+			wantReady:   false,
+			wantBlocker: "",
+		},
+		{
+			// The forwarded token lapsed between re-forwards and the sidecar said
+			// so. Pressing r clears it; a browser sign-in would not.
+			name: "a forwarded token that lapsed between re-forwards is not a dead sign-in",
+			build: func() *fakeTransport {
+				return newFake().with("POST /v1/email/search", 502, searchTokenLapsed)
+			},
+			wantStates:  map[string]State{KeyMailbox: StateUnknown},
+			wantReady:   false,
+			wantBlocker: "",
+		},
+		{
+			// Two mailboxes: the read route takes no provider and 400s on 2+, so
+			// the answer is known without asking. Nothing is proven either way.
+			name: "two mailboxes connected leaves the probe unable to answer",
+			build: func() *fakeTransport {
+				return newFake().with("GET /v1/email/connectors", 200, connectorsBoth)
+			},
+			wantStates:  map[string]State{KeyMailbox: StateUnknown},
+			wantReady:   false,
+			wantBlocker: "",
+			// And it does NOT pay for a read whose answer it already knows.
+			mustNotCall: []call{{"POST", "/v1/email/search"}},
+		},
+		{
+			// An older sidecar with no read route says nothing about credentials.
+			name: "a sidecar without the read route leaves the mailbox unverified",
+			build: func() *fakeTransport {
+				return newFake().with("POST /v1/email/search", 404, `{"detail":"Not Found"}`)
+			},
+			wantStates:  map[string]State{KeyMailbox: StateUnknown},
+			wantReady:   false,
+			wantBlocker: "",
+		},
+		{
+			// An empty inbox is a working mailbox, not an unverified one.
+			name: "an empty inbox still proves the credentials work",
+			build: func() *fakeTransport {
+				return newFake().with("POST /v1/email/search", 200, searchEmptyInbox)
+			},
+			wantStates: map[string]State{KeyMailbox: StateOK},
+			wantReady:  true,
 		},
 		{
 			// present:false must NOT be reported as "download the model" when the
@@ -504,6 +706,9 @@ func TestEveryFailedRowIsActionable(t *testing.T) {
 		"model":       newFake().with("GET /v1/email/init", 503, initModelMissing),
 		"mailbox":     newFake().with("GET /v1/email/connectors", 200, connectorsNone),
 		"no send":     newFake().with("GET /v1/email/connectors", 200, connectorsNoSend),
+		"no grant":    newFake().with("GET /v1/email/connectors", 200, connectorsNoGrant),
+		"creds dead":  newFake().with("POST /v1/email/search", 502, searchNoForwardedCredential),
+		"revoked":     newFake().with("POST /v1/email/search", 403, searchRevoked),
 		"sidecar":     newFake().with("GET /daemon/v1/agents", 200, agentsStopped),
 	}
 	for name, f := range scenarios {
@@ -758,7 +963,7 @@ func TestConnectedMailboxWithoutAnAccountEmail(t *testing.T) {
 	if row.State != StateOK {
 		t.Fatalf("mailbox row = %s, want ok\n%s", row.State.Word(), rep)
 	}
-	if !strings.Contains(row.Line, "Gmail") || !strings.Contains(row.Line, "can send") {
+	if !strings.Contains(row.Line, "Gmail") || !strings.Contains(row.Line, "can read and send") {
 		t.Errorf("mailbox line = %q", row.Line)
 	}
 	if strings.Contains(row.Line, "default") {
@@ -887,5 +1092,345 @@ func TestIndeterminateIsNeitherReadyNorBlocking(t *testing.T) {
 	row, _ := unknown.Find(KeyLemonade)
 	if row.State.Marker() == StateOK.Marker() || row.State.Word() == StateOK.Word() {
 		t.Error("an indeterminate row is indistinguishable from a passing one")
+	}
+}
+
+// --- the mailbox: four states, four remedies ---------------------------------
+
+// The four states the connector list plus one read can tell apart. Each needs
+// its own sentence: one "reconnect your mailbox" for all of them is what makes
+// people reconnect the wrong thing — or re-authorize something that was already
+// fine while the actual gap goes untouched.
+func TestTheFourMailboxStatesReadDifferently(t *testing.T) {
+	cases := []struct {
+		name  string
+		build func() *fakeTransport
+		state State
+		// line is a substring unique to this state's row.
+		line string
+		// detail is a substring of the sentence that explains it.
+		detail string
+	}{
+		{
+			name:   "not connected",
+			build:  func() *fakeTransport { return newFake().with("GET /v1/email/connectors", 200, connectorsNone) },
+			state:  StateFailed,
+			line:   "not connected",
+			detail: "cannot do anything until it can read a mailbox",
+		},
+		{
+			name:   "connected but the agent has no send grant",
+			build:  func() *fakeTransport { return newFake().with("GET /v1/email/connectors", 200, connectorsNoGrant) },
+			state:  StateFailed,
+			line:   "send access not granted",
+			detail: "does include send permission",
+		},
+		{
+			name:   "connected but the sign-in is missing the send scope",
+			build:  func() *fakeTransport { return newFake().with("GET /v1/email/connectors", 200, connectorsNoSend) },
+			state:  StateFailed,
+			line:   "sign-in has no send access",
+			detail: "signed in without the send scope",
+		},
+		{
+			name: "connected but the credentials are rejected",
+			build: func() *fakeTransport {
+				return newFake().with("POST /v1/email/search", 502, searchNoForwardedCredential)
+			},
+			state:  StateFailed,
+			line:   "sign-in no longer works",
+			detail: "no forwarded 'google' credential",
+		},
+	}
+
+	seenLines := map[string]string{}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rep := Check(context.Background(), tc.build(), EmailConfig())
+			row, ok := rep.Find(KeyMailbox)
+			if !ok {
+				t.Fatalf("no mailbox row:\n%s", rep)
+			}
+			if row.State != tc.state {
+				t.Fatalf("state = %s, want %s\n%s", row.State.Word(), tc.state.Word(), rep)
+			}
+			if !strings.Contains(row.Line, tc.line) {
+				t.Errorf("line = %q, want it to mention %q", row.Line, tc.line)
+			}
+			if !strings.Contains(row.Detail, tc.detail) {
+				t.Errorf("detail = %q, want it to mention %q", row.Detail, tc.detail)
+			}
+			// Whatever the state, the command must never narrow what the account
+			// can already do: `grants grant` overwrites the ledger entry and
+			// `connect --scopes` replaces the provider defaults, so the only safe
+			// remedy is the full union through the connect flow.
+			assertRealCommand(t, row)
+			if strings.Contains(row.Remedy.Command, "grants grant") {
+				t.Errorf("%s names the overwrite-scopes path: %q", tc.name, row.Remedy.Command)
+			}
+			if strings.Contains(row.Remedy.Command, "connectors connect") {
+				for _, scope := range connectScopes["google"] {
+					if !strings.Contains(row.Remedy.Command, scope) {
+						t.Errorf("%s reconnects without %q, narrowing the account: %s",
+							tc.name, scope, row.Remedy.Command)
+					}
+				}
+			}
+			if prev, dup := seenLines[row.Line]; dup {
+				t.Errorf("%s reads identically to %s: %q", tc.name, prev, row.Line)
+			}
+			seenLines[row.Line] = tc.name
+		})
+	}
+}
+
+// A mailbox the metadata already proves unusable is never read: the probe is the
+// only call on this screen that leaves the machine, and paying for it to confirm
+// a failure already in hand is the cost users would resent.
+func TestTheProbeOnlyRunsWhenTheMetadataSaysItShouldWork(t *testing.T) {
+	for name, body := range map[string]string{
+		"nothing connected": connectorsNone,
+		"no send scope":     connectorsNoSend,
+		"no agent grant":    connectorsNoGrant,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFake().with("GET /v1/email/connectors", 200, body)
+			Check(context.Background(), f, EmailConfig())
+			if f.called("POST", "/v1/email/search") {
+				t.Error("the gate paid for a live mailbox read it did not need")
+			}
+		})
+	}
+
+	// And it DOES run once the metadata stops being able to answer.
+	f := newFake()
+	Check(context.Background(), f, EmailConfig())
+	if !f.called("POST", "/v1/email/search") {
+		t.Error("a connected+granted mailbox was passed without being read")
+	}
+}
+
+// The probe is one bounded read, and `d` has to show it — including what it cost,
+// which is the only way anyone can tell whether the gate got slower.
+func TestTheProbeRecordsWhatItDidAndWhatItCost(t *testing.T) {
+	f := newFake()
+	rep := Check(context.Background(), f, EmailConfig())
+	row, _ := rep.Find(KeyMailbox)
+
+	for _, want := range []string{
+		"mailbox probe: POST /v1/email/search",
+		`{"max_results":1}`, // bounded: one message, one hydration
+		"HTTP 200",
+		"ms",
+	} {
+		if !strings.Contains(row.Raw, want) {
+			t.Errorf("the probe trace does not record %q:\n%s", want, row.Raw)
+		}
+	}
+	// The connector body it started from is still there — `d` must show both.
+	if !strings.Contains(row.Raw, "can_send") {
+		t.Errorf("the probe trace replaced the connector body:\n%s", row.Raw)
+	}
+
+	var searches int
+	for _, c := range f.calls {
+		if c.method == "POST" && c.path == "/v1/email/search" {
+			searches++
+		}
+	}
+	if searches != 1 {
+		t.Errorf("the gate read the mailbox %d times; one launch is one read", searches)
+	}
+}
+
+// A probe that never answers must not hold the gate for its whole 90s check
+// budget, and must not be reported as a broken mailbox either.
+func TestAProbeThatHangsIsReportedAsUnverifiedNotBroken(t *testing.T) {
+	f := newFake()
+	f.errs["POST /v1/email/search"] = &daemon.RequestError{
+		Op: "read the mailbox", Detail: "context deadline exceeded"}
+
+	rep := Check(context.Background(), f, EmailConfig())
+	row, _ := rep.Find(KeyMailbox)
+
+	if row.State != StateUnknown {
+		t.Fatalf("state = %s, want unknown — a timeout proves nothing about the mailbox\n%s",
+			row.State.Word(), rep)
+	}
+	if rep.Blocked() {
+		t.Error("an unanswered probe blocked the launch")
+	}
+	if rep.Ready() {
+		t.Error("an unanswered probe reported the report ready")
+	}
+	if row.Remedy.Empty() {
+		t.Error("an unverified mailbox row has nothing to tell the user")
+	}
+	if strings.Contains(row.Line, "can read") {
+		t.Errorf("an unverified row claims a capability: %q", row.Line)
+	}
+}
+
+// A relay failure and a mailbox failure both arrive as 502. Telling them apart is
+// the difference between "sign in again" (a browser round trip that fixes
+// nothing) and "your sidecar died".
+func TestARelay502IsNotBlamedOnTheMailbox(t *testing.T) {
+	rep := Check(context.Background(),
+		newFake().with("POST /v1/email/search", 502, searchRelayDown), EmailConfig())
+	row, _ := rep.Find(KeyMailbox)
+
+	// != StateFailed would also pass on StateOK, which is the WORSE regression: a
+	// dead relay read as a healthy mailbox.
+	if row.State != StateUnknown {
+		t.Fatalf("a dead relay was reported as %s, want unknown\n%s", row.State.Word(), rep)
+	}
+	if strings.Contains(row.Remedy.Command, "connectors connect") {
+		t.Errorf("a dead relay is answered with an OAuth sign-in: %q", row.Remedy.Command)
+	}
+	if row.Fix == FixConnectMailbox {
+		t.Error("a dead relay offers a one-key mailbox reconnect")
+	}
+}
+
+// A sidecar too old to have the read route is not a broken mailbox, and the
+// answer must not be "install the agent you are already running".
+func TestAMissingReadRouteDoesNotReadAsAMissingAgent(t *testing.T) {
+	rep := Check(context.Background(),
+		newFake().with("POST /v1/email/search", 404, `{"detail":"Not Found"}`), EmailConfig())
+	row, _ := rep.Find(KeyMailbox)
+
+	if row.State != StateUnknown {
+		t.Fatalf("state = %s, want unknown\n%s", row.State.Word(), rep)
+	}
+	if !strings.Contains(row.Detail, "does not answer the read") {
+		t.Errorf("detail = %q, want it to name the missing route", row.Detail)
+	}
+	if strings.Contains(row.Detail, "does not know the agent") {
+		t.Errorf("a running agent was reported as unknown to the daemon: %q", row.Detail)
+	}
+}
+
+// The sidecar's own credential error ends with a command carrying a `<scopes>`
+// placeholder. Quoting the whole thing hands the user something they cannot run.
+func TestTheRefusalQuotesTheDiagnosisNotTheSidecarsOwnCommand(t *testing.T) {
+	rep := Check(context.Background(),
+		newFake().with("POST /v1/email/search", 502, searchNoForwardedCredential), EmailConfig())
+	row, _ := rep.Find(KeyMailbox)
+
+	if !strings.Contains(row.Detail, "no forwarded 'google' credential is available") {
+		t.Errorf("the row drops the diagnosis: %q", row.Detail)
+	}
+	for _, unwanted := range []string{"<scopes>", "--scopes <", "Settings -> Connections"} {
+		if strings.Contains(row.Detail, unwanted) {
+			t.Errorf("the row quotes %q from the sidecar's own remedy: %q", unwanted, row.Detail)
+		}
+	}
+	assertRealCommand(t, row)
+}
+
+// A relay answer and a mailbox answer arrive on the SAME status codes. Telling
+// them apart is the difference between "sign in again" — a browser round trip
+// that fixes nothing — and "restart your sidecar".
+func TestRelayAuthoredAnswersAreNeverBlamedOnTheMailbox(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status int
+		body   string
+	}{
+		"502 the sidecar did not answer": {502, searchRelayDown},
+		"503 the sidecar is gone":        {503, searchRelay503},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rep := Check(context.Background(),
+				newFake().with("POST /v1/email/search", tc.status, tc.body), EmailConfig())
+			row, _ := rep.Find(KeyMailbox)
+
+			if row.State != StateUnknown {
+				t.Fatalf("state = %s, want unknown — the relay said nothing about the mailbox\n%s",
+					row.State.Word(), rep)
+			}
+			if strings.Contains(row.Remedy.Command, "connectors connect") {
+				t.Errorf("a dead relay hop is answered with an OAuth sign-in: %q", row.Remedy.Command)
+			}
+			if row.Fix == FixConnectMailbox {
+				t.Error("a dead relay hop offers a one-key mailbox reconnect")
+			}
+			if rep.Blocked() {
+				t.Errorf("a dead relay hop blocked the launch on the mailbox row\n%s", rep)
+			}
+		})
+	}
+
+	// And the sidecar's OWN 503 — it can no longer resolve a mailbox at all —
+	// still fails the row, or this fix would have made 503 unusable.
+	rep := Check(context.Background(), newFake().with("POST /v1/email/search", 503,
+		`{"detail":"No mailbox connected — connect Google or Microsoft in Settings -> Connectors before searching the inbox."}`),
+		EmailConfig())
+	row, _ := rep.Find(KeyMailbox)
+	if row.State != StateFailed {
+		t.Errorf("the sidecar's own 503 = %s, want failed\n%s", row.State.Word(), rep)
+	}
+}
+
+// The one credential failure that clears itself. The sidecar says "Retry in a
+// moment"; blocking the launch would charge the user a browser sign-in for it.
+func TestALapsedForwardedTokenIsNotReportedAsADeadSignIn(t *testing.T) {
+	rep := Check(context.Background(),
+		newFake().with("POST /v1/email/search", 502, searchTokenLapsed), EmailConfig())
+	row, _ := rep.Find(KeyMailbox)
+
+	if row.State != StateUnknown {
+		t.Fatalf("state = %s, want unknown\n%s", row.State.Word(), rep)
+	}
+	if rep.Blocked() {
+		t.Error("a self-clearing credential gap blocked the launch")
+	}
+	if row.Fix == FixConnectMailbox || strings.Contains(row.Remedy.Command, "connectors connect") {
+		t.Errorf("a self-clearing gap is answered with a sign-in: %q", row.Remedy.Command)
+	}
+	if !strings.Contains(row.Remedy.Action, "r") {
+		t.Errorf("the remedy does not tell the user to re-check: %q", row.Remedy.Action)
+	}
+}
+
+// FastAPI's validation errors put an ARRAY in `detail`. Only the `msg` fields are
+// language a person can read; the array itself must never reach a row.
+func TestAValidationErrorNeverPutsRawJSONOnTheScreen(t *testing.T) {
+	rep := Check(context.Background(),
+		newFake().with("POST /v1/email/search", 422, searchUnprocessable), EmailConfig())
+	row, _ := rep.Find(KeyMailbox)
+
+	if row.State != StateUnknown {
+		t.Fatalf("state = %s, want unknown\n%s", row.State.Word(), rep)
+	}
+	for _, unwanted := range []string{`{"type"`, `"loc"`, "[{", `"input"`} {
+		if strings.Contains(row.Detail, unwanted) {
+			t.Errorf("raw validation JSON reached the row (%q): %q", unwanted, row.Detail)
+		}
+	}
+	if !strings.Contains(row.Detail, "Field required") {
+		t.Errorf("the readable half of the error was dropped: %q", row.Detail)
+	}
+}
+
+// Every upstream message here carries `→` and em dashes. A byte-wise truncation
+// cuts through one and renders mojibake that no trimming repairs.
+func TestTruncationNeverSplitsAMultibyteCharacter(t *testing.T) {
+	// A message whose only content is multibyte, longer than either cap.
+	long := strings.Repeat("Settings → Connections — reconnect. ", 40)
+	for name, got := range map[string]string{
+		"firstSentence": firstSentence(strings.ReplaceAll(long, ". ", " ")),
+		"detailSuffix":  detailSuffix(strings.ReplaceAll(long, ". ", " ")),
+		"clip":          clip(long, 7),
+	} {
+		if !utf8.ValidString(got) {
+			t.Errorf("%s produced invalid UTF-8: %q", name, got)
+		}
+		if strings.Contains(got, "�") {
+			t.Errorf("%s produced a replacement character: %q", name, got)
+		}
+	}
+	// And it still truncates: a cap that never fires is not a cap.
+	if got := clip(long, 7); len([]rune(got)) > 8 {
+		t.Errorf("clip(…, 7) returned %d runes: %q", len([]rune(got)), got)
 	}
 }

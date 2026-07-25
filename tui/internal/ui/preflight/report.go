@@ -4,18 +4,24 @@
 // It answers four generic preconditions — the daemon is up and speaks our
 // contract, the agent's sidecar is running, the local model server is reachable
 // at a compatible version, and the model is downloaded — plus any number of
-// per-agent extra checks (for email: a mailbox that is both connected AND
-// granted send). Every answer is machine-readable already; this package turns
-// those answers into one row per precondition with a state, a human line, and a
-// remedy that names a real command.
+// per-agent extra checks (for email: a mailbox that is connected, granted send,
+// AND proven readable). Every answer is machine-readable already; this package
+// turns those answers into one row per precondition with a state, a human line,
+// and a remedy that names a real command.
 //
-// Two rules the rest of the package exists to enforce:
+// Three rules the rest of the package exists to enforce:
 //
 //   - `unknown` is not `ok`. GET /v1/<agent>/init reports `compatible: null`
 //     when Lemonade does not advertise a version. That is an indeterminate
 //     check, not a pass, and it renders as its own state.
 //   - No raw HTTP status ever reaches the user. Ladder maps a failed call to
 //     {cause, remedy, where-to-look}, specific causes before generic ones.
+//   - `configured` is not `working`. A row that can only read a service's own
+//     record of itself has not verified anything the user will feel. Where the
+//     record can disagree with reality — a stored OAuth connection reports
+//     `connected: true` long after its credentials stop working — the row makes
+//     the smallest real call instead, and reports `unknown` when even that
+//     cannot answer. See MailboxCheck.
 //
 // # What an indeterminate row does, and why that is not the gate going soft
 //

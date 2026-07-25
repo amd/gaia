@@ -41,9 +41,16 @@ type gateTransport struct {
 	initByAgent map[string]initAnswer
 	// connectors is the answer to GET /v1/<agent>/connectors.
 	connectors map[string]any
+	// searchStatus and searchBody are the answer to the mailbox row's credential
+	// probe, POST /v1/<agent>/search. A connector list that says "connected and
+	// granted" is not evidence the mailbox works, so the gate reads it — and this
+	// fake has to answer, or the row reports "could not be verified".
+	searchStatus int
+	searchBody   map[string]any
 
-	starts  int
-	ensures int
+	starts   int
+	ensures  int
+	searches int
 }
 
 func readyGateTransport() *gateTransport {
@@ -60,11 +67,26 @@ func readyGateTransport() *gateTransport {
 				"id": "Gemma-4-E4B-it-GGUF", "present": true, "ctx_size": 32768,
 			},
 		},
+		// The real shape: connector_routes returns the NAMESPACED grant id, and
+		// flow.py stores scopes as full URIs — which is what the mailbox row
+		// compares `can_send` against.
 		connectors: map[string]any{
-			"agent_id": "email",
+			"agent_id": "installed:email",
 			"providers": []map[string]any{
 				{"provider": "google", "connected": true, "account_email": "user@gmail.com",
-					"can_send": true, "scopes": []string{"gmail.send"}},
+					"can_send": true, "scopes": []string{
+						"https://www.googleapis.com/auth/gmail.modify",
+						"https://www.googleapis.com/auth/gmail.send",
+					}},
+			},
+		},
+		searchStatus: http.StatusOK,
+		// EmailSearchResponse: `count` is required there, so a body without it is
+		// not the shape the sidecar serializes.
+		searchBody: map[string]any{
+			"schema_version": "2.5", "count": 1,
+			"messages": []map[string]any{
+				{"id": "18f0", "subject": "Welcome", "from": "a@b.com", "label_ids": []string{"INBOX"}},
 			},
 		},
 	}
@@ -110,6 +132,9 @@ func (g *gateTransport) Do(_ context.Context, _, path string, _ []byte) (preflig
 		return jsonResponse(g.initStatus, g.initBody)
 	case strings.HasSuffix(path, "/connectors"):
 		return jsonResponse(http.StatusOK, g.connectors)
+	case strings.HasSuffix(path, "/search"):
+		g.searches++
+		return jsonResponse(g.searchStatus, g.searchBody)
 	}
 	return preflight.Response{}, fmt.Errorf("gateTransport: no canned answer for %s", path)
 }
@@ -161,6 +186,17 @@ func (g *gateTransport) modelMissing() *gateTransport {
 // state that asks the host to open a connector flow.
 func (g *gateTransport) mailboxMissing() *gateTransport {
 	g.connectors = map[string]any{"agent_id": "email", "providers": []map[string]any{}}
+	return g
+}
+
+// mailboxCredentialsRejected is the state the connector list cannot see: linked,
+// granted, and the first read refused. The gate must stop here.
+func (g *gateTransport) mailboxCredentialsRejected() *gateTransport {
+	g.searchStatus = http.StatusBadGateway
+	g.searchBody = map[string]any{
+		"detail": "no forwarded 'google' credential is available to the email sidecar. " +
+			"The connection may not be granted to this agent, or it was revoked/withdrawn.",
+	}
 	return g
 }
 
@@ -365,6 +401,52 @@ func TestAFailingPreconditionKeepsTheUserOnTheGate(t *testing.T) {
 	}
 	if got := d.cat.Get("email").Status; got == catalog.StatusActive {
 		t.Error("a blocked gate marked the agent active")
+	}
+}
+
+// The mailbox bug: the connector list said connected + can_send, the gate showed
+// 5 of 5 ready, and the first triage came back with a credential error. A row
+// that is only ever as true as a stored record must not green-light a launch.
+func TestAMailboxWhoseCredentialsAreRejectedKeepsTheUserOnTheGate(t *testing.T) {
+	d := newRootDriver(t, readyGateTransport().mailboxCredentialsRejected(), 80, 24)
+	d.launchEmail()
+
+	if got := d.view(); got != "preflight" {
+		t.Fatalf("view with a dead mailbox credential = %q, want preflight\n%s", got, d.screen())
+	}
+	screen := d.flat()
+	for _, want := range []string{
+		"Mailbox",
+		"sign-in no longer works",
+		"no forwarded 'google' credential is available",
+		"run: gaia connectors connect google --grant-agent installed:email",
+		"f connect a mailbox",
+	} {
+		if !strings.Contains(screen, want) {
+			t.Errorf("the gate does not show %q:\n%s", want, d.screen())
+		}
+	}
+	// The old wording, which is what made it look fine.
+	if strings.Contains(screen, "· can read and send") || strings.Contains(screen, "· can send") {
+		t.Errorf("the mailbox row still claims a working mailbox:\n%s", d.screen())
+	}
+	if g := d.transport(); g.searches == 0 {
+		t.Error("the gate passed the mailbox row without reading the mailbox")
+	}
+	d.send(keyEnter())
+	if got := d.view(); got != "preflight" {
+		t.Fatalf("enter past a dead mailbox landed on %q", got)
+	}
+}
+
+// The whole point of the probe is that it is the LAST thing tried: nothing pays
+// for a live mailbox read while an earlier row is already broken.
+func TestTheMailboxIsNotReadWhenAnEarlierRowFailed(t *testing.T) {
+	d := newRootDriver(t, readyGateTransport().modelMissing(), 80, 24)
+	d.launchEmail()
+
+	if g := d.transport(); g.searches != 0 {
+		t.Errorf("the gate read the mailbox behind a missing model: %d reads", g.searches)
 	}
 }
 

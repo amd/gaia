@@ -240,6 +240,11 @@ func (d *relayDaemon) handle(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(r.URL.Path, "/connectors"):
 		writeJSON(w, readyGateTransport().connectors)
 
+	case strings.HasSuffix(r.URL.Path, "/search"):
+		// The mailbox row's credential probe. "connected and granted" in the
+		// connector list is not proof the mailbox reads, so the gate asks.
+		writeJSON(w, readyGateTransport().searchBody)
+
 	case strings.HasSuffix(r.URL.Path, "/query"):
 		d.mu.Lock()
 		d.queries++

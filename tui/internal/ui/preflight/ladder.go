@@ -344,9 +344,7 @@ func detailSuffix(body string) string {
 	if body == "" {
 		return ""
 	}
-	const limit = 240
-	if len(body) > limit {
-		body = body[:limit] + "…"
-	}
-	return "It said: " + body
+	// Rune-wise: these bodies carry `Settings → Connections` and em dashes, and a
+	// byte cut through one of those renders as mojibake.
+	return "It said: " + clip(body, 240)
 }

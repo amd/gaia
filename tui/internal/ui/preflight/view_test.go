@@ -111,7 +111,7 @@ func TestRenderAllReadyAt80x24(t *testing.T) {
 		"0.5.0",
 		"Lemonade 8.1.10",
 		"Gemma-4-E4B-it-GGUF · 16K context",
-		"you@gmail.com (Gmail) · can send",
+		"you@gmail.com (Gmail) · can read and send",
 	} {
 		if !strings.Contains(screen, want) {
 			t.Errorf("screen does not show %q:\n%s", want, screen)
@@ -155,6 +155,10 @@ func TestRenderFitsEveryScenarioAt80x24(t *testing.T) {
 		"model missing":        newFake().with("GET /v1/email/init", 503, initModelMissing),
 		"no mailbox":           newFake().with("GET /v1/email/connectors", 200, connectorsNone),
 		"send not granted":     newFake().with("GET /v1/email/connectors", 200, connectorsNoSend),
+		"grant missing":        newFake().with("GET /v1/email/connectors", 200, connectorsNoGrant),
+		"credentials dead":     newFake().with("POST /v1/email/search", 502, searchNoForwardedCredential),
+		"mailbox unverified":   newFake().with("POST /v1/email/search", 502, searchRelayDown),
+		"two mailboxes":        newFake().with("GET /v1/email/connectors", 200, connectorsBoth).with("POST /v1/email/search", 400, searchAmbiguous),
 		"sidecar stopped":      newFake().with("GET /daemon/v1/agents", 200, agentsStopped),
 		"not installed":        newFake().with("GET /daemon/v1/agents", 200, agentsEmpty),
 	}
