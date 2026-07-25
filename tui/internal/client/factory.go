@@ -41,7 +41,12 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 					"build it, put it on PATH, or pass --mock <path> to run against a stub",
 				agent.ID)
 		}
-		return NewSubprocessClient(agent.BinaryPath, agent.BinaryArgs, opts.Debug), nil
+		// Resolved HERE, before any caller can report "connected".
+		bin, err := catalog.ResolveExecutable(agent.BinaryPath, agent.ID)
+		if err != nil {
+			return nil, fmt.Errorf("cannot start agent %q: %w", agent.ID, err)
+		}
+		return NewSubprocessClient(bin, agent.BinaryArgs, opts.Debug), nil
 
 	default:
 		return nil, fmt.Errorf(

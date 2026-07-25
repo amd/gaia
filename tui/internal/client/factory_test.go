@@ -41,6 +41,31 @@ func TestForAgentRejectsAMissingBinary(t *testing.T) {
 	}
 }
 
+// The catalog leaves an unresolved binary NAME in place when discovery finds
+// nothing, so "BinaryPath is set" never meant "this can start". The hub took
+// that as a green light: it opened a chat, said "Connected to: Bash", and only
+// failed when the user sent their first message with
+// `exec: "gaia-bash": executable file not found in $PATH`. Refusing here is
+// what makes the launch tell the truth.
+func TestForAgentRejectsAnUnresolvableBinaryName(t *testing.T) {
+	_, err := ForAgent(
+		catalog.Agent{ID: "bash", BinaryPath: "gaia-bash-that-was-never-built"},
+		ForAgentOptions{},
+	)
+	if err == nil {
+		t.Fatal("a binary that is nowhere on this machine built a client anyway")
+	}
+	if !strings.Contains(err.Error(), "cannot start agent") {
+		t.Errorf("the error does not say the agent cannot start: %v", err)
+	}
+	if !strings.Contains(err.Error(), "gaia-bash-that-was-never-built") {
+		t.Errorf("the error does not name the missing binary: %v", err)
+	}
+	if !strings.Contains(err.Error(), "PATH") {
+		t.Errorf("the error does not say where it looked: %v", err)
+	}
+}
+
 func TestForAgentRejectsAnUnknownTransport(t *testing.T) {
 	_, err := ForAgent(catalog.Agent{ID: "future", Transport: catalog.Transport(99)}, ForAgentOptions{})
 	if err == nil {

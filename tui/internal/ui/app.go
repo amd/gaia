@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -15,9 +17,19 @@ import (
 	"github.com/amd/gaia/tui/internal/control"
 	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/ui/chat"
+	"github.com/amd/gaia/tui/internal/ui/components"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 	"github.com/amd/gaia/tui/internal/ui/root"
 )
+
+// prepareTerminal does everything that has to TALK to the terminal before
+// Bubble Tea takes over stdin. Every full-screen launch path calls it.
+func prepareTerminal() {
+	if err := components.PrimeRenderer(); err != nil {
+		fmt.Fprintf(os.Stderr,
+			"%v — replies will be shown as plain text. Report this with `gaia diagnostics`.\n", err)
+	}
+}
 
 // RunHub launches the Agent Hub TUI — the main entry point for browsing and launching agents.
 // If mockAgent is non-empty, all agent binary paths are overridden with it for testing.
@@ -41,8 +53,14 @@ func RunChat(subprocess string, query string, debug bool, ctrl *control.Options)
 	if err != nil {
 		return fmt.Errorf("invalid --subprocess command: %w", err)
 	}
+	// Checked before the alt screen opens: otherwise the chat says "connected"
+	// and the exec failure only surfaces when the user sends their first message.
+	bin, err := catalog.ResolveExecutable(argv[0], agentNameFromPath(argv[0]))
+	if err != nil {
+		return fmt.Errorf("cannot start --subprocess %q: %w", argv[0], err)
+	}
 
-	c := client.NewSubprocessClient(argv[0], argv[1:], debug)
+	c := client.NewSubprocessClient(bin, argv[1:], debug)
 	defer c.Close()
 
 	return run(chat.NewChatModel(c, agentNameFromPath(argv[0]), query, debug), debug, ctrl)
@@ -51,6 +69,16 @@ func RunChat(subprocess string, query string, debug bool, ctrl *control.Options)
 // run boots the Bubble Tea program, optionally wrapping it with the control
 // recorder so the live session can be driven over HTTP.
 func run(model tea.Model, debug bool, ctrl *control.Options) error {
+	prepareTerminal()
+
+	// Swept whether or not this run publishes one of its own: a session started
+	// WITHOUT --control used to leave a dead predecessor's file in place.
+	if removed, err := control.ClearStale(daemon.PIDAlive); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+	} else if removed && debug {
+		fmt.Fprintln(os.Stderr, "[DEBUG] removed a stale control discovery file")
+	}
+
 	if ctrl == nil {
 		p := tea.NewProgram(model, tea.WithAltScreen())
 		if _, err := p.Run(); err != nil {
@@ -75,6 +103,22 @@ func run(model tea.Model, debug bool, ctrl *control.Options) error {
 			fmt.Fprintf(os.Stderr, "%v\n", stopErr)
 		}
 	}()
+
+	// A deferred Stop covers a normal exit only; a signalled one has to remove
+	// the discovery file too, or it keeps advertising a pid, a port and a token.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	defer func() {
+		signal.Stop(sigs)
+		close(sigs)
+	}()
+	go func() {
+		srv.WatchTermination(sigs, p.Quit)
+		// Default disposition restored after the first one, so a second ctrl+c
+		// still kills a quit that is wedged.
+		signal.Stop(sigs)
+	}()
+
 	fmt.Fprintf(os.Stderr, "control API listening on %s:%d — token in %s\n",
 		control.Host, srv.Port(), srv.DiscoveryPath())
 
@@ -105,8 +149,7 @@ func RunAgent(agentID, query, model string, debug bool, timeout time.Duration) (
 
 	agent := cat.Get(agentID)
 	if agent == nil {
-		return 1, fmt.Errorf("no agent %q in the catalog — known ids: %s",
-			agentID, strings.Join(agentIDs(cat), ", "))
+		return 1, fmt.Errorf("no agent %q in the catalog. %s", agentID, runnableIDs(cat))
 	}
 
 	// A one-shot is always bounded — that is the whole point — so an unbounded
@@ -158,6 +201,7 @@ func RunAgent(agentID, query, model string, debug bool, timeout time.Duration) (
 		return res.ExitCode, nil
 	}
 
+	prepareTerminal()
 	model_ := chat.NewChatModel(c, agent.Name, "", debug)
 	p := tea.NewProgram(model_, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
@@ -166,13 +210,49 @@ func RunAgent(agentID, query, model string, debug bool, timeout time.Duration) (
 	return 0, nil
 }
 
-func agentIDs(cat *catalog.Catalog) []string {
-	all := cat.All()
-	ids := make([]string, 0, len(all))
-	for _, a := range all {
-		ids = append(ids, a.ID)
+// runnableIDs names what would actually start, and keeps the rest separate.
+// Listing every catalog id as "known ids" read as a menu, and most of it could
+// not run.
+func runnableIDs(cat *catalog.Catalog) string {
+	var runnable, notYet []string
+	for _, a := range cat.All() {
+		if canStart(a) {
+			runnable = append(runnable, a.ID)
+			continue
+		}
+		notYet = append(notYet, a.ID)
 	}
-	return ids
+
+	if len(runnable) == 0 && len(notYet) == 0 {
+		return "The catalog is empty."
+	}
+
+	var b strings.Builder
+	if len(runnable) == 0 {
+		b.WriteString("Nothing is installed yet — see what the Agent Hub offers with `gaia tui list`, " +
+			"then install one with `gaia tui install <id>`")
+	} else {
+		b.WriteString("Installed and runnable: " + strings.Join(runnable, ", "))
+		b.WriteString(". Install more with `gaia tui install <id>` (`gaia tui list` shows what is offered)")
+	}
+	if len(notYet) > 0 {
+		b.WriteString(". Not runnable here: " + strings.Join(notYet, ", "))
+	}
+	return b.String()
+}
+
+// canStart reports whether this entry would actually start right now. `run`
+// never consulted Status, so listing by Status alone called an agent unrunnable
+// while `gaia tui run <id>` ran it.
+func canStart(a catalog.Agent) bool {
+	if a.Transport != catalog.TransportSubprocess {
+		return a.Status.IsLaunchable()
+	}
+	if a.BinaryPath == "" {
+		return false
+	}
+	_, err := catalog.ResolveExecutable(a.BinaryPath, a.ID)
+	return err == nil
 }
 
 func agentNameFromPath(path string) string {

@@ -32,13 +32,19 @@ func TestHubModelRenders(t *testing.T) {
 		t.Fatal("hub still showing loading after window size")
 	}
 
-	// Check for key content in rendered view
-	// Only Bash is installed — it should appear in the default Installed tab
-	checks := []string{"Agent Hub", "Bash"}
+	// A fresh machine has nothing installed, so the hub opens on the first tab
+	// that has rows — the published agents it can actually offer.
+	checks := []string{"Agent Hub", "Email"}
 	for _, check := range checks {
 		if !contains(view, check) {
 			t.Errorf("hub view missing expected content: %q", check)
 		}
+	}
+	if _, name := hubModel.ActiveTab(); name != string(catalog.SectionAvailable) {
+		t.Errorf("a fresh hub opened on %q; nothing is installed, so it must not open on an empty tab", name)
+	}
+	if contains(view, "Bash") {
+		t.Error("the first screen offers Bash, which is not a published agent and has no binary on a fresh machine")
 	}
 	t.Logf("Hub view length: %d chars", len(view))
 }
@@ -48,7 +54,7 @@ func TestHubModelRenders(t *testing.T) {
 func TestHubTabSwitching(t *testing.T) {
 	d := newDriver(t, nil, 120, 40)
 
-	_, first := d.m.ActiveTab()
+	firstIdx, first := d.m.ActiveTab()
 	firstRows := d.m.VisibleAgentIDs()
 
 	d.send(keyTab())
@@ -57,8 +63,11 @@ func TestHubTabSwitching(t *testing.T) {
 	if second == first {
 		t.Fatalf("Tab did not change the active tab (still %q)", first)
 	}
-	if idx != 1 {
-		t.Errorf("Tab moved to index %d, want 1", idx)
+	// Relative, not absolute: which tab the hub opens on depends on what is
+	// installed, and hardcoding index 1 only held while a seed agent shipped
+	// as installed.
+	if want := (firstIdx + 1) % 3; idx != want {
+		t.Errorf("Tab moved to index %d, want %d (from %d)", idx, want, firstIdx)
 	}
 	secondRows := d.m.VisibleAgentIDs()
 	if sameIDs(firstRows, secondRows) {
@@ -195,8 +204,10 @@ func TestDashboardStats(t *testing.T) {
 	cat := catalog.NewCatalog()
 
 	installed, active, idle := cat.DashboardStats()
-	if installed != 1 {
-		t.Errorf("expected 1 installed (bash only), got %d", installed)
+	// Nothing ships installed: every seed agent waits for the Agent Hub to
+	// publish it, and the daemon to have a spec that can start it.
+	if installed != 0 {
+		t.Errorf("expected 0 installed on a fresh catalog, got %d", installed)
 	}
 	if active != 0 {
 		t.Errorf("expected 0 active, got %d", active)
@@ -207,7 +218,7 @@ func TestDashboardStats(t *testing.T) {
 
 	// Set one to active
 	cat.SetStatus("bash", catalog.StatusActive)
-	installed, active, idle = cat.DashboardStats()
+	installed, active, _ = cat.DashboardStats()
 	if active != 1 {
 		t.Errorf("expected 1 active after SetStatus, got %d", active)
 	}

@@ -103,6 +103,84 @@ func TestRunUnknownAgentExitsNonZero(t *testing.T) {
 	}
 }
 
+// The unknown-id error used to print every id in the catalog as "known ids",
+// which reads as a menu of things to run — and 12 of the 13 could not run.
+// Picking one answered "build it" for an agent nothing publishes.
+func TestUnknownAgentErrorSeparatesRunnableFromNotRunnable(t *testing.T) {
+	gaiaBin, binDir := buildBinaries(t)
+
+	cmd := exec.Command(gaiaBin, "run", "not-a-real-agent", "--query", "hi")
+	cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err == nil {
+		t.Fatal("an unknown agent id exited 0")
+	}
+
+	text := stderr.String()
+	if strings.Contains(text, "known ids") {
+		t.Errorf("the error still presents every catalog id as runnable:\n%s", text)
+	}
+	if !strings.Contains(text, "gaia tui list") {
+		t.Errorf("the error does not say how to find a runnable agent:\n%s", text)
+	}
+	if !strings.Contains(text, "Not runnable here") {
+		t.Errorf("the error does not separate what cannot run:\n%s", text)
+	}
+}
+
+// --model and --timeout were accepted and then dropped on the --subprocess
+// path: RunChat is given neither, so both changed nothing at all. (--query is
+// honoured there — it opens the chat and sends the first message.)
+func TestChatSubprocessRefusesFlagsItCannotHonour(t *testing.T) {
+	gaiaBin, _ := buildBinaries(t)
+
+	for _, flag := range []struct{ name, value string }{
+		{"--model", "some-model"},
+		{"--timeout", "3s"},
+	} {
+		t.Run(flag.name, func(t *testing.T) {
+			cmd := exec.Command(gaiaBin, "chat", "--subprocess", "/bin/echo", flag.name, flag.value)
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+			if err := cmd.Run(); err == nil {
+				t.Fatalf("%s with --subprocess exited 0; it was accepted and dropped", flag.name)
+			}
+			text := stderr.String()
+			if !strings.Contains(text, flag.name) {
+				t.Errorf("the refusal does not name %s:\n%s", flag.name, text)
+			}
+			if !strings.Contains(text, "--agent") {
+				t.Errorf("the refusal does not name the path that does support it:\n%s", text)
+			}
+		})
+	}
+}
+
+// A one-line refusal followed by 20 lines of command listing pushes the error
+// off a short terminal.
+func TestFlagRefusalDoesNotDumpTheUsageBlock(t *testing.T) {
+	gaiaBin, _ := buildBinaries(t)
+
+	cmd := exec.Command(gaiaBin, "--control-port", "4001")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err == nil {
+		t.Fatal("the reserved port was accepted")
+	}
+
+	text := stderr.String()
+	if !strings.Contains(text, "reserved") {
+		t.Fatalf("the refusal does not explain itself:\n%s", text)
+	}
+	if strings.Contains(text, "Available Commands:") {
+		t.Errorf("a flag refusal printed the whole usage block:\n%s", text)
+	}
+}
+
 // The subcommands the port added must exist and be discoverable from --help.
 func TestHubSubcommandsExist(t *testing.T) {
 	gaiaBin, _ := buildBinaries(t)

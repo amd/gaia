@@ -155,10 +155,23 @@ func (m HubModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case vote.VoteResultMsg:
-		// Vote was already incremented locally in the key handler
+		// The key handler incremented the count optimistically so the row reacts
+		// at once. Nothing queues a failed vote for later, so a failure has to
+		// take that increment back — a count that only ever went up locally is
+		// the UI telling the user their vote was recorded when it was not.
 		if msg.Err != nil {
-			m.setStatus(fmt.Sprintf("Voted for %s (offline)", msg.AgentID))
+			m.catalog.DecrementVotes(msg.AgentID)
+			m.setStatus(fmt.Sprintf(
+				"Could not send your vote for %s (%v) — nothing was recorded. Try again when you are online",
+				msg.AgentID, msg.Err))
+			m.refreshRows()
+			return m, nil
 		}
+		// The server's count is the real one; the optimistic +1 was a guess.
+		if msg.Votes > 0 {
+			m.catalog.SetVotes(msg.AgentID, msg.Votes)
+		}
+		m.setStatus(fmt.Sprintf("Voted for %s — thanks!", msg.AgentID))
 		m.refreshRows()
 		return m, nil
 
@@ -416,10 +429,12 @@ func (m HubModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if selected.Status == catalog.StatusComingSoon {
-			// Increment locally immediately for responsive UX
+			// Optimistic: the count moves now, and VoteResultMsg takes it back if
+			// the send fails. The wording says what is happening, not what has
+			// already happened — the request has not been answered yet.
 			m.catalog.IncrementVotes(selected.ID)
-			m.refreshList()
-			m.setStatus(fmt.Sprintf("Voted for %s! (vote sent to amd-gaia.ai)", selected.Name))
+			m.refreshRows()
+			m.setStatus(fmt.Sprintf("Sending your vote for %s to amd-gaia.ai…", selected.Name))
 			// Fire HTTP POST — sends only agent_id, no personal data
 			return m, vote.CastVote(selected.ID)
 		}

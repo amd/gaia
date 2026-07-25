@@ -84,26 +84,28 @@ func TestUnsupervisedHubAgentIsNotOffered(t *testing.T) {
 	}
 }
 
-func TestSeedAgentsAbsentFromTheHubLeaveAvailable(t *testing.T) {
+// No seed may be left offering an install the daemon cannot serve, and every
+// one of them has to say why it is not offered.
+func TestSeedAgentsAbsentFromTheHubAreNotOffered(t *testing.T) {
 	c := NewCatalog()
-	before := c.Get("code")
-	if before.Status != StatusAvailable {
-		t.Fatalf("precondition: seed 'code' is %s, want available", before.Status)
-	}
 
 	c.ApplyHubCatalog(hubResponse(false, true))
 
-	after := c.Get("code")
-	if after.Status == StatusAvailable {
-		t.Error("'code' is still Available but the hub cannot install it")
+	for _, a := range c.All() {
+		if a.ID == "email" {
+			continue // the one the fixture carries
+		}
+		if a.Status == StatusAvailable {
+			t.Errorf("%q is Available but the hub cannot install it", a.ID)
+		}
+		if a.NotOfferedReason == "" {
+			t.Errorf("no reason recorded for %q", a.ID)
+		}
 	}
-	// The daemon reported it as filtered-for-lack-of-a-spec, so say that
-	// rather than "not published".
-	if after.NotOfferedReason == "" {
-		t.Error("no reason recorded for 'code'")
-	}
-	if summarize := c.Get("summarize"); summarize.NotOfferedReason == "" {
-		t.Error("no reason recorded for an agent the hub simply does not carry")
+	// 'code' is the id the fixture reports as filtered-for-lack-of-a-spec, so
+	// that fact must replace the seed's blanket "not published yet".
+	if got := c.Get("code").NotOfferedReason; got != "no way to run it yet" {
+		t.Errorf("'code' reason = %q, want the daemon's filtered reason", got)
 	}
 }
 

@@ -39,8 +39,17 @@ func RunOneShot(
 	query string,
 	out, errW io.Writer,
 ) OneShotResult {
+	started := time.Now()
+
 	ch, err := c.Send(ctx, query)
 	if err != nil {
+		// Our own deadline is not a broken dependency: the transport error sent
+		// the user to the daemon log over a --timeout they chose.
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			detail := abandonedDetail(ctx.Err(), query, time.Since(started))
+			fmt.Fprintf(errW, "❌ %s\n", detail)
+			return OneShotResult{ExitCode: 1, TerminalType: event.CanonicalTypeError, ErrorDetail: detail}
+		}
 		fmt.Fprintf(errW, "❌ %v\n", err)
 		return OneShotResult{ExitCode: 1, ErrorDetail: err.Error()}
 	}
@@ -49,7 +58,6 @@ func RunOneShot(
 		res       OneShotResult
 		streamed  strings.Builder
 		sawTokens bool
-		started   = time.Now()
 	)
 
 	handle := func(evt interface{}) {
@@ -71,10 +79,12 @@ func RunOneShot(
 			fmt.Fprintf(errW, "  🔧 %s\n", e.Tool)
 
 		case event.CanonicalToolResultEvent:
+			// Not a tick: the canonical tool_result event carries no success
+			// flag, so a failed tool looks exactly like one that worked.
 			if e.Render != "" {
-				fmt.Fprintf(errW, "  ✓ %s (%s)\n", e.Tool, e.Render)
+				fmt.Fprintf(errW, "  ← %s returned (%s)\n", e.Tool, e.Render)
 			} else {
-				fmt.Fprintf(errW, "  ✓ %s\n", e.Tool)
+				fmt.Fprintf(errW, "  ← %s returned\n", e.Tool)
 			}
 
 		case event.CanonicalNeedsConfirmationEvent:
@@ -302,9 +312,11 @@ func writeReadiness(errW io.Writer, rep preflight.Report) {
 func abandonedDetail(err error, query string, elapsed time.Duration) string {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Sprintf(
-			"gave up on the %q query after %s — the agent accepted it and then stopped "+
-				"answering. Read `gaia daemon logs` and the agent's own log under "+
-				"~/.gaia/agents/, then retry", query, elapsed.Round(time.Second))
+			"gave up on the %q query after %s — that is the --timeout bound, not a "+
+				"failure the agent reported. Raise it (e.g. --timeout 5m) and re-run; if it "+
+				"keeps happening the agent stopped answering, so read `gaia daemon logs` and "+
+				"the agent's own log under ~/.gaia/agents/",
+			query, elapsed.Round(time.Second))
 	}
 	return fmt.Sprintf("the %q query was cancelled after %s, before the agent answered",
 		query, elapsed.Round(time.Second))
