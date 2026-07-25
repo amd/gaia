@@ -89,6 +89,39 @@ def default_undo_window_seconds() -> int:
     return value
 
 
+# Per-call ceiling for inbox-scanning tools (triage / pre-scan). Bounds an
+# interactive call so the LLM can't trigger a thousand-message scan. The eval
+# benchmark raises it to cover a whole labelled corpus deterministically.
+_INBOX_SCAN_CEILING_ENV = "GAIA_EMAIL_TRIAGE_MAX_MESSAGES"
+DEFAULT_INBOX_SCAN_CEILING = 100
+
+
+def default_inbox_scan_ceiling() -> int:
+    """Resolve the scan ceiling from ``GAIA_EMAIL_TRIAGE_MAX_MESSAGES``, else 100.
+
+    Resolved at construction (like :func:`default_undo_window_seconds`) so a bad
+    value fails startup instead of degrading every later tool call.
+    """
+    raw = os.environ.get(_INBOX_SCAN_CEILING_ENV, "").strip()
+    if not raw:
+        return DEFAULT_INBOX_SCAN_CEILING
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ConfigurationError(
+            f"{_INBOX_SCAN_CEILING_ENV}={raw!r} is not an integer. Set it to a "
+            f"positive message count (e.g. 250), or unset it to use the "
+            f"{DEFAULT_INBOX_SCAN_CEILING}-message default."
+        ) from exc
+    if value <= 0:
+        raise ConfigurationError(
+            f"{_INBOX_SCAN_CEILING_ENV}={raw!r} must be a positive message "
+            f"count. Unset it to use the {DEFAULT_INBOX_SCAN_CEILING}-message "
+            "default."
+        )
+    return value
+
+
 @dataclass
 class EmailAgentConfig:
     """Configuration for ``EmailTriageAgent``.
@@ -163,6 +196,7 @@ class EmailAgentConfig:
     show_stats: bool = False
     output_dir: Optional[str] = None
     undo_window_seconds: int = field(default_factory=default_undo_window_seconds)
+    inbox_scan_ceiling: int = field(default_factory=default_inbox_scan_ceiling)
     followup_window_days: int = 3
     db_path: Optional[str] = None
     memory_db_path: Optional[str] = None

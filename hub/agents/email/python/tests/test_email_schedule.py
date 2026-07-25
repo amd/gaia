@@ -274,9 +274,7 @@ class TestSnooze:
         backend.add_message(msg)
 
         with pytest.raises(ValueError, match="not in INBOX"):
-            snooze_message_impl(
-                backend, db, message_id="msg_1", until=_iso_in(3600)
-            )
+            snooze_message_impl(backend, db, message_id="msg_1", until=_iso_in(3600))
         assert schedule_store.list_jobs(db) == []
 
 
@@ -355,7 +353,9 @@ class TestSchedulerMechanics:
         job_id = schedule_store.create_job(
             db, kind="unknown_kind", due_at=time.time() - 1, payload={}
         )
-        scheduler = EmailJobScheduler(str(tmp_path / "state.db"), executors={}, poll_seconds=30.0)
+        scheduler = EmailJobScheduler(
+            str(tmp_path / "state.db"), executors={}, poll_seconds=30.0
+        )
 
         out = scheduler.fire_due_jobs()
         assert out["failed"] == [job_id]

@@ -206,7 +206,9 @@ def check_followups_impl(
                 continue
             headers = _header_map(latest)
             recipients = [
-                a for a in _recipient_addresses(headers.get("to", "")) if a != user_email
+                a
+                for a in _recipient_addresses(headers.get("to", ""))
+                if a != user_email
             ]
             if not recipients:
                 # Note-to-self (or no recipient) — an inbound reply can never

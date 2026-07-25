@@ -544,30 +544,25 @@ async def query(request: AgentQueryRequest) -> StreamingResponse:
                     if event.get("type") == "run_complete":
                         return
                 if not thread.is_alive() and not drained:
-                    # The worker died without emitting a terminal event. Its own
-                    # error path (see _run_agent) always emits one, so reaching
-                    # here means the thread was killed outside that path — report
-                    # it rather than closing the stream on a blank answer that
-                    # reads as a successful empty reply.
+                    # _run_agent always emits a terminal event, so reaching
+                    # here means the thread died outside its error path.
                     logger.error(
                         "agent turn for session %s ended with no terminal event "
                         "(worker thread died outside its error path)",
                         session.session_id,
                     )
-                    yield "data: " + json.dumps(
-                        {
-                            "type": "error",
-                            "message": (
-                                "The agent run ended without producing an answer. "
-                                "This is an internal failure, not an empty reply — "
-                                "retry the request, and check the sidecar log "
-                                "(gaia-agent-email serve) for the worker traceback."
-                            ),
-                        }
-                    ) + "\n\n"
-                    yield "data: " + json.dumps(
-                        {"type": "run_complete", "answer": ""}
-                    ) + "\n\n"
+                    failure = {
+                        "type": "error",
+                        "message": (
+                            "The agent run ended without producing an answer. "
+                            "This is an internal failure, not an empty reply — "
+                            "retry the request, and check the sidecar log "
+                            "(gaia-agent-email serve) for the worker traceback."
+                        ),
+                    }
+                    yield f"data: {json.dumps(failure)}\n\n"
+                    terminal = {"type": "run_complete", "answer": ""}
+                    yield f"data: {json.dumps(terminal)}\n\n"
                     return
                 await asyncio.sleep(0.05)
         finally:

@@ -13,7 +13,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from gaia_agent_email.agent import _detect_targeted_mailboxes
 
-
 # ---------------------------------------------------------------------------
 # Detector — pure-function intent extraction
 # ---------------------------------------------------------------------------

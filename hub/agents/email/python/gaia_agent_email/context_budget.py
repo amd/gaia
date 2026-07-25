@@ -67,11 +67,7 @@ def envelope_budget_tokens() -> int:
     own output are accounted for. Bulk triage condenses its result envelope to
     fit this so the post-tool turn stays under ``CONTEXT_TARGET_TOKENS``.
     """
-    return (
-        CONTEXT_TARGET_TOKENS
-        - _AGENT_LOOP_FIXED_TOKENS
-        - _RESPONSE_RESERVE_TOKENS
-    )
+    return CONTEXT_TARGET_TOKENS - _AGENT_LOOP_FIXED_TOKENS - _RESPONSE_RESERVE_TOKENS
 
 
 def estimate_tokens(text: str) -> int:

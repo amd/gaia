@@ -154,14 +154,13 @@ class ProfileToolsMixin:
             try:
                 payload = json.loads(row["content"])
             except (json.JSONDecodeError, KeyError) as exc:
-                # Restarting the record is the only way forward, but it drops
-                # every latency this sender had accumulated — which feeds
-                # priority-sender promotion, so say so.
+                # Row id, never the address: this is WARNING, and gaia
+                # diagnostics bundles default-level logs into bug reports.
                 log.warning(
-                    "profile_tools: reply record for %s is unreadable (%s) — "
-                    "restarting it; prior reply-latency history for this sender "
-                    "is lost and promotion restarts from zero.",
-                    entity,
+                    "profile_tools: reply record %s is unreadable (%s) — "
+                    "restarting it; that sender's reply-latency history is "
+                    "lost and priority promotion restarts from zero.",
+                    row.get("id"),
                     exc,
                 )
                 payload = {
@@ -273,10 +272,10 @@ class ProfileToolsMixin:
                 payload = json.loads(row["content"])
             except (json.JSONDecodeError, KeyError) as exc:
                 log.warning(
-                    "profile_tools: interaction record for %s is unreadable "
-                    "(%s) — restarting it; prior interaction count and category "
-                    "history for this sender are lost.",
-                    entity,
+                    "profile_tools: interaction record %s is unreadable (%s) — "
+                    "restarting it; that sender's interaction count and "
+                    "category history are lost.",
+                    row.get("id"),
                     exc,
                 )
                 payload = {

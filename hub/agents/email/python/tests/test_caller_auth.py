@@ -280,9 +280,7 @@ def test_shipped_sidecar_app_enforces_token(monkeypatch):
     assert client.get("/health").status_code == 200
 
 
-def test_shipped_sidecar_app_enforces_token_delivered_via_file(
-    tmp_path, monkeypatch
-):
+def test_shipped_sidecar_app_enforces_token_delivered_via_file(tmp_path, monkeypatch):
     # The full boundary for the #2149 file leg: token delivered as a file path,
     # enforced by the real app over HTTP — missing/wrong bearer → 401, the
     # delivered token → 200. No mocks between the request and the check.

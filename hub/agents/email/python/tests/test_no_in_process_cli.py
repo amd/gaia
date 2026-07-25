@@ -35,14 +35,21 @@ def test_in_process_cli_module_is_absent():
 def test_no_module_imports_the_in_process_cli():
     """Nothing in the package may import a ``cli`` submodule."""
     offenders = []
-    pattern = re.compile(r"^\s*(from\s+\.?cli\s+import|import\s+gaia_agent_email\.cli)")
+    pattern = re.compile(
+        r"^\s*(?:"
+        r"from\s+(?:\.|gaia_agent_email\.)cli\s+import"  # from .cli import x
+        r"|from\s+(?:\.|gaia_agent_email)\s+import\s+[^#]*\bcli\b"  # from . import cli
+        r"|import\s+gaia_agent_email\.cli"  # import pkg.cli
+        r")"
+    )
     for path in PACKAGE_ROOT.rglob("*.py"):
         for lineno, line in enumerate(path.read_text().splitlines(), start=1):
             if pattern.match(line):
                 offenders.append(f"{path.relative_to(EMAIL_ROOT)}:{lineno}: {line!r}")
-    assert not offenders, (
-        "These modules import an in-process CLI that should not exist:\n"
-        + "\n".join(offenders)
+    assert (
+        not offenders
+    ), "These modules import an in-process CLI that should not exist:\n" + "\n".join(
+        offenders
     )
 
 

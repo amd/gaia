@@ -36,8 +36,11 @@ stable shape.
 
 ### Version history
 
-`SCHEMA_VERSION` bumps the MAJOR on a breaking change and the MINOR on an
-additive one, so an additive bump still leaves older consumers working.
+`SCHEMA_VERSION` bumps the MINOR on every change, additive or breaking, and
+the MAJOR has never moved. Clients gate on the MAJOR only (`checkVersion` in
+the npm package accepts any higher MINOR), so the one breaking change below —
+`2.3` — was **not** signalled to pinned consumers. Treat a MINOR bump as
+"read the row before upgrading", not as "safe by construction".
 
 | Version | Change |
 |---|---|
@@ -611,11 +614,12 @@ server exposes it — null otherwise (no config echo, no guessing).
 even when the model-catalog probe fails and `present` reports `false` —
 the two fields answer different questions from different probes.
 
-> **Note:** no CLI loads the model. Since #2191 every front-door — including
-> `gaia email` — relays `POST /v1/email/query` to this sidecar, so the sidecar's
-> own configuration is the only thing that decides `ctx_size`. The
-> `agent_context_sizes` registry this note used to cite no longer exists.
-> The envelope above governs the **eval/benchmark/release** path.
+> **Note:** no *interactive* front-door loads the model. Since #2191 `gaia email`
+> relays `POST /v1/email/query` to this sidecar, so the sidecar's configuration
+> decides `ctx_size`; the `agent_context_sizes` registry this note used to cite
+> no longer exists. `gaia eval benchmark` is the exception — it constructs
+> `EmailAgentConfig(ctx_size=...)` in-process, which is the path the envelope
+> above governs.
 
 **Shared-server constraint:** Lemonade Server is single-tenant per model
 slot. An agent instance with an exact ctx pin (`EmailAgentConfig.ctx_size` /

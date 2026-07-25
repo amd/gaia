@@ -39,7 +39,8 @@ _SCORECARD = _NPM_ROOT / "SCORECARD.md"
 # current aggregate. Any "NN.N / 100" or "NN.NN / 100" in these is a score claim.
 _PROSE_DOCS = ("README.md", "EVALUATION.md")
 
-_SCORE_CLAIM = re.compile(r"(\d+\.\d+)\s*/\s*100")
+# "84.53 / 100" and the bare "the 84.53 triage score" phrasing alike.
+_SCORE_CLAIM = re.compile(r"(\d+\.\d+)(?=\s*/\s*100|\s+triage score)")
 
 
 def _front_matter(path: Path) -> dict:
@@ -93,6 +94,10 @@ def test_prose_docs_quote_the_current_aggregate(doc_name, aggregate_value):
 
 _EMAIL_ROOT = Path(__file__).resolve().parents[1]
 _CONTRACT_DOC = _EMAIL_ROOT / "CONTRACT.md"
+# The docs site repeats the same version claim; #1841 makes it part of the
+# same change, so it is guarded here rather than left to drift on its own.
+_REPO_ROOT = Path(__file__).resolve().parents[5]
+_INTEGRATION_GUIDE = _REPO_ROOT / "docs" / "guides" / "email-integration.mdx"
 
 
 def _declared_schema_version() -> str:
@@ -118,17 +123,19 @@ def test_contract_doc_headline_matches_the_code():
     assert f'`SCHEMA_VERSION` (`"{version}"`) is pinned' in text
 
 
-def test_contract_doc_examples_use_the_current_version():
+@pytest.mark.parametrize("doc", ["CONTRACT.md", "email-integration.mdx"])
+def test_json_examples_use_the_current_version(doc):
     """Every ``schema_version`` in a JSON example must be the current one."""
     version = _declared_schema_version()
-    text = _CONTRACT_DOC.read_text(encoding="utf-8")
-    stale = sorted(
-        set(re.findall(r'"schema_version":\s*"([^"]+)"', text)) - {version}
-    )
+    path = _CONTRACT_DOC if doc == "CONTRACT.md" else _INTEGRATION_GUIDE
+    if not path.exists():
+        pytest.skip(f"{doc} not present in this checkout")
+    text = path.read_text(encoding="utf-8")
+    stale = sorted(set(re.findall(r'"schema_version":\s*"([^"]+)"', text)) - {version})
     assert not stale, (
-        f"CONTRACT.md JSON examples still show schema_version {stale} but the "
-        f"module is on {version!r}. Copy-pasteable examples that declare a "
-        "stale version teach integrators to send one."
+        f"{doc} JSON examples still show schema_version {stale} but the module "
+        f"is on {version!r}. Copy-pasteable examples that declare a stale "
+        "version teach integrators to send one."
     )
 
 

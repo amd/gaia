@@ -33,8 +33,12 @@ if str(_REPO_ROOT) not in sys.path:
 
 pytest.importorskip("gaia_agent_email")
 
-from gaia_agent_email.config import ConfigurationError  # noqa: E402
-from gaia_agent_email.tools import read_tools  # noqa: E402
+from gaia_agent_email.config import (  # noqa: E402
+    DEFAULT_INBOX_SCAN_CEILING,
+    ConfigurationError,
+    EmailAgentConfig,
+    default_inbox_scan_ceiling,
+)
 
 _ENV = "GAIA_EMAIL_TRIAGE_MAX_MESSAGES"
 
@@ -46,27 +50,50 @@ _ENV = "GAIA_EMAIL_TRIAGE_MAX_MESSAGES"
 
 def test_unset_override_uses_the_documented_default(monkeypatch):
     monkeypatch.delenv(_ENV, raising=False)
-    assert read_tools._inbox_scan_ceiling() == read_tools.DEFAULT_INBOX_SCAN_CEILING
+    assert default_inbox_scan_ceiling() == DEFAULT_INBOX_SCAN_CEILING
 
 
 def test_valid_override_is_honoured(monkeypatch):
     monkeypatch.setenv(_ENV, "250")
-    assert read_tools._inbox_scan_ceiling() == 250
+    assert default_inbox_scan_ceiling() == 250
 
 
-@pytest.mark.parametrize("bad", ["", "  ", "abc", "25o", "1e3", "12.5"])
-def test_non_integer_override_raises_or_defaults_but_never_guesses(monkeypatch, bad):
-    """Empty means "unset"; anything else non-integer is a configuration error."""
+def test_bad_override_fails_at_construction_not_per_tool_call(monkeypatch):
+    """The raise must reach the operator.
+
+    Both scanning tools wrap their body in ``except Exception -> _envelope_err``,
+    so a ceiling resolved at call time would be caught and handed to the LLM as
+    a per-call error string — the eval harness would then complete a fully
+    failed run and still write a scorecard. Resolving it on EmailAgentConfig
+    means a bad value stops startup instead.
+    """
+    monkeypatch.setenv(_ENV, "not-a-number")
+    with pytest.raises(ConfigurationError, match=_ENV):
+        EmailAgentConfig()
+
+
+def test_config_carries_the_resolved_ceiling(monkeypatch):
+    monkeypatch.setenv(_ENV, "250")
+    assert EmailAgentConfig().inbox_scan_ceiling == 250
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_blank_override_means_unset(monkeypatch, blank):
+    """Whitespace is "unset", same as default_undo_window_seconds treats it."""
+    monkeypatch.setenv(_ENV, blank)
+    assert default_inbox_scan_ceiling() == DEFAULT_INBOX_SCAN_CEILING
+
+
+@pytest.mark.parametrize("bad", ["abc", "25o", "1e3", "12.5"])
+def test_non_integer_override_raises(monkeypatch, bad):
+    """A typo is an operator error, not a value to guess past."""
     monkeypatch.setenv(_ENV, bad)
-    if not bad.strip() and not bad:
-        assert read_tools._inbox_scan_ceiling() == read_tools.DEFAULT_INBOX_SCAN_CEILING
-        return
     with pytest.raises(ConfigurationError) as exc:
-        read_tools._inbox_scan_ceiling()
+        default_inbox_scan_ceiling()
     message = str(exc.value)
     assert _ENV in message and repr(bad) in message  # what failed
     assert "positive message count" in message  # what to do
-    assert str(read_tools.DEFAULT_INBOX_SCAN_CEILING) in message  # the way out
+    assert str(DEFAULT_INBOX_SCAN_CEILING) in message  # the way out
 
 
 @pytest.mark.parametrize("bad", ["0", "-1", "-250"])
@@ -74,7 +101,7 @@ def test_non_positive_override_raises(monkeypatch, bad):
     """``max(1, ...)`` used to clamp these into a working-ish value."""
     monkeypatch.setenv(_ENV, bad)
     with pytest.raises(ConfigurationError, match="positive message count"):
-        read_tools._inbox_scan_ceiling()
+        default_inbox_scan_ceiling()
 
 
 # ---------------------------------------------------------------------------
@@ -134,19 +161,21 @@ def test_corrupt_reply_record_reset_is_logged(caplog):
         "promotion) vanished silently"
     )
     text = " ".join(r.getMessage() for r in warnings)
-    assert "alice@example.com" in text, f"warning does not name the sender: {text}"
+    # The row id, never the address — this is WARNING-level and gaia
+    # diagnostics bundles default-level logs into user-attached bug reports.
+    assert "row-1" in text, f"warning does not identify the record: {text}"
+    assert "alice@example.com" not in text, f"warning leaks a sender address: {text}"
     assert "lost" in text.lower()
     # Fail-soft is intentional: the write still happens on a fresh record.
     assert store.writes, "the reset should still persist a fresh record"
 
 
 def test_corrupt_interaction_record_reset_is_logged(caplog):
-    warnings, store = _drive(
-        caplog, "_record_interaction", "bob@example.com", "urgent"
-    )
+    warnings, store = _drive(caplog, "_record_interaction", "bob@example.com", "urgent")
     assert warnings, "an unreadable interaction record was reset with no log line"
     text = " ".join(r.getMessage() for r in warnings)
-    assert "bob@example.com" in text, f"warning does not name the sender: {text}"
+    assert "row-1" in text, f"warning does not identify the record: {text}"
+    assert "bob@example.com" not in text, f"warning leaks a sender address: {text}"
     assert "lost" in text.lower()
     assert store.writes, "the reset should still persist a fresh record"
 

@@ -68,9 +68,8 @@ _GATE_FIXTURES_DIR = _REPO_ROOT / "tests" / "fixtures" / "email"
 # Committed, generated artifact.
 ARTIFACT_PATH = _EMAIL_ROOT / "CAPABILITY_MATRIX.md"
 
-# REST path suffixes that are probe/utility endpoints. Excluded from the
-# functional-verb count, still counted in the frozen contract's total. Both
-# numbers are derived, never written down here — see _derive_rest().
+# REST path suffixes that are probe/utility endpoints: excluded from the
+# functional-verb count, still counted in the frozen contract's total.
 _PROBE_SUFFIXES = frozenset({"health", "version", "init"})
 
 # Suite -> the report/gate script whose presence means CI actually consumes
@@ -92,10 +91,8 @@ _SUITE_REPORT_FILENAMES: Dict[str, str] = {
 # quality eval, so a reviewed mapping is the only truthful mechanism.
 # ---------------------------------------------------------------------------
 
-# Template, not a finished string: the two surface counts are DERIVED (see
-# _derive_rest / _derive_mcp) and interpolated by tools_count_definition().
-# They were once literals here, which is how this file came to state "16 REST
-# verbs" in its Definitions section while computing 21 forty lines later.
+# Template, not a finished string — the surface counts are derived, so a
+# literal here silently drifts from what this file computes.
 TOOLS_COUNT_DEFINITION = (
     "tools_count = the number of internal @tool-decorated agent-loop "
     "functions across gaia_agent_email/tools/*.py mixins (one per capability "
@@ -112,9 +109,10 @@ def tools_count_definition(rest_functional: int, mcp_tools: int) -> str:
         rest_functional=rest_functional, mcp_tools=mcp_tools
     )
 
+
 _NO_EVAL_SENTINEL = "no quality eval (contract-tested only)"
 
-# The 25 exposed ops (21 REST functional + 4 MCP) -> the eval suite that
+# Every exposed op (REST functional + MCP) -> the eval suite that
 # actually exercises them for quality, or the sentinel meaning "only
 # contract/shape-tested, no judged quality bar". Op names mirror
 # ``_derive_rest_ops``'s naming scheme: the REST path suffix after

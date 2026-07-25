@@ -103,7 +103,7 @@ _SYSTEM_PROMPT = (
     "(URGENT > NEEDS_RESPONSE > PROMOTIONAL > PERSONAL > FYI).\n"
     "\n"
     "SPAM (separate from category -- a PROMOTIONAL email is not "
-    "automatically spam): set \"is_spam\" true only for unsolicited, "
+    'automatically spam): set "is_spam" true only for unsolicited, '
     "indiscriminate mass-market junk mail -- pharmacy/drug ads, "
     "prize/lottery/inheritance scams, adult content, or garbled "
     "filter-evasion spelling (e.g. 'v1agra', 'cia1is'). A marketing email "

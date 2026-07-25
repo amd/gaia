@@ -51,45 +51,10 @@ from gaia.logger import get_logger
 
 log = get_logger(__name__)
 
-# Default per-call ceiling for inbox-scanning tools (triage / pre-scan). Bounds
-# an interactive call so the LLM can't trigger a thousand-message scan that
-# blows latency and context. The eval benchmark scores a fixed labelled corpus
-# and needs to cover all of it deterministically, so it raises this ceiling via
-# GAIA_EMAIL_TRIAGE_MAX_MESSAGES — the per-email classification is identical
-# whether batched at 100 or at the corpus size, so the override is
-# measurement-neutral and only changes coverage, never a decision.
-DEFAULT_INBOX_SCAN_CEILING = 100
-
-
-def _inbox_scan_ceiling() -> int:
-    """Per-call ceiling for triage/pre-scan, overridable for the eval harness.
-
-    A malformed or non-positive override raises ``ConfigurationError`` rather
-    than reverting to the default — mirrors ``config._undo_window_seconds``.
-    Silently defaulting meant a typo'd ceiling in an eval harness produced a
-    quietly different scan size and therefore a quietly different score.
-    """
-    from gaia_agent_email.config import ConfigurationError
-
-    env = "GAIA_EMAIL_TRIAGE_MAX_MESSAGES"
-    raw = os.environ.get(env)
-    if not raw:
-        return DEFAULT_INBOX_SCAN_CEILING
-    try:
-        value = int(raw)
-    except (TypeError, ValueError) as exc:
-        raise ConfigurationError(
-            f"{env}={raw!r} is not an integer. Set it to a positive message "
-            f"count (e.g. 250), or unset it to use the "
-            f"{DEFAULT_INBOX_SCAN_CEILING}-message default."
-        ) from exc
-    if value <= 0:
-        raise ConfigurationError(
-            f"{env}={raw!r} must be a positive message count. Unset it to use "
-            f"the {DEFAULT_INBOX_SCAN_CEILING}-message default."
-        )
-    return value
-
+from gaia_agent_email.config import (  # noqa: E402
+    DEFAULT_INBOX_SCAN_CEILING,
+    default_inbox_scan_ceiling as _inbox_scan_ceiling,
+)
 
 # Maximum body length sent to the LLM. Larger messages are truncated with
 # a ``...[truncated]`` marker. Prevents context blow-up and limits the
