@@ -23,6 +23,7 @@ var (
 	installTrust      bool
 	runQuery          string
 	runModel          string
+	runTimeout        time.Duration
 )
 
 // hubClient builds a client over the real daemon, logging through --debug.
@@ -246,14 +247,19 @@ var runCmd = &cobra.Command{
 	Long: "Open the chat TUI for an installed agent.\n\n" +
 		"--query makes it a genuine non-interactive one-shot: no alt screen, the " +
 		"answer on stdout, progress on stderr, and exit 0 on a final answer / 1 on " +
-		"an error. That is what makes it usable from a script or from CI.",
+		"an error. That is what makes it usable from a script or from CI.\n\n" +
+		"A one-shot checks its preconditions first and refuses in seconds — naming " +
+		"the unmet one and the command that fixes it on stderr — rather than waiting " +
+		"on a model server that is not there. The turn itself is bounded too, so an " +
+		"agent that accepts the query and then goes quiet is reported, never waited " +
+		"on forever — raise or lower that bound with --timeout.",
 	Args:         cobra.ExactArgs(1),
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := checkModelSupported(args[0], runModel); err != nil {
 			return err
 		}
-		code, err := ui.RunAgent(args[0], runQuery, runModel, debug)
+		code, err := ui.RunAgent(args[0], runQuery, runModel, debug, runTimeout)
 		if err != nil {
 			return err
 		}
@@ -381,6 +387,8 @@ func init() {
 		"run one query non-interactively: answer on stdout, exit 0/1")
 	runCmd.Flags().StringVar(&runModel, "model", "",
 		"model id override (the agent's default is used when unset)")
+	runCmd.Flags().DurationVar(&runTimeout, "timeout", ui.DefaultOneShotTimeout,
+		"how long one --query turn may take before it is abandoned and reported (e.g. 90s, 2h)")
 
 	rootCmd.AddCommand(listCmd, installCmd, uninstallCmd, runCmd, statusCmd)
 }
