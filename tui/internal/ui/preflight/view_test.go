@@ -153,14 +153,17 @@ func TestRenderFitsEveryScenarioAt80x24(t *testing.T) {
 		"lemonade too old":     newFake().with("GET /v1/email/init", 503, initTooOld),
 		"version unknown":      newFake().with("GET /v1/email/init", 200, initUnknownVersion),
 		"model missing":        newFake().with("GET /v1/email/init", 503, initModelMissing),
-		"no mailbox":           newFake().with("GET /v1/email/connectors", 200, connectorsNone),
-		"send not granted":     newFake().with("GET /v1/email/connectors", 200, connectorsNoSend),
-		"grant missing":        newFake().with("GET /v1/email/connectors", 200, connectorsNoGrant),
-		"credentials dead":     newFake().with("POST /v1/email/search", 502, searchNoForwardedCredential),
-		"mailbox unverified":   newFake().with("POST /v1/email/search", 502, searchRelayDown),
-		"two mailboxes":        newFake().with("GET /v1/email/connectors", 200, connectorsBoth).with("POST /v1/email/search", 400, searchAmbiguous),
-		"sidecar stopped":      newFake().with("GET /daemon/v1/agents", 200, agentsStopped),
-		"not installed":        newFake().with("GET /daemon/v1/agents", 200, agentsEmpty),
+		// The longest remedy on the screen: a stop instruction, its reason, the app
+		// alternative, the terminal caveat and the memory caveat, all in one row.
+		"context shortfall":  newFake().with("GET /v1/email/init", 200, initCtxShortfall),
+		"no mailbox":         newFake().with("GET /v1/email/connectors", 200, connectorsNone),
+		"send not granted":   newFake().with("GET /v1/email/connectors", 200, connectorsNoSend),
+		"grant missing":      newFake().with("GET /v1/email/connectors", 200, connectorsNoGrant),
+		"credentials dead":   newFake().with("POST /v1/email/search", 502, searchNoForwardedCredential),
+		"mailbox unverified": newFake().with("POST /v1/email/search", 502, searchRelayDown),
+		"two mailboxes":      newFake().with("GET /v1/email/connectors", 200, connectorsBoth).with("POST /v1/email/search", 400, searchAmbiguous),
+		"sidecar stopped":    newFake().with("GET /daemon/v1/agents", 200, agentsStopped),
+		"not installed":      newFake().with("GET /daemon/v1/agents", 200, agentsEmpty),
 	}
 	for name, f := range scenarios {
 		t.Run(name, func(t *testing.T) {

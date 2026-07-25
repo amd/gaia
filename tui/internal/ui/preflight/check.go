@@ -525,14 +525,20 @@ func markCtxShortfall(model *Row, loaded int) {
 			"comes back as a context-length error rather than an answer.",
 		loaded, target)
 
-	// The restart command is the resolved one, so it carries the window on a
-	// launcher that can take it and names where it lives on one that cannot. It
-	// is not promised as a cure: on the machine above, asking for 65536 still
-	// only got 32527, because the limit was memory rather than the request.
+	// The resolved RESTART remedy, and its wording is kept rather than replaced.
+	// This row only exists once a model is loaded, which means a server is already
+	// holding the port — so the stop is part of the instruction, and an earlier
+	// version of this function threw that clause away by overwriting the Action.
+	// The result was a command that could not run from the only state that
+	// produces this row: lemond has no stop or restart verb, and a second instance
+	// exits with "Port … is already in use".
+	//
+	// Only the shortfall-specific caveat is appended, and it is deliberately not a
+	// promise: asking for the full window raised it on the measured machine but
+	// never reached the target, because the limit was memory rather than the ask.
 	r := lemonadeRestartRemedy()
-	r.Action = "Restart the local model server so it asks for the full window — if it " +
-		"still comes up short, this machine did not have the memory for more, and " +
-		"only long inputs are affected."
+	r.Action += " If it still comes up short after that, this machine did not have the " +
+		"memory for more — only long inputs are affected."
 	model.Remedy = r
 	// Nothing here is safe to do from the TUI: restarting the model server is a
 	// host-level action, exactly as it is on the Local AI row.

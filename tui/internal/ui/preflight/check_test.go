@@ -1612,6 +1612,11 @@ func TestTheShortfallRowShowsTheActualWindowAndTheExpectedOne(t *testing.T) {
 	if !strings.Contains(row.Remedy.Action, "still comes up short") {
 		t.Errorf("the remedy over-promises: %q", row.Remedy.Action)
 	}
+	// And it must be runnable FROM THIS STATE. The row only exists once a model
+	// is loaded, so a server already holds the port; lemond has no stop or
+	// restart verb, and a second instance exits with "already in use". A restart
+	// remedy that omits the stop is a command the caller cannot run.
+	assertSaysToStopFirst(t, row.Remedy)
 	// Nothing here is safe to do from the TUI.
 	if row.Fix != FixNone {
 		t.Errorf("the shortfall row offers a one-key fix: %v", row.Fix)
@@ -1684,4 +1689,76 @@ func TestTheShortfallIsNamedDuringTheHandoff(t *testing.T) {
 		t.Errorf("the hand-off never shows the window that will fail:\n%s", screen)
 	}
 	assertFits(t, splitLines(screen), 80, 24)
+}
+
+// assertSaysToStopFirst checks a remedy aimed at a RUNNING server either names a
+// command that restarts in place (systemd, launchd) or tells the user to stop it
+// first. Anything else is a command that exits with "address already in use" the
+// moment it is followed.
+func assertSaysToStopFirst(t *testing.T, r Remedy) {
+	t.Helper()
+	restartsInPlace := strings.Contains(r.Command, "restart") ||
+		strings.Contains(r.Command, "kickstart")
+	if restartsInPlace {
+		return
+	}
+	for _, phrase := range []string{"Stop the running server", "Stop it", "Quit it"} {
+		if strings.Contains(r.Action, phrase) {
+			return
+		}
+	}
+	t.Errorf("this remedy starts a server while one is already running, and never says "+
+		"to stop it: action=%q command=%q", r.Action, r.Command)
+}
+
+// Every row that describes a server which is UP has to survive that check: they
+// all fire while something holds the port, so none of them may print a bare
+// start command.
+func TestEveryRemedyAimedAtARunningServerSaysToStopItFirst(t *testing.T) {
+	cases := map[string]string{
+		// Reachable, but its model list could not be read.
+		"model list unreadable": initModelListUnreadable,
+		// Loaded, healthy, and below the profile window.
+		"context shortfall": initCtxShortfall,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			status := 503
+			if name == "context shortfall" {
+				status = 200
+			}
+			rep := Check(context.Background(),
+				newFake().with("GET /v1/email/init", status, body), EmailConfig())
+			for _, key := range []string{KeyLemonade, KeyModel} {
+				row, _ := rep.Find(key)
+				if row.State == StateOK || row.State == StatePending {
+					continue
+				}
+				assertSaysToStopFirst(t, row.Remedy)
+			}
+		})
+	}
+
+	// The ladder's timeout rung too: a server that answered and then stalled is
+	// still holding the port.
+	d := Ladder{AgentID: "email"}.Text("check the local AI", "the request timed out")
+	assertSaysToStopFirst(t, d.AsRemedy())
+}
+
+// A launcher that CAN restart in place must not be told to stop first — that
+// would be busywork, and systemctl/launchctl already do both halves.
+func TestALauncherThatRestartsInPlaceIsNotToldToStopFirst(t *testing.T) {
+	systemd := withProbe(
+		fakeHostFor("linux", []string{"systemctl"},
+			[]string{"/usr/bin/lemond", "/usr/lib/systemd/user/lemond.service"}, nil),
+		lemonadeRestartRemedy)
+
+	if !strings.Contains(systemd.Command, "restart") {
+		t.Fatalf("expected an in-place restart command, got %q", systemd.Command)
+	}
+	if strings.Contains(systemd.Action, "Stop the running server") {
+		t.Errorf("systemd restarts in place; telling the user to stop first is busywork: %q",
+			systemd.Action)
+	}
+	assertSaysToStopFirst(t, systemd)
 }

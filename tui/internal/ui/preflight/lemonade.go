@@ -438,10 +438,15 @@ func lemonadeRestartRemedy() Remedy {
 			Where:   lemonadeDocs,
 		}
 	}
-	// No distinct restart form: quitting first is on the user, and a remedy that
-	// hides that reads as "this one command is enough".
+	// No distinct restart form, so the stop is the user's to do — and saying WHY
+	// is what makes the instruction followable. Measured on lemond 10.10.0: it has
+	// no stop, restart or daemonize verb, and a second instance against a held
+	// port prints "Port 13305 on 127.0.0.1 is already in use. … This instance will
+	// now exit." So a restart remedy that omits the stop is a command that cannot
+	// run from the only state the row appears in.
 	return Remedy{
-		Action:  "Quit it, then start it again" + orTheApp(l) + comeBack(l) + ctxNote(l),
+		Action: "Stop the running server first — it holds the port, and a second one just " +
+			"exits — then start it again" + orTheApp(l) + comeBack(l) + ctxNote(l),
 		Command: l.Restart,
 		Where:   lemonadeDocs,
 	}

@@ -303,9 +303,16 @@ func TestTheRestartRemedySaysToQuitFirstWhenThereIsNoRestartForm(t *testing.T) {
 
 	bare := withProbe(
 		fakeHostFor("darwin", nil, []string{"/usr/local/bin/lemond"}, nil), lemonadeRestartRemedy)
-	if !strings.Contains(bare.Action, "Quit it") {
-		t.Errorf("a launcher with no restart form must say to quit first: %q", bare.Action)
+	if !strings.Contains(bare.Action, "Stop the running server") {
+		t.Errorf("a launcher with no restart form must say to stop first: %q", bare.Action)
 	}
+	// And it says WHY, because "stop it first" without the reason reads as
+	// optional ceremony rather than the difference between the command working
+	// and printing "address already in use".
+	if !strings.Contains(bare.Action, "holds the port") {
+		t.Errorf("the reason the stop matters is missing: %q", bare.Action)
+	}
+	assertSaysToStopFirst(t, bare)
 }
 
 // A server that answers the port while GAIA cannot name its launcher must not be
