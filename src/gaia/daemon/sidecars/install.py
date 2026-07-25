@@ -250,15 +250,101 @@ def _reject_reserved(agent_id: str) -> None:
         )
 
 
-def _require_supervised(agent_id: str, known: Iterable[str]) -> None:
+# What a not-installable id turned out to be, best-effort. Only used to make
+# the refusal say something truer than "unknown" — never to change behaviour.
+_KNOWN_INSTALLED = "installed"
+_KNOWN_HUB = "hub"
+_KNOWN_AGENT = "agent"
+
+
+def _entry_point_agent_ids() -> "set[str]":
+    """Agent ids this Python environment advertises, from dist metadata only.
+
+    Reads entry-point NAMES; it never imports an agent package, so a broken
+    third-party agent cannot turn an error message into a second error.
+    """
+    import importlib.metadata
+
+    from gaia.agents.registry import AGENT_ENTRY_POINT_GROUPS
+
+    return {
+        ep.name
+        for group in AGENT_ENTRY_POINT_GROUPS
+        for ep in importlib.metadata.entry_points(group=group)
+    }
+
+
+def _identify_unsupervised(
+    agent_id: str, install_root: Optional[Path]
+) -> Optional[str]:
+    """Best-effort: what IS this id, if not an installable sidecar?
+
+    Three cheap, local, network-free probes so a real agent id is not reported
+    the same way as a typo. Each is independently guarded: this only enriches
+    an error message, and failing to classify must never mask the refusal the
+    caller actually needs to see (the degradation is logged, not silent).
+    """
+    probes = (
+        (
+            _KNOWN_INSTALLED,
+            lambda: agent_id in _installer().list_installed(install_root),
+        ),
+        (
+            _KNOWN_HUB,
+            lambda: agent_id in {e.get("id") for e in _catalog().cached_index_agents()},
+        ),
+        (_KNOWN_AGENT, lambda: agent_id in _entry_point_agent_ids()),
+    )
+    for label, probe in probes:
+        try:
+            if probe():
+                return label
+        except Exception as exc:  # noqa: BLE001 - advisory only; never mask the refusal
+            logger.warning(
+                "install: could not check whether '%s' is a known %s id (%s); "
+                "the refusal message will be less specific",
+                agent_id,
+                label,
+                exc,
+            )
+    return None
+
+
+def _require_supervised(
+    agent_id: str, known: Iterable[str], install_root: Optional[Path] = None
+) -> None:
+    """Refuse an id the daemon could not run, actionable clause FIRST.
+
+    The user's next move (what IS installable, and how to see the rest) leads;
+    the ``builtin_specs()`` pointer is a trailing developer note, because it is
+    an internal symbol nobody outside this repo can act on.
+    """
     known = sorted(known)
-    if agent_id not in known:
-        raise UnknownAgentError(
-            f"the daemon has no sidecar spec for '{agent_id}', so it could not "
-            f"start it after installing. Installable agents: "
-            f"{', '.join(known) or '(none)'}. If this agent was just published, "
-            "it needs an entry in gaia.daemon.sidecars.spec.builtin_specs()."
-        )
+    if agent_id in known:
+        return
+    installable = ", ".join(known) or "(none)"
+    lead = {
+        _KNOWN_INSTALLED: (
+            f"'{agent_id}' is installed but the daemon does not supervise it as "
+            f"a sidecar"
+        ),
+        _KNOWN_HUB: (
+            f"'{agent_id}' is published on the Agent Hub but this GAIA build "
+            f"cannot run it as a sidecar"
+        ),
+        _KNOWN_AGENT: (
+            f"'{agent_id}' is a GAIA agent but is not published as an "
+            f"installable sidecar"
+        ),
+    }.get(
+        _identify_unsupervised(agent_id, install_root),
+        f"no installable agent '{agent_id}'",
+    )
+    raise UnknownAgentError(
+        f"{lead} — installable: {installable}. See the full catalog with "
+        f"`gaia hub list`. (Developer note: an agent is installable here only "
+        f"once gaia.daemon.sidecars.spec.builtin_specs() has an entry for it.)"
+    )
 
 
 def _claim_slot(agent_id: str, action: str = "install") -> None:
@@ -404,7 +490,7 @@ def start_install(
 
     _validate_agent_id(agent_id)
     _reject_reserved(agent_id)
-    _require_supervised(agent_id, supervised_ids(registry))
+    _require_supervised(agent_id, supervised_ids(registry), install_root)
 
     url = catalog_mod.manifest_url(agent_id, base_url)
     try:
@@ -557,7 +643,11 @@ def uninstall(
         with sidecar_stopped(registry, agent_id, install_root):
             installer_mod.uninstall(agent_id, install_root=install_root)
     except installer_mod.NotInstalledError as exc:
-        raise AgentNotInstalledError(str(exc)) from exc
+        # The installer names what failed and where to look; the third part of
+        # the fail-loudly contract — what to DO next — is added here.
+        raise AgentNotInstalledError(
+            f"{exc} See what is installed with `gaia hub list --installed`."
+        ) from exc
     except installer_mod.InstallError as exc:
         raise InstallFailedError(str(exc)) from exc
     finally:
