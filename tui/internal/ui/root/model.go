@@ -1,12 +1,14 @@
 package root
 
 import (
-	"strings"
+	"fmt"
+	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/client"
+	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/ui/chat"
 	"github.com/amd/gaia/tui/internal/ui/components"
 	"github.com/amd/gaia/tui/internal/ui/hub"
@@ -15,7 +17,7 @@ import (
 type view int
 
 const (
-	viewHub  view = iota
+	viewHub view = iota
 	viewChat
 )
 
@@ -126,13 +128,29 @@ func (m RootModel) View() string {
 	return base
 }
 
-func (m RootModel) launchAgent(agent catalog.Agent) (tea.Model, tea.Cmd) {
-	cmdLine := agent.BinaryPath
-	if len(agent.BinaryArgs) > 0 {
-		cmdLine += " " + strings.Join(agent.BinaryArgs, " ")
+// newAgentClient builds the transport the catalog entry asks for.
+func (m RootModel) newAgentClient(agent catalog.Agent) client.AgentClient {
+	if agent.Transport == catalog.TransportDaemon {
+		// HTTP sidecar behind the daemon relay: no binary, no stdin/stdout.
+		return client.NewSSEClient(agent.ID, daemon.New(daemon.Options{Logf: m.logf}), client.SSEOptions{
+			Logf: m.logf,
+		})
 	}
+	// catalog.TransportSubprocess (the zero value): spawn the binary directly.
+	return client.NewSubprocessClient(agent.BinaryPath, agent.BinaryArgs, m.debug)
+}
 
-	c := client.NewSubprocessClient(cmdLine, m.debug)
+// logf writes transport diagnostics to stderr in debug mode. It must never be
+// given a daemon token — daemon.Instance redacts its own token when formatted.
+func (m RootModel) logf(format string, args ...any) {
+	if !m.debug {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
+}
+
+func (m RootModel) launchAgent(agent catalog.Agent) (tea.Model, tea.Cmd) {
+	c := m.newAgentClient(agent)
 	m.chatClient = c
 
 	m.catalog.SetStatus(agent.ID, catalog.StatusActive)

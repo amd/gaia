@@ -88,7 +88,10 @@ type ChatModel struct {
 	messages  []Message
 	activity  []ActivityItem
 	streaming bool
-	buffer    strings.Builder
+	// buffer accumulates streamed answer text. A plain string, not a
+	// strings.Builder: Bubble Tea copies the model on every update, and a
+	// Builder panics the moment a copied non-zero one is written to again.
+	buffer string
 
 	input    textarea.Model
 	viewport viewport.Model
@@ -305,6 +308,12 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case query == "/clear":
 			m.messages = nil
+			// Daemon-transport agents are stateless per turn: the host pushes the
+			// transcript back as `context`, so clearing the view must clear that
+			// too or the "cleared" history keeps being sent.
+			if r, ok := m.client.(client.TranscriptResetter); ok {
+				r.ResetTranscript()
+			}
 			m.updateViewport()
 			return m, nil
 		}
@@ -336,7 +345,7 @@ func (m ChatModel) sendQuery(query string) (tea.Model, tea.Cmd) {
 	})
 	m.streaming = true
 	m.activity = nil
-	m.buffer.Reset()
+	m.buffer = ""
 	m.queryStart = time.Now()
 	m.firstEvent = false
 	m.ttft = 0
@@ -375,6 +384,12 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 	if !m.firstEvent {
 		m.firstEvent = true
 		m.ttft = time.Since(m.queryStart)
+	}
+
+	// The daemon transport speaks the canonical seven-event contract; the
+	// subprocess transport speaks the legacy in-process vocabulary below.
+	if updated, cmd, handled := m.handleCanonicalEvent(evt); handled {
+		return updated, cmd
 	}
 
 	switch e := evt.(type) {
@@ -479,7 +494,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case event.ChunkEvent:
-		m.buffer.WriteString(e.Content)
+		m.buffer += e.Content
 
 	case event.AgentErrorEvent:
 		m.messages = append(m.messages, Message{
@@ -514,7 +529,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 }
 
 func (m *ChatModel) flushBuffer() {
-	content := m.buffer.String()
+	content := m.buffer
 	if content == "" {
 		return
 	}
@@ -524,7 +539,7 @@ func (m *ChatModel) flushBuffer() {
 		Content:  content,
 		Rendered: rendered,
 	})
-	m.buffer.Reset()
+	m.buffer = ""
 }
 
 func (m *ChatModel) resize() {
@@ -570,7 +585,7 @@ func (m *ChatModel) updateViewport() {
 		sb.WriteString("\n")
 	}
 
-	buf := m.buffer.String()
+	buf := m.buffer
 	if m.streaming && buf != "" {
 		sb.WriteString(assistantStyle.Render(buf))
 		sb.WriteString("\n")

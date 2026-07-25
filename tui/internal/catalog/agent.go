@@ -54,6 +54,35 @@ func (s AgentStatus) IsLaunchable() bool {
 	return s == StatusInstalled || s == StatusActive || s == StatusIdle
 }
 
+// Transport is how the TUI talks to an agent.
+//
+// The zero value is TransportSubprocess — the original stdin/stdout JSONL path,
+// which every pre-existing catalog entry uses.
+type Transport int
+
+const (
+	// TransportSubprocess spawns BinaryPath and trades newline-delimited JSON
+	// over stdin/stdout. Used by the local C++ agents.
+	TransportSubprocess Transport = iota
+
+	// TransportDaemon streams canonical SSE events through the GAIA daemon's
+	// relay (POST /v1/<id>/query). Used by the long-lived HTTP sidecar agents,
+	// which the daemon starts and supervises — there is no binary to spawn.
+	TransportDaemon
+)
+
+// String returns the wire name of the transport.
+func (t Transport) String() string {
+	switch t {
+	case TransportSubprocess:
+		return "subprocess"
+	case TransportDaemon:
+		return "daemon"
+	default:
+		return "unknown"
+	}
+}
+
 // Agent represents a GAIA agent in the catalog.
 type Agent struct {
 	ID          string
@@ -64,8 +93,9 @@ type Agent struct {
 	Icon        string // emoji
 	Version     string // semver, e.g. "0.1.0"
 	Status      AgentStatus
-	BinaryPath  string   // e.g. "gaia-bash"
-	BinaryArgs  []string // e.g. ["--json-events"]
+	Transport   Transport
+	BinaryPath  string   // e.g. "gaia-bash" (subprocess transport only)
+	BinaryArgs  []string // e.g. ["--json-events"] (subprocess transport only)
 	Votes       int      // for coming-soon agents
 }
 

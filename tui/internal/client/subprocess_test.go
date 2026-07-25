@@ -6,9 +6,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/event"
 )
 
@@ -68,7 +70,7 @@ func main() {
 func TestSubprocessClient_SendReceivesEvents(t *testing.T) {
 	bin := buildMockAgent(t)
 
-	c := NewSubprocessClient(bin, true)
+	c := NewSubprocessClient(bin, nil, true)
 	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -119,7 +121,7 @@ func TestSubprocessClient_SendReceivesEvents(t *testing.T) {
 func TestSubprocessClient_MultiTurn(t *testing.T) {
 	bin := buildMockAgent(t)
 
-	c := NewSubprocessClient(bin, false)
+	c := NewSubprocessClient(bin, nil, false)
 	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -153,7 +155,7 @@ func TestSubprocessClient_MultiTurn(t *testing.T) {
 }
 
 func TestSubprocessClient_InvalidCommand(t *testing.T) {
-	c := NewSubprocessClient("nonexistent_binary_xyz_12345", false)
+	c := NewSubprocessClient("nonexistent_binary_xyz_12345", nil, false)
 	defer c.Close()
 
 	ctx := context.Background()
@@ -163,8 +165,8 @@ func TestSubprocessClient_InvalidCommand(t *testing.T) {
 	}
 }
 
-func TestSubprocessClient_EmptyCommand(t *testing.T) {
-	c := NewSubprocessClient("", false)
+func TestSubprocessClient_EmptyBinaryPath(t *testing.T) {
+	c := NewSubprocessClient("", nil, false)
 
 	ctx := context.Background()
 	_, err := c.Send(ctx, "hello")
@@ -174,7 +176,7 @@ func TestSubprocessClient_EmptyCommand(t *testing.T) {
 }
 
 func TestSubprocessClient_CloseBeforeSend(t *testing.T) {
-	c := NewSubprocessClient("echo", false)
+	c := NewSubprocessClient("echo", nil, false)
 
 	// Close without ever starting should be a no-op.
 	if err := c.Close(); err != nil {
@@ -211,7 +213,7 @@ func main() { os.Exit(1) }
 		t.Fatalf("build exit agent: %v\n%s", err, out)
 	}
 
-	c := NewSubprocessClient(binPath, false)
+	c := NewSubprocessClient(binPath, nil, false)
 	defer c.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -239,3 +241,197 @@ func main() { os.Exit(1) }
 
 // Verify the interface is satisfied at compile time.
 var _ AgentClient = (*SubprocessClient)(nil)
+
+// buildAgentFrom compiles src into dir and returns the binary path.
+func buildAgentFrom(t *testing.T, dir, name, src string) string {
+	t.Helper()
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	srcPath := filepath.Join(dir, name+".go")
+	if err := os.WriteFile(srcPath, []byte(src), 0644); err != nil {
+		t.Fatalf("write %s: %v", srcPath, err)
+	}
+
+	binName := name
+	if runtime.GOOS == "windows" {
+		binName += ".exe"
+	}
+	binPath := filepath.Join(dir, binName)
+
+	goExe := "go"
+	if p, err := exec.LookPath("go"); err == nil {
+		goExe = p
+	}
+	cmd := exec.Command(goExe, "build", "-o", binPath, srcPath)
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build %s: %v\n%s", name, err, out)
+	}
+	return binPath
+}
+
+const echoAgentSrc = `package main
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+)
+
+func main() {
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		fmt.Println("{\"type\":\"answer\",\"content\":\"ok\",\"steps\":1,\"tools_used\":0}")
+	}
+}
+`
+
+// A path containing a space used to be re-split on whitespace, so the binary
+// could never be found.
+func TestSubprocessClient_BinaryPathWithSpaces(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "My Agents")
+	bin := buildAgentFrom(t, dir, "spaced_agent", echoAgentSrc)
+	if !strings.Contains(bin, " ") {
+		t.Fatalf("test setup: expected a space in %q", bin)
+	}
+
+	c := NewSubprocessClient(bin, nil, false)
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	ch, err := c.Send(ctx, "hello")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	var got []interface{}
+	for evt := range ch {
+		got = append(got, evt)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 event, got %d: %+v", len(got), got)
+	}
+	if _, ok := got[0].(event.AnswerEvent); !ok {
+		t.Fatalf("expected AnswerEvent, got %T", got[0])
+	}
+}
+
+const slowAgentSrc = `package main
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+	"time"
+)
+
+func main() {
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		fmt.Println("{\"type\":\"step\",\"step\":1,\"total\":2,\"status\":\"running\"}")
+		time.Sleep(30 * time.Second)
+		fmt.Println("{\"type\":\"answer\",\"content\":\"late\",\"steps\":1,\"tools_used\":0}")
+	}
+}
+`
+
+// Cancelling a turn must stop the child. Leaving it alive lets the tail of this
+// turn's output surface as the NEXT turn's events.
+func TestSubprocessClient_CancelKillsChild(t *testing.T) {
+	bin := buildAgentFrom(t, t.TempDir(), "slow_agent", slowAgentSrc)
+
+	c := NewSubprocessClient(bin, nil, false)
+	defer c.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ch, err := c.Send(ctx, "start")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if _, ok := <-ch; !ok {
+		t.Fatal("expected the first event before cancelling")
+	}
+
+	c.mu.Lock()
+	pid := c.proc.cmd.Process.Pid
+	c.mu.Unlock()
+
+	cancel()
+	for range ch { // drain
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c.mu.Lock()
+		started := c.started
+		c.mu.Unlock()
+		if !started {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("client still holds a started process 5s after cancellation")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if daemon.PIDAlive(pid) {
+		t.Errorf("child pid %d is still alive after cancellation", pid)
+	}
+}
+
+const garbageAgentSrc = `package main
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+)
+
+func main() {
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		fmt.Println("this is not json at all")
+		fmt.Println("{\"type\":\"brand_new_type\"}")
+		fmt.Println("{\"type\":\"answer\",\"content\":\"done\",\"steps\":1,\"tools_used\":0}")
+	}
+}
+`
+
+// An unreadable line must be surfaced, not silently dropped, and must not end
+// the turn.
+func TestSubprocessClient_UnparseableLineIsVisible(t *testing.T) {
+	bin := buildAgentFrom(t, t.TempDir(), "garbage_agent", garbageAgentSrc)
+
+	c := NewSubprocessClient(bin, nil, false)
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	ch, err := c.Send(ctx, "hello")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	var warnings int
+	var answered bool
+	for evt := range ch {
+		switch e := evt.(type) {
+		case event.StatusEvent:
+			if e.Status == "warning" {
+				warnings++
+			}
+		case event.AnswerEvent:
+			answered = true
+		}
+	}
+	if warnings != 2 {
+		t.Errorf("expected 2 warning status events (bad JSON + unknown type), got %d", warnings)
+	}
+	if !answered {
+		t.Error("the turn must still reach its answer after an unreadable line")
+	}
+}

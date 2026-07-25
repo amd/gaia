@@ -32,12 +32,19 @@ func RunHub(debug bool, mockAgent string) error {
 }
 
 // RunChat launches the chat TUI directly with a subprocess agent (standalone mode).
+//
+// subprocess is a command line, so it is split with quoting honoured — a binary
+// path containing a space must be quoted, not silently torn in two.
 func RunChat(subprocess string, query string, debug bool) error {
-	c := client.NewSubprocessClient(subprocess, debug)
+	argv, err := client.SplitCommandLine(subprocess)
+	if err != nil {
+		return fmt.Errorf("invalid --subprocess command: %w", err)
+	}
+
+	c := client.NewSubprocessClient(argv[0], argv[1:], debug)
 	defer c.Close()
 
-	agentName := extractAgentName(subprocess)
-	model := chat.NewChatModel(c, agentName, query, debug)
+	model := chat.NewChatModel(c, agentNameFromPath(argv[0]), query, debug)
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
@@ -46,12 +53,7 @@ func RunChat(subprocess string, query string, debug bool) error {
 	return nil
 }
 
-func extractAgentName(cmdLine string) string {
-	parts := strings.Fields(cmdLine)
-	if len(parts) == 0 {
-		return "agent"
-	}
-	name := filepath.Base(parts[0])
-	name = strings.TrimSuffix(name, ".exe")
-	return name
+func agentNameFromPath(path string) string {
+	name := filepath.Base(path)
+	return strings.TrimSuffix(name, ".exe")
 }
