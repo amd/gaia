@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -394,6 +396,20 @@ func checkInit(ctx context.Context, t Transport, cfg Config, rep *Report) State 
 		lemonade.Line = "not running at " + body.Lemonade.BaseURL
 		lemonade.Detail = "GAIA needs a local model server. It runs on your machine; no message text ever leaves it."
 		lemonade.Remedy = d.AsRemedy()
+		if !isLoopback(body.Lemonade.BaseURL) {
+			// The agent is pointed at another machine, so a launcher resolved
+			// against THIS one starts a server nothing will talk to.
+			lemonade.Detail = fmt.Sprintf(
+				"The %s agent is configured to use a model server on another machine (%s), "+
+					"so it has to be started there — starting one here would not be used.",
+				cfg.AgentName, body.Lemonade.BaseURL)
+			lemonade.Remedy = Remedy{
+				Action: "Start the model server on that machine, or point LEMONADE_BASE_URL at a " +
+					"reachable one, then press r to re-check.",
+				Command: "gaia init",
+				Where:   lemonadeDocs,
+			}
+		}
 		// The sidecar cannot install or launch Lemonade — that is a host
 		// prerequisite — so there is no honest one-key fix here.
 		lemonade.Fix = FixNone
@@ -409,11 +425,7 @@ func checkInit(ctx context.Context, t Transport, cfg Config, rep *Report) State 
 		lemonade.State = StateFailed
 		lemonade.Line = "running, but not answering properly"
 		lemonade.Detail = body.hint()
-		lemonade.Remedy = Remedy{
-			Action:  "Restart the local model server, then re-check.",
-			Command: "lemonade-server serve",
-			Where:   "https://amd-gaia.ai/docs/guides/install",
-		}
+		lemonade.Remedy = lemonadeRestartRemedy()
 		setRow(rep, lemonade)
 		return StateFailed
 
@@ -488,6 +500,27 @@ func checkInit(ctx context.Context, t Transport, cfg Config, rep *Report) State 
 func modelListUnreadable(body initBody) bool {
 	h := strings.ToLower(body.hint())
 	return strings.Contains(h, "model list") && strings.Contains(h, "could not be read")
+}
+
+// isLoopback reports whether a base URL names this machine. A blank or
+// unparseable URL is treated as local: that is what every default is, and
+// guessing "remote" would withhold the launcher the user does need.
+func isLoopback(baseURL string) bool {
+	if strings.TrimSpace(baseURL) == "" {
+		return true
+	}
+	u, err := url.Parse(baseURL)
+	if err != nil || u.Host == "" {
+		return true
+	}
+	host := u.Hostname()
+	if host == "localhost" || host == "" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 func versionOr(v *string, fallback string) string {

@@ -65,13 +65,17 @@ func TestOneShotReadinessRefusesAndNamesTheRemedy(t *testing.T) {
 	for _, want := range []string{
 		"Local AI",                            // which precondition
 		"not running at",                      // what is wrong with it
-		"run: lemonade-server serve",          // how to fix it
+		"run: ",                               // how to fix it
 		"Nothing was sent to the Email agent", // and that nothing half-ran
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("the refusal is missing %q:\n%s", want, errW.String())
 		}
 	}
+	// And the command it names has to exist on this machine. Asserting a literal
+	// here is what let `lemonade-server serve` — a command no modern install
+	// has — sit in the refusal as though it were actionable.
+	assertRefusalCommandRunnable(t, errW.String())
 	// No keystroke advice can be acted on from a script, so the refusal must at
 	// least end by telling the reader to re-run it.
 	if !strings.Contains(msg, "re-run") {
@@ -303,11 +307,12 @@ func TestRunQueryRefusesInSecondsWhenAPreconditionIsUnmet(t *testing.T) {
 	if stdout.String() != "" {
 		t.Errorf("stdout must stay empty so `> answer.txt` never captures a failure, got %q", stdout.String())
 	}
-	for _, want := range []string{"not ready", "Local AI", "lemonade-server serve"} {
+	for _, want := range []string{"not ready", "Local AI", "run: "} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Errorf("stderr is missing %q:\n%s", want, stderr.String())
 		}
 	}
+	assertRefusalCommandRunnable(t, stderr.String())
 	if strings.Contains(stdout.String(), altScreenEnter) || strings.Contains(stderr.String(), altScreenEnter) {
 		t.Error("the refusal opened the alt screen; a script has nobody to press a key")
 	}
@@ -394,4 +399,54 @@ func TestOneShotAgainstAStallingDaemonHitsTheDeadline(t *testing.T) {
 	case <-time.After(60 * time.Second):
 		t.Fatal("the one-shot hung against a stalling daemon — this is issue #2483")
 	}
+}
+
+// assertRefusalCommandRunnable checks every `run: <command>` the refusal printed
+// names a program that exists on this machine.
+//
+// The gate's Local AI remedy is resolved per machine (preflight/lemonade.go), so
+// there is no literal to compare against from out here — and a literal is what
+// went stale. `gaia` itself is exempt: it is this repo's own entry point and is
+// not required to be installed to run these tests.
+func assertRefusalCommandRunnable(t *testing.T, stderr string) {
+	t.Helper()
+	found := false
+	for _, line := range strings.Split(stderr, "\n") {
+		_, cmd, ok := strings.Cut(strings.TrimSpace(line), "run: ")
+		if !ok {
+			continue
+		}
+		found = true
+		program := commandProgram(cmd)
+		if program == "gaia" {
+			continue
+		}
+		if strings.ContainsRune(program, os.PathSeparator) {
+			if _, err := os.Stat(program); err != nil {
+				t.Errorf("the refusal names %q, which is not on this machine: %v", program, err)
+			}
+			continue
+		}
+		if _, err := exec.LookPath(program); err != nil {
+			t.Errorf("the refusal names %q, which is not on PATH: %v", program, err)
+		}
+	}
+	if !found {
+		t.Errorf("the refusal printed no command at all:\n%s", stderr)
+	}
+}
+
+// commandProgram is the program a command line invokes, honouring the quoting the
+// gate applies to a path containing a space.
+func commandProgram(cmd string) string {
+	cmd = strings.TrimSpace(cmd)
+	if after, ok := strings.CutPrefix(cmd, `"`); ok {
+		if end := strings.Index(after, `"`); end >= 0 {
+			return after[:end]
+		}
+	}
+	if i := strings.IndexAny(cmd, " \t"); i >= 0 {
+		return cmd[:i]
+	}
+	return cmd
 }

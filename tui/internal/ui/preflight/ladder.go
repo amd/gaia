@@ -30,6 +30,14 @@ func (d Diagnosis) AsRemedy() Remedy {
 	return Remedy{Action: d.Remedy, Command: d.Command, Where: d.Where}
 }
 
+// withRemedy is the inverse: a cause plus an already-built Remedy. It exists so
+// a remedy that has to be RESOLVED (the Lemonade start command, which depends on
+// what is installed) is built in one place and reused by both the ladder and the
+// rows, instead of each spelling out a command of its own.
+func withRemedy(cause string, r Remedy) Diagnosis {
+	return Diagnosis{Cause: cause, Remedy: r.Action, Command: r.Command, Where: r.Where}
+}
+
 // String is the one-line form, for logs and for chat's mid-run error line.
 func (d Diagnosis) String() string {
 	parts := []string{d.Cause}
@@ -276,12 +284,12 @@ func (l Ladder) Text(op, text string) Diagnosis {
 
 	switch {
 	case containsAny(body, "not reachable", "refused", "connection error", "connect:", "no such host"):
-		return Diagnosis{
-			Cause:   "The local model server (Lemonade) is not running.",
-			Remedy:  "Start it, then press r to re-check.",
-			Command: "lemonade-server serve",
-			Where:   "https://amd-gaia.ai/docs/guides/install",
-		}
+		// The command is resolved against this machine, not hardcoded: see
+		// lemonade.go. `lemonade-server serve` no longer exists on a modern
+		// install, and a remedy that errors leaves the user with no way forward.
+		return withRemedy(
+			"The local model server (Lemonade) is not running.",
+			lemonadeStartRemedy())
 	case containsAny(body, "older than the required", "min_version", "upgrade it"):
 		return Diagnosis{
 			Cause:   "The local model server is older than this agent requires.",
@@ -305,12 +313,13 @@ func (l Ladder) Text(op, text string) Diagnosis {
 			Where:   "https://amd-gaia.ai/docs/guides/install",
 		}
 	case containsAny(body, "timed out", "timeout", "deadline exceeded"):
-		return Diagnosis{
-			Cause:   "The local model server did not respond in time.",
-			Remedy:  "Check it is running on the port GAIA expects.",
-			Command: "lemonade-server serve",
-			Where:   daemonLog(),
-		}
+		// It answered the socket and then stalled, so this is a wedged server to
+		// restart — not one to start. Those are different commands under systemd.
+		d := withRemedy(
+			"The local model server did not respond in time.",
+			lemonadeRestartRemedy())
+		d.Where = daemonLog()
+		return d
 	}
 
 	// Fallback: something answered, but with nothing this ladder recognises.

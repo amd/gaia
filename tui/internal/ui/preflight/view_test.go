@@ -250,7 +250,12 @@ func TestKeysDriveTheRightActions(t *testing.T) {
 		m, _ := renderAt(t, f, 80, 24)
 		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
 		m = updated.(Model)
-		if !strings.Contains(ansi.Strip(m.View()), "lemonade-server serve") {
+		// Whatever this machine's start command is — the screen must name the one
+		// that exists here, never a fixed literal. Via the REMEDY, not the raw
+		// launcher: the launcher is "" on a machine with no Lemonade (every CI
+		// runner), and strings.Contains(_, "") is always true — an assertion that
+		// silently stops asserting is how the stale literal survived.
+		if !strings.Contains(ansi.Strip(m.View()), lemonadeStartRemedy().Command) {
 			t.Errorf("pressing f on an unfixable row said nothing useful:\n%s", m.View())
 		}
 	})

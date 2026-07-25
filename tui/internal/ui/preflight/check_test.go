@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -285,17 +287,32 @@ func (f *fakeTransport) called(method, path string) bool {
 // realCommands are the command prefixes that actually exist. A remedy that names
 // something outside this set sends the user somewhere that does not work, which
 // is worse than no remedy at all.
-var realCommands = []string{
-	"gaia daemon status",
-	"gaia daemon start",
-	"gaia daemon restart",
-	"gaia daemon start-agent ",
-	"gaia daemon agents",
-	"gaia hub install ",
-	"gaia init",
-	"lemonade-server serve",
-	"gaia connectors connect ",
-	"gaia connectors grants grant ",
+//
+// The `gaia` family is fixed. The local-model-server command is NOT: it depends
+// on what is installed on the machine the remedy will be typed into, so it is
+// taken from the same resolver the rows use. `lemonade-server serve` is
+// deliberately absent from the fixed list — it was hardcoded here, which is how a
+// command that exists on no modern install stayed asserted-as-real for so long.
+func realCommands() []string {
+	fixed := []string{
+		"gaia daemon status",
+		"gaia daemon start",
+		"gaia daemon restart",
+		"gaia daemon start-agent ",
+		"gaia daemon agents",
+		"gaia hub install ",
+		"gaia init",
+		"gaia connectors connect ",
+		"gaia connectors grants grant ",
+		"gaia connectors list",
+	}
+	l := resolveLemonade()
+	for _, cmd := range []string{l.Start, l.Restart} {
+		if cmd != "" {
+			fixed = append(fixed, cmd)
+		}
+	}
+	return fixed
 }
 
 func assertRealCommand(t *testing.T, row Row) {
@@ -304,7 +321,7 @@ func assertRealCommand(t *testing.T, row Row) {
 	if cmd == "" {
 		t.Fatalf("row %q failed with no command to run: %+v", row.Key, row.Remedy)
 	}
-	for _, prefix := range realCommands {
+	for _, prefix := range realCommands() {
 		if strings.HasPrefix(cmd, prefix) {
 			if strings.Contains(cmd, "<") {
 				t.Fatalf("row %q remedy still has a placeholder: %q", row.Key, cmd)
@@ -312,7 +329,48 @@ func assertRealCommand(t *testing.T, row Row) {
 			return
 		}
 	}
-	t.Fatalf("row %q remedy names a command that does not exist: %q", row.Key, cmd)
+	t.Fatalf("row %q remedy names a command that does not exist on this machine: %q",
+		row.Key, cmd)
+}
+
+// assertRunnable is the stronger check the Lemonade remedies need: not "it is on
+// a list we maintain" but "its program is on THIS host". A list can go stale
+// silently; a resolved binary cannot.
+func assertRunnable(t *testing.T, cmd string) {
+	t.Helper()
+	if cmd == "" {
+		t.Fatal("no command to run")
+	}
+	program := firstWord(cmd)
+	if program == "gaia" {
+		// The gaia CLI is this repo's own entry point and is not required to be
+		// installed to run these tests.
+		return
+	}
+	if strings.HasPrefix(program, "/") || strings.Contains(program, string(os.PathSeparator)) {
+		if _, err := os.Stat(program); err != nil {
+			t.Errorf("remedy names %q, which is not on this machine: %v", program, err)
+		}
+		return
+	}
+	if _, err := exec.LookPath(program); err != nil {
+		t.Errorf("remedy names %q, which is not on PATH: %v", program, err)
+	}
+}
+
+// firstWord is the program a command line invokes, honouring the quoting
+// quoteCommand applies to a path with a space in it.
+func firstWord(cmd string) string {
+	cmd = strings.TrimSpace(cmd)
+	if strings.HasPrefix(cmd, `"`) {
+		if end := strings.Index(cmd[1:], `"`); end >= 0 {
+			return cmd[1 : end+1]
+		}
+	}
+	if i := strings.IndexAny(cmd, " \t"); i >= 0 {
+		return cmd[:i]
+	}
+	return cmd
 }
 
 func TestCheck(t *testing.T) {
@@ -405,7 +463,9 @@ func TestCheck(t *testing.T) {
 				KeyModel: StatePending, KeyMailbox: StatePending,
 			},
 			wantBlocker: KeyLemonade,
-			wantIn:      []string{"lemonade-server serve", "not running"},
+			// The command is whatever THIS machine can actually run; only the
+			// diagnosis half is a fixed string.
+			wantIn: []string{"not running"},
 			// The sidecar cannot install or launch Lemonade; pretending otherwise
 			// would be a key that does nothing.
 			wantFix:     FixNone,
@@ -615,7 +675,7 @@ func TestCheck(t *testing.T) {
 				KeyLemonade: StateFailed, KeyModel: StatePending,
 			},
 			wantBlocker: KeyLemonade,
-			wantIn:      []string{"model list", "lemonade-server serve"},
+			wantIn:      []string{"model list"},
 			wantFix:     FixNone,
 		},
 		{
@@ -795,12 +855,15 @@ func TestProvisionOutcomeComesFromTheFinalLine(t *testing.T) {
 			wantCmd: "gaia init",
 		},
 		{
-			name:    "refused before streaming",
-			status:  503,
-			body:    "✗ Local Lemonade Server is not reachable at http://localhost:8000/api/v1.\n",
-			wantOK:  false,
-			wantIn:  "not reachable",
-			wantCmd: "lemonade-server serve",
+			name:   "refused before streaming",
+			status: 503,
+			body:   "✗ Local Lemonade Server is not reachable at http://localhost:8000/api/v1.\n",
+			wantOK: false,
+			wantIn: "not reachable",
+			// Resolved per machine, and taken from the REMEDY rather than the raw
+			// launcher: the launcher is empty where nothing is installed, and an
+			// empty wantCmd is skipped by the table — a silently-disabled assertion.
+			wantCmd: lemonadeStartRemedy().Command,
 		},
 		{
 			name:    "ends saying nothing",
