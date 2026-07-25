@@ -2905,6 +2905,15 @@ Examples:
         default=None,
         help="Version to install (default: the hub's latest)",
     )
+    hub_install_parser.add_argument(
+        "--trust",
+        action="store_true",
+        dest="trusted",
+        help=(
+            "Explicitly trust a non-verified agent (it runs third-party code on "
+            "your machine). Required for any community/experimental package."
+        ),
+    )
     hub_uninstall_parser = hub_subparsers.add_parser(
         "uninstall", help="Uninstall an agent (stops its sidecar first)"
     )
@@ -7666,8 +7675,21 @@ def _handle_hub_install(args):
         "POST",
         f"/daemon/v1/agents/{agent_id}/install",
         timeout=(5.0, 60.0),
-        json_body={"version": getattr(args, "version", None)},
+        json_body={
+            "version": getattr(args, "version", None),
+            "trusted": bool(getattr(args, "trusted", False)),
+        },
     )
+    if r.status_code == 403:
+        # Non-verified agent, no opt-in. Name the flag; never retry with
+        # trusted=true on the user's behalf.
+        print(f"❌ {_daemon_http_detail(r)}", file=sys.stderr)
+        print(
+            f"   Re-run with --trust if you trust the publisher: "
+            f"gaia hub install {agent_id} --trust",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     if r.status_code != 202:
         print(
             f"❌ the daemon refused to install '{agent_id}': {_daemon_http_detail(r)}"

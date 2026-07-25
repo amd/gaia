@@ -39,6 +39,7 @@ from gaia.daemon.constants import API_PREFIX
 from gaia.daemon.sidecars import install as install_svc
 from gaia.daemon.sidecars.errors import (
     AgentNotInstalledError,
+    AgentTrustRequiredError,
     CapacityError,
     HealthTimeoutError,
     HubUnavailableError,
@@ -70,16 +71,24 @@ def build_agents_router(token: str, registry):
             return None
         return body.get("mode")
 
-    async def _body_version(request: Request) -> Optional[str]:
-        """``version`` from an optional JSON body ({"version": "0.5.0"|null})."""
+    async def _install_body(request: Request) -> "tuple[Optional[str], bool]":
+        """``(version, trusted)`` from an optional JSON install body.
+
+        ``trusted`` MUST default to False: it is the user's explicit opt-in to
+        run a non-verified agent's third-party code, so a body that omits it
+        (or is absent entirely) is a refusal, never an approval.
+        """
         try:
             body = await request.json()
         except ValueError:
-            return None
+            return None, False
         if not isinstance(body, dict):
-            return None
+            return None, False
         version = body.get("version")
-        return str(version) if version is not None else None
+        return (
+            str(version) if version is not None else None,
+            body.get("trusted") is True,
+        )
 
     @router.get(f"{API_PREFIX}/agents")
     def list_agents() -> dict:
@@ -147,21 +156,32 @@ def build_agents_router(token: str, registry):
     async def install(agent_id: str, request: Request) -> dict:
         """Queue an install of *agent_id*; poll ``install-status`` for progress.
 
-        Body: ``{"version": "0.5.0"}`` (optional — defaults to the hub's latest).
-        Returns 202 ``{"agent_id", "status": "queued", "version"}``. A running
-        sidecar is stopped first and a pid that survives aborts with 500 — the
-        install dir is that sidecar's own binary cache.
+        Body (all optional): ``{"version": "0.5.0", "trusted": true}`` —
+        ``version`` defaults to the hub's latest, ``trusted`` defaults to
+        **false**. Returns 202 ``{"agent_id", "status": "queued", "version"}``.
+
+        A non-verified agent (anything outside the ``verified`` security tier,
+        which includes ``email``) is refused with **403** until the caller
+        passes ``trusted: true`` — that is the user's explicit acknowledgement
+        that installing runs third-party code on their machine. Render it as a
+        "Trust & Install" prompt and retry; there is no bypass.
+
+        A running sidecar is stopped first and a pid that survives aborts with
+        500 — the install dir is that sidecar's own binary cache.
         """
-        version = await _body_version(request)
+        version, trusted = await _install_body(request)
         try:
             return await run_in_threadpool(
                 install_svc.start_install,
                 agent_id,
                 registry=registry,
                 version=version,
+                trusted=trusted,
             )
         except UnknownAgentError as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
+        except AgentTrustRequiredError as e:
+            raise HTTPException(status_code=403, detail=str(e)) from e
         except UnsupervisedAgentError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         except InstallBusyError as e:

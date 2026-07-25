@@ -192,6 +192,17 @@ def _auth(token="secret-tok"):
     return {"Authorization": f"Bearer {token}"}
 
 
+def _post_install(client, agent_id="email", *, trusted=True, **body):
+    """POST an install. Defaults to trusted=True because the fixture agent is
+    in the ``experimental`` tier, like the real email agent — the refusal path
+    is asserted explicitly in its own tests."""
+    return client.post(
+        f"/daemon/v1/agents/{agent_id}/install",
+        headers=_auth(),
+        json={"trusted": trusted, **body},
+    )
+
+
 def _patch_hub(monkeypatch, fetcher):
     """Route every hub read in the install service through *fetcher*."""
     real_start = install_svc.start_install
@@ -394,7 +405,7 @@ def test_install_queues_and_reaches_completed(monkeypatch, install_root):
     _patch_hub(monkeypatch, fetcher)
     client = _client(_FakeRegistry())
 
-    r = client.post("/daemon/v1/agents/email/install", headers=_auth(), json={})
+    r = _post_install(client)
     assert r.status_code == 202
     assert r.json()["agent_id"] == "email"
     assert r.json()["status"] == "queued"
@@ -432,7 +443,7 @@ def test_install_stops_a_running_sidecar_before_touching_the_dir(
     registry = _FakeRegistry()
     client = _client(registry)
 
-    client.post("/daemon/v1/agents/email/install", headers=_auth(), json={})
+    _post_install(client)
     # Once synchronously (so a survivor is a 500 on the request) and once around
     # the worker's mutation (so a mid-download ensure cannot respawn it).
     assert registry.stop_calls == ["email", "email"]
@@ -447,7 +458,7 @@ def test_install_aborts_when_the_sidecar_pid_survives(monkeypatch, install_root)
     registry = _FakeRegistry(stop_error=StopFailedError("pid 4242 survived"))
     client = _client(registry)
 
-    r = client.post("/daemon/v1/agents/email/install", headers=_auth(), json={})
+    r = _post_install(client)
     assert r.status_code == 500
     assert "4242" in r.json()["detail"]
     # Nothing downloaded, nothing written: the artifact was never requested.
@@ -488,7 +499,7 @@ def test_worker_failure_always_reaches_a_terminal_status(monkeypatch, install_ro
         )
 
     monkeypatch.setattr("gaia.hub.installer.install", _slot_taken)
-    client.post("/daemon/v1/agents/email/install", headers=_auth(), json={})
+    _post_install(client)
 
     status = client.get(
         "/daemon/v1/agents/email/install-status", headers=_auth()
@@ -533,7 +544,7 @@ def test_mutation_refuses_while_a_forgotten_process_runs_from_the_dir(
         assert str(proc.pid) in r.json()["detail"]
         assert (install_root / "email" / ".installed").exists()
 
-        r = client.post("/daemon/v1/agents/email/install", headers=_auth(), json={})
+        r = _post_install(client)
         assert r.status_code == 500
         assert not any(ARTIFACT_NAME in c for c in fetcher.calls)
     finally:
@@ -552,7 +563,7 @@ def test_install_sha_mismatch_is_a_hard_failure_leaving_nothing_installed(
     _patch_hub(monkeypatch, fetcher)
     client = _client(_FakeRegistry())
 
-    r = client.post("/daemon/v1/agents/email/install", headers=_auth(), json={})
+    r = _post_install(client)
     assert r.status_code == 202
 
     status = client.get(
@@ -563,6 +574,64 @@ def test_install_sha_mismatch_is_a_hard_failure_leaving_nothing_installed(
     # No "use it anyway": no sentinel, no binary.
     assert not (install_root / "email" / ".installed").exists()
     assert not (install_root / "email" / "email-agent").exists()
+
+
+def test_install_without_trust_is_refused_with_403_naming_the_flag(
+    monkeypatch, install_root
+):
+    """A non-verified agent runs third-party code, so the refusal is the
+    DEFAULT: an omitted body, an empty body and an explicit false all 403, and
+    nothing is downloaded or written."""
+    fetcher = _RecordingFetcher(_hub_files())
+    _patch_hub(monkeypatch, fetcher)
+    client = _client(_FakeRegistry())
+
+    bodies = [None, {}, {"trusted": False}, {"trusted": "yes"}, {"version": "0.5.0"}]
+    for body in bodies:
+        r = client.post("/daemon/v1/agents/email/install", headers=_auth(), json=body)
+        assert r.status_code == 403, f"body {body!r} must not authorize an install"
+        detail = r.json()["detail"]
+        assert "experimental" in detail
+        assert "--trust" in detail  # names the remedy
+
+    # The gate runs before any download and leaves nothing behind.
+    assert not any(ARTIFACT_NAME in c for c in fetcher.calls)
+    assert not (install_root / "email").exists()
+    assert install_svc.install_status("email") is None
+    assert install_svc._QUEUED == set()
+
+    # ...and the same request WITH the opt-in completes.
+    assert _post_install(client).status_code == 202
+    assert (install_root / "email" / ".installed").exists()
+
+
+def test_verified_tier_agent_installs_without_a_trust_flag(monkeypatch, install_root):
+    """The gate is tier-based, not blanket: a verified agent needs no opt-in."""
+    files = _hub_files()
+    manifest = _manifest()
+    manifest["security_tier"] = "verified"
+    files["/agents/email/manifest.json"] = json.dumps(manifest).encode()
+    _patch_hub(monkeypatch, _RecordingFetcher(files))
+    client = _client(_FakeRegistry())
+
+    r = client.post("/daemon/v1/agents/email/install", headers=_auth(), json={})
+    assert r.status_code == 202
+    status = client.get(
+        "/daemon/v1/agents/email/install-status", headers=_auth()
+    ).json()
+    assert status["status"] == "completed"
+
+
+def test_id_checks_run_before_the_trust_check(monkeypatch):
+    """An unknown or reserved id must not be answered with a trust prompt —
+    a client would render 'Trust & Install' for an agent that cannot exist."""
+    fetcher = _RecordingFetcher(_hub_files())
+    _patch_hub(monkeypatch, fetcher)
+    client = _client(_FakeRegistry(agent_ids=("email", "builder")))
+
+    assert _post_install(client, "nope", trusted=False).status_code == 404
+    assert _post_install(client, "builder", trusted=False).status_code == 400
+    assert fetcher.calls == []  # neither reached the hub
 
 
 def test_install_unknown_agent_is_404_listing_installable_ids(monkeypatch):
@@ -596,7 +665,7 @@ def test_install_hub_manifest_failure_is_502(monkeypatch):
     _patch_hub(monkeypatch, fetcher)
     client = _client(_FakeRegistry())
 
-    r = client.post("/daemon/v1/agents/email/install", headers=_auth(), json={})
+    r = _post_install(client)
     assert r.status_code == 502
     assert "manifest" in r.json()["detail"].lower()
 
@@ -631,11 +700,11 @@ def test_concurrent_installs_of_the_same_id_serialize(monkeypatch, install_root)
         lambda work: threading.Thread(target=work, daemon=True).start(),
     )
 
-    first = client.post("/daemon/v1/agents/email/install", headers=_auth(), json={})
+    first = _post_install(client)
     assert first.status_code == 202
     assert started.wait(5), "install worker never started"
 
-    second = client.post("/daemon/v1/agents/email/install", headers=_auth(), json={})
+    second = _post_install(client)
     assert second.status_code == 409
     assert "in progress" in second.json()["detail"]
 
@@ -679,7 +748,7 @@ def test_install_arriving_during_an_uninstall_is_refused(monkeypatch, install_ro
     t.start()
     assert in_uninstall.wait(5), "uninstall never started"
 
-    r = client.post("/daemon/v1/agents/email/install", headers=_auth(), json={})
+    r = _post_install(client)
     assert r.status_code == 409
     assert "in progress" in r.json()["detail"]
     # Nothing was downloaded into the directory being removed.
@@ -702,13 +771,13 @@ def test_a_runner_that_cannot_start_releases_the_slot(monkeypatch, install_root)
     monkeypatch.setattr(install_svc, "_spawn_thread", _cannot_spawn)
     client = _client(_FakeRegistry())
 
-    first = client.post("/daemon/v1/agents/email/install", headers=_auth(), json={})
+    first = _post_install(client)
     assert first.status_code == 500
     assert install_svc._QUEUED == set()
 
     # A retry is accepted rather than wedged behind a phantom install.
     monkeypatch.setattr(install_svc, "_spawn_thread", lambda work: work())
-    retry = client.post("/daemon/v1/agents/email/install", headers=_auth(), json={})
+    retry = _post_install(client)
     assert retry.status_code == 202
     assert (install_root / "email" / ".installed").exists()
 
@@ -878,13 +947,17 @@ def test_install_honours_an_explicit_version(monkeypatch, install_root):
     client = _client(_FakeRegistry())
 
     r = client.post(
-        "/daemon/v1/agents/email/install", headers=_auth(), json={"version": "0.5.0"}
+        "/daemon/v1/agents/email/install",
+        headers=_auth(),
+        json={"version": "0.5.0", "trusted": True},
     )
     assert r.status_code == 202
     assert r.json()["version"] == "0.5.0"
 
     r = client.post(
-        "/daemon/v1/agents/email/install", headers=_auth(), json={"version": "9.9.9"}
+        "/daemon/v1/agents/email/install",
+        headers=_auth(),
+        json={"version": "9.9.9", "trusted": True},
     )
     status = client.get(
         "/daemon/v1/agents/email/install-status", headers=_auth()
@@ -976,7 +1049,7 @@ def test_installed_layout_is_what_the_sidecar_fetch_accepts(monkeypatch, install
     fetcher = _RecordingFetcher(_hub_files())
     _patch_hub(monkeypatch, fetcher)
     client = _client(_FakeRegistry())
-    client.post("/daemon/v1/agents/email/install", headers=_auth(), json={})
+    _post_install(client)
 
     result = fetchmod.fetch_binary(
         out_dir=install_root / "email",
@@ -1039,9 +1112,7 @@ def test_no_route_response_contains_a_token(monkeypatch, install_root, caplog):
     with caplog.at_level(logging.DEBUG):
         bodies = [
             client.get("/daemon/v1/catalog", headers=_auth()).text,
-            client.post(
-                "/daemon/v1/agents/email/install", headers=_auth(), json={}
-            ).text,
+            _post_install(client).text,
             client.get("/daemon/v1/agents/email/install-status", headers=_auth()).text,
             client.delete("/daemon/v1/agents/email", headers=_auth()).text,
         ]
@@ -1089,11 +1160,19 @@ def _canned_cli(monkeypatch, responses):
     """Drive the CLI handlers against a scripted sequence of daemon responses."""
     from gaia import cli as cli_mod
 
-    calls: list = []
+    class _Calls(list):
+        """(method, path) tuples, with the request bodies alongside."""
+
+        bodies: list = []
+
+    calls = _Calls()
+    bodies: list = []
+    calls.bodies = bodies
     seq = list(responses)
 
     def _request(inst, method, path, **kwargs):
         calls.append((method, path))
+        bodies.append(kwargs.get("json_body"))
         return seq.pop(0)
 
     monkeypatch.setattr(cli_mod, "_hub_daemon", lambda: object())
@@ -1129,6 +1208,39 @@ def test_cli_install_polls_until_completed(monkeypatch, capsys):
     assert "installed" in out and "0.5.0" in out
     assert calls[0] == ("POST", "/daemon/v1/agents/email/install")
     assert calls[1] == ("GET", "/daemon/v1/agents/email/install-status")
+
+
+def test_cli_sends_trusted_only_when_the_flag_is_given(monkeypatch, capsys):
+    """`--trust` is the user's opt-in: the CLI must never send true without it."""
+    import argparse
+
+    cli_mod, calls = _canned_cli(
+        monkeypatch,
+        [
+            _CannedResp(202, {"agent_id": "email", "status": "queued"}),
+            _CannedResp(
+                200, {"status": "completed", "phase": "completed", "version": "0.5.0"}
+            ),
+        ],
+    )
+    cli_mod._handle_hub_install(
+        argparse.Namespace(agent_id="email", version=None, trusted=True)
+    )
+    assert calls.bodies[0] == {"version": None, "trusted": True}
+
+    cli_mod, calls = _canned_cli(
+        monkeypatch,
+        [_CannedResp(403, {"detail": "'email' is a non-verified agent ... --trust"})],
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli_mod._handle_hub_install(
+            argparse.Namespace(agent_id="email", version=None, trusted=False)
+        )
+    assert exc.value.code == 1
+    assert calls.bodies[0] == {"version": None, "trusted": False}
+    err = capsys.readouterr().err
+    assert "non-verified" in err
+    assert "gaia hub install email --trust" in err  # names the exact remedy
 
 
 def test_cli_install_failure_exits_1_with_the_reason(monkeypatch, capsys):

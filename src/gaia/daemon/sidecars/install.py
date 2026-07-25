@@ -43,6 +43,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from gaia.daemon.sidecars.errors import (
     AgentNotInstalledError,
+    AgentTrustRequiredError,
     HubUnavailableError,
     InstallBusyError,
     InstallFailedError,
@@ -371,6 +372,7 @@ def start_install(
     *,
     registry,
     version: Optional[str] = None,
+    trusted: bool = False,
     base_url: Optional[str] = None,
     fetcher=None,
     install_root: Optional[Path] = None,
@@ -378,14 +380,21 @@ def start_install(
 ) -> Dict[str, Any]:
     """Queue an install of *agent_id* and return immediately (202 semantics).
 
-    The manifest is resolved SYNCHRONOUSLY so an unreachable hub or a malformed
-    manifest is an actionable error on the request itself instead of a silent
-    background failure. Progress (and any terminal error) is then polled via
-    :func:`install_status`.
+    The manifest is resolved SYNCHRONOUSLY so an unreachable hub, a malformed
+    manifest, or a missing trust opt-in is an actionable error on the request
+    itself instead of a silent background failure. Progress (and any terminal
+    error) is then polled via :func:`install_status`.
+
+    *trusted* is the caller's explicit opt-in to install a non-verified agent
+    (``gaia hub install --trust`` / a UI "Trust & Install" confirmation). It
+    defaults to False and is never inferred: a non-verified package runs
+    third-party code on the user's machine, so the refusal has to be the
+    default. ``email`` is in the ``experimental`` tier, so it needs it.
 
     Raises:
         UnsupervisedAgentError: reserved built-in id.
         UnknownAgentError: no sidecar spec — the daemon could not run it.
+        AgentTrustRequiredError: non-verified agent without ``trusted=True``.
         InstallBusyError: an install for this id is already running.
         HubUnavailableError: the hub manifest could not be fetched.
         StopFailedError: a running sidecar survived the pre-install stop.
@@ -412,6 +421,15 @@ def start_install(
             "malformed — report it against the hub."
         ) from exc
 
+    # Enforced here for a synchronous, distinct 403 (the client can then prompt
+    # and retry); installer.install re-checks it as defense in depth.
+    try:
+        installer_mod.ensure_trust_ack(agent_id, manifest, trusted=trusted)
+    except installer_mod.TrustRequiredError as exc:
+        raise AgentTrustRequiredError(
+            f"{exc} From the CLI: `gaia hub install {agent_id} --trust`."
+        ) from exc
+
     _claim_slot(agent_id)
     try:
         # Stop the sidecar up front so a survivor is a SYNCHRONOUS error the
@@ -428,6 +446,7 @@ def start_install(
                 agent_id,
                 registry=registry,
                 version=version,
+                trusted=trusted,
                 manifest=manifest,
                 base_url=base_url,
                 fetcher=fetcher,
@@ -448,6 +467,7 @@ def _run_install(
     *,
     registry,
     version: Optional[str],
+    trusted: bool,
     manifest: Dict[str, Any],
     base_url: Optional[str],
     fetcher,
@@ -462,6 +482,7 @@ def _run_install(
             result = installer_mod.install(
                 agent_id,
                 version=version,
+                trusted=trusted,
                 manifest=manifest,
                 base_url=base_url,
                 fetcher=fetcher,

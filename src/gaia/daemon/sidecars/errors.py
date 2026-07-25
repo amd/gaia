@@ -97,6 +97,17 @@ class InstallBusyError(SidecarError):
     """An install for this agent id is already running (one install per id)."""
 
 
+class AgentTrustRequiredError(SidecarError):
+    """A non-verified agent needs an explicit trust opt-in to install.
+
+    The daemon-side mirror of :class:`gaia.hub.installer.TrustRequiredError`,
+    so the route layer maps it to 403 without importing ``gaia.hub``. 403 is a
+    distinct, actionable status: a client renders a "Trust & Install" prompt
+    and retries with ``trusted: true``. There is no bypass — the gate exists
+    because installing runs third-party code on the user's machine.
+    """
+
+
 class AgentNotInstalledError(SidecarError):
     """The agent has no ``.installed`` sentinel — there is nothing to remove."""
 
