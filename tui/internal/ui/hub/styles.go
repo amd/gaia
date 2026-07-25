@@ -55,10 +55,10 @@ var (
 				Foreground(lipgloss.Color("252"))
 
 	// Status dots — green for active, amber for idle, dim for installed
-	activeDot     = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("●")
-	idleDot       = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("●")
-	installedDot  = lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("●")
-	availableDot  = lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("○")
+	activeDot    = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("●")
+	idleDot      = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("●")
+	installedDot = lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("●")
+	availableDot = lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("○")
 	comingSoonDot = lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("◌")
 
 	voteStyle = lipgloss.NewStyle().
