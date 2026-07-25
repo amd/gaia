@@ -95,7 +95,7 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 #: proxied — it would hand the bearer token and the screen text to the proxy.
 NO_PROXY: Dict[str, Any] = {"http": None, "https": None}
 
-MCP_DEFAULT_PORT = 8767  # 8765/8766 belong to agent_ui_mcp
+MCP_DEFAULT_PORT = 8767  # 8765 is agent_ui_mcp, 8766 is the MCP bridge (cli.py)
 MCP_DEFAULT_HOST = "localhost"
 
 
