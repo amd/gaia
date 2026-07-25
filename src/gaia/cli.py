@@ -2875,6 +2875,42 @@ Examples:
     )
     daemon_parser.set_defaults(action="daemon")
 
+    # Agent Hub command (install/uninstall agents through the daemon)
+    hub_parser = subparsers.add_parser(
+        "hub",
+        help="Browse, install and uninstall agents from the GAIA Agent Hub",
+    )
+    hub_subparsers = hub_parser.add_subparsers(
+        dest="hub_action", help="Hub action to perform"
+    )
+    hub_list_parser = hub_subparsers.add_parser(
+        "list", help="List Agent Hub agents and which of them are installed"
+    )
+    hub_list_parser.add_argument(
+        "--installed",
+        action="store_true",
+        help="Show only agents installed on this machine (works offline)",
+    )
+    hub_list_parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Bypass the 5-minute catalog cache and re-fetch from the hub",
+    )
+    hub_install_parser = hub_subparsers.add_parser(
+        "install", help="Install an agent from the Agent Hub"
+    )
+    hub_install_parser.add_argument("agent_id", help="Agent to install (e.g. email)")
+    hub_install_parser.add_argument(
+        "--version",
+        default=None,
+        help="Version to install (default: the hub's latest)",
+    )
+    hub_uninstall_parser = hub_subparsers.add_parser(
+        "uninstall", help="Uninstall an agent (stops its sidecar first)"
+    )
+    hub_uninstall_parser.add_argument("agent_id", help="Agent to uninstall")
+    hub_parser.set_defaults(action="hub")
+
     # Cache command (for Context7 cache management)
     cache_parser = subparsers.add_parser(
         "cache", help="Manage Context7 API cache and rate limiting"
@@ -4661,6 +4697,10 @@ Let me know your answer!
 
     if args.action == "daemon":
         handle_daemon_command(args)
+        return
+
+    if args.action == "hub":
+        handle_hub_command(args)
         return
 
     # Handle Config command
@@ -7493,6 +7533,202 @@ def _handle_daemon_logs(args):
         tail = f.readlines()[-lines:]
     for line in tail:
         print(line, end="")
+
+
+# ---------------------------------------------------------------------------
+# Agent Hub (`gaia hub list|install|uninstall`)
+#
+# Thin client over the daemon's /daemon/v1/catalog + install routes, so the
+# CLI, the TUI and the Agent UI share one installer, one integrity check and
+# one install lock. NEVER prints tokens: none of these routes return one, and
+# these renderers only touch the fields named below.
+# ---------------------------------------------------------------------------
+
+# Install can download tens of MB and unpack it; poll patiently, but bounded.
+_HUB_INSTALL_TIMEOUT = 900.0
+
+
+def handle_hub_command(args):
+    """Handle `gaia hub list|install|uninstall`."""
+    action = getattr(args, "hub_action", None)
+    if action is None:
+        print(
+            "❌ No hub action specified. Use 'gaia hub --help' to see available "
+            "actions (list, install, uninstall)."
+        )
+        sys.exit(1)
+    _check_daemon_deps()
+    if action == "list":
+        _handle_hub_list(args)
+    elif action == "install":
+        _handle_hub_install(args)
+    elif action == "uninstall":
+        _handle_hub_uninstall(args)
+    else:
+        print(f"❌ Unknown hub action: {action}")
+        sys.exit(1)
+
+
+def _hub_daemon():
+    """Start-or-attach the daemon; exit(1) with its own message on failure."""
+    from gaia.daemon import client
+    from gaia.daemon.errors import DaemonError
+
+    try:
+        return client.start_or_attach()
+    except DaemonError as e:
+        print(f"❌ {e}")
+        sys.exit(1)
+
+
+def _hub_request(inst, method: str, path: str, *, timeout, json_body=None):
+    """Call one daemon hub route. Exits(1) on transport failure."""
+    import requests
+
+    try:
+        return requests.request(
+            method,
+            f"{inst.base_url}{path}",
+            headers={"Authorization": f"Bearer {inst.token}"},
+            json=json_body,
+            timeout=timeout,
+        )
+    except requests.exceptions.RequestException as e:
+        print(f"❌ could not reach the daemon at {inst.base_url}: {e}")
+        sys.exit(1)
+
+
+def _fmt_size(num_bytes) -> str:
+    try:
+        size = float(num_bytes or 0)
+    except (TypeError, ValueError):
+        return "-"
+    if size <= 0:
+        return "-"
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.0f}{unit}" if unit == "B" else f"{size:.1f}{unit}"
+        size /= 1024
+    return "-"
+
+
+def _handle_hub_list(args):
+    inst = _hub_daemon()
+    # --installed is a purely local question: ask for it that way so it also
+    # answers with no network (the daemon reads the .installed sentinels).
+    query = []
+    if getattr(args, "installed", False):
+        query.append("installed_only=true")
+    if getattr(args, "refresh", False):
+        query.append("refresh=true")
+    path = "/daemon/v1/catalog" + (f"?{'&'.join(query)}" if query else "")
+    r = _hub_request(inst, "GET", path, timeout=(5.0, 30.0))
+    if r.status_code != 200:
+        print(f"❌ the daemon could not load the catalog: {_daemon_http_detail(r)}")
+        sys.exit(1)
+    body = r.json()
+    agents = body.get("agents", [])
+    if body.get("offline"):
+        print("⚠️  hub unreachable — showing the cached catalog")
+    if not agents:
+        print(
+            "No agents installed."
+            if getattr(args, "installed", False)
+            else "The Agent Hub catalog is empty."
+        )
+        return
+    print(f"{'AGENT':<14} {'LATEST':<10} {'INSTALLED':<12} {'SIZE':<8} NAME")
+    for a in agents:
+        if a.get("update_available"):
+            state = f"{a.get('installed_version')} ↑"
+        elif a.get("installed"):
+            state = str(a.get("installed_version") or "yes")
+        else:
+            state = "-"
+        print(
+            f"{str(a.get('id')):<14} {str(a.get('latest_version') or '-'):<10} "
+            f"{state:<12} {_fmt_size(a.get('download_size_bytes')):<8} "
+            f"{a.get('name') or ''}"
+        )
+    hidden = body.get("unsupervised_filtered") or []
+    if hidden:
+        print(
+            f"\n{len(hidden)} hub agent(s) hidden — this GAIA build cannot run "
+            f"them yet: {', '.join(hidden)}"
+        )
+
+
+def _handle_hub_install(args):
+    inst = _hub_daemon()
+    agent_id = args.agent_id
+    r = _hub_request(
+        inst,
+        "POST",
+        f"/daemon/v1/agents/{agent_id}/install",
+        timeout=(5.0, 60.0),
+        json_body={"version": getattr(args, "version", None)},
+    )
+    if r.status_code != 202:
+        print(
+            f"❌ the daemon refused to install '{agent_id}': {_daemon_http_detail(r)}"
+        )
+        sys.exit(1)
+    print(f"⏳ installing '{agent_id}'...")
+
+    last_phase = None
+    deadline = time.monotonic() + _HUB_INSTALL_TIMEOUT
+    while time.monotonic() < deadline:
+        time.sleep(1.0)
+        s = _hub_request(
+            inst,
+            "GET",
+            f"/daemon/v1/agents/{agent_id}/install-status",
+            timeout=(5.0, 15.0),
+        )
+        if s.status_code == 404:
+            # The record was queued moments ago: it can only vanish if the
+            # daemon restarted or something else mutated this agent.
+            print(
+                f"❌ the install record for '{agent_id}' disappeared mid-install. "
+                f"The daemon may have restarted, or the agent was uninstalled "
+                f"concurrently. Check `gaia hub list` and `gaia daemon logs`."
+            )
+            sys.exit(1)
+        if s.status_code != 200:
+            print(f"❌ could not read install status: {_daemon_http_detail(s)}")
+            sys.exit(1)
+        state = s.json()
+        phase = state.get("phase")
+        if phase != last_phase:
+            print(f"   {phase} ({state.get('percent', 0)}%)")
+            last_phase = phase
+        if state.get("status") == "completed":
+            print(
+                f"✅ '{agent_id}' {state.get('version')} installed. "
+                f"Start it with `gaia daemon start-agent {agent_id}`."
+            )
+            return
+        if state.get("status") == "failed":
+            print(f"❌ install of '{agent_id}' failed: {state.get('error')}")
+            sys.exit(1)
+    print(
+        f"❌ install of '{agent_id}' did not finish within "
+        f"{int(_HUB_INSTALL_TIMEOUT)}s. It may still be running — check "
+        f"`gaia hub list` and `gaia daemon logs`."
+    )
+    sys.exit(1)
+
+
+def _handle_hub_uninstall(args):
+    inst = _hub_daemon()
+    agent_id = args.agent_id
+    r = _hub_request(
+        inst, "DELETE", f"/daemon/v1/agents/{agent_id}", timeout=(5.0, 120.0)
+    )
+    if r.status_code != 200:
+        print(f"❌ could not uninstall '{agent_id}': {_daemon_http_detail(r)}")
+        sys.exit(1)
+    print(f"✅ '{agent_id}' uninstalled (sidecar stopped, install directory removed)")
 
 
 def handle_mcp_command(args):

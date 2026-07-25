@@ -107,6 +107,20 @@ dropped rather than surfaced.
 
 ### Phase 2 — Install / run / uninstall
 
+> **Status: backend half landed.** The daemon now serves `GET /daemon/v1/catalog`,
+> `POST /daemon/v1/agents/{id}/install`, `GET .../install-status` and
+> `DELETE /daemon/v1/agents/{id}` (`src/gaia/daemon/sidecars/install.py` +
+> `routes.py`), and `gaia hub list|install|uninstall` drives them. The
+> `builtin_specs()` blocker was resolved with **option (b)**: the catalog filters
+> to ids the daemon has a spec for and reports what it hid
+> (`unsupervised_filtered`), and install refuses the rest — synthesizing a spec
+> from `gaia-agent.yaml` (option (a)) is not possible today because the manifest
+> carries none of `token_env_var` / `service_id` / `expected_api_major`, so it
+> needs a manifest-schema change first. Install is driven entirely from the hub
+> manifest's server-computed SHA-256; `binaries.lock.json` is no longer on the
+> install path. Still open: the TUI hub screen and `gaia tui *` switches (items
+> 3-5 below).
+
 **The gap:** there is no install or uninstall path anywhere except the web UI's FastAPI
 server (`src/gaia/ui/routers/hub.py:166,232`, port 4200). The daemon has no install API.
 There is no `gaia hub install` CLI. The lazy binary fetch in
