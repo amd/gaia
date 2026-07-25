@@ -195,3 +195,112 @@ def test_healthy_record_is_not_warned_about(caplog):
     with caplog.at_level(logging.WARNING):
         host._record_reply_interaction("carol@example.com", latency_seconds=12.0)
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_explicit_config_ceiling_beats_the_environment(monkeypatch):
+    """An explicit ``inbox_scan_ceiling=`` must not be silently ignored.
+
+    The scanning tools used to call the env resolver on every invocation, so
+    ``EmailAgentConfig(inbox_scan_ceiling=500)`` was accepted, validated, and
+    then never read — the env var (or the 100 default) won instead, and the
+    ceiling could change between two calls in one run.
+    """
+    monkeypatch.setenv(_ENV, "250")
+    cfg = EmailAgentConfig(inbox_scan_ceiling=500)
+    assert cfg.inbox_scan_ceiling == 500
+
+
+def _clamped_ceiling(monkeypatch, config):
+    """Register the read tools on a stub host; return the ceiling triage applied."""
+    from types import SimpleNamespace
+
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+    from gaia_agent_email.tools.read_tools import ReadToolsMixin
+
+    seen = {}
+
+    class _Host(ReadToolsMixin):
+        def __init__(self):
+            self._gmail = object()
+            self._backends = {"google": object()}
+            self.config = config
+
+        def _triage_all_backends(self, *, max_messages):
+            seen["max_messages"] = max_messages
+            return {"results": [], "grouped": {}}
+
+    saved = dict(_TOOL_REGISTRY)
+    try:
+        _TOOL_REGISTRY.clear()
+        host = _Host()
+        host._register_read_tools()
+        # Ask for far more than any ceiling so the clamp is what we observe.
+        _TOOL_REGISTRY["triage_inbox"]["function"](max_messages=10_000)
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+    return seen.get("max_messages")
+
+
+def test_explicit_config_ceiling_is_applied_not_the_environment(monkeypatch):
+    """An explicit ``inbox_scan_ceiling=`` must actually clamp the scan.
+
+    The scanning tools used to call the env resolver on every invocation, so
+    ``EmailAgentConfig(inbox_scan_ceiling=500)`` was accepted, validated, and
+    then never read — the env var (or the 100 default) won instead.
+    """
+    from types import SimpleNamespace
+
+    monkeypatch.setenv(_ENV, "250")
+    applied = _clamped_ceiling(
+        monkeypatch, SimpleNamespace(debug=False, inbox_scan_ceiling=7)
+    )
+    assert applied == 7, (
+        f"triage clamped to {applied}, not the configured 7 — the explicit "
+        "config ceiling is being ignored in favour of the environment"
+    )
+
+
+def test_duck_typed_config_without_the_field_falls_back_to_the_env(monkeypatch):
+    """Hosts pass a duck-typed config (see debug_flag); they must keep working."""
+    from types import SimpleNamespace
+
+    monkeypatch.setenv(_ENV, "33")
+    applied = _clamped_ceiling(monkeypatch, SimpleNamespace(debug=False))
+    assert applied == 33
+
+
+def test_ceiling_is_resolved_once_at_registration_not_per_call(monkeypatch):
+    """Changing the env mid-run must not move the ceiling under a live agent."""
+    from types import SimpleNamespace
+
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+    from gaia_agent_email.tools.read_tools import ReadToolsMixin
+
+    seen = []
+
+    class _Host(ReadToolsMixin):
+        def __init__(self):
+            self._gmail = object()
+            self._backends = {"google": object()}
+            self.config = SimpleNamespace(debug=False)
+
+        def _triage_all_backends(self, *, max_messages):
+            seen.append(max_messages)
+            return {"results": [], "grouped": {}}
+
+    monkeypatch.setenv(_ENV, "40")
+    saved = dict(_TOOL_REGISTRY)
+    try:
+        _TOOL_REGISTRY.clear()
+        host = _Host()
+        host._register_read_tools()
+        fn = _TOOL_REGISTRY["triage_inbox"]["function"]
+        fn(max_messages=10_000)
+        monkeypatch.setenv(_ENV, "5")
+        fn(max_messages=10_000)
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+
+    assert seen == [40, 40], f"ceiling changed between calls: {seen}"

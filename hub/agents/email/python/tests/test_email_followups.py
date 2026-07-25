@@ -290,16 +290,23 @@ class TestScanTruncated:
             _sent("s2", thread_id="t2", age_days=6),
             _sent("s3", thread_id="t3", age_days=7),
         )
-        out = check_followups_impl(gmail, window_days=3, max_sent=50, now_ms=NOW_MS)
+        out = check_followups_impl(
+            gmail, window_days=3, max_sent=50, now_ms=NOW_MS
+        )
         assert out["scan_truncated"] is False
 
     def test_at_cap_with_more_remaining_is_truncated(self):
         # 5 distinct sent threads but max_sent=3 — the scan stops after the
         # 3 newest, leaving 2 older (more overdue) sends unscanned.
         gmail = _backend(
-            *(_sent(f"s{i}", thread_id=f"t{i}", age_days=5 + i) for i in range(5))
+            *(
+                _sent(f"s{i}", thread_id=f"t{i}", age_days=5 + i)
+                for i in range(5)
+            )
         )
-        out = check_followups_impl(gmail, window_days=3, max_sent=3, now_ms=NOW_MS)
+        out = check_followups_impl(
+            gmail, window_days=3, max_sent=3, now_ms=NOW_MS
+        )
         assert out["sent_scanned"] == 3
         assert out["scan_truncated"] is True
 
@@ -313,7 +320,9 @@ class TestScanTruncated:
             _sent("s1", thread_id="t1", age_days=5),
             _sent("s2", thread_id="t2", age_days=6),
         )
-        out = check_followups_impl(gmail, window_days=3, max_sent=2, now_ms=NOW_MS)
+        out = check_followups_impl(
+            gmail, window_days=3, max_sent=2, now_ms=NOW_MS
+        )
         assert out["sent_scanned"] == 2
         assert out["scan_truncated"] is True
 

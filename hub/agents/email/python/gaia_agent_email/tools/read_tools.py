@@ -17,11 +17,11 @@ module because every read tool that returns body bytes needs to honor it.
 
 from __future__ import annotations
 
-import os
 import re
 from datetime import date
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
+from gaia_agent_email.config import default_inbox_scan_ceiling
 from gaia_agent_email.gmail_backend import decode_message_body
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 
@@ -51,10 +51,6 @@ from gaia.logger import get_logger
 
 log = get_logger(__name__)
 
-from gaia_agent_email.config import (  # noqa: E402
-    DEFAULT_INBOX_SCAN_CEILING,
-    default_inbox_scan_ceiling as _inbox_scan_ceiling,
-)
 
 # Maximum body length sent to the LLM. Larger messages are truncated with
 # a ``...[truncated]`` marker. Prevents context blow-up and limits the
@@ -1185,6 +1181,13 @@ class ReadToolsMixin:
     def _register_read_tools(self) -> None:
         gmail = self._gmail
         debug_flag = bool(getattr(self.config, "debug", False))
+        # An explicit EmailAgentConfig(inbox_scan_ceiling=...) must win over the
+        # environment. Hosts may pass a duck-typed config (see debug_flag), so
+        # an absent field falls back to the same env resolution the config field
+        # uses — resolved once here, never re-read per call.
+        scan_ceiling = getattr(self.config, "inbox_scan_ceiling", None)
+        if scan_ceiling is None:
+            scan_ceiling = default_inbox_scan_ceiling()
         agent = self  # captured for live access to ``_session_preferences``
 
         @tool
@@ -1485,9 +1488,7 @@ class ReadToolsMixin:
             ``results``) as the complete view when results are condensed.
             """
             try:
-                max_messages = max(
-                    1, min(int(max_messages or 25), _inbox_scan_ceiling())
-                )
+                max_messages = max(1, min(int(max_messages or 25), scan_ceiling))
                 # Phase 2 (#1603): scan every connected mailbox, tag each item
                 # with its source mailbox, split the budget across mailboxes,
                 # and merge. LLM follow-up (#1107) is wired inside the agent
@@ -1533,9 +1534,7 @@ class ReadToolsMixin:
                     (default 25, max 100).
             """
             try:
-                max_messages = max(
-                    1, min(int(max_messages or 25), _inbox_scan_ceiling())
-                )
+                max_messages = max(1, min(int(max_messages or 25), scan_ceiling))
                 # Phase 2 (#1603): pre-scan every connected mailbox, tag each
                 # section item with its source mailbox, split the budget, merge.
                 return _envelope_ok(

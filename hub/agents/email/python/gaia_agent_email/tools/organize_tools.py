@@ -435,7 +435,9 @@ def _coerce_ids(message_ids):
         if s.startswith("[") and s.endswith("]"):
             s = s[1:-1]
         return [
-            cleaned for x in s.replace(";", ",").split(",") if (cleaned := _clean_id(x))
+            cleaned
+            for x in s.replace(";", ",").split(",")
+            if (cleaned := _clean_id(x))
         ]
     return []
 

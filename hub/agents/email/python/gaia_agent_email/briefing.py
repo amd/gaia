@@ -112,9 +112,7 @@ class BriefingScheduleConfig:
             )
 
     @classmethod
-    def from_env(
-        cls, environ: Optional[Dict[str, str]] = None
-    ) -> "BriefingScheduleConfig":
+    def from_env(cls, environ: Optional[Dict[str, str]] = None) -> "BriefingScheduleConfig":
         """Build the config from environment variables, validating eagerly.
 
         Unset variables take the documented defaults (disabled, 08:00, 25).

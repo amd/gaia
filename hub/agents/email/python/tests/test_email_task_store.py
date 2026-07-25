@@ -147,9 +147,7 @@ def test_dedup_key_is_normalized_description():
         d, message_id="m-1", items=[ActionItem(description="Please review the doc")]
     )
     created = task_store.record_action_items(
-        d,
-        message_id="m-1",
-        items=[ActionItem(description="  please REVIEW   the doc ")],
+        d, message_id="m-1", items=[ActionItem(description="  please REVIEW   the doc ")]
     )
     assert created == []
     assert len(task_store.list_tasks(d, message_id="m-1")) == 1
@@ -312,7 +310,9 @@ def test_batch_triage_persistence_failure_is_isolated_per_item(triage_env, monke
     client, db = triage_env
     item_ok = _triage_payload("msg-batch-ok")["payload"]
     item_boom = _triage_payload("msg-batch-boom")["payload"]
-    resp = client.post("/v1/email/triage/batch", json={"items": [item_boom, item_ok]})
+    resp = client.post(
+        "/v1/email/triage/batch", json={"items": [item_boom, item_ok]}
+    )
 
     assert resp.status_code == 200, resp.text
     results = resp.json()["results"]

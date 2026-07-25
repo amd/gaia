@@ -201,9 +201,7 @@ def snooze_message_impl(
         }
 
 
-def cancel_scheduled_job_impl(
-    db, *, job_id: str, debug: bool = False
-) -> Dict[str, Any]:
+def cancel_scheduled_job_impl(db, *, job_id: str, debug: bool = False) -> Dict[str, Any]:
     """Cancel a pending job. Loud on anything not cancellable."""
     with log_tool_call("cancel_scheduled_job", {"job_id": job_id}, debug=debug) as st:
         if schedule_store.cancel_job(db, job_id=job_id):

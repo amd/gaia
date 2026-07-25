@@ -409,10 +409,7 @@ class EmailTriageMCPAgent(MCPAgent):
             )
         provider = providers[0]
         if provider == "google":
-            from gaia_agent_email.gmail_backend import (
-                LiveGmailBackend,
-                _get_gmail_token,
-            )
+            from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
 
             return LiveGmailBackend(_get_gmail_token)
         if provider == "microsoft":

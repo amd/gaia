@@ -48,6 +48,7 @@ from gaia_agent_email.tools.read_tools import (  # noqa: E402
 
 from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
 
+
 # ---------------------------------------------------------------------------
 # End-to-end through search_messages_impl: outgoing query is normalized
 # ---------------------------------------------------------------------------
@@ -55,7 +56,9 @@ from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
 
 def test_impl_normalizes_mixed_format_dates_in_outgoing_query():
     gmail = FakeGmailBackend(user_email="user@example.com")
-    search_messages_impl(gmail, query="invoice after:July 1, 2026 before:2026-07-08")
+    search_messages_impl(
+        gmail, query="invoice after:July 1, 2026 before:2026-07-08"
+    )
     listed = [c for c in gmail.transport.calls if c[0] == "list_messages"]
     assert len(listed) == 1
     assert listed[0][1]["query"] == "invoice after:2026/07/01 before:2026/07/08"
@@ -115,7 +118,10 @@ def test_non_date_operators_and_epoch_pass_through_untouched(query):
 
 def test_yearless_date_defaults_to_current_year():
     year = date.today().year
-    assert normalize_gmail_date_operators("after:July 1") == f"after:{year}/07/01"
+    assert (
+        normalize_gmail_date_operators("after:July 1")
+        == f"after:{year}/07/01"
+    )
 
 
 # ---------------------------------------------------------------------------
