@@ -338,15 +338,30 @@ class SidecarRegistry:
                 abort rather than mutate a live process's directory.
         """
         spec = self._spec(agent_id)
+        _, agent_lock = self._holder(agent_id, spec)
+        with agent_lock:
+            # Re-read under the lock. ``ensure(mode=...)`` REPLACES the manager
+            # for a stopped agent, so the one captured a moment ago can be a
+            # stale object whose is_running is False while the manager that
+            # replaced it is live — stopping the stale one would leave a running
+            # sidecar and let the caller mutate its directory anyway.
+            manager, _ = self._holder(agent_id, spec)
+            self._stop_locked(agent_id, manager)
+            yield
+
+    def _holder(self, agent_id: str, spec: AgentSidecarSpec) -> tuple:
+        """The ``(manager, lock)`` pair for *agent_id*, creating it if needed.
+
+        The lock object is stable for an agent id's lifetime (``ensure`` reuses
+        it when it swaps the manager), which is what makes re-reading the
+        manager under that lock safe.
+        """
         with self._lock:
             holder = self._managers.get(agent_id)
             if holder is None:
                 holder = (self._new_manager(agent_id, spec, None), threading.Lock())
                 self._managers[agent_id] = holder
-        manager, agent_lock = holder
-        with agent_lock:
-            self._stop_locked(agent_id, manager)
-            yield
+            return holder
 
     def shutdown_all(self) -> None:
         """Tree-kill every running sidecar (daemon shutdown path)."""

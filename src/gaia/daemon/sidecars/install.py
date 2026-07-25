@@ -296,6 +296,7 @@ def assert_no_live_process_in(install_dir: Path, agent_id: str) -> None:
     """
     import psutil
 
+    target = install_dir.resolve()
     survivors = []
     for proc in psutil.process_iter(["pid", "exe", "cmdline"]):
         try:
@@ -310,7 +311,7 @@ def assert_no_live_process_in(install_dir: Path, agent_id: str) -> None:
                 if not candidate:
                     continue
                 try:
-                    Path(candidate).resolve().relative_to(install_dir.resolve())
+                    Path(candidate).resolve().relative_to(target)
                 except (ValueError, OSError):
                     continue
                 survivors.append(info.get("pid"))

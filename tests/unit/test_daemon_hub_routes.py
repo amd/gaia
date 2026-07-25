@@ -787,6 +787,91 @@ def test_registry_hold_blocks_ensure_for_the_duration(monkeypatch):
     assert order == ["mutation-done", "ensure"]
 
 
+def _toy_spec():
+    from gaia.daemon.sidecars.spec import AgentSidecarSpec
+
+    return AgentSidecarSpec(
+        agent_id="toy",
+        service_id="gaia-agent-toy",
+        display_name="Toy",
+        expected_api_major="1",
+        token_env_var="GAIA_TOY_SIDECAR_TOKEN",
+        mode_env_var="GAIA_TOY_AGENT_MODE",
+        cache_dir_name="toy",
+    )
+
+
+class _ToyManager:
+    def __init__(self, spec, mode=None, **kwargs):
+        self.spec = spec
+        self._mode_override = mode
+        self._running = False
+        self.pid = None
+        self.port = None
+        self.base_url = None
+        self.api_version = "1.0"
+        self.agent_version = "0.1.0"
+        self.resolved_mode = None
+        self.auth_token = "tok"
+        self.started_at = None
+
+    @property
+    def mode(self):
+        return self._mode_override or "user"
+
+    @property
+    def is_running(self):
+        return self._running
+
+    def start(self):
+        self._running = True
+        self.pid = 4242
+        self.port = 51000
+        self.base_url = "http://127.0.0.1:51000"
+        self.started_at = 1.0
+        self.resolved_mode = self.mode
+        return self.base_url
+
+    def shutdown(self):
+        self._running = False
+
+
+def test_hold_stops_the_manager_that_replaced_the_one_it_first_read(monkeypatch):
+    """``ensure(mode=...)`` REPLACES a stopped agent's manager. If the hold
+    stops the object it read before taking the lock, it stops a stale manager
+    whose is_running is already False and leaves the LIVE one running — the
+    mutation would then proceed against a running sidecar."""
+    from gaia.daemon.sidecars import registry as registry_mod
+
+    spec = _toy_spec()
+    monkeypatch.setattr(registry_mod.psutil, "pid_exists", lambda pid: False)
+
+    class _RacyRegistry(registry_mod.SidecarRegistry):
+        """Swaps the manager in exactly once, between the first holder read and
+        the lock acquisition — the real interleaving, made deterministic."""
+
+        swapped = False
+
+        def _holder(self, agent_id, spec):
+            holder = super()._holder(agent_id, spec)
+            if not self.swapped:
+                self.swapped = True
+                self.ensure(agent_id, mode="dev")  # replaces + starts a NEW manager
+            return holder
+
+    reg = _RacyRegistry({"toy": spec})
+    reg._manager_factory = _ToyManager
+    reg.ensure("toy")
+    reg.stop("toy")  # stopped manager built for "user" — the replaceable state
+
+    with reg.hold_for_mutation("toy"):
+        live = reg._managers["toy"][0]
+        assert not live.is_running, (
+            "the hold stopped a stale manager: the sidecar that replaced it is "
+            "still running while its directory is about to be mutated"
+        )
+
+
 def test_install_honours_an_explicit_version(monkeypatch, install_root):
     fetcher = _RecordingFetcher(_hub_files())
     _patch_hub(monkeypatch, fetcher)
