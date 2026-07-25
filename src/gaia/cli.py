@@ -4054,7 +4054,16 @@ Let me know your answer!
             else:
                 print(f"❌ {result['message']}")
         else:
-            print("❌ Specify --lemonade or --port <number>")
+            # A refusal must not report success — `gaia kill && next-step`
+            # would otherwise run next-step having killed nothing.
+            print("❌ gaia kill needs a target:")
+            print("     --lemonade        stop Lemonade Server (port 13305)")
+            print("     --port <number>   kill whatever is listening on <number>")
+            print(
+                "   Both target a port. A stray GAIA process that is not "
+                "holding a port must be killed by PID."
+            )
+            sys.exit(1)
         return
 
     # Import LemonadeManager for model commands error handling
@@ -5834,8 +5843,10 @@ def handle_cache_command(args):
                 cache.clear()
                 print("✓ Context7 cache cleared")
             else:
-                print("Specify --context7 or --all to clear caches")
+                # Same refusal-must-not-report-success rule as `gaia kill`.
+                print("❌ Specify --context7 or --all to clear caches")
                 print("Run 'gaia cache clear --help' for more information")
+                sys.exit(1)
 
     except Exception as e:
         cache_log = get_logger(__name__)
