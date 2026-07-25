@@ -104,6 +104,8 @@ models: [Qwen3.5-35B-A3B-GGUF]
 
 requirements:
   min_memory_gb: 8
+  min_lemonade_version: "10.2.0"   # optional; SemVer. The backend floor a
+                                   # readiness check compares against.
   platforms: [win-x64, linux-x64, darwin-arm64]
 
 interfaces:
