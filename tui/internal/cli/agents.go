@@ -282,15 +282,16 @@ var runCmd = &cobra.Command{
 	Short: "Run an agent — interactive chat, or a one-shot with --query",
 	Long: "Open the chat TUI for an installed agent.\n\n" +
 		"--query makes it a genuine non-interactive one-shot: no alt screen, the " +
-		"answer on stdout, progress on stderr, and exit 0 on a final answer / 1 on " +
-		"an error. That is what makes it usable from a script or from CI.\n\n" +
-		"A turn whose tool calls failed exits 1 even when the agent still wrote an " +
-		"answer, so `gaia tui run … && next-step` does not fire over work that never " +
-		"happened. A tool that reports no outcome at all is named on stderr as " +
-		"unverified rather than counted as a success. A turn that stopped at a " +
-		"confirmation gate — a destructive action held back for approval this run " +
-		"cannot give — exits 3, distinct from 1 because nothing broke and nothing " +
-		"was done.\n\n" +
+		"answer on stdout, progress on stderr, and an exit code a script can act " +
+		"on. That is what makes it usable from a script or from CI.\n\n" +
+		"  exit 0  the agent answered and nothing reported a failure\n" +
+		"  exit 1  an error, or a tool failed and nothing recovered it — even when " +
+		"the agent still wrote an answer, so `gaia tui run … && next-step` does not " +
+		"fire over work that never happened\n" +
+		"  exit 3  a confirmation gate held back a destructive action this run has " +
+		"no way to approve: nothing broke, and nothing was done\n\n" +
+		"A tool that reports no outcome at all is named on stderr as unverified " +
+		"rather than counted as a success.\n\n" +
 		"A one-shot checks its preconditions first and refuses in seconds — naming " +
 		"the unmet one and the command that fixes it on stderr — rather than waiting " +
 		"on a model server that is not there. The turn itself is bounded too, so an " +
@@ -427,7 +428,8 @@ func init() {
 		"acknowledge that a non-verified agent runs third-party code on this machine")
 
 	runCmd.Flags().StringVar(&runQuery, "query", "",
-		"run one query non-interactively: answer on stdout, exit 0/1")
+		"run one query non-interactively: answer on stdout, exit 0 answered / "+
+			"1 failed / 3 needs approval")
 	runCmd.Flags().StringVar(&runModel, "model", "",
 		"model id override (the agent's default is used when unset)")
 	runCmd.Flags().DurationVar(&runTimeout, "timeout", ui.DefaultOneShotTimeout,

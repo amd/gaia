@@ -2390,7 +2390,7 @@ gaia tui list --installed                 # local only, no network call
 gaia tui install email --trust            # download and install
 gaia tui uninstall email                  # stop the agent and remove it
 gaia tui run email                        # interactive chat
-gaia tui run email --query "triage my inbox"   # one-shot: answer on stdout, exit 0/1
+gaia tui run email --query "triage my inbox"   # one-shot: answer on stdout, exit 0/1/3
 gaia tui status                           # background service + what is installed
 ```
 
@@ -2400,7 +2400,7 @@ gaia tui status                           # background service + what is install
 | `gaia tui list [--installed]` | List agents with version, install state, download size, and security tier. `--installed` reads the local `~/.gaia/agents/*/.installed` sentinels and never touches the network. |
 | `gaia tui install <id> [--version X] [--trust]` | Install an agent and wait for it to finish. |
 | `gaia tui uninstall <id>` | Stop the agent's sidecar, verify it is gone, remove its install directory. |
-| `gaia tui run <id> [--query "…"] [--model M] [--timeout D]` | Run an agent. `--query` is a genuine one-shot, checked and bounded (`--timeout`, default 15m). |
+| `gaia tui run <id> [--query "…"] [--model M] [--timeout D]` | Run an agent. `--query` is a genuine one-shot, checked and bounded (`--timeout`, default 15m). It exits **0** when the agent answered and nothing reported a failure, **1** on an error or a tool failure nothing recovered, and **3** when a confirmation gate held back a destructive action the run cannot approve — nothing broke, and nothing was done. |
 | `gaia tui status` | Whether the background service is running, which sidecars it knows, and what is installed. |
 | `gaia tui chat --agent <id>` \| `--subprocess <cmd>` | Chat with an agent by catalog id, or with a binary you spawn directly. With `--agent --query` it is the same one-shot `gaia tui run --query` is, `--timeout` included. |
 | `gaia tui hub` | The hub screen explicitly (same as bare `gaia tui`). |

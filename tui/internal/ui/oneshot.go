@@ -401,11 +401,11 @@ func rawOrDash(raw json.RawMessage) string {
 
 // finishOneShot applies the terminal-event contract, then the tool-outcome one.
 //
-// `run --help` promises exit 0 on an answer and 1 on an error, and that promise
-// is what makes the flag usable from a script. A turn whose only tool call came
-// back `{"ok": false, …}` and which then wrote an apology is not a success —
-// exiting 0 there fired the caller's `&& next-step` over work that never
-// happened.
+// `run --help` promises an exit code a script can act on (0 answered / 1 failed
+// / 3 needs approval), and that promise is what makes the flag usable at all. A
+// turn whose only tool call came back `{"ok": false, …}` and which then wrote an
+// apology is not a success — exiting 0 there fired the caller's `&& next-step`
+// over work that never happened.
 func finishOneShot(res OneShotResult, tools *toolLedger, query string, errW io.Writer) OneShotResult {
 	res.FailedTools = tools.failed()
 	res.UndeterminedTools = tools.undetermined()

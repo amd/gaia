@@ -75,7 +75,7 @@ func init() {
 	chatCmd.Flags().StringVar(&agentID, "agent", "", "catalog agent id to chat with (e.g. \"email\")")
 	chatCmd.Flags().StringVar(&chatModel, "model", "", "model id override (--agent only; the sidecar default is used when unset)")
 	chatCmd.Flags().StringVar(&subprocess, "subprocess", "", "command to spawn agent subprocess (e.g. \"./gaia-bash --json-events\")")
-	chatCmd.Flags().StringVar(&query, "query", "", "single query to send. With --agent it is a genuine non-interactive one-shot: it refuses in seconds when a precondition is unmet, answers on stdout, and exits 0/1. With --subprocess it opens the interactive chat and sends this as the first message, so it still needs a terminal")
+	chatCmd.Flags().StringVar(&query, "query", "", "single query to send. With --agent it is a genuine non-interactive one-shot: it refuses in seconds when a precondition is unmet, answers on stdout, and exits 0 answered / 1 failed / 3 needs approval. With --subprocess it opens the interactive chat and sends this as the first message, so it still needs a terminal")
 	chatCmd.Flags().DurationVar(&chatTimeout, "timeout", ui.DefaultOneShotTimeout,
 		"how long one --query turn may take before it is abandoned and reported (--agent only)")
 	rootCmd.AddCommand(chatCmd)

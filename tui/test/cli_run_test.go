@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/amd/gaia/tui/internal/ui"
 )
 
 // altScreenEnter is the escape sequence Bubble Tea writes when it takes over the
@@ -317,5 +319,44 @@ func TestSuccessfulToolRunStaysZeroAndQuiet(t *testing.T) {
 	}
 	if strings.Contains(stderr.String(), "unverified") || strings.Contains(stderr.String(), "exit 1") {
 		t.Errorf("a successful run was judged:\n%s", stderr.String())
+	}
+}
+
+// One command's help printed the exit contract twice and the two disagreed:
+// the Long text described exit 3 while the --query flag, one screen below,
+// still promised "exit 0/1". A single `--help` invocation contradicted itself.
+//
+// CLAUDE.md's rule is that a functional change updates EVERY doc describing it,
+// so this asserts the property rather than any one wording: whatever states the
+// contract must state all of it.
+func TestHelpStatesTheWholeExitContract(t *testing.T) {
+	gaiaBin, _ := buildBinaries(t)
+
+	for _, command := range [][]string{
+		{"run", "--help"},
+		{"chat", "--help"},
+	} {
+		t.Run(strings.Join(command, " "), func(t *testing.T) {
+			out, err := exec.Command(gaiaBin, command...).CombinedOutput()
+			if err != nil {
+				t.Fatalf("%v: %v\n%s", command, err, out)
+			}
+			text := string(out)
+
+			// The stale shorthand, which promises there are only two outcomes.
+			for _, stale := range []string{"exit 0/1", "exits 0/1"} {
+				if strings.Contains(text, stale) {
+					t.Errorf("help still promises %q, but a withheld action exits %d:\n%s",
+						stale, ui.ExitApprovalRequired, text)
+				}
+			}
+			// Every code the one-shot can return has to appear.
+			for _, want := range []string{"0", "1", "3"} {
+				if !strings.Contains(text, "exit "+want) && !strings.Contains(text, want+" needs approval") &&
+					!strings.Contains(text, want+" failed") && !strings.Contains(text, want+" answered") {
+					t.Errorf("help does not mention exit %s:\n%s", want, text)
+				}
+			}
+		})
 	}
 }
