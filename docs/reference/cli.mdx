@@ -2371,6 +2371,109 @@ under [Agent Command](#agent-command).
 
 ---
 
+### Terminal hub (`gaia tui`)
+
+`gaia tui` is the Go/Bubble Tea terminal hub: browse agents, install them, and
+chat with them without leaving the terminal. Building from source the binary is
+`tui/bin/gaia` (`cd tui && make build`).
+
+<Note>
+  The binary accepts a leading `tui` word and drops it, so `gaia tui install
+  email` and `gaia install email` are the same command. Running the source build
+  directly, both `./tui/bin/gaia tui list` and `./tui/bin/gaia list` work.
+</Note>
+
+```bash
+gaia tui                                  # open the hub
+gaia tui list                             # what the Agent Hub offers + what you have
+gaia tui list --installed                 # local only, no network call
+gaia tui install email --trust            # download and install
+gaia tui uninstall email                  # stop the agent and remove it
+gaia tui run email                        # interactive chat
+gaia tui run email --query "triage my inbox"   # one-shot: answer on stdout, exit 0/1
+gaia tui status                           # background service + what is installed
+```
+
+| Command | Description |
+|---------|-------------|
+| `gaia tui` | Open the Agent Hub. |
+| `gaia tui list [--installed]` | List agents with version, install state, download size, and security tier. `--installed` reads the local `~/.gaia/agents/*/.installed` sentinels and never touches the network. |
+| `gaia tui install <id> [--version X] [--trust]` | Install an agent and wait for it to finish. |
+| `gaia tui uninstall <id>` | Stop the agent's sidecar, verify it is gone, remove its install directory. |
+| `gaia tui run <id> [--query "…"] [--model M]` | Run an agent. `--query` is a genuine one-shot. |
+| `gaia tui status` | Whether the background service is running, which sidecars it knows, and what is installed. |
+| `gaia tui chat --agent <id>` \| `--subprocess <cmd>` | Chat with an agent by catalog id, or with a binary you spawn directly. |
+| `gaia tui hub` | The hub screen explicitly (same as bare `gaia tui`). |
+
+Install and uninstall are served by the GAIA daemon
+(`POST /daemon/v1/agents/{id}/install`, `DELETE /daemon/v1/agents/{id}`), so the
+TUI, `gaia hub`, and the Agent UI share one integrity check and one install
+lock. The daemon is started automatically for these commands; `gaia tui status`
+only ever attaches, so it reports what *is* running rather than starting
+something.
+
+#### `--trust`: installing a non-verified agent
+
+An agent outside the `verified` security tier runs third-party code on your
+machine. The daemon refuses to install one with **HTTP 403** until the caller
+passes an explicit opt-in — there is no bypass, and nothing retries on your
+behalf.
+
+From the CLI, that opt-in is `--trust`. Without it the command prints exactly
+what you would be agreeing to and exits non-zero:
+
+```console
+$ gaia tui install email
+
+Refusing to install "email" without --trust.
+
+  Agent       email
+  Version     0.5.0
+  Publisher   AMD
+  Security    experimental (not verified by AMD)
+  Download    31.1 MB
+  Access      none declared
+
+If you trust the publisher, re-run:
+  gaia tui install email --trust
+```
+
+In the hub screen the same refusal opens a **Trust & Install** confirmation
+showing the same facts. It defaults to *Cancel*, and only an explicit yes
+re-sends the request with the opt-in.
+
+#### `run --query` is a real one-shot
+
+`--query` does not open the alt screen. The answer goes to stdout, progress to
+stderr, and the exit code is `0` on a terminal answer / `1` on an error — so
+`gaia tui run email --query "…" > answer.txt` captures exactly the answer:
+
+```bash
+gaia tui run email --query "how many unread?" > answer.txt 2> progress.log
+echo $?   # 0
+```
+
+#### Hub keys
+
+| Key | Action |
+|-----|--------|
+| `enter` | Run the selected agent |
+| `i` | Install it (or update it, when a newer version exists) |
+| `d` | Uninstall it (asks first) |
+| `r` | Refresh the agent list from the Agent Hub |
+| `/` | Search |
+| `tab` / `shift+tab` | Next / previous category |
+| `v` | Vote for a coming-soon agent |
+| `?` | Help |
+| `q`, `ctrl+c` | Quit |
+
+<Note>
+  `backspace` is deliberately unbound. It used to share the uninstall binding
+  with `d` and `delete`, which made "go back" a destructive action.
+</Note>
+
+---
+
 ### TUI Control API
 
 The terminal hub (`gaia tui`, the Go/Bubble Tea binary) can expose a loopback

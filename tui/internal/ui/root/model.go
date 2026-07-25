@@ -34,12 +34,28 @@ type RootModel struct {
 }
 
 func NewRootModel(cat *catalog.Catalog, debug bool) RootModel {
-	return RootModel{
+	m := RootModel{
 		activeView: viewHub,
-		hub:        hub.NewHubModel(cat, debug),
 		catalog:    cat,
 		debug:      debug,
 	}
+	// One hub client for the session: it caches the daemon instance whose token
+	// authorized the last call, and that token rotates on every daemon restart.
+	m.hub = hub.NewHubModel(cat, catalog.NewHubClient(m.logf), debug)
+	return m
+}
+
+// NewRootModelWithHub builds a root model against a specific hub client. Tests
+// point it at a fake daemon; a nil client disables install/uninstall, which
+// then fail loudly instead of silently doing nothing.
+func NewRootModelWithHub(cat *catalog.Catalog, hc *catalog.HubClient, debug bool) RootModel {
+	m := RootModel{
+		activeView: viewHub,
+		catalog:    cat,
+		debug:      debug,
+	}
+	m.hub = hub.NewHubModel(cat, hc, debug)
+	return m
 }
 
 func (m RootModel) Init() tea.Cmd {
@@ -89,6 +105,14 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showHelp = false
 			return m, nil
 		}
+	}
+
+	// The hub's async results go to the hub whatever is on screen. They are
+	// answers to work it started, and the chat view would just discard them.
+	if hub.OwnsMsg(msg) {
+		updated, cmd := m.hub.Update(msg)
+		m.hub = updated.(hub.HubModel)
+		return m, cmd
 	}
 
 	// Forward to active sub-model
