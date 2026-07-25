@@ -497,6 +497,53 @@ def test_worker_failure_always_reaches_a_terminal_status(monkeypatch, install_ro
     assert "already in progress" in status["error"]
 
 
+def test_mutation_refuses_while_a_forgotten_process_runs_from_the_dir(
+    monkeypatch, install_root
+):
+    """The registry only verifies the pid it still tracks. A sidecar the daemon
+    lost track of (observed in the wild: a start path that replaced its process
+    handle without killing the old child) must still block a mutation — the
+    directory, not the bookkeeping, is what has to be safe.
+
+    Uses a REAL child process executing a script inside the install dir, so the
+    check is exercised against the OS rather than a mocked process table.
+    """
+    import os
+    import subprocess
+
+    if os.name == "nt":
+        pytest.skip("POSIX shebang stand-in for the frozen sidecar binary")
+
+    _write_sentinel(install_root, "email", "0.5.0")
+    # Stands in for the frozen sidecar: an executable INSIDE the install dir,
+    # so the running process's argv[0] is that file (what psutil reports for
+    # the real email-agent binary).
+    stray = install_root / "email" / "email-agent"
+    stray.write_text("#!/bin/sh\nsleep 120\n", encoding="utf-8")
+    stray.chmod(0o755)
+    proc = subprocess.Popen([str(stray)])
+    try:
+        fetcher = _RecordingFetcher(_hub_files())
+        _patch_hub(monkeypatch, fetcher)
+        client = _client(_FakeRegistry())
+
+        # The registry reports a clean stop, yet the mutation is still refused.
+        r = client.delete("/daemon/v1/agents/email", headers=_auth())
+        assert r.status_code == 500
+        assert str(proc.pid) in r.json()["detail"]
+        assert (install_root / "email" / ".installed").exists()
+
+        r = client.post("/daemon/v1/agents/email/install", headers=_auth(), json={})
+        assert r.status_code == 500
+        assert not any(ARTIFACT_NAME in c for c in fetcher.calls)
+    finally:
+        proc.kill()
+        proc.wait(timeout=10)
+
+    # With the stray gone, the same uninstall succeeds.
+    assert client.delete("/daemon/v1/agents/email", headers=_auth()).status_code == 200
+
+
 def test_install_sha_mismatch_is_a_hard_failure_leaving_nothing_installed(
     monkeypatch, install_root
 ):

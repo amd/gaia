@@ -18,7 +18,10 @@ What this module adds is the two things only the daemon can do:
    holds open corrupts it (or fails outright on Windows). Every mutating entry
    point stops the sidecar through the registry first, and the registry's
    post-kill liveness check turns a surviving pid into a loud
-   :class:`StopFailedError` that **aborts the mutation**.
+   :class:`StopFailedError` that **aborts the mutation**. Because that check
+   only covers the pid the manager still tracks, the directory is ALSO scanned
+   for any live process running out of it (:func:`assert_no_live_process_in`) —
+   a sidecar the daemon lost track of must not get its binary swapped either.
 2. **Refuse agents the daemon could not run.** ``builtin_specs()`` is a static
    table (see the module docstring of :mod:`gaia.daemon.sidecars.spec`), so the
    hub can advertise agents the daemon has no spec for. Rather than install
@@ -43,6 +46,7 @@ from gaia.daemon.sidecars.errors import (
     HubUnavailableError,
     InstallBusyError,
     InstallFailedError,
+    StopFailedError,
     UnknownAgentError,
     UnsupervisedAgentError,
 )
@@ -279,8 +283,53 @@ def _release_slot(agent_id: str) -> None:
         _QUEUED.discard(agent_id)
 
 
+def assert_no_live_process_in(install_dir: Path, agent_id: str) -> None:
+    """Refuse to mutate *install_dir* while any live process runs from it.
+
+    The registry only verifies the pid it currently tracks. A sidecar the
+    daemon lost track of — a start path that replaced its process handle
+    without killing the old child, a crash before the ledger was written, a
+    binary the user launched by hand — is invisible to that check and would
+    have its executable replaced underneath it. This is the backstop: the
+    directory itself is the thing being protected, so ask the OS what is
+    actually running out of it.
+    """
+    import psutil
+
+    survivors = []
+    for proc in psutil.process_iter(["pid", "exe", "cmdline"]):
+        try:
+            info = proc.info
+            # exe + argv[0] catch a frozen sidecar (the daemon always spawns it
+            # by absolute path); argv[1] catches an interpreter running a script
+            # from the dir. Later argv entries are deliberately NOT scanned — a
+            # log path passed to `tail` must not block an install. Relative argv
+            # would need the process's cwd and is not what the daemon produces.
+            candidates = [info.get("exe") or ""] + list(info.get("cmdline") or [])[:2]
+            for candidate in candidates:
+                if not candidate:
+                    continue
+                try:
+                    Path(candidate).resolve().relative_to(install_dir.resolve())
+                except (ValueError, OSError):
+                    continue
+                survivors.append(info.get("pid"))
+                break
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+    if survivors:
+        pids = ", ".join(str(p) for p in sorted(set(survivors)))
+        raise StopFailedError(
+            f"process(es) {pids} are still running from {install_dir} even though "
+            f"the daemon believes '{agent_id}' is stopped. Refusing to rewrite or "
+            f"delete a directory a live process is using. Kill them (`gaia kill`, "
+            f"or `kill {pids}`) and retry; if they came back on their own, report "
+            "it — a sidecar the daemon lost track of is a supervision bug."
+        )
+
+
 @contextmanager
-def sidecar_stopped(registry, agent_id: str):
+def sidecar_stopped(registry, agent_id: str, install_root: Optional[Path] = None):
     """Stop *agent_id*'s sidecar and keep it stopped for the whole body.
 
     Stopping once is not enough: the download + replace take tens of seconds,
@@ -290,18 +339,23 @@ def sidecar_stopped(registry, agent_id: str):
     tree-kill raises :class:`StopFailedError` and the body never runs — the
     daemon never mutates a live process's directory.
 
-    An agent the daemon has no spec for has nothing to stop and nothing that
-    could respawn it, so the body runs unguarded (uninstalling such an agent
-    is still legitimate).
+    An agent the daemon has no spec for has nothing the daemon could respawn,
+    but it may still have a stray process, so the directory check runs either
+    way (uninstalling such an agent is still legitimate).
     """
+    install_dir = _installer().agent_install_dir(agent_id, install_root)
     if agent_id not in supervised_ids(registry):
         logger.info(
             "install: '%s' is not a daemon-supervised agent; nothing to stop",
             agent_id,
         )
+        assert_no_live_process_in(install_dir, agent_id)
         yield
         return
     with registry.hold_for_mutation(agent_id):
+        # Belt and braces: the hold verified the pid the manager knows about;
+        # this catches one it lost track of.
+        assert_no_live_process_in(install_dir, agent_id)
         logger.info("install: '%s' sidecar stopped and held for mutation", agent_id)
         yield
 
@@ -362,7 +416,7 @@ def start_install(
         # Stop the sidecar up front so a survivor is a SYNCHRONOUS error the
         # caller sees on this request; the worker re-takes the hold for the
         # duration of the actual mutation.
-        with sidecar_stopped(registry, agent_id):
+        with sidecar_stopped(registry, agent_id, install_root):
             pass
         installer_mod.clear_progress(agent_id)
         installer_mod._set_progress(  # noqa: SLF001 - seed state for the poller
@@ -403,7 +457,7 @@ def _run_install(
     try:
         # The hold spans the whole download+replace so no ensure can respawn
         # the sidecar from the directory being rewritten.
-        with sidecar_stopped(registry, agent_id):
+        with sidecar_stopped(registry, agent_id, install_root):
             result = installer_mod.install(
                 agent_id,
                 version=version,
@@ -478,7 +532,7 @@ def uninstall(
     # stops this removal from deleting a just-completed install).
     _claim_slot(agent_id, action="uninstall")
     try:
-        with sidecar_stopped(registry, agent_id):
+        with sidecar_stopped(registry, agent_id, install_root):
             installer_mod.uninstall(agent_id, install_root=install_root)
     except installer_mod.NotInstalledError as exc:
         raise AgentNotInstalledError(str(exc)) from exc
