@@ -35,7 +35,10 @@ def _block_network(request, monkeypatch):
         return
 
     def _blocked_connect(*args, **kwargs):
-        raise ConnectionError("Unit tests must not make real network connections")
+        raise ConnectionError(
+            "Unit tests must not make real network connections "
+            "(mark the test @pytest.mark.allow_network if it uses a local socket)"
+        )
 
     def _blocked_connect_ex(*args, **kwargs):
         return 1
