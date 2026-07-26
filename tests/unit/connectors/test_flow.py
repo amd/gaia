@@ -27,6 +27,8 @@ import httpx
 import pytest
 import respx
 
+pytestmark = pytest.mark.allow_network
+
 from gaia.connectors.errors import (
     ConsentDeniedError,
     FlowTimeoutError,
