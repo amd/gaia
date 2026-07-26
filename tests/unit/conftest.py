@@ -13,8 +13,36 @@ from any ``test_memory_*.py`` file so the per-test mocks take effect.
 """
 
 import os
+import socket
 
 import pytest
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "allow_network: opt out of the _block_network socket guard"
+    )
+
+
+@pytest.fixture(autouse=True)
+def _block_network(request, monkeypatch):
+    """Prevent unit tests from making real network connections.
+
+    Opt out with @pytest.mark.allow_network.
+    """
+    if request.node.get_closest_marker("allow_network"):
+        yield
+        return
+
+    def _blocked_connect(*args, **kwargs):
+        raise ConnectionError("Unit tests must not make real network connections")
+
+    def _blocked_connect_ex(*args, **kwargs):
+        return 1
+
+    monkeypatch.setattr(socket.socket, "connect", _blocked_connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", _blocked_connect_ex)
+    yield
 
 
 @pytest.fixture(autouse=True)

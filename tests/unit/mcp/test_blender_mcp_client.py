@@ -20,6 +20,8 @@ import time
 
 import pytest
 
+pytestmark = pytest.mark.allow_network
+
 from gaia.mcp.blender_mcp_client import MCPClient, MCPError
 
 
