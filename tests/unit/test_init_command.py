@@ -846,11 +846,13 @@ class TestEnsureLemonadeInstalledSkipsWhenPresent(unittest.TestCase):
 
         This case DOES download — verify the upgrade path is taken.
         """
-        from gaia.llm.lemonade_client import LemonadeClientError
         from gaia.installer.init_command import InitCommand
+        from gaia.llm.lemonade_client import LemonadeClientError
 
         mock_client = MagicMock()
-        mock_client._send_request.side_effect = LemonadeClientError("connection refused")
+        mock_client._send_request.side_effect = LemonadeClientError(
+            "connection refused"
+        )
         mock_client.health_check.side_effect = LemonadeClientError("connection refused")
         mock_client_cls.return_value = mock_client
 
@@ -964,11 +966,13 @@ class TestLegacyFallback(unittest.TestCase):
     @patch("gaia.llm.lemonade_client.LemonadeClient")
     def test_not_installed_on_linux_proceeds_to_install_via_ppa(self, mock_client_cls):
         """On Linux: check_installation not-installed -> install called WITHOUT download."""
-        from gaia.llm.lemonade_client import LemonadeClientError
         from gaia.installer.init_command import InitCommand
+        from gaia.llm.lemonade_client import LemonadeClientError
 
         mock_client = MagicMock()
-        mock_client._send_request.side_effect = LemonadeClientError("connection refused")
+        mock_client._send_request.side_effect = LemonadeClientError(
+            "connection refused"
+        )
         mock_client.health_check.side_effect = LemonadeClientError("connection refused")
         mock_client_cls.return_value = mock_client
 
@@ -999,15 +1003,19 @@ class TestLegacyFallback(unittest.TestCase):
         mock_installer.install.assert_called_once()
 
     @patch("gaia.llm.lemonade_client.LemonadeClient")
-    def test_not_installed_on_windows_proceeds_to_download_and_install(self, mock_client_cls):
+    def test_not_installed_on_windows_proceeds_to_download_and_install(
+        self, mock_client_cls
+    ):
         """On Windows: check_installation not-installed -> download + install called."""
         from pathlib import Path as _P
 
-        from gaia.llm.lemonade_client import LemonadeClientError
         from gaia.installer.init_command import InitCommand
+        from gaia.llm.lemonade_client import LemonadeClientError
 
         mock_client = MagicMock()
-        mock_client._send_request.side_effect = LemonadeClientError("connection refused")
+        mock_client._send_request.side_effect = LemonadeClientError(
+            "connection refused"
+        )
         mock_client.health_check.side_effect = LemonadeClientError("connection refused")
         mock_client_cls.return_value = mock_client
 
