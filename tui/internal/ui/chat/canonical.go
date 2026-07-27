@@ -34,6 +34,18 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 
 	case event.CanonicalToolResultEvent:
 		m.markToolDone(e)
+		if e.Render != "" {
+			// The sidecar declared a card, so the card is the result. The email
+			// agent's pre-scan tool docstring tells the model NOT to describe the
+			// results in prose precisely because the client is expected to draw
+			// this — ignore `render` and the turn produces one vague sentence.
+			m.messages = append(m.messages, Message{
+				Role:     RoleCard,
+				ToolName: e.Tool,
+				Render:   e.Render,
+				Data:     e.Data,
+			})
+		}
 
 	case event.CanonicalNeedsConfirmationEvent:
 		// The approval UI is a later phase. Until then the pause is surfaced as a
@@ -43,7 +55,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		if summary := strings.TrimSpace(e.Summary); summary != "" {
 			line += " — " + summary
 		}
-		m.messages = append(m.messages, Message{Role: RoleStatus, Content: "⚠️  " + line})
+		m.messages = append(m.messages, Message{Role: RoleStatus, Content: "[!] " + line})
 
 	case event.CanonicalFinalEvent:
 		usage := event.CanonicalUsageOf(e)
@@ -107,15 +119,10 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 //
 // The canonical tool_result carries no success flag, so the agent's own
 // {"ok": bool} / {"success": bool} convention is read out of `data` when present;
-// absent that, a delivered result counts as completed. The typed render card
-// (Phase 5) is what will show per-tool detail.
+// absent that, a delivered result counts as completed. Per-tool detail belongs
+// to the render card drawn in the transcript, not to this one-line summary.
 func (m *ChatModel) markToolDone(e event.CanonicalToolResultEvent) {
 	success := toolResultSucceeded(e.Data)
-
-	label := ""
-	if e.Render != "" {
-		label = "render:" + e.Render
-	}
 
 	for i := len(m.activity) - 1; i >= 0; i-- {
 		item := &m.activity[i]
@@ -124,20 +131,13 @@ func (m *ChatModel) markToolDone(e event.CanonicalToolResultEvent) {
 		}
 		item.Done = true
 		item.Success = &success
-		if label != "" {
-			item.Content += " → " + label
-		}
 		return
 	}
 
 	// A result with no matching call still has to be visible.
-	content := e.Tool
-	if label != "" {
-		content += " → " + label
-	}
 	m.activity = append(m.activity, ActivityItem{
 		Kind:    "tool",
-		Content: content,
+		Content: e.Tool,
 		Done:    true,
 		Success: &success,
 	})
