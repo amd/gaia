@@ -2400,9 +2400,9 @@ gaia tui status                           # background service + what is install
 | `gaia tui list [--installed]` | List agents with version, install state, download size, and security tier. `--installed` reads the local `~/.gaia/agents/*/.installed` sentinels and never touches the network. |
 | `gaia tui install <id> [--version X] [--trust]` | Install an agent and wait for it to finish. |
 | `gaia tui uninstall <id>` | Stop the agent's sidecar, verify it is gone, remove its install directory. |
-| `gaia tui run <id> [--query "…"] [--model M]` | Run an agent. `--query` is a genuine one-shot. |
+| `gaia tui run <id> [--query "…"] [--model M] [--timeout D]` | Run an agent. `--query` is a genuine one-shot, checked and bounded (`--timeout`, default 15m). |
 | `gaia tui status` | Whether the background service is running, which sidecars it knows, and what is installed. |
-| `gaia tui chat --agent <id>` \| `--subprocess <cmd>` | Chat with an agent by catalog id, or with a binary you spawn directly. |
+| `gaia tui chat --agent <id>` \| `--subprocess <cmd>` | Chat with an agent by catalog id, or with a binary you spawn directly. With `--agent --query` it is the same one-shot `gaia tui run --query` is, `--timeout` included. |
 | `gaia tui hub` | The hub screen explicitly (same as bare `gaia tui`). |
 
 Install and uninstall are served by the GAIA daemon
@@ -2452,6 +2452,32 @@ stderr, and the exit code is `0` on a terminal answer / `1` on an error — so
 gaia tui run email --query "how many unread?" > answer.txt 2> progress.log
 echo $?   # 0
 ```
+
+It never waits on something that is not there. Before the query is sent, a
+one-shot over the daemon transport (the agents the background service supervises)
+runs the same readiness check the hub's launch gate runs — background service,
+sidecar, local model server, model, and for email the mailbox — and if one of
+them is not ready it prints that row and its remedy to stderr and exits non-zero.
+Against an unreachable dependency that is about a second; the ceiling is the time
+it takes to start the sidecar. Nothing is sent to the agent, and the gate screen
+is never rendered: a script has nobody to press a key. An agent that runs as a
+local subprocess has no readiness route to probe, so it is launched directly.
+
+```bash
+$ gaia tui run email --query "triage my inbox"   # with the model server down
+❌ Email is not ready — Local AI: not running at http://localhost:8000/api/v1
+   GAIA needs a local model server. It runs on your machine; no message text ever leaves it.
+…
+        run: lemonade-server serve
+$ echo $?   # 1, after about a second
+```
+
+The turn itself is bounded — 15 minutes by default, `--timeout 90s` / `--timeout
+2h` to change it — so an agent that accepts the query and then stops answering is
+reported with what to read next instead of hanging a CI job until the job's own
+timeout kills it. There is no "wait forever": `--timeout 0` is refused. Interactive
+`gaia tui run <id>` is unaffected — a person can read what arrives and press
+ctrl+c.
 
 #### Hub keys
 

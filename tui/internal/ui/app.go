@@ -6,13 +6,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/control"
+	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/ui/chat"
+	"github.com/amd/gaia/tui/internal/ui/preflight"
 	"github.com/amd/gaia/tui/internal/ui/root"
 )
 
@@ -93,8 +96,10 @@ func run(model tea.Model, debug bool, ctrl *control.Options) error {
 // With query != "" this is a genuine non-interactive one-shot: no alt screen, the
 // answer on stdout, progress on stderr, and a real exit code. That is what makes
 // the transport exercisable from a script, from CI, and against a live daemon.
+// timeout bounds that turn; it is ignored by the interactive path, where a person
+// can see what is happening and press ctrl+c.
 // Returns the process exit code.
-func RunAgent(agentID, query, model string, debug bool) (int, error) {
+func RunAgent(agentID, query, model string, debug bool, timeout time.Duration) (int, error) {
 	cat := catalog.NewCatalog()
 	cat.DiscoverBinaries()
 
@@ -102,6 +107,15 @@ func RunAgent(agentID, query, model string, debug bool) (int, error) {
 	if agent == nil {
 		return 1, fmt.Errorf("no agent %q in the catalog — known ids: %s",
 			agentID, strings.Join(agentIDs(cat), ", "))
+	}
+
+	// A one-shot is always bounded — that is the whole point — so an unbounded
+	// or negative one is refused here rather than quietly turned into "forever".
+	if query != "" && timeout <= 0 {
+		return 1, fmt.Errorf(
+			"--timeout must be a positive duration, got %s: a one-shot that cannot "+
+				"time out is exactly the hang this bound exists to prevent. Pass a "+
+				"longer bound instead, e.g. --timeout 2h", timeout)
 	}
 
 	logf := func(string, ...any) {}
@@ -122,7 +136,25 @@ func RunAgent(agentID, query, model string, debug bool) (int, error) {
 	defer c.Close()
 
 	if query != "" {
-		res := RunOneShot(context.Background(), c, query, os.Stdout, os.Stderr)
+		// A one-shot runs unattended, so an unmet precondition has to be
+		// reported and refused rather than waited on. Interactive is left alone
+		// on purpose: a person can read a half-answer and press ctrl+c, and the
+		// launch that does have a gate is the hub's.
+		if agent.Transport == catalog.TransportDaemon {
+			// Only a relayed agent has the /v1/<agent>/init route the check
+			// probes. For a subprocess agent the rows could only say "not
+			// installed" — four wrong answers over a launch that works.
+			t := preflight.NewDaemonTransport(daemon.New(daemon.Options{Logf: logf}))
+			rep := ReportReadiness(context.Background(), t,
+				preflight.ConfigFor(agent.ID, agent.Name), os.Stderr)
+			if rep.Blocked() {
+				return 1, nil
+			}
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		res := RunOneShot(ctx, c, query, os.Stdout, os.Stderr)
 		return res.ExitCode, nil
 	}
 
