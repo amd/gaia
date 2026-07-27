@@ -53,6 +53,20 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **"Show me my inbox" now works on a real mailbox with the default NPU
+  profile (#2514).** `list_inbox` and `search_messages` capped each
+  message's body independently but never checked the COMBINED size of the
+  result — a realistic 25-message inbox built a >100KB tool response that
+  overflowed the NPU profile's 32768-token context window on the very
+  first tool call of a brand-new conversation, and `/clear` didn't help
+  since nothing had accumulated yet. Worse, the overflow sometimes surfaced
+  as a silently truncated message count (10 requested, 8 returned) rather
+  than a clear error. Both tools now shrink every message's body together
+  to fit the active device's context budget (GPU or NPU, whichever is
+  running) — messages are never dropped to make the count fit, and a
+  request too large even at the smallest usable body size fails with an
+  actionable error naming the limit instead of silently returning less
+  than was asked for.
 - **Two-turn "archive several… then undo" is now actually reachable (#2456).**
   "Undo that" with no id no longer demands the internal batch uuid:
   `undo_archive_batch` recalls the most recently archived, still-undoable

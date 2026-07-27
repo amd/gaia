@@ -195,7 +195,10 @@ def _format_messages_within_budget(
     out = [_format_message_for_llm(m) for m in full_msgs]
     if not out:
         return out
-    if estimate_tokens_json(json.dumps({"messages": out}, default=str)) <= budget_tokens:
+    if (
+        estimate_tokens_json(json.dumps({"messages": out}, default=str))
+        <= budget_tokens
+    ):
         return out
 
     lo, hi = THREAD_MIN_PER_MESSAGE_CHARS, DEFAULT_BODY_LIMIT_CHARS - 1
@@ -229,7 +232,9 @@ def list_inbox_impl(
 ) -> Dict[str, Any]:
     with log_tool_call("list_inbox", {"max_results": max_results}, debug=debug) as st:
         listing = gmail.list_messages(label_ids=["INBOX"], max_results=max_results)
-        full_msgs = [gmail.get_message(stub["id"]) for stub in listing.get("messages", [])]
+        full_msgs = [
+            gmail.get_message(stub["id"]) for stub in listing.get("messages", [])
+        ]
         out = _format_messages_within_budget(
             full_msgs,
             tool_name="list_inbox",
@@ -1309,6 +1314,14 @@ class ReadToolsMixin:
             a ``mailbox_errors`` entry is added; only if EVERY mailbox fails does
             the tool return an error.
 
+            A large ``max_results`` may shrink every message's body TOGETHER
+            (never independently, never dropping a message) so the whole result
+            stays within the model's context window — shrunk messages report
+            ``body_truncated: true``. If even the smallest usable body can't fit
+            every requested message, the tool returns an actionable error instead
+            of silently returning fewer messages than asked for — retry with a
+            smaller ``max_results``.
+
             Args:
                 max_results: How many messages to return in total (default 25, max 100).
 
@@ -1502,6 +1515,14 @@ class ReadToolsMixin:
             passed and returns nothing, the tool retries once as an operator
             query automatically, but forming the operator query yourself is
             more reliable.
+
+            A large ``max_results`` may shrink every hit's body TOGETHER (never
+            independently, never dropping a hit) so the whole result stays
+            within the model's context window — shrunk messages report
+            ``body_truncated: true``. If even the smallest usable body can't fit
+            every requested hit, the tool returns an actionable error instead of
+            silently returning fewer hits than asked for — retry with a smaller
+            ``max_results``.
             """
             try:
                 max_results = max(1, min(int(max_results or 25), 100))
