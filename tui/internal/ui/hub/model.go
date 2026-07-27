@@ -100,6 +100,12 @@ func (m HubModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// SetStatus shows an ephemeral message in the hub, used to surface a launch
+// failure without leaving the user staring at an unchanged screen.
+func (m *HubModel) SetStatus(status string) {
+	m.status = status
+}
+
 func (m HubModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "ctrl+c":

@@ -49,9 +49,10 @@ func (c *Catalog) Get(id string) *Agent {
 }
 
 // DiscoverBinaries searches for agent executables on PATH and in common build locations.
+// Daemon-transport agents are skipped — the daemon owns their lifecycle.
 func (c *Catalog) DiscoverBinaries() {
 	for i := range c.agents {
-		if c.agents[i].BinaryPath == "" {
+		if c.agents[i].Transport == TransportDaemon || c.agents[i].BinaryPath == "" {
 			continue
 		}
 		name := c.agents[i].BinaryPath
@@ -98,8 +99,12 @@ func findBinaryInRepo(name string) string {
 }
 
 // SetMockBinary overrides all installed agent binary paths with a mock binary for testing.
+// Daemon-transport agents are skipped — they have no binary to override.
 func (c *Catalog) SetMockBinary(binaryPath string) {
 	for i := range c.agents {
+		if c.agents[i].Transport == TransportDaemon {
+			continue
+		}
 		if c.agents[i].Status == StatusInstalled || c.agents[i].Status == StatusActive || c.agents[i].Status == StatusIdle {
 			c.agents[i].BinaryPath = binaryPath
 			c.agents[i].BinaryArgs = nil
@@ -228,9 +233,12 @@ func seedAgents() []Agent {
 			Icon: "📝", Version: "0.1.0", Status: StatusAvailable,
 		},
 		{
+			// The email agent is an HTTP sidecar the daemon supervises, not a
+			// binary the TUI can spawn — it is reached through the daemon relay.
 			ID: "email", Name: "Email", Description: "Email triage, drafting, and calendar",
 			Category: "Productivity", Tags: []string{"email", "gmail", "calendar", "communication"},
 			Icon: "📧", Version: "0.1.0", Status: StatusAvailable,
+			Transport: TransportDaemon,
 		},
 
 		// --- Coming Soon ---
