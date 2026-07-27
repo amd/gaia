@@ -177,11 +177,15 @@ class TestRequestShape:
         an actionable error naming the missing scope, never a raw 403 after
         the user already confirmed something irreversible."""
         from gaia.connectors.errors import ScopeMismatchError
+        from gaia_agent_email.scopes import SCOPE_GMAIL_FULL_MAILBOX
 
         backend, rec, _ = _backend(lambda r: httpx.Response(204))
         with pytest.raises(ScopeMismatchError) as excinfo:
             backend.permanent_delete("m1")
-        assert "https://mail.google.com/" in str(excinfo.value)
+        # Assert against the constant, not a copy of the URL: the message has to
+        # name the scope the backend actually checks, and a literal here would
+        # keep passing if that scope ever changed.
+        assert SCOPE_GMAIL_FULL_MAILBOX in str(excinfo.value)
         assert rec.requests == [], "must not attempt a call that can only 403"
 
     def test_send_message_base64_encodes_rfc822(self):
