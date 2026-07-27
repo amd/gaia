@@ -41,8 +41,10 @@ from gaia_agent_email.tools.calendar_tools import (  # noqa: E402
     list_calendar_events_impl,
 )
 from gaia_agent_email.tools.delete_tools import (  # noqa: E402
+    find_trashed_messages_impl,
     permanent_delete_impl,
     restore_message_impl,
+    restore_trashed_message_impl,
     trash_message_impl,
 )
 from gaia_agent_email.tools.organize_tools import (  # noqa: E402
@@ -790,6 +792,72 @@ class TestDeleteTools:
         out = permanent_delete_impl(fake_gmail, db, message_id=msg_id)
         assert out["irreversible"] is True
         assert msg_id not in fake_gmail._messages
+
+    # -- restore_trashed_message (#2523) -------------------------------
+
+    def test_restore_trashed_message_round_trip(self, fake_gmail, db):
+        """State-reconciling restore: no action_id, no undo window."""
+        msg_id = list(fake_gmail._messages.keys())[0]
+        trash_message_impl(fake_gmail, db, message_id=msg_id)
+        assert "TRASH" in fake_gmail.get_message(msg_id)["labelIds"]
+
+        result = restore_trashed_message_impl(fake_gmail, db, message_id=msg_id)
+        assert result["restored"] is True
+        post = fake_gmail.get_message(msg_id)
+        assert "INBOX" in post["labelIds"]
+        assert "TRASH" not in post["labelIds"]
+
+    def test_restore_trashed_message_works_after_undo_window_elapsed(
+        self, fake_gmail, db
+    ):
+        """Regression guard for #2523: restore_message respects the undo
+        window (proven below); restore_trashed_message must not — it never
+        even queries the action_store row that carries the window."""
+        msg_id = list(fake_gmail._messages.keys())[0]
+        out = trash_message_impl(fake_gmail, db, message_id=msg_id)
+        action_id = out["action_id"]
+        import time
+
+        db.update(
+            "email_actions",
+            {"created_at": time.time() - 3600},
+            "action_id = :id",
+            {"id": action_id},
+        )
+        # The old fast path is now expired -- confirm it really is.
+        with pytest.raises(RuntimeError):
+            restore_message_impl(
+                lambda _action: fake_gmail,
+                db,
+                action_id=action_id,
+                window_seconds=30,
+            )
+        # The state-reconciling path is unaffected: the message is still
+        # physically in Trash, so it still restores.
+        result = restore_trashed_message_impl(fake_gmail, db, message_id=msg_id)
+        assert result["restored"] is True
+        post = fake_gmail.get_message(msg_id)
+        assert "INBOX" in post["labelIds"]
+        assert "TRASH" not in post["labelIds"]
+
+    def test_restore_trashed_message_requires_live_trash_state(self, fake_gmail, db):
+        """Fails loud -- never a silent no-op -- when the message is not
+        actually in Trash right now."""
+        msg_id = list(fake_gmail._messages.keys())[0]
+        assert "TRASH" not in fake_gmail.get_message(msg_id)["labelIds"]
+        with pytest.raises(RuntimeError) as exc:
+            restore_trashed_message_impl(fake_gmail, db, message_id=msg_id)
+        assert "not in Trash" in str(exc.value)
+
+    def test_find_trashed_messages_returns_only_trash(self, fake_gmail, db):
+        ids = list(fake_gmail._messages.keys())[:2]
+        trash_message_impl(fake_gmail, db, message_id=ids[0])
+
+        result = find_trashed_messages_impl(fake_gmail)
+
+        found_ids = {m["id"] for m in result["messages"]}
+        assert ids[0] in found_ids
+        assert ids[1] not in found_ids
 
 
 # ---------------------------------------------------------------------------
