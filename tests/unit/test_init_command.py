@@ -840,12 +840,21 @@ class TestEnsureLemonadeInstalledSkipsWhenPresent(unittest.TestCase):
         mock_installer.download_installer.assert_not_called()
         mock_installer.install.assert_not_called()
 
-    def test_older_version_below_minimum_triggers_install_in_ci(self):
+    @patch("gaia.llm.lemonade_client.LemonadeClient")
+    def test_older_version_below_minimum_triggers_install_in_ci(self, mock_client_cls):
         """Case 3b: installed << profile minimum, --yes -> upgrade is invoked.
 
         This case DOES download — verify the upgrade path is taken.
         """
         from gaia.installer.init_command import InitCommand
+        from gaia.llm.lemonade_client import LemonadeClientError
+
+        mock_client = MagicMock()
+        mock_client._send_request.side_effect = LemonadeClientError(
+            "connection refused"
+        )
+        mock_client.health_check.side_effect = LemonadeClientError("connection refused")
+        mock_client_cls.return_value = mock_client
 
         info = LemonadeInfo(
             installed=True,
@@ -954,9 +963,18 @@ class TestLegacyFallback(unittest.TestCase):
     the runtime install path.  Linux uses PPA; Windows uses download+install.
     """
 
-    def test_not_installed_on_linux_proceeds_to_install_via_ppa(self):
+    @patch("gaia.llm.lemonade_client.LemonadeClient")
+    def test_not_installed_on_linux_proceeds_to_install_via_ppa(self, mock_client_cls):
         """On Linux: check_installation not-installed -> install called WITHOUT download."""
         from gaia.installer.init_command import InitCommand
+        from gaia.llm.lemonade_client import LemonadeClientError
+
+        mock_client = MagicMock()
+        mock_client._send_request.side_effect = LemonadeClientError(
+            "connection refused"
+        )
+        mock_client.health_check.side_effect = LemonadeClientError("connection refused")
+        mock_client_cls.return_value = mock_client
 
         info = LemonadeInfo(installed=False, error="lemonade-server not found in PATH")
 
@@ -984,11 +1002,22 @@ class TestLegacyFallback(unittest.TestCase):
         mock_installer.download_installer.assert_not_called()
         mock_installer.install.assert_called_once()
 
-    def test_not_installed_on_windows_proceeds_to_download_and_install(self):
+    @patch("gaia.llm.lemonade_client.LemonadeClient")
+    def test_not_installed_on_windows_proceeds_to_download_and_install(
+        self, mock_client_cls
+    ):
         """On Windows: check_installation not-installed -> download + install called."""
         from pathlib import Path as _P
 
         from gaia.installer.init_command import InitCommand
+        from gaia.llm.lemonade_client import LemonadeClientError
+
+        mock_client = MagicMock()
+        mock_client._send_request.side_effect = LemonadeClientError(
+            "connection refused"
+        )
+        mock_client.health_check.side_effect = LemonadeClientError("connection refused")
+        mock_client_cls.return_value = mock_client
 
         info = LemonadeInfo(installed=False, error="lemonade-server not found in PATH")
 
