@@ -176,8 +176,9 @@ class TestRequestShape:
         never requests. LiveGmailBackend now refuses before any HTTP call —
         an actionable error naming the missing scope, never a raw 403 after
         the user already confirmed something irreversible."""
-        from gaia.connectors.errors import ScopeMismatchError
         from gaia_agent_email.scopes import SCOPE_GMAIL_FULL_MAILBOX
+
+        from gaia.connectors.errors import ScopeMismatchError
 
         backend, rec, _ = _backend(lambda r: httpx.Response(204))
         with pytest.raises(ScopeMismatchError) as excinfo:
