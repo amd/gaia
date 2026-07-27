@@ -22,12 +22,16 @@ PID = 4242
 PORT = 8770
 BASE_URL = f"http://127.0.0.1:{PORT}"
 
+# Verbatim from the Go hub (ui/hub/model.go). The previous fixture used an
+# invented "Enter=launch" form the product has never emitted, so the parser was
+# only ever tested against input that could not occur — and both install tools
+# were broken in the field while these tests passed.
 HUB_FOOTER = (
-    "Enter=launch  /=search  Tab=category  d=delete  v=vote  r=request  "
-    "?=help  q=quit"
+    "  enter run · i install · d remove · / search · tab category · "
+    "v vote · r refresh · ? help · q quit"
 )
 HUB_FOOTER_NO_INSTALL = (
-    "Enter=launch  /=search  Tab=category  v=vote  r=request  ?=help  q=quit"
+    "  enter run · / search · tab category · v vote · r refresh · ? help · q quit"
 )
 
 
@@ -993,7 +997,7 @@ def test_install_agent_without_a_binding_sends_no_keys(live_tui):
     assert out["status"] == "error"
     assert "not yet available" in out["detail"]
     assert "Bindings currently offered:" in out["detail"]
-    assert "Enter=launch" in out["detail"]
+    assert "enter" in out["detail"]
     assert fake.keys_sent == []
 
 
@@ -1142,14 +1146,17 @@ def test_install_that_changes_nothing_is_an_error(live_tui):
 
 def test_footer_parsing():
     bindings = tui_mcp._parse_footer_bindings(f"hub\n  bash\n{HUB_FOOTER}")
-    assert bindings["Enter"] == "launch"
-    assert bindings["d"] == "delete"
+    assert bindings["enter"] == "run"
+    assert bindings["d"] == "remove"
+    assert bindings["i"] == "install"
     assert tui_mcp._find_binding(bindings, "uninstall") == "d"
-    assert tui_mcp._find_binding(bindings, "install") is None
+    assert tui_mcp._find_binding(bindings, "install") == "i"
 
-    with_install = tui_mcp._parse_footer_bindings("x\nEnter=launch  i=install  q=quit")
-    assert tui_mcp._find_binding(with_install, "install") == "i"
-    assert tui_mcp._find_binding(with_install, "uninstall") is None
+    # The legacy "=" form still parses, so a future footer change in either
+    # direction is covered rather than silently unsupported.
+    legacy = tui_mcp._parse_footer_bindings("x\nEnter=launch  i=install  q=quit")
+    assert tui_mcp._find_binding(legacy, "install") == "i"
+    assert tui_mcp._find_binding(legacy, "uninstall") is None
 
     assert tui_mcp._parse_footer_bindings("") == {}
 
