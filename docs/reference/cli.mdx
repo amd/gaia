@@ -603,7 +603,19 @@ gaia agent install <id> --trust            # required for non-verified agents
 
 `gaia agent list` shows what the hub offers (with an `[installed]` marker) so
 you know which id to pass. This is the supported way to provision a sidecar
-agent (e.g. `email`) on a machine with no UI. Running the agent (e.g.
+agent (e.g. `email`) on a machine with no UI.
+
+<Note>
+`gaia agent install` installs **in-process**. [`gaia hub install`](#hub-command)
+performs the same install through the daemon, which additionally stops that
+agent's running sidecar first and keeps it stopped for the whole download —
+the install directory is the sidecar's own binary cache. Reach for `gaia hub`
+when the daemon supervises the agent, and `gaia agent` when it does not (or
+when the daemon extras are not installed). Both enforce the same `--trust` gate
+and the same SHA-256 verification.
+</Note>
+
+Running the agent (e.g.
 `gaia email -q "..."`) starts its sidecar automatically on first use;
 `gaia daemon start-agent <id>` is an optional pre-flight to launch and
 health-check it early.
@@ -2280,6 +2292,163 @@ gaia daemon stop-agent email              # stop one sidecar, daemon stays up
 | `agents` | — | List every registered sidecar agent: id, state, and (when running) mode, pid, port, contract version — never the bearer token. Dev-mode entries also show their source dir. |
 | `start-agent <id>` | `--mode user\|dev` | Start (or attach to) one agent's sidecar, auto-starting the daemon if needed. Requesting a mode different from the running sidecar's is a loud conflict — stop it first. |
 | `stop-agent <id>` | — | Tree-kill one agent's sidecar; the daemon keeps running. Attach-only: no daemon running → clear error, exit 1. A sidecar surviving the kill is a loud failure, never silent. |
+
+**Daemon HTTP surface** (the daemon serves no OpenAPI schema, so this is the
+contract; every route needs `Authorization: Bearer <token>` from
+`~/.gaia/host/instance.json`):
+
+| Route | Purpose |
+|-------|---------|
+| `GET /daemon/v1/status` | pid / port / uptime / API version |
+| `POST /daemon/v1/shutdown` | graceful drain + exit |
+| `GET /daemon/v1/agents` | registered sidecars — never the bearer token |
+| `POST /daemon/v1/agents/{id}/ensure` | spawn-or-attach; the body carries the sidecar token |
+| `POST /daemon/v1/agents/{id}/stop` | tree-kill + verify the pid is gone |
+| `GET /daemon/v1/catalog` | Agent Hub catalog merged with local install state (`?refresh` / `?installed_only` / `?include_unsupervised`) |
+| `POST /daemon/v1/agents/{id}/install` | 202, queue an install (`{"version": "...", "trusted": true}`, both optional; `trusted` defaults to **false** → 403 for a non-verified agent) |
+| `GET /daemon/v1/agents/{id}/install-status` | poll `queued\|running\|completed\|failed` + `error` |
+| `DELETE /daemon/v1/agents/{id}` | stop the sidecar, verify, then remove the install dir |
+| `ANY /v1/<agent>/*` | relay to that agent's sidecar (SSE streamed unbuffered) |
+
+---
+
+### Hub Command
+
+Browse, install and uninstall agents from the [GAIA Agent Hub](https://hub.amd-gaia.ai).
+`gaia hub` is a thin client over the daemon's install routes, so the CLI, the
+Agent UI and the TUI share **one** installer, one SHA-256 check and one install
+lock — installing from two places at once is a clean 409, never a corrupt
+download. The daemon is started automatically if it is not already running.
+
+Agents install into `~/.gaia/agents/<id>/` (binary + `gaia-agent.yaml` +
+`.installed` sentinel). Every artifact is verified against the SHA-256 in the
+hub manifest before it is written; a mismatch fails the install and leaves
+nothing behind — there is no "use it anyway" path.
+
+```bash
+gaia hub list                      # catalog + which agents are installed
+gaia hub list --installed          # only what is installed (works offline)
+gaia hub list --refresh            # bypass the 5-minute catalog cache
+gaia hub install email --trust     # required: email is a non-verified agent
+gaia hub install email --version 0.5.0 --trust
+gaia hub uninstall email           # stops the sidecar first, then removes the dir
+```
+
+| Action | Options | Description |
+|--------|---------|-------------|
+| `list` | `--installed`, `--refresh` | Print id, latest version, installed version (`↑` when an update is available), download size and name. Warns when the hub was unreachable and the cached catalog was used. `--installed` is answered from the local `.installed` sentinels and needs no network. |
+| `install <id>` | `--version`, `--trust` | Download + verify + install, printing each phase. Exit 1 on any failure, with the reason. `--trust` is required for any agent outside the `verified` security tier. |
+| `uninstall <id>` | — | Stop the agent's sidecar, verify its pid is gone, then remove `~/.gaia/agents/<id>/`. |
+
+**Notes**
+
+- Install and uninstall both stop a running sidecar first — the install
+  directory *is* the sidecar's binary cache — and keep it stopped for the whole
+  operation, so nothing can respawn it mid-download. If the process survives the
+  tree-kill, the command aborts loudly and nothing is mutated.
+- Install and uninstall of the same agent are serialized: the second caller gets
+  a clean "already in progress" error instead of racing the first.
+- The catalog only lists agents this GAIA build can actually supervise; anything
+  else is reported as hidden rather than silently dropped.
+- Reserved built-in agents (e.g. `builder`) ship with the wheel and are refused
+  by both `install` and `uninstall`.
+- **Trust gate.** Any agent outside the `verified` security tier runs
+  third-party code on your machine, so it is refused (HTTP 403) until you pass
+  `--trust`. `email` is `experimental`, so `gaia hub install email` alone fails
+  with the remedy named. Nothing infers the opt-in for you, and there is no
+  bypass — a client (TUI, UI) renders this as a "Trust & Install" confirmation
+  and retries with `trusted: true`.
+- Requires the daemon extras (`pip install "amd-gaia[ui]"`), same as `gaia daemon`.
+
+<Note>
+`gaia agent install <id>` does the same install **in-process**; `gaia hub
+install <id>` routes it through the daemon, which additionally stops the
+agent's running sidecar first and holds it stopped for the download. Prefer
+`gaia hub` when the daemon supervises that agent (today: `email`); `gaia agent`
+is the right call on a machine with no daemon extras installed. See the note
+under [Agent Command](#agent-command).
+</Note>
+
+---
+
+### TUI Control API
+
+The terminal hub (`gaia tui`, the Go/Bubble Tea binary) can expose a loopback
+HTTP API that drives **the session you are looking at** — not a headless copy.
+An assistant navigates, types, and launches agents while the frames render in
+your terminal in real time. It is how the TUI gets tested without a human at
+the keyboard.
+
+Off by default. Bound to `127.0.0.1` only, and every request needs a bearer
+token.
+
+```bash
+gaia tui --control                 # auto-assign a port
+gaia tui --control-port 8770       # explicit port (implies --control)
+gaia tui --control --debug         # log every injected key, state change, and wait
+```
+
+<Note>
+  These are persistent flags on the TUI binary's root command, so they apply to
+  the hub, `hub`, and `chat` alike. Building from source, that binary is
+  `tui/bin/gaia` (`cd tui && make build`).
+</Note>
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--control` | flag | off | Start the control API on an auto-assigned loopback port. |
+| `--control-port` | integer | `0` | Bind a specific port. Implies `--control`. `0` auto-assigns. Port `4001` is reserved and rejected. |
+| `--debug` | flag | off | Log every injected key, state transition, and wait resolution/timeout to stderr. |
+
+On start the TUI writes `~/.gaia/tui/control.json` (mode `0600`) holding the
+pid, port, and token, and removes it on exit. Clients find the TUI by reading
+that file — the token is never printed to the terminal. A client must verify
+**both** that the recorded pid is alive and that `/control/v1/status` answers
+with a matching pid before trusting the port: after a crash the file can point
+at a port some unrelated process now owns.
+
+<Warning>
+  Anything that can read `~/.gaia/tui/control.json` can drive your TUI — the
+  same trust boundary as `~/.gaia/host/instance.json` for the daemon. Leave
+  `--control` off unless you want a session driven.
+</Warning>
+
+Endpoints (all under `/control/v1`, all requiring `Authorization: Bearer <token>`):
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /status` | `running` plus the active view, active agent, streaming, hub tab, selection, terminal size, and `can_return_to_hub`. |
+| `GET /screen` | The current rendered frame. `?format=plain` (default, ANSI stripped) or `?format=ansi`. |
+| `POST /keys` | Inject named keys — `{"keys": ["tab","down","enter"]}`. |
+| `POST /text` | Type a string as runes — `{"text": "triage my inbox"}`. |
+| `POST /wait` | Block until the screen or state matches, or time out. A timeout reports what the screen actually contained. |
+| `GET /frames` | Recent rendered frames (`?since=N`), for debugging what happened. |
+| `POST /resize` | Re-lay-out at a given size — `{"cols":120,"rows":40}`. |
+
+Errors come back as `{"error": {"code", "message", "hint"}}`; a `/wait` timeout is
+HTTP 408 and carries the screen it saw.
+
+Two response details matter when driving this:
+
+- **`settled`** on `/keys`, `/text`, and `/resize`. The call returns only once every
+  injected key has been *consumed and redrawn*, so reading `/screen` straight after
+  is race-free. `settled: false` means the model was still busy — the input is
+  queued, so re-read rather than assume it was ignored. It does **not** promise the
+  consequences are done: pressing `enter` to launch an agent is consumed
+  immediately, while the view switch it kicks off lands later. Use `/wait` for
+  anything asynchronous.
+- **HTTP 503 `not_running`** when the TUI's event loop is not consuming input —
+  it is still starting, or the user has quit. Bubble Tea silently drops messages
+  in that window, so the API refuses instead of reporting a success for keys that
+  went nowhere. Reads (`/status`, `/screen`, `/frames`) keep working.
+
+`can_return_to_hub` exists because `esc` is not universally "go back": in a chat
+opened from the hub it returns there, but in a standalone `gaia chat --subprocess`
+session it **quits the program**. A driver that guesses wrong kills the session it
+was asked to drive, so the state says which.
+
+Most callers should not speak this API directly — the
+[TUI MCP server](/guides/mcp/tui) wraps it as MCP tools.
 
 ---
 
