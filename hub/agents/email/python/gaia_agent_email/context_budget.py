@@ -95,10 +95,14 @@ def active_profile_ctx_size() -> int:
 
     try:
         device = GaiaConfig.load().default_device
-    except GaiaConfigError:
-        # A corrupt config must not crash a budget lookup — fall back to the
-        # profile resolver's own default (GPU/CPU) rather than guessing npu.
-        device = None
+    except GaiaConfigError as exc:
+        # Mirrors gaia.cli._configured_device(): a corrupt config must not
+        # silently pick a device — re-raise with the fix, never guess past it.
+        raise GaiaConfigError(
+            f"Cannot resolve the inference device to size the email context "
+            f"budget: {exc}. Fix or delete {GaiaConfig.config_path()}, or run "
+            "`gaia config set default_device gpu`."
+        ) from exc
     return profile_ctx_size(device)
 
 
