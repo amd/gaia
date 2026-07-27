@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import requests
 
+from gaia.logger import route_console_logging_to_stderr
 from gaia.ui.sse_handler import (
     _RAG_RESULT_JSON_SUB_RE,
     _THINK_TAG_SUB_RE,
@@ -834,6 +835,8 @@ def main():
     mcp = create_agent_ui_mcp(backend_url=args.backend)
 
     if args.stdio:
+        # stdout carries JSON-RPC framing in stdio mode; keep logs off it.
+        route_console_logging_to_stderr()
         print("Starting GAIA Agent UI MCP Server (stdio mode)...", file=sys.stderr)
         mcp.run(transport="stdio")
     else:
