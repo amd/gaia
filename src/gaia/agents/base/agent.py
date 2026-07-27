@@ -37,7 +37,11 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK
-from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, GPU_CTX_SIZE
+from gaia.llm.lemonade_client import (
+    DEFAULT_MODEL_NAME,
+    GPU_CTX_SIZE,
+    is_context_overflow_error,
+)
 
 if TYPE_CHECKING:
     from gaia.agents.base.goal_store import Goal, Proposal
@@ -3269,11 +3273,7 @@ Do NOT wrap conversational replies in JSON.
                     except Exception as e:
                         logger.error(f"Unexpected error during streaming: {e}")
                         err_text = str(e).lower()
-                        is_ctx_overflow = (
-                            "exceed_context_size" in err_text
-                            or "exceeds the available context size" in err_text
-                            or "got too long" in err_text
-                        )
+                        is_ctx_overflow = is_context_overflow_error(err_text)
                         # See non-streaming branch for explanation: re-raise
                         # if model was loaded with the wrong (small) ctx so
                         # the chat helper can reload it at 32K.
@@ -3409,14 +3409,12 @@ Do NOT wrap conversational replies in JSON.
                             print(f"[DEBUG] Error calling LLM: {e}")
                         logger.error(f"Unexpected error calling LLM: {e}")
 
-                        # Did we hit a context-overflow mid-loop? Detect by
-                        # substring (typed exceptions get wrapped by AgentSDK).
+                        # Did we hit a context-overflow mid-loop? Classify by
+                        # structure-then-text since typed exceptions get
+                        # wrapped by AgentSDK and the backend's error shape
+                        # varies (llama.cpp vs. FastFlowLM, #2513).
                         err_text = str(e).lower()
-                        is_ctx_overflow = (
-                            "exceed_context_size" in err_text
-                            or "exceeds the available context size" in err_text
-                            or "got too long" in err_text
-                        )
+                        is_ctx_overflow = is_context_overflow_error(err_text)
                         # Detect "wrong ctx size loaded" — substring match on
                         # error text first (when raw payload is preserved),
                         # then probe Lemonade health if substring missed
