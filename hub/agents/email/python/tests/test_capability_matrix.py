@@ -24,6 +24,7 @@ so the module is loaded by file path, exactly like ``test_stamp_version.py`` and
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -396,3 +397,41 @@ def test_eval_followup_plan_current(matrix):
         ), f"EVAL_FOLLOWUP_PLAN[{suite!r}] looks like a lazy placeholder: {text!r}"
 
     assert matrix.eval_suites["followups"]["wired"] is False
+
+
+# ---------------------------------------------------------------------------
+# Surface counts are derived everywhere, never written down
+# ---------------------------------------------------------------------------
+
+
+def test_definitions_section_agrees_with_the_computed_surface_counts(matrix):
+    """The Definitions blurb and the matrix header must state the same numbers.
+
+    They didn't: ``TOOLS_COUNT_DEFINITION`` was a finished string with "16
+    functional verbs" baked in, so the generated doc claimed 16 REST verbs in
+    its Definitions section and computed 21 a few lines below — in one file,
+    from one generator run. AC1's byte-identical check can't catch that; it
+    compares the doc to a regeneration, and both carried the same stale
+    literal. Now the blurb is a template fed by the derived counts.
+    """
+    rendered = capability_matrix.render_markdown(matrix)
+    rest = matrix.rest_functional_count
+    mcp = len(matrix.mcp_tools)
+
+    assert f"the REST API's {rest} functional verbs" in rendered
+    assert f"the MCP interface's {mcp} task-level tools" in rendered
+    assert f"({rest} REST functional + {mcp} MCP)" in rendered
+    assert f"- REST functional verbs: **{rest}**" in rendered
+
+
+def test_no_surface_count_literal_is_baked_into_the_definition():
+    """``TOOLS_COUNT_DEFINITION`` must interpolate, not hardcode."""
+    assert "{rest_functional}" in capability_matrix.TOOLS_COUNT_DEFINITION
+    assert "{mcp_tools}" in capability_matrix.TOOLS_COUNT_DEFINITION
+    assert not re.search(
+        r"\b\d+\s+functional verbs\b", capability_matrix.TOOLS_COUNT_DEFINITION
+    ), (
+        "a surface count was hardcoded back into TOOLS_COUNT_DEFINITION — it "
+        "will drift from the derived count again. Use the {rest_functional} / "
+        "{mcp_tools} placeholders."
+    )

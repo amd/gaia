@@ -5,7 +5,7 @@
 > **Component:** Email request/response contract (issue #1262)
 > **Module:** `gaia_agent_email.contract`
 > **Validation:** pydantic v2
-> **Schema version:** `2.3`
+> **Schema version:** `2.5`
 
 ---
 
@@ -31,13 +31,16 @@ stable shape.
 - **Fail loudly.** Every model forbids unknown fields (`extra="forbid"`). An
   off-contract payload raises a `ValidationError` naming the offending field,
   never a silently coerced result.
-- **Versioned.** `SCHEMA_VERSION` (`"2.3"`) is pinned in the module and echoed in
+- **Versioned.** `SCHEMA_VERSION` (`"2.5"`) is pinned in the module and echoed in
   every request and response so a consumer can detect a breaking change.
 
 ### Version history
 
-`SCHEMA_VERSION` bumps only on a breaking change; additive surfaces keep older
-consumers working.
+`SCHEMA_VERSION` bumps the MINOR on every change, additive or breaking, and
+the MAJOR has never moved. Clients gate on the MAJOR only (`checkVersion` in
+the npm package accepts any higher MINOR), so the one breaking change below —
+`2.3` — was **not** signalled to pinned consumers. Treat a MINOR bump as
+"read the row before upgrading", not as "safe by construction".
 
 | Version | Change |
 |---|---|
@@ -46,6 +49,8 @@ consumers working.
 | `2.1` | Additive REST surfaces: inbox search (#1781), archive + phishing-quarantine and their undo (#1779), calendar view/create/respond (#1780), inbox pre-scan (#1778). |
 | `2.2` | Additive attachment handling (#1542): `EmailMessage` / `EmailTriageResult` / `DraftReply` gain an `attachments` metadata list; draft/send accept `OutgoingAttachment` payloads. |
 | `2.3` | **Breaking:** `EmailTriageResult.draft` is now a `DraftScaffold` (recipient + subject only) instead of a `DraftReply` — triage never composed a body, so the always-empty `draft.body` is dropped. `DraftReply` (with `body`) is unchanged and remains the `POST /v1/email/draft` + MCP `draft_reply` response. |
+| `2.4` | Additive (#2016): new streaming agent-loop surface — `POST /v1/email/query` (NL request in, the seven canonical SSE event types out) and `POST /v1/email/query/{run_id}/cancel`. No existing shape changed, so `2.3` consumers keep working. |
+| `2.5` | Additive (#2154): OAuth forward-OUT intake — `POST /v1/connections/{provider}` (the daemon forwards a short-lived access token, never a refresh token), `GET /v1/connections` (metadata only), `DELETE /v1/connections/{provider}`. No existing shape changed, so `2.4` consumers keep working. |
 
 ---
 
@@ -79,7 +84,7 @@ test asserts byte-for-byte equality, so drift in either place fails CI.
 
 | Field | Type | Notes |
 |---|---|---|
-| `schema_version` | string | Contract version. Defaults to `"2.3"`. |
+| `schema_version` | string | Contract version. Defaults to `"2.5"`. |
 | `payload` | `SingleEmailInput` \| `ThreadInput` | Discriminated on `kind`. |
 | `context` | `TriageContext` \| null | Optional; biases categorization/summary. |
 
@@ -251,7 +256,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.3",
+  "schema_version": "2.5",
   "payload": {
     "kind": "single",
     "principal": { "name": "Alice Example", "email": "alice@example.com" },
@@ -273,7 +278,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.3",
+  "schema_version": "2.5",
   "request_kind": "single",
   "result": {
     "category": "NEEDS_RESPONSE",
@@ -300,7 +305,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.3",
+  "schema_version": "2.5",
   "payload": {
     "kind": "thread",
     "principal": { "name": "Alice Example", "email": "alice@example.com" },
@@ -333,7 +338,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.3",
+  "schema_version": "2.5",
   "request_kind": "thread",
   "result": {
     "category": "NEEDS_RESPONSE",
@@ -360,7 +365,7 @@ triages up to `MAX_BATCH_SIZE` (**100**) emails or threads in one request: an
 
 | Field | Type | Notes |
 |---|---|---|
-| `schema_version` | string | Contract version. Defaults to `"2.3"`. |
+| `schema_version` | string | Contract version. Defaults to `"2.5"`. |
 | `items` | `(SingleEmailInput \| ThreadInput)[]` | 1–100 inputs, discriminated on `kind` — the same item shapes the single endpoint's `payload` accepts. Over 100 → `422`. |
 | `context` | `TriageContext` \| null | Optional; applied to **all** items. |
 
@@ -393,7 +398,7 @@ The MCP surface mirrors this with a `triage_email_batch` tool (the single
 
 ```json
 {
-  "schema_version": "2.3",
+  "schema_version": "2.5",
   "items": [
     {
       "kind": "single",
@@ -423,7 +428,7 @@ The MCP surface mirrors this with a `triage_email_batch` tool (the single
 
 ```json
 {
-  "schema_version": "2.3",
+  "schema_version": "2.5",
   "results": [
     {
       "index": 0,
@@ -609,11 +614,12 @@ server exposes it — null otherwise (no config echo, no guessing).
 even when the model-catalog probe fails and `present` reports `false` —
 the two fields answer different questions from different probes.
 
-> **Note:** the **interactive `gaia email` CLI path currently loads the model
-> at 32K** (the `agent_context_sizes` registry in `src/gaia/cli.py`) — the
-> envelope's acceptable max, not the 16K target. Pinning the interactive path
-> to the target is deliberately out of #1892's scope; the envelope above
-> governs the **eval/benchmark/release** path today.
+> **Note:** no *interactive* front-door loads the model. Since #2191 `gaia email`
+> relays `POST /v1/email/query` to this sidecar, so the sidecar's configuration
+> decides `ctx_size`; the `agent_context_sizes` registry this note used to cite
+> no longer exists. `gaia eval benchmark` is the exception — it constructs
+> `EmailAgentConfig(ctx_size=...)` in-process, which is the path the envelope
+> above governs.
 
 **Shared-server constraint:** Lemonade Server is single-tenant per model
 slot. An agent instance with an exact ctx pin (`EmailAgentConfig.ctx_size` /
