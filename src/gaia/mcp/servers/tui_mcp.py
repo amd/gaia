@@ -566,17 +566,33 @@ _FOOTER_SEP_RE = re.compile(r"\s{2,}|\s*[·|•]\s*")
 
 
 def _parse_footer_bindings(screen: str) -> Dict[str, str]:
-    """Parse the hub footer (``Enter=launch  /=search  d=delete``) into key→action.
+    """Parse the hub footer into key→action.
 
-    Returns the bindings of the last line that advertises at least two of them,
-    or ``{}`` when the screen has no recognizable footer.
+    Two shapes are accepted, because the product emits the second one and only
+    the fixtures ever emitted the first:
+
+    * ``Enter=launch  /=search`` — explicit ``=``
+    * ``enter run · i install · d remove`` — key, space, action (what the Go
+      hub actually renders; see ``ui/hub/model.go``)
+
+    Requiring ``=`` made every real footer parse to nothing, so the install and
+    uninstall tools always reported the hub as unavailable.
+
+    Returns the bindings of the last line advertising at least two of them, or
+    ``{}`` when the screen has no recognizable footer.
     """
     for line in reversed([ln for ln in (screen or "").splitlines() if ln.strip()]):
         bindings: Dict[str, str] = {}
         for token in _FOOTER_SEP_RE.split(line.strip()):
-            if "=" not in token:
+            token = token.strip()
+            if not token:
                 continue
-            key, _, action = token.partition("=")
+            if "=" in token:
+                key, _, action = token.partition("=")
+            else:
+                # "i install" -> ("i", "install"); "tab category" -> ("tab",
+                # "category"). A lone word is a label, not a binding.
+                key, _, action = token.partition(" ")
             key, action = key.strip(), action.strip()
             if key and action:
                 bindings[key] = action

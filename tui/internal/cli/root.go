@@ -33,7 +33,19 @@ func init() {
 	rootCmd.Flags().StringVar(&mockAgent, "mock", "", "path to mock agent binary for testing (overrides all agent binaries)")
 }
 
+// Execute runs the CLI.
+//
+// A leading `tui` word is accepted and dropped. This binary is addressed as
+// `gaia tui …` everywhere it is documented, but its own root command is `gaia`,
+// so without this `gaia tui install email` — the exact line the docs and the
+// install refusal tell people to run — would fail with "unknown command". Both
+// spellings work; only the first argument is considered, so an agent named
+// "tui" is unaffected.
 func Execute() error {
+	args := os.Args[1:]
+	if len(args) > 0 && args[0] == "tui" {
+		rootCmd.SetArgs(args[1:])
+	}
 	return rootCmd.Execute()
 }
 
