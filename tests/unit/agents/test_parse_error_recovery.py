@@ -193,6 +193,38 @@ class TestProcessQueryRecoversOnContextOverflow:
             assert "exceeds the available context size" not in text
             assert "Traceback" not in text
 
+    def test_flm_context_overflow_after_retry_gives_friendly_fallback(self, agent):
+        """#2513 work item 3: once the FastFlowLM 400 is reachable, an
+        exhausted retry must render the SAME "I had to trim the
+        conversation" message the llama.cpp path already has -- not the
+        generic "Sorry, I ran into an unexpected problem" wrapper, and not
+        a leaked "Max length reached!" backend string.
+        """
+        agent.streaming = False
+        agent._is_loaded_ctx_too_small = lambda: False
+        flm_error_text = (
+            "Error in chat completions (status 400): "
+            '{"error":{"code":400,"details":{"backend":"FastFlowLM",'
+            '"response":{"error":{"code":400,"message":"Max length reached!",'
+            '"type":"model_error"}}},"message":"Max length reached!",'
+            '"status_code":400,"type":"model_error"}}'
+        )
+        responses = [RuntimeError(flm_error_text), RuntimeError(flm_error_text)]
+        chat = MagicMock()
+
+        def _send(*_, **__):
+            raise responses.pop(0)
+
+        chat.send_messages = MagicMock(side_effect=_send)
+        agent.chat = chat
+        result = agent.process_query("x", max_steps=5)
+        # ``process_query`` returns ``{"status": ..., "result": <final_answer>, ...}``
+        text = result["result"] if isinstance(result, dict) else str(result)
+        assert text, "expected the friendly trim-exhausted fallback text"
+        assert "I had to trim the conversation" in text
+        assert "Max length reached" not in text
+        assert "Sorry, I ran into" not in text
+
     def test_wrong_ctx_loaded_reraises_for_model_reload(self, agent):
         """When the probe reports a too-small loaded ctx, the overflow is
         re-raised so the chat helper can reload the model — instead of being
@@ -244,10 +276,11 @@ class TestProcessQueryRecoversOnContextOverflow:
         assert any(
             e.get("type") == "llm_context_overflow_trimmed" for e in agent.error_history
         )
-        text = result.get("response") if isinstance(result, dict) else str(result)
-        if text:
-            assert "Max length reached" not in text
-            assert "Sorry, I ran into" not in text
+        # ``process_query`` returns ``{"status": ..., "result": <final_answer>, ...}``
+        text = result["result"] if isinstance(result, dict) else str(result)
+        assert text, "expected the retried answer to reach the user"
+        assert "Max length reached" not in text
+        assert "Sorry, I ran into" not in text
 
 
 class TestProcessQueryRecoversOnContextOverflowStreaming:
@@ -290,10 +323,11 @@ class TestProcessQueryRecoversOnContextOverflowStreaming:
         assert any(
             e.get("type") == "llm_context_overflow_trimmed" for e in agent.error_history
         )
-        text = result.get("response") if isinstance(result, dict) else str(result)
-        if text:
-            assert "Max length reached" not in text
-            assert "Sorry, I ran into" not in text
+        # ``process_query`` returns ``{"status": ..., "result": <final_answer>, ...}``
+        text = result["result"] if isinstance(result, dict) else str(result)
+        assert text, "expected the retried streamed answer to reach the user"
+        assert "Max length reached" not in text
+        assert "Sorry, I ran into" not in text
 
 
 class TestRepairInvalidJsonEscapes:
