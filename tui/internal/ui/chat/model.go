@@ -516,11 +516,10 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		}
 
 	case event.StepEvent:
+		// Tracked, not shown. "Step 2/50" is the agent loop's bound, not the
+		// user's progress — it says neither what is happening nor how far along
+		// the work is, and it pushed the informative tool line off the screen.
 		m.totalSteps = e.Step
-		m.activity = append(m.activity, ActivityItem{
-			Kind:    "step",
-			Content: fmt.Sprintf("Step %d/%d", e.Step, e.Total),
-		})
 
 	case event.StatusEvent:
 		if e.Status == "complete" {

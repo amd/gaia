@@ -192,9 +192,13 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 	// events can still be delivered on ctx after runCtx is gone.
 	runCtx, cancel := context.WithCancel(ctx)
 
+	relayPath := fmt.Sprintf("/v1/%s/query", url.PathEscape(s.agentID))
+	s.opts.Logf("sse: POST %s%s run_id=%s model=%q max_steps=%d context_turns=%d",
+		inst.BaseURL(), relayPath, runID, s.opts.Model, s.opts.MaxSteps, len(history))
+
 	resp, inst, err := s.daemon.Do(runCtx, inst, daemon.Request{
 		Method: http.MethodPost,
-		Path:   fmt.Sprintf("/v1/%s/query", url.PathEscape(s.agentID)),
+		Path:   relayPath,
 		Body:   payload,
 		Header: http.Header{
 			"Content-Type": []string{"application/json"},
@@ -207,6 +211,7 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 		cancel()
 		return nil, err
 	}
+	s.opts.Logf("sse: relay answered HTTP %d for '%s' run_id=%s", resp.StatusCode, s.agentID, runID)
 	if resp.StatusCode != http.StatusOK {
 		detail := daemon.ErrorDetail(resp)
 		status := resp.StatusCode
@@ -324,6 +329,9 @@ func (s *SSEClient) consume(
 		// a value-copied Bubble Tea model) and avoids quadratic reallocation.
 		streamed  strings.Builder
 		delivered = true
+		// Compact records of cards drawn this turn, folded into the transcript
+		// so the next turn can resolve "that one" against what is on screen.
+		shown []string
 	)
 
 	for {
@@ -342,6 +350,13 @@ func (s *SSEClient) consume(
 		if fin, isFinal := evt.(event.CanonicalFinalEvent); isFinal {
 			answer = fin.Answer
 		}
+		if tr, isResult := evt.(event.CanonicalToolResultEvent); isResult && tr.Render != "" {
+			// What the user can SEE has to be what the model can refer to. A
+			// card is drawn here, not by the sidecar, so without this the next
+			// turn's history holds only the model's one-line framing — and a
+			// follow-up like "when is that one?" resolves against nothing.
+			shown = append(shown, displayedCard(tr))
+		}
 		if !emit(evt) {
 			delivered = false
 			break
@@ -359,7 +374,7 @@ func (s *SSEClient) consume(
 				// empty `final` — keep the streamed text as the turn's answer.
 				answer = streamed.String()
 			}
-			s.appendTurn(query, answer)
+			s.appendTurn(query, answer, shown)
 		}
 		return
 	}
@@ -534,13 +549,60 @@ func (s *SSEClient) clearActive(handle *runHandle) {
 	s.mu.Unlock()
 }
 
-func (s *SSEClient) appendTurn(query, answer string) {
+func (s *SSEClient) appendTurn(query, answer string, shown []string) {
+	// The assistant turn records what the USER saw, not only what the model
+	// said. Cards are drawn by this client, so their contents never reach the
+	// sidecar's history on their own — and a follow-up referring to a row
+	// ("when is that one?") would resolve against a one-line summary.
+	content := answer
+	if len(shown) > 0 {
+		content = strings.TrimSpace(
+			answer + "\n\n[shown to the user]\n" + strings.Join(shown, "\n"),
+		)
+	}
 	s.mu.Lock()
 	s.transcript = append(s.transcript,
 		Turn{Role: "user", Content: query},
-		Turn{Role: "assistant", Content: answer},
+		Turn{Role: "assistant", Content: content},
 	)
 	s.mu.Unlock()
+}
+
+// displayedCard renders a drawn card as the few lines a model needs to resolve
+// a reference to it. Deliberately lossy: senders and subjects are what users
+// point at, and a verbatim payload would crowd the context it is meant to help.
+func displayedCard(tr event.CanonicalToolResultEvent) string {
+	const maxRows = 40
+	var rows []string
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(tr.Data, &payload); err != nil {
+		return tr.Render + " card displayed"
+	}
+	for _, bucket := range []string{"urgent", "actionable", "suggested_archives"} {
+		raw, ok := payload[bucket]
+		if !ok {
+			continue
+		}
+		var items []struct {
+			MessageID string `json:"message_id"`
+			Sender    string `json:"sender"`
+			Subject   string `json:"subject"`
+		}
+		if json.Unmarshal(raw, &items) != nil {
+			continue
+		}
+		for _, it := range items {
+			if len(rows) >= maxRows {
+				break
+			}
+			rows = append(rows, fmt.Sprintf("- [%s] %s — %s (id %s)",
+				bucket, it.Sender, it.Subject, it.MessageID))
+		}
+	}
+	if len(rows) == 0 {
+		return tr.Render + " card displayed"
+	}
+	return strings.Join(rows, "\n")
 }
 
 // Transcript returns a copy of the host-owned transcript pushed as `context`.

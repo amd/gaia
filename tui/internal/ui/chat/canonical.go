@@ -27,8 +27,12 @@ type questionFailedMsg struct{ err error }
 func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bool) {
 	switch e := evt.(type) {
 	case event.CanonicalStatusEvent:
-		if msg := strings.TrimSpace(e.Message); msg != "" {
-			m.activity = append(m.activity, ActivityItem{Kind: "status", Content: msg})
+		// One live line, replaced — not a log. A user watching a 200s turn needs
+		// to know what is happening NOW; an accumulating list of "Step 2/50"
+		// and "Thinking" answers a question nobody asked and buries the tool
+		// call that actually says what the agent is doing.
+		if msg := userFacingStatus(e.Message); msg != "" {
+			m.setLiveStatus(msg)
 		}
 
 	case event.CanonicalTokenEvent:
@@ -235,4 +239,44 @@ func toolResultSucceeded(data json.RawMessage) bool {
 		return *probe.Success
 	}
 	return true
+}
+
+// userFacingStatus keeps only what a person watching the turn can act on, and
+// rewrites agent-loop vocabulary into it. Returns "" for noise.
+//
+// Dropped: the model name (identical on every message of every turn), the step
+// counter (a loop bound, not progress), and bare "Thinking" (the spinner
+// already says that).
+func userFacingStatus(raw string) string {
+	msg := strings.TrimSpace(raw)
+	switch {
+	case msg == "":
+		return ""
+	case msg == "Thinking":
+		return ""
+	case strings.HasPrefix(msg, "Processing with "):
+		return ""
+	case strings.HasPrefix(msg, "Step ") && strings.Contains(msg, "/"):
+		return ""
+	case strings.HasPrefix(msg, "Completed in "):
+		return ""
+	}
+	return msg
+}
+
+// setLiveStatus replaces the current status line instead of appending one, so
+// the activity area shows the latest stage rather than a transcript of stages.
+func (m *ChatModel) setLiveStatus(msg string) {
+	for i := len(m.activity) - 1; i >= 0; i-- {
+		if m.activity[i].Kind == "status" {
+			m.activity[i].Content = msg
+			return
+		}
+		// A completed tool call is evidence of work and stays; a status line
+		// after it is a NEW stage, so stop looking and add one.
+		if m.activity[i].Kind == "tool" {
+			break
+		}
+	}
+	m.activity = append(m.activity, ActivityItem{Kind: "status", Content: msg})
 }
