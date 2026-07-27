@@ -33,8 +33,15 @@ func TestCtrlCQuitsFromEveryModal(t *testing.T) {
 			d.send(key("y"))
 		}},
 		{"uninstall confirm", func(d *driver) {
+			// Installed has to be reached by installing something: no agent
+			// ships installed any more.
+			d.gotoTab("Available")
+			d.selectAgent("email")
+			d.send(key("i"))
+			d.send(key("y"))
+			d.send(keyEsc()) // dismiss the install result box
 			d.gotoTab("Installed")
-			d.selectAgent("bash")
+			d.selectAgent("email")
 			d.send(key("d"))
 		}},
 	}

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -122,10 +123,15 @@ func ReadInfo() (*Info, error) {
 	}
 	var info Info
 	if err := json.Unmarshal(raw, &info); err != nil {
-		return nil, fmt.Errorf("%s is present but malformed: %w", path, err)
+		return nil, fmt.Errorf("%w: %s: %v", ErrMalformed, path, err)
 	}
 	return &info, nil
 }
+
+// ErrMalformed marks a discovery file that exists but cannot be parsed. It is
+// the only read failure that justifies deleting it — an unreadable file (a
+// permission blip, EIO) may still belong to a running TUI.
+var ErrMalformed = errors.New("the control discovery file is present but malformed")
 
 // RemoveInfo deletes control.json, but only when it still records onlyPID — so
 // a shutting-down TUI never clobbers the registration of a newer one that
@@ -149,6 +155,47 @@ func RemoveInfo(onlyPID int) error {
 		return fmt.Errorf("cannot remove %s: %w", path, err)
 	}
 	return nil
+}
+
+// ClearStale removes a discovery file whose owning process is gone — a TUI
+// killed with SIGKILL leaves one that still advertises a pid, a port and a
+// valid token. A file owned by a LIVE pid is left alone; it may be another
+// running TUI's. alive is injected for tests; pass daemon.PIDAlive.
+func ClearStale(alive func(int) bool) (bool, error) {
+	info, err := ReadInfo()
+	if errors.Is(err, ErrMalformed) {
+		// Unparsable can never identify a running TUI, so it goes. Re-read
+		// first: a TUI that registered since is writing valid JSON, and its
+		// file must survive.
+		if again, rerr := ReadInfo(); rerr == nil && again != nil {
+			return false, nil
+		}
+		path, perr := FilePath()
+		if perr != nil {
+			return false, perr
+		}
+		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+			return false, fmt.Errorf("cannot remove the malformed control file %s: %w (it could not be parsed: %v)", path, rmErr, err)
+		}
+		return true, nil
+	}
+	if err != nil {
+		// Could not be READ (a permission blip, EIO). It may belong to a running
+		// TUI, so it is reported, never deleted.
+		return false, err
+	}
+	if info == nil {
+		return false, nil
+	}
+	if info.PID == os.Getpid() || alive(info.PID) {
+		return false, nil
+	}
+	// RemoveInfo re-reads and deletes only while the pid still matches, so a TUI
+	// that registered between the read above and this call keeps its file.
+	if err := RemoveInfo(info.PID); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // newToken mints a 256-bit bearer token. Never logged, never printed.

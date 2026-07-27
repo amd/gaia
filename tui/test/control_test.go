@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +17,19 @@ import (
 	"github.com/amd/gaia/tui/internal/control"
 	"github.com/amd/gaia/tui/internal/ui/root"
 )
+
+// mockBinaryPath builds the mock agent and returns its path. It must be a real
+// agent binary, not this test process: a control test that sends a message
+// inside a launched chat would otherwise fork the whole suite.
+func mockBinaryPath(t *testing.T) string {
+	t.Helper()
+	_, binDir := buildBinaries(t)
+	suffix := ""
+	if runtime.GOOS == "windows" {
+		suffix = ".exe"
+	}
+	return filepath.Join(binDir, "gaia-bash"+suffix)
+}
 
 // liveTUI boots the real root model inside a real tea.Program, headlessly, with
 // the control server attached — the same wiring `gaia tui --control` uses.
@@ -29,10 +44,15 @@ func startLiveTUI(t *testing.T) *liveTUI {
 	t.Helper()
 	t.Setenv(control.EnvHome, t.TempDir())
 
+	// A fixed catalog and NO hub client, so what these tests drive is decided
+	// here and not by whatever daemon and installed agents the machine running
+	// them happens to have. --mock is the flag a person would use for the same
+	// reason: it makes the one subprocess agent launchable.
 	cat := catalog.NewCatalog()
+	cat.SetMockBinary(mockBinaryPath(t))
 	state := control.NewState(nil)
 	prog := tea.NewProgram(
-		control.NewRecorder(root.NewRootModel(cat, false), state),
+		control.NewRecorder(root.NewRootModelWithHub(cat, nil, false), state),
 		tea.WithInput(strings.NewReader("")),
 		tea.WithOutput(io.Discard),
 		tea.WithoutRenderer(),

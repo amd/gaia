@@ -15,6 +15,9 @@ var rootCmd = &cobra.Command{
 	Use:   "gaia",
 	Short: "GAIA Terminal Agent Hub",
 	Long:  "Terminal-native hub for browsing, launching, and chatting with GAIA agents.",
+	// A one-line refusal followed by 20 lines of command listing pushes the
+	// actual error off a short terminal. Usage is what --help is for.
+	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctrl, err := controlOptionsFor(cmd)
 		if err != nil {

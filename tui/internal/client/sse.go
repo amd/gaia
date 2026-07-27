@@ -163,9 +163,13 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 	// events can still be delivered on ctx after runCtx is gone.
 	runCtx, cancel := context.WithCancel(ctx)
 
+	relayPath := fmt.Sprintf("/v1/%s/query", url.PathEscape(s.agentID))
+	s.opts.Logf("sse: POST %s%s run_id=%s model=%q max_steps=%d context_turns=%d",
+		inst.BaseURL(), relayPath, runID, s.opts.Model, s.opts.MaxSteps, len(history))
+
 	resp, inst, err := s.daemon.Do(runCtx, inst, daemon.Request{
 		Method: http.MethodPost,
-		Path:   fmt.Sprintf("/v1/%s/query", url.PathEscape(s.agentID)),
+		Path:   relayPath,
 		Body:   payload,
 		Header: http.Header{
 			"Content-Type": []string{"application/json"},
@@ -178,6 +182,7 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 		cancel()
 		return nil, err
 	}
+	s.opts.Logf("sse: relay answered HTTP %d for '%s' run_id=%s", resp.StatusCode, s.agentID, runID)
 	if resp.StatusCode != http.StatusOK {
 		detail := daemon.ErrorDetail(resp)
 		status := resp.StatusCode

@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -126,7 +127,11 @@ func (e *HubError) Error() string {
 	if e.Status == 0 {
 		return fmt.Sprintf("could not %s: %s", e.Op, e.Detail)
 	}
-	return fmt.Sprintf("could not %s (HTTP %d): %s", e.Op, e.Status, e.Detail)
+	// The background service is always the responder, even when it is relaying
+	// the Agent Hub. Naming it keeps a local failure from reading as a remote
+	// one — the status code is exactly where that distinction matters.
+	return fmt.Sprintf("could not %s: the GAIA background service answered HTTP %d: %s",
+		e.Op, e.Status, e.Detail)
 }
 
 // HubClient drives the daemon's Agent Hub control plane.
@@ -230,7 +235,13 @@ func (h *HubClient) call(
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// Callers wrap the detail in their own message that already names the
 		// status, so keep ErrorDetail's "HTTP 503: " prefix out of it.
-		return resp.StatusCode, stripStatusPrefix(daemon.ErrorDetail(resp)), nil
+		detail := stripStatusPrefix(daemon.ErrorDetail(resp))
+		// Diagnosed once, here, so no call site has to tell version skew from a
+		// refusal — and so none of them can get the attribution wrong.
+		if daemon.IsRouteMissing(req.Path, resp.StatusCode, detail) {
+			return resp.StatusCode, detail, &daemon.RouteMissingError{Op: req.Op, Path: req.Path}
+		}
+		return resp.StatusCode, detail, nil
 	}
 	if out != nil {
 		if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<22)).Decode(out); err != nil {
@@ -262,9 +273,15 @@ func (h *HubClient) Catalog(ctx context.Context, start, installedOnly, refresh b
 	code, detail, err := h.call(ctx, start, daemon.Request{
 		Method: http.MethodGet,
 		Path:   path,
-		Op:     "read the Agent Hub catalog from the daemon",
+		Op:     "read the Agent Hub catalog",
 	}, &out)
 	if err != nil {
+		// This one call has a way through that needs no daemon at all.
+		var missing *daemon.RouteMissingError
+		if errors.As(err, &missing) {
+			missing.Alternative = "`gaia tui list --installed` still works meanwhile — " +
+				"it reads what is installed straight from disk"
+		}
 		return nil, err
 	}
 	if code != http.StatusOK {

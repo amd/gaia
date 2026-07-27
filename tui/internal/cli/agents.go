@@ -43,22 +43,52 @@ var listCmd = &cobra.Command{
 		"and never touches the network, so it works offline.",
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if listInstalledOnly {
+			// Answered from the sentinels on disk, with no daemon and no network
+			// — which is what --installed has always promised. Routing it through
+			// the daemon meant the offline flag both required a daemon AND
+			// started one.
+			return printLocalInstalls(cmd.OutOrStdout(), cmd.ErrOrStderr())
+		}
 		hc := hubClient()
-		cat, err := hc.Catalog(context.Background(), true, listInstalledOnly, false)
+		cat, err := hc.Catalog(context.Background(), true, false, false)
 		if err != nil {
 			return err
 		}
-		printCatalog(cmd.OutOrStdout(), cat, listInstalledOnly)
+		printCatalog(cmd.OutOrStdout(), cat)
 		return nil
 	},
 }
 
-func printCatalog(w io.Writer, cat *catalog.HubCatalog, installedOnly bool) {
+// printLocalInstalls renders ~/.gaia/agents/*/.installed.
+func printLocalInstalls(out, errW io.Writer) error {
+	records, warnings := catalog.LocalInstalls()
+	for _, w := range warnings {
+		// Never swallowed: each of these hides an installed agent, and a short
+		// list is indistinguishable from a correct one.
+		fmt.Fprintf(errW, "[!] %s\n", w)
+	}
+	if len(records) == 0 && len(warnings) == 0 {
+		fmt.Fprintln(out, "No agents installed. Install one with `gaia tui install <id>`.")
+		return nil
+	}
+	fmt.Fprintln(out, row("ID", "VERSION", "STATE", "SIZE", "SECURITY"))
+	for _, r := range records {
+		fmt.Fprintln(out, row(r.ID, orDash(r.Version), "installed", "-", "-"))
+	}
+	fmt.Fprintf(out, "\nRead from %s. Run `gaia tui list` for versions and updates from the Agent Hub.\n",
+		catalog.InstallRoot())
+	if len(warnings) > 0 {
+		// Exit non-zero: each warning hides an installed agent, so a short list
+		// is indistinguishable from a correct one and a script must be able to
+		// tell them apart.
+		return fmt.Errorf("this list is incomplete — %d install record(s) could not be read (see above)", len(warnings))
+	}
+	return nil
+}
+
+func printCatalog(w io.Writer, cat *catalog.HubCatalog) {
 	if len(cat.Agents) == 0 {
-		if installedOnly {
-			fmt.Fprintln(w, "No agents installed. Install one with `gaia tui install <id>`.")
-			return
-		}
 		fmt.Fprintln(w, "The Agent Hub returned no installable agents.")
 		return
 	}
@@ -83,7 +113,13 @@ func printCatalog(w io.Writer, cat *catalog.HubCatalog, installedOnly bool) {
 		}
 		tier := a.SecurityTier
 		if a.RequiresTrust() {
-			tier += " (needs --trust)"
+			// Only for a row the user could still install: "installed … (needs
+			// --trust)" reads as an install that never finished.
+			if a.Installed {
+				tier += " (trusted)"
+			} else {
+				tier += " (needs --trust)"
+			}
 		}
 		fmt.Fprintln(w, row(a.ID, orDash(version), state,
 			catalog.FormatSize(a.DownloadSizeBytes), tier))
@@ -246,8 +282,16 @@ var runCmd = &cobra.Command{
 	Short: "Run an agent — interactive chat, or a one-shot with --query",
 	Long: "Open the chat TUI for an installed agent.\n\n" +
 		"--query makes it a genuine non-interactive one-shot: no alt screen, the " +
-		"answer on stdout, progress on stderr, and exit 0 on a final answer / 1 on " +
-		"an error. That is what makes it usable from a script or from CI.\n\n" +
+		"answer on stdout, progress on stderr, and an exit code a script can act " +
+		"on. That is what makes it usable from a script or from CI.\n\n" +
+		"  exit 0  the agent answered and nothing reported a failure\n" +
+		"  exit 1  an error, or a tool failed and nothing recovered it — even when " +
+		"the agent still wrote an answer, so `gaia tui run … && next-step` does not " +
+		"fire over work that never happened\n" +
+		"  exit 3  a confirmation gate held back a destructive action this run has " +
+		"no way to approve: nothing broke, and nothing was done\n\n" +
+		"A tool that reports no outcome at all is named on stderr as unverified " +
+		"rather than counted as a success.\n\n" +
 		"A one-shot checks its preconditions first and refuses in seconds — naming " +
 		"the unmet one and the command that fixes it on stderr — rather than waiting " +
 		"on a model server that is not there. The turn itself is bounded too, so an " +
@@ -376,7 +420,7 @@ func orDash(s string) string {
 
 func init() {
 	listCmd.Flags().BoolVar(&listInstalledOnly, "installed", false,
-		"only what is installed locally (no network call)")
+		"only what is installed locally, read from disk (no daemon, no network)")
 
 	installCmd.Flags().StringVar(&installVersion, "version", "",
 		"version to install (default: the hub's latest)")
@@ -384,7 +428,8 @@ func init() {
 		"acknowledge that a non-verified agent runs third-party code on this machine")
 
 	runCmd.Flags().StringVar(&runQuery, "query", "",
-		"run one query non-interactively: answer on stdout, exit 0/1")
+		"run one query non-interactively: answer on stdout, exit 0 answered / "+
+			"1 failed / 3 needs approval")
 	runCmd.Flags().StringVar(&runModel, "model", "",
 		"model id override (the agent's default is used when unset)")
 	runCmd.Flags().DurationVar(&runTimeout, "timeout", ui.DefaultOneShotTimeout,

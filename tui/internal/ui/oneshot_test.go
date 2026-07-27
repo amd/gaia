@@ -34,7 +34,7 @@ func (s *scriptedClient) Close() error { return nil }
 func captureOneShot(t *testing.T, events ...interface{}) (OneShotResult, string, string) {
 	t.Helper()
 	var out, errW bytes.Buffer
-	res := RunOneShot(context.Background(), &scriptedClient{events: events}, "q", &out, &errW)
+	res := RunOneShot(context.Background(), &scriptedClient{events: events}, "q", &out, &errW, nil)
 	return res, out.String(), errW.String()
 }
 
@@ -123,7 +123,7 @@ func TestRunOneShotNoTerminalEventExitsNonZero(t *testing.T) {
 func TestRunOneShotSendFailureIsReported(t *testing.T) {
 	var out, errW bytes.Buffer
 	c := &scriptedClient{sendErr: errFake("no daemon is registered; start one with `gaia daemon start`")}
-	res := RunOneShot(context.Background(), c, "q", &out, &errW)
+	res := RunOneShot(context.Background(), c, "q", &out, &errW, nil)
 
 	if res.ExitCode != 1 {
 		t.Errorf("exit code = %d, want 1", res.ExitCode)
@@ -149,7 +149,7 @@ func TestRunOneShotSurfacesUnsupportedAndMalformed(t *testing.T) {
 }
 
 func TestRunOneShotSurfacesNeedsConfirmation(t *testing.T) {
-	_, _, errW := captureOneShot(t,
+	res, _, errW := captureOneShot(t,
 		event.CanonicalNeedsConfirmationEvent{
 			Type: "needs_confirmation", Action: "send_draft",
 			Summary: "Send reply to alice@example.com",
@@ -158,6 +158,12 @@ func TestRunOneShotSurfacesNeedsConfirmation(t *testing.T) {
 	)
 	if !strings.Contains(errW, "send_draft") || !strings.Contains(errW, "alice@example.com") {
 		t.Errorf("a pending approval must never be swallowed: %q", errW)
+	}
+	// The fixture says it: the answer is "skipped". Reporting that as success
+	// let `gaia tui run … && next-step` fire over an action a safety gate
+	// deliberately withheld.
+	if res.ExitCode == 0 {
+		t.Errorf("a withheld action exited 0; stderr was:\n%s", errW)
 	}
 }
 
@@ -209,7 +215,7 @@ func runOneShotAsync(
 ) OneShotResult {
 	t.Helper()
 	done := make(chan OneShotResult, 1)
-	go func() { done <- RunOneShot(ctx, c, "triage my inbox", out, errW) }()
+	go func() { done <- RunOneShot(ctx, c, "triage my inbox", out, errW, nil) }()
 	select {
 	case res := <-done:
 		return res
