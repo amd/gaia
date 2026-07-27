@@ -36,7 +36,7 @@ import os
 import re
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional
 
 from gaia_agent_email import action_store, schedule_store, task_store, trust
 from gaia_agent_email.config import ConfigurationError, EmailAgentConfig
@@ -1086,7 +1086,12 @@ class EmailTriageAgent(
             )
         return backend
 
-    def _triage_all_backends(self, *, max_messages: int) -> dict:
+    def _triage_all_backends(
+        self,
+        *,
+        max_messages: int,
+        progress: "Optional[Callable[[int, int, str], None]]" = None,
+    ) -> dict:
         """Triage every connected mailbox, tag each item, merge under budget.
 
         ``max_messages`` is a TOTAL budget split across mailboxes (NEVER
@@ -1145,6 +1150,7 @@ class EmailTriageAgent(
                     force_llm=force_llm,
                     classifier=classifier,
                     debug=debug_flag,
+                    progress=progress,
                 )
             except ConnectorsError as exc:
                 msg = format_connector_error(exc)

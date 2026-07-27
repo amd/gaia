@@ -188,6 +188,32 @@ class _Declined(Exception):
     """The user said no. Not an error — a complete, respected answer."""
 
 
+def _connect_scopes(provider: str, agent_scopes: List[str]) -> List[str]:
+    """The provider's catalog scopes plus the ones this agent needs, deduped.
+
+    Mirrors what ``gaia connectors connect`` requests, so a mailbox connected
+    through the agent is not weaker than the same mailbox connected from a
+    shell — the divergence that left accounts showing as "default".
+    """
+    defaults: List[str] = []
+    try:
+        from gaia.connectors.providers import get as get_provider
+
+        defaults = list(getattr(get_provider(provider), "default_scopes", ()) or ())
+    except Exception as exc:  # noqa: BLE001 — mail scopes alone still connect
+        log.warning(
+            "onboarding: no catalog default_scopes for %s (%s); connecting with "
+            "the agent's scopes only — the account email may be unavailable",
+            provider,
+            exc,
+        )
+    merged = list(defaults)
+    for scope in agent_scopes:
+        if scope not in merged:
+            merged.append(scope)
+    return merged
+
+
 def _run_oauth(agent: Any, provider: str) -> Dict[str, Any]:
     """Run the browser OAuth flow and grant the result to this agent."""
     from gaia.connectors._loop import run_sync
@@ -198,7 +224,12 @@ def _run_oauth(agent: Any, provider: str) -> Dict[str, Any]:
     scopes = ms.required_scopes(provider)
 
     config: Dict[str, Any] = {
-        "scopes": scopes,
+        # Authorize the provider's own identity scopes alongside the mail ones.
+        # Without them the token cannot name the account, so every surface shows
+        # the mailbox as "default" instead of the address the user just signed
+        # in with. The grant below stays narrow — identity is for the
+        # connection, not for the agent.
+        "scopes": _connect_scopes(provider, scopes),
         # Committing the grant inside the same flow is what stops the
         # connected-but-unusable dead end this whole feature exists to remove.
         "grant_agents": {ms.AGENT_ID: scopes},
@@ -237,12 +268,31 @@ def _run_oauth(agent: Any, provider: str) -> Dict[str, Any]:
     return state
 
 
+_CLIENT_FIRST_BLURB = (
+    "First you'll paste an OAuth client ID and secret you create once in your "
+    "provider console — GAIA does not ship one. Then your browser opens."
+)
+
+
+def _go_blurb(provider: str, when_client_ready: str) -> str:
+    """What saying yes actually does next.
+
+    Promising a browser while the OAuth client is still missing is the same
+    reports-ready-then-fails pattern this feature exists to remove: the user
+    accepts "opens your browser", and gets asked to paste a client ID instead.
+    """
+    if _oauth_client_gap(provider) is None:
+        return when_client_ready
+    return _CLIENT_FIRST_BLURB
+
+
 def _confirm_repair(agent: Any, state: Dict[str, Any]) -> bool:
     """Ask the state-specific opening question. True when the user says go."""
     label = state["label"]
     account = state.get("account_email")
     who = f" ({account})" if account else ""
     kind = state["state"]
+    provider = state["provider"]
 
     if kind == ms.STATE_NOT_GRANTED:
         question = (
@@ -264,7 +314,7 @@ def _confirm_repair(agent: Any, state: Dict[str, Any]) -> bool:
         go = Option(
             _YES,
             f"Reconnect {label}",
-            "Opens your browser to sign in again. Your mail is untouched.",
+            _go_blurb(provider, "Opens your browser to sign in again. Your mail is untouched."),
         )
     elif kind == ms.STATE_MISSING_SCOPES:
         missing = _scope_labels(state["provider"], state.get("missing_scopes") or [])
@@ -275,7 +325,7 @@ def _confirm_repair(agent: Any, state: Dict[str, Any]) -> bool:
         go = Option(
             _YES,
             "Re-authorise",
-            "Opens your browser to approve the extra permission.",
+            _go_blurb(provider, "Opens your browser to approve the extra permission."),
         )
     else:  # not_connected
         question = (
@@ -285,7 +335,7 @@ def _confirm_repair(agent: Any, state: Dict[str, Any]) -> bool:
         go = Option(
             _YES,
             f"Connect {label}",
-            "Opens your browser to sign in. Nothing is sent anywhere else.",
+            _go_blurb(provider, "Opens your browser to sign in. Nothing is sent anywhere else."),
         )
 
     answer = ask(
