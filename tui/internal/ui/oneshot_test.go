@@ -29,7 +29,7 @@ func (s *scriptedClient) Send(context.Context, string) (<-chan interface{}, erro
 
 func (s *scriptedClient) Close() error { return nil }
 
-func run(t *testing.T, events ...interface{}) (OneShotResult, string, string) {
+func captureOneShot(t *testing.T, events ...interface{}) (OneShotResult, string, string) {
 	t.Helper()
 	var out, errW bytes.Buffer
 	res := RunOneShot(context.Background(), &scriptedClient{events: events}, "q", &out, &errW)
@@ -39,7 +39,7 @@ func run(t *testing.T, events ...interface{}) (OneShotResult, string, string) {
 // The answer goes to stdout and nothing else does, so `--query X > file` captures
 // exactly the answer.
 func TestRunOneShotSeparatesAnswerFromProgress(t *testing.T) {
-	res, out, errW := run(t,
+	res, out, errW := captureOneShot(t,
 		event.CanonicalStatusEvent{Type: "status", Message: "Scanning inbox"},
 		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "pre_scan_inbox"},
 		event.CanonicalToolResultEvent{Type: "tool_result", Tool: "pre_scan_inbox", Render: "email_pre_scan"},
@@ -63,7 +63,7 @@ func TestRunOneShotSeparatesAnswerFromProgress(t *testing.T) {
 }
 
 func TestRunOneShotStreamsTokensWithoutDuplicatingTheAnswer(t *testing.T) {
-	res, out, _ := run(t,
+	res, out, _ := captureOneShot(t,
 		event.CanonicalTokenEvent{Type: "token", Delta: "You have "},
 		event.CanonicalTokenEvent{Type: "token", Delta: "3 urgent emails"},
 		event.CanonicalFinalEvent{Type: "final", Answer: "You have 3 urgent emails"},
@@ -78,7 +78,7 @@ func TestRunOneShotStreamsTokensWithoutDuplicatingTheAnswer(t *testing.T) {
 }
 
 func TestRunOneShotFinalWithEmptyAnswerKeepsStreamedTokens(t *testing.T) {
-	res, out, _ := run(t,
+	res, out, _ := captureOneShot(t,
 		event.CanonicalTokenEvent{Type: "token", Delta: "streamed only"},
 		event.CanonicalFinalEvent{Type: "final", Answer: ""},
 	)
@@ -91,7 +91,7 @@ func TestRunOneShotFinalWithEmptyAnswerKeepsStreamedTokens(t *testing.T) {
 }
 
 func TestRunOneShotTerminalErrorExitsNonZero(t *testing.T) {
-	res, out, errW := run(t,
+	res, out, errW := captureOneShot(t,
 		event.CanonicalErrorEvent{Type: "error", Detail: "Lemonade is not reachable — run `gaia init`", Status: 503},
 	)
 	if res.ExitCode != 1 {
@@ -107,7 +107,7 @@ func TestRunOneShotTerminalErrorExitsNonZero(t *testing.T) {
 
 // A stream that ends with no terminal event is a failure, not an empty success.
 func TestRunOneShotNoTerminalEventExitsNonZero(t *testing.T) {
-	res, _, errW := run(t,
+	res, _, errW := captureOneShot(t,
 		event.CanonicalStatusEvent{Type: "status", Message: "working"},
 	)
 	if res.ExitCode != 1 {
@@ -133,7 +133,7 @@ func TestRunOneShotSendFailureIsReported(t *testing.T) {
 
 // Unknown and unreadable events stay visible (contract §7) and do not end the run.
 func TestRunOneShotSurfacesUnsupportedAndMalformed(t *testing.T) {
-	res, _, errW := run(t,
+	res, _, errW := captureOneShot(t,
 		event.CanonicalUnsupportedEvent{EventType: "needs_input"},
 		event.CanonicalMalformedEvent{Reason: "not valid JSON"},
 		event.CanonicalFinalEvent{Type: "final", Answer: "done"},
@@ -147,7 +147,7 @@ func TestRunOneShotSurfacesUnsupportedAndMalformed(t *testing.T) {
 }
 
 func TestRunOneShotSurfacesNeedsConfirmation(t *testing.T) {
-	_, _, errW := run(t,
+	_, _, errW := captureOneShot(t,
 		event.CanonicalNeedsConfirmationEvent{
 			Type: "needs_confirmation", Action: "send_draft",
 			Summary: "Send reply to alice@example.com",
@@ -161,7 +161,7 @@ func TestRunOneShotSurfacesNeedsConfirmation(t *testing.T) {
 
 // The same renderer also handles a subprocess agent's legacy vocabulary.
 func TestRunOneShotHandlesLegacyEvents(t *testing.T) {
-	res, out, _ := run(t,
+	res, out, _ := captureOneShot(t,
 		event.ToolStartEvent{Type: "tool_start", Tool: "bash"},
 		event.AnswerEvent{Type: "answer", Content: "legacy answer"},
 	)

@@ -11,33 +11,29 @@ import (
 
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/client"
+	"github.com/amd/gaia/tui/internal/control"
 	"github.com/amd/gaia/tui/internal/ui/chat"
 	"github.com/amd/gaia/tui/internal/ui/root"
 )
 
 // RunHub launches the Agent Hub TUI — the main entry point for browsing and launching agents.
 // If mockAgent is non-empty, all agent binary paths are overridden with it for testing.
-func RunHub(debug bool, mockAgent string) error {
+// A non-nil ctrl starts the loopback control API against this very program.
+func RunHub(debug bool, mockAgent string, ctrl *control.Options) error {
 	cat := catalog.NewCatalog()
 	if mockAgent != "" {
 		cat.SetMockBinary(mockAgent)
 	} else {
 		cat.DiscoverBinaries()
 	}
-	model := root.NewRootModel(cat, debug)
-
-	p := tea.NewProgram(model, tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
-		return fmt.Errorf("TUI error: %w", err)
-	}
-	return nil
+	return run(root.NewRootModel(cat, debug), debug, ctrl)
 }
 
 // RunChat launches the chat TUI directly with a subprocess agent (standalone mode).
 //
 // subprocess is a command line, so it is split with quoting honoured — a binary
 // path containing a space must be quoted, not silently torn in two.
-func RunChat(subprocess string, query string, debug bool) error {
+func RunChat(subprocess string, query string, debug bool, ctrl *control.Options) error {
 	argv, err := client.SplitCommandLine(subprocess)
 	if err != nil {
 		return fmt.Errorf("invalid --subprocess command: %w", err)
@@ -46,10 +42,45 @@ func RunChat(subprocess string, query string, debug bool) error {
 	c := client.NewSubprocessClient(argv[0], argv[1:], debug)
 	defer c.Close()
 
-	model := chat.NewChatModel(c, agentNameFromPath(argv[0]), query, debug)
+	return run(chat.NewChatModel(c, agentNameFromPath(argv[0]), query, debug), debug, ctrl)
+}
 
-	p := tea.NewProgram(model, tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
+// run boots the Bubble Tea program, optionally wrapping it with the control
+// recorder so the live session can be driven over HTTP.
+func run(model tea.Model, debug bool, ctrl *control.Options) error {
+	if ctrl == nil {
+		p := tea.NewProgram(model, tea.WithAltScreen())
+		if _, err := p.Run(); err != nil {
+			return fmt.Errorf("TUI error: %w", err)
+		}
+		return nil
+	}
+
+	// One debug switch for both halves: --debug on the TUI implies control
+	// logging, and the server must not end up quieter than the recorder.
+	opts := *ctrl
+	opts.Debug = opts.Debug || debug
+	state := control.NewState(control.Debugf(opts.Debug))
+	p := tea.NewProgram(control.NewRecorder(model, state), tea.WithAltScreen())
+
+	srv, err := control.Start(p, state, opts)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if stopErr := srv.Stop(); stopErr != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", stopErr)
+		}
+	}()
+	fmt.Fprintf(os.Stderr, "control API listening on %s:%d — token in %s\n",
+		control.Host, srv.Port(), srv.DiscoveryPath())
+
+	// Bracket Run: tea.Program.Send silently discards messages outside it, so
+	// the control API must refuse injection rather than report a false success.
+	srv.MarkRunning()
+	_, err = p.Run()
+	srv.MarkStopped()
+	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
 	return nil
