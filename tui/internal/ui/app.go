@@ -142,8 +142,13 @@ func run(model tea.Model, debug bool, ctrl *control.Options) error {
 // the transport exercisable from a script, from CI, and against a live daemon.
 // timeout bounds that turn; it is ignored by the interactive path, where a person
 // can see what is happening and press ctrl+c.
+//
+// ctrl is only honoured on the interactive path (query == ""): a one-shot has no
+// session for the control API to attach to, so the caller is expected to have
+// already refused that combination (see cli.agentControlOptions) rather than
+// pass a non-nil ctrl through here.
 // Returns the process exit code.
-func RunAgent(agentID, query, model string, debug bool, timeout time.Duration) (int, error) {
+func RunAgent(agentID, query, model string, debug bool, timeout time.Duration, ctrl *control.Options) (int, error) {
 	cat := catalog.NewCatalog()
 	cat.DiscoverBinaries()
 
@@ -222,11 +227,9 @@ func RunAgent(agentID, query, model string, debug bool, timeout time.Duration) (
 		return res.ExitCode, nil
 	}
 
-	prepareTerminal()
 	model_ := chat.NewChatModel(c, agent.Name, "", debug)
-	p := tea.NewProgram(model_, tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
-		return 1, fmt.Errorf("TUI error: %w", err)
+	if err := run(model_, debug, ctrl); err != nil {
+		return 1, err
 	}
 	return 0, nil
 }
