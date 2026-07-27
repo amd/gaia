@@ -91,6 +91,13 @@ class AgentServer:
         model_id: OpenAI-compatible model id for the REST surface. Defaults to
             the agent's :meth:`ApiAgent.get_model_id` (or ``gaia-<classname>``).
         name: Human-readable server name (banners, MCP ``serverInfo``).
+        requirements: What the agent needs before it can serve — see
+            :class:`~gaia.agents.base.readiness.AgentRequirements`. Supplying it
+            (or a manifest that declares ``models:`` /
+            ``requirements.min_lemonade_version``) is what earns the agent
+            ``GET``/``POST /v1/<id>/init`` without hand-writing either verb.
+        agent_id: The id used in the ``/v1/<id>/init`` path. Defaults to the
+            manifest id, else a slug of the class name.
     """
 
     def __init__(
@@ -100,6 +107,8 @@ class AgentServer:
         manifest: Any = None,
         model_id: Optional[str] = None,
         name: Optional[str] = None,
+        requirements: Any = None,
+        agent_id: Optional[str] = None,
     ) -> None:
         if not isinstance(agent, Agent):
             raise TypeError(
@@ -111,6 +120,16 @@ class AgentServer:
         self.manifest = manifest
         self.model_id = model_id or self._default_model_id(agent)
         self.name = name or agent.__class__.__name__
+        self.agent_id = agent_id or self._default_agent_id(agent, manifest)
+        # An explicit declaration wins; otherwise derive from the manifest. Both
+        # absent means the agent declared nothing, and the init routes are not
+        # mounted at all — an /init that answers "ready" without having checked
+        # anything is worse than no /init.
+        if requirements is None and manifest is not None:
+            from gaia.agents.base.readiness import AgentRequirements
+
+            requirements = AgentRequirements.from_manifest(manifest)
+        self.requirements = requirements
 
     # ------------------------------------------------------------------
     # Interface gating (fail loudly)
@@ -123,6 +142,20 @@ class AgentServer:
         cls = agent.__class__.__name__
         base = cls[:-5].lower() if cls.endswith("Agent") else cls.lower()
         return f"gaia-{base}"
+
+    @staticmethod
+    def _default_agent_id(agent: Agent, manifest: Any) -> str:
+        """The id in ``/v1/<id>/init``: the manifest's, else a class-name slug.
+
+        The manifest id is authoritative because that is what the daemon relay
+        and every consumer address the agent by — deriving a different one here
+        would mount the route at a path nothing calls.
+        """
+        manifest_id = getattr(manifest, "id", None)
+        if manifest_id:
+            return str(manifest_id)
+        cls = agent.__class__.__name__
+        return cls[:-5].lower() if cls.endswith("Agent") else cls.lower()
 
     def _ensure_interface(self, interface: str) -> None:
         """Raise if *interface* is disabled by the manifest's ``interfaces``.
@@ -453,6 +486,8 @@ class AgentServer:
         async def list_tools():
             return {"tools": self._tool_definitions()}
 
+        self._mount_init_routes(app)
+
         @app.post("/v1/chat/completions")
         async def create_chat_completion(request: ChatCompletionRequest):
             if request.model != self.model_id:
@@ -505,6 +540,103 @@ class AgentServer:
             )
 
         return app
+
+    def _mount_init_routes(self, app) -> None:
+        """Mount ``GET``/``POST /v1/<id>/init`` when the agent declared needs.
+
+        An agent that declared nothing gets no routes: a readiness endpoint that
+        answers "ready" without having checked anything is worse than a 404,
+        because a consumer would trust it. The absence is logged so the reason
+        is discoverable rather than mysterious.
+        """
+        import asyncio
+
+        from fastapi import Response
+        from fastapi.concurrency import iterate_in_threadpool
+        from fastapi.responses import StreamingResponse
+
+        from gaia.agents.base import readiness
+
+        # An empty declaration is treated exactly like a missing one: a manifest
+        # with no `models:` and no minimum version states nothing to verify, and
+        # an /init built from it would answer "ready" the moment the backend is
+        # up without having checked a single thing about this agent.
+        if self.requirements is None or not self.requirements.declares_anything():
+            logger.debug(
+                "%s declared no requirements, so /v1/%s/init is not mounted. "
+                "Pass requirements=AgentRequirements(...) to AgentServer, or "
+                "declare models:/requirements: in gaia-agent.yaml, to get it.",
+                self.name,
+                self.agent_id,
+            )
+            return
+
+        _, _, InitResponse = readiness.init_models()
+        path = f"/v1/{self.agent_id}/init"
+        requirements = self.requirements
+        agent_name = self.name
+
+        @app.get(
+            path, response_model=InitResponse, responses={503: {"model": InitResponse}}
+        )
+        async def agent_init(response: Response):
+            """Readiness preflight for this agent's declared requirements.
+
+            200 when ready, 503 when not — the SAME body either way, with an
+            actionable ``hint``. Read-only: no pull, no install, no mutation.
+            """
+            status = await asyncio.to_thread(
+                readiness.compute_init_status, requirements, agent_name
+            )
+            if not status.ready:
+                response.status_code = 503
+            return status
+
+        @app.post(path, include_in_schema=False)
+        async def agent_provision() -> StreamingResponse:
+            """Provision this agent's declared model, streaming progress.
+
+            Tells an already-running backend to download the model. It cannot
+            install the backend — if that is what is missing this returns a real
+            503 and pulls nothing. Once a pull starts the response is a
+            committed 200 and the final ``✓``/``✗`` line is authoritative.
+            """
+            media_type = "text/plain; charset=utf-8"
+            model_id = requirements.model_id
+            reachable, probe_base, _version, _loaded = await asyncio.to_thread(
+                readiness.probe_backend_health, requirements.base_url
+            )
+
+            if not reachable:
+                # Fail loudly BEFORE streaming so the status code is a truthful
+                # 503 rather than a 200 the consumer must parse to disbelieve.
+                return StreamingResponse(
+                    readiness.unreachable_progress(probe_base, agent_name),
+                    media_type=media_type,
+                    status_code=503,
+                )
+
+            if not model_id:
+
+                def _nothing_to_do():
+                    yield (
+                        f"✓ {agent_name} declares no model, so there is nothing "
+                        "to provision.\n"
+                    )
+
+                return StreamingResponse(
+                    _nothing_to_do(), media_type=media_type, status_code=200
+                )
+
+            # The generator does blocking HTTP (including a long pull), so it is
+            # iterated in a worker thread and never on the event loop.
+            return StreamingResponse(
+                iterate_in_threadpool(
+                    readiness.provision_progress(probe_base, model_id, agent_name)
+                ),
+                media_type=media_type,
+                status_code=200,
+            )
 
     def _sse_stream(self, prompt: str):
         """Minimal OpenAI-compatible SSE: role chunk, content chunk, done."""

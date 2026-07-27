@@ -161,6 +161,15 @@ func RunAgent(agentID, query, model string, debug bool, timeout time.Duration) (
 				"longer bound instead, e.g. --timeout 2h", timeout)
 	}
 
+	// A one-shot is always bounded — that is the whole point — so an unbounded
+	// or negative one is refused here rather than quietly turned into "forever".
+	if query != "" && timeout <= 0 {
+		return 1, fmt.Errorf(
+			"--timeout must be a positive duration, got %s: a one-shot that cannot "+
+				"time out is exactly the hang this bound exists to prevent. Pass a "+
+				"longer bound instead, e.g. --timeout 2h", timeout)
+	}
+
 	logf := func(string, ...any) {}
 	if debug {
 		logf = func(format string, args ...any) {
