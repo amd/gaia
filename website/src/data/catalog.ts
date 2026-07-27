@@ -292,8 +292,10 @@ export function isAgent(agent: Agent): boolean {
 export function installMethods(agent: Agent): InstallMethod[] {
   // A component/app is not installed *into* GAIA and has no PyPI wheel — it is
   // downloaded per platform. `gaia agent install <id>` would not work for it.
+  // An npm package, where one exists, is a real second path (the Agent UI
+  // ships `gaia-ui` globally), so offer it alongside rather than instead.
   if (!isAgent(agent)) {
-    return [
+    const methods: InstallMethod[] = [
       {
         key: 'download',
         label: 'Download',
@@ -301,6 +303,15 @@ export function installMethods(agent: Agent): InstallMethod[] {
         note: 'Download the build for your platform from the release below.',
       },
     ];
+    if (agent.npm_package) {
+      methods.push({
+        key: 'npm',
+        label: 'npm',
+        command: `npm install -g ${agent.npm_package}`,
+        note: 'Global CLI install from npm.',
+      });
+    }
+    return methods;
   }
 
   if (agent.npm_package) {
