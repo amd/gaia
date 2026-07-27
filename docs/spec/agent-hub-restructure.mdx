@@ -66,6 +66,7 @@ src/gaia/agents/                 src/gaia/agents/        ← framework only
 3. **Shared tool mixins promoted to framework.** RAG, FileIO, Shell, CodeIndex mixins move into `src/gaia/agents/tools/` so agents don't depend on each other for tools.
 4. **Entry-point discovery.** Agents register via the `gaia.agent` entry point group. The registry discovers installed agent wheels at startup — no hardcoded agent list.
 5. **Framework-provided generic server.** `src/gaia/agents/base/server.py` wraps any Agent into an OpenAI-compatible REST API + MCP stdio server. Agents don't implement server logic.
+6. **Inherited init.** An agent *declares* what it needs — a model id, a minimum backend version — and the framework serves `GET`/`POST /v1/<id>/init` for it. Agents don't hand-write readiness or provisioning endpoints. See [Inherited init](#inherited-init).
 
 ## Pre-requisite: Promote shared tool mixins
 
@@ -104,6 +105,8 @@ models: [Qwen3.5-35B-A3B-GGUF]
 
 requirements:
   min_memory_gb: 8
+  min_lemonade_version: "10.2.0"   # optional; SemVer. The backend floor a
+                                   # readiness check compares against.
   platforms: [win-x64, linux-x64, darwin-arm64]
 
 interfaces:
@@ -127,6 +130,69 @@ chat = "gaia_agent_chat.agent:ChatAgent"
 ```
 
 Agents with cross-agent dependencies (e.g. RoutingAgent uses CodeAgent) declare them as package dependencies: `dependencies = ["amd-gaia>=0.18.0", "gaia-agent-code>=0.1.0"]`.
+
+## Inherited init
+
+An agent that needs a model before it can answer anything should not have to
+hand-write a readiness endpoint to say so. It **declares** the requirement and
+`AgentServer` serves both verbs at `/v1/<id>/init`:
+
+| Verb | Effect | Status |
+|------|--------|--------|
+| `GET` | Read-only readiness probe. Reports backend reachability, version compatibility, and whether the declared model is downloaded — with an actionable `hint` per failure. | `200` ready · `503` not ready, **same body** either way |
+| `POST` | Provisioning. Tells an already-running backend to download the declared model, streaming newline-terminated progress. | `503` before streaming if the backend is down · otherwise a committed `200` |
+
+Declare requirements in `gaia-agent.yaml` (`models:` and
+`requirements.min_lemonade_version`), or pass them explicitly:
+
+```python
+from gaia.agents.base.readiness import AgentRequirements
+from gaia.agents.base.server import AgentServer
+
+server = AgentServer(
+    MyAgent(),
+    agent_id="my-agent",
+    requirements=AgentRequirements(
+        model_id="Gemma-4-E4B-it-GGUF",
+        min_backend_version="10.2.0",
+    ),
+)
+```
+
+An agent that declares nothing gets **no** init routes — a readiness endpoint
+that reports "ready" without having checked anything is worse than a 404,
+because a consumer would trust it.
+
+### Where the boundary sits
+
+Inherited init makes *this agent's* requirements ready: its model, against a
+backend that is already running. **Installing the backend stays with `gaia
+init`.** An agent process cannot bootstrap the server it depends on, so when
+Lemonade is unreachable both verbs fail loudly and name whose job the fix is
+rather than hanging or half-succeeding:
+
+```
+✗ The local Lemonade Server is not reachable at http://127.0.0.1:9099/api/v1.
+✗ Start it with `lemonade-server serve` (or run `gaia init`), then POST to this path again.
+✗ My Agent can't install the backend itself — that's a host prerequisite.
+```
+
+### Reading a provisioning result
+
+Once a streamed `200` is committed the HTTP status can no longer change, so a
+pull that fails half-way still arrives as `200 OK`. **The final line is the
+verdict** — `✓` success, `✗` failure, `⚠` succeeded-but-unverified. Consumers
+must read it rather than the status code; the TUI's preflight gate
+(`tui/internal/ui/preflight`) already does.
+
+Two distinctions the contract preserves deliberately, because each has a
+different remedy:
+
+- **"Could not tell" is not "missing."** If the backend answers `/health` but
+  its model list cannot be read, `present:false` means unknown — reporting it as
+  missing would send the user to re-download a model they may already have.
+- **Indeterminate is not a pass.** A backend that advertises no version yields
+  `compatible: null`, never `true`.
 
 ## Implementation Steps
 
@@ -153,7 +219,7 @@ Remove agent packages from `setup.py`. Remove `gaia-emr`/`gaia-code` console scr
 Replace ~16 direct agent imports in `cli.py`, `ui/_chat_helpers.py`, `ui/agent_loop.py`, and apps with `registry.create_agent(id)`.
 </Step>
 <Step title="Add framework generic server">
-`src/gaia/agents/base/server.py` wraps any Agent into REST API + MCP server. Enables `gaia agent run <id> --api` and `--mcp`.
+`src/gaia/agents/base/server.py` wraps any Agent into REST API + MCP server. Enables `gaia agent run <id> --api` and `--mcp`, and serves the agent's [inherited init](#inherited-init) routes.
 </Step>
 <Step title="Add CI/CD workflow">
 `.github/workflows/build_agents.yml` matrix-builds the C++ agent binaries;

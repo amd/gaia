@@ -62,7 +62,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.target_ref || github.ref }}
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Run semgrep (security rulesets) -> SARIF
@@ -74,7 +74,7 @@ jobs:
             --config p/python --config p/security-audit --config p/secrets \
             src hub || true
       - name: Upload semgrep SARIF to code scanning
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: semgrep.sarif
           category: semgrep
@@ -121,7 +121,7 @@ jobs:
       - name: Run Claude (${{ matrix.lens }} lens)
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@af0559ee4f514d1ef21826982bed13f7edc3c35e  # v1.0.178
+        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b  # v1.0.183
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -223,7 +223,7 @@ jobs:
       security-events: write
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install CVSS scorer
@@ -245,7 +245,7 @@ jobs:
               echo '{"$schema":"https://json.schemastore.org/sarif-2.1.0.json","version":"2.1.0","runs":[{"tool":{"driver":{"name":"gaia-claude-security-audit","rules":[]}},"results":[]}]}' > claude-security.sarif
           fi
       - name: Upload Claude SARIF to code scanning
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: claude-security.sarif
           category: claude-security

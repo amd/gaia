@@ -646,6 +646,83 @@ def test_install_unknown_agent_is_404_listing_installable_ids(monkeypatch):
     assert fetcher.calls == []
 
 
+def test_unknown_id_message_leads_with_the_actionable_clause(monkeypatch):
+    """A typo must not be answered with a sentence about daemon internals.
+
+    The user's next move (what IS installable, how to see the rest) leads; the
+    internal symbol is a trailing developer note, not the headline.
+    """
+    _patch_hub(monkeypatch, _RecordingFetcher(_hub_files()))
+    client = _client(_FakeRegistry(agent_ids=("email",)))
+
+    detail = client.post(
+        "/daemon/v1/agents/nope/install", headers=_auth(), json={}
+    ).json()["detail"]
+
+    assert detail.startswith("no installable agent 'nope'")
+    # The useful clause is up front, not buried behind the internals.
+    assert detail.index("installable: email") < detail.index("builtin_specs")
+    assert "gaia hub list" in detail
+    # The internal symbol survives only as an explicitly-labelled dev note.
+    note = detail[detail.index("(Developer note:") :]
+    assert "builtin_specs" in note
+    assert not detail.startswith("the daemon has no sidecar spec")
+
+
+@pytest.mark.parametrize(
+    "probe,expected_lead",
+    [
+        ("installed", "is installed but the daemon does not supervise it"),
+        ("hub", "is published on the Agent Hub but this GAIA build cannot run it"),
+        ("agent", "is a GAIA agent but is not published as an installable sidecar"),
+    ],
+)
+def test_a_real_agent_id_is_not_reported_as_a_typo(
+    monkeypatch, install_root, probe, expected_lead
+):
+    """`chat` is a real agent; `nope` is a typo. They must not read the same."""
+    _patch_hub(monkeypatch, _RecordingFetcher(_hub_files()))
+    if probe == "installed":
+        _write_sentinel(install_root, "chat", "1.0.0")
+    elif probe == "hub":
+        monkeypatch.setattr(
+            "gaia.hub.catalog.cached_index_agents", lambda *a, **k: [{"id": "chat"}]
+        )
+    else:
+        monkeypatch.setattr(
+            install_svc, "_entry_point_agent_ids", lambda: {"chat", "bash"}
+        )
+    client = _client(_FakeRegistry(agent_ids=("email",)))
+
+    detail = client.post(
+        "/daemon/v1/agents/chat/install", headers=_auth(), json={}
+    ).json()["detail"]
+    assert expected_lead in detail
+    assert "installable: email" in detail
+    assert detail.index("installable: email") < detail.index("builtin_specs")
+
+
+def test_a_failing_classification_probe_still_refuses_loudly(monkeypatch, caplog):
+    """Classification only enriches the message: if a probe blows up, the
+    refusal still arrives (less specific) and the failure is logged, not eaten."""
+    import logging
+
+    _patch_hub(monkeypatch, _RecordingFetcher(_hub_files()))
+    monkeypatch.setattr(
+        install_svc,
+        "_entry_point_agent_ids",
+        lambda: (_ for _ in ()).throw(RuntimeError("dist-info is corrupt")),
+    )
+    client = _client(_FakeRegistry(agent_ids=("email",)))
+
+    caplog.set_level(logging.WARNING, logger="gaia")
+    r = client.post("/daemon/v1/agents/chat/install", headers=_auth(), json={})
+    assert r.status_code == 404
+    assert r.json()["detail"].startswith("no installable agent 'chat'")
+    assert "installable: email" in r.json()["detail"]
+    assert "dist-info is corrupt" in caplog.text
+
+
 def test_install_reserved_builtin_is_refused(monkeypatch):
     fetcher = _RecordingFetcher(_hub_files())
     _patch_hub(monkeypatch, fetcher)
@@ -1003,7 +1080,12 @@ def test_uninstall_not_installed_is_404(install_root):
     client = _client(_FakeRegistry())
     r = client.delete("/daemon/v1/agents/email", headers=_auth())
     assert r.status_code == 404
-    assert "not installed" in r.json()["detail"]
+    detail = r.json()["detail"]
+    # Fail-loudly wants all three parts, and the installer's own message only
+    # carries two: what failed, and where to look.
+    assert "not installed" in detail  # what failed
+    assert ".installed" in detail  # where to look
+    assert "gaia hub list --installed" in detail  # what to do next
 
 
 def test_uninstall_reserved_builtin_is_refused(install_root):

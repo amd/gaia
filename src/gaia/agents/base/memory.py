@@ -38,6 +38,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -263,6 +264,21 @@ _cross_encoder_model = None
 _CROSS_ENCODER_UNAVAILABLE = False
 
 
+#: Opt back in where faiss and torch share one OpenMP runtime and coexist fine
+#: (common on Linux). The guard below cannot tell that host from one that would
+#: abort, so it errs toward staying alive and lets those users say otherwise.
+_OMP_OVERRIDE_ENV = "GAIA_ALLOW_FAISS_TORCH_OMP"
+
+
+def _omp_conflict_override() -> bool:
+    """True when the operator has declared this host safe for both runtimes."""
+    return os.environ.get(_OMP_OVERRIDE_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
 def _get_cross_encoder():
     """Lazy-load the cross-encoder reranking model. Cached at module level.
 
@@ -274,6 +290,25 @@ def _get_cross_encoder():
         return None
     if _cross_encoder_model is not None:
         return _cross_encoder_model
+    # faiss and torch each link their own OpenMP runtime; whichever loads
+    # second aborts the process with "OMP: Error #15" — a SIGABRT no except
+    # clause can catch, so the guards below would never run. Refuse the import
+    # we know is fatal rather than take the process down mid-conversation.
+    if (
+        "faiss" in sys.modules
+        and "torch" not in sys.modules
+        and not _omp_conflict_override()
+    ):
+        logger.warning(
+            "[MemoryMixin] cross-encoder reranking disabled: faiss is already "
+            "loaded and importing torch alongside it aborts the process "
+            "(OpenMP double-initialisation). Retrieval falls back to vector "
+            "similarity, which is ordered but not reranked. Set "
+            "%s=1 to keep reranking on a host where the two runtimes coexist.",
+            _OMP_OVERRIDE_ENV,
+        )
+        _CROSS_ENCODER_UNAVAILABLE = True
+        return None
     try:
         from sentence_transformers import CrossEncoder
 
