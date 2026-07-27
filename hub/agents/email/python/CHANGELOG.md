@@ -9,6 +9,23 @@ contract version is tracked separately as
 
 ### Added
 
+- **Preference removal and read-back tools — the agent can no longer claim
+  it removed a preference it has no way to remove (#2520).** Asking the
+  agent to remove a low-priority sender used to either do nothing while it
+  reported success, or trigger the *set* tool instead and report success at
+  adding when the user asked to remove — verified by diffing the agent's
+  own `state.db` before and after. Three new tools (`remove_priority_sender`,
+  `remove_low_priority_sender`, `remove_category_default`) pair with each
+  existing `set_*` tool, and a new `get_preferences` tool reads back
+  everything currently stored so a change is verifiable from the
+  conversation. Every removal reports an explicit `removed` field — `false`
+  means the preference was never set, and in that case the result carries no
+  persistence claim at all, so the model has an unambiguous signal instead of
+  inferring success from `ok: true` alone. Removing a low-priority sender
+  never promotes it to priority (or vice versa) the way *setting* one
+  deliberately clears the opposite flag — removal only ever touches its own
+  target.
+
 - **Agent-led mailbox onboarding — the agent sets up its own access, in the
   conversation (#2469).** Hitting the agent without a usable mailbox used to
   end the run with an error and a shell command
