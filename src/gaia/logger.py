@@ -255,6 +255,27 @@ class GaiaLogger:
         # Set as default for future loggers matching this prefix
         self.default_levels[name] = level
 
+    def route_console_logging_to_stderr(self):
+        """Point every stdout console log handler at stderr.
+
+        stdio transports (``gaia mcp serve --stdio`` and friends) reserve
+        stdout for JSON-RPC framing; a single log line written to stdout
+        corrupts the client's message parser and the session goes quiet after
+        the first reply. GAIA's console handler writes to stdout, so redirect
+        every stdout ``StreamHandler`` on the root logger to stderr. ``gaia``
+        loggers propagate to these root handlers, so this covers log lines
+        emitted lazily during a request, not just at startup.
+        """
+        root_logger = logging.getLogger()
+        for handler in root_logger.handlers:
+            # FileHandler subclasses StreamHandler but its stream is the log
+            # file, so the ``is sys.stdout`` identity check skips it.
+            if (
+                isinstance(handler, logging.StreamHandler)
+                and getattr(handler, "stream", None) is sys.stdout
+            ):
+                handler.setStream(sys.stderr)
+
 
 # Create a global instance
 log_manager = GaiaLogger()
@@ -263,3 +284,11 @@ log_manager = GaiaLogger()
 # Convenience function to get a logger
 def get_logger(name):
     return log_manager.get_logger(name)
+
+
+def route_console_logging_to_stderr():
+    """Redirect stdout console logging to stderr (stdio-transport safety).
+
+    See :meth:`GaiaLogger.route_console_logging_to_stderr`.
+    """
+    log_manager.route_console_logging_to_stderr()

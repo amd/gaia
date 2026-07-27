@@ -120,11 +120,18 @@ class ManifestError(ValueError):
 
 @dataclass
 class Requirements:
-    """System requirements block from ``requirements:``."""
+    """System requirements block from ``requirements:``.
+
+    ``min_lemonade_version`` is the minimum Lemonade Server version the agent
+    needs. It is what a readiness check compares the running server against, so
+    an agent that declares it can report "your backend is too old" instead of
+    failing later with something less specific.
+    """
 
     min_memory_gb: Optional[float] = None
     min_disk_gb: Optional[float] = None
     min_context_size: Optional[int] = None
+    min_lemonade_version: Optional[str] = None
     platforms: List[str] = field(default_factory=list)
     npu: bool = False
     gpu_vram_gb: Optional[float] = None
@@ -530,6 +537,10 @@ def _parse_requirements(raw: Any, where: str) -> Requirements:
     if raw is None:
         return Requirements()
     data = _require_mapping(raw, "requirements", where)
+    if data.get("min_lemonade_version") is not None:
+        _validate_semver(
+            data["min_lemonade_version"], "requirements.min_lemonade_version", where
+        )
     return Requirements(
         min_memory_gb=_parse_number(
             data.get("min_memory_gb"), "requirements.min_memory_gb", where
@@ -547,6 +558,7 @@ def _parse_requirements(raw: Any, where: str) -> Requirements:
                 0,
             )
         ),
+        min_lemonade_version=data.get("min_lemonade_version"),
         platforms=_validate_platforms(
             data.get("platforms"), "requirements.platforms", where
         ),
