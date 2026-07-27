@@ -281,10 +281,12 @@ session — an overlapping `/query` returns **409**. See `SPEC.md` for the full 
 
 ### Full autonomy (`/v1/email/agent/autonomy/*`)
 
-The agent can run **proactively** at the `earn_trust` level: it archives low-signal mail
-on its own **where your explicit preferences already sanction it** (a low-priority sender,
-or a category you default to archive), drafts replies for review, and **always asks before
-anything destructive** (send / forward / permanent-delete / RSVP).
+The agent can run **proactively** at the `earn_trust` level: it archives low-signal
+(promotional/spam) mail and marks FYI mail read on its own **where your explicit
+preferences already sanction it** (a low-priority sender, or a category you default to
+archive) or a sender/category has earned enough trust, and **always asks before anything
+destructive** (send / forward / permanent-delete / RSVP) — reply drafting is not yet wired
+into this proactive loop (the policy layer supports it, but no candidate reaches it today).
 Turn it on and inspect the earned trust:
 
 ```js
@@ -299,19 +301,23 @@ const r = await fetch(`${base}/v1/email/agent/autonomy/run`, {
   method: "POST", headers: { "content-type": "application/json" },
   body: JSON.stringify({ session_id: "s1", max_messages: 25 }),
 });
-const report = await r.json();   // { level, executed:[…], proposals:[…], skipped }
+const report = await r.json();
+// { level, executed:[…], proposals:[…], decisions:[…], skipped }
+// decisions[] explains EVERY candidate considered: { message_id, tool, action, outcome, reason, sender }
 
 // Inspect the earned-trust ledger — autonomy is never a black box
 const status = await (await fetch(`${base}/v1/email/agent/autonomy/s1`)).json();
 // { level, enabled, trust_min_samples, trust_threshold, trusted_scope_count, scopes:[…] }
 ```
 
-The agent **learns from your corrections**: undoing an auto-archive (`undo_archive_batch`)
-is captured as a negative outcome that pulls the sender/category back below the trust bar.
-(Positive-outcome accrual — trust *rising* as suggestions are accepted or left standing —
-is not yet wired, so today the ledger only ratchets trust down.) Every auto-action is
-reversible with undo. A bad `level` returns **400**; an unknown
-session returns **404**.
+The agent **learns from your corrections**: undoing an auto-executed action —
+`POST /v1/email/agent/autonomy/undo` with `{ session_id, action_id }` from the `executed[]`
+entry, or the conversational `undo_archive_batch` tool for a batch archive — is captured as
+a negative outcome that pulls the sender/category back below the trust bar. (Positive-outcome
+accrual — trust *rising* as suggestions are accepted or left standing — is not yet wired, so
+today the ledger only ratchets trust down.) Every auto-action is reversible with undo. A bad
+`level` returns **400**; an unknown session returns **404**; undoing an unknown/expired
+`action_id` returns **409**.
 
 ## Running in a server / long-lived app
 

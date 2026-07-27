@@ -6,6 +6,20 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## Unreleased
 
+- **Full autonomy now does more than archive, explains its decisions, and can be undone.**
+  Previously the proactive `earn_trust`/`full` loop only ever archived low-signal mail —
+  every other reversible action the trust model already declared (marking mail read,
+  starring, labeling) was unreachable, the run report never said *why* a message was held
+  back, and there was no way to undo an auto-executed action other than the archive-only
+  `undo_archive_batch` tool. Now: FYI mail is marked read instead of archived (it stays
+  visible, just no longer sits unread); `POST /v1/email/agent/autonomy/run` returns a new
+  `decisions[]` field explaining every candidate's outcome and reason, including "held back
+  for confirmation" and "held back — provider-flagged IMPORTANT"; and a new
+  `POST /v1/email/agent/autonomy/undo` reverses any auto-executed action and records the
+  correction against its trust scope, the same negative-feedback loop `undo_archive_batch`
+  already gave archives. The destructive floor (send/forward/permanent-delete/RSVP/quarantine)
+  is unaffected — it was already inviolable and stays that way at every level (#2529).
+
 - **The agent sets up your mailbox itself, in the conversation.** Before, hitting
   the email agent without a working mailbox produced an error and a shell command
   to go run somewhere else — a dead end for anyone in a terminal or chat window.
