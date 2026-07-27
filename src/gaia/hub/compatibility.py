@@ -166,6 +166,7 @@ def _coerce_requirements(requirements: Any) -> Requirements:
             min_memory_gb=requirements.get("min_memory_gb"),
             min_disk_gb=requirements.get("min_disk_gb"),
             min_context_size=requirements.get("min_context_size"),
+            min_lemonade_version=requirements.get("min_lemonade_version"),
             platforms=list(requirements.get("platforms") or []),
             npu=bool(requirements.get("npu", False)),
             gpu_vram_gb=requirements.get("gpu_vram_gb"),

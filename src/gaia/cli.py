@@ -8118,6 +8118,10 @@ def handle_mcp_serve(args):
         mcp = create_agent_ui_mcp(backend_url=args.backend)
 
         if args.stdio:
+            # stdout carries JSON-RPC framing in stdio mode; keep logs off it.
+            from gaia.logger import route_console_logging_to_stderr
+
+            route_console_logging_to_stderr()
             print(
                 "Starting GAIA Agent UI MCP Server (stdio mode)...",
                 file=__import__("sys").stderr,
