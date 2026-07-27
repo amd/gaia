@@ -283,6 +283,62 @@ def sender_scope(sender: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Correction capture (#2529) — pure ``db``-over functions so any
+# ``DatabaseMixin`` holder can record a trust signal, not only a live
+# ``EmailTriageAgent``. ``EmailTriageAgent.record_autonomy_outcome`` /
+# ``note_action_undone`` are thin wrappers around these two.
+# ---------------------------------------------------------------------------
+
+
+def record_autonomy_outcome(
+    db,
+    *,
+    action_type: str,
+    positive: bool,
+    sender: str = "",
+    category: str = "",
+) -> None:
+    """Record one trust signal against both the sender and category scope.
+
+    The outcome is recorded against BOTH scopes (whichever are non-empty) so
+    trust accrues at whichever granularity recurs — a specific sender AND its
+    category both learn from the same decision.
+    """
+    for scope in (
+        sender_scope(sender) if sender else "",
+        category_scope(category) if category else "",
+    ):
+        if scope:
+            TrustLedger.record_outcome(
+                db, action_type=action_type, scope=scope, positive=positive
+            )
+
+
+def note_autonomy_undo(db, *, action_id: str) -> bool:
+    """Capture a correction: an auto-executed action that was undone.
+
+    Looks up ``action_id`` in the attribution index; if it was recorded as an
+    autonomy decision (:func:`record_autonomy_action`), records a negative
+    outcome for its scope and marks the index row resolved (so the same undo
+    can't be counted twice). Returns True when a correction was captured,
+    False when ``action_id`` was not an autonomy action (e.g. the user undid
+    something they did manually themselves) — a no-op, not an error.
+    """
+    row = lookup_autonomy_action(db, action_id=action_id)
+    if row is None:
+        return False
+    record_autonomy_outcome(
+        db,
+        action_type=row["action_type"],
+        positive=False,
+        sender=row.get("sender") or "",
+        category=row.get("category") or "",
+    )
+    mark_autonomy_action_resolved(db, action_id=action_id)
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Auto-archive safety guard (#2426)
 # ---------------------------------------------------------------------------
 

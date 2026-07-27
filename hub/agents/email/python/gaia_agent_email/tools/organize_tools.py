@@ -17,8 +17,8 @@ from __future__ import annotations
 import uuid
 from typing import Any, Dict, List, Optional
 
-from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email import action_store
+from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email.verbose import log_tool_call
 
 from gaia.agents.base.tools import tool
@@ -374,6 +374,91 @@ def undo_archive_batch_impl(
         }
 
 
+# Toggle actions the autonomy candidate map can auto-execute, reversed by
+# calling the opposite backend method directly (#2529). ``archive`` is NOT
+# here — it is handled by a dedicated branch in
+# ``undo_reversible_action_impl`` that routes through
+# ``undo_archive_batch_impl`` using the row's own ``batch_id`` (every
+# autonomy archive mints a unique one, so "undo this action" and "undo this
+# batch" coincide for a solo auto-archive). Extend this table — or add a
+# branch like ``archive``'s for anything that needs prior-state restoration —
+# when the autonomy candidate map grows a new auto-executable action_type; an
+# unhandled type fails loudly rather than pretending the undo succeeded.
+_TOGGLE_UNDO_OPS: Dict[str, str] = {
+    "mark_read": "mark_unread",
+    "mark_unread": "mark_read",
+    "add_star": "remove_star",
+    "remove_star": "add_star",
+}
+
+
+def undo_reversible_action_impl(
+    resolve_backend,
+    db,
+    *,
+    action_id: str,
+    window_seconds: int,
+    debug: bool = False,
+) -> Dict[str, Any]:
+    """Undo one action recorded in ``email_actions`` by its ``action_id``.
+
+    Complements ``undo_archive_batch_impl`` (archive-only, batch-shaped) and
+    ``delete_tools.restore_message_impl`` (trash-only): this is the general
+    single-action undo for the rest of the reversible-action set autonomy can
+    execute (#2529) — without it, the earned-trust ledger can only ever
+    ratchet up, because no undo can reach it for anything but a batch
+    archive. ``resolve_backend(row: dict) -> backend`` routes per-message,
+    same as the other undo impls in this module.
+
+    Fails loudly: an unknown/expired/already-undone ``action_id`` raises
+    ``RuntimeError``; an ``action_type`` with no reversal wired here raises
+    ``ValueError`` rather than silently no-op'ing.
+    """
+    with log_tool_call(
+        "undo_reversible_action", {"action_id": action_id}, debug=debug
+    ) as st:
+        row = action_store.fetch_undoable(
+            db, action_id=action_id, window_seconds=window_seconds
+        )
+        if row is None:
+            raise RuntimeError(
+                f"undo window has expired ({window_seconds} s) or action_id "
+                f"{action_id!r} is unknown or already undone."
+            )
+        action_type = row["action_type"]
+        message_id = row["message_id"]
+        if action_type == "archive":
+            batch_result = undo_archive_batch_impl(
+                resolve_backend,
+                db,
+                batch_id=row["batch_id"],
+                window_seconds=window_seconds,
+                debug=debug,
+            )
+            undone = batch_result["restored"] > 0
+        else:
+            reverse_op = _TOGGLE_UNDO_OPS.get(action_type)
+            if reverse_op is None:
+                raise ValueError(
+                    f"undo_reversible_action: no reversal implemented for "
+                    f"action_type {action_type!r}. Add one to "
+                    "_TOGGLE_UNDO_OPS (or a dedicated branch, like 'archive') "
+                    "before this action type can be auto-executed by the "
+                    "autonomy candidate map."
+                )
+            backend = resolve_backend(row)
+            getattr(backend, reverse_op)(message_id)
+            action_store.mark_undone(db, action_id=action_id)
+            undone = True
+        st["result_summary"] = {"action_id": action_id, "undone": undone}
+        return {
+            "action_id": action_id,
+            "action_type": action_type,
+            "message_id": message_id,
+            "undone": undone,
+        }
+
+
 # ---------------------------------------------------------------------------
 # Mixin
 # ---------------------------------------------------------------------------
@@ -435,9 +520,7 @@ def _coerce_ids(message_ids):
         if s.startswith("[") and s.endswith("]"):
             s = s[1:-1]
         return [
-            cleaned
-            for x in s.replace(";", ",").split(",")
-            if (cleaned := _clean_id(x))
+            cleaned for x in s.replace(";", ",").split(",") if (cleaned := _clean_id(x))
         ]
     return []
 
