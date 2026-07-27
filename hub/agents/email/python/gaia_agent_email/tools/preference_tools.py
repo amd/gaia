@@ -28,8 +28,10 @@ Tools registered:
 - ``get_preferences()`` — read back everything currently stored
 - ``clear_session_preferences()`` — wipe preferences (in-process and persisted)
 
-The set/remove pairs and ``get_preferences`` are consulted by
-``triage_inbox`` and ``pre_scan_inbox`` (see ``read_tools.py``).
+The set/remove pairs mutate the same ``_session_preferences`` state that
+``triage_inbox`` and ``pre_scan_inbox`` consult (see ``read_tools.py``).
+``get_preferences`` is a pure read-back for the conversation and plays no
+role in triage itself.
 
 #2520: no removal tool existed at all — asking to remove a single
 preference either no-op'd while the agent claimed success, or triggered
