@@ -322,7 +322,7 @@ def note_autonomy_undo(db, *, action_id: str) -> bool:
     outcome for its scope and marks the index row resolved (so the same undo
     can't be counted twice). Returns True when a correction was captured,
     False when ``action_id`` was not an autonomy action (e.g. the user undid
-    something they did manually themselves) — a no-op, not an error.
+    something they did manually) — a no-op, not an error.
     """
     row = lookup_autonomy_action(db, action_id=action_id)
     if row is None:
