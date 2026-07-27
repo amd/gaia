@@ -131,6 +131,10 @@ func (h *fakeHost) handle(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(initReady))
 	case "/v1/email/connectors":
 		_, _ = w.Write([]byte(connectorsReady))
+	case "/v1/email/search":
+		// The mailbox row's credential probe. It is a relayed POST like any
+		// other, so a token rotation lands on it too.
+		_, _ = w.Write([]byte(searchOK))
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"detail":"no such route"}`))

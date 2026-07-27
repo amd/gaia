@@ -110,8 +110,8 @@ func TestRenderAllReadyAt80x24(t *testing.T) {
 		"running (pid 41822)",
 		"0.5.0",
 		"Lemonade 8.1.10",
-		"Gemma-4-E4B-it-GGUF · 16K context",
-		"you@gmail.com (Gmail) · can send",
+		"Gemma-4-E4B-it-GGUF · 64K context",
+		"you@gmail.com (Gmail) · can read and send",
 	} {
 		if !strings.Contains(screen, want) {
 			t.Errorf("screen does not show %q:\n%s", want, screen)
@@ -153,10 +153,17 @@ func TestRenderFitsEveryScenarioAt80x24(t *testing.T) {
 		"lemonade too old":     newFake().with("GET /v1/email/init", 503, initTooOld),
 		"version unknown":      newFake().with("GET /v1/email/init", 200, initUnknownVersion),
 		"model missing":        newFake().with("GET /v1/email/init", 503, initModelMissing),
-		"no mailbox":           newFake().with("GET /v1/email/connectors", 200, connectorsNone),
-		"send not granted":     newFake().with("GET /v1/email/connectors", 200, connectorsNoSend),
-		"sidecar stopped":      newFake().with("GET /daemon/v1/agents", 200, agentsStopped),
-		"not installed":        newFake().with("GET /daemon/v1/agents", 200, agentsEmpty),
+		// The longest remedy on the screen: a stop instruction, its reason, the app
+		// alternative, the terminal caveat and the memory caveat, all in one row.
+		"context shortfall":  newFake().with("GET /v1/email/init", 200, initCtxShortfall),
+		"no mailbox":         newFake().with("GET /v1/email/connectors", 200, connectorsNone),
+		"send not granted":   newFake().with("GET /v1/email/connectors", 200, connectorsNoSend),
+		"grant missing":      newFake().with("GET /v1/email/connectors", 200, connectorsNoGrant),
+		"credentials dead":   newFake().with("POST /v1/email/search", 502, searchNoForwardedCredential),
+		"mailbox unverified": newFake().with("POST /v1/email/search", 502, searchRelayDown),
+		"two mailboxes":      newFake().with("GET /v1/email/connectors", 200, connectorsBoth).with("POST /v1/email/search", 400, searchAmbiguous),
+		"sidecar stopped":    newFake().with("GET /daemon/v1/agents", 200, agentsStopped),
+		"not installed":      newFake().with("GET /daemon/v1/agents", 200, agentsEmpty),
 	}
 	for name, f := range scenarios {
 		t.Run(name, func(t *testing.T) {
@@ -246,17 +253,36 @@ func TestKeysDriveTheRightActions(t *testing.T) {
 		m, _ := renderAt(t, f, 80, 24)
 		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
 		m = updated.(Model)
-		if !strings.Contains(ansi.Strip(m.View()), "lemonade-server serve") {
+		// Whatever this machine's start command is — the screen must name the one
+		// that exists here, never a fixed literal. Via the REMEDY, not the raw
+		// launcher: the launcher is "" on a machine with no Lemonade (every CI
+		// runner), and strings.Contains(_, "") is always true — an assertion that
+		// silently stops asserting is how the stale literal survived.
+		if !strings.Contains(ansi.Strip(m.View()), lemonadeStartRemedy().Command) {
 			t.Errorf("pressing f on an unfixable row said nothing useful:\n%s", m.View())
 		}
 	})
 
 	t.Run("enter is refused while a check is blocked", func(t *testing.T) {
-		f := newFake().with("GET /v1/email/connectors", 200, connectorsNone)
+		// A stopped sidecar blocks; a bad mailbox does not, because the agent
+		// repairs that one in the conversation the launch reaches.
+		f := newFake().with("GET /daemon/v1/agents", 200, agentsStopped)
 		m, _ := renderAt(t, f, 80, 24)
 		_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 		if cmd != nil {
 			t.Fatalf("enter proceeded past a blocked report: %T", cmd())
+		}
+	})
+
+	t.Run("enter is offered over a mailbox the agent can repair", func(t *testing.T) {
+		f := newFake().with("GET /v1/email/connectors", 200, connectorsNone)
+		m, lines := renderAt(t, f, 80, 24)
+		screen := strings.Join(lines, "\n")
+		if !strings.Contains(screen, "start anyway") {
+			t.Errorf("a repairable mailbox hid the launch that reaches the fix:\n%s", screen)
+		}
+		if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil {
+			t.Error("enter did nothing on a mailbox the agent could have fixed")
 		}
 	})
 

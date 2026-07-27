@@ -18,8 +18,9 @@ import (
 // is a fact with no expiry notice — the daemon can be killed, its client token
 // rotates on every restart, Lemonade can unload the model, a mailbox grant can be
 // revoked from the web — so a cached pass would open a chat that cannot answer
-// while claiming it had been verified. An all-green pass costs one attach plus two
-// relayed GETs and is held ~800ms; that is the price of the answer being true now.
+// while claiming it had been verified. An all-green pass costs one attach, two
+// relayed GETs, and one bounded relayed mailbox read, and is held ~800ms; that is
+// the price of the answer being true now.
 func (m RootModel) beginPreflight(agent catalog.Agent) (tea.Model, tea.Cmd) {
 	if agent.Transport != catalog.TransportDaemon {
 		// Every precondition the gate reports is probed THROUGH the daemon relay
@@ -82,6 +83,11 @@ func (m RootModel) gateIsFor(agentID string) bool {
 // its own 90s timeout after the user leaves; its result is dropped by
 // updatePreflight rather than allowed to drive whatever is on screen. Fixing it
 // properly needs a pointer-receiver initialiser in the preflight package.
+//
+// Since the mailbox row started proving its credentials, that abandoned check can
+// include one live read of the user's mailbox, capped by the row's own 5s bound
+// rather than the 90s one — so it is bounded and read-only, but it is no longer
+// only loopback traffic.
 func (m *RootModel) closeGate() {
 	if m.preflight != nil {
 		m.preflight.Cancel()

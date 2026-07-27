@@ -39,7 +39,11 @@ func TestLadderPicksTheRightSubject(t *testing.T) {
 			diagnose: func() Diagnosis {
 				return l.Text("check the local AI", "Local Lemonade Server is not reachable at http://localhost:8000")
 			},
-			wantCmd: "lemonade-server serve",
+			// Resolved against this machine, not hardcoded: `lemonade-server` does
+			// not exist on a modern install. From the REMEDY, which always names
+			// something — resolveLemonade().Start is "" where nothing is installed,
+			// and an empty wantCmd is skipped, so this would assert nothing in CI.
+			wantCmd: lemonadeStartRemedy().Command,
 			wantIn:  "local model server",
 		},
 		{
