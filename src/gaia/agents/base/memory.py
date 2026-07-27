@@ -38,6 +38,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -274,6 +275,19 @@ def _get_cross_encoder():
         return None
     if _cross_encoder_model is not None:
         return _cross_encoder_model
+    # faiss and torch each link their own OpenMP runtime; whichever loads
+    # second aborts the process with "OMP: Error #15" — a SIGABRT no except
+    # clause can catch, so the guards below would never run. Refuse the import
+    # we know is fatal rather than take the process down mid-conversation.
+    if "faiss" in sys.modules and "torch" not in sys.modules:
+        logger.warning(
+            "[MemoryMixin] cross-encoder reranking disabled: faiss is already "
+            "loaded and importing torch alongside it aborts the process "
+            "(OpenMP double-initialisation). Retrieval falls back to vector "
+            "similarity, which is ordered but not reranked."
+        )
+        _CROSS_ENCODER_UNAVAILABLE = True
+        return None
     try:
         from sentence_transformers import CrossEncoder
 
