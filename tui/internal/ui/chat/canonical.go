@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -8,9 +9,17 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/ui/components"
 )
+
+// answerTimeout bounds the out-of-band POST that delivers an answer. Short: the
+// daemon is local, and a hung answer must not look like a hung agent.
+const answerTimeout = 15 * time.Second
+
+// questionFailedMsg reports that an answer never reached the agent.
+type questionFailedMsg struct{ err error }
 
 // handleCanonicalEvent renders the canonical `/query` SSE vocabulary — what the
 // daemon transport streams. handled is false for anything else, so the legacy
@@ -18,8 +27,12 @@ import (
 func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bool) {
 	switch e := evt.(type) {
 	case event.CanonicalStatusEvent:
-		if msg := strings.TrimSpace(e.Message); msg != "" {
-			m.activity = append(m.activity, ActivityItem{Kind: "status", Content: msg})
+		// One live line, replaced — not a log. A user watching a 200s turn needs
+		// to know what is happening NOW; an accumulating list of "Step 2/50"
+		// and "Thinking" answers a question nobody asked and buries the tool
+		// call that actually says what the agent is doing.
+		if msg := userFacingStatus(e.Message); msg != "" {
+			m.setLiveStatus(msg)
 		}
 
 	case event.CanonicalTokenEvent:
@@ -46,6 +59,17 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 				Data:     e.Data,
 			})
 		}
+
+	case event.CanonicalNeedsInputEvent:
+		// The run is parked waiting for this answer, on the stream we are still
+		// reading. Put the question up and keep reading — the answer goes back
+		// out of band (see answerQuestion) and the same stream resumes.
+		m.question = questionFromEvent(e)
+		m.question.SetWidth(m.cardWidth())
+		m.messages = append(m.messages, Message{
+			Role:    RoleStatus,
+			Content: "the agent needs an answer to continue",
+		})
 
 	case event.CanonicalNeedsConfirmationEvent:
 		// The approval UI is a later phase. Until then the pause is surfaced as a
@@ -80,6 +104,10 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		})
 		m.streaming = false
 		m.activity = nil
+		// The turn is over, so any question it was waiting on is dead. Leaving
+		// the panel up would swallow every keystroke into a question nobody is
+		// listening to — the composer becomes unreachable and Esc quits the app.
+		m.question = nil
 		if usage.Steps > 0 {
 			m.totalSteps = usage.Steps
 		}
@@ -91,6 +119,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		m.messages = append(m.messages, Message{Role: RoleError, Content: e.Detail})
 		m.streaming = false
 		m.activity = nil
+		m.question = nil
 		m.updateViewport()
 		return m, nil, true
 
@@ -100,6 +129,9 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			Role:    RoleStatus,
 			Content: fmt.Sprintf("unsupported event %q from the agent (update GAIA to render it)", e.EventType),
 		})
+
+	case event.CanonicalNoticeEvent:
+		m.messages = append(m.messages, Message{Role: RoleStatus, Content: e.Text})
 
 	case event.CanonicalMalformedEvent:
 		m.messages = append(m.messages, Message{
@@ -113,6 +145,52 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 
 	m.updateViewport()
 	return m, waitForEvent(m.events), true
+}
+
+// questionFromEvent builds the picker from the wire event.
+func questionFromEvent(e event.CanonicalNeedsInputEvent) *components.QuestionModel {
+	opts := make([]components.QuestionOption, 0, len(e.Options))
+	for _, o := range e.Options {
+		label := o.Label
+		if label == "" {
+			label = o.Value
+		}
+		opts = append(opts, components.QuestionOption{
+			Value:       o.Value,
+			Label:       label,
+			Description: o.Description,
+		})
+	}
+	question := strings.TrimSpace(e.Question)
+	if question == "" {
+		question = "The agent needs an answer to continue."
+	}
+	q := components.NewQuestionModel(e.RequestID, question, opts, e.AllowFreeText, e.Sensitive)
+	return &q
+}
+
+// answerQuestion delivers the answer on the transport's out-of-band seam.
+//
+// A transport with no Respond is a real dead end for the user — the agent is
+// waiting on something this client structurally cannot send — so it says so
+// rather than dropping the keystroke.
+func (m ChatModel) answerQuestion(requestID, value string) tea.Cmd {
+	responder, ok := m.client.(client.AgentResponder)
+	if !ok {
+		return func() tea.Msg {
+			return questionFailedMsg{err: fmt.Errorf(
+				"this agent connection cannot answer questions mid-run; " +
+					"relaunch the agent through the GAIA daemon transport")}
+		}
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), answerTimeout)
+		defer cancel()
+		if err := responder.Respond(ctx, requestID, value); err != nil {
+			return questionFailedMsg{err: err}
+		}
+		return nil
+	}
 }
 
 // markToolDone closes out the activity line opened by the matching tool_call.
@@ -161,4 +239,44 @@ func toolResultSucceeded(data json.RawMessage) bool {
 		return *probe.Success
 	}
 	return true
+}
+
+// userFacingStatus keeps only what a person watching the turn can act on, and
+// rewrites agent-loop vocabulary into it. Returns "" for noise.
+//
+// Dropped: the model name (identical on every message of every turn), the step
+// counter (a loop bound, not progress), and bare "Thinking" (the spinner
+// already says that).
+func userFacingStatus(raw string) string {
+	msg := strings.TrimSpace(raw)
+	switch {
+	case msg == "":
+		return ""
+	case msg == "Thinking":
+		return ""
+	case strings.HasPrefix(msg, "Processing with "):
+		return ""
+	case strings.HasPrefix(msg, "Step ") && strings.Contains(msg, "/"):
+		return ""
+	case strings.HasPrefix(msg, "Completed in "):
+		return ""
+	}
+	return msg
+}
+
+// setLiveStatus replaces the current status line instead of appending one, so
+// the activity area shows the latest stage rather than a transcript of stages.
+func (m *ChatModel) setLiveStatus(msg string) {
+	for i := len(m.activity) - 1; i >= 0; i-- {
+		if m.activity[i].Kind == "status" {
+			m.activity[i].Content = msg
+			return
+		}
+		// A completed tool call is evidence of work and stays; a status line
+		// after it is a NEW stage, so stop looking and add one.
+		if m.activity[i].Kind == "tool" {
+			break
+		}
+	}
+	m.activity = append(m.activity, ActivityItem{Kind: "status", Content: msg})
 }

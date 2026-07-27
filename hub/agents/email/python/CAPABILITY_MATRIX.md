@@ -9,12 +9,12 @@ python hub/agents/email/python/packaging/capability_matrix.py
 
 ## Definitions
 
-- **tools_count**: the number of internal @tool-decorated agent-loop functions across gaia_agent_email/tools/*.py mixins (one per capability the agent's own LLM tool-calling loop can invoke). This is distinct from, and larger than, the REST API's 21 functional verbs and the MCP interface's 4 task-level tools -- both smaller, purpose-built surfaces for external callers, not agent-loop tools.
+- **tools_count**: the number of internal @tool-decorated agent-loop functions across gaia_agent_email/tools/*.py mixins (one per capability the agent's own LLM tool-calling loop can invoke). This is distinct from, and larger than, the REST API's 22 functional verbs and the MCP interface's 4 task-level tools -- both smaller, purpose-built surfaces for external callers, not agent-loop tools.
 - **no quality eval sentinel**: `no quality eval (contract-tested only)` -- the op is contract/shape-tested only; no judged quality bar exists for it.
 
 ## Capability matrix
 
-25 exposed ops (21 REST functional + 4 MCP) and their eval coverage:
+26 exposed ops (22 REST functional + 4 MCP) and their eval coverage:
 
 | Op | Surface | Eval coverage |
 |---|---|---|
@@ -34,6 +34,7 @@ python hub/agents/email/python/packaging/capability_matrix.py
 | `quarantine` | REST | no quality eval (contract-tested only) |
 | `query` | REST | no quality eval (contract-tested only) |
 | `query/{run_id}/cancel` | REST | no quality eval (contract-tested only) |
+| `query/{run_id}/respond` | REST | no quality eval (contract-tested only) |
 | `search` | REST | no quality eval (contract-tested only) |
 | `send` | REST | no quality eval (contract-tested only) |
 | `send_email` | MCP | no quality eval (contract-tested only) |
@@ -46,12 +47,13 @@ python hub/agents/email/python/packaging/capability_matrix.py
 
 ## Surface totals
 
-- Internal `@tool` agent-loop functions: **56**
+- Internal `@tool` agent-loop functions: **58**
   - `briefing_tools`: 3
   - `calendar_tools`: 6
   - `connection_tools`: 1
   - `delete_tools`: 3
   - `followup_tools`: 1
+  - `onboarding_tools`: 2
   - `organize_tools`: 15
   - `phishing_tools`: 2
   - `preference_tools`: 4
@@ -61,7 +63,7 @@ python hub/agents/email/python/packaging/capability_matrix.py
   - `schedule_tools`: 4
   - `summarize_tools`: 1
   - `voice_tools`: 2
-- REST functional verbs: **21** (24 total operations in the frozen contract, including health/version/init probes)
+- REST functional verbs: **22** (25 total operations in the frozen contract, including health/version/init probes)
 - MCP tools: **4**
   - `draft_reply`
   - `send_email`

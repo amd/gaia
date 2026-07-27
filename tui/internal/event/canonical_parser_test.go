@@ -131,16 +131,49 @@ func TestParseCanonicalError(t *testing.T) {
 
 // Contract §7: an unknown top-level type is surfaced, never dropped.
 func TestParseCanonicalUnknownTypeIsVisible(t *testing.T) {
-	e := ParseCanonicalEvent([]byte(`{"type":"needs_input","prompt":"Which mailbox?"}`))
+	e := ParseCanonicalEvent([]byte(`{"type":"needs_telepathy","prompt":"Which mailbox?"}`))
 	u, ok := e.(CanonicalUnsupportedEvent)
 	if !ok {
 		t.Fatalf("expected CanonicalUnsupportedEvent, got %T", e)
 	}
-	if u.EventType != "needs_input" {
+	if u.EventType != "needs_telepathy" {
 		t.Errorf("event type = %q", u.EventType)
 	}
 	if !strings.Contains(u.Raw, "Which mailbox?") {
 		t.Errorf("raw payload not retained: %q", u.Raw)
+	}
+}
+
+// needs_input carries the options AND their descriptions: a label alone does not
+// tell the user what picking it will do.
+func TestParseCanonicalNeedsInput(t *testing.T) {
+	e := ParseCanonicalEvent([]byte(`{"type":"needs_input","run_id":"r","request_id":"q1",` +
+		`"question":"Which mailbox should I connect?",` +
+		`"options":[{"value":"google","label":"Gmail","description":"A gmail.com account."},` +
+		`{"value":"microsoft","label":"Outlook"}],` +
+		`"allow_free_text":false,"respond_url":"/v1/email/query/r/respond","timeout_seconds":240}`))
+	ev, ok := e.(CanonicalNeedsInputEvent)
+	if !ok {
+		t.Fatalf("expected CanonicalNeedsInputEvent, got %T", e)
+	}
+	if ev.RequestID != "q1" || ev.Question != "Which mailbox should I connect?" {
+		t.Errorf("unexpected values: %+v", ev)
+	}
+	if len(ev.Options) != 2 {
+		t.Fatalf("options = %d, want 2", len(ev.Options))
+	}
+	if ev.Options[0].Description != "A gmail.com account." {
+		t.Errorf("description lost: %+v", ev.Options[0])
+	}
+	if ev.AllowFreeText {
+		t.Error("allow_free_text must survive as false")
+	}
+	if ev.TimeoutSeconds != 240 {
+		t.Errorf("timeout = %d", ev.TimeoutSeconds)
+	}
+	// The run continues after a question — it is not a terminal event.
+	if CanonicalTerminalType(ev) != "" {
+		t.Error("needs_input must not terminate the run")
 	}
 }
 

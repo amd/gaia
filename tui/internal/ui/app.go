@@ -181,6 +181,9 @@ func RunAgent(agentID, query, model string, debug bool, timeout time.Duration) (
 		Debug: debug,
 		Model: model,
 		Logf:  logf,
+		// A one-shot has nobody at the keyboard; only the interactive chat can
+		// answer a question, so it must not claim it can.
+		Interactive: query == "",
 	})
 	if err != nil {
 		return 1, err

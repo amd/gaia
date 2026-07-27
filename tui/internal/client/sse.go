@@ -46,6 +46,11 @@ type SSEOptions struct {
 	// idle timeout: it fires only if no byte of the stream arrives within it.
 	ConnectTimeout time.Duration
 	ReadTimeout    time.Duration
+	// Interactive declares that a human is watching and this client will render
+	// a `needs_input` question and POST the answer. Default false: an agent that
+	// asks a question nobody can answer parks the run until it times out, which
+	// is indistinguishable from a hang. Only the interactive chat view sets it.
+	Interactive bool
 	// Logf receives progress and best-effort-failure notes. Never given a token.
 	Logf func(format string, args ...any)
 }
@@ -75,6 +80,13 @@ type SSEClient struct {
 	transcript []Turn
 	closed     bool
 	active     *runHandle
+	// peer is what negotiation learned about the sidecar's contract version;
+	// peerProbed guards the one-shot probe. See negotiate.go.
+	peer       peerContract
+	peerProbed bool
+	// noticedOldPeer records that the "this agent cannot be asked anything"
+	// notice has already been shown, so it appears once per launch, not per turn.
+	noticedOldPeer bool
 }
 
 // runHandle is the cancel side of the currently streaming run.
@@ -111,6 +123,12 @@ type queryRequest struct {
 	Context  []Turn `json:"context"`
 	Model    string `json:"model,omitempty"`
 	MaxSteps int    `json:"max_steps,omitempty"`
+	// A POINTER, so nil omits the key entirely. Sidecar request models are
+	// strict: a peer that predates this field 422s EVERY request carrying it,
+	// including `false`. Only set once negotiation proves the peer accepts it,
+	// and then send it explicitly — including `false`, which is a real answer
+	// the agent branches on, not an absence.
+	CanAnswerQuestions *bool `json:"can_answer_questions,omitempty"`
 }
 
 // Send starts one turn. The returned channel carries the canonical event types
@@ -147,12 +165,23 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 	history = append(history, s.transcript...)
 	s.mu.Unlock()
 
+	// Ask what the peer speaks BEFORE sending it an optional field (negotiate.go).
+	// A published sidecar is routinely older than the source this TUI was built
+	// from, and its strict request model rejects an unknown key outright.
+	peer := s.negotiate(ctx, inst)
+	var canAnswer *bool
+	if peer.canAnswerQuestions {
+		interactive := s.opts.Interactive
+		canAnswer = &interactive
+	}
+
 	payload, err := json.Marshal(queryRequest{
-		Query:    query,
-		RunID:    runID,
-		Context:  history,
-		Model:    s.opts.Model,
-		MaxSteps: s.opts.MaxSteps,
+		Query:              query,
+		RunID:              runID,
+		Context:            history,
+		Model:              s.opts.Model,
+		MaxSteps:           s.opts.MaxSteps,
+		CanAnswerQuestions: canAnswer,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("could not encode the '%s' query request: %w", s.agentID, err)
@@ -230,8 +259,28 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 	}
 
 	ch := make(chan interface{}, 32)
+	// Say it once, on the channel the UI already renders: a user at an
+	// interactive session whose agent cannot be asked anything would otherwise
+	// just never be offered the in-conversation fix, with no way to know why.
+	if notice := s.oldPeerNotice(peer); notice != "" {
+		ch <- event.CanonicalNoticeEvent{Text: notice}
+	}
 	go s.consume(ctx, runCtx, handle, resp, ch, query)
 	return ch, nil
+}
+
+// oldPeerNotice returns the one-time warning text, or "" when none is due.
+func (s *SSEClient) oldPeerNotice(peer peerContract) string {
+	if peer.canAnswerQuestions || !s.opts.Interactive {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.noticedOldPeer {
+		return ""
+	}
+	s.noticedOldPeer = true
+	return noticeForMissingCapability(s.agentID, peer.version)
 }
 
 // consume reads the SSE response and enforces the terminal-event contract.
@@ -280,6 +329,9 @@ func (s *SSEClient) consume(
 		// a value-copied Bubble Tea model) and avoids quadratic reallocation.
 		streamed  strings.Builder
 		delivered = true
+		// Compact records of cards drawn this turn, folded into the transcript
+		// so the next turn can resolve "that one" against what is on screen.
+		shown []string
 	)
 
 	for {
@@ -298,6 +350,13 @@ func (s *SSEClient) consume(
 		if fin, isFinal := evt.(event.CanonicalFinalEvent); isFinal {
 			answer = fin.Answer
 		}
+		if tr, isResult := evt.(event.CanonicalToolResultEvent); isResult && tr.Render != "" {
+			// What the user can SEE has to be what the model can refer to. A
+			// card is drawn here, not by the sidecar, so without this the next
+			// turn's history holds only the model's one-line framing — and a
+			// follow-up like "when is that one?" resolves against nothing.
+			shown = append(shown, displayedCard(tr))
+		}
 		if !emit(evt) {
 			delivered = false
 			break
@@ -315,7 +374,7 @@ func (s *SSEClient) consume(
 				// empty `final` — keep the streamed text as the turn's answer.
 				answer = streamed.String()
 			}
-			s.appendTurn(query, answer)
+			s.appendTurn(query, answer, shown)
 		}
 		return
 	}
@@ -378,6 +437,66 @@ func (s *SSEClient) readTimeoutDetail() string {
 		s.agentID, s.opts.ReadTimeout)
 }
 
+// Respond answers the question the in-flight run is paused on.
+//
+// It is NOT best-effort like cancelRun: a swallowed answer looks exactly like an
+// agent that stopped thinking, so every failure comes back to the caller with
+// something the user can act on. The run continues on the stream Send() already
+// returned — there is no second channel to read.
+func (s *SSEClient) Respond(ctx context.Context, requestID, value string) error {
+	s.mu.Lock()
+	inst := s.inst
+	active := s.active
+	s.mu.Unlock()
+	if inst == nil || active == nil {
+		return fmt.Errorf(
+			"there is no live '%s' run to answer — the question expired when the turn ended. Ask again",
+			s.agentID)
+	}
+
+	payload, err := json.Marshal(respondRequest{RequestID: requestID, Value: value})
+	if err != nil {
+		return fmt.Errorf("could not encode the answer for '%s': %w", s.agentID, err)
+	}
+
+	resp, _, err := s.daemon.Do(ctx, inst, daemon.Request{
+		Method: http.MethodPost,
+		Path: fmt.Sprintf("/v1/%s/query/%s/respond",
+			url.PathEscape(s.agentID), url.PathEscape(active.runID)),
+		Body: payload,
+		Header: http.Header{
+			"Content-Type": []string{"application/json"},
+		},
+		HTTPClient: s.cancelHTTP,
+		Op:         fmt.Sprintf("answer the '%s' agent's question", s.agentID),
+	})
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return nil
+	case http.StatusNotFound:
+		return fmt.Errorf(
+			"the '%s' run had already ended, so the answer arrived too late. Ask again",
+			s.agentID)
+	case http.StatusConflict:
+		return fmt.Errorf(
+			"the '%s' agent is no longer waiting on that question — it timed out or was already answered. Ask again",
+			s.agentID)
+	default:
+		return fmt.Errorf("answering the '%s' agent failed (%s)",
+			s.agentID, daemon.ErrorDetail(resp))
+	}
+}
+
+type respondRequest struct {
+	RequestID string `json:"request_id"`
+	Value     string `json:"value"`
+}
+
 // cancelRun asks the relay to drop a run we are abandoning.
 //
 // Best-effort: the sidecar may already be gone. It owns its own background
@@ -430,13 +549,60 @@ func (s *SSEClient) clearActive(handle *runHandle) {
 	s.mu.Unlock()
 }
 
-func (s *SSEClient) appendTurn(query, answer string) {
+func (s *SSEClient) appendTurn(query, answer string, shown []string) {
+	// The assistant turn records what the USER saw, not only what the model
+	// said. Cards are drawn by this client, so their contents never reach the
+	// sidecar's history on their own — and a follow-up referring to a row
+	// ("when is that one?") would resolve against a one-line summary.
+	content := answer
+	if len(shown) > 0 {
+		content = strings.TrimSpace(
+			answer + "\n\n[shown to the user]\n" + strings.Join(shown, "\n"),
+		)
+	}
 	s.mu.Lock()
 	s.transcript = append(s.transcript,
 		Turn{Role: "user", Content: query},
-		Turn{Role: "assistant", Content: answer},
+		Turn{Role: "assistant", Content: content},
 	)
 	s.mu.Unlock()
+}
+
+// displayedCard renders a drawn card as the few lines a model needs to resolve
+// a reference to it. Deliberately lossy: senders and subjects are what users
+// point at, and a verbatim payload would crowd the context it is meant to help.
+func displayedCard(tr event.CanonicalToolResultEvent) string {
+	const maxRows = 40
+	var rows []string
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(tr.Data, &payload); err != nil {
+		return tr.Render + " card displayed"
+	}
+	for _, bucket := range []string{"urgent", "actionable", "suggested_archives"} {
+		raw, ok := payload[bucket]
+		if !ok {
+			continue
+		}
+		var items []struct {
+			MessageID string `json:"message_id"`
+			Sender    string `json:"sender"`
+			Subject   string `json:"subject"`
+		}
+		if json.Unmarshal(raw, &items) != nil {
+			continue
+		}
+		for _, it := range items {
+			if len(rows) >= maxRows {
+				break
+			}
+			rows = append(rows, fmt.Sprintf("- [%s] %s — %s (id %s)",
+				bucket, it.Sender, it.Subject, it.MessageID))
+		}
+	}
+	if len(rows) == 0 {
+		return tr.Render + " card displayed"
+	}
+	return strings.Join(rows, "\n")
 }
 
 // Transcript returns a copy of the host-owned transcript pushed as `context`.
@@ -489,5 +655,6 @@ func newRunID() (string, error) {
 // subprocess one.
 var (
 	_ AgentClient        = (*SSEClient)(nil)
+	_ AgentResponder     = (*SSEClient)(nil)
 	_ TranscriptResetter = (*SSEClient)(nil)
 )

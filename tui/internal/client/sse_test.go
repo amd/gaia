@@ -36,16 +36,24 @@ type fakeRelay struct {
 	stream func(w http.ResponseWriter, flush func(), body queryRequest)
 	// queryStatus, when non-zero, is returned instead of a stream.
 	queryStatus int
+	// contractVersion is what GET /v1/<agent>/version reports. Empty means the
+	// route 404s, like a sidecar predating it.
+	contractVersion string
+	// strictBody replicates the sidecar's pydantic `extra="forbid"`: an unknown
+	// request field is a 422, not an ignored key. This is what makes a published
+	// older sidecar reject a field a newer TUI invented.
+	strictBody bool
 	// onEnsure runs after a successful ensure — used to simulate a daemon
 	// restart (and therefore a token rotation) mid-Send.
 	onEnsure func()
 
-	mu        sync.Mutex
-	token     string
-	queries   []queryRequest
-	rawBodies []string
-	cancelled []string
-	auths     []string
+	mu          sync.Mutex
+	token       string
+	queries     []queryRequest
+	rawBodies   []string
+	cancelled   []string
+	auths       []string
+	versionHits int
 }
 
 func newFakeRelay(t *testing.T) *fakeRelay {
@@ -54,7 +62,7 @@ func newFakeRelay(t *testing.T) *fakeRelay {
 	dir := t.TempDir()
 	t.Setenv(daemon.EnvHome, dir)
 
-	f := &fakeRelay{t: t, dir: dir, token: "token-A"}
+	f := &fakeRelay{t: t, dir: dir, token: "token-A", contractVersion: "2.6"}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.srv.Close)
 
@@ -124,6 +132,18 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 			f.onEnsure()
 		}
 
+	case strings.HasSuffix(r.URL.Path, "/version"):
+		f.mu.Lock()
+		f.versionHits++
+		f.mu.Unlock()
+		if f.contractVersion == "" {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"detail":"no route"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"apiVersion":%q,"agentVersion":"0.5.0"}`, f.contractVersion)
+
 	case strings.HasSuffix(r.URL.Path, "/cancel"):
 		parts := strings.Split(r.URL.Path, "/")
 		f.mu.Lock()
@@ -141,6 +161,41 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 		f.queries = append(f.queries, body)
 		f.rawBodies = append(f.rawBodies, string(raw))
 		f.mu.Unlock()
+
+		if f.strictBody {
+			// The accepted field set is the one THIS peer's contract declares —
+			// 2.6 knows can_answer_questions, older versions do not. Modelling
+			// only one of the two would make the fake agree with the client by
+			// construction, which is how the 422 shipped in the first place.
+			dec := json.NewDecoder(strings.NewReader(string(raw)))
+			dec.DisallowUnknownFields()
+			var derr error
+			if contractAtLeast(f.contractVersion, 2, 6) {
+				var strict struct {
+					Query              string `json:"query"`
+					RunID              string `json:"run_id"`
+					Context            []Turn `json:"context"`
+					Model              string `json:"model"`
+					MaxSteps           int    `json:"max_steps"`
+					CanAnswerQuestions *bool  `json:"can_answer_questions"`
+				}
+				derr = dec.Decode(&strict)
+			} else {
+				var strict struct {
+					Query    string `json:"query"`
+					RunID    string `json:"run_id"`
+					Context  []Turn `json:"context"`
+					Model    string `json:"model"`
+					MaxSteps int    `json:"max_steps"`
+				}
+				derr = dec.Decode(&strict)
+			}
+			if derr != nil {
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				fmt.Fprintf(w, `{"detail":[{"type":"extra_forbidden","msg":%q}]}`, derr.Error())
+				return
+			}
+		}
 
 		if f.queryStatus != 0 {
 			w.WriteHeader(f.queryStatus)
@@ -162,6 +217,23 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"detail":"no route"}`))
 	}
+}
+
+// versionProbes counts GET /v1/<agent>/version calls, so the probe can be
+// asserted to happen once per client rather than once per turn.
+func (f *fakeRelay) versionProbes() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.versionHits
+}
+
+func (f *fakeRelay) lastRawBody() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.rawBodies) == 0 {
+		f.t.Fatal("no query body was received")
+	}
+	return f.rawBodies[len(f.rawBodies)-1]
 }
 
 func (f *fakeRelay) lastQuery() queryRequest {

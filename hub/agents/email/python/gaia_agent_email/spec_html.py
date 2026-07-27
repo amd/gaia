@@ -741,13 +741,27 @@ def render_endpoint_spec_html() -> str:
     sent; the transcript slice is <b>pushed</b> in <code>context</code> (the sidecar
     stays stateless).</p>
   <p class="desc">Each SSE frame is <code>data: {json}</code> discriminated on
-    <code>type</code>, one of the <b>seven canonical event types</b>:
+    <code>type</code>, one of the <b>eight canonical event types</b>:
     <code>status</code> {message} &middot; <code>token</code> {delta} &middot;
     <code>tool_call</code> {tool, args} &middot; <code>tool_result</code>
     {tool, render?, data} &middot; <code>needs_confirmation</code>
-    {run_id, action, summary} &middot; <code>final</code> {answer, usage?} &middot;
+    {run_id, action, summary} &middot; <code>needs_input</code>
+    {run_id, request_id, question, options, allow_free_text, respond_url} &middot;
+    <code>final</code> {answer, usage?} &middot;
     <code>error</code> {detail, status}. The stream is terminated by <b>exactly one
-    <code>final</code> or <code>error</code></b>.</p>
+    <code>final</code> or <code>error</code></b>. Lines beginning <code>:</code>
+    are heartbeat comments and carry no payload.</p>
+  <p class="desc"><b>Mid-run questions (#2469):</b> the agent can ask the user
+    something <i>while it runs</i> — most importantly to set up or repair mailbox
+    access instead of printing a shell command. It emits <code>needs_input</code>
+    carrying the question, 0-4 mutually exclusive
+    <code>options</code> (each with a <code>label</code> and a
+    <code>description</code> of what choosing it does) and an
+    <code>allow_free_text</code> escape. <code>needs_input</code> is
+    <b>not terminal</b>: the run stays parked on the open stream until
+    <code>POST /v1/email/query/{run_id}/respond</code> delivers the answer, then
+    the same stream continues. An unanswered question times out and the run ends
+    with an <code>error</code> — it never hangs.</p>
   <p class="desc"><b>Confirmation (stateless stub, epic decision D1):</b> a step
     that needs approval (a destructive/external tool such as <code>send_now</code>)
     emits <code>needs_confirmation</code> and then the run ends with a
@@ -764,6 +778,21 @@ def render_endpoint_spec_html() -> str:
     between steps (cooperative, not a kill). Returns
     <code>{ run_id, cancelled, status }</code>. 404 if no run with that id is in
     flight.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/query/{run_id}/respond</span>
+  <p class="desc">Answer the <code>needs_input</code> question an in-flight
+    <code>/query</code> run is paused on; the run resumes on its
+    <b>original</b> stream. Body:
+    <code>{ "request_id": str, "value": str }</code> — <code>value</code> is an
+    option's <code>value</code> (its <code>label</code> is also accepted) or free
+    text. Returns <code>{ run_id, request_id, accepted, status }</code>.
+    <b>404</b> if no run with that id is in flight; <b>409</b> if the run is not
+    waiting on that <code>request_id</code> (already answered, timed out, or from
+    another run) — a stale answer is rejected, never applied to whatever question
+    is pending now.</p>
 </div>
 """
 

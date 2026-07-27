@@ -88,7 +88,18 @@ CATEGORY_PERSONAL = "PERSONAL"
 #   - GET /v1/connections               — metadata-only view of forwarded creds.
 #   - DELETE /v1/connections/{provider} — withdraw a forward (revoke/uninstall).
 # No existing shape changed, so 2.4 consumers keep working (additive MINOR).
-SCHEMA_VERSION = "2.5"
+# 2.6 is additive over 2.5 (#2469): the agent can ask the user a question MID-RUN
+# and carry on from the answer, instead of ending the run with a shell command
+# for the user to go run somewhere else.
+#   - a new canonical SSE event, ``needs_input`` {run_id, request_id, question,
+#     options[{value,label,description}], allow_free_text, sensitive?,
+#     respond_url, timeout_seconds?} — NON-terminal: the run stays parked on the
+#     open stream. Distinct from ``needs_confirmation``, whose terminal
+#     deny-by-default approval behaviour is unchanged.
+#   - POST /v1/email/query/{run_id}/respond — deliver the answer; the ORIGINAL
+#     stream resumes. 404 unknown run, 409 stale/unknown request_id.
+# No existing shape changed, so 2.5 consumers keep working (additive MINOR).
+SCHEMA_VERSION = "2.6"
 
 # Maximum number of items in a single batch request. Protects the single-tenant
 # local model slot from runaway batches. Enforced via Pydantic max_length.

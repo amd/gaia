@@ -780,8 +780,15 @@ def triage_inbox_impl(
     force_llm: bool = False,
     classifier: Optional[Callable[..., Mapping[str, Any]]] = None,
     debug: bool = False,
+    progress: Optional[Callable[[int, int, str], None]] = None,
 ) -> Dict[str, Any]:
     """Triage the inbox using heuristic fast path + LLM fallback.
+
+    ``progress(done, total, subject)`` is called after each message when
+    supplied. A single LLM follow-up costs 9-31s locally, so a 25-message scan
+    can sit silent for a minute; the callback is what turns that into visible
+    movement. It must never break the scan — callers get their exceptions
+    swallowed and logged, because narration is not worth losing a triage over.
 
     For each message: fetch metadata, run the heuristic. If the heuristic
     is confident, record its category as the triage decision. Otherwise
@@ -903,6 +910,15 @@ def triage_inbox_impl(
                 debug=debug,
             )
             results.append(decision)
+            if progress is not None:
+                try:
+                    progress(
+                        len(results),
+                        len(listing.get("messages", [])),
+                        payload_headers.get("subject", "") or "(no subject)",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log.debug("triage progress callback failed: %s", exc)
         grouped = group_by_category(results)
         st["result_summary"] = {
             "total": grouped["total"],
@@ -1467,7 +1483,14 @@ class ReadToolsMixin:
         # the fast alternative for "what's urgent right now" asks.
         @tool(timeout=600.0)
         def triage_inbox(max_messages: int = 25) -> str:
-            """Triage the inbox, returning per-message categories.
+            """Raw per-message classifier. NOT the tool for "triage my inbox".
+
+            When the user asks to triage, review, or check their inbox, call
+            ``pre_scan_inbox`` instead: it returns the typed card the chat
+            surface draws, so every message is shown. This tool returns an
+            unrendered verdict list that a model can only paraphrase — which
+            loses most of the inbox. Use it only when you need the raw
+            per-message categories for further computation.
 
             Categories: ``URGENT``, ``NEEDS_RESPONSE``, ``FYI``,
             ``PROMOTIONAL``, ``PERSONAL``. Each result also has ``is_spam`` and
@@ -1498,10 +1521,33 @@ class ReadToolsMixin:
                 # (#2087): a large batch's verbatim verdict list overflows
                 # CONTEXT_TARGET_TOKENS when the agent re-reads it next turn.
                 # No-op below budget; verdicts themselves are unchanged.
+                # Narrate per message: a single LLM follow-up is 9-31s locally,
+                # so a silent scan looks hung. print_info reaches the live stream.
+                def _narrate(done: int, total: int, subject: str) -> None:
+                    console = getattr(agent, "console", None)
+                    emit = getattr(console, "print_info", None)
+                    if callable(emit):
+                        emit(f"Triaged {done}/{total} — {subject[:60]}")
+
+                # Only hosts that accept it get narration. Checked by signature,
+                # not try/except TypeError — that would swallow a real TypeError
+                # raised inside triage and blame it on the callback.
+                kwargs = {"max_messages": max_messages}
+                try:
+                    import inspect as _inspect
+
+                    if (
+                        "progress"
+                        in _inspect.signature(
+                            agent._triage_all_backends
+                        ).parameters
+                    ):
+                        kwargs["progress"] = _narrate
+                except (TypeError, ValueError) as exc:
+                    log.debug("triage: host signature unreadable (%s)", exc)
+
                 return _envelope_ok(
-                    condense_triage_result(
-                        agent._triage_all_backends(max_messages=max_messages)
-                    )
+                    condense_triage_result(agent._triage_all_backends(**kwargs))
                 )
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
