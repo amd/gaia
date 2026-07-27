@@ -2452,6 +2452,87 @@ Most callers should not speak this API directly — the
 
 ---
 
+### TUI Control API
+
+The terminal hub (`gaia tui`, the Go/Bubble Tea binary) can expose a loopback
+HTTP API that drives **the session you are looking at** — not a headless copy.
+An assistant navigates, types, and launches agents while the frames render in
+your terminal in real time. It is how the TUI gets tested without a human at
+the keyboard.
+
+Off by default. Bound to `127.0.0.1` only, and every request needs a bearer
+token.
+
+```bash
+gaia tui --control                 # auto-assign a port
+gaia tui --control-port 8770       # explicit port (implies --control)
+gaia tui --control --debug         # log every injected key, state change, and wait
+```
+
+<Note>
+  These are persistent flags on the TUI binary's root command, so they apply to
+  the hub, `hub`, and `chat` alike. Building from source, that binary is
+  `tui/bin/gaia` (`cd tui && make build`).
+</Note>
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--control` | flag | off | Start the control API on an auto-assigned loopback port. |
+| `--control-port` | integer | `0` | Bind a specific port. Implies `--control`. `0` auto-assigns. Port `4001` is reserved and rejected. |
+| `--debug` | flag | off | Log every injected key, state transition, and wait resolution/timeout to stderr. |
+
+On start the TUI writes `~/.gaia/tui/control.json` (mode `0600`) holding the
+pid, port, and token, and removes it on exit. Clients find the TUI by reading
+that file — the token is never printed to the terminal. A client must verify
+**both** that the recorded pid is alive and that `/control/v1/status` answers
+with a matching pid before trusting the port: after a crash the file can point
+at a port some unrelated process now owns.
+
+<Warning>
+  Anything that can read `~/.gaia/tui/control.json` can drive your TUI — the
+  same trust boundary as `~/.gaia/host/instance.json` for the daemon. Leave
+  `--control` off unless you want a session driven.
+</Warning>
+
+Endpoints (all under `/control/v1`, all requiring `Authorization: Bearer <token>`):
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /status` | `running` plus the active view, active agent, streaming, hub tab, selection, terminal size, and `can_return_to_hub`. |
+| `GET /screen` | The current rendered frame. `?format=plain` (default, ANSI stripped) or `?format=ansi`. |
+| `POST /keys` | Inject named keys — `{"keys": ["tab","down","enter"]}`. |
+| `POST /text` | Type a string as runes — `{"text": "triage my inbox"}`. |
+| `POST /wait` | Block until the screen or state matches, or time out. A timeout reports what the screen actually contained. |
+| `GET /frames` | Recent rendered frames (`?since=N`), for debugging what happened. |
+| `POST /resize` | Re-lay-out at a given size — `{"cols":120,"rows":40}`. |
+
+Errors come back as `{"error": {"code", "message", "hint"}}`; a `/wait` timeout is
+HTTP 408 and carries the screen it saw.
+
+Two response details matter when driving this:
+
+- **`settled`** on `/keys`, `/text`, and `/resize`. The call returns only once every
+  injected key has been *consumed and redrawn*, so reading `/screen` straight after
+  is race-free. `settled: false` means the model was still busy — the input is
+  queued, so re-read rather than assume it was ignored. It does **not** promise the
+  consequences are done: pressing `enter` to launch an agent is consumed
+  immediately, while the view switch it kicks off lands later. Use `/wait` for
+  anything asynchronous.
+- **HTTP 503 `not_running`** when the TUI's event loop is not consuming input —
+  it is still starting, or the user has quit. Bubble Tea silently drops messages
+  in that window, so the API refuses instead of reporting a success for keys that
+  went nowhere. Reads (`/status`, `/screen`, `/frames`) keep working.
+
+`can_return_to_hub` exists because `esc` is not universally "go back": in a chat
+opened from the hub it returns there, but in a standalone `gaia chat --subprocess`
+session it **quits the program**. A driver that guesses wrong kills the session it
+was asked to drive, so the state says which.
+
+Most callers should not speak this API directly — the
+[TUI MCP server](/guides/mcp/tui) wraps it as MCP tools.
+
+---
+
 ### Cache Command
 
 Inspect or clear GAIA's on-disk caches (document-Q7 metadata, chat history,
