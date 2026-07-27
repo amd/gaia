@@ -284,7 +284,8 @@ session — an overlapping `/query` returns **409**. See `SPEC.md` for the full 
 The agent can run **proactively** at the `earn_trust` level: it archives low-signal mail
 on its own **where your explicit preferences already sanction it** (a low-priority sender,
 or a category you default to archive), drafts replies for review, and **always asks before
-anything destructive** (send / forward / permanent-delete / RSVP).
+anything destructive** (send / forward / RSVP / quarantine). There is no permanent-delete —
+the agent only ever moves mail to Trash, which is always reversible.
 Turn it on and inspect the earned trust:
 
 ```js
