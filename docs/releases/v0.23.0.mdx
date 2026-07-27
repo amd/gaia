@@ -5,7 +5,7 @@ description: "The Agent UI gets in-app install, auto-update, and a first-run wiz
 
 # GAIA v0.23.0 Release Notes
 
-GAIA v0.23.0 is a large release built around making the Agent UI a real application instead of a developer tool with a browser front end. It can now install and update itself, walk a new user through hardware checks and model download on first launch, and run every agent as an isolated process supervised by a background daemon instead of code loaded into the UI. The email agent grows a full-autonomy mode that decides what to handle silently and what to ask about, and Outlook support extends to work and school accounts with a zero-setup sign-in flow. Underneath, every agent now shares one model and one context size so switching between them is instant, Lemonade Server moves to 11.0.0, and a dedicated security-audit pipeline replaces a general weekly pass with deterministic scanning plus reasoning over CWE-specific classes.
+GAIA v0.23.0 is a large release built around making the Agent UI a real application instead of a developer tool with a browser front end. It can now install and update itself, walk a new user through hardware checks and model download on first launch, and run every agent as an isolated process supervised by a background daemon instead of code loaded into the UI. The email agent grows a full-autonomy mode that decides what to handle silently and what to ask about, and Outlook support extends to work and school accounts with a zero-setup sign-in flow. Underneath, every agent now shares one model and one context size so switching between them is instant, Lemonade Server moves to 11.5.0, and a dedicated security-audit pipeline replaces a general weekly pass with deterministic scanning plus reasoning over CWE-specific classes.
 
 **Why upgrade:**
 - **Install agents from inside the app** — the Agent UI's Hub install now actually works (a real backend install, not the old "not yet implemented" stub), verified end to end.
@@ -68,9 +68,9 @@ Agents that left their model unset used to default to a different model than cha
 
 ---
 
-### Lemonade Server 11.0.0
+### Lemonade Server 11.5.0
 
-The pinned Lemonade Server moves 10.10.0 → 11.0.0 (PR [#2130](https://github.com/amd/gaia/pull/2130)). This doesn't move existing installs — a machine already on a 10.x that clears every profile's minimum is left alone — but it fixes a version-check bug found while crossing the major boundary: GAIA compared Lemonade's major version for equality, so every 10.x install was about to start seeing a false "version mismatch" warning on every run, the exact opposite of what `gaia init` reported. The check is now a floor (10.2.0), not an equality check, so a newer server is never flagged as wrong.
+The pinned Lemonade Server moves 10.10.0 → 11.5.0 across two bumps this cycle (11.0.0 in PR [#2130](https://github.com/amd/gaia/pull/2130), 11.5.0 in PR [#2424](https://github.com/amd/gaia/pull/2424)). This doesn't move existing installs — a machine already on a 10.x that clears every profile's minimum is left alone — but it fixes a version-check bug found while crossing the major boundary: GAIA compared Lemonade's major version for equality, so every 10.x install was about to start seeing a false "version mismatch" warning on every run, the exact opposite of what `gaia init` reported. The check is now a floor (10.2.0), not an equality check, so a newer server is never flagged as wrong.
 
 ---
 
