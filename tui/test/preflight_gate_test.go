@@ -409,7 +409,7 @@ func TestAFailingPreconditionKeepsTheUserOnTheGate(t *testing.T) {
 // The mailbox bug: the connector list said connected + can_send, the gate showed
 // 5 of 5 ready, and the first triage came back with a credential error. A row
 // that is only ever as true as a stored record must not green-light a launch.
-func TestAMailboxWhoseCredentialsAreRejectedKeepsTheUserOnTheGate(t *testing.T) {
+func TestAMailboxWhoseCredentialsAreRejectedNeverGreenLightsALaunch(t *testing.T) {
 	d := newRootDriver(t, readyGateTransport().mailboxCredentialsRejected(), 80, 24)
 	d.launchEmail()
 
@@ -435,9 +435,15 @@ func TestAMailboxWhoseCredentialsAreRejectedKeepsTheUserOnTheGate(t *testing.T) 
 	if g := d.transport(); g.searches == 0 {
 		t.Error("the gate passed the mailbox row without reading the mailbox")
 	}
+	// Never automatic — but the user may choose it. The agent repairs this state
+	// inside the conversation, so refusing the choice would hide the fix behind
+	// the gate that found the problem.
+	if !strings.Contains(screen, "start anyway") {
+		t.Errorf("the gate hid the launch that reaches the in-conversation fix:\n%s", d.screen())
+	}
 	d.send(keyEnter())
-	if got := d.view(); got != "preflight" {
-		t.Fatalf("enter past a dead mailbox landed on %q", got)
+	if got := d.view(); got != "chat" {
+		t.Fatalf("enter over a repairable mailbox = %q, want chat\n%s", got, d.screen())
 	}
 }
 

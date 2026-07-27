@@ -305,8 +305,11 @@ func TestSendPrefersDeliveryOverACancelledContext(t *testing.T) {
 }
 
 // Pressing enter on a blocked report must say why, not silently do nothing.
+//
+// A stopped sidecar, not a bad mailbox: a mailbox the agent can repair in the
+// conversation is offerable, so it would no longer refuse here.
 func TestEnterOnABlockedReportSaysWhy(t *testing.T) {
-	f := newFake().with("GET /v1/email/connectors", 200, connectorsNone)
+	f := newFake().with("GET /daemon/v1/agents", 200, agentsStopped)
 	m := newModel(t, f)
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -315,7 +318,7 @@ func TestEnterOnABlockedReportSaysWhy(t *testing.T) {
 		t.Fatalf("enter proceeded past a blocked report: %T", cmd())
 	}
 	screen := strings.Join(strings.Fields(ansi.Strip(m.View())), " ")
-	if !strings.Contains(screen, "cannot start yet") || !strings.Contains(screen, "Mailbox") {
+	if !strings.Contains(screen, "cannot start yet") || !strings.Contains(screen, "agent") {
 		t.Errorf("enter was a silent no-op:\n%s", screen)
 	}
 }

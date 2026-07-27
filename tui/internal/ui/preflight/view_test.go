@@ -264,11 +264,25 @@ func TestKeysDriveTheRightActions(t *testing.T) {
 	})
 
 	t.Run("enter is refused while a check is blocked", func(t *testing.T) {
-		f := newFake().with("GET /v1/email/connectors", 200, connectorsNone)
+		// A stopped sidecar blocks; a bad mailbox does not, because the agent
+		// repairs that one in the conversation the launch reaches.
+		f := newFake().with("GET /daemon/v1/agents", 200, agentsStopped)
 		m, _ := renderAt(t, f, 80, 24)
 		_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 		if cmd != nil {
 			t.Fatalf("enter proceeded past a blocked report: %T", cmd())
+		}
+	})
+
+	t.Run("enter is offered over a mailbox the agent can repair", func(t *testing.T) {
+		f := newFake().with("GET /v1/email/connectors", 200, connectorsNone)
+		m, lines := renderAt(t, f, 80, 24)
+		screen := strings.Join(lines, "\n")
+		if !strings.Contains(screen, "start anyway") {
+			t.Errorf("a repairable mailbox hid the launch that reaches the fix:\n%s", screen)
+		}
+		if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil {
+			t.Error("enter did nothing on a mailbox the agent could have fixed")
 		}
 	})
 

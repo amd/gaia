@@ -217,6 +217,30 @@ func (r Report) Blocked() bool {
 	return false
 }
 
+// agentRepairable names preconditions the agent itself can fix once the
+// conversation starts. Central map rather than a per-row flag so a newly added
+// mailbox state cannot forget to set it.
+var agentRepairable = map[string]bool{KeyMailbox: true}
+
+// OfferableDespiteFailure reports whether the user may CHOOSE to launch over the
+// failures found — true when every failed row is one the agent repairs in the
+// conversation. Deliberately separate from Blocked: a launch is never automatic
+// over a proven failure, but refusing the choice would hide the mailbox
+// onboarding behind the gate that detects it.
+func (r Report) OfferableDespiteFailure() bool {
+	failed := false
+	for _, row := range r.Rows {
+		if row.State != StateFailed {
+			continue
+		}
+		if !agentRepairable[row.Key] {
+			return false
+		}
+		failed = true
+	}
+	return failed
+}
+
 // OKCount is how many preconditions proved ready.
 func (r Report) OKCount() int {
 	n := 0

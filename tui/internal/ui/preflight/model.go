@@ -418,7 +418,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.Busy() {
 			return m, nil
 		}
-		if blocker, blocked := m.rep.Blocker(); blocked {
+		if blocker, blocked := m.rep.Blocker(); blocked && !m.rep.OfferableDespiteFailure() {
 			m.note = fmt.Sprintf("%s cannot start yet: %s is %s. Fix that row first.",
 				m.cfg.AgentName, blocker.Label, blocker.Line)
 			return m, nil
@@ -466,7 +466,16 @@ func (m Model) applyFix() (tea.Model, tea.Cmd) {
 
 // unverifiedSummary names what could not be proved, for the line shown while an
 // indeterminate report is handed off.
+//
+// A known failure outranks an unproven row: if the launch proceeds over a broken
+// mailbox, saying "could not be verified" would understate a state we measured.
 func (m Model) unverifiedSummary() string {
+	for _, row := range m.rep.Rows {
+		if row.State == StateFailed {
+			return row.Label + " is not working (" + row.Line +
+				") — ask " + m.cfg.AgentName + " to fix it."
+		}
+	}
 	for _, row := range m.rep.Rows {
 		if row.State == StateUnknown {
 			return row.Label + " could not be verified (" + row.Line + ")."
