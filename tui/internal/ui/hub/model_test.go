@@ -11,7 +11,7 @@ import (
 // sized builds a HubModel with a window size so the list has real dimensions.
 func sized(t *testing.T) HubModel {
 	t.Helper()
-	m := NewHubModel(catalog.NewCatalog(), false)
+	m := NewHubModel(catalog.NewCatalog(), nil, false)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	return updated.(HubModel)
 }

@@ -2,7 +2,10 @@
 
 Detailed reference for `@amd-gaia/agent-email`. For a quick start, see
 [`README.md`](./README.md); for an AI-assisted integration walkthrough, see
-[`SKILL.md`](./SKILL.md). The contract version is `SCHEMA_VERSION` **2.4**.
+[`SKILL.md`](./SKILL.md). This client pins `SCHEMA_VERSION` **2.4**; the sidecar
+serves **2.5**, which is additive over 2.4 (it only adds the `/v1/connections`
+OAuth intake surface this client does not call), so 2.4 requests are accepted
+unchanged.
 
 ## Architecture
 

@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import queue
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -536,16 +537,32 @@ async def query(request: AgentQueryRequest) -> StreamingResponse:
                 while True:
                     try:
                         event = handler.event_queue.get_nowait()
-                    except Exception:
+                    except queue.Empty:
                         break
                     drained = True
                     yield f"data: {json.dumps(event)}\n\n"
                     if event.get("type") == "run_complete":
                         return
                 if not thread.is_alive() and not drained:
-                    # Thread finished and queue is empty but no terminal event
-                    # was seen (defensive) — synthesize one so the client closes.
-                    yield f'data: {json.dumps({"type": "run_complete", "answer": ""})}\n\n'
+                    # _run_agent always emits a terminal event, so reaching
+                    # here means the thread died outside its error path.
+                    logger.error(
+                        "agent turn for session %s ended with no terminal event "
+                        "(worker thread died outside its error path)",
+                        session.session_id,
+                    )
+                    failure = {
+                        "type": "error",
+                        "message": (
+                            "The agent run ended without producing an answer. "
+                            "This is an internal failure, not an empty reply — "
+                            "retry the request, and check the sidecar log "
+                            "(gaia-agent-email serve) for the worker traceback."
+                        ),
+                    }
+                    yield f"data: {json.dumps(failure)}\n\n"
+                    terminal = {"type": "run_complete", "answer": ""}
+                    yield f"data: {json.dumps(terminal)}\n\n"
                     return
                 await asyncio.sleep(0.05)
         finally:

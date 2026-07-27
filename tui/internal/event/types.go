@@ -2,6 +2,17 @@ package event
 
 import "encoding/json"
 
+// The LEGACY in-process event vocabulary, spoken only by the subprocess
+// transport (the local C++ agents). It is FROZEN: do not add types here, and do
+// not implement new UI features against it.
+//
+// Everything reached over the daemon relay speaks the canonical seven-event
+// contract in canonical.go instead. New rendering work — approval prompts, result
+// cards, error remedies — belongs on the canonical path only, or it has to be
+// written and maintained twice. The two sets deliberately do not share Go types
+// even where they share wire names (`status`, `tool_result`, `error`), because
+// the parser is chosen by transport and the payload shapes differ.
+
 // Event is the base for all events. Use ParseEvent() to get concrete types.
 type Event struct {
 	Type string `json:"type"`

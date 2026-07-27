@@ -12,6 +12,7 @@ import time
 
 import pytest
 
+from gaia.agents.base.console import OutputHandler
 from gaia.ui.sse_handler import SSEOutputHandler
 
 # ---------------------------------------------------------------------------
@@ -290,3 +291,95 @@ class TestConfirmToolEndpoint:
             json={"session_id": "nonexistent", "approved": True},
         )
         assert resp.status_code == 404
+
+
+# ===========================================================================
+# Regression: the SSE path must NOT inherit the deny-by-default (#2210)
+# ===========================================================================
+
+
+class TestSSEPathUnaffectedByDenyByDefault:
+    """``OutputHandler.confirm_tool_execution`` now denies when it cannot reach a
+    human (#2210). The Agent UI path has a human — the frontend permission modal
+    — so it must still emit ``permission_request``, block, and honour whatever
+    ``resolve_tool_confirmation`` says.
+    """
+
+    def test_permission_request_still_fires_and_approval_still_runs_the_tool(self):
+        """End-to-end through the agent gate: request event, then execution."""
+        from unittest.mock import patch
+
+        from gaia.agents.base.agent import Agent
+        from gaia.agents.base.tools import tool
+
+        class _GatedAgent(Agent):
+            CONFIRMATION_REQUIRED_TOOLS = frozenset({"send_now"})
+
+            def __init__(self, console, **kwargs):
+                self.sent = []
+                self._console_override = console
+                super().__init__(**kwargs)
+
+            def _get_system_prompt(self):
+                return "gated"
+
+            def _create_console(self):
+                return self._console_override
+
+            def _register_tools(self):
+                sent = self.sent
+
+                @tool
+                def send_now(to: str) -> str:
+                    """Send an email immediately. Gated."""
+                    sent.append(to)
+                    return "SENT"
+
+        handler = SSEOutputHandler()
+        with patch("gaia.agents.base.agent.AgentSDK"):
+            agent = _GatedAgent(console=handler, silent_mode=True, skip_lemonade=True)
+
+        result_holder = {}
+
+        def run_tool():
+            result_holder["result"] = agent._execute_tool("send_now", {"to": "a@b.c"})
+
+        t = threading.Thread(target=run_tool)
+        t.start()
+        _wait_for_pending_confirmation(handler)
+
+        events = _drain(handler)
+        permission = [e for e in events if e.get("type") == "permission_request"]
+        assert len(permission) == 1
+        assert permission[0]["tool"] == "send_now"
+        assert permission[0]["args"] == {"to": "a@b.c"}
+        assert permission[0]["confirm_id"]
+
+        handler.resolve_tool_confirmation(approved=True)
+        t.join(timeout=3.0)
+        assert not t.is_alive()
+        assert result_holder["result"] == "SENT"
+        assert agent.sent == ["a@b.c"]
+
+    def test_blocking_handler_does_not_auto_deny(self, handler):
+        """The handler advertises a live confirmation channel and overrides the
+        base default — no synchronous deny before the modal is shown."""
+        assert handler.blocking_confirmation is True
+        assert handler.auto_approve_gated_tools is False
+        assert (
+            SSEOutputHandler.confirm_tool_execution
+            is not OutputHandler.confirm_tool_execution
+        )
+
+    def test_background_mode_still_denies_with_the_unattended_reason(self):
+        """Autonomous runs keep their existing auto-deny event and now surface
+        the same wording in the tool result the model sees."""
+        handler = SSEOutputHandler(background_mode=True)
+        assert handler.confirm_tool_execution("send_now", {}) is False
+
+        events = _drain(handler)
+        denied = [e for e in events if e.get("type") == "tool_confirm_denied"]
+        assert len(denied) == 1
+        assert denied[0]["reason"] == "unattended"
+        assert "cannot run" in denied[0]["message"]
+        assert handler.confirmation_denied_reason("send_now") == denied[0]["message"]

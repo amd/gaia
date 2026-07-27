@@ -1,7 +1,8 @@
 package root
 
 import (
-	"strings"
+	"fmt"
+	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -10,12 +11,16 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/chat"
 	"github.com/amd/gaia/tui/internal/ui/components"
 	"github.com/amd/gaia/tui/internal/ui/hub"
+	"github.com/amd/gaia/tui/internal/ui/preflight"
 )
 
 type view int
 
 const (
-	viewHub  view = iota
+	viewHub view = iota
+	// viewPreflight is the readiness gate every daemon-backed launch passes
+	// through before chat opens.
+	viewPreflight
 	viewChat
 )
 
@@ -30,15 +35,50 @@ type RootModel struct {
 	width      int
 	height     int
 	debug      bool
+
+	// preflight is the gate currently on screen, nil when there is none.
+	preflight *preflight.Model
+	// pending is the agent that gate is guarding — launched only on ProceedMsg.
+	pending *catalog.Agent
+	// connect is the mailbox hand-off shown over the gate, nil when there is none.
+	connect *connectHandoff
+	// pfTransport is built on first launch and reused for the session.
+	pfTransport preflight.Transport
+	pfOpts      preflight.Options
+}
+
+// WithPreflight points the readiness gate at a specific transport and tunes its
+// options. Tests use it to drive the gate against a fake daemon; a real session
+// leaves it alone and gets the daemon transport.
+func (m RootModel) WithPreflight(t preflight.Transport, opts preflight.Options) RootModel {
+	m.pfTransport = t
+	m.pfOpts = opts
+	return m
 }
 
 func NewRootModel(cat *catalog.Catalog, debug bool) RootModel {
-	return RootModel{
+	m := RootModel{
 		activeView: viewHub,
-		hub:        hub.NewHubModel(cat, debug),
 		catalog:    cat,
 		debug:      debug,
 	}
+	// One hub client for the session: it caches the daemon instance whose token
+	// authorized the last call, and that token rotates on every daemon restart.
+	m.hub = hub.NewHubModel(cat, catalog.NewHubClient(m.logf), debug)
+	return m
+}
+
+// NewRootModelWithHub builds a root model against a specific hub client. Tests
+// point it at a fake daemon; a nil client disables install/uninstall, which
+// then fail loudly instead of silently doing nothing.
+func NewRootModelWithHub(cat *catalog.Catalog, hc *catalog.HubClient, debug bool) RootModel {
+	m := RootModel{
+		activeView: viewHub,
+		catalog:    cat,
+		debug:      debug,
+	}
+	m.hub = hub.NewHubModel(cat, hc, debug)
+	return m
 }
 
 func (m RootModel) Init() tea.Cmd {
@@ -56,6 +96,8 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			updated, cmd := m.hub.Update(msg)
 			m.hub = updated.(hub.HubModel)
 			return m, cmd
+		case viewPreflight:
+			return m.updatePreflight(msg)
 		case viewChat:
 			if m.chat != nil {
 				updated, cmd := m.chat.Update(msg)
@@ -67,7 +109,25 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case hub.LaunchAgentMsg:
-		return m.launchAgent(msg.Agent)
+		return m.beginPreflight(msg.Agent)
+
+	case preflight.ProceedMsg:
+		if !m.gateIsFor(msg.AgentID) {
+			return m, nil
+		}
+		return m.proceedFromGate()
+
+	case preflight.CancelMsg:
+		if !m.gateIsFor(msg.AgentID) {
+			return m, nil
+		}
+		return m.cancelFromGate()
+
+	case preflight.ConnectMailboxMsg:
+		if !m.gateIsFor(msg.AgentID) {
+			return m, nil
+		}
+		return m.openConnectHandoff(msg.Provider)
 
 	case chat.ReturnToHubMsg:
 		return m.returnToHub(msg.AgentID)
@@ -88,6 +148,19 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showHelp = false
 			return m, nil
 		}
+		// The mailbox hand-off owns every key while it is up, the way the hub's
+		// modals do — otherwise esc would cancel the launch behind it.
+		if m.activeView == viewPreflight && m.connect != nil {
+			return m.handleConnectKey(msg)
+		}
+	}
+
+	// The hub's async results go to the hub whatever is on screen. They are
+	// answers to work it started, and the chat view would just discard them.
+	if hub.OwnsMsg(msg) {
+		updated, cmd := m.hub.Update(msg)
+		m.hub = updated.(hub.HubModel)
+		return m, cmd
 	}
 
 	// Forward to active sub-model
@@ -96,6 +169,11 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		updated, cmd := m.hub.Update(msg)
 		m.hub = updated.(hub.HubModel)
 		return m, cmd
+	case viewPreflight:
+		// Everything the gate started answers with a message this package cannot
+		// name — the probe result, a fix outcome, download progress, the hold
+		// tick — so the gate gets the whole default stream, spinner ticks and all.
+		return m.updatePreflight(msg)
 	case viewChat:
 		if m.chat != nil {
 			updated, cmd := m.chat.Update(msg)
@@ -113,6 +191,13 @@ func (m RootModel) View() string {
 	switch m.activeView {
 	case viewHub:
 		base = m.hub.View()
+	case viewPreflight:
+		switch {
+		case m.connect != nil:
+			base = m.connect.view(m.width, m.height)
+		case m.preflight != nil:
+			base = m.preflight.View()
+		}
 	case viewChat:
 		if m.chat != nil {
 			base = m.chat.View()
@@ -126,13 +211,22 @@ func (m RootModel) View() string {
 	return base
 }
 
-func (m RootModel) launchAgent(agent catalog.Agent) (tea.Model, tea.Cmd) {
-	cmdLine := agent.BinaryPath
-	if len(agent.BinaryArgs) > 0 {
-		cmdLine += " " + strings.Join(agent.BinaryArgs, " ")
+// logf writes transport diagnostics to stderr in debug mode. It must never be
+// given a daemon token — daemon.Instance redacts its own token when formatted.
+func (m RootModel) logf(format string, args ...any) {
+	if !m.debug {
+		return
 	}
+	fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
+}
 
-	c := client.NewSubprocessClient(cmdLine, m.debug)
+func (m RootModel) launchAgent(agent catalog.Agent) (tea.Model, tea.Cmd) {
+	c, err := client.ForAgent(agent, client.ForAgentOptions{Debug: m.debug, Logf: m.logf})
+	if err != nil {
+		// Stay in the hub and say why, rather than opening a chat that cannot talk.
+		m.hub.SetStatus(err.Error())
+		return m, nil
+	}
 	m.chatClient = c
 
 	m.catalog.SetStatus(agent.ID, catalog.StatusActive)
@@ -156,6 +250,12 @@ func (m RootModel) launchAgent(agent catalog.Agent) (tea.Model, tea.Cmd) {
 func (m RootModel) returnToHub(agentID string) (tea.Model, tea.Cmd) {
 	m.catalog.SetStatus(agentID, catalog.StatusIdle)
 
+	// Cancel before closing: the chat model owns the per-turn context, so closing
+	// the transport without cancelling it can leave a reader streaming into a
+	// screen that no longer exists.
+	if m.chat != nil {
+		m.chat.CancelActiveTurn()
+	}
 	if m.chatClient != nil {
 		m.chatClient.Close()
 		m.chatClient = nil

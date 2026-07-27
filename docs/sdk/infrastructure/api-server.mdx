@@ -170,6 +170,20 @@ both surfaces.
 {"event": "answer", "data": {"text": "Here's the code..."}}
 ```
 
+### Confirmation-gated tools are denied on this surface
+
+This stream is one-way — the client has no channel to answer a permission
+request — so tools in the agent's `confirmation_required_tools()` set (shell,
+file mutation, email send/delete) return
+`{"status": "denied", "error": "…requires explicit user approval…"}` instead of
+executing. The Agent UI handler is the surface with a real confirmation
+handshake (`permission_request` + `POST /api/chat/confirm-tool`).
+
+If you are deliberately running an unattended agent through this server and
+accept that the model can write files and run shell commands unprompted, set
+`GAIA_AUTO_APPROVE_TOOLS=1` in the server's environment; every approval is logged
+with the tool name. See [Output Handlers](../core/console#confirming-dangerous-tools).
+
 ---
 
 ## Related Topics

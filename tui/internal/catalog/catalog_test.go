@@ -295,3 +295,51 @@ func TestAllSections(t *testing.T) {
 		t.Fatalf("AllSections()[2] = %q, want %q", sections[2], SectionComingSoon)
 	}
 }
+
+func TestTransportZeroValueIsSubprocess(t *testing.T) {
+	var zero Transport
+	if zero != TransportSubprocess {
+		t.Fatalf("the zero Transport must be subprocess so existing entries keep working, got %v", zero)
+	}
+	if TransportSubprocess.String() != "subprocess" || TransportDaemon.String() != "daemon" {
+		t.Errorf("unexpected transport names: %q / %q", TransportSubprocess, TransportDaemon)
+	}
+}
+
+func TestEmailUsesTheDaemonTransport(t *testing.T) {
+	c := NewCatalog()
+
+	email := c.Get("email")
+	if email == nil {
+		t.Fatal("email is missing from the catalog")
+	}
+	if email.Transport != TransportDaemon {
+		t.Errorf("email transport = %v, want daemon (it is an HTTP sidecar, not a spawnable binary)", email.Transport)
+	}
+	if email.BinaryPath != "" {
+		t.Errorf("a daemon-transport agent must carry no binary path, got %q", email.BinaryPath)
+	}
+
+	// Every other seeded agent still uses the subprocess transport.
+	for _, a := range c.All() {
+		if a.ID == "email" {
+			continue
+		}
+		if a.Transport != TransportSubprocess {
+			t.Errorf("agent %q transport = %v, want subprocess", a.ID, a.Transport)
+		}
+	}
+}
+
+func TestSetMockBinarySkipsDaemonTransport(t *testing.T) {
+	c := NewCatalog()
+	c.SetStatus("email", StatusInstalled)
+	c.SetMockBinary("/tmp/mock-agent")
+
+	if got := c.Get("email").BinaryPath; got != "" {
+		t.Errorf("a daemon-transport agent must not get a mock binary, got %q", got)
+	}
+	if got := c.Get("bash").BinaryPath; got != "/tmp/mock-agent" {
+		t.Errorf("bash binary = %q, want the mock", got)
+	}
+}

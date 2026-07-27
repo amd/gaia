@@ -6,6 +6,8 @@ import importlib.util
 
 import pytest
 
+pytestmark = pytest.mark.allow_network
+
 from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.email_sidecar.proxy import EmailSidecarProxy
 

@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.allow_network
+
 from gaia.daemon.sidecars import manager as mgr
 from gaia.daemon.sidecars.errors import (
     BinaryNotFoundError,

@@ -19,7 +19,7 @@ promotional). Calling a *needs-reply* email *urgent* is a near miss, not a
 disaster — you still see it. Calling it *promotional* is a real miss — it gets
 buried. So the headline score gives full credit for the exact bucket **or** the
 one next to it, and no credit for anything further off. That's what the
-**83.4 / 100** headline means: on most emails, the agent lands on the right
+**84.53 / 100** headline means: on most emails, the agent lands on the right
 priority or right next to it.
 
 Alongside the headline we also report the stricter "exact bucket" rate, how many
@@ -41,7 +41,7 @@ score; the rest are there for transparency.
 
 There's also a separate, optional check that rates how well the agent drafts
 replies *in your voice* — that one uses an AI judge and is reported on its own; it
-does not affect the 83.4 triage score.
+does not affect the 84.53 triage score.
 
 ## Can you trust the number?
 

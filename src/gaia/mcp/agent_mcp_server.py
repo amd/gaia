@@ -15,7 +15,7 @@ from typing import Any, Dict, Literal, Type
 from mcp.server.fastmcp import FastMCP
 
 from gaia.agents.base.mcp_agent import MCPAgent
-from gaia.logger import get_logger
+from gaia.logger import get_logger, route_console_logging_to_stderr
 
 logger = get_logger(__name__)
 
@@ -323,6 +323,10 @@ class AgentMCPServer:
         transport = transport or self.transport
 
         if transport == "stdio":
+            # stdout carries JSON-RPC framing in stdio mode; the banner is
+            # already routed to stderr, but request-time log lines would still
+            # corrupt the stream, so redirect the console handler too.
+            route_console_logging_to_stderr()
             self._print_startup_info(stream=sys.stderr, transport="stdio")
             try:
                 self.mcp.run(transport="stdio")

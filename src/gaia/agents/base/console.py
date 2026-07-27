@@ -3,11 +3,13 @@
 
 import json
 import logging
+import os
 import subprocess
+import sys
 import threading
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from gaia.agents.base.tools import get_tool_display_name
 
@@ -53,6 +55,128 @@ ANSI_MAGENTA = "\033[95m"
 ANSI_CYAN = "\033[96m"
 
 
+# === Confirmation-gated tools (#2210) ===
+#
+# Tools in ``Agent.confirmation_required_tools()`` must never execute without an
+# explicit human decision. A console that cannot reach a human DENIES. The only
+# ways to pre-approve them for a trusted unattended run (CI, a batch job, a host
+# that already asked the user) are ``GAIA_AUTO_APPROVE_TOOLS=1`` in the real
+# process environment or ``auto_approve_gated_tools=True`` on the console; every
+# auto-approval is logged with the tool name.
+AUTO_APPROVE_ENV_VAR = "GAIA_AUTO_APPROVE_TOOLS"
+
+_TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes", "on"})
+
+# Confirmation prompts show the literal arguments so the user approves what will
+# actually happen. Individual long values are shortened head+tail — never the
+# whole payload from the front, because for a shell command or a file path the
+# decision-critical part is often at the end.
+MAX_CONFIRMATION_VALUE_CHARS = 600
+
+# "Always allow" is never offered for these: the tool name says nothing about
+# what the next call will do, so one approval would hand over arbitrary
+# execution for the rest of the session.
+NO_ALWAYS_ALLOW_TOOLS = frozenset({"run_shell_command", "run_cli_command"})
+
+
+def auto_approve_env_enabled() -> bool:
+    """True when the operator opted into unattended approval of gated tools.
+
+    Reads the environment as it was at startup, before any ``.env`` was merged
+    in (``gaia.pre_dotenv_env``): a project-local file must not be able to switch
+    off every confirmation prompt. A library host that wants unattended approval
+    passes ``auto_approve_gated_tools=True`` to its console instead.
+    """
+    import gaia  # deferred: gaia/__init__ imports this module
+
+    reader = getattr(gaia, "pre_dotenv_env", None)
+    if reader is None:  # partially-initialised package — assume no opt-in
+        return False
+    return (reader(AUTO_APPROVE_ENV_VAR) or "").strip().lower() in _TRUTHY_ENV_VALUES
+
+
+def unattended_denial_message(tool_name: str) -> str:
+    """Actionable denial text for a gated tool with no human to ask."""
+    return (
+        f"'{tool_name}' requires explicit user approval and cannot run "
+        "unattended: this console has no interactive terminal to ask on. "
+        "Re-run the request from an interactive terminal to approve it, or set "
+        f"{AUTO_APPROVE_ENV_VAR}=1 to pre-approve confirmation-gated tools for "
+        "a trusted automated run."
+    )
+
+
+def user_denial_message(tool_name: str) -> str:
+    """Denial text for a human who was asked and said no."""
+    return f"Tool '{tool_name}' was denied by the user."
+
+
+def unaskable_denial_message(tool_name: str) -> str:
+    """Denial text for when the terminal broke mid-question.
+
+    Approving something the user never saw — or never answered — is not an
+    option, so a broken prompt denies.
+    """
+    return (
+        f"'{tool_name}' requires explicit user approval, and this terminal could "
+        "not present the request or read an answer. Nothing was executed. Retry "
+        "from a working interactive terminal, or set "
+        f"{AUTO_APPROVE_ENV_VAR}=1 for a trusted automated run."
+    )
+
+
+def terminal_is_interactive() -> bool:
+    """True when a human can both see a prompt and answer it.
+
+    Both ends must be a TTY: with stdout redirected (``gaia … > log.txt``) the
+    question lands in the file and the user is left staring at a blank screen
+    while the agent blocks on a read. Same requirement as the Lemonade installer
+    prompt in ``gaia.llm.lemonade_client``.
+    """
+    for stream in (sys.stdin, sys.stdout):
+        try:
+            if stream is None or not stream.isatty():
+                return False
+        except (AttributeError, ValueError):
+            # ValueError: stream closed (pytest capture, detached subprocess).
+            return False
+    return True
+
+
+def _shorten(value: str) -> str:
+    """Head+tail shortening, so the end of a command/path stays visible."""
+    if len(value) <= MAX_CONFIRMATION_VALUE_CHARS:
+        return value
+    keep = MAX_CONFIRMATION_VALUE_CHARS // 2
+    return f"{value[:keep]} …[{len(value)} chars]… {value[-keep:]}"
+
+
+def format_confirmation_args(tool_args: Any) -> str:
+    """Render tool arguments for a confirmation prompt.
+
+    Every argument name is always shown — a hidden key is a hidden side effect.
+    Only oversized individual values are shortened.
+
+    Accepts whatever the model actually emitted, not just a dict: a malformed
+    ``tool_args`` (a list, a bare string) must still be shown to the user rather
+    than raising, because the alternative is a crash on the one code path whose
+    job is to protect them.
+    """
+    if not tool_args:
+        return "(no arguments)"
+    if not isinstance(tool_args, dict):
+        return _shorten(str(tool_args))
+    shortened = {
+        key: _shorten(value) if isinstance(value, str) else value
+        for key, value in tool_args.items()
+    }
+    # ensure_ascii=False: the shortening marker (…) and any non-ASCII content in
+    # the arguments must stay readable in the prompt, not appear as \uXXXX.
+    return json.dumps(
+        shortened, indent=2, default=str, sort_keys=True, ensure_ascii=False
+    )
+
+
 class OutputHandler(ABC):
     """
     Abstract base class for handling agent output.
@@ -69,6 +193,21 @@ class OutputHandler(ABC):
 
     blocking_confirmation: bool = False
     """Whether ``confirm_tool_execution`` waits for an explicit user decision."""
+
+    auto_approve_gated_tools: bool = False
+    """Explicit opt-in: approve confirmation-gated tools with no human present.
+
+    Never default-on. A host sets this (or the operator sets
+    ``GAIA_AUTO_APPROVE_TOOLS=1``) when it has already obtained consent or is a
+    trusted unattended harness. Every approval taken this way is logged.
+    """
+
+    _last_denial: Optional[Tuple[str, str]] = None
+    """``(tool_name, reason)`` for the most recent denial (#2210).
+
+    Bound to the tool so a handler that denies without recording a reason can
+    never inherit the previous tool's explanation.
+    """
 
     # === Core Progress/State Methods (Required) ===
 
@@ -218,11 +357,56 @@ class OutputHandler(ABC):
 
     def confirm_tool_execution(
         self,
-        tool_name: str,  # pylint: disable=unused-argument
+        tool_name: str,
         tool_args: Dict[str, Any],  # pylint: disable=unused-argument
     ) -> bool:
-        """Request user confirmation before executing a tool. Returns True to proceed."""
-        return True
+        """Request user confirmation before executing a tool. True proceeds.
+
+        Denies by default (#2210). A handler that cannot reach a human must not
+        answer on their behalf, and denying is recoverable — the agent loop turns
+        it into a ``{"status": "denied"}`` tool result the model can act on —
+        whereas raising would abort runs mid-flight for every unattended host
+        that inherits this default. Override to actually ask (see
+        ``AgentConsole`` for the CLI prompt and ``SSEOutputHandler`` for the
+        Agent UI permission modal).
+        """
+        if self.auto_approve_confirmations_enabled():
+            self.log_auto_approval(tool_name)
+            return True
+        return self.deny_tool_execution(tool_name, unattended_denial_message(tool_name))
+
+    def auto_approve_confirmations_enabled(self) -> bool:
+        """True when this handler may approve gated tools without asking."""
+        return bool(self.auto_approve_gated_tools) or auto_approve_env_enabled()
+
+    def log_auto_approval(self, tool_name: str) -> None:
+        """Record that a gated tool ran without a human decision."""
+        self._last_denial = None
+        logger.warning(
+            "Auto-approved confirmation-gated tool '%s' — unattended approval is "
+            "enabled for this run (%s or an explicit host opt-in).",
+            tool_name,
+            AUTO_APPROVE_ENV_VAR,
+        )
+
+    def deny_tool_execution(self, tool_name: str, reason: str) -> bool:
+        """Record and log a denial, then return False for the caller to return."""
+        self._last_denial = (tool_name, reason)
+        logger.warning("Denied confirmation-gated tool '%s': %s", tool_name, reason)
+        return False
+
+    def confirmation_denied_reason(self, tool_name: str) -> str:
+        """Actionable explanation for the most recent denial.
+
+        ``Agent._execute_tool`` puts this in the ``{"status": "denied"}`` result
+        so the model (and the user reading the transcript) sees *why* — a human
+        said no, versus nothing could ask one. Falls back to the generic wording
+        unless the recorded denial is for this exact tool.
+        """
+        recorded = self._last_denial
+        if recorded and recorded[0] == tool_name:
+            return recorded[1]
+        return user_denial_message(tool_name)
 
     def print_policy_alert(
         self,
@@ -386,15 +570,200 @@ class ProgressIndicator:
             print("\r" + " " * (len(self.message) + 5) + "\r", end="", flush=True)
 
 
-class AgentConsole(OutputHandler):
+class TerminalConfirmationMixin:
+    """Asks the user, on the terminal, before a confirmation-gated tool runs.
+
+    Mixed into every console that a person might be sitting in front of —
+    ``AgentConsole`` and ``SilentConsole`` alike. Silent mode suppresses
+    *narration*, never *consent*: `gaia chat` builds a ``SilentConsole`` for a
+    real user at a real terminal, so a question it cannot ask is a tool the user
+    can never approve (#2210).
+
+    The prompt writes with plain ``print``/``input`` so it works with or without
+    Rich and regardless of how quiet the host console is; ``AgentConsole``
+    overrides ``_render_confirmation_request`` to draw it as a Rich panel.
+
+    Mix in alongside ``OutputHandler``, whose ``deny_tool_execution`` /
+    ``auto_approve_confirmations_enabled`` / progress hooks this relies on.
+    """
+
+    CONFIRMATION_PROMPT = "Allow this? [y]es / [N]o / [a]lways for this tool: "
+    CONFIRMATION_PROMPT_NO_ALWAYS = "Allow this? [y]es / [N]o: "
+
+    def confirm_tool_execution(self, tool_name: str, tool_args: Dict[str, Any]) -> bool:
+        """Ask the user on the terminal before running a gated tool.
+
+        Shows the tool and its literal arguments, then reads an answer that
+        defaults to **no**. With no interactive terminal (piped stdin, redirected
+        stdout, CI, a subprocess host) there is nobody to ask, so the call is
+        denied with an actionable message instead of silently approved (#2210).
+        """
+        if self.auto_approve_confirmations_enabled():
+            self.log_auto_approval(tool_name)
+            return True
+
+        if tool_name in self._always_allowed():
+            logger.info(
+                "Confirmation-gated tool '%s' pre-approved for this session by the user",
+                tool_name,
+            )
+            return True
+
+        if not terminal_is_interactive():
+            reason = unattended_denial_message(tool_name)
+            # A model that keeps retrying the tool would otherwise repeat the
+            # whole notice each time; the log still records every denial.
+            if tool_name not in self._notified_denials():
+                self._notified_denials().add(tool_name)
+                self._display("denial notice", self._show_denial_notice, reason)
+            return self.deny_tool_execution(tool_name, reason)
+
+        allow_always = tool_name not in NO_ALWAYS_ALLOW_TOOLS
+        # A live spinner/preview would fight with the prompt for the terminal.
+        self._display("progress pause", self.pause_progress)
+        try:
+            shown = self._display(
+                "confirmation request",
+                self._render_confirmation_request,
+                tool_name,
+                tool_args,
+            )
+            if not shown:
+                # The user never saw what they would be approving.
+                return self.deny_tool_execution(
+                    tool_name, unaskable_denial_message(tool_name)
+                )
+            answer = self._read_confirmation_answer(allow_always)
+        finally:
+            self._display("progress resume", self.resume_progress)
+
+        if answer is None:
+            return self.deny_tool_execution(
+                tool_name, unaskable_denial_message(tool_name)
+            )
+
+        if allow_always and answer in ("a", "always"):
+            self._always_allowed().add(tool_name)
+            logger.info(
+                "User approved '%s' for the remainder of this session", tool_name
+            )
+            self._last_denial = None
+            return True
+        if answer in ("y", "yes"):
+            logger.info("User approved confirmation-gated tool '%s'", tool_name)
+            self._last_denial = None
+            return True
+
+        self._display("denial echo", print, f"Denied '{tool_name}'.")
+        return self.deny_tool_execution(tool_name, user_denial_message(tool_name))
+
+    def _display(self, what: str, action: Any, *args: Any) -> bool:
+        """Run a terminal-display step; report whether it worked.
+
+        Broad by design: a broken, closed, or redirected terminal must never turn
+        the confirmation gate into a crash — before this gate existed the tool
+        just ran, so an exception escaping here would be a new way to break a
+        working session. Failures are logged with a traceback and push the
+        decision toward DENY; nothing is ever approved because rendering failed.
+        """
+        try:
+            action(*args)
+            return True
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning(
+                "Confirmation %s failed on this terminal: %s", what, exc, exc_info=True
+            )
+            return False
+
+    def reset_tool_approvals(self) -> None:
+        """Forget every "always allow" answer.
+
+        Call when the conversation the approvals were given in ends (new session,
+        new user) so consent does not outlive its context.
+        """
+        self._always_allowed().clear()
+        self._notified_denials().clear()
+
+    def _always_allowed(self) -> Set[str]:
+        """The per-console "always allow" set, created on first use.
+
+        Lazily instantiated per instance — never a shared class-level set, which
+        would leak one user's approval into every other console in the process —
+        so a subclass that skips ``super().__init__()`` still behaves.
+        """
+        return self._lazy_tool_set("_session_approved_tools")
+
+    def _notified_denials(self) -> Set[str]:
+        """Tools whose unattended-denial notice has already been shown."""
+        return self._lazy_tool_set("_denial_notices_shown")
+
+    def _lazy_tool_set(self, attribute: str) -> Set[str]:
+        """Per-instance set of tool names, created on first use."""
+        names = getattr(self, attribute, None)
+        if names is None:
+            names = set()
+            setattr(self, attribute, names)
+        return names
+
+    def _show_denial_notice(self, reason: str) -> None:
+        """Tell the user why a gated tool was refused. Quiet consoles stay quiet
+        — the denial is always logged, and JSON-only output must stay parseable."""
+        print(f"\n⚠️  {reason}\n")
+
+    def _render_confirmation_request(
+        self, tool_name: str, tool_args: Dict[str, Any]
+    ) -> None:
+        """Show the pending tool call so the user approves what will happen."""
+        print(f"\n⚠️  Confirm: {get_tool_display_name(tool_name)}")
+        print(format_confirmation_args(tool_args))
+
+    def _read_confirmation_answer(self, allow_always: bool = True) -> Optional[str]:
+        """Read the user's answer.
+
+        Ctrl-C / EOF read as an explicit "no" (empty string). ``None`` means the
+        terminal broke before an answer could be read (a detached or closed tty
+        raises ``OSError`` from ``input()``) — the caller denies with a different
+        message, because nobody actually said no.
+        """
+        prompt = (
+            self.CONFIRMATION_PROMPT
+            if allow_always
+            else self.CONFIRMATION_PROMPT_NO_ALWAYS
+        )
+        try:
+            return input(prompt).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            self._display("newline after cancel", print)
+            return ""
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            # OSError (broken/detached tty), and anything else a hostile stdin
+            # raises. Never let it escape: see ``_display``.
+            logger.warning(
+                "Could not read a confirmation answer from this terminal: %s",
+                exc,
+                exc_info=True,
+            )
+            return None
+
+
+class AgentConsole(TerminalConfirmationMixin, OutputHandler):
     """
     A class to handle all display-related functionality for the agent.
     Provides rich text formatting and progress indicators when available.
     Implements OutputHandler for CLI-based output.
+
+    Confirmation-gated tools prompt on the terminal when stdin is interactive and
+    are denied otherwise (#2210) — see ``confirm_tool_execution``.
     """
 
-    def __init__(self):
-        """Initialize the AgentConsole with appropriate display capabilities."""
+    def __init__(self, auto_approve_gated_tools: bool = False):
+        """Initialize the AgentConsole with appropriate display capabilities.
+
+        Args:
+            auto_approve_gated_tools: Run confirmation-gated tools without asking.
+                Unattended harnesses only; every approval is logged.
+        """
+        self.auto_approve_gated_tools = auto_approve_gated_tools
         self.rich_available = RICH_AVAILABLE
         self.console = Console() if self.rich_available else None
         self.progress = ProgressIndicator()
@@ -964,8 +1333,6 @@ class AgentConsole(OutputHandler):
             caption: Optional caption to display
             prompt_to_open: If True, prompt user to open in default viewer after display
         """
-        import os
-        import sys
         from pathlib import Path
 
         path = Path(image_path)
@@ -1092,6 +1459,36 @@ class AgentConsole(OutputHandler):
             print("=" * 50)
             print(diff)
             print("=" * 50 + "\n")
+
+    # === Tool Confirmation (Rich rendering of the mixin's prompt) ===
+
+    def _show_denial_notice(self, reason: str) -> None:
+        """Surface an unattended denial in the CLI's usual warning style."""
+        self.print_warning(reason)
+
+    def _render_confirmation_request(
+        self, tool_name: str, tool_args: Dict[str, Any]
+    ) -> None:
+        """Show the pending tool call as a panel with its literal arguments."""
+        if not self.rich_available:
+            super()._render_confirmation_request(tool_name, tool_args)
+            return
+
+        body = format_confirmation_args(tool_args)
+        renderable = (
+            Syntax(body, "json", theme="monokai", word_wrap=True)
+            if Syntax is not None and tool_args
+            else body
+        )
+        self.console.print()
+        self.console.print(
+            Panel(
+                renderable,
+                title=f"⚠️  Confirm: {get_tool_display_name(tool_name)}",
+                border_style="yellow",
+                padding=(0, 1),
+            )
+        )
 
     def print_repeated_tool_warning(self) -> None:
         """Print a warning about repeated tool calls."""
@@ -1546,8 +1943,6 @@ class AgentConsole(OutputHandler):
             bytes_total: Total bytes to download
             speed_mbps: Download speed in MB/s (optional)
         """
-        import sys
-
         # Format sizes
         if bytes_total > 1024**3:  # > 1 GB
             dl_str = f"{bytes_downloaded / 1024**3:.2f} GB"
@@ -2032,21 +2427,38 @@ class AgentConsole(OutputHandler):
         )
 
 
-class SilentConsole(OutputHandler):
+class SilentConsole(TerminalConfirmationMixin, OutputHandler):
     """
     A silent console that suppresses all output for JSON-only mode.
     Provides the same interface as AgentConsole but with no-op methods.
     Implements OutputHandler for silent/suppressed output.
+
+    Silence covers narration, not consent: `gaia chat` runs on this console with
+    a real user at the terminal, so confirmation-gated tools still prompt when
+    stdin/stdout are a TTY and are denied otherwise (#2210). The unattended
+    denial notice is logged rather than printed, so JSON-only output stays clean.
     """
 
-    def __init__(self, silence_final_answer: bool = False):
+    def __init__(
+        self,
+        silence_final_answer: bool = False,
+        auto_approve_gated_tools: bool = False,
+    ):
         """Initialize the silent console.
 
         Args:
             silence_final_answer: If True, suppress even the final answer (for JSON-only mode)
+            auto_approve_gated_tools: Run confirmation-gated tools without asking.
+                Unattended harnesses only; every approval is logged.
         """
         self.streaming_buffer = ""  # Maintain compatibility
         self.silence_final_answer = silence_final_answer
+        self.auto_approve_gated_tools = auto_approve_gated_tools
+
+    def _show_denial_notice(self, reason: str) -> None:
+        """Stay silent — JSON-only output must remain parseable. The denial is
+        still logged by ``deny_tool_execution`` and returned to the caller in the
+        tool result."""
 
     # Implementation of OutputHandler abstract methods - all no-ops
     def print_final_answer(
