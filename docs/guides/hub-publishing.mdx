@@ -170,6 +170,9 @@ python:
 
 requirements:                # what a machine needs to run it (shown as cards on your page)
   min_memory_gb: 8
+  min_lemonade_version: "10.2.0"  # optional: the oldest Lemonade Server your
+                                  # agent works with, so a too-old backend is
+                                  # reported as such instead of failing oddly
   platforms: [win-x64, linux-x64, darwin-arm64]
 
 interfaces:                  # the ways your agent can be used (see "Standalone sidecars")
