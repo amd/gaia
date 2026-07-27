@@ -19,6 +19,14 @@ func (m RootModel) ControlSnapshot() control.Snapshot {
 		snap.VisibleAgentIDs = m.hub.VisibleAgentIDs()
 		snap.Filtering = m.hub.IsFiltering()
 		snap.Overlay = m.hub.Overlay()
+	case viewPreflight:
+		snap.View = "preflight"
+		if m.preflight != nil {
+			snap.Agent = m.preflight.AgentID()
+		}
+		if m.connect != nil {
+			snap.Overlay = "connect-mailbox"
+		}
 	case viewChat:
 		snap.View = "chat"
 		if m.chat != nil {
