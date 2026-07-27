@@ -171,11 +171,18 @@ class TestRequestShape:
         assert rec.requests[1].url.path.endswith("/messages/m1/modify")
         assert json.loads(rec.requests[1].content) == {"addLabelIds": ["INBOX"]}
 
-    def test_permanent_delete_uses_delete_method(self):
+    def test_permanent_delete_fails_loud_without_a_request(self):
+        """#2533: Google 403s DELETE without the mail.google.com scope GAIA
+        never requests. LiveGmailBackend now refuses before any HTTP call —
+        an actionable error naming the missing scope, never a raw 403 after
+        the user already confirmed something irreversible."""
+        from gaia.connectors.errors import ScopeMismatchError
+
         backend, rec, _ = _backend(lambda r: httpx.Response(204))
-        backend.permanent_delete("m1")
-        assert rec.requests[0].method == "DELETE"
-        assert rec.requests[0].url.path.endswith("/messages/m1")
+        with pytest.raises(ScopeMismatchError) as excinfo:
+            backend.permanent_delete("m1")
+        assert "https://mail.google.com/" in str(excinfo.value)
+        assert rec.requests == [], "must not attempt a call that can only 403"
 
     def test_send_message_base64_encodes_rfc822(self):
         backend, rec, _ = _backend(lambda r: _ok({"id": "sent_1"}))
