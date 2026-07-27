@@ -15,6 +15,19 @@ import pytest
 from gaia.agents.base import memory as memory_mod
 
 
+def _stub_sentence_transformers(monkeypatch, on_import):
+    """Stand in for the real package.
+
+    Every fall-through case MUST use this. Dropping "faiss" from sys.modules
+    does not unload its native library, so the OpenMP runtime stays initialised
+    and a real ``import torch`` still aborts the interpreter — a test that
+    reaches the true import takes the whole suite down with it.
+    """
+    mod = type(sys)("sentence_transformers")
+    mod.CrossEncoder = on_import
+    monkeypatch.setitem(sys.modules, "sentence_transformers", mod)
+
+
 @pytest.fixture(autouse=True)
 def _reset_cross_encoder_cache(monkeypatch):
     """The result is cached at module level; each case starts from cold."""
@@ -38,10 +51,15 @@ def test_torch_already_loaded_is_not_blocked(monkeypatch):
     monkeypatch.setitem(sys.modules, "faiss", object())
     monkeypatch.setitem(sys.modules, "torch", object())
 
-    # Falls through to the real import path rather than short-circuiting; that
-    # path may still return None here, but not via the guard.
+    reached = {}
+
+    def _mark(*_a, **_k):
+        reached["import"] = True
+        raise ImportError("stubbed")
+
+    _stub_sentence_transformers(monkeypatch, _mark)
     memory_mod._get_cross_encoder()
-    assert memory_mod._CROSS_ENCODER_UNAVAILABLE is not True or True
+    assert reached.get("import"), "the guard short-circuited a safe host"
 
 
 def test_the_override_keeps_reranking_on_a_host_that_handles_omp(monkeypatch):
@@ -57,11 +75,7 @@ def test_the_override_keeps_reranking_on_a_host_that_handles_omp(monkeypatch):
         called["tried"] = True
         raise ImportError("sentence_transformers not installed")
 
-    monkeypatch.setitem(
-        sys.modules, "sentence_transformers", type(sys)("sentence_transformers")
-    )
-    sys.modules["sentence_transformers"].CrossEncoder = _boom
-
+    _stub_sentence_transformers(monkeypatch, _boom)
     memory_mod._get_cross_encoder()
     assert called.get("tried"), "the override did not reach the import"
 
@@ -69,4 +83,7 @@ def test_the_override_keeps_reranking_on_a_host_that_handles_omp(monkeypatch):
 def test_no_faiss_is_unaffected(monkeypatch):
     monkeypatch.delitem(sys.modules, "faiss", raising=False)
     monkeypatch.delitem(sys.modules, "torch", raising=False)
+    _stub_sentence_transformers(
+        monkeypatch, lambda *_a, **_k: (_ for _ in ()).throw(ImportError("stubbed"))
+    )
     memory_mod._get_cross_encoder()  # must not raise
