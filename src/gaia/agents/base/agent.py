@@ -1907,6 +1907,20 @@ Do NOT wrap conversational replies in JSON.
             cls.CONFIRMATION_REQUIRED_TOOLS
         )
 
+    def _confirmation_denied_error(self, tool_name: str) -> str:
+        """Explain a confirmation denial to the model in the tool result.
+
+        Consoles may expose ``confirmation_denied_reason`` to distinguish "a human
+        said no" from "nothing could ask a human" (#2210); duck-typed so custom
+        handlers without the hook still get the generic wording.
+        """
+        reason_hook = getattr(self.console, "confirmation_denied_reason", None)
+        if callable(reason_hook):
+            reason = reason_hook(tool_name)
+            if reason:
+                return str(reason)
+        return f"Tool '{tool_name}' was denied by the user."
+
     def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """
         Execute a tool by name with the provided arguments.
@@ -1977,13 +1991,14 @@ Do NOT wrap conversational replies in JSON.
                 return {"status": "error", "error": err}
 
         # Guardrail: require explicit user confirmation for high-risk tools.
-        # The SSEOutputHandler overrides this to block until the frontend
-        # responds; the default implementation auto-approves (CLI path).
+        # Consoles that cannot reach a human deny rather than answer for them
+        # (#2210): AgentConsole prompts on a TTY, SSEOutputHandler blocks on the
+        # frontend modal, everything else denies with an actionable message.
         if tool_name in self.confirmation_required_tools():
             if not self.console.confirm_tool_execution(tool_name, tool_args):
                 return {
                     "status": "denied",
-                    "error": f"Tool '{tool_name}' was denied by the user.",
+                    "error": self._confirmation_denied_error(tool_name),
                 }
 
         # Dynamic tool loader (#1449): record use for LRU recency. The name is
