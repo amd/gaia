@@ -398,20 +398,28 @@ def test_version_meets_min(found, minimum, expected):
 
 
 def test_min_lemonade_version_locksteps_with_manifest():
-    # ONE source of truth: the runtime constant and the gaia-agent.yaml manifest
-    # value `gaia init` reads MUST match, or readiness and install disagree.
+    """The runtime constant and the PARSED manifest value must agree.
+
+    Deliberately routed through ``gaia.hub.manifest.parse`` rather than
+    ``yaml.safe_load``. Comparing raw YAML text to the constant proves the two
+    files agree with each other while saying nothing about whether the value
+    survives parsing — and for a long time it did not: ``Requirements`` had no
+    ``min_lemonade_version`` field, so the parser dropped it and this test
+    stayed green over a declaration that reached no consumer.
+    """
     import gaia_agent_email
-    import yaml
     from gaia_agent_email.version import MIN_LEMONADE_VERSION as RUNTIME_MIN
+
+    from gaia.hub.manifest import parse
 
     manifest_path = (
         Path(gaia_agent_email.__file__).resolve().parents[1] / "gaia-agent.yaml"
     )
-    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-    declared = manifest["requirements"]["min_lemonade_version"]
+    declared = parse(manifest_path).requirements.min_lemonade_version
     assert declared == RUNTIME_MIN, (
-        f"gaia-agent.yaml min_lemonade_version ({declared!r}) != "
-        f"version.MIN_LEMONADE_VERSION ({RUNTIME_MIN!r}) — keep in lock-step."
+        f"gaia-agent.yaml min_lemonade_version parsed as {declared!r} != "
+        f"version.MIN_LEMONADE_VERSION ({RUNTIME_MIN!r}). If this is None, the "
+        f"manifest parser is dropping the field rather than the two drifting."
     )
 
 
