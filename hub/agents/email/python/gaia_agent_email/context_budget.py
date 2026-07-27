@@ -19,6 +19,8 @@ optimistic default.
 
 from __future__ import annotations
 
+from typing import Optional
+
 CONTEXT_TARGET_TOKENS = 16384
 CONTEXT_MAX_TOKENS = 32768
 
@@ -57,21 +59,47 @@ def thread_budget_tokens() -> int:
     )
 
 
-def envelope_budget_tokens() -> int:
+def envelope_budget_tokens(ctx_size: Optional[int] = None) -> int:
     """Usable token budget for a tool-result envelope re-read on the agent
-    loop's next turn (#2087).
+    loop's next turn (#2087, #2514).
 
-    ``CONTEXT_TARGET_TOKENS`` minus the agent-loop fixed prompt cost (system
-    prompt + full tool schema) and the response reserve — the slice actually
-    available for a tool result once the surrounding scaffolding and the model's
-    own output are accounted for. Bulk triage condenses its result envelope to
-    fit this so the post-tool turn stays under ``CONTEXT_TARGET_TOKENS``.
+    ``ctx_size`` (default ``CONTEXT_TARGET_TOKENS``, the eval harness's
+    pinned 16K target) minus the agent-loop fixed prompt cost (system prompt
+    + full tool schema) and the response reserve — the slice actually
+    available for a tool result once the surrounding scaffolding and the
+    model's own output are accounted for, floored at 0. Bulk triage
+    condenses its result envelope to the default so its gated measurement
+    stays comparable across runs (#2087). A caller that needs the REAL
+    device ceiling instead of the eval target — ``list_inbox``'s combined
+    body budget (#2514) — passes the active profile's window explicitly,
+    e.g. ``envelope_budget_tokens(ctx_size=active_profile_ctx_size())``:
+    GPU/CPU 65536, NPU 32768 (``gaia.llm.lemonade_client``).
     """
-    return (
-        CONTEXT_TARGET_TOKENS
-        - _AGENT_LOOP_FIXED_TOKENS
-        - _RESPONSE_RESERVE_TOKENS
-    )
+    base = CONTEXT_TARGET_TOKENS if ctx_size is None else ctx_size
+    return max(0, base - _AGENT_LOOP_FIXED_TOKENS - _RESPONSE_RESERVE_TOKENS)
+
+
+def active_profile_ctx_size() -> int:
+    """The active device profile's context window (GPU/CPU 65536, NPU 32768).
+
+    Resolves through ``gaia.llm.lemonade_client.profile_ctx_size`` against
+    the persisted ``GaiaConfig.default_device`` — the same source of truth
+    ``gaia.cli`` uses to size the model load itself, so the budget this
+    module hands out always matches what the running Lemonade server can
+    actually serve. Deferred imports keep this module import-cheap for
+    callers that never need live device resolution (most budget checks pass
+    ``ctx_size`` explicitly, e.g. in tests).
+    """
+    from gaia.config import GaiaConfig, GaiaConfigError
+    from gaia.llm.lemonade_client import profile_ctx_size
+
+    try:
+        device = GaiaConfig.load().default_device
+    except GaiaConfigError:
+        # A corrupt config must not crash a budget lookup — fall back to the
+        # profile resolver's own default (GPU/CPU) rather than guessing npu.
+        device = None
+    return profile_ctx_size(device)
 
 
 def estimate_tokens(text: str) -> int:

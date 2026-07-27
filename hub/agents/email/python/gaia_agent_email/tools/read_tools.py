@@ -17,11 +17,17 @@ module because every read tool that returns body bytes needs to honor it.
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import date
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from gaia_agent_email.config import default_inbox_scan_ceiling
+from gaia_agent_email.context_budget import (
+    active_profile_ctx_size,
+    envelope_budget_tokens,
+    estimate_tokens_json,
+)
 from gaia_agent_email.gmail_backend import decode_message_body
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 
@@ -87,6 +93,17 @@ NO_MAILBOX_CONNECTED_MESSAGE = (
 )
 
 
+class EnvelopeBudgetExceeded(RuntimeError):
+    """Raised when even the per-message floor can't fit every requested
+    message inside the active context budget (#2514).
+
+    The only acceptable failure mode for a combined-envelope budget: a
+    caller must never learn a request was too big by silently getting back
+    fewer messages than it asked for (the N=10-truncated-to-8 bug this
+    exception replaces).
+    """
+
+
 def wrap_untrusted_body(body: str) -> str:
     """Wrap a body in the untrusted-input delimiter pair."""
     return f"{UNTRUSTED_BODY_OPEN}\n{body}\n{UNTRUSTED_BODY_CLOSE}"
@@ -140,15 +157,85 @@ def _format_message_for_llm(
 # ---------------------------------------------------------------------------
 
 
+def _format_messages_within_budget(
+    full_msgs: List[Dict[str, Any]],
+    *,
+    tool_name: str,
+    max_results: int,
+    budget_tokens: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Format ``full_msgs`` for the LLM under a COMBINED envelope budget (#2514).
+
+    Shared by ``list_inbox_impl`` and ``search_messages_impl`` — both loop
+    ``gmail.get_message()`` -> ``_format_message_for_llm`` with no combined
+    cap today, so a realistic ``max_results`` batch can overflow the NPU
+    profile's 32768-token context window on the first call of a fresh
+    conversation. Mirrors ``get_thread_impl``'s shrink-together philosophy
+    (every message stays represented, none dropped) but adds two things that
+    path doesn't need: a context-aware token budget (not a fixed char
+    constant) and a fail-loud path when even the per-message floor can't
+    fit — silently truncating the message COUNT (this issue's N=10-becomes-8
+    bug) is exactly what must never happen again.
+
+    ``budget_tokens`` defaults to the ACTIVE device profile's envelope budget
+    (GPU/CPU 65536, NPU 32768) rather than the fixed eval-harness target, so
+    a GPU box gets its real headroom instead of being capped to the NPU's
+    conservative ceiling.
+
+    Binary-searches the largest shared per-message body limit (bounded below
+    by ``THREAD_MIN_PER_MESSAGE_CHARS``) that keeps the serialized envelope
+    within budget. A single proportional guess (scale the default limit by
+    budget/measured-total) systematically undershoots: per-message JSON
+    overhead (id/subject/dates/label_ids/etc.) does not shrink with the
+    body, so only a measured search converges reliably.
+    """
+    if budget_tokens is None:
+        budget_tokens = envelope_budget_tokens(ctx_size=active_profile_ctx_size())
+
+    out = [_format_message_for_llm(m) for m in full_msgs]
+    if not out:
+        return out
+    if estimate_tokens_json(json.dumps({"messages": out}, default=str)) <= budget_tokens:
+        return out
+
+    lo, hi = THREAD_MIN_PER_MESSAGE_CHARS, DEFAULT_BODY_LIMIT_CHARS - 1
+    best: Optional[List[Dict[str, Any]]] = None
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        candidate = [_format_message_for_llm(m, body_limit=mid) for m in full_msgs]
+        tokens = estimate_tokens_json(json.dumps({"messages": candidate}, default=str))
+        if tokens <= budget_tokens:
+            best = candidate
+            lo = mid + 1
+        else:
+            hi = mid - 1
+
+    if best is None:
+        raise EnvelopeBudgetExceeded(
+            f"{tool_name}: cannot fit {len(full_msgs)} messages (max_results="
+            f"{max_results}) within the {budget_tokens}-token context budget "
+            f"even at the {THREAD_MIN_PER_MESSAGE_CHARS}-char minimum "
+            "per-message body limit. Reduce max_results and try again."
+        )
+    return best
+
+
 def list_inbox_impl(
-    gmail, *, max_results: int = 25, debug: bool = False
+    gmail,
+    *,
+    max_results: int = 25,
+    debug: bool = False,
+    budget_tokens: Optional[int] = None,
 ) -> Dict[str, Any]:
     with log_tool_call("list_inbox", {"max_results": max_results}, debug=debug) as st:
         listing = gmail.list_messages(label_ids=["INBOX"], max_results=max_results)
-        out = []
-        for stub in listing.get("messages", []):
-            full = gmail.get_message(stub["id"])
-            out.append(_format_message_for_llm(full))
+        full_msgs = [gmail.get_message(stub["id"]) for stub in listing.get("messages", [])]
+        out = _format_messages_within_budget(
+            full_msgs,
+            tool_name="list_inbox",
+            max_results=max_results,
+            budget_tokens=budget_tokens,
+        )
         st["result_summary"] = {"count": len(out)}
         return {"messages": out, "next_page_token": listing.get("nextPageToken")}
 
@@ -665,6 +752,7 @@ def search_messages_impl(
     max_results: int = 25,
     debug: bool = False,
     operator_retry: bool = True,
+    budget_tokens: Optional[int] = None,
 ) -> Dict[str, Any]:
     query = normalize_gmail_date_operators(query)
     with log_tool_call(
@@ -686,10 +774,13 @@ def search_messages_impl(
                     query=retried_query, max_results=max_results
                 )
                 stubs = listing.get("messages", [])
-        out = []
-        for stub in stubs:
-            msg = gmail.get_message(stub["id"])
-            out.append(_format_message_for_llm(msg))
+        full_msgs = [gmail.get_message(stub["id"]) for stub in stubs]
+        out = _format_messages_within_budget(
+            full_msgs,
+            tool_name="search_messages",
+            max_results=max_results,
+            budget_tokens=budget_tokens,
+        )
         summary: Dict[str, Any] = {"count": len(out)}
         if retried_query is not None:
             summary["operator_retry"] = retried_query
