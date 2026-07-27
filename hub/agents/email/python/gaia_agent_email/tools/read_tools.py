@@ -35,6 +35,7 @@ from gaia_agent_email.tools.triage_heuristics import (
     CATEGORY_PROMOTIONAL,
     CATEGORY_URGENT,
     classify_category_heuristic,
+    detect_phishing,
     group_by_category,
 )
 from gaia_agent_email.tools.usage import aggregate_usage_stats
@@ -799,9 +800,11 @@ def triage_inbox_impl(
     session_preferences: Optional[Mapping[str, Any]] = None,
     force_llm: bool = False,
     classifier: Optional[Callable[..., Mapping[str, Any]]] = None,
+    slm_classifier: Optional[Callable[..., Optional[Mapping[str, Any]]]] = None,
+    slm_phishing_classifier: Optional[Callable[..., Optional[bool]]] = None,
     debug: bool = False,
 ) -> Dict[str, Any]:
-    """Triage the inbox using heuristic fast path + LLM fallback.
+    """Triage the inbox using heuristic fast path + SLM + LLM fallback.
 
     For each message: fetch metadata, run the heuristic. If the heuristic
     is confident, record its category as the triage decision. Otherwise
@@ -825,6 +828,12 @@ def triage_inbox_impl(
     the same LLM call (no extra round-trip) and only its ``is_spam`` field is
     applied from the response — an already-confident category is never
     silently overridden by a spam-only escalation, and vice versa.
+
+    When ``slm_classifier`` is provided and the heuristic is not confident, the
+    SLM classifies first (``source="slm"``); a miss falls through to the LLM.
+    Skipped under ``force_llm``. When ``slm_phishing_classifier`` is provided, it
+    runs first for phishing: a usable result is used alone (heuristics are not
+    run); ``None`` falls back to ``detect_phishing``.
 
     When ``force_llm`` is True, every message is routed to the classifier
     (if provided) regardless of heuristic confidence — used for
@@ -850,11 +859,15 @@ def triage_inbox_impl(
                 (h.get("name") or "").lower(): h.get("value", "")
                 for h in (msg.get("payload") or {}).get("headers", [])
             }
+            # SLM owns phishing when a classifier is wired: skip heuristic phishing
+            # so a successful SLM result never coexists with a heuristic run.
+            phishing_slm_applies = slm_phishing_classifier is not None
             heuristic = classify_category_heuristic(
                 subject=payload_headers.get("subject", ""),
                 sender=payload_headers.get("from", ""),
                 label_ids=msg.get("labelIds", []),
                 body=msg.get("snippet", ""),
+                check_phishing=not phishing_slm_applies,
             )
             log_triage_dispatch(
                 message_id=msg["id"],
@@ -883,25 +896,72 @@ def triage_inbox_impl(
                 "source": "heuristic",
             }
 
-            # LLM follow-up (#1107; is_spam added #1906): re-classify when the
-            # heuristic is not confident about category OR not confident about
-            # is_spam (or force_llm), if a classifier is wired in. Raises on
-            # failure — never silently defaults the category. Category and
-            # is_spam are applied independently: a spam-only escalation must
-            # not let the LLM silently override an already-confident category,
-            # and vice versa.
+            # Decode body once if SLM or LLM classification will run.
             needs_llm = (
                 not heuristic.confident or not heuristic.spam_confident or force_llm
             )
-            if classifier is not None and needs_llm:
+            triage_slm_applies = bool(
+                slm_classifier is not None and not force_llm and not heuristic.confident
+            )
+            body_text: Optional[str] = None
+            if (
+                phishing_slm_applies
+                or triage_slm_applies
+                or (classifier is not None and needs_llm)
+            ):
                 body_text, _ = decode_message_body(msg.get("payload") or {})
+
+            # SLM-first phishing; None falls back to detect_phishing.
+            if phishing_slm_applies:
+                is_phishing = slm_phishing_classifier(
+                    subject=decision["subject"],
+                    sender=decision["from"],
+                    body=body_text or "",
+                )
+                if is_phishing is not None:
+                    decision["is_phishing"] = is_phishing
+                    decision["phishing_source"] = "slm"
+                else:
+                    decision["is_phishing"] = detect_phishing(
+                        decision["subject"],
+                        decision["from"],
+                        body_text or msg.get("snippet", ""),
+                    )
+
+            # SLM category before LLM; None falls through to the LLM.
+            if triage_slm_applies:
+                slm = slm_classifier(
+                    subject=decision["subject"],
+                    sender=decision["from"],
+                    body=body_text or "",
+                    message_id=msg["id"],
+                )
+                if slm:
+                    decision["category"] = slm["category"]
+                    decision["confident"] = True
+                    decision["source"] = "slm"
+                    decision["rationale"] = (
+                        f"SLM classified as {slm['category']} "
+                        f"(heuristic said: {heuristic.reason})"
+                    )
+                    if slm.get("confidence") is not None:
+                        decision["slm_confidence"] = slm["confidence"]
+
+            # LLM follow-up (#1107; is_spam added #1906): resolve only what the
+            # heuristic/SLM left open. Category and is_spam apply independently —
+            # the LLM never overwrites a committed SLM/heuristic category.
+            category_resolved = decision["confident"]
+            still_needs_llm = (
+                force_llm or not category_resolved or not heuristic.spam_confident
+            )
+            if classifier is not None and still_needs_llm:
                 llm = classifier(
                     subject=decision["subject"],
                     sender=decision["from"],
-                    body=body_text,
+                    body=body_text or "",
                     message_id=msg["id"],
                 )
-                if not heuristic.confident or force_llm:
+                if not category_resolved or force_llm:
                     decision["category"] = llm["category"]
                     decision["confident"] = True
                     decision["source"] = "llm"
@@ -950,6 +1010,8 @@ def pre_scan_inbox_impl(
     archive_cap: int = PRE_SCAN_ARCHIVE_CAP,
     session_preferences: Optional[Mapping[str, Any]] = None,
     force_llm: bool = False,
+    slm_classifier: Optional[Callable[..., Optional[Mapping[str, Any]]]] = None,
+    slm_phishing_classifier: Optional[Callable[..., Optional[bool]]] = None,
     debug: bool = False,
 ) -> Dict[str, Any]:
     """Pre-scan the inbox for the chat surface.
@@ -986,6 +1048,8 @@ def pre_scan_inbox_impl(
             max_messages=max_messages,
             session_preferences=prefs,
             force_llm=force_llm,
+            slm_classifier=slm_classifier,
+            slm_phishing_classifier=slm_phishing_classifier,
             debug=debug,
         )
         urgent: List[Dict[str, Any]] = []
@@ -1091,6 +1155,8 @@ def merge_pre_scan_backends(
     force_llm: bool = False,
     debug: bool = False,
     remember_mailbox: Optional[Callable[[Optional[str], str], None]] = None,
+    slm_classifier: Optional[Callable[..., Optional[Mapping[str, Any]]]] = None,
+    slm_phishing_classifier: Optional[Callable[..., Optional[bool]]] = None,
 ) -> Dict[str, Any]:
     """Pre-scan every connected mailbox, tag each item, merge under budget.
 
@@ -1106,7 +1172,8 @@ def merge_pre_scan_backends(
     EVERY backend fails the error is raised rather than returning a misleading
     empty pre-scan. ``remember_mailbox`` is the agent's optional
     message-id -> mailbox recorder for action routing; the stateless REST path
-    omits it.
+    omits it. ``slm_classifier`` / ``slm_phishing_classifier`` are forwarded to
+    ``pre_scan_inbox_impl`` when the agent has SpecificAI SLMs loaded.
     """
     prefs = session_preferences
     per_backend = max(1, max_messages // len(backends))
@@ -1127,6 +1194,8 @@ def merge_pre_scan_backends(
                 session_preferences=prefs,
                 force_llm=force_llm,
                 debug=debug,
+                slm_classifier=slm_classifier,
+                slm_phishing_classifier=slm_phishing_classifier,
             )
         except ConnectorsError as exc:
             msg = format_connector_error(exc)

@@ -147,6 +147,19 @@ class EmailAgentConfig:
     - ``scheduler_poll_seconds`` / ``start_scheduler``: the one-shot scheduler
       for scheduled send + snooze (#1609). ``start_scheduler=False`` skips the
       polling thread — tests drive ``fire_due_jobs()`` deterministically.
+    - ``use_slm``: enable the SLM classifiers (phishing detection + triage
+      category). Defaults to True. Set False to skip SLM loading and use only
+      the heuristic + LLM flow. Local Lemonade only (AC3).
+    - ``slm_triage_model`` / ``slm_triage_checkpoint``: Lemonade model id and
+      checkpoint (``org/repo:file.gguf``) for the triage-category SLM. Labels
+      are the five triage categories. Both must be set together or the task is
+      skipped (fail safe).
+    - ``slm_phishing_model`` / ``slm_phishing_checkpoint``: Lemonade model id
+      and checkpoint for the phishing SLM (labels ``"True"`` / ``"False"``).
+      When available, runs first as the sole phishing decision; on miss the
+      agent falls back to ``detect_phishing``.
+    - ``force_llm``: when True, every message is routed to the LLM classifier
+      (benchmarking) — also skips the SLM triage step.
     - ``ctx_size``: exact context-window pin for THIS agent's LLM client
       (#1892). When set, the agent wires it as the LemonadeClient's
       instance-scoped ``ctx_size_override`` so every model load happens at
@@ -179,6 +192,15 @@ class EmailAgentConfig:
     outlook_backend: Optional[Any] = None
     calendar_backend: Optional[Any] = None
     force_llm: bool = False
+    use_slm: bool = True
+    slm_triage_model: Optional[str] = "specific-ai-triage"
+    slm_triage_checkpoint: Optional[str] = (
+        "specific-ai/email-agent-triage:bert-base-only.gguf"
+    )
+    slm_phishing_model: Optional[str] = "specific-ai-phishing-detection"
+    slm_phishing_checkpoint: Optional[str] = (
+        "specific-AI/email-agent-phishing-detection:bert-base-only.gguf"
+    )
     # One-shot scheduler (#1609): scheduled send + snooze. ``start_scheduler``
     # controls the built-in polling thread; tests set it False and drive
     # ``EmailJobScheduler.fire_due_jobs()`` deterministically instead.
@@ -237,6 +259,20 @@ class EmailAgentConfig:
                 f"EmailAgentConfig.followup_window_days must be a positive "
                 f"integer number of days, got {self.followup_window_days!r}."
             )
+        if self.use_slm:
+            # Both model and checkpoint required per task; both-empty = skip.
+            for task, model, checkpoint in (
+                ("triage", self.slm_triage_model, self.slm_triage_checkpoint),
+                ("phishing", self.slm_phishing_model, self.slm_phishing_checkpoint),
+            ):
+                if bool(model) != bool(checkpoint):
+                    raise ConfigurationError(
+                        f"EmailAgentConfig SLM {task} task is half-configured: "
+                        f"slm_{task}_model={model!r} and "
+                        f"slm_{task}_checkpoint={checkpoint!r}. Set BOTH (the "
+                        "Lemonade model id and its 'org/repo:file.gguf' "
+                        "checkpoint) or leave both unset to skip the task."
+                    )
         if self.ctx_size is not None and (
             not isinstance(self.ctx_size, int) or self.ctx_size <= 0
         ):

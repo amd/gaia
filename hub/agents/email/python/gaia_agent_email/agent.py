@@ -683,6 +683,18 @@ class EmailTriageAgent(
                 "scheduled send / snooze from its reconciled clock)."
             )
 
+        # SLM classifiers: build once when enabled (expensive to load).
+        self._slm_triage_classifier = None
+        self._slm_phishing_classifier = None
+        if config.use_slm:
+            from gaia_agent_email.tools.slm_phishing import (
+                make_slm_phishing_classifier,
+            )
+            from gaia_agent_email.tools.slm_triage import make_slm_classifier
+
+            self._slm_triage_classifier = make_slm_classifier(config)
+            self._slm_phishing_classifier = make_slm_phishing_classifier(config)
+
     # -- Agent contract -----------------------------------------------------
 
     def _create_console(self) -> AgentConsole:
@@ -1128,6 +1140,8 @@ class EmailTriageAgent(
                     session_preferences=prefs,
                     force_llm=force_llm,
                     classifier=classifier,
+                    slm_classifier=self._slm_triage_classifier,
+                    slm_phishing_classifier=self._slm_phishing_classifier,
                     debug=debug_flag,
                 )
             except ConnectorsError as exc:
@@ -1245,6 +1259,8 @@ class EmailTriageAgent(
             force_llm=bool(getattr(self.config, "force_llm", False)),
             debug=bool(getattr(self.config, "debug", False)),
             remember_mailbox=self._remember_message_mailbox,
+            slm_classifier=self._slm_triage_classifier,
+            slm_phishing_classifier=self._slm_phishing_classifier,
         )
 
     # -- Full autonomy: observe -> decide -> act (#1115 / #557) -------------

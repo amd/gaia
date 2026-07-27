@@ -228,6 +228,37 @@ scheduled run). An invalid value fails sidecar startup with an actionable error
 rather than guessing a schedule. Push delivery and a cross-agent morning brief
 are planned on the autonomy engine (#555).
 
+## Small language model classifiers
+
+The agent runs compact SLMs **before** the main LLM for two triage tasks
+(`use_slm=True` by default). They use the same local Lemonade server as the
+chat model. Every SLM call **fails safe**: if unavailable or unusable, the
+agent falls back to the heuristic + LLM path. Set `use_slm=False` to skip SLM
+entirely.
+
+- **Triage category** — when a heuristic isn't confident, the triage SLM
+  classifies first. On a hit the LLM classify call is *skipped*. `force_llm`
+  skips the SLM and forces the LLM instead.
+- **Phishing detection** — when `use_slm` is on and the phishing SLM returns a
+  usable result, that result is used alone (phishing heuristics are not run).
+  If SLM is off or returns nothing, the agent falls back to `detect_phishing`.
+
+Configure via `EmailAgentConfig` (`use_slm`, `slm_triage_model` /
+`slm_triage_checkpoint`, `slm_phishing_model` / `slm_phishing_checkpoint`). A
+task activates only when **both** its model and checkpoint are set; one without
+the other fails startup.
+
+<Note>
+Lemonade keeps separate slots for the chat LLM and embedding models. With the
+default embedding max of 1, both SLM models (triage, phishing) cannot be loaded at once — loading
+one evicts the other and hurts performance. Raise the limit so both stay
+resident alongside the chat model:
+
+```bash
+lemonade config set max_loaded_models=2
+```
+</Note>
+
 ## Action surface
 
 ### Read
@@ -338,7 +369,14 @@ There is no setting, flag, or "auto-send" mode that bypasses this — it's a saf
 
 ## Phishing handling
 
-The agent uses a multi-signal detector — subject keyword pairs, suspicious sender domain, and body-level phrases — to set `is_phishing` on every triage result. Detection is heuristic-only (no LLM, deterministic), precision-first, and never auto-acts.
+When `use_slm` is on and the phishing SLM is available, it classifies first and
+its result is the sole `is_phishing` decision. If SLM is off or fails safe, the
+agent falls back to a multi-signal heuristic — subject keyword pairs, suspicious
+sender domain, and body-level phrases. Detection never uses the chat LLM,
+is precision-first, and never auto-acts.
+
+See [Small language model classifiers](#small-language-model-classifiers) for
+how the phishing SLM is configured.
 
 When you ask the agent to quarantine a flagged message, it:
 

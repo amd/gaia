@@ -210,7 +210,7 @@ treatment. When the condense call ran, the tool's result `data` carries a
 | `draft` | `DraftScaffold` \| null | Proposed reply **scaffold** (recipient + subject only, no body), or `null` when none is suggested (schema 2.3). Triage never composes reply prose — compose the body yourself and `POST /v1/email/draft` to get a full `DraftReply` + confirmation token. |
 | `suggested_action` | `"reply"` \| `"none"` \| `"archive"` | Derived next action (reply for URGENT/NEEDS_RESPONSE, archive for PROMOTIONAL, none otherwise). Defaults to `"none"`. |
 | `message_id` | string \| null | Echoes the request message-id when available; null for raw Gmail-API-sourced results. |
-| `usage` | `TriageUsage` \| null | LLM token/throughput metrics. Null on the heuristic-only path (no LLM call). |
+| `usage` | `TriageUsage` \| null | LLM token/throughput metrics. Null whenever no LLM call was made — the heuristic-only path, or an SLM classification that resolved the category first. |
 | `attachments` | `AttachmentMeta[]` | Attachment metadata of the analyzed message(s), echoed for downstream processing (schema 2.2). |
 
 `ActionItem`:
