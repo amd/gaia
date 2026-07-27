@@ -475,9 +475,7 @@ class PreferenceToolsMixin:
                     }
                 )
             except Exception as exc:
-                log.exception(
-                    "remove_priority_sender failed: %s", type(exc).__name__
-                )
+                log.exception("remove_priority_sender failed: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
@@ -714,9 +712,7 @@ class PreferenceToolsMixin:
                     }
                 )
             except Exception as exc:
-                log.exception(
-                    "remove_category_default failed: %s", type(exc).__name__
-                )
+                log.exception("remove_category_default failed: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
