@@ -25,6 +25,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClientError,
     _get_lemonade_config,
 )
+from gaia.llm.lemonade_launcher import describe_client_hint, describe_start_hint
 from gaia.logger import get_logger
 from gaia.perf_analysis import run_perf_visualization
 from gaia.version import version
@@ -987,7 +988,7 @@ def _launch_agent_ui(port=4200, base_url=None, log=None, debug=False, webui_dist
             print(
                 "     1. Models downloaded  : gaia init --profile chat  (first time only, ~25 GB)"
             )
-            print("     2. Lemonade running   : lemonade-server serve")
+            print(f"     2. Lemonade running   : {describe_start_hint().instruction}")
             print()
 
         import uvicorn
@@ -4114,7 +4115,16 @@ Let me know your answer!
             else:
                 print(f"❌ {result['message']}")
         else:
-            print("❌ Specify --lemonade or --port <number>")
+            # A refusal must not report success — `gaia kill && next-step`
+            # would otherwise run next-step having killed nothing.
+            print("❌ gaia kill needs a target:")
+            print("     --lemonade        stop Lemonade Server (port 13305)")
+            print("     --port <number>   kill whatever is listening on <number>")
+            print(
+                "   Both target a port. A stray GAIA process that is not "
+                "holding a port must be killed by PID."
+            )
+            sys.exit(1)
         return
 
     # Import LemonadeManager for model commands error handling
@@ -4191,7 +4201,8 @@ Let me know your answer!
                         "   1. Close any running GAIA commands (gaia chat, gaia code, etc.)"
                     )
                     print(
-                        "   2. Restart Lemonade Server (close window and run: lemonade-server serve)"
+                        f"   2. Restart Lemonade Server "
+                        f"({describe_start_hint().instruction})"
                     )
                     print("   3. Run: gaia download --clear-cache")
                     print()
@@ -5483,7 +5494,9 @@ def handle_sd_command(args):
         getattr(args, "use_claude", False) or getattr(args, "use_chatgpt", False)
     ):
         print("Failed to initialize Lemonade Server with required 8K context.")
-        print("Try: lemonade-server serve --ctx-size 8192")
+        print(
+            f"Restart it with an 8192 token context. {describe_start_hint(8192).instruction}"
+        )
         sys.exit(1)
 
     # Create config - ensure LLM model is set
@@ -5510,8 +5523,8 @@ def handle_sd_command(args):
     if health["status"] != "healthy":
         print(f"Error: {health.get('error', 'SD endpoint unavailable')}")
         print("Make sure Lemonade Server is running and SD model is available:")
-        print("  lemonade-server serve")
-        print("  lemonade-server pull SD-Turbo")
+        print(f"  {describe_start_hint().instruction}")
+        print(f"  {describe_client_hint('pull', args.sd_model).instruction}")
         sys.exit(1)
 
     print()
@@ -5895,8 +5908,10 @@ def handle_cache_command(args):
                 cache.clear()
                 print("✓ Context7 cache cleared")
             else:
-                print("Specify --context7 or --all to clear caches")
+                # Same refusal-must-not-report-success rule as `gaia kill`.
+                print("❌ Specify --context7 or --all to clear caches")
                 print("Run 'gaia cache clear --help' for more information")
+                sys.exit(1)
 
     except Exception as e:
         cache_log = get_logger(__name__)
@@ -6419,7 +6434,9 @@ def _bootstrap_infer():
             raw_response = "".join(raw_response)
     except Exception as e:
         print(f"\n\n  ❌ LLM call failed: {e}")
-        print("  Make sure Lemonade Server is running: lemonade-server serve")
+        print(
+            f"  Make sure Lemonade Server is running. {describe_start_hint().instruction}"
+        )
         return
 
     print(" done.")
