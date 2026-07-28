@@ -1,3 +1,8 @@
 # Binary test fixtures — prevent LF/CRLF mangling
 cpp/tests/fixtures/*.png binary
 cpp/tests/fixtures/*.jpg binary
+
+# Every email-agent PR appends an [Unreleased] bullet to this changelog;
+# without a union merge, sibling PRs merged close together conflict on the
+# same insertion point.
+hub/agents/email/python/CHANGELOG.md merge=union
