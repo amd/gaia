@@ -9,6 +9,8 @@ silent skip), and the atomic claim prevents a second driver from double-firing.
 
 from __future__ import annotations
 
+import logging
+import unittest
 from pathlib import Path
 
 import pytest
@@ -152,3 +154,27 @@ def test_schema_initialized_once_not_per_poll_pass(tmp_path, monkeypatch):
         f"DaemonClock instance, regardless of how many fire_due passes run; "
         f"got {len(calls)} invocations"
     )
+
+
+def test_polling_path_does_not_log_database_initialized_per_pass(tmp_path):
+    """The clock opens a brand-new connection every pass BY DESIGN (module
+    docstring: "opens its OWN SQLite connection per polling pass"), so
+    ``DatabaseMixin.init_db``'s per-connection "Database initialized" INFO
+    line would otherwise fire every 30s forever — ~2,880 lines/day on every
+    install that runs the daemon, for a clock with zero jobs (#2379).
+
+    ``assertNoLogs`` (not ``assertLogs``) is deliberate: the watched logger
+    here (``gaia.database.mixin``) is the same object that emits the record,
+    so the "assertLogs only changes the watched logger's level, not a child
+    logger's inherited level" gotcha (see ``tests/test_lemonade_client.py``'s
+    ``test_api_key_never_appears_in_logs``) does not apply — but ``assertLogs``
+    itself raises when NOTHING is captured, which is exactly the passing case
+    here, so ``assertNoLogs`` is the correct primitive for a silence
+    assertion, not an inverted ``assertLogs``.
+    """
+    clock = DaemonClock(str(tmp_path / "clock.db"), executors={})
+
+    with unittest.TestCase().assertNoLogs("gaia.database.mixin", level=logging.INFO):
+        clock.fire_due(now=1.0)
+        clock.fire_due(now=2.0)
+        clock.fire_due(now=3.0)

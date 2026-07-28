@@ -87,7 +87,12 @@ class DaemonClock:
 
     def _open_db(self) -> _ClockDB:
         db = _ClockDB()
-        db.init_db(self._db_path)
+        # quiet=True: a genuinely fresh connection opens on EVERY pass by
+        # design (module docstring above), so the mixin's per-connection
+        # "Database initialized" INFO line would otherwise repeat forever at
+        # the poll cadence (~2,880 lines/day at the 30s default) rather than
+        # log a one-time startup event.
+        db.init_db(self._db_path, quiet=True)
         # Per-connection pragma — must be set on every open, unlike the schema.
         db.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
         if not self._schema_ready:
