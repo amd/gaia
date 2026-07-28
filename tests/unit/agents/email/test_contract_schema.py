@@ -332,7 +332,7 @@ def test_result_summary_required():
 
 
 def test_schema_version_unchanged_by_multi_inbox():
-    """Schema 2.5 is the current frozen contract version.
+    """Schema 2.6 is the current frozen contract version.
 
     2.1 was additive over the 2.0 5-bucket taxonomy (no triage shape change):
     it added inbox search (#1781), mailbox actions (#1779), the calendar
@@ -344,11 +344,15 @@ def test_schema_version_unchanged_by_multi_inbox():
     streaming agent-loop surface (POST /v1/email/query + cancel) — no existing
     shape changed. 2.5 is additive over 2.4 (#2154): the OAuth forward-OUT
     intake surface (POST/GET/DELETE /v1/connections) the daemon delivers
-    short-lived connector tokens to — no existing shape changed. If this fails,
-    someone changed the version unexpectedly; that requires an explicit version
-    negotiation, not a drive-by edit.
+    short-lived connector tokens to — no existing shape changed. 2.6 is additive
+    over 2.5 (#2469): the agent can ask the user a question MID-RUN and carry on
+    from the answer — a non-terminal ``needs_input`` SSE event plus POST
+    /v1/email/query/{run_id}/respond, which resumes the original stream. No
+    existing shape changed. If this fails, someone changed the version
+    unexpectedly; that requires an explicit version negotiation, not a drive-by
+    edit.
     """
-    assert SCHEMA_VERSION == "2.5"
+    assert SCHEMA_VERSION == "2.6"
 
 
 def test_triage_result_gained_no_new_required_field():

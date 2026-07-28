@@ -20,6 +20,7 @@
  *   POST /v1/email/calendar/events/respond     (RSVP accept/decline/tentative)
  *   POST /v1/email/query                       (agent loop — SSE stream, schema 2.4)
  *   POST /v1/email/query/{run_id}/cancel       (cancel an in-flight /query run)
+ *   POST /v1/email/query/{run_id}/respond      (answer a paused /query run)
  *   GET  /v1/email/init       (readiness preflight — Lemonade + model probe)
  *   GET  /health              (root liveness — what the standalone sidecar serves)
  *   GET  /version             (root apiVersion / agentVersion)
@@ -78,6 +79,7 @@ import type {
   InitResponse,
   OpenApiDocument,
   QueryCancelResponse,
+  QueryRespondResponse,
   QueryEvent,
   VersionResponse,
 } from "./types.js";
@@ -319,6 +321,9 @@ export class EmailClient {
    *   - a gated step emits `needs_confirmation`, then (stateless model, epic
    *     decision D1) the run ends with a `final` refusal pointing at the
    *     fixed-function route (`draft()` → `send()`).
+   *   - a step that needs an ANSWER emits `needs_input` and the run PAUSES on
+   *     this same stream. Call `respondToQuery(runId, requestId, value)` and
+   *     keep iterating — the run resumes here. Do not start a second `query()`.
    *
    * Failures throw: non-2xx → `HttpError`; a non-SSE response, a malformed
    * event payload, or a stream that closes without a terminal event →
@@ -425,6 +430,7 @@ export class EmailClient {
           case "tool_call":
           case "tool_result":
           case "needs_confirmation":
+          case "needs_input":
           case "final":
           case "error":
             return obj as unknown as QueryEvent;
@@ -466,6 +472,40 @@ export class EmailClient {
     } finally {
       opts?.signal?.removeEventListener("abort", onCallerAbort);
     }
+  }
+
+  /**
+   * Answer the `needs_input` question a paused `query()` run is waiting on
+   * (POST /v1/email/query/{run_id}/respond — schema 2.6, #2469).
+   *
+   * `value` is an option's `value` (its `label` is also accepted) or free text
+   * when the question set `allow_free_text`. The run resumes on the stream
+   * `query()` already returned; keep iterating it.
+   *
+   * Throws `HttpError` 404 when no run with that id is in flight (the question
+   * expired), or 409 when the run is not waiting on that `request_id` — a stale
+   * answer is rejected rather than applied to whatever is pending now.
+   */
+  async respondToQuery(
+    runId: string,
+    requestId: string,
+    value: string,
+  ): Promise<QueryRespondResponse> {
+    if (!runId) {
+      throw new TypeError("respondToQuery requires the run_id the query was sent with");
+    }
+    if (!requestId) {
+      throw new TypeError(
+        "respondToQuery requires the request_id from the needs_input event",
+      );
+    }
+    if (!value) {
+      throw new TypeError("respondToQuery requires a non-empty answer value");
+    }
+    return this.post<QueryRespondResponse>(
+      `/v1/email/query/${encodeURIComponent(runId)}/respond`,
+      { request_id: requestId, value },
+    );
   }
 
   /**

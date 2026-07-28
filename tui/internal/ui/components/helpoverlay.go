@@ -33,22 +33,27 @@ func RenderHelpOverlay(ctx HelpContext, background string, width, height int) st
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
 }
 
+// hubHelpText is kept to 20 lines: with the box's padding and border that is
+// exactly 24 rows, so the overlay still fits the minimum terminal.
 const hubHelpText = `  GAIA Agent Hub
-
-  Keyboard Shortcuts
   ──────────────────
-  Enter       Launch selected agent
+  Enter       Run the selected agent
+  i           Install it (or update it)
+  d           Uninstall it
+  r           Refresh the agent list
   /           Search agents
-  Tab         Next category
-  Shift+Tab   Previous category
-  d           Delete/uninstall agent
-  v           Vote for coming-soon agent
-  r           Request a new agent
+  Tab / S-Tab Next / previous category
+  v           Vote for a coming-soon agent
   ?           Toggle this help
   q, Ctrl+C   Quit
 
-  Data: Votes send only the agent ID
-  to amd-gaia.ai — no personal data.`
+  Installing a non-verified agent runs
+  third-party code — GAIA asks first and
+  shows you exactly what you're trusting.
+
+  Votes send only the agent ID to
+  amd-gaia.ai; no personal data. Request
+  an agent at github.com/amd/gaia/issues.`
 
 const chatHelpText = `  GAIA Chat
 

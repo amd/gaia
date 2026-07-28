@@ -5,7 +5,7 @@
 > **Component:** Email request/response contract (issue #1262)
 > **Module:** `gaia_agent_email.contract`
 > **Validation:** pydantic v2
-> **Schema version:** `2.5`
+> **Schema version:** `2.6`
 
 ---
 
@@ -31,7 +31,7 @@ stable shape.
 - **Fail loudly.** Every model forbids unknown fields (`extra="forbid"`). An
   off-contract payload raises a `ValidationError` naming the offending field,
   never a silently coerced result.
-- **Versioned.** `SCHEMA_VERSION` (`"2.5"`) is pinned in the module and echoed in
+- **Versioned.** `SCHEMA_VERSION` (`"2.6"`) is pinned in the module and echoed in
   every request and response so a consumer can detect a breaking change.
 
 ### Version history
@@ -51,6 +51,7 @@ the npm package accepts any higher MINOR), so the one breaking change below —
 | `2.3` | **Breaking:** `EmailTriageResult.draft` is now a `DraftScaffold` (recipient + subject only) instead of a `DraftReply` — triage never composed a body, so the always-empty `draft.body` is dropped. `DraftReply` (with `body`) is unchanged and remains the `POST /v1/email/draft` + MCP `draft_reply` response. |
 | `2.4` | Additive (#2016): new streaming agent-loop surface — `POST /v1/email/query` (NL request in, the seven canonical SSE event types out) and `POST /v1/email/query/{run_id}/cancel`. No existing shape changed, so `2.3` consumers keep working. |
 | `2.5` | Additive (#2154): OAuth forward-OUT intake — `POST /v1/connections/{provider}` (the daemon forwards a short-lived access token, never a refresh token), `GET /v1/connections` (metadata only), `DELETE /v1/connections/{provider}`. No existing shape changed, so `2.4` consumers keep working. |
+| `2.6` | Additive (#2469): the agent can ask the user a question MID-RUN and carry on from the answer. New non-terminal SSE event `needs_input` {run_id, request_id, question, options[{value,label,description}], allow_free_text, sensitive?, respond_url, timeout_seconds?} and `POST /v1/email/query/{run_id}/respond` to answer it (404 unknown run, 409 stale request_id). `needs_confirmation` and its terminal, deny-by-default approval behaviour are unchanged. No existing shape changed, so `2.5` consumers keep working. |
 
 ---
 
@@ -84,7 +85,7 @@ test asserts byte-for-byte equality, so drift in either place fails CI.
 
 | Field | Type | Notes |
 |---|---|---|
-| `schema_version` | string | Contract version. Defaults to `"2.5"`. |
+| `schema_version` | string | Contract version. Defaults to `"2.6"`. |
 | `payload` | `SingleEmailInput` \| `ThreadInput` | Discriminated on `kind`. |
 | `context` | `TriageContext` \| null | Optional; biases categorization/summary. |
 
@@ -256,7 +257,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.5",
+  "schema_version": "2.6",
   "payload": {
     "kind": "single",
     "principal": { "name": "Alice Example", "email": "alice@example.com" },
@@ -278,7 +279,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.5",
+  "schema_version": "2.6",
   "request_kind": "single",
   "result": {
     "category": "NEEDS_RESPONSE",
@@ -305,7 +306,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.5",
+  "schema_version": "2.6",
   "payload": {
     "kind": "thread",
     "principal": { "name": "Alice Example", "email": "alice@example.com" },
@@ -338,7 +339,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.5",
+  "schema_version": "2.6",
   "request_kind": "thread",
   "result": {
     "category": "NEEDS_RESPONSE",
@@ -365,7 +366,7 @@ triages up to `MAX_BATCH_SIZE` (**100**) emails or threads in one request: an
 
 | Field | Type | Notes |
 |---|---|---|
-| `schema_version` | string | Contract version. Defaults to `"2.5"`. |
+| `schema_version` | string | Contract version. Defaults to `"2.6"`. |
 | `items` | `(SingleEmailInput \| ThreadInput)[]` | 1–100 inputs, discriminated on `kind` — the same item shapes the single endpoint's `payload` accepts. Over 100 → `422`. |
 | `context` | `TriageContext` \| null | Optional; applied to **all** items. |
 
@@ -398,7 +399,7 @@ The MCP surface mirrors this with a `triage_email_batch` tool (the single
 
 ```json
 {
-  "schema_version": "2.5",
+  "schema_version": "2.6",
   "items": [
     {
       "kind": "single",
@@ -428,7 +429,7 @@ The MCP surface mirrors this with a `triage_email_batch` tool (the single
 
 ```json
 {
-  "schema_version": "2.5",
+  "schema_version": "2.6",
   "results": [
     {
       "index": 0,

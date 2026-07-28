@@ -175,7 +175,7 @@ def test_terminal_types_identical_across_relay_translator_harness():
         assert sidecar_terminal == relay_terminal
 
 
-def test_canonical_seven_event_set_matches_translator_outputs():
+def test_canonical_event_set_matches_translator_outputs():
     """Every canonical type the harness validates against must be a type the
     sidecar translator can actually PRODUCE — otherwise the harness would pass
     runs that emit a type the wire contract forbids, or reject a legal one."""
@@ -188,7 +188,8 @@ def test_canonical_seven_event_set_matches_translator_outputs():
 
     # The translator's producible types: the terminal set + every type its
     # per-event maps can emit. We assert the harness's set is exactly the frozen
-    # seven and that the translator never emits something outside it.
+    # vocabulary (the seven, plus the additive-MINOR needs_input from #2469) and
+    # that the translator never emits something outside it.
     assert CANONICAL_EVENT_TYPES == frozenset(
         {
             "status",
@@ -196,6 +197,7 @@ def test_canonical_seven_event_set_matches_translator_outputs():
             "tool_call",
             "tool_result",
             "needs_confirmation",
+            "needs_input",
             "final",
             "error",
         }

@@ -239,7 +239,7 @@ export function SettingsModal() {
                                         value={status.lemonade_running ? `Running${status.lemonade_version ? ` v${status.lemonade_version}` : ''}` : 'Not Running'}
                                         ok={status.lemonade_running}
                                         hint={!status.lemonade_running
-                                            ? (status.initialized ? 'Run: lemonade-server serve' : 'Run: gaia init --profile chat')
+                                            ? (status.initialized ? (status.start_command ? `Run: ${status.start_command}` : (status.start_instruction ?? 'Start Lemonade Server')) : 'Run: gaia init --profile chat')
                                             : undefined}
                                     />
                                     <StatusRow

@@ -16,6 +16,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/amd/gaia/tui/internal/daemon"
 )
 
 // Sender is the subset of *tea.Program the control server needs. Program.Send
@@ -172,6 +174,14 @@ func Start(sender Sender, state *State, opts Options) (*Server, error) {
 		StartedAt:  float64(time.Now().UnixNano()) / 1e9,
 		Version:    version,
 	}
+	// Whoever registers last owns the file. Say so when that displaces a live
+	// registration: the older TUI keeps running but becomes undiscoverable.
+	if prev, rerr := ReadInfo(); rerr == nil && prev != nil && prev.PID != s.pid && daemon.PIDAlive(prev.PID) {
+		fmt.Fprintf(os.Stderr,
+			"control: taking over %s, which was registered to pid %d and that pid is still "+
+				"in use. If it is another TUI it can no longer be found by a client — quit it, "+
+				"or run only one TUI with --control at a time.\n", path, prev.PID)
+	}
 	if err := WriteInfo(info); err != nil {
 		listener.Close()
 		return nil, fmt.Errorf("control: cannot publish the discovery file: %w", err)
@@ -233,6 +243,26 @@ func (s *Server) BaseURL() string { return fmt.Sprintf("http://%s:%d", Host, s.p
 // Token is the bearer token. Exposed for in-process tests only — it is never
 // printed to the terminal and never logged.
 func (s *Server) Token() string { return s.token }
+
+// WatchTermination removes the discovery file when the process is told to
+// terminate, then asks the caller to quit — a deferred Stop only covers a normal
+// exit, and the file left behind still reads as live.
+//
+// sigs is injected so tests drive this without signalling a real process. It
+// returns when sigs is closed, so the caller can unwind it with signal.Stop.
+func (s *Server) WatchTermination(sigs <-chan os.Signal, quit func()) {
+	sig, ok := <-sigs
+	if !ok {
+		return
+	}
+	s.debugf("received %v — removing %s before exiting", sig, s.discoveryPath)
+	if err := s.Stop(); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+	}
+	if quit != nil {
+		quit()
+	}
+}
 
 // Stop shuts the listener down and removes the discovery file.
 func (s *Server) Stop() error {

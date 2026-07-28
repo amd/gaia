@@ -6,6 +6,28 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## Unreleased
 
+- **The agent sets up your mailbox itself, in the conversation.** Before, hitting
+  the email agent without a working mailbox produced an error and a shell command
+  to go run somewhere else — a dead end for anyone in a terminal or chat window.
+  It now works out *which* of the four problems it actually has (nothing
+  connected, credentials stopped working, a missing permission, or connected but
+  not allowed for this agent), says something specific about that one, and offers
+  to fix it right there. The connected-but-not-allowed case is fixed with no
+  browser at all. Connecting Google still needs your own OAuth client ID and
+  secret — the agent now tells you that up front with a link, instead of failing
+  later (#2469).
+  Integrators: `can_answer_questions` is only understood from 2.6 onward, so
+  check `version()` before sending it — an older sidecar rejects the unknown
+  field outright rather than ignoring it.
+- **New: the agent can ask you a question mid-run** — schema 2.6, additive. A new
+  non-terminal SSE event `needs_input` carries a question, 2-4 labelled options
+  each with a description of what choosing it does, and a free-text escape;
+  `respondToQuery(runId, requestId, value)` (`POST
+  /v1/email/query/{run_id}/respond`) delivers the answer and the ORIGINAL stream
+  resumes. An unanswered question ends the run with an error rather than hanging.
+  Approvals (`needs_confirmation`) are unchanged: still terminal, still
+  deny-by-default (#2469).
+
 - **Work/school Outlook (Microsoft 365 / Entra ID) mailboxes now work, not just
   personal Outlook.com.** The Microsoft connector previously signed in only
   against the `consumers` tenant, so a corporate Microsoft 365 account was

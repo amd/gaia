@@ -1,0 +1,12 @@
+// Tests run in Node (vitest.config.ts sets environment: "node"), so they may
+// use node: builtins and import.meta. The root tsconfig deliberately types
+// src/ with @cloudflare/workers-types ONLY, so that a Worker handler cannot
+// reach for a Node API that does not exist at the edge — widening it there to
+// satisfy a test would remove that guard.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node", "@cloudflare/workers-types"]
+  },
+  "include": ["test/**/*.ts", "src/**/*.ts"]
+}

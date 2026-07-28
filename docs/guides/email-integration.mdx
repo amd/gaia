@@ -394,7 +394,7 @@ curl -s -X POST http://127.0.0.1:4200/v1/email/triage \
 
 ```json
 {
-  "schema_version": "2.5",
+  "schema_version": "2.6",
   "request_kind": "single",
   "result": {
     "category": "URGENT",
@@ -440,6 +440,61 @@ returns one result per item, order-preserved. Per-item failures are isolated: **
 can carry errored items**, so inspect each `results[].error`, not just the status. A
 **502** means Lemonade was unreachable or the triage model is unavailable there,
 detected before any item was processed.
+
+## Mid-run questions (`needs_input`)
+
+*(#2469, contract 2.6)* The agent can ask the user a question **while a `/query` run
+is in flight**, and carry on from the answer. It uses this most often to set up or
+repair mailbox access: rather than returning an error telling the user to go run
+`gaia connectors connect google …`, it works out which of the four problems it has
+(nothing connected, credentials stopped working, a missing scope, or connected but
+not granted to this agent), asks about that one, and fixes it.
+
+**Declare whether you can answer.** `POST /v1/email/query` takes
+`can_answer_questions` (default `false`). Set it to `true` only if your UI can render
+a question and POST the answer. Leave it false for a one-shot, a batch job, or
+anything unattended — the agent then refuses the step immediately with something
+actionable, instead of parking the run until the question times out.
+
+```jsonc
+// A needs_input event on the stream. It is NOT terminal — keep reading.
+{
+  "type": "needs_input",
+  "run_id": "0f9c…",
+  "request_id": "8c21…",
+  "question": "Your Gmail sign-in has stopped working. Reconnect?",
+  "options": [
+    {"value": "yes", "label": "Reconnect Gmail",
+     "description": "Opens your browser to sign in again. Your mail is untouched."},
+    {"value": "no", "label": "Not now", "description": "Change nothing."}
+  ],
+  "allow_free_text": true,
+  "sensitive": false,
+  "respond_url": "/v1/email/query/0f9c…/respond",
+  "timeout_seconds": 240
+}
+```
+
+Answer it out of band; the **original** stream resumes — do not issue a second
+`/query`:
+
+```bash
+curl -s -X POST http://127.0.0.1:4200/v1/email/query/$RUN_ID/respond \
+  -H 'content-type: application/json' \
+  -d '{"request_id": "8c21…", "value": "yes"}'
+# {"run_id":"0f9c…","request_id":"8c21…","accepted":true,"status":"ok"}
+```
+
+`404` means no run with that id is in flight; `409` means the run is not waiting on
+that `request_id` (already answered, or timed out) — a stale answer is rejected
+rather than applied to whatever is pending now.
+
+Two rules worth respecting in your UI: **render each option's `description`** (the
+label alone does not tell the user what they are agreeing to), and when
+`sensitive` is `true` **mask the input and never log it** — that flag is set when the
+agent asks for an OAuth client secret. Lines beginning `:` on the stream are
+heartbeat comments; skip them, but let them reset any read-idle timer you keep, or
+you will abandon a run that is simply waiting on a human.
 
 ## Draft → confirmed send
 

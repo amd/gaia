@@ -347,10 +347,22 @@ flow itself, asking only for what it genuinely can't obtain, opening the browser
 confirming when it lands. Same pattern for a revoked token or a missing scope mid-task:
 the agent should recover in-conversation rather than returning a 403 for the user to decode.
 
-Prerequisites this needs and doesn't have: a way for the agent to request structured input
-mid-run and get an answer back (Phase 3's resume mechanism is the same primitive), a
-first-party OAuth client so users don't supply their own credentials, and probably a device-code
-flow so nothing depends on a local browser. Worth an issue; not worth blocking v1.
+**Status: shipped (#2469).** The mid-run structured-input primitive it needed is built —
+the canonical `needs_input` SSE event plus `POST /v1/email/query/{run_id}/respond`
+(contract 2.6, spec §5.1) and a question component in the TUI chat view. The agent
+detects which of the four unusable-mailbox states it is in and offers to fix that one;
+the connected-but-not-granted case needs no browser at all.
+
+**Phase 3 must reuse that same component.** An approval is a question whose options are
+Approve and Deny — build the approval UI on the `needs_input` primitive rather than a
+second mechanism. Note that moving approvals onto it changes `needs_confirmation`'s
+terminal, deny-by-default behaviour, which is a security control: make that change
+deliberately, not as a side effect.
+
+Still missing, and still worth their own issues: a **first-party OAuth client** (users
+must supply their own Google client ID and secret today — the single biggest remaining
+friction, and the only part of the flow the agent cannot do for them) and a **device-code
+flow** so nothing depends on a local browser.
 
 ---
 

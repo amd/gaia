@@ -2,9 +2,10 @@ package event
 
 import "encoding/json"
 
-// The canonical `/query` SSE vocabulary — the frozen seven event types from
+// The canonical `/query` SSE vocabulary from
 // docs/spec/agent-ui-query-sse-contract.md §4, streamed by every v2 agent
-// sidecar through the daemon relay.
+// sidecar through the daemon relay: the frozen seven, plus `needs_input` — the
+// additive-MINOR eighth type that resolved spec §9 Q3 (#2469).
 //
 // These are NOT the legacy in-process types in types.go (step / thinking /
 // tool_start / chunk / answer / …), which the subprocess transport still uses.
@@ -20,6 +21,7 @@ const (
 	CanonicalTypeToolCall          = "tool_call"
 	CanonicalTypeToolResult        = "tool_result"
 	CanonicalTypeNeedsConfirmation = "needs_confirmation"
+	CanonicalTypeNeedsInput        = "needs_input"
 	CanonicalTypeFinal             = "final"
 	CanonicalTypeError             = "error"
 )
@@ -66,6 +68,34 @@ type CanonicalNeedsConfirmationEvent struct {
 	ConfirmURL string `json:"confirm_url,omitempty"`
 }
 
+// CanonicalNeedsInputEvent — the run pauses on a QUESTION and resumes on this
+// same stream once the answer is POSTed to RespondURL (contract §5.1).
+//
+// Distinct from needs_confirmation on the one axis that matters: that one is a
+// terminal approve/deny the run does not come back from, this one is answerable.
+// Options are mutually exclusive; each carries a Label to pick and a Description
+// of what picking it does. AllowFreeText adds the typed escape hatch — with no
+// options at all it is a plain free-text prompt.
+type CanonicalNeedsInputEvent struct {
+	Type           string                 `json:"type"`
+	RunID          string                 `json:"run_id"`
+	RequestID      string                 `json:"request_id"`
+	Question       string                 `json:"question"`
+	Options        []CanonicalInputOption `json:"options,omitempty"`
+	AllowFreeText  bool                   `json:"allow_free_text"`
+	Sensitive      bool                   `json:"sensitive,omitempty"`
+	RespondURL     string                 `json:"respond_url,omitempty"`
+	TimeoutSeconds int                    `json:"timeout_seconds,omitempty"`
+}
+
+// CanonicalInputOption is one mutually-exclusive answer. Value is what goes back
+// on the wire; Label is what the user picks; Description says what it will do.
+type CanonicalInputOption struct {
+	Value       string `json:"value"`
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
 // CanonicalFinalEvent — terminal success. Usage is an optional
 // {steps?, tools_used?, elapsed?, tokens?} object.
 type CanonicalFinalEvent struct {
@@ -104,6 +134,14 @@ type CanonicalUnsupportedEvent struct {
 type CanonicalMalformedEvent struct {
 	Payload string
 	Reason  string
+}
+
+// CanonicalNoticeEvent — something the CLIENT has to say about this run, not a
+// wire event. Used when contract negotiation finds the installed agent too old
+// for a capability the user is about to want: the alternative is a feature that
+// silently never appears, which reads as broken rather than as out of date.
+type CanonicalNoticeEvent struct {
+	Text string
 }
 
 // CanonicalUsageOf decodes a final event's usage object. A missing or unreadable

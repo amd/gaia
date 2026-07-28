@@ -44,8 +44,9 @@ func CastVote(agentID string) tea.Cmd {
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
-			// Network error — still increment locally
-			return VoteResultMsg{AgentID: agentID, Votes: -1, Err: err}
+			// Nothing queues this for later, so the caller has to take its
+			// optimistic increment back rather than show a vote that never left.
+			return VoteResultMsg{AgentID: agentID, Err: err}
 		}
 		defer resp.Body.Close()
 
@@ -54,7 +55,13 @@ func CastVote(agentID string) tea.Cmd {
 		}
 
 		var vr VoteResponse
-		json.NewDecoder(resp.Body).Decode(&vr)
+		if err := json.NewDecoder(resp.Body).Decode(&vr); err != nil {
+			return VoteResultMsg{AgentID: agentID, Err: fmt.Errorf("the vote API answered 200 with a body this build cannot read: %w", err)}
+		}
+		if !vr.Success {
+			// 200 with success:false is a refusal, not a vote.
+			return VoteResultMsg{AgentID: agentID, Err: fmt.Errorf("the vote API accepted the request but did not record a vote")}
+		}
 		return VoteResultMsg{AgentID: agentID, Votes: vr.Votes}
 	}
 }

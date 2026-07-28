@@ -32,6 +32,8 @@ import uuid
 
 import pytest
 
+pytestmark = pytest.mark.allow_network
+
 from gaia.ui.email_sidecar import relay  # noqa: E402 - expected to fail (red phase)
 from gaia.ui.email_sidecar.errors import (  # noqa: E402
     SidecarError,

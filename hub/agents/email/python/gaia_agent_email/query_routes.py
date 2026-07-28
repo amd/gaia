@@ -32,13 +32,25 @@ Distinctions from the stateful ``/v1/email/agent/*`` surface
 
 Confirmation (epic decision D1, UNSIGNED — stateless stub)
 ----------------------------------------------------------
-Stateful server-side *resume* is intentionally NOT wired here. A step that needs
-confirmation (a destructive/external tool such as ``send_now``) emits a
-``needs_confirmation`` event (specced shape) and then the run ends with a ``final``
-refusal that points the caller at the deterministic fixed-function route (mint a
-token via ``POST /v1/email/draft``, then ``POST /v1/email/send``). ``confirm_url``
-is omitted (spec §5 / Q4). When D1 is signed off, the resume model can be wired
-without changing this event's shape.
+Stateful server-side *resume* of an APPROVAL is intentionally NOT wired here. A
+step that needs confirmation (a destructive/external tool such as ``send_now``)
+emits a ``needs_confirmation`` event (specced shape) and then the run ends with a
+``final`` refusal that points the caller at the deterministic fixed-function
+route (mint a token via ``POST /v1/email/draft``, then ``POST /v1/email/send``).
+``confirm_url`` is omitted (spec §5 / Q4). Deny-by-default on approvals is a
+security control; #2469 deliberately left it exactly as it was.
+
+Mid-run questions (#2469 — resumable)
+-------------------------------------
+A *question* is a different animal from an approval, and now has its own
+canonical event: ``needs_input`` (spec §5.1). The agent asks it from inside a
+tool via ``gaia_agent_email.question.ask``, which blocks the worker thread on
+``SSEOutputHandler.request_user_input_blocking`` — the same out-of-band
+resolve/timeout machinery the stateful Agent UI path uses, not a fork of it.
+The stream forwards the event and KEEPS READING; ``POST
+/v1/email/query/{run_id}/respond`` delivers the answer and the run continues on
+the same stream. Nothing answers it → the handler's own timeout fires and the
+tool raises, so an abandoned question fails loudly instead of hanging forever.
 
 Auth rides the existing per-session bearer (#1980): this router is mounted under
 the same ``require_caller_token`` gate as the rest of ``/v1/email/*`` — no new
@@ -52,6 +64,7 @@ import json
 import queue
 import re
 import threading
+import time
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -70,6 +83,11 @@ router = APIRouter(tags=["email-query"])
 
 # Providers the local-only email agent (AC3: local Lemonade inference) accepts.
 _ALLOWED_PROVIDERS = frozenset({"lemonade"})
+
+#: How long the stream may stay silent before it emits an SSE comment. Well
+#: under the 300s read-idle watchdog the TUI and the daemon relay both run, so a
+#: run parked on a question is never mistaken for a dead one.
+_HEARTBEAT_SECONDS = 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +218,17 @@ class QueryRequest(_Strict):
         ge=1,
         description="Agent-loop step ceiling. Omitted → the agent's configured default.",
     )
+    can_answer_questions: bool = Field(
+        default=False,
+        description=(
+            "Whether THIS caller can render a 'needs_input' event and POST the "
+            "answer back to /query/{run_id}/respond. Defaults to false, which is "
+            "the safe answer: a caller that cannot answer would otherwise park "
+            "the run until the question times out, which reads as a hang. When "
+            "false, a step that would ask instead fails immediately with what "
+            "the user should do on this surface."
+        ),
+    )
 
     @field_validator("run_id")
     @classmethod
@@ -217,6 +246,39 @@ class QueryCancelResponse(_Strict):
     run_id: str = Field(..., description="The run that was signalled to cancel.")
     cancelled: bool = Field(
         default=True, description="True once the cancel was delivered to the run."
+    )
+    status: str = Field(default="ok", description="Always 'ok' on success.")
+
+
+class QueryRespondRequest(_Strict):
+    """Body of ``POST /v1/email/query/{run_id}/respond`` (spec §5.1)."""
+
+    request_id: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "The 'request_id' from the needs_input event being answered. An "
+            "answer for a question that is no longer pending is rejected (409) "
+            "rather than applied to whatever the run is waiting on now."
+        ),
+    )
+    value: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "The answer: an option's 'value' (or its 'label'), or free text "
+            "when the question set allow_free_text."
+        ),
+    )
+
+
+class QueryRespondResponse(_Strict):
+    """Result of ``POST /v1/email/query/{run_id}/respond``."""
+
+    run_id: str = Field(..., description="The run the answer was delivered to.")
+    request_id: str = Field(..., description="The question that was answered.")
+    accepted: bool = Field(
+        default=True, description="True once the answer unblocked the run."
     )
     status: str = Field(default="ok", description="Always 'ok' on success.")
 
@@ -411,8 +473,13 @@ _QUERY_SSE_RESPONSES = {
             "one canonical event discriminated on `type`, one of: status "
             "{message} | token {delta} | tool_call {tool, args} | tool_result "
             "{tool, render?, data} | needs_confirmation {run_id, action, summary} "
-            "| final {answer, usage?} | error {detail, status}. The stream is "
-            "terminated by exactly one `final` or one `error`."
+            "| needs_input {run_id, request_id, question, options, "
+            "allow_free_text, respond_url, timeout_seconds?} | final {answer, "
+            "usage?} | error {detail, status}. The stream is terminated by "
+            "exactly one `final` or one `error`; `needs_input` pauses the run "
+            "until POST /v1/email/query/{run_id}/respond delivers the answer, "
+            "then the SAME stream continues. `:`-prefixed heartbeat comments may "
+            "appear at any time and carry no payload."
         ),
         "content": {
             "text/event-stream": {
@@ -442,7 +509,9 @@ async def query(request: QueryRequest) -> StreamingResponse:
     relays the loop as the seven canonical event types (spec §4). The stream ends
     with exactly one ``final`` or ``error``. A confirmation-requiring step ends the
     stream with a ``needs_confirmation`` followed by a ``final`` refusal (the
-    stateless D1 stub — see module docstring).
+    stateless D1 stub — see module docstring). A step that asks the user a
+    question emits ``needs_input`` and the stream STAYS OPEN, resuming once
+    ``POST /v1/email/query/{run_id}/respond`` delivers the answer.
     """
     # Lazy imports: keep module import (and the OpenAPI export) dependency-light.
     from gaia_agent_email.sse_translation import TERMINAL_TYPES, CanonicalTranslator
@@ -485,6 +554,9 @@ async def query(request: QueryRequest) -> StreamingResponse:
         {"role": item.role, "content": item.content} for item in request.context
     ]
     agent.console = handler
+    # Read by ``question.ask``: a caller that cannot answer must be refused at
+    # the point of asking, not parked until the question times out.
+    agent.can_answer_questions = bool(request.can_answer_questions)
     # The base agent loop observes this at each step boundary (agent.py) — the
     # cancel endpoint sets it so tool execution stops between steps.
     agent._cancel_event = run.cancel_event
@@ -515,6 +587,7 @@ async def query(request: QueryRequest) -> StreamingResponse:
     async def _stream():
         translator = CanonicalTranslator(request.run_id)
         terminated = False
+        last_write = time.monotonic()
         try:
             while True:
                 try:
@@ -522,6 +595,14 @@ async def query(request: QueryRequest) -> StreamingResponse:
                 except queue.Empty:
                     if not thread.is_alive() and handler.event_queue.empty():
                         break
+                    # A run parked on a needs_input question emits nothing until
+                    # the user answers. Without a heartbeat that silence trips
+                    # the client's read-idle watchdog and the question is
+                    # abandoned mid-thought. `:` lines are SSE comments — every
+                    # conformant reader skips them and resets its timer.
+                    if time.monotonic() - last_write >= _HEARTBEAT_SECONDS:
+                        last_write = time.monotonic()
+                        yield ": keepalive\n\n"
                     await asyncio.sleep(0.03)
                     continue
 
@@ -531,6 +612,12 @@ async def query(request: QueryRequest) -> StreamingResponse:
                 for canonical in translator.translate(event):
                     ctype = canonical.get("type")
                     yield _sse(canonical)
+                    last_write = time.monotonic()
+                    if ctype == "needs_input":
+                        # Answerable, so the run stays alive: keep draining the
+                        # queue while the worker thread blocks in
+                        # request_user_input_blocking waiting for /respond.
+                        continue
                     if ctype == "needs_confirmation":
                         # Stateless stub (D1): end the run with a final refusal
                         # and stop the loop so it doesn't block on approval.
@@ -592,6 +679,51 @@ async def cancel_query(run_id: str) -> QueryCancelResponse:
     return QueryCancelResponse(run_id=run_id, cancelled=True)
 
 
+@router.post("/query/{run_id}/respond", response_model=QueryRespondResponse)
+async def respond_query(run_id: str, body: QueryRespondRequest) -> QueryRespondResponse:
+    """Answer a ``needs_input`` question and let the paused run continue.
+
+    The run's worker thread is blocked inside ``request_user_input_blocking``;
+    this hands it the answer through the same out-of-band resolve the stateful
+    Agent UI path uses, and the run resumes emitting on its ORIGINAL ``/query``
+    stream — no second request, no replayed context.
+
+    Failure modes are distinct on purpose, because "the agent never saw my
+    answer" is otherwise indistinguishable from "the agent is thinking":
+
+    - **404** — no run with that ``run_id`` is in flight (it finished, was
+      cancelled, or the id is wrong).
+    - **409** — the run is live but ``request_id`` is not what it is waiting on:
+      a stale answer to a question that already timed out or was answered.
+      Rejected rather than applied to whatever question is pending now.
+    """
+    run = registry.get(run_id)
+    if run is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No in-flight run for run_id {run_id!r}. It has already "
+                "finished or been cancelled, so there is nothing to answer."
+            ),
+        )
+    if not run.handler.resolve_user_input(body.request_id, body.value):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Run {run_id!r} is not waiting on request_id "
+                f"{body.request_id!r}. The question was already answered, timed "
+                "out, or belongs to a different run. Re-send your request to be "
+                "asked again."
+            ),
+        )
+    logger.info(
+        "email /query run_id=%s resumed: answered request_id=%s",
+        run_id,
+        body.request_id,
+    )
+    return QueryRespondResponse(run_id=run_id, request_id=body.request_id)
+
+
 __all__ = [
     "router",
     "registry",
@@ -599,4 +731,6 @@ __all__ = [
     "QueryRequest",
     "QueryContextItem",
     "QueryCancelResponse",
+    "QueryRespondRequest",
+    "QueryRespondResponse",
 ]

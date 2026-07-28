@@ -139,6 +139,7 @@ OP_EVAL_COVERAGE: Dict[str, str] = {
     # judged quality bar of their own -- contract/shape-tested only.
     "query": _NO_EVAL_SENTINEL,
     "query/{run_id}/cancel": _NO_EVAL_SENTINEL,
+    "query/{run_id}/respond": _NO_EVAL_SENTINEL,
     # #2154 OAuth forward-OUT intake: the daemon delivers short-lived connector
     # tokens here; a credential-plumbing surface with no judged quality bar --
     # contract/shape-tested only.

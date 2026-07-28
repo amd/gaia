@@ -149,8 +149,10 @@ install_gaia() {
 add_to_path() {
     print_step "Adding GAIA to PATH..."
 
+    # Both bins: the venv holds the Python CLI, $GAIA_HOME/bin holds the
+    # terminal hub. Adding only the venv left gaia-tui installed but unreachable.
     local bin_path="$GAIA_VENV/bin"
-    local path_export="export PATH=\"\$PATH:$bin_path\""
+    local path_export="export PATH=\"\$PATH:$bin_path:$GAIA_HOME/bin\""
     local added=false
 
     # Add to .bashrc if it exists
@@ -212,6 +214,85 @@ show_next_steps() {
 }
 
 # Main installation flow
+
+# ---------------------------------------------------------------------------
+# Terminal hub (Go binary)
+# ---------------------------------------------------------------------------
+
+# Install the `gaia` terminal hub from the GitHub release.
+#
+# Separate from the Python package on purpose: this is a static binary with no
+# interpreter, and it is what a user actually runs. Failure here is reported and
+# survivable — the Python CLI is already installed by the time we get here, so a
+# release without a matching asset must not abort the whole install.
+install_tui() {
+    print_step "Installing the GAIA terminal hub"
+
+    local os arch target
+    case "$(uname -s)" in
+        Linux)  os="linux" ;;
+        Darwin) os="darwin" ;;
+        *)
+            print_warning "No terminal hub build for $(uname -s); skipping."
+            return 0
+            ;;
+    esac
+    case "$(uname -m)" in
+        x86_64|amd64)  arch="amd64" ;;
+        arm64|aarch64) arch="arm64" ;;
+        *)
+            print_warning "No terminal hub build for $(uname -m); skipping."
+            return 0
+            ;;
+    esac
+    target="gaia-${os}-${arch}"
+
+    local base="https://github.com/amd/gaia/releases/latest/download"
+    local tmp
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' RETURN
+
+    if ! curl -fsSL "$base/$target" -o "$tmp/gaia"; then
+        print_warning "Could not download $target from the latest release."
+        print_warning "The Python CLI is installed; the terminal hub is not."
+        return 0
+    fi
+
+    # Verify before trusting. A checksum file that cannot be fetched is not a
+    # reason to install an unverified binary — it is a reason to stop.
+    if curl -fsSL "$base/gaia-tui-SHA256SUMS.txt" -o "$tmp/SHA256SUMS"; then
+        local want got
+        want="$(grep " ${target}\$" "$tmp/SHA256SUMS" | awk '{print $1}')"
+        if [ -z "$want" ]; then
+            print_warning "No checksum listed for $target; not installing it."
+            return 0
+        fi
+        if command -v sha256sum >/dev/null 2>&1; then
+            got="$(sha256sum "$tmp/gaia" | awk '{print $1}')"
+        else
+            got="$(shasum -a 256 "$tmp/gaia" | awk '{print $1}')"
+        fi
+        if [ "$want" != "$got" ]; then
+            print_error "Checksum mismatch for $target — refusing to install."
+            print_error "  expected $want"
+            print_error "  got      $got"
+            return 0
+        fi
+    else
+        print_warning "Checksum file unavailable; not installing an unverified binary."
+        return 0
+    fi
+
+    # Installed as `gaia-tui`, NOT `gaia`. The Python CLI already owns `gaia`
+    # in the venv, and this binary has no `init`, `daemon` or `connectors`
+    # subcommands — whichever won the PATH, something a user needs would stop
+    # working. The planned rename (Go takes `gaia`, Python moves to `gaia-cli`)
+    # flips this deliberately; until then the two names coexist.
+    mkdir -p "$GAIA_HOME/bin"
+    install -m 0755 "$tmp/gaia" "$GAIA_HOME/bin/gaia-tui"
+    print_success "Terminal hub installed to $GAIA_HOME/bin/gaia-tui"
+}
+
 main() {
     echo ""
     echo -e "${COLOR_CYAN}========================================${COLOR_RESET}"
@@ -228,6 +309,9 @@ main() {
 
     # Install GAIA
     install_gaia
+
+    # Install the terminal hub binary
+    install_tui
 
     # Add to PATH
     add_to_path

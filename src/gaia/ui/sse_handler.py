@@ -194,6 +194,11 @@ class SSEOutputHandler(OutputHandler):
         self._user_input_queue: deque = deque()
         self._user_input_events: Dict[str, threading.Event] = {}
         self._user_input_results: Dict[str, str] = {}
+        # Guards the three maps above. resolve_user_input() runs on a request
+        # thread while the agent thread is timing out on the same request_id;
+        # unsynchronized, that window lets a caller be told "accepted" for an
+        # answer the run has already stopped waiting for.
+        self._user_input_lock = threading.Lock()
         # Live response for an in-flight email /query relay (#2109), so the
         # cancel path can force a blocked read to error out by closing it from
         # another thread. None outside an active email-relay turn.
@@ -1003,12 +1008,24 @@ class SSEOutputHandler(OutputHandler):
         default_if_no_response: Optional[str] = None,
         timeout_seconds: int = 300,
         continue_if_no_response: bool = True,
+        options: Optional[List[Dict[str, Any]]] = None,
+        allow_free_text: bool = True,
+        sensitive: bool = False,
     ) -> str:
         """Ask the user a question and block until a response arrives or timeout.
 
         Emits a ``user_input_request`` SSE event.  In background mode the request
         is still emitted (so it appears in the Goals dashboard), but returns
         ``"__NO_RESPONSE__"`` immediately instead of blocking.
+
+        ``choices`` is the flat list of answer strings.  ``options`` is the
+        richer form — ``[{"value", "label", "description"}, ...]`` — for surfaces
+        that render a labelled picker; a bare yes/no cannot express "Gmail or
+        Outlook?".  Both may be supplied; a surface that only understands
+        ``choices`` keeps working unchanged.  ``sensitive`` tells the surface the
+        answer is a credential, so it masks the typed characters — asking for an
+        OAuth client secret with no way to say "this is a secret" is a defect,
+        not a styling preference.
 
         Returns:
             User's response string, the chosen option, the default value on
@@ -1018,30 +1035,38 @@ class SSEOutputHandler(OutputHandler):
         request_id = str(uuid.uuid4())
         timeout_seconds = max(10, timeout_seconds)  # floor: 10 seconds
 
+        # Register BEFORE emitting, mirroring confirm_tool_execution: a fast
+        # client can answer before this thread reaches the registration, and
+        # resolve_user_input would then reject a perfectly good answer.
+        evt: Optional[threading.Event] = None
+        if not self.background_mode:
+            evt = threading.Event()
+            with self._user_input_lock:
+                self._user_input_events[request_id] = evt
+                self._user_input_queue.append(request_id)
+
         self._emit(
             {
                 "type": "user_input_request",
                 "request_id": request_id,
                 "message": message,
                 "choices": choices or [],
+                "options": options or [],
+                "allow_free_text": bool(allow_free_text),
+                "sensitive": bool(sensitive),
                 "timeout_seconds": timeout_seconds,
                 "continue_if_no_response": continue_if_no_response,
             }
         )
 
-        if self.background_mode:
-            # Can't block — no active SSE consumer.  Return the sentinel so the
-            # caller can decide whether to proceed or schedule a retry.
+        if evt is None:
+            # Background mode: can't block — no active SSE consumer.  Return the
+            # sentinel so the caller can decide whether to proceed or retry.
             return (
                 default_if_no_response
                 if default_if_no_response is not None
                 else "__NO_RESPONSE__"
             )
-
-        # Register the pending request
-        evt = threading.Event()
-        self._user_input_events[request_id] = evt
-        self._user_input_queue.append(request_id)
 
         # Block until resolved or timeout
         deadline = time.monotonic() + timeout_seconds
@@ -1051,12 +1076,15 @@ class SSEOutputHandler(OutputHandler):
             if evt.wait(timeout=0.5):
                 break
 
-        # Clean up
-        self._user_input_queue = deque(
-            rid for rid in self._user_input_queue if rid != request_id
-        )
-        self._user_input_events.pop(request_id, None)
-        response = self._user_input_results.pop(request_id, None)
+        # Clean up. Under the lock and as one step, so a resolve landing at the
+        # deadline either wins outright or is rejected — never accepted into a
+        # slot this thread is about to drop.
+        with self._user_input_lock:
+            self._user_input_queue = deque(
+                rid for rid in self._user_input_queue if rid != request_id
+            )
+            self._user_input_events.pop(request_id, None)
+            response = self._user_input_results.pop(request_id, None)
 
         if response is not None:
             return response
@@ -1075,14 +1103,17 @@ class SSEOutputHandler(OutputHandler):
     def resolve_user_input(self, request_id: str, response: str) -> bool:
         """Unblock a pending ``request_user_input_blocking()`` call.
 
-        Called by ``POST /api/chat/user-input``.  Returns ``False`` if no
-        request with that ID is pending.
+        Called by ``POST /api/chat/user-input`` and by the email sidecar's
+        ``POST /v1/email/query/{run_id}/respond``.  Returns ``False`` if no
+        request with that ID is pending, so the caller can answer 409 rather
+        than report an accepted answer nothing will read.
         """
-        evt = self._user_input_events.get(request_id)
-        if evt is None:
-            return False
-        self._user_input_results[request_id] = response
-        evt.set()
+        with self._user_input_lock:
+            evt = self._user_input_events.get(request_id)
+            if evt is None:
+                return False
+            self._user_input_results[request_id] = response
+            evt.set()
         return True
 
     def signal_done(self):

@@ -17,6 +17,11 @@ type ForAgentOptions struct {
 	MaxSteps int
 	// Logf receives transport diagnostics. Never given a token.
 	Logf func(format string, args ...any)
+	// Interactive declares that a human is watching and can answer a question
+	// the agent asks mid-run. Only the interactive chat view sets it; a one-shot
+	// leaves it false so an agent that needs an answer says so and stops,
+	// instead of parking until the question times out.
+	Interactive bool
 }
 
 // ForAgent builds the transport a catalog entry declares.
@@ -29,9 +34,10 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 	switch agent.Transport {
 	case catalog.TransportDaemon:
 		return NewSSEClient(agent.ID, daemon.New(daemon.Options{Logf: opts.Logf}), SSEOptions{
-			Model:    opts.Model,
-			MaxSteps: opts.MaxSteps,
-			Logf:     opts.Logf,
+			Model:       opts.Model,
+			MaxSteps:    opts.MaxSteps,
+			Logf:        opts.Logf,
+			Interactive: opts.Interactive,
 		}), nil
 
 	case catalog.TransportSubprocess:
@@ -41,7 +47,12 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 					"build it, put it on PATH, or pass --mock <path> to run against a stub",
 				agent.ID)
 		}
-		return NewSubprocessClient(agent.BinaryPath, agent.BinaryArgs, opts.Debug), nil
+		// Resolved HERE, before any caller can report "connected".
+		bin, err := catalog.ResolveExecutable(agent.BinaryPath, agent.ID)
+		if err != nil {
+			return nil, fmt.Errorf("cannot start agent %q: %w", agent.ID, err)
+		}
+		return NewSubprocessClient(bin, agent.BinaryArgs, opts.Debug), nil
 
 	default:
 		return nil, fmt.Errorf(

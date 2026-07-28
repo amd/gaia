@@ -43,6 +43,8 @@ import time
 
 import pytest
 
+pytestmark = pytest.mark.allow_network
+
 from gaia.api.agent_proxy import (
     API_KEY_ENV,
     _synthetic_error_frame,

@@ -13,8 +13,8 @@ Two verified sources, checked in order; there is NO 'use it anyway' path:
    on POSIX. Source 2 is a repo-checkout/npm-package convenience: the lock is
    NOT wheel package data, so on a pip install the Hub install (source 1, which
    verifies against the hub manifest) is the only path — an absent lock reports
-   "not installed" with the `gaia hub install <id>` remedy, never a broken-install
-   error.
+   "not installed" with the `gaia hub install <id>` remedy, never a
+   broken-install error.
 
 A tampered/truncated binary is rejected before it can ever be spawned.
 

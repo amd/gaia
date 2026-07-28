@@ -34,7 +34,11 @@ except ImportError:
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.install_hints import source_install_command
 from gaia.installer.lemonade_installer import LemonadeInfo, LemonadeInstaller
-from gaia.llm.lemonade_launcher import build_start_command, resolve_lemonade
+from gaia.llm.lemonade_launcher import (
+    build_start_command,
+    describe_start_hint,
+    resolve_lemonade,
+)
 from gaia.version import LEMONADE_VERSION
 
 log = logging.getLogger(__name__)
@@ -1287,24 +1291,17 @@ class InitCommand:
                 )
             else:
                 # Give the user the exact start command for their tooling
-                tooling = resolve_lemonade()
-                if tooling.found:
-                    min_ctx = INIT_PROFILES[self.profile].get("min_context_size")
-                    spec = build_start_command(tooling, min_ctx)
-                    cmd_str = " ".join(spec.argv)
-                    if spec.env:
-                        env_prefix = " ".join(f"{k}={v}" for k, v in spec.env.items())
-                        cmd_str = f"{env_prefix} {cmd_str}"
-                    if tooling.kind == "legacy":
-                        cmd_str += " &"
+                min_ctx = INIT_PROFILES[self.profile].get("min_context_size")
+                hint = describe_start_hint(min_ctx)
+                if hint.command:
+                    # We block on input() next — hand back the shell.
+                    cmd_str = f"{hint.command} &" if hint.foreground else hint.command
                     self.console.print(f"   [dim]• Run:[/dim] [cyan]{cmd_str}[/cyan]")
-                else:
                     self.console.print(
-                        "   [dim]• Run:[/dim] [cyan]lemonade-server serve &[/cyan]"
+                        "   [dim]• If command not found, open a new terminal or run:[/dim] [cyan]hash -r[/cyan]"
                     )
-                self.console.print(
-                    "   [dim]• If command not found, open a new terminal or run:[/dim] [cyan]hash -r[/cyan]"
-                )
+                else:
+                    self.console.print(f"   [dim]• {hint.instruction}[/dim]")
             self.console.print()
 
             # Wait for user to start the server
@@ -1415,7 +1412,7 @@ class InitCommand:
         except ConnectionError as e:
             self._print_error(f"Cannot reach Lemonade Server to detect hardware: {e}")
             self._print_error(
-                "Ensure Lemonade Server is running: lemonade-server serve"
+                f"Ensure Lemonade Server is running. {describe_start_hint().instruction}"
             )
             return False
         except Exception as e:
@@ -1768,7 +1765,8 @@ class InitCommand:
                 else:
                     self._print_error(f"Failed to configure {min_ctx} token context")
                     self._print_error(
-                        f"Try: lemonade-server serve --ctx-size {min_ctx}"
+                        f"Restart Lemonade Server with a {min_ctx} token context. "
+                        f"{describe_start_hint(min_ctx).instruction}"
                     )
                     return False
 

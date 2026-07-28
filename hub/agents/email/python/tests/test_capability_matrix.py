@@ -60,7 +60,7 @@ _spec.loader.exec_module(capability_matrix)
 # see the plan for issue #2013 §1 for the derivation of every number below).
 # ---------------------------------------------------------------------------
 
-# 14 mixins in gaia_agent_email/tools/, keyed by module stem, 56 tools total.
+# 15 mixins in gaia_agent_email/tools/, keyed by module stem, 58 tools total.
 _EXPECTED_TOOLS_BY_MIXIN = {
     "read_tools": 8,
     "organize_tools": 15,
@@ -76,14 +76,16 @@ _EXPECTED_TOOLS_BY_MIXIN = {
     "profile_tools": 1,
     "summarize_tools": 1,
     "connection_tools": 1,
+    # #2469 agent-led onboarding: check_mailbox_access + setup_mailbox_access.
+    "onboarding_tools": 2,
 }
-_EXPECTED_TOOLS_TOTAL = 56
+_EXPECTED_TOOLS_TOTAL = 58
 assert sum(_EXPECTED_TOOLS_BY_MIXIN.values()) == _EXPECTED_TOOLS_TOTAL
 
 _EXPECTED_MCP_COUNT = 4
 _EXPECTED_EVAL_SUITE_COUNT = 6
-_EXPECTED_REST_FUNCTIONAL_COUNT = 21
-_EXPECTED_REST_IN_CONTRACT_COUNT = 24
+_EXPECTED_REST_FUNCTIONAL_COUNT = 22
+_EXPECTED_REST_IN_CONTRACT_COUNT = 25
 
 # The 6 eval suites are the *_gate_thresholds.json fixture stems at the repo
 # root (NOT under hub/agents/email/python/tests/ — this package ships no such
@@ -129,6 +131,8 @@ _EXPECTED_REST_OP_NAMES = {
     # #2016 streaming agent-loop surface: POST /v1/email/query and its cancel.
     "query",
     "query/{run_id}/cancel",
+    # #2469 mid-run question resume.
+    "query/{run_id}/respond",
     # #2154 OAuth forward-OUT intake. These live under /v1/connections (NOT
     # /v1/email/), so the naming scheme keeps their full path.
     "/v1/connections",

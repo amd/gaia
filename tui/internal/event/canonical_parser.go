@@ -43,6 +43,8 @@ func ParseCanonicalEvent(data []byte) interface{} {
 		return decodeCanonical[CanonicalToolResultEvent](data, probe.Type)
 	case CanonicalTypeNeedsConfirmation:
 		return decodeCanonical[CanonicalNeedsConfirmationEvent](data, probe.Type)
+	case CanonicalTypeNeedsInput:
+		return decodeCanonical[CanonicalNeedsInputEvent](data, probe.Type)
 	case CanonicalTypeFinal:
 		return decodeCanonical[CanonicalFinalEvent](data, probe.Type)
 	case CanonicalTypeError:

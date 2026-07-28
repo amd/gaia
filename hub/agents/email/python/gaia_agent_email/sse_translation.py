@@ -38,6 +38,9 @@ Spec open questions surfaced in this file (do not block #2016):
 - **Q2** — ``policy_alert`` maps to ``error`` (status 403). A governance block is
   per-*tool* (the run may continue) whereas canonical ``error`` is terminal; a
   dedicated additive event type may be warranted. See spec §9 Q2.
+- **Q3 — RESOLVED (#2469).** ``user_input_request`` maps to the eighth canonical
+  type ``needs_input`` (answerable, run continues), NOT to
+  ``needs_confirmation`` (terminal approve/deny). See spec §5.1.
 - **Q4 (D1)** — ``needs_confirmation`` omits ``confirm_url`` under the stateless
   stop-and-hand-off model (no server-side resume). See spec §5 / §9 Q4.
 """
@@ -270,20 +273,27 @@ class CanonicalTranslator:
         ]
 
     def _on_user_input_request(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
-        message = str(event.get("message") or "Input requested")
-        choices = event.get("choices") or []
-        summary = message
-        if choices:
-            summary = f"{message} (choices: {', '.join(str(c) for c in choices)})"
-        # Same "pause for the user" primitive as approve/deny (spec §6.2 / Q3).
-        return [
-            {
-                "type": "needs_confirmation",
-                "run_id": self._run_id,
-                "action": "input",
-                "summary": summary,
-            }
-        ]
+        # Spec §9 Q3 resolved: a mid-run question is its OWN canonical type, not
+        # a flavour of needs_confirmation. The two differ in the only way that
+        # matters on the wire — needs_confirmation is a terminal approve/deny
+        # (deny-by-default, run over), needs_input is answerable and the run
+        # continues on the same stream. Folding them would have made the
+        # security-relevant terminal behaviour depend on an optional field.
+        question = str(event.get("message") or "Input requested")
+        canonical: Dict[str, Any] = {
+            "type": "needs_input",
+            "run_id": self._run_id,
+            "request_id": str(event.get("request_id") or ""),
+            "question": question,
+            "options": _normalize_options(event),
+            "allow_free_text": bool(event.get("allow_free_text", True)),
+            "sensitive": bool(event.get("sensitive", False)),
+            "respond_url": f"/v1/email/query/{self._run_id}/respond",
+        }
+        timeout = event.get("timeout_seconds")
+        if isinstance(timeout, (int, float)) and timeout > 0:
+            canonical["timeout_seconds"] = int(timeout)
+        return [canonical]
 
     def _on_tool_confirm_denied(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         # Unattended auto-deny is informational — the run continues and the agent
@@ -318,7 +328,41 @@ class CanonicalTranslator:
 
 
 #: Canonical terminal event types — exactly one ends a run (spec §3).
+#: ``needs_input`` is deliberately NOT here: the run pauses on it and resumes on
+#: the same stream once the answer arrives (spec §5.1).
 TERMINAL_TYPES = frozenset({"final", "error"})
+
+
+def _normalize_options(event: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Build the canonical ``options`` array for a ``needs_input`` event.
+
+    Prefers the rich ``options`` list (``{value, label, description}``) and falls
+    back to the flat ``choices`` strings, so a caller that only passed choices
+    still gets a pickable list rather than an unlabelled blob buried in prose.
+    """
+    out: List[Dict[str, str]] = []
+    raw_options = event.get("options")
+    if isinstance(raw_options, list):
+        for item in raw_options:
+            if not isinstance(item, dict):
+                continue
+            value = str(item.get("value") or item.get("label") or "").strip()
+            if not value:
+                continue
+            out.append(
+                {
+                    "value": value,
+                    "label": str(item.get("label") or value),
+                    "description": str(item.get("description") or ""),
+                }
+            )
+    if out:
+        return out
+    for choice in event.get("choices") or []:
+        text = str(choice).strip()
+        if text:
+            out.append({"value": text, "label": text, "description": ""})
+    return out
 
 
 # Human labels for the confirmation-gated actions the /query stream surfaces.
