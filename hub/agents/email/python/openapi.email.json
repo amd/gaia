@@ -1164,6 +1164,12 @@
             "title": "Actionable",
             "type": "array"
           },
+          "degraded": {
+            "default": false,
+            "description": "True when at least one connected mailbox could not be scanned (see mailbox_errors) — the surviving mailboxes' results are still shown, but coverage is partial (#2584).",
+            "title": "Degraded",
+            "type": "boolean"
+          },
           "informational_count": {
             "default": 0,
             "description": "Count of informational (FYI/PERSONAL) messages — not listed.",
@@ -1177,6 +1183,29 @@
             "title": "Kind",
             "type": "string"
           },
+          "mailbox_errors": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/MailboxError"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Connected mailboxes that failed during this pre-scan, if any (#2584) — surfaced to the caller, not only logged.",
+            "title": "Mailbox Errors"
+          },
+          "needs_review": {
+            "description": "Messages the heuristic was NOT confident about (capped, #2584) — surfaced for human review rather than silently filed under a placeholder category guess (e.g. an unconfident FYI or PROMOTIONAL guess). ``why`` carries the heuristic's escalation reason.",
+            "items": {
+              "$ref": "#/components/schemas/PreScanItem"
+            },
+            "title": "Needs Review",
+            "type": "array"
+          },
           "preferences_applied": {
             "anyOf": [
               {
@@ -1187,6 +1216,12 @@
               }
             ],
             "description": "Session preferences that shaped this pre-scan."
+          },
+          "scanned": {
+            "default": 0,
+            "description": "How many messages this pre-scan actually classified (sum across every bucket, including needs_review) — the honest numerator for 'how much of the inbox did we look at' (#2584).",
+            "title": "Scanned",
+            "type": "integer"
           },
           "suggested_archives": {
             "description": "Promotional / low-priority messages suggested for archive (capped).",
@@ -1201,6 +1236,18 @@
             "items": {},
             "title": "Suggested Drafts",
             "type": "array"
+          },
+          "total_unread": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Estimated total UNREAD messages in the scanned mailbox(es), the denominator for scan coverage (#2584). Gmail reports a real API estimate; Outlook cannot honestly provide one and reports null — never a fabricated page-size number.",
+            "title": "Total Unread"
           },
           "totals": {
             "anyOf": [
@@ -2233,6 +2280,28 @@
         "title": "InitResponse",
         "type": "object"
       },
+      "MailboxError": {
+        "additionalProperties": false,
+        "description": "One connected mailbox that failed during a pre-scan (#2584).\n\nA partial failure never silently shrinks the result — every skipped\nmailbox is named here so the caller can tell \"empty inbox\" apart from\n\"half the inbox couldn't be scanned\".",
+        "properties": {
+          "error": {
+            "description": "Actionable error message for the failure.",
+            "title": "Error",
+            "type": "string"
+          },
+          "mailbox": {
+            "description": "Provider name of the failed mailbox ('google' / 'microsoft').",
+            "title": "Mailbox",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mailbox",
+          "error"
+        ],
+        "title": "MailboxError",
+        "type": "object"
+      },
       "OutgoingAttachment": {
         "additionalProperties": false,
         "description": "One attachment to include on a draft/send (schema 2.2, #1542).\n\nContent travels inline as standard (RFC 4648) base64. Validation is\nfail-loud: a non-decodable payload, a malformed MIME type, or a decoded\nsize over ``MAX_ATTACHMENT_BYTES`` is a ``ValidationError`` — never\nsilently truncated or dropped.",
@@ -2371,6 +2440,12 @@
             "default": 0,
             "description": "Total informational (FYI/PERSONAL) messages found.",
             "title": "Informational",
+            "type": "integer"
+          },
+          "needs_review": {
+            "default": 0,
+            "description": "Total messages the heuristic was NOT confident about (#2584) — surfaced for human review rather than filed under a placeholder category guess.",
+            "title": "Needs Review",
             "type": "integer"
           },
           "suggested_archives": {

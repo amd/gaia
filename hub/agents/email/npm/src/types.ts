@@ -349,6 +349,16 @@ export interface PreScanTotals {
   actionable: number;
   informational: number;
   suggested_archives: number;
+  /** Total messages the heuristic was not confident about (#2584). */
+  needs_review: number;
+}
+
+/** One connected mailbox that failed during a pre-scan (contract.py: MailboxError, #2584). */
+export interface MailboxError {
+  /** Provider name of the failed mailbox ('google' / 'microsoft'). */
+  mailbox: string;
+  /** Actionable error message for the failure. */
+  error: string;
 }
 
 /** Request envelope for an inbox pre-scan (contract.py: EmailPreScanRequest). */
@@ -377,6 +387,24 @@ export interface EmailPreScanResult {
   preferences_applied?: PreScanPreferencesApplied | null;
   /** Pre-cap totals per bucket. */
   totals?: PreScanTotals | null;
+  /**
+   * Messages the heuristic was NOT confident about (capped, #2584) —
+   * surfaced for human review rather than silently filed under a
+   * placeholder category guess.
+   */
+  needs_review: PreScanItem[];
+  /** How many messages this pre-scan actually classified (#2584). */
+  scanned: number;
+  /**
+   * Estimated total unread messages in the scanned mailbox(es) (#2584).
+   * Gmail reports a real estimate; Outlook cannot and reports null — never
+   * a fabricated number.
+   */
+  total_unread?: number | null;
+  /** True when at least one connected mailbox could not be scanned (#2584). */
+  degraded: boolean;
+  /** Connected mailboxes that failed during this pre-scan, if any (#2584). */
+  mailbox_errors?: MailboxError[] | null;
 }
 
 /** Top-level pre-scan response envelope (contract.py: EmailPreScanResponse). */
