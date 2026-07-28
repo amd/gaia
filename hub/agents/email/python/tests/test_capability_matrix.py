@@ -60,7 +60,7 @@ _spec.loader.exec_module(capability_matrix)
 # see the plan for issue #2013 §1 for the derivation of every number below).
 # ---------------------------------------------------------------------------
 
-# 15 mixins in gaia_agent_email/tools/, keyed by module stem, 59 tools total.
+# 16 mixins in gaia_agent_email/tools/, keyed by module stem, 60 tools total.
 _EXPECTED_TOOLS_BY_MIXIN = {
     "read_tools": 8,
     "organize_tools": 15,
@@ -81,8 +81,10 @@ _EXPECTED_TOOLS_BY_MIXIN = {
     "connection_tools": 1,
     # #2469 agent-led onboarding: check_mailbox_access + setup_mailbox_access.
     "onboarding_tools": 2,
+    # #2581: list_waiting_on_you (inbound mail awaiting the user's reply).
+    "waiting_on_you_tools": 1,
 }
-_EXPECTED_TOOLS_TOTAL = 59
+_EXPECTED_TOOLS_TOTAL = 60
 assert sum(_EXPECTED_TOOLS_BY_MIXIN.values()) == _EXPECTED_TOOLS_TOTAL
 
 _EXPECTED_MCP_COUNT = 4
