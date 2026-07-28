@@ -1484,9 +1484,7 @@ class AttentionItem(_Strict):
     reason a person should look at it.
     """
 
-    kind: AttentionItemKind = Field(
-        ..., description="Which signal surfaced this item."
-    )
+    kind: AttentionItemKind = Field(..., description="Which signal surfaced this item.")
     message_id: Optional[str] = Field(
         default=None,
         description=(
@@ -1612,7 +1610,9 @@ class EmailAttentionResponse(_Strict):
     schema_version: str = Field(
         default=SCHEMA_VERSION, description="Echoes the contract version."
     )
-    result: EmailAttentionResult = Field(..., description="The attention-view envelope.")
+    result: EmailAttentionResult = Field(
+        ..., description="The attention-view envelope."
+    )
 
 
 # ---------------------------------------------------------------------------

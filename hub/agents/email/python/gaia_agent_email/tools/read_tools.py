@@ -35,14 +35,6 @@ from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 # to prove pre-scan never wires the LLM (test_pre_scan_counts.py).
 from gaia_agent_email.tools.llm_triage import make_llm_classifier  # noqa: F401
 from gaia_agent_email.tools.triage_condense import condense_triage_result
-from gaia_agent_email.tools.triage_heuristics import (
-    CATEGORY_FYI,
-    CATEGORY_NEEDS_RESPONSE,
-    CATEGORY_PROMOTIONAL,
-    CATEGORY_URGENT,
-    classify_category_heuristic,
-    group_by_category,
-)
 
 # Read-only reuse of the existing automated-sender signal for needs_review's
 # display ordering (#2584) — NOT a new heuristic phrase list (that's #2581's
@@ -50,6 +42,14 @@ from gaia_agent_email.tools.triage_heuristics import (
 # stays in triage_heuristics; this module never redefines it.
 from gaia_agent_email.tools.triage_heuristics import (
     _AUTOMATED_SENDER_KEYWORDS as _NEEDS_REVIEW_AUTOMATED_SENDER_KEYWORDS,
+)
+from gaia_agent_email.tools.triage_heuristics import (
+    CATEGORY_FYI,
+    CATEGORY_NEEDS_RESPONSE,
+    CATEGORY_PROMOTIONAL,
+    CATEGORY_URGENT,
+    classify_category_heuristic,
+    group_by_category,
 )
 from gaia_agent_email.tools.usage import aggregate_usage_stats
 from gaia_agent_email.verbose import (
@@ -1275,7 +1275,6 @@ def pre_scan_inbox_impl(
             }
             why = r.get("rationale", "")
             category = r.get("category", CATEGORY_FYI)
-            confident = r.get("confident", True)
 
             if r.get("is_spam") or r.get("is_phishing"):
                 # Phishing/spam should never be silently archived from a
@@ -1880,6 +1879,7 @@ class ReadToolsMixin:
             """
             try:
                 max_messages = max(1, min(int(max_messages or 25), scan_ceiling))
+
                 # Phase 2 (#1603): scan every connected mailbox, tag each item
                 # with its source mailbox, split the budget across mailboxes,
                 # and merge. LLM follow-up (#1107) is wired inside the agent
@@ -1906,9 +1906,7 @@ class ReadToolsMixin:
 
                     if (
                         "progress"
-                        in _inspect.signature(
-                            agent._triage_all_backends
-                        ).parameters
+                        in _inspect.signature(agent._triage_all_backends).parameters
                     ):
                         kwargs["progress"] = _narrate
                 except (TypeError, ValueError) as exc:

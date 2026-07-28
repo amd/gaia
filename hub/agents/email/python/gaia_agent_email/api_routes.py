@@ -49,11 +49,13 @@ import json
 import re
 import secrets
 import threading
+import time
 from typing import Any, Dict, Iterator, List, Literal, NoReturn, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 from gaia_agent_email import caller_auth
+from gaia_agent_email.context_budget import estimate_tokens, thread_budget_tokens
 from gaia_agent_email.contract import (
     ActionItem,
     AttachmentMeta,
@@ -76,6 +78,8 @@ from gaia_agent_email.contract import (
     EmailAddress,
     EmailArchiveRequest,
     EmailArchiveResponse,
+    EmailAttentionResponse,
+    EmailAttentionResult,
     EmailCategory,
     EmailMessage,
     EmailPreScanRequest,
@@ -100,7 +104,6 @@ from gaia_agent_email.contract import (
     UnarchivedMessage,
     UnarchiveFailure,
 )
-from gaia_agent_email.context_budget import estimate_tokens, thread_budget_tokens
 from gaia_agent_email.outlook_backend import AttachmentTooLargeError
 from gaia_agent_email.tools.llm_triage import LLMTriageError
 from gaia_agent_email.tools.summarize_tools import EmailSummarizeError
@@ -2257,6 +2260,143 @@ async def get_briefing() -> EmailBriefingResponse:
         ) from e
 
 
+def get_attention_backends() -> Dict[str, Any]:
+    """Resolve every connected mailbox's read-only backend for the attention
+    view, always as a ``provider -> backend`` map (never a bare single
+    backend) so ``build_attention_view_impl`` gets a uniform shape regardless
+    of how many mailboxes are connected.
+
+    0 connected → HTTP 503 (actionable: go connect a mailbox), mirroring
+    :func:`get_prescan_backend`. Wired as a FastAPI ``Depends`` so tests
+    inject fakes via ``app.dependency_overrides[get_attention_backends]``.
+    """
+    providers = connected_mailbox_providers()
+    if not providers:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No mailbox connected — connect Google or Microsoft in "
+                "Settings → Connectors before viewing the attention view."
+            ),
+        )
+    return {provider: _build_prescan_live_backend(provider) for provider in providers}
+
+
+# ---------------------------------------------------------------------------
+# Attention view (#2582) — computed on open, then cached in-process. There is
+# deliberately no background job populating this: #2379 landed the daemon
+# clock with no jobs attached (that's #2585, unbuilt), so "compute on open"
+# means exactly that — the first call after the cache is empty or stale does
+# the live scan, and every call within the freshness window reuses it.
+# ---------------------------------------------------------------------------
+
+# Seconds a computed result is served verbatim (stale=False) before the next
+# call attempts a live refresh. Deliberately not parameterized by
+# max_messages — the TUI always calls this with its default, and keying the
+# cache on every possible parameter combination is complexity this single-
+# consumer surface does not need yet.
+ATTENTION_CACHE_TTL_SECONDS = 120.0
+
+_attention_cache: Optional[Dict[str, Any]] = None
+_attention_cache_lock = threading.Lock()
+
+
+def reset_attention_cache() -> None:
+    """Clear the in-process attention-view cache. Test-only seam."""
+    global _attention_cache
+    with _attention_cache_lock:
+        _attention_cache = None
+
+
+def _attention_view_with_age(
+    record: Dict[str, Any], *, now: float, stale: bool
+) -> Dict[str, Any]:
+    out = {k: v for k, v in record.items() if k != "_computed_at"}
+    out["cache_age_seconds"] = max(0.0, now - record["_computed_at"])
+    out["stale"] = stale
+    return out
+
+
+def _get_or_refresh_attention_view(
+    backends: Dict[str, Any], max_messages: int
+) -> Dict[str, Any]:
+    """Serve the cached attention view when it's fresh; otherwise recompute.
+
+    A recompute that fails (every connected mailbox erroring) falls back to
+    the last known-good cache, marked ``stale=True`` with its real age,
+    rather than hard-failing a view the user has already seen once
+    successfully. With no prior cache at all, the failure propagates —
+    there is nothing honest to fall back to.
+    """
+    global _attention_cache
+    now = time.time()
+    with _attention_cache_lock:
+        cached = _attention_cache
+    if (
+        cached is not None
+        and (now - cached["_computed_at"]) < ATTENTION_CACHE_TTL_SECONDS
+    ):
+        return _attention_view_with_age(cached, now=now, stale=False)
+
+    from gaia_agent_email.tools.attention_tools import build_attention_view_impl
+
+    try:
+        fresh = build_attention_view_impl(
+            backends, max_messages=max_messages, action_db=resolve_action_db()
+        )
+    except ConnectorsError:
+        if cached is not None:
+            return _attention_view_with_age(cached, now=now, stale=True)
+        raise
+    fresh["_computed_at"] = now
+    with _attention_cache_lock:
+        _attention_cache = fresh
+    return _attention_view_with_age(fresh, now=now, stale=False)
+
+
+@router.get(
+    "/attention",
+    response_model=EmailAttentionResponse,
+    responses={**_CONNECTOR_ERROR_RESPONSES},
+)
+async def get_attention_view(
+    max_messages: int = 100,
+    backends: Dict[str, Any] = Depends(get_attention_backends),
+) -> EmailAttentionResponse:
+    """The read-only "what needs you" attention view (#2582).
+
+    Merges four signals by calling the underlying tools directly, never the
+    ``/prescan`` envelope (whose ``informational_count`` carries no rows, so
+    a meeting proposal in a confidently-classified informational message
+    would otherwise be invisible): inbound waiting-on-you items (#2581),
+    meeting proposals found during the scan (#2583), unreviewed messages
+    (#2584), and open action items from prior triage (#2110/#2525).
+
+    Computed on open and cached (no scheduler dependency, #2379/#2585): a
+    call within the freshness window returns the cached result with its real
+    ``cache_age_seconds``; past that window a fresh scan is attempted, and a
+    failed refresh falls back to the last known-good result marked
+    ``stale=True`` rather than presenting it as current. Read-only
+    throughout — this never archives, marks, replies, or sends.
+    """
+    from gaia_agent_email.tools.attention_tools import MAX_ATTENTION_SCAN_MESSAGES
+
+    bounded = max(1, min(int(max_messages), MAX_ATTENTION_SCAN_MESSAGES))
+    try:
+        out = await asyncio.to_thread(_get_or_refresh_attention_view, backends, bounded)
+    except (
+        AuthRequiredError,
+        ScopeMismatchError,
+        ConnectionRevokedError,
+    ) as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ConfigurationError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except ConnectorsError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    return EmailAttentionResponse(result=EmailAttentionResult.model_validate(out))
+
+
 @router.post("/draft", response_model=EmailDraftResponse)
 async def draft_reply(request: EmailDraftRequest) -> EmailDraftResponse:
     """Propose a reply and mint a confirmation token bound to its payload.
@@ -3174,6 +3314,9 @@ __all__ = [
     "get_send_backend",
     "get_search_backend",
     "get_prescan_backend",
+    "get_attention_backends",
+    "reset_attention_cache",
+    "ATTENTION_CACHE_TTL_SECONDS",
     "get_calendar_backend",
     "resolve_calendar_backend",
     "get_action_db",

@@ -76,9 +76,7 @@ class TestNeedsReviewDecision:
 
     def test_phishing_never_needs_review_even_if_unconfident(self):
         assert (
-            needs_review_decision(
-                _r(category="FYI", confident=False, is_phishing=True)
-            )
+            needs_review_decision(_r(category="FYI", confident=False, is_phishing=True))
             is False
         )
 

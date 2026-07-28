@@ -89,8 +89,8 @@ assert sum(_EXPECTED_TOOLS_BY_MIXIN.values()) == _EXPECTED_TOOLS_TOTAL
 
 _EXPECTED_MCP_COUNT = 4
 _EXPECTED_EVAL_SUITE_COUNT = 6
-_EXPECTED_REST_FUNCTIONAL_COUNT = 22
-_EXPECTED_REST_IN_CONTRACT_COUNT = 25
+_EXPECTED_REST_FUNCTIONAL_COUNT = 23
+_EXPECTED_REST_IN_CONTRACT_COUNT = 26
 
 # The 6 eval suites are the *_gate_thresholds.json fixture stems at the repo
 # root (NOT under hub/agents/email/python/tests/ — this package ships no such
@@ -122,6 +122,7 @@ _EXPECTED_REST_OP_NAMES = {
     "search",
     "prescan",
     "briefing",
+    "attention",
     "draft",
     "send",
     "confirm",

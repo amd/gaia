@@ -38,7 +38,9 @@ from gaia_agent_email.tools.read_tools import (
 from gaia_agent_email.tools.waiting_on_you_tools import (
     DEFAULT_MAX_INBOX_SCAN as _WAITING_ON_YOU_DEFAULT_MAX_INBOX,
 )
-from gaia_agent_email.tools.waiting_on_you_tools import detect_waiting_on_you_impl
+from gaia_agent_email.tools.waiting_on_you_tools import (
+    detect_waiting_on_you_impl,
+)
 
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.formatting import format_connector_error
@@ -88,7 +90,9 @@ def _meeting_item(r: Mapping[str, Any], provider: Optional[str]) -> Dict[str, An
     return item
 
 
-def _waiting_on_you_item(w: Mapping[str, Any], provider: Optional[str]) -> Dict[str, Any]:
+def _waiting_on_you_item(
+    w: Mapping[str, Any], provider: Optional[str]
+) -> Dict[str, Any]:
     age_days = w.get("age_days", 0)
     item: Dict[str, Any] = {
         "kind": "waiting_on_you",
@@ -148,9 +152,7 @@ def _scan_one_backend(
             items.append(_needs_review_item(r, provider))
 
     waiting_budget = waiting_on_you_max_inbox or _WAITING_ON_YOU_DEFAULT_MAX_INBOX
-    waiting = detect_waiting_on_you_impl(
-        backend, max_inbox=waiting_budget, debug=debug
-    )
+    waiting = detect_waiting_on_you_impl(backend, max_inbox=waiting_budget, debug=debug)
     for w in waiting["waiting_on_you"]:
         items.append(_waiting_on_you_item(w, provider))
 
