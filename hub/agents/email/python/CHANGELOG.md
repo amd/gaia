@@ -53,6 +53,19 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **The inbox briefing carries a structured breakdown instead of one padded
+  sentence (#2525).** `get_briefing` already returned the full
+  `email_pre_scan` envelope (urgent/actionable messages, counts, applied
+  preferences) — the tool's own docstring was the bug: it told the model to
+  "write a short framing sentence, do not recite the JSON" as if a card
+  rendered the details, but unlike `pre_scan_inbox` no card renders a
+  briefing, so that one sentence was the entire answer. `summarize_briefing`
+  now computes the breakdown in code (total scanned, urgency/category
+  counts, the individual urgent/actionable messages, and named applied
+  preferences) so the reply can never assert an urgency judgement the
+  pre-scan classification did not itself make; the tool docstring and system
+  prompt now point the model at that computed `data.summary` instead of
+  asking it to compress everything away.
 - **A trashed message is recoverable any time it's still in Trash, not just
   for a few seconds (#2523).** The only restore path (`restore_message`) was
   gated by a short undo window and a live `action_id`; once either was gone,
