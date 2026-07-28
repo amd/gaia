@@ -12,7 +12,6 @@ search the web, and download files for local analysis.
 
 import json
 import logging
-import os
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -192,8 +191,9 @@ class BrowserToolsMixin:
         ) -> str:
             """Search the web and return results with titles, URLs, and snippets.
 
-            Uses configured search provider (DuckDuckGo or You.com) to find relevant web pages. 
-            Returns titles, URLs, and brief descriptions. Use fetch_page to read the full content of any result.
+            Uses the configured search provider (DuckDuckGo or You.com) to find
+            relevant web pages. Returns titles, URLs, and brief descriptions.
+            Use fetch_page to read the full content of any result.
 
             Args:
                 query: Search query string
@@ -202,13 +202,9 @@ class BrowserToolsMixin:
             if not _ensure_web_client():
                 return "Error: Browser tools not initialized. Web search is disabled."
 
-            # Get search provider configuration from the mixin
-            search_provider = getattr(mixin, '_web_search_provider', 'duckduckgo')
-            youcom_api_key = getattr(mixin, '_youcom_api_key', None)
-            
-            # Resolve API key from environment if not set in config
-            if search_provider == "youcom" and not youcom_api_key:
-                youcom_api_key = os.getenv('YDC_API_KEY')
+            # Get search provider configuration from the mixin.
+            search_provider = getattr(mixin, "_web_search_provider", "duckduckgo")
+            youcom_api_key = getattr(mixin, "_youcom_api_key", None)
 
             # Clamp num_results based on provider limits
             if search_provider == "youcom":
@@ -233,26 +229,11 @@ class BrowserToolsMixin:
                 return f"Error: {e}"
             except Exception as e:
                 logger.error(f"Error searching web with {search_provider}: {e}")
-                
-                # Fallback to DuckDuckGo if You.com fails
-                if search_provider == "youcom":
-                    logger.info("Falling back to DuckDuckGo search")
-                    try:
-                        results = mixin._web_client.search_duckduckgo(
-                            query, num_results=min(num_results, 10)  # Clamp to DDG limits
-                        )
-                    except Exception as fallback_e:
-                        logger.error(f"Fallback DuckDuckGo search also failed: {fallback_e}")
-                        return (
-                            f"Error performing web search: {e}\\n"
-                            f"Fallback to DuckDuckGo also failed: {fallback_e}\\n"
-                            "Try using fetch_page with a direct URL instead."
-                        )
-                else:
-                    return (
-                        f"Error performing web search: {e}\\n"
-                        "Try using fetch_page with a direct URL instead."
-                    )
+                provider_name = "You.com" if search_provider == "youcom" else "DuckDuckGo"
+                return (
+                    f"Error performing {provider_name} search: {e}\n"
+                    "Try using fetch_page with a direct URL instead."
+                )
 
             if not results:
                 return (

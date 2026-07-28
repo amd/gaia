@@ -875,72 +875,69 @@ class WebClient:
 
         return results
 
-    def search_youcom(self, query: str, num_results: int = 5, api_key: Optional[str] = None) -> list:
+    def search_youcom(
+        self, query: str, num_results: int = 5, api_key: Optional[str] = None
+    ) -> list:
         """Search using You.com Search API.
-        
-        Uses You.com Search API with optional authentication. Falls back to 
-        keyless operation (100 free searches/day) when no API key provided.
-        
+
+        Uses You.com Search API with optional authentication. Falls back to
+        keyless operation (100 free searches/day) when no API key is provided.
+
         Args:
             query: Search query string
             num_results: Number of results to return (default: 5, max: 20)
             api_key: Optional You.com API key (YDC_API_KEY)
-            
+
         Returns: [{"title": str, "url": str, "snippet": str}]
         """
         # Clamp num_results to You.com API limits
         num_results = max(1, min(num_results, 20))
-        
+
         # Determine endpoint and headers based on API key availability
         if api_key:
-            # Authenticated endpoint with higher rate limits  
+            # Authenticated endpoint with higher rate limits.
             url = "https://api.you.com/v1/search"
-            headers = {
-                "X-API-Key": api_key,
-                "Content-Type": "application/json"
-            }
+            headers = {"X-API-Key": api_key}
         else:
             # Keyless endpoint (100 searches/day per IP)
             url = "https://api.you.com/v1/agents/search"
-            headers = {
-                "Content-Type": "application/json"
-            }
-            
+            headers = {}
+
         # Add integration User-Agent for tracking
         headers["User-Agent"] = "youdotcom-integration/amd-gaia"
-        
+
         payload = {
             "query": query,
             "count": num_results,
-            "safesearch": "moderate"
+            "safesearch": "moderate",
         }
-        
+
         try:
-            response = self._session.get(url, headers=headers, params=payload, timeout=self._timeout)
+            response = self._session.get(
+                url, headers=headers, params=payload, timeout=self._timeout
+            )
             response.raise_for_status()
             data = response.json()
-            
+
             results = []
-            
+
             # Parse results from You.com API response
             if "results" in data and "web" in data["results"]:
                 for item in data["results"]["web"]:
                     if len(results) >= num_results:
                         break
-                        
+
                     title = item.get("title", "")
-                    url = item.get("url", "") 
+                    url = item.get("url", "")
                     description = item.get("description", "")
-                    
+
                     if title and url:
-                        results.append({
-                            "title": title,
-                            "url": url,
-                            "snippet": description
-                        })
-                        
+                        results.append(
+                            {"title": title, "url": url, "snippet": description}
+                        )
+
             return results
-            
+
         except requests.exceptions.RequestException as e:
             log.warning(f"You.com search request failed: {e}")
             raise
