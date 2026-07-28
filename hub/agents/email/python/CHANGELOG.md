@@ -71,6 +71,21 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Snoozing/scheduling by ordinary phrases like "tomorrow morning" now
+  actually works (#2526).** `schedule_send`/`snooze_message` used to hand
+  relative-time phrases straight to a strict ISO-8601 parser, which failed
+  and told the user in chat to supply ISO-8601 themselves — with an example
+  timestamp that was already in the past. No scheduled job was ever created.
+  The agent now resolves "tomorrow morning", "next monday", "in 3 hours",
+  "this evening", "tomorrow at 7" (and similar) itself before calling the
+  scheduling tools, anchored to the local time of the machine/process the
+  agent runs on (the same convention naive ISO-8601 timestamps already used
+  here — not UTC, not a per-user setting). A phrase that still can't be
+  resolved fails with a proposed concrete time (tomorrow 09:00 local)
+  instead of demanding a format. `cancel_scheduled_job` also now accepts a
+  1-based position ("2", "second") from the most recently shown
+  `list_scheduled_jobs` listing, since the user has no way to know the raw
+  job id from chat.
 - **`get_thread` returns every message in the right order — no more dropped
   or duplicated entries on a multi-participant thread (#2531).** Asked to
   list a full conversation chronologically, the agent could return the
