@@ -53,6 +53,23 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **`draft_reply` / `draft_forward` actually draft instead of asking for the
+  text to draft (#2524).** Asked to draft a reply or forward, the agent
+  correctly located the source message and then asked the user to supply the
+  finished reply/forward text — the thing it was asked to write. Neither
+  tool's docstring nor the base system prompt ever told the model that
+  composing `body` is its own job; the only place that said so was the
+  voice-profile style guidance, which only appears once enough Sent-mail
+  history has been learned, so a fresh mailbox never saw it.
+  `draft_forward`'s `body` was already optional, ruling out a simple
+  required-parameter theory — this was a missing authorship contract, not a
+  schema-required-ness problem. Both tools' docstrings and the always-present
+  REPLYING/DRAFTING system-prompt section now say explicitly: the model
+  writes the body itself, from the source message plus any stated
+  constraints (length, tone, points to hit), in the same turn it resolves
+  the target — and only uses the user's own wording verbatim when they hand
+  it over explicitly. `send_draft` / `send_now` / `forward_message` remain
+  confirmation-gated; drafting still never sends.
 - **A trashed message is recoverable any time it's still in Trash, not just
   for a few seconds (#2523).** The only restore path (`restore_message`) was
   gated by a short undo window and a live `action_id`; once either was gone,
