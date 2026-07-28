@@ -205,14 +205,18 @@ class DaemonClock:
     def job_counts(self) -> Dict[str, int]:
         """Point-in-time pending/failed counts for ``GET /daemon/v1/status``.
 
+        A ``COUNT(*)`` per status, not a materialised row list — this backs a
+        public HTTP route any attached client can poll, so it must not become
+        an unbounded read as the job table grows.
+
         Opens its own connection (same rule as every other pass) and closes it
         before returning.
         """
         db = self._open_db()
         try:
             return {
-                "pending": len(store.list_jobs(db, status=STATUS_PENDING)),
-                "failed": len(store.list_jobs(db, status=STATUS_FAILED)),
+                "pending": store.count_jobs(db, status=STATUS_PENDING),
+                "failed": store.count_jobs(db, status=STATUS_FAILED),
             }
         finally:
             db.close_db()

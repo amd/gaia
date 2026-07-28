@@ -57,24 +57,34 @@ def custody_db_path() -> Path:
 
 
 def ensure_host_dir() -> Path:
-    """Create ``host_dir()`` if missing and return it."""
+    """Create ``host_dir()`` if missing (``0700`` on POSIX, first-touch only)
+    and return it.
+
+    The directory holds instance.json's client token, the sidecar ledger, and
+    (via ``scheduler_db_path()``) will eventually hold job recipients/subjects —
+    hardened at the point of creation for every caller, not re-chmod'd on
+    every call, so a directory a user deliberately loosened afterward isn't
+    silently re-tightened underneath them the next time any daemon path helper
+    runs.
+    """
     d = host_dir()
+    existed = d.exists()
     d.mkdir(parents=True, exist_ok=True)
+    if not existed and os.name != "nt":
+        os.chmod(d, 0o700)
     return d
 
 
 def scheduler_db_path() -> Path:
     """The daemon-owned scheduler SQLite file (single clock's job store, #2379).
 
-    Hardened beyond its sibling ``custody_db_path()``: this store will eventually
-    hold recipients and subjects (email job payloads), so every call chmods the
-    host dir ``0700`` and, on first touch, creates the file itself ``0600`` —
-    mirroring the ``atomic_write_json(mode=0o600)`` precedent above. Mode bits
-    are meaningless on Windows and skipped there.
+    Hardened beyond its sibling ``custody_db_path()``: this store will
+    eventually hold recipients and subjects (email job payloads), so the file
+    is created ``0600`` on first touch — mirroring the
+    ``atomic_write_json(mode=0o600)`` precedent above. Mode bits are
+    meaningless on Windows and skipped there.
     """
     d = ensure_host_dir()
-    if os.name != "nt":
-        os.chmod(d, 0o700)
     path = d / "scheduler.db"
     if not path.exists():
         try:
