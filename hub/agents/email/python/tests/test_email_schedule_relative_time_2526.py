@@ -43,7 +43,6 @@ from gaia_agent_email.tools.schedule_tools import (  # noqa: E402
 )
 
 from gaia.database.mixin import DatabaseMixin  # noqa: E402
-
 from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
 
 
@@ -210,7 +209,9 @@ class TestCancelByPosition:
         assert out["cancelled"] is True
         assert out["job_id"] == second["job_id"]
 
-        assert schedule_store.get_job(db, job_id=second["job_id"])["status"] == "cancelled"
+        assert (
+            schedule_store.get_job(db, job_id=second["job_id"])["status"] == "cancelled"
+        )
         assert schedule_store.get_job(db, job_id=first["job_id"])["status"] == "pending"
 
     def test_cancel_position_out_of_range_is_loud(self, tmp_path):

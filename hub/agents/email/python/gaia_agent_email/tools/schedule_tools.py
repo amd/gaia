@@ -42,8 +42,8 @@ import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, Tuple
 
-from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email import action_store, schedule_store
+from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email.verbose import log_tool_call
 
 from gaia.agents.base.tools import tool
@@ -133,9 +133,7 @@ def _resolve_relative_time(raw: str, now: datetime) -> Optional[datetime]:
     if not text:
         return None
 
-    m = re.fullmatch(
-        r"in\s+(\d+)\s*(second|sec|minute|min|hour|hr|day)s?", text
-    )
+    m = re.fullmatch(r"in\s+(\d+)\s*(second|sec|minute|min|hour|hr|day)s?", text)
     if m:
         amount = int(m.group(1))
         unit_seconds = _RELATIVE_UNIT_SECONDS[m.group(2)]
@@ -154,9 +152,7 @@ def _resolve_relative_time(raw: str, now: datetime) -> Optional[datetime]:
         hour, minute = _TIME_OF_DAY.get(period or "morning", (9, 0))
         return _at_time_of_day(base, hour, minute)
 
-    m = re.fullmatch(
-        r"(tomorrow|today)\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", text
-    )
+    m = re.fullmatch(r"(tomorrow|today)\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", text)
     if m:
         day_word, hour_str, minute_str, meridiem = m.groups()
         base = now + timedelta(days=1) if day_word == "tomorrow" else now
@@ -406,7 +402,9 @@ def _resolve_cancel_target(db, ref: str) -> str:
     )
 
 
-def cancel_scheduled_job_impl(db, *, job_id: str, debug: bool = False) -> Dict[str, Any]:
+def cancel_scheduled_job_impl(
+    db, *, job_id: str, debug: bool = False
+) -> Dict[str, Any]:
     """Cancel a pending job. ``job_id`` may be an exact id OR a 1-based
     position/ordinal from the most recent listing. Loud on anything not
     cancellable."""
