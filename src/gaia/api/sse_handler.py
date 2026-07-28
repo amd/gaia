@@ -144,9 +144,11 @@ class SSEOutputHandler(OutputHandler):
 
     # === Status Messages (Required) ===
 
-    def print_error(self, error_message: str):
+    def print_error(self, error_message: str, recoverable: bool = False):
         """Print error message."""
-        self._add_event("error", {"message": error_message})
+        self._add_event(
+            "error", {"message": error_message, "recoverable": recoverable}
+        )
 
     def print_warning(self, warning_message: str):
         """Print warning message."""
