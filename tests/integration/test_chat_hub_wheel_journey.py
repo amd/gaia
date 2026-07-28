@@ -168,16 +168,9 @@ def _build_chat_fixture_wheel() -> bytes:
     )
 
 
-def _real_pip_run_pip(python_exe):
-    def run_pip(args):
-        subprocess.run(
-            [python_exe, "-m", "pip", "install", *args],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-
-    return run_pip
+# Production's own runner -- a real install, no mocks. A local
+# `sys.executable -m pip` copy cannot work here: a uv-created venv has no pip.
+_real_pip_run_pip = hub_installer._default_run_pip
 
 
 # `gaia init`'s final "Verifying setup..." step (init_command.py:1696,
@@ -343,7 +336,7 @@ def test_clean_core_only_init_then_chat_journey(tmp_path):
         manifest=manifest,
         base_url=BASE_URL,
         fetcher=fetcher,
-        run_pip=_real_pip_run_pip(sys.executable),
+        run_pip=_real_pip_run_pip,
         install_root=install_root,
         # The throwaway venv's OWN site-packages -- this is the mechanism-2
         # `.pth` write under test; a fresh `gaia chat` subprocess launched
