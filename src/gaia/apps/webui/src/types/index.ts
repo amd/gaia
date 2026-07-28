@@ -448,6 +448,10 @@ export interface DownloadProgress {
 
 export interface SystemStatus {
     lemonade_running: boolean;
+    /** How to start Lemonade on this host, resolved server-side. */
+    start_instruction?: string | null;
+    /** Shell command, or null on hosts started from a GUI (tray / app). */
+    start_command?: string | null;
     model_loaded: string | null;
     embedding_model_loaded: boolean;
     disk_space_gb: number;
