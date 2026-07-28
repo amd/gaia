@@ -30,7 +30,7 @@ class _AskingFakeAgent:
 
     QUESTION = "Which mailbox should I connect?"
 
-    def __init__(self, allow_free_text: bool = False):
+    def __init__(self, allow_free_text: bool = False, timeout_seconds: int = 10):
         self.conversation_history = []
         self.console = None
         self.can_answer_questions = False  # the route sets it from the request
@@ -38,6 +38,10 @@ class _AskingFakeAgent:
         self.allow_free_text = allow_free_text
         self.answer = None
         self.asked = threading.Event()
+        # How long the run stays parked. A test that waits for something the
+        # parked run emits must outlast the interval that emits it — see
+        # test_stream_heartbeats_while_a_question_is_pending.
+        self.timeout_seconds = timeout_seconds
 
     def process_query(self, query, max_steps=None):
         from gaia_agent_email import question as q
@@ -53,7 +57,7 @@ class _AskingFakeAgent:
                     q.Option("microsoft", "Outlook", "An outlook.com account."),
                 ),
                 allow_free_text=self.allow_free_text,
-                timeout_seconds=10,
+                timeout_seconds=self.timeout_seconds,
             )
         except q.InputUnansweredError as exc:
             self.console.print_error(str(exc))
@@ -298,8 +302,15 @@ def test_a_caller_that_cannot_answer_gets_an_error_not_a_pause(live_server, monk
 
 
 def test_stream_heartbeats_while_a_question_is_pending(live_server, monkeypatch):
-    """The paused stream keeps talking, so a client watchdog does not abandon it."""
-    fake = _AskingFakeAgent()
+    """The paused stream keeps talking, so a client watchdog does not abandon it.
+
+    The park has to outlast the heartbeat interval. At the default 10s it ties
+    _HEARTBEAT_SECONDS exactly: the question times out, the agent thread ends,
+    and the stream closes in the same instant the first keepalive is due —
+    whichever timer wins decides the test. That coin-flip passed on developer
+    machines and failed in CI.
+    """
+    fake = _AskingFakeAgent(timeout_seconds=int(query_routes._HEARTBEAT_SECONDS * 3))
     monkeypatch.setattr(query_routes, "build_query_agent", lambda **kw: fake)
 
     run_id = str(uuid.uuid4())
