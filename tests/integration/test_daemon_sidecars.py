@@ -373,10 +373,23 @@ def test_real_daemon_client_roundtrip(toy_env):
 # ---------------------------------------------------------------------------
 
 
-def _run_cli(env: ToyEnv, *cli_args) -> subprocess.CompletedProcess:
+def _run_cli(
+    env: ToyEnv, *cli_args, cwd=None, extra_env=None
+) -> subprocess.CompletedProcess:
+    """Run ``gaia daemon <cli_args>`` as a real subprocess.
+
+    ``cwd`` lets a test pin the CLI process's own working directory (#2588:
+    the caller's checkout is resolved from ITS cwd, not the daemon's).
+    ``extra_env`` layers additional env vars on top of ``_child_env(env)``
+    without needing a whole new ``ToyEnv``.
+    """
+    child_env = _child_env(env)
+    if extra_env:
+        child_env.update(extra_env)
     return subprocess.run(
         [sys.executable, "-m", "gaia.cli", "daemon", *cli_args],
-        env=_child_env(env),
+        env=child_env,
+        cwd=cwd,
         capture_output=True,
         text=True,
         timeout=60,
@@ -463,5 +476,177 @@ def test_cli_stop_agent_unknown_id_surfaces_registered_ids(toy_env):
         assert r.returncode != 0
         combined = r.stdout + r.stderr
         assert "toy" in combined  # 404 detail lists registered ids
+    finally:
+        _stop(inst)
+
+
+# ---------------------------------------------------------------------------
+# #2588 -- the daemon-dev-anchor bug: a caller in one checkout must never be
+# silently served another checkout's (or the daemon's own) dev source.
+#
+# ``tests/fixtures/toy_sidecar.py`` (used above) is a raw stdlib binary with
+# no ASGI app, so it cannot exercise a REAL dev-mode spawn (uvicorn cannot
+# load it). ``tests/fixtures/toy_sidecar_dev/packaging/server.py`` is a
+# minimal real FastAPI app answering the same /health //version contract,
+# spawnable via the real dev-mode command
+# (``uvicorn server:app --app-dir <dev_src_dir>/packaging``) -- this
+# fixture's own directory stands in for "checkout A": the tree the daemon's
+# toy-dev spec is anchored at, regardless of which checkout the CALLER is in.
+# ---------------------------------------------------------------------------
+
+_TOY_DEV_FIXTURE_DIR = (
+    Path(__file__).resolve().parent.parent / "fixtures" / "toy_sidecar_dev"
+)
+
+_TOY_DEV_SPEC = {
+    "service_id": "gaia-agent-toy-dev",
+    "display_name": "Toy Dev",
+    "expected_api_major": "1",
+    "token_env_var": "GAIA_TOY_DEV_SIDECAR_TOKEN",
+    "mode_env_var": "GAIA_TOY_DEV_AGENT_MODE",
+    "cache_dir_name": "toy-dev",
+    "dev_src_dir": str(_TOY_DEV_FIXTURE_DIR),
+}
+
+
+@pytest.fixture()
+def toy_dev_env(tmp_path, monkeypatch) -> ToyEnv:
+    """Register the real ASGI toy-dev spec (dev_src_dir = this fixture's own
+    tree, standing in for "checkout A" -- the daemon's own anchor) via the
+    EXTRA_SPECS seam. No frozen binary is planted (dev mode never needs one),
+    so ``toy_binary`` is a placeholder path ``_child_env``/callers never read.
+
+    Deliberately its OWN fixture (not ``toy_env``) so it never shares a
+    ``GAIA_DAEMON_HOME``/daemon process with the "toy" (user-mode) tests
+    above -- this suite starts and kills its own daemon per test. Sets env
+    vars on THIS test process too (mirroring ``toy_env``) so direct
+    ``client.attach()``/HTTP calls made from the test itself -- not only the
+    ``_run_cli`` subprocess -- resolve the same daemon instance/home.
+    """
+    daemon_home = tmp_path / "host"
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+
+    extra_specs_path = fake_home / "toy-dev-specs.json"
+    extra_specs_path.write_text(
+        json.dumps({"toy-dev": _TOY_DEV_SPEC}), encoding="utf-8"
+    )
+
+    monkeypatch.setenv("GAIA_DAEMON_HOME", str(daemon_home))
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("GAIA_DAEMON_EXTRA_SPECS", str(extra_specs_path))
+
+    return ToyEnv(
+        daemon_home=daemon_home,
+        fake_home=fake_home,
+        extra_specs_path=extra_specs_path,
+        toy_binary=Path("/nonexistent-toy-dev-has-no-frozen-binary"),
+    )
+
+
+def _list_agents_dict(inst) -> dict:
+    r = requests.get(
+        f"{inst.base_url}{API_PREFIX}/agents",
+        headers={"Authorization": f"Bearer {inst.token}"},
+        timeout=10,
+    )
+    assert r.status_code == 200, r.text
+    return {e["agent_id"]: e for e in r.json()["agents"]}
+
+
+def test_headline_pre_fix_baseline_wrong_checkout_silently_served_checkout_a(
+    toy_dev_env, tmp_path
+):
+    """PRE-FIX BASELINE (#2588), captured on UNMODIFIED code.
+
+    The daemon's toy-dev spec is anchored at this repo's own fixture tree
+    ("checkout A"). A caller invoking `gaia daemon start-agent toy-dev
+    --mode dev` from a COMPLETELY DIFFERENT git work tree ("checkout B")
+    gets no error and no mention of either checkout -- today's
+    ``_handle_daemon_start_agent`` never resolves the caller's own checkout
+    at all, and the daemon spawns from whatever ITS OWN spec says. This test
+    exists to prove that is real, observed behavior (not a hypothetical) so
+    the paired post-fix test below has something concrete to invert. It is
+    expected to start FAILING once #2588 lands, at which point delete it (or
+    repurpose it as a regression pin on the OLD, now-impossible behavior).
+    """
+    checkout_b = tmp_path / "checkout-b"
+    checkout_b.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=str(checkout_b), check=True)
+
+    inst = None
+    try:
+        r = _run_cli(
+            toy_dev_env,
+            "start-agent",
+            "toy-dev",
+            "--mode",
+            "dev",
+            cwd=str(checkout_b),
+        )
+        assert r.returncode == 0, f"stdout={r.stdout!r} stderr={r.stderr!r}"
+        assert "toy-dev" in r.stdout
+        assert "dev" in r.stdout
+
+        inst = client.attach()
+        assert inst is not None
+
+        entry = _list_agents_dict(inst)["toy-dev"]
+        assert entry["state"] == "running"
+        assert entry["mode"] == "dev"
+        # Silently serving THE DAEMON'S OWN checkout ("A") -- checkout B (the
+        # caller's actual checkout) is never consulted, let alone named.
+        assert entry["dev_src_dir"] == str(_TOY_DEV_FIXTURE_DIR)
+        assert str(checkout_b) not in json.dumps(entry)
+
+        health = requests.get(f"{entry['base_url']}/health", timeout=5).json()
+        assert health["service"] == "gaia-agent-toy-dev"
+        version = requests.get(f"{entry['base_url']}/version", timeout=5).json()
+        assert version["apiVersion"] == "1.0"
+    finally:
+        _stop(inst)
+
+
+def test_start_agent_from_wrong_checkout_is_refused_naming_both_checkouts(
+    toy_dev_env, tmp_path
+):
+    """#2588 target behavior -- currently RED, the fix does not exist yet.
+
+    Same setup as the pre-fix baseline above (a fresh daemon anchored at
+    checkout A, a caller in checkout B, nothing running yet). Post-fix, this
+    must be refused: exit non-zero, name BOTH checkouts and the "Python
+    environment" remedy, and leave the sidecar unspawned. This is the FRESH
+    SPAWN variant (AC-2): nothing was ever running, so the message must NOT
+    suggest `gaia daemon stop-agent toy-dev` -- there is nothing to stop.
+    """
+    checkout_b = tmp_path / "checkout-b"
+    checkout_b.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=str(checkout_b), check=True)
+    expected_caller_path = (
+        checkout_b.resolve() / "hub" / "agents" / "toy-dev" / "python"
+    )
+
+    inst = None
+    try:
+        r = _run_cli(
+            toy_dev_env,
+            "start-agent",
+            "toy-dev",
+            "--mode",
+            "dev",
+            cwd=str(checkout_b),
+        )
+        combined = r.stdout + r.stderr
+        assert r.returncode != 0, f"expected a refusal; got stdout={r.stdout!r}"
+        assert str(_TOY_DEV_FIXTURE_DIR) in combined
+        assert str(expected_caller_path) in combined
+        assert "Python environment" in combined
+        assert "gaia daemon stop-agent toy-dev" not in combined
+
+        inst = client.attach()
+        assert inst is not None, "the daemon must still have started"
+        entry = _list_agents_dict(inst)["toy-dev"]
+        assert entry["state"] == "stopped"
+        assert entry["pid"] is None
     finally:
         _stop(inst)

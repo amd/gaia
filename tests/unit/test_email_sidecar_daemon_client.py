@@ -16,6 +16,8 @@ therefore ``import requests`` at module level, exactly like
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 import gaia.ui.email_sidecar.daemon_client as daemon_client_module  # noqa: E402
@@ -225,16 +227,57 @@ def test_acquire_default_mode_is_user(monkeypatch):
     assert recorder.calls[0]["json"] == {"mode": "user"}
 
 
+def _patch_dev_src_dir_resolution(monkeypatch) -> Path:
+    """Force a fixed, fake dev_src_dir (#2588) so this test never depends on
+    -- or is broken by -- the ambient checkout's real git state (this test
+    module itself runs inside a real git work tree, so an unpatched
+    ``git rev-parse --show-toplevel`` would succeed and return a real,
+    non-deterministic-across-machines path).
+
+    Prefers patching the name directly on ``daemon_client_module`` (matching
+    its existing top-level ``from gaia.daemon.sidecars.spec import
+    builtin_specs`` import style); falls back to stubbing the git subprocess
+    seam inside ``gaia.daemon.sidecars.spec`` if the resolver isn't imported
+    by that name into this module.
+    """
+    fake_repo_root = Path("/fake/checkout-b")
+    fake_dev_src_dir = fake_repo_root / "hub" / "agents" / "email" / "python"
+    if hasattr(daemon_client_module, "resolve_caller_dev_src_dir"):
+        monkeypatch.setattr(
+            daemon_client_module,
+            "resolve_caller_dev_src_dir",
+            lambda *a, **k: fake_dev_src_dir,
+        )
+        return fake_dev_src_dir
+
+    import subprocess
+
+    import gaia.daemon.sidecars.spec as spec_module
+
+    monkeypatch.setattr(
+        spec_module.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=str(fake_repo_root) + "\n", stderr=""
+        ),
+    )
+    return fake_dev_src_dir
+
+
 def test_acquire_mode_from_env_override(monkeypatch):
     monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
     inst = _daemon_instance()
     monkeypatch.setattr(daemon_client_module, "start_or_attach", lambda **k: inst)
     recorder = _RecordingPost(_FakeResponse(200, {**ENSURE_PAYLOAD, "mode": "dev"}))
     monkeypatch.setattr(daemon_client_module.requests, "post", recorder)
+    fake_dev_src_dir = _patch_dev_src_dir_resolution(monkeypatch)
 
     handle = daemon_client_module.acquire_handle()
 
-    assert recorder.calls[0]["json"] == {"mode": "dev"}
+    assert recorder.calls[0]["json"] == {
+        "mode": "dev",
+        "dev_src_dir": str(fake_dev_src_dir),
+    }
     assert handle.mode == "dev"
 
 
