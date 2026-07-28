@@ -413,6 +413,22 @@ package's `packaging/` directory does not collide with the PyPI `packaging`
 library. If the source package is missing, dev mode fails loudly with the
 `uv pip install -e` remedy — it never silently falls back to the binary.
 
+Dev mode always runs from **the daemon's own checkout** — the daemon (a
+per-user singleton) is never told to spawn from an arbitrary path a caller
+sends it. `gaia daemon start-agent email --mode dev` and `gaia chat --ui`
+resolve *your own* checkout (via `git rev-parse --show-toplevel` against your
+shell's cwd, or an explicit `--dev-src-dir <path>`) and send it to the daemon
+purely for comparison. If it matches the checkout the daemon is already
+running from, nothing changes; if it doesn't, the daemon refuses loudly,
+naming both checkouts and the fix — restart the daemon from a Python
+environment/editable install rooted at your checkout (a bare `cd` there does
+not help if one virtualenv is shared across checkouts, since the daemon's
+default source dir follows the Python environment that launched it, not its
+cwd). This exists because a per-user daemon started from checkout A silently
+served checkout A's source to a `--mode dev` request made from checkout B —
+a testing-integrity bug, not a runtime one, but one that makes a passing test
+meaningless without saying so.
+
 **Operational behavior:**
 - The **daemon owns the sidecar lifecycle**. Closing the Agent UI no longer
   kills the sidecar — it keeps running under the daemon until you stop it with
