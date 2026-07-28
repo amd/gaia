@@ -206,6 +206,12 @@ class TestToolRegistry:
         "set_low_priority_sender",
         "set_category_default",
         "clear_session_preferences",
+        # Per-entry preference removal + readback (#2520). Undoing one sender
+        # previously meant clear_session_preferences, which wiped all of them.
+        "remove_priority_sender",
+        "remove_low_priority_sender",
+        "remove_category_default",
+        "get_preferences",
         # Inbox profiling from memory (#1289)
         "profile_inbox",
         # Voice/style profile from Sent mail (#1607)
