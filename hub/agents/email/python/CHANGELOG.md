@@ -9,6 +9,19 @@ contract version is tracked separately as
 
 ### Added
 
+- **Meeting-request detection now runs during the inbox scan, not only on a message you
+  point at directly (#2583).** `detect_meeting_request_heuristic` has existed for over a
+  year but nothing ever called it from `triage_inbox`/`pre_scan_inbox` — a colleague
+  proposing a time sailed through a scan uninspected. It now runs against every message's
+  subject/snippet (no extra body fetch, no LLM call — the scan stays cheap) and the result
+  is carried on `PreScanItem.is_meeting_request` for downstream rendering. Catching this
+  also surfaced two real accuracy bugs in the heuristic itself: informal phrasing like "any
+  chance to meet this Thursday at 9am?" previously scored a confident non-match (the noun
+  list had "meeting" but not the verb "meet"), and the existing noun+time rule fired on any
+  co-occurrence anywhere in the email — so marketing copy mentioning a "quick call" near an
+  unrelated offer-deadline clock ("valid only through 4PM PT today") false-positived. Both
+  are fixed; the noun and the time now have to appear within one clause of each other.
+
 - **The autonomy trust model can now be exercised end to end — broader candidates, an undo
   surface, and per-message decisions (#2529).** The proactive `earn_trust`/`full` loop's
   candidate generator (`_autonomy_candidate`) only ever proposed `archive`, so the rest of

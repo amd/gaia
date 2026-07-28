@@ -331,6 +331,12 @@ export interface PreScanItem {
   why?: string | null;
   /** Rationale for a suggested-archive row. */
   reason?: string | null;
+  /**
+   * True when the heuristic confidently detected a meeting/scheduling
+   * request in this message's subject/snippet (#2583). Read-only signal —
+   * detection makes no calendar changes.
+   */
+  is_meeting_request: boolean;
 }
 
 /** Session preferences that shaped a pre-scan (contract.py: PreScanPreferencesApplied). */
