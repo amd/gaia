@@ -83,7 +83,11 @@ if TYPE_CHECKING:  # import-cheap: only for annotations, never at runtime
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
-from gaia.agents.base.memory import MemoryMixin
+from gaia.agents.base.memory import (
+    MEMORY_UNAVAILABLE_MODEL_NOT_PULLED,
+    MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE,
+    MemoryMixin,
+)
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.registry import get_embedding_model_for_device
 from gaia.connectors.errors import AuthRequiredError, ConnectorsError
@@ -684,6 +688,19 @@ class EmailTriageAgent(
             ),
         )
 
+        # Surface the degraded-memory state where the user actually is
+        # (#2519): before this, a failed embedding connectivity probe only
+        # logged a WARNING and set a REST field nobody was looking at, so a
+        # user in chat saw the agent quietly claim it never had memory tools
+        # rather than being told memory failed to come up and how to fix it.
+        # Skip the deliberate GAIA_MEMORY_DISABLED=1 opt-out here — that's an
+        # explicit choice (used by tests/CI), not a silent degradation.
+        if getattr(self, "_memory_unavailable_reason", None) in (
+            MEMORY_UNAVAILABLE_MODEL_NOT_PULLED,
+            MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE,
+        ):
+            self.console.print_warning(self.memory_unavailable_message())
+
         # Exact ctx pin (#1892): set the instance-scoped override on the
         # concrete LemonadeClient this agent chats through. Post-super(),
         # the client lives at self.chat.llm_client._backend (AgentSDK →
@@ -760,19 +777,19 @@ class EmailTriageAgent(
         """Report the current memory state without changing it.
 
         Returns ``{"enabled", "available", "message"}`` where ``available`` is
-        whether a memory store exists this session (False when disabled at startup
-        via ``GAIA_MEMORY_DISABLED`` or when Lemonade was unreachable) and
-        ``enabled`` is the effective on/off state (``available`` and not incognito).
+        whether a memory store exists this session and ``enabled`` is the
+        effective on/off state (``available`` and not incognito). When
+        unavailable, ``message`` names the REAL cause — env opt-out, the
+        embedding model never having been pulled into a running Lemonade, or
+        Lemonade itself being unreachable — via
+        ``MemoryMixin.memory_unavailable_message()`` (#2519). These are
+        distinct failures with distinct remedies; conflating them (as this
+        method used to) sends the user down the wrong fix.
         """
         available = getattr(self, "_memory_store", None) is not None
         enabled = self.is_memory_enabled()
         if not available:
-            message = (
-                "Memory is unavailable this session: it was disabled at startup "
-                "(GAIA_MEMORY_DISABLED=1) or the Lemonade embedding service was "
-                "unreachable when the agent started. Start lemonade-server and "
-                "restart the agent to enable it."
-            )
+            message = self.memory_unavailable_message()
         elif enabled:
             message = "Memory is enabled: personalization and persistence are active."
         else:
@@ -1306,9 +1323,8 @@ class EmailTriageAgent(
         """Build the earn-trust policy from current config + the confirm-floor.
 
         Rebuilt per cycle so a runtime ``autonomy_level`` change (e.g. via the
-        the forthcoming ``gaia email autonomy`` CLI) takes effect on the next
-        heartbeat without
-        reconstructing the agent.
+        ``gaia email autonomy set-level`` CLI) takes effect on the next
+        heartbeat without reconstructing the agent.
         """
         ledger = trust.TrustLedger(
             min_samples=self.config.autonomy_trust_min_samples,
@@ -1640,9 +1656,10 @@ class EmailTriageAgent(
         Returns the current level, the trust thresholds, and the earned-trust
         ledger — every ``(action, scope)`` with its positive/negative tally and
         whether it has crossed the bar. This is the single read-model the
-        planned ``gaia email autonomy status`` / ``trust`` CLI, the REST surface, and
-        the Agent-UI panel all render, so autonomy behavior is always
-        explainable ("archives news@x because 12/12 correct").
+        ``gaia email autonomy status`` / ``trust`` CLI and the REST surface
+        both render (a future Agent-UI panel is not yet built), so autonomy
+        behavior is always explainable ("archives news@x because 12/12
+        correct").
         """
         ledger = trust.TrustLedger(
             min_samples=self.config.autonomy_trust_min_samples,
@@ -1678,8 +1695,8 @@ class EmailTriageAgent(
     ) -> Dict[str, Any]:
         """Driver-facing entry: run a cycle and persist proposals to GoalStore.
 
-        This is the seam a ``DaemonClock`` job / the planned ``gaia email autonomy`` CLI
-        invokes (mirroring ``run_briefing_job`` for the briefing feature).
+        This is the seam a ``DaemonClock`` job / the ``gaia email autonomy run``
+        CLI invokes (mirroring ``run_briefing_job`` for the briefing feature).
         Returns a JSON-serializable report — the ``Proposal`` objects are
         replaced by their persisted dict form.
         """

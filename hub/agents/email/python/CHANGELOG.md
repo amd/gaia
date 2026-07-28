@@ -9,6 +9,19 @@ contract version is tracked separately as
 
 ### Added
 
+- **`gaia email autonomy` CLI (#2516).** A thin client over the session-scoped
+  `/v1/email/agent/autonomy*` REST surface, relayed through the daemon like
+  every other `gaia email` command (no second auth scheme): `status`,
+  `set-level`, `pause`, `resume`, `run`, `trust`, `kill`. Closes the gap where
+  the code and the plan doc both described this command before it existed.
+
+### Fixed
+
+- **`POST /autonomy/run` refuses instead of silently no-oping while autonomy
+  is `off` (#2528).** Previously the route returned HTTP 200 with the same
+  empty-report shape whether autonomy was disabled or had genuinely run and
+  found nothing to do — a caller could not tell the two apart. It now returns
+  **409**, naming the current level and how to change it.
 - **The autonomy trust model can now be exercised end to end — broader candidates, an undo
   surface, and per-message decisions (#2529).** The proactive `earn_trust`/`full` loop's
   candidate generator (`_autonomy_candidate`) only ever proposed `archive`, so the rest of
@@ -81,6 +94,17 @@ contract version is tracked separately as
   `recoverable` flag through to the wire; a recoverable error folds to a
   non-terminal status line instead of a terminal `error`, so the retry can
   reach completion and the user still sees the failure as it happens.
+- **A failed memory startup is now visible in chat, and blames the right
+  cause (#2519).** When the embedding model wasn't reachable, memory quietly
+  disabled itself: a log line and a REST field said so, but the agent's
+  answers made it look like a missing feature ("I don't have a tool to view
+  saved preferences") rather than a broken one. The agent now prints a
+  startup warning naming the real problem and the fix. It also used to blame
+  every failure on `GAIA_MEMORY_DISABLED=1` or a stopped Lemonade — the
+  common real case is neither: Lemonade is running fine but the embedding
+  model was never pulled. The message now tells those two apart and gives
+  the matching remedy (pull the model vs. start Lemonade), since acting on
+  the wrong one wastes the user's time.
 - **`draft_reply` / `draft_forward` actually draft instead of asking for the
   text to draft (#2524).** Asked to draft a reply or forward, the agent
   correctly located the source message and then asked the user to supply the
