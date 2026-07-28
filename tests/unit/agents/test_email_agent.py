@@ -220,6 +220,10 @@ class TestToolRegistry:
         "get_briefing",
         "list_tasks",
         "extract_action_items",
+        # Agent-led mailbox onboarding (#2496) — the agent diagnoses and repairs
+        # its own access in the conversation instead of handing out a command.
+        "check_mailbox_access",
+        "setup_mailbox_access",
     }
 
     def test_every_expected_tool_is_registered(self, agent):

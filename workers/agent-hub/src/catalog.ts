@@ -81,6 +81,9 @@ export function upsertVersion(
     author: existing?.author ?? manifest.author,
     license: base?.license ?? existing?.license ?? manifest.license,
     language: base?.language ?? existing?.language ?? manifest.language,
+    // ?? DEFAULT_TYPE, not a guess: manifests stored before #1716 have no
+    // `type`, and "agent" is the documented default they were published under.
+    type: base?.type ?? existing?.type ?? manifest.type ?? "agent",
     category: base?.category ?? existing?.category ?? manifest.category,
     tags: base?.tags ?? existing?.tags ?? manifest.tags,
     icon: base?.icon ?? existing?.icon ?? manifest.icon,
@@ -198,6 +201,7 @@ export function toIndexEntry(
     latest_version: agent.latest_version,
     icon: agent.icon,
     language: agent.language,
+    type: agent.type ?? "agent",
     author: agent.author,
     security_tier: agent.security_tier,
     download_size_bytes: latest?.artifact.size_bytes ?? 0,

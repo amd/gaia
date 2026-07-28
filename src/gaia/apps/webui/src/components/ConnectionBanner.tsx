@@ -224,7 +224,9 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
                 <div className="connection-banner__text">
                     LLM server is not responding &mdash; it may be busy or not running.{' '}
                     <span className="connection-banner__hint">
-                        If not started, run: <code>lemonade-server serve</code>
+                        {systemStatus.start_command
+                            ? <>If not started, run: <code>{systemStatus.start_command}</code></>
+                            : (systemStatus.start_instruction ?? 'Start Lemonade Server, then retry.')}
                     </span>
                 </div>
                 {onRetry && (
@@ -370,7 +372,9 @@ export function ConnectionBanner({ onRetry }: { onRetry?: () => void }) {
                         , set ctx&#8209;size to {MIN_CONTEXT_SIZE.toLocaleString()}, or
                         restart with:{' '}
                         <code>
-                            lemonade-server serve --ctx-size {MIN_CONTEXT_SIZE}
+                            {systemStatus?.start_command
+                                ? `${systemStatus.start_command} --ctx-size ${MIN_CONTEXT_SIZE}`
+                                : `LEMONADE_CTX_SIZE=${MIN_CONTEXT_SIZE} (see Settings)`}
                         </code>
                     </span>
                 </div>

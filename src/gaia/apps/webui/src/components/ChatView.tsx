@@ -1147,9 +1147,9 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
 
                 if (msg.includes('Lemonade') || msg.includes('LLM') || msg.includes('Could not get response')) {
                     errorContent =
-                        'Could not reach the LLM server. Make sure Lemonade Server is running:\n\n' +
-                        '```\nlemonade-server serve\n```\n\n' +
-                        'Then try sending your message again.' + issueFooter;
+                        'Could not reach the LLM server. Start Lemonade Server — on Windows from the '+
+                        'tray icon, on macOS from the Lemonade app — then try sending your '+
+                        'message again. Settings shows the exact command for this machine.' + issueFooter;
                 } else if (err instanceof TypeError || msg.includes('fetch') || msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
                     errorContent =
                         'Cannot connect to the GAIA server. Make sure the backend is running:\n\n' +
@@ -1157,7 +1157,7 @@ export function ChatView({ sessionId, onCreateAgent, onAgentChange }: ChatViewPr
                 } else if (msg.includes('500')) {
                     errorContent =
                         'The server encountered an error. This usually means Lemonade Server is not running or the model failed to load.\n\n' +
-                        'Start Lemonade Server with:\n```\nlemonade-server serve\n```' + issueFooter;
+                        'Start Lemonade Server — Settings shows how to start it on this machine.' + issueFooter;
                 } else if (msg.includes('timed out') || msg.includes('timeout') || msg.includes('Timeout')) {
                     errorContent =
                         'The request timed out. The query may be too complex — try breaking it into simpler questions.\n\n' +

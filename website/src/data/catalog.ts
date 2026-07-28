@@ -17,7 +17,12 @@
 // Nothing else in the app changes: pages consume getCatalog()/getAgent() only.
 
 export type SecurityTier = 'verified' | 'community' | 'experimental';
-export type AgentLanguage = 'python' | 'cpp';
+export type AgentLanguage = 'python' | 'cpp' | 'go' | 'typescript';
+
+// What a catalog entry IS. Agents are the default; the terminal hub publishes
+// as a component and the Agent UI as an app, so a listing that shows only
+// agents must filter on this rather than assume every entry is one.
+export type PackageType = 'agent' | 'app' | 'component';
 
 export interface AgentRequirements {
   min_memory_gb: number;
@@ -36,6 +41,9 @@ export interface Agent {
   latest_version: string;
   icon: string;
   language: AgentLanguage;
+  // Optional so the site keeps building against an index.json served before the
+  // Worker that emits `type` is deployed. Read it through packageType().
+  type?: PackageType;
   author: string;
   security_tier: SecurityTier;
   download_size_bytes: number;
@@ -196,6 +204,8 @@ export function categoryLabel(category: string): string {
 const LANGUAGE_LABELS: Record<AgentLanguage, string> = {
   python: 'Python',
   cpp: 'C++',
+  go: 'Go',
+  typescript: 'TypeScript',
 };
 
 export function languageLabel(language: AgentLanguage): string {
@@ -269,7 +279,41 @@ export interface InstallMethod {
  *  - Otherwise: the GAIA app install, a pip package for Python agents, and a
  *    source build (language-driven, the long-standing default).
  */
+/** An entry's package type, defaulting to 'agent' as the manifest schema does. */
+export function packageType(agent: Agent): PackageType {
+  return agent.type ?? 'agent';
+}
+
+/** True for the entries that ARE agents — excludes the Agent UI and terminal hub. */
+export function isAgent(agent: Agent): boolean {
+  return packageType(agent) === 'agent';
+}
+
 export function installMethods(agent: Agent): InstallMethod[] {
+  // A component/app is not installed *into* GAIA and has no PyPI wheel — it is
+  // downloaded per platform. `gaia agent install <id>` would not work for it.
+  // An npm package, where one exists, is a real second path (the Agent UI
+  // ships `gaia-ui` globally), so offer it alongside rather than instead.
+  if (!isAgent(agent)) {
+    const methods: InstallMethod[] = [
+      {
+        key: 'download',
+        label: 'Download',
+        command: '',
+        note: 'Download the build for your platform from the release below.',
+      },
+    ];
+    if (agent.npm_package) {
+      methods.push({
+        key: 'npm',
+        label: 'npm',
+        command: `npm install -g ${agent.npm_package}`,
+        note: 'Global CLI install from npm.',
+      });
+    }
+    return methods;
+  }
+
   if (agent.npm_package) {
     return [
       {

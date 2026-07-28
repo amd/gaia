@@ -99,7 +99,7 @@ tags: [chat, general, personality]
 icon: message-circle
 tools_count: 0
 
-language: python
+language: python                    # python | cpp | go | typescript
 min_gaia_version: "0.18.0"
 models: [Qwen3.5-35B-A3B-GGUF]
 
@@ -116,6 +116,24 @@ interfaces:
   api_server: true
   mcp_server: true
 ```
+
+### Non-agent packages
+
+Not every hub package is an agent. `type` discriminates them, and two ship today:
+
+| Package | `type` | `language` | What it is |
+|---------|--------|------------|------------|
+| `terminal-hub` | `component` | `go` | The `gaia tui` binary — six platform builds |
+| `agent-ui` | `app` | `typescript` | The Electron desktop app installers |
+
+Their manifests live in `hub/components/<id>/gaia-agent.yaml` and publish through
+the same `POST /publish` path as an agent — `release_components.yml` builds (or
+collects) the per-platform artifacts and posts them with the manifest.
+
+Both host or drive agents rather than being one, so they declare `tools_count: 0`
+and no `models`. A catalog consumer that lists *agents* must filter on `type`;
+treating every entry as an agent would offer `gaia agent install terminal-hub`,
+which is not how either is installed.
 
 ### `pyproject.toml`
 
