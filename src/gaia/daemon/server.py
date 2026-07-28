@@ -151,11 +151,13 @@ def _build_register(
 
     Crash-safety (#2379): ``app.py``'s lifespan calls ``on_startup()`` OUTSIDE
     its ``try``/``finally``, so if this raises, ``on_shutdown`` (the
-    ``_deregister`` hook) never runs to clean up. A ``clock.start()`` failure
-    must therefore roll back everything already done here — stop the
-    refresher and remove the ``instance.json`` just written — before
-    re-raising, so a failed startup never leaves a live polling thread or a
-    stale registry entry pointing at a daemon that is about to die.
+    ``_deregister`` hook) never runs to clean up. Either ``refresher.start()``
+    or ``clock.start()`` failing must therefore roll back everything already
+    done here — stop the refresher (safe even if it never started —
+    :meth:`ForwardRefresher.stop` is documented idempotent-when-unstarted) and
+    remove the ``instance.json`` just written — before re-raising, so a failed
+    startup never leaves a live polling thread or a stale registry entry
+    pointing at a daemon that is about to die.
     """
     from gaia.daemon.sidecars import ledger
 
@@ -170,11 +172,14 @@ def _build_register(
                 pid=pid, port=port, token=token, host=host, started_at=started_at
             )
         )
-        refresher.start()
         try:
+            refresher.start()
             clock.start()
         except Exception:
-            logger.exception("daemon: clock failed to start; rolling back registration")
+            logger.exception(
+                "daemon: startup failed after instance.json was written; "
+                "rolling back registration"
+            )
             refresher.stop()
             remove_instance(only_pid=pid)
             raise

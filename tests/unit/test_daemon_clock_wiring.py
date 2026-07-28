@@ -180,6 +180,33 @@ def test_build_register_rolls_back_refresher_and_instance_on_clock_start_failure
     assert instance_mod.read_instance() is None
 
 
+def test_build_register_rolls_back_instance_on_refresher_start_failure(daemon_home):
+    """The same rollback must apply one line earlier: if refresher.start()
+    itself raises (before clock.start() is ever reached), instance.json was
+    already written and must still be undone — not just on a clock failure."""
+    refresher = mock.Mock()
+    refresher.start.side_effect = RuntimeError("refresher exploded")
+    clock = mock.Mock()
+
+    register = daemon_server._build_register(
+        specs={},
+        pid=4444,
+        port=55125,
+        token="tok-def",
+        host="127.0.0.1",
+        started_at=300.0,
+        refresher=refresher,
+        clock=clock,
+    )
+
+    with pytest.raises(RuntimeError, match="refresher exploded"):
+        register()
+
+    clock.start.assert_not_called()
+    refresher.stop.assert_called_once()
+    assert instance_mod.read_instance() is None
+
+
 # ---------------------------------------------------------------------------
 # gaia.daemon.server._build_deregister
 # ---------------------------------------------------------------------------
