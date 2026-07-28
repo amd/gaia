@@ -303,3 +303,57 @@ def test_a_working_google_mailbox_is_never_dragged_into_microsoft_setup(
     assert out["ok"] is True
     assert out["data"]["provider"] == "google"
     assert agent.console.asked == [], "a working Gmail mailbox must stay quiet"
+
+
+def test_naming_microsoft_reaches_its_setup_even_though_google_is_usable(
+    ms_connectors, monkeypatch
+):
+    """The other half of the real-world blocker: EXPLICITLY naming the
+    unconnected provider must reach ITS walkthrough, not the
+    already-usable-mailbox short-circuit that answers when nothing is named.
+    ``_setup_flow(agent, wanted="microsoft")`` takes the `if wanted:` branch
+    directly — it never evaluates ``first_usable``, which only runs in the
+    no-target ``else`` branch — so this is a structural guarantee, not a
+    coincidence of test data."""
+    from gaia_agent_email import mailbox_state as ms
+
+    ms_connectors["connection"] = None  # microsoft: not connected
+    ms_connectors["client_id"] = ""
+    google_scopes = ms.required_scopes("google")
+
+    def get_connection(provider):
+        if provider == "google":
+            return {
+                "provider": "google",
+                "account_email": "kalin@gmail.com",
+                "scopes": list(google_scopes),
+                "connected_at": 1,
+            }
+        # microsoft: starts unconnected, but the device-flow stub above
+        # (ms_connectors's own poll_device_flow) updates
+        # ms_connectors["connection"] once the walkthrough succeeds — the
+        # terminal inspect_provider(probe=True) call must see that, not a
+        # permanently-None override.
+        return ms_connectors["connection"]
+
+    def check_agent_grant(provider, agent_id, scopes):
+        if provider == "google":
+            return True
+        return ms_connectors["granted"]
+
+    monkeypatch.setattr("gaia.connectors.api.get_connection", get_connection)
+    monkeypatch.setattr("gaia.connectors.grants.check_agent_grant", check_agent_grant)
+    monkeypatch.setattr(
+        "gaia.connectors.api.get_access_token_sync", lambda **kw: "token"
+    )
+
+    agent = _FakeAgent(answers=["yes", *_WALKTHROUGH_DONE_ANSWERS, VALID_GUID])
+
+    out = _run(agent, provider="microsoft")
+
+    assert out["ok"] is True, out
+    # NOT the "nothing to set up" message a Google short-circuit would give.
+    assert "nothing to set up" not in out["data"]["message"].lower()
+    assert out["data"]["provider"] == "microsoft"
+    assert out["data"]["account_email"] == "kalin@outlook.com"
+    assert ms_connectors["device_started"], "the microsoft walkthrough never ran"
