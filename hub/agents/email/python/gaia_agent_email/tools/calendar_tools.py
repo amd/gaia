@@ -126,12 +126,24 @@ _INVITE_PHRASES = (
     "i'd like to schedule",
     "would like to schedule",
     "i want to schedule",
+    # Informal "any chance ...?" slot-proposal phrasing (#2583, the #2580
+    # incident: "any chance to meet this Thursday at 9am?"). These are
+    # invite-strength on their own — no co-occurring time required, matching
+    # the other entries in this tuple.
+    "any chance to meet",
+    "any chance we could meet",
+    "any chance you could meet",
+    "any chance you're free",
 )
 
-# Meeting nouns — only a positive signal when paired with a concrete time
-# signal (otherwise "the meeting notes are attached" would false-positive).
+# Meeting nouns/verbs — only a positive signal when paired with a concrete
+# time signal nearby (otherwise "the meeting notes are attached" would
+# false-positive). "meet" is the informal verb form of "meeting" (#2583) —
+# it lets "any chance to meet Thursday at 9am" match even where the
+# "any chance ..." phrase above doesn't exactly match a variant.
 _MEETING_NOUNS = (
     "meeting",
+    "meet",
     "call",
     "1:1",
     "one-on-one",
@@ -143,6 +155,53 @@ _MEETING_NOUNS = (
     "google meet",
     "teams meeting",
 )
+
+# How close (in characters) a meeting noun/verb and a concrete time signal
+# must appear to count as one scheduling statement, rather than two unrelated
+# mentions in the same email (#2583). "call" in particular is common enough
+# in marketing copy ("happy to jump on a quick call") that a same-email,
+# anywhere-in-the-text match with an unrelated offer-deadline time ("valid
+# only through 4PM PT today") produced false positives on 8/104 rows of the
+# vendor PROMOTIONAL corpus — the noun and the deadline clock always lived in
+# different sentences. 60 chars comfortably separates that shape (the closest
+# real false positive measured 82 chars apart) from genuine same-clause
+# phrasing like "Meeting request: budget review at 3pm" or "meet ... at 9am".
+_NOUN_TIME_PROXIMITY_CHARS = 60
+
+
+def _find_all_spans(term: str, text: str) -> List[Tuple[int, int]]:
+    """Every ``(start, end)`` span where ``term`` occurs in ``text``."""
+    spans: List[Tuple[int, int]] = []
+    start = 0
+    while True:
+        idx = text.find(term, start)
+        if idx == -1:
+            break
+        spans.append((idx, idx + len(term)))
+        start = idx + 1
+    return spans
+
+
+def _nearest_time_within(
+    noun_spans: List[Tuple[int, int]],
+    time_spans: List[Tuple[int, int, str]],
+    window: int = _NOUN_TIME_PROXIMITY_CHARS,
+) -> Optional[str]:
+    """The matched time text closest to any noun span, if within ``window``
+    characters — or ``None`` if every time mention is farther away than that.
+    """
+    best: Optional[Tuple[int, str]] = None
+    for n_start, n_end in noun_spans:
+        for t_start, t_end, t_text in time_spans:
+            if n_end <= t_start:
+                distance = t_start - n_end
+            elif t_end <= n_start:
+                distance = n_start - t_end
+            else:
+                distance = 0
+            if distance <= window and (best is None or distance < best[0]):
+                best = (distance, t_text)
+    return best[1] if best else None
 
 # Concrete time / date signals. ``\b`` word boundaries keep "monday" from
 # matching inside another token.
@@ -235,19 +294,25 @@ def detect_meeting_request_heuristic(subject: str, body: str) -> MeetingDetectio
             reason=f"explicit invite phrase: {invite_hits[0]!r}",
         )
 
-    # 2. Meeting noun + concrete time — high-confidence positive.
+    # 2. Meeting noun/verb + concrete time NEARBY — high-confidence positive.
+    #    Proximity (not just co-occurrence anywhere in the email) is required
+    #    — see ``_NOUN_TIME_PROXIMITY_CHARS`` for why.
     noun_hits = [n for n in _MEETING_NOUNS if n in text]
     time_match = _TIME_RE.search(text)
-    if noun_hits and time_match:
-        return MeetingDetection(
-            is_meeting_request=True,
-            confidence="high",
-            signals=tuple(noun_hits) + (time_match.group(0),),
-            reason=(
-                f"meeting noun {noun_hits[0]!r} with concrete time "
-                f"{time_match.group(0)!r}"
-            ),
-        )
+    if noun_hits:
+        noun_spans = [span for n in noun_hits for span in _find_all_spans(n, text)]
+        time_spans = [(m.start(), m.end(), m.group(0)) for m in _TIME_RE.finditer(text)]
+        nearby_time = _nearest_time_within(noun_spans, time_spans)
+        if nearby_time is not None:
+            return MeetingDetection(
+                is_meeting_request=True,
+                confidence="high",
+                signals=tuple(noun_hits) + (nearby_time,),
+                reason=(
+                    f"meeting noun {noun_hits[0]!r} with concrete time "
+                    f"{nearby_time!r} nearby"
+                ),
+            )
 
     # 3. Slot-proposal phrase + concrete time — high-confidence positive.
     #    "Here are some times: Mon 10am / Wed 2pm" is the canonical case.
