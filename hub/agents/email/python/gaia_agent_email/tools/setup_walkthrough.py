@@ -171,17 +171,25 @@ def _shape_check_client_id(value: str) -> Optional[str]:
     return _CLIENT_ID_SHAPE_ERROR
 
 
-def _collect_credential(agent: Any, step: Step) -> str:
+def _collect_credential(agent: Any, step: Step, route: SetupRoute) -> str:
     """Ask for *step*'s credential value — a plain free-text prompt, never
-    the navigation lane's Done/I'm-stuck options (design §4: a credential
-    prompt must never receive the FAQ lane, and this is how that is
-    structural rather than a rule someone has to remember)."""
+    the navigation lane's Done/I'm-stuck OPTIONS (a credential prompt keeps
+    zero options throughout; this is structural, not a rule to remember).
+
+    On a shape-check failure it DOES try the FAQ lookup — Azure's Overview
+    blade shows three GUIDs side by side (Application client ID, Object ID,
+    Directory/tenant ID) and a shape check can't tell them apart, so a user
+    who asks "which one?" must get answered, not just re-shown the same
+    generic error. A genuine GUID never matches an FAQ hint (the hints are
+    English words), so this can never misfire on a real value.
+    """
     prompt = f"Paste the value for: {step.title}."
     value = ask(agent, prompt, allow_free_text=True, sensitive=False)
     if step.id == "client_id":
         error = _shape_check_client_id(value)
         while error is not None:
-            narrate(agent, error)
+            answer = _faq_answer(step, route, value)
+            narrate(agent, answer if answer is not None else error)
             value = ask(agent, prompt, allow_free_text=True, sensitive=False)
             error = _shape_check_client_id(value)
     return value
@@ -278,7 +286,7 @@ def run_setup_walkthrough(
             told_cannot_see = True
 
         if step.collects_credential:
-            value = _collect_credential(agent, step)
+            value = _collect_credential(agent, step, route)
             collected[step.id] = value
             # Reached only once the shape check above has already passed —
             # verified is never claimed for a step this route can't check.

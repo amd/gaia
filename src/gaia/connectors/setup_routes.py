@@ -192,6 +192,27 @@ MS_PERSONAL = SetupRoute(
             ),
             verifiable=True,
             collects_credential=True,
+            faq=(
+                # The Overview blade shows THREE GUIDs side by side — a
+                # shape check alone can't tell them apart, and pasting the
+                # wrong one passes validation cleanly, then fails later in a
+                # way that points nowhere near the real mistake.
+                QA(
+                    question_hints=(
+                        "which id",
+                        "three",
+                        "tenant",
+                        "object",
+                        "directory",
+                    ),
+                    answer=(
+                        "The Overview page shows three GUIDs — copy the one "
+                        "labeled 'Application (client) ID'. The other two, "
+                        "'Object ID' and 'Directory (tenant) ID', look the "
+                        "same shape but are not what I need here."
+                    ),
+                ),
+            ),
         ),
     ),
     faq=(

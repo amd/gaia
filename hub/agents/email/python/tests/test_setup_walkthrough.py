@@ -354,20 +354,66 @@ def test_faq_turn_re_asks_with_the_same_options_and_free_text_still_enabled():
             assert call["allow_free_text"] is True
 
 
-def test_credential_prompt_is_never_given_the_faq_lane():
-    """The credential ask has zero options — a free-text answer there is
-    ALWAYS taken as the literal value, never routed through FAQ matching."""
-    weird_but_literal_value = "why do you need this?"
+def test_a_genuine_question_at_the_credential_step_gets_its_authored_answer():
+    """Azure's Overview blade shows THREE GUIDs side by side (Application
+    client ID, Object ID, Directory/tenant ID) — a shape check can't tell
+    them apart, so this is the one place a guided walkthrough answering
+    questions genuinely earns its keep. A question-shaped answer must get
+    its authored FAQ answer and a re-ask, not the generic shape error."""
+    client_id_step = next(s for s in sr.MS_PERSONAL.steps if s.id == "client_id")
+    qa = next(
+        qa
+        for qa in client_id_step.faq
+        if any(h in qa.question_hints for h in ("which id", "tenant"))
+    )
     agent = _FakeAgent(
-        answers=["done", "done", "done", "done", weird_but_literal_value, _VALID_GUID]
+        answers=[
+            "done",
+            "done",
+            "done",
+            "done",
+            "which id is it? there are three on this page",
+            _VALID_GUID,
+        ]
     )
 
     collected, _trace = sw.run_setup_walkthrough(agent, sr.MS_PERSONAL)
 
-    # It was rejected by the SHAPE CHECK (not a GUID), not silently
-    # reinterpreted as a question — the walkthrough asked again and got the
-    # real value next.
     assert collected["client_id"] == _VALID_GUID
-    assert not any(
-        "which account" in m or sw._FAQ_NO_MATCH in m for m in agent.console.info
+    assert qa.answer in agent.console.info
+    # The generic shape error was never shown for a question-shaped answer.
+    assert sw._CLIENT_ID_SHAPE_ERROR not in agent.console.info
+
+
+def test_a_malformed_credential_value_still_gets_the_shape_error():
+    """A value that ISN'T a question (doesn't match any FAQ hint) is still
+    treated as a malformed literal, not silently swallowed by the FAQ lane."""
+    bogus = "xxxxxxxx-not-a-guid-at-all"
+    agent = _FakeAgent(
+        answers=["done", "done", "done", "done", bogus, _VALID_GUID]
     )
+
+    collected, _trace = sw.run_setup_walkthrough(agent, sr.MS_PERSONAL)
+
+    assert collected["client_id"] == _VALID_GUID
+    assert sw._CLIENT_ID_SHAPE_ERROR in agent.console.info
+    assert not any(bogus in m for m in agent.console.info)
+
+
+def test_credential_prompt_still_has_zero_options_with_the_faq_lane_added():
+    """The FAQ lookup on the credential step is a lookup, not a lane change —
+    the prompt itself stays a plain free-text ask, never gains Done/Stuck
+    options (which would let a real client ID collide with an option value)."""
+    agent = _FakeAgent(
+        answers=["done", "done", "done", "done", "what's a tenant id?", _VALID_GUID]
+    )
+
+    sw.run_setup_walkthrough(agent, sr.MS_PERSONAL)
+
+    credential_calls = [
+        c for c in agent.console.asked if c["message"].startswith("Paste the value")
+    ]
+    assert len(credential_calls) == 2  # the question turn, then the real value
+    for call in credential_calls:
+        assert call["options"] == []
+        assert call["allow_free_text"] is True
