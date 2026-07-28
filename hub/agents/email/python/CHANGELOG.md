@@ -9,6 +9,20 @@ contract version is tracked separately as
 
 ### Added
 
+- **`gaia email autonomy` CLI (#2516).** A thin client over the session-scoped
+  `/v1/email/agent/autonomy*` REST surface, relayed through the daemon like
+  every other `gaia email` command (no second auth scheme): `status`,
+  `set-level`, `pause`, `resume`, `run`, `trust`, `kill`. Closes the gap where
+  the code and the plan doc both described this command before it existed.
+
+### Fixed
+
+- **`POST /autonomy/run` refuses instead of silently no-oping while autonomy
+  is `off` (#2528).** Previously the route returned HTTP 200 with the same
+  empty-report shape whether autonomy was disabled or had genuinely run and
+  found nothing to do — a caller could not tell the two apart. It now returns
+  **409**, naming the current level and how to change it.
+
 - **Agent-led mailbox onboarding — the agent sets up its own access, in the
   conversation (#2469).** Hitting the agent without a usable mailbox used to
   end the run with an error and a shell command

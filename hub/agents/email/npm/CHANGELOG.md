@@ -6,6 +6,12 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## Unreleased
 
+- **Triggering an autonomy cycle while autonomy is switched off now tells you
+  so, instead of quietly reporting nothing happened.** `POST
+  /v1/email/agent/autonomy/run` used to return the same "nothing to do"
+  response whether autonomy was disabled or had genuinely run and found
+  nothing — there was no way to tell which. It now returns an error naming
+  the current level and how to turn autonomy back on.
 - **A trashed email is recoverable any time it's still in Trash — not just for
   a few seconds after you delete it.** The only way back used to be a short
   undo window right after trashing; miss it, and the agent told you the

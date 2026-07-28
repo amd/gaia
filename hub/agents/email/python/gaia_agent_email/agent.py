@@ -1291,9 +1291,8 @@ class EmailTriageAgent(
         """Build the earn-trust policy from current config + the confirm-floor.
 
         Rebuilt per cycle so a runtime ``autonomy_level`` change (e.g. via the
-        the forthcoming ``gaia email autonomy`` CLI) takes effect on the next
-        heartbeat without
-        reconstructing the agent.
+        ``gaia email autonomy set-level`` CLI) takes effect on the next
+        heartbeat without reconstructing the agent.
         """
         ledger = trust.TrustLedger(
             min_samples=self.config.autonomy_trust_min_samples,
@@ -1555,9 +1554,10 @@ class EmailTriageAgent(
         Returns the current level, the trust thresholds, and the earned-trust
         ledger — every ``(action, scope)`` with its positive/negative tally and
         whether it has crossed the bar. This is the single read-model the
-        planned ``gaia email autonomy status`` / ``trust`` CLI, the REST surface, and
-        the Agent-UI panel all render, so autonomy behavior is always
-        explainable ("archives news@x because 12/12 correct").
+        ``gaia email autonomy status`` / ``trust`` CLI and the REST surface
+        both render (a future Agent-UI panel is not yet built), so autonomy
+        behavior is always explainable ("archives news@x because 12/12
+        correct").
         """
         ledger = trust.TrustLedger(
             min_samples=self.config.autonomy_trust_min_samples,
@@ -1593,8 +1593,8 @@ class EmailTriageAgent(
     ) -> Dict[str, Any]:
         """Driver-facing entry: run a cycle and persist proposals to GoalStore.
 
-        This is the seam a ``DaemonClock`` job / the planned ``gaia email autonomy`` CLI
-        invokes (mirroring ``run_briefing_job`` for the briefing feature).
+        This is the seam a ``DaemonClock`` job / the ``gaia email autonomy run``
+        CLI invokes (mirroring ``run_briefing_job`` for the briefing feature).
         Returns a JSON-serializable report — the ``Proposal`` objects are
         replaced by their persisted dict form.
         """

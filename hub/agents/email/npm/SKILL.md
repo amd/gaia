@@ -312,7 +312,11 @@ is captured as a negative outcome that pulls the sender/category back below the 
 (Positive-outcome accrual — trust *rising* as suggestions are accepted or left standing —
 is not yet wired, so today the ledger only ratchets trust down.) Every auto-action is
 reversible with undo. A bad `level` returns **400**; an unknown
-session returns **404**.
+session returns **404**; `/run` while the level is `off` returns **409** — it refuses
+rather than returning the same 200 shape a real, found-nothing cycle would (#2528).
+
+The Python host also ships a thin-client CLI over this same surface:
+`gaia email autonomy {status|set-level|pause|resume|run|trust|kill}` (#2516).
 
 ## Running in a server / long-lived app
 

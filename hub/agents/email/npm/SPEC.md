@@ -246,7 +246,7 @@ emits the canonical event vocabulary.
 | `GET /v1/email/agent/memory/{id}` | Memory status without changing it. |
 | `GET /v1/email/agent/autonomy/{id}` | Inspectable autonomy status: `{ level, enabled, trust_min_samples, trust_threshold, trusted_scope_count, scopes[] }` — the earned-trust ledger, never a black box. |
 | `POST /v1/email/agent/autonomy` | Set the autonomy level, `{ session_id, level }` where level ∈ `off` \| `suggest` \| `earn_trust` \| `full` (`off` = kill switch). Bad level → **400**. |
-| `POST /v1/email/agent/autonomy/run` | Trigger one observe→decide→act cycle, `{ session_id, max_messages? }` → `{ level, executed[], proposals[], skipped }`. The daemon clock / scheduler drives this in production. |
+| `POST /v1/email/agent/autonomy/run` | Trigger one observe→decide→act cycle, `{ session_id, max_messages? }` → `{ level, executed[], proposals[], skipped }`. The daemon clock / scheduler drives this in production. Refused with **409** while the session's level is `off` — the kill switch is never mistakable for "ran and found nothing to do" (#2528). |
 
 Sessions are in-process and single-tenant (the sidecar hosts one user's agent); one turn
 runs at a time per session. Memory uses FAISS locally; embeddings still go over Lemonade

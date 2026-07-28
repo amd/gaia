@@ -75,7 +75,9 @@ def test_relay_json_raises_loud_on_error_status(monkeypatch):
     monkeypatch.setattr(requests, "request", lambda *a, **k: _Resp())
 
     with pytest.raises(DaemonError) as exc:
-        relay_json("email", "POST", "agent/autonomy/run", json_body={"session_id": "cli"})
+        relay_json(
+            "email", "POST", "agent/autonomy/run", json_body={"session_id": "cli"}
+        )
     assert "autonomy is off for session 'cli'" in str(exc.value)
 
 
