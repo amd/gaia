@@ -19,12 +19,26 @@ genuine session-only states, and the tools report them honestly via a
 Tools registered:
 
 - ``set_priority_sender(email)`` — flag a sender as always urgent
+- ``remove_priority_sender(email)`` — undo a single priority-sender flag
 - ``set_low_priority_sender(email)`` — flag a sender as always low-priority
+- ``remove_low_priority_sender(email)`` — undo a single low-priority flag
 - ``set_category_default(category, action)`` — per-category default action
+- ``remove_category_default(category)`` — clear a category's default,
+  reverting it to the implicit ``keep``
+- ``get_preferences()`` — read back everything currently stored
 - ``clear_session_preferences()`` — wipe preferences (in-process and persisted)
 
-The first three tools are consulted by ``triage_inbox`` and
-``pre_scan_inbox`` (see ``read_tools.py``).
+The set/remove pairs mutate the same ``_session_preferences`` state that
+``triage_inbox`` and ``pre_scan_inbox`` consult (see ``read_tools.py``).
+``get_preferences`` is a pure read-back for the conversation and plays no
+role in triage itself.
+
+#2520: no removal tool existed at all — asking to remove a single
+preference either no-op'd while the agent claimed success, or triggered
+the *set* tool instead. Every removal tool below reports its outcome via
+an explicit ``removed`` field rather than relying on ``ok: true`` alone,
+so the agent-loop model has an unambiguous signal to narrate from and
+cannot claim a mutation that did not happen (see each tool's docstring).
 """
 
 from __future__ import annotations
@@ -403,6 +417,70 @@ class PreferenceToolsMixin:
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
+        def remove_priority_sender(email: str) -> str:
+            """Remove a sender from the priority (always-urgent) list.
+
+            Reverses ``set_priority_sender`` for one address. Only touches
+            ``priority_senders`` — never ``low_priority_senders``, even if
+            the address happens to be flagged there. Unlike the set tools,
+            which deliberately cross-clear the opposite set, removal has no
+            such side effect: it undoes exactly one flag and nothing else.
+
+            The ``removed`` field is the only outcome to trust: ``true``
+            means the address WAS a priority sender and now isn't. ``false``
+            means it was never flagged as priority, so nothing changed — the
+            call still succeeds (``ok: true``), but there is nothing to
+            report success ABOUT, and no ``persisted``/``persistence`` fields
+            are present since nothing was written. Never tell the user a
+            sender was removed when ``removed`` is ``false`` — say plainly
+            that it was not set as a priority sender.
+
+            When ``removed`` is ``true`` the result reports persistence the
+            same way ``set_priority_sender`` does: ``persisted: true`` means
+            the removal is durable; ``persisted: false`` (incognito, or
+            persistent storage unavailable — see ``note``) means it applies
+            to THIS SESSION ONLY.
+
+            Args:
+                email: A bare email address, e.g. ``alice@example.com``.
+                    Headers like ``"Alice <alice@example.com>"`` are
+                    rejected; pass the bare address only.
+            """
+            try:
+                normalized = _normalize_email(email)
+                if not normalized or "@" not in normalized:
+                    return _envelope_err(
+                        "remove_priority_sender: email must be a bare address "
+                        f"like 'alice@example.com' (got: {email!r})"
+                    )
+                prefs = agent._session_preferences
+                _validate_session_preferences(prefs)
+                if normalized not in prefs["priority_senders"]:
+                    return _envelope_ok(
+                        {
+                            "removed": False,
+                            "message": (
+                                f"{normalized} was not set as a priority "
+                                "sender — nothing to remove."
+                            ),
+                            "preferences": _snapshot(prefs),
+                        }
+                    )
+                prefs["priority_senders"].discard(normalized)
+                status = _persist_preferences(agent)
+                return _envelope_ok(
+                    {
+                        "removed": True,
+                        "message": f"{normalized} is no longer a priority sender.",
+                        "preferences": _snapshot(prefs),
+                        **_persistence_fields(status),
+                    }
+                )
+            except Exception as exc:
+                log.exception("remove_priority_sender failed: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
+
+        @tool
         def set_low_priority_sender(email: str) -> str:
             """Mark a sender as always low-priority.
 
@@ -447,6 +525,74 @@ class PreferenceToolsMixin:
                 )
             except Exception as exc:
                 log.exception("set_low_priority_sender failed: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
+
+        @tool
+        def remove_low_priority_sender(email: str) -> str:
+            """Remove a sender from the low-priority list.
+
+            Reverses ``set_low_priority_sender`` for one address. Only
+            touches ``low_priority_senders`` — never ``priority_senders``,
+            even if the address happens to be flagged there. Unlike the set
+            tools, which deliberately cross-clear the opposite set, removal
+            has no such side effect: it undoes exactly one flag and nothing
+            else.
+
+            The ``removed`` field is the only outcome to trust: ``true``
+            means the address WAS low-priority and now isn't. ``false``
+            means it was never flagged low-priority, so nothing changed —
+            the call still succeeds (``ok: true``), but there is nothing to
+            report success ABOUT, and no ``persisted``/``persistence`` fields
+            are present since nothing was written. Never tell the user a
+            sender was removed when ``removed`` is ``false`` — say plainly
+            that it was not set as a low-priority sender.
+
+            When ``removed`` is ``true`` the result reports persistence the
+            same way ``set_low_priority_sender`` does: ``persisted: true``
+            means the removal is durable; ``persisted: false`` (incognito, or
+            persistent storage unavailable — see ``note``) means it applies
+            to THIS SESSION ONLY.
+
+            Args:
+                email: A bare email address, e.g.
+                    ``newsletter@stripe.com``.
+            """
+            try:
+                normalized = _normalize_email(email)
+                if not normalized or "@" not in normalized:
+                    return _envelope_err(
+                        "remove_low_priority_sender: email must be a bare "
+                        f"address like 'a@b.com' (got: {email!r})"
+                    )
+                prefs = agent._session_preferences
+                _validate_session_preferences(prefs)
+                if normalized not in prefs["low_priority_senders"]:
+                    return _envelope_ok(
+                        {
+                            "removed": False,
+                            "message": (
+                                f"{normalized} was not set as a low-priority "
+                                "sender — nothing to remove."
+                            ),
+                            "preferences": _snapshot(prefs),
+                        }
+                    )
+                prefs["low_priority_senders"].discard(normalized)
+                status = _persist_preferences(agent)
+                return _envelope_ok(
+                    {
+                        "removed": True,
+                        "message": (
+                            f"{normalized} is no longer a low-priority sender."
+                        ),
+                        "preferences": _snapshot(prefs),
+                        **_persistence_fields(status),
+                    }
+                )
+            except Exception as exc:
+                log.exception(
+                    "remove_low_priority_sender failed: %s", type(exc).__name__
+                )
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
@@ -507,6 +653,87 @@ class PreferenceToolsMixin:
                 )
             except Exception as exc:
                 log.exception("set_category_default failed: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
+
+        @tool
+        def remove_category_default(category: str) -> str:
+            """Clear a category's default action, reverting it to the
+            implicit ``keep``.
+
+            Equivalent to ``set_category_default(category, "keep")``, but
+            named to match ``remove_priority_sender`` /
+            ``remove_low_priority_sender`` so the model has an obvious
+            removal verb instead of having to know that ``"keep"`` secretly
+            undoes an ``"archive"`` override.
+
+            The ``removed`` field is the only outcome to trust: ``true``
+            means the category HAD an ``archive`` override that is now
+            cleared. ``false`` means the category was already at the
+            implicit ``keep`` default, so nothing changed — no
+            ``persisted``/``persistence`` fields are present since nothing
+            was written. Never tell the user a default was removed when
+            ``removed`` is ``false``.
+
+            When ``removed`` is ``true`` the result reports persistence the
+            same way ``set_category_default`` does: ``persisted: true``
+            means the removal is durable; ``persisted: false`` (incognito,
+            or persistent storage unavailable — see ``note``) means it
+            applies to THIS SESSION ONLY.
+
+            Args:
+                category: One of ``"FYI"`` or ``"PROMOTIONAL"``.
+            """
+            try:
+                cat = (category or "").strip().upper()
+                if cat not in _CATEGORIES_WITH_DEFAULTS:
+                    return _envelope_err(
+                        "remove_category_default: category must be one of "
+                        f"{list(_CATEGORIES_WITH_DEFAULTS)} (got: {category!r})"
+                    )
+                prefs = agent._session_preferences
+                _validate_session_preferences(prefs)
+                if cat not in prefs["category_defaults"]:
+                    return _envelope_ok(
+                        {
+                            "removed": False,
+                            "message": (
+                                f"{cat} has no default action set — nothing "
+                                "to remove."
+                            ),
+                            "preferences": _snapshot(prefs),
+                        }
+                    )
+                prefs["category_defaults"].pop(cat, None)
+                status = _persist_preferences(agent)
+                return _envelope_ok(
+                    {
+                        "removed": True,
+                        "message": f"{cat} no longer has a default action.",
+                        "preferences": _snapshot(prefs),
+                        **_persistence_fields(status),
+                    }
+                )
+            except Exception as exc:
+                log.exception("remove_category_default failed: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
+
+        @tool
+        def get_preferences() -> str:
+            """Return everything currently saved: priority senders,
+            low-priority senders, and category default actions.
+
+            The read-back counterpart to the set/remove tools above — the
+            only way to confirm from the conversation what is actually
+            stored, including whether a removal really took effect. Call
+            this before telling a user what is or isn't configured, rather
+            than guessing from conversation history.
+            """
+            try:
+                prefs = agent._session_preferences
+                _validate_session_preferences(prefs)
+                return _envelope_ok({"preferences": _snapshot(prefs)})
+            except Exception as exc:
+                log.exception("get_preferences failed: %s", type(exc).__name__)
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool

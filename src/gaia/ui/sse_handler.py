@@ -443,13 +443,17 @@ class SSEOutputHandler(OutputHandler):
 
     # === Status Messages ===
 
-    def print_error(self, error_message: str):
-        self._emit(
-            {
-                "type": "agent_error",
-                "content": str(error_message) if error_message else "Unknown error",
-            }
-        )
+    def print_error(self, error_message: str, recoverable: bool = False):
+        event: Dict[str, Any] = {
+            "type": "agent_error",
+            "content": str(error_message) if error_message else "Unknown error",
+        }
+        # Only set when True: keeps the wire shape unchanged for every
+        # existing (fatal) caller, and lets a downstream translator treat a
+        # missing/False flag as the pre-#2515 terminal default.
+        if recoverable:
+            event["recoverable"] = True
+        self._emit(event)
 
     def print_warning(self, warning_message: str):
         self._emit(

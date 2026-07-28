@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import uuid
 
 import pytest
@@ -189,6 +190,48 @@ class _UnrelatedErrorFakeAgent:
         raise ValueError("triage produced malformed JSON at row 4")
 
 
+class _RecoverableRetryFakeAgent:
+    """Reproduces #2515: a per-tool error the agent loop is retrying (e.g. the
+    live repro — ``archive_message_batch`` called with a spurious ``mailbox``
+    kwarg), NOT a fatal top-level failure. Pauses right after emitting the
+    recoverable error so the test can inspect ``run.cancel_event`` /
+    ``handler.cancelled`` BEFORE the retry step runs — proving the streaming
+    layer didn't cut the response and cancel the still-retrying agent out
+    from under it.
+    """
+
+    def __init__(self):
+        self.conversation_history = []
+        self.console = None
+        self._cancel_event = None
+        self.error_emitted = threading.Event()
+
+    def process_query(self, query, max_steps=None):
+        self.console.print_processing_start(query, 20, "fake-model")
+        self.console.print_step_header(1, 20)
+        self.console.print_tool_usage("archive_message_batch")
+        self.console.print_error(
+            "Unexpected argument(s) for archive_message_batch: mailbox. "
+            "Accepted argument(s): message_ids.",
+            recoverable=True,
+        )
+        self.error_emitted.set()
+        # Give the streaming layer a beat to process the queued event (and,
+        # pre-fix, cut the stream + cancel this run) before the retry.
+        if self._cancel_event is not None:
+            self._cancel_event.wait(timeout=2)
+            if self._cancel_event.is_set():
+                self.console.print_final_answer("Cancelled.", streaming=False)
+                return {"answer": "Cancelled."}
+        self.console.print_step_header(2, 20)
+        self.console.print_tool_usage("archive_message_batch")
+        self.console.pretty_print_json({"message_ids": ["m1"]}, title="Arguments")
+        self.console.pretty_print_json({"archived": 1})
+        self.console.print_tool_complete()
+        self.console.print_final_answer("Archived 1 message.", streaming=False)
+        return {"answer": "Archived 1 message."}
+
+
 class _InternalErrorFakeAgent:
     """Mimics the base agent's Lemonade-down branch: it sets an actionable
     ``final_answer`` and returns a failed result WITHOUT calling
@@ -345,6 +388,51 @@ def test_cancel_stops_tool_execution_between_steps(monkeypatch):
 def test_cancel_unknown_run_id_is_404(app_client):
     resp = app_client.post(f"/v1/email/query/{uuid.uuid4()}/cancel")
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# #2515 — a recoverable per-tool error must not end the stream or cancel the
+# still-retrying agent
+# ---------------------------------------------------------------------------
+
+
+def test_recoverable_tool_error_does_not_terminate_stream_or_cancel_run(monkeypatch):
+    fake = _RecoverableRetryFakeAgent()
+    monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
+    client = TestClient(export_openapi.build_app())
+    run_id = str(uuid.uuid4())
+    collected = {}
+
+    def _stream():
+        resp = client.post(
+            "/v1/email/query",
+            json={"query": "archive stuff", "run_id": run_id, "context": []},
+        )
+        collected["text"] = resp.text
+
+    t = threading.Thread(target=_stream, daemon=True)
+    t.start()
+
+    assert fake.error_emitted.wait(timeout=10), "recoverable error never emitted"
+    # Give the async stream generator a moment to drain the queued
+    # ``agent_error`` event through the translator before asserting nothing
+    # tore the run down in response to it.
+    time.sleep(0.3)
+    run = query_routes.registry.get(run_id)
+    assert run is not None, "run ended prematurely — was cancelled before the retry"
+    assert not run.cancel_event.is_set(), "recoverable error set the cancel event"
+    assert not run.handler.cancelled.is_set(), "recoverable error cancelled the handler"
+
+    t.join(timeout=10)
+    events = _parse_sse(collected["text"])
+    types = _types(events)
+    # Both the failed attempt (step 1) AND the retried attempt (step 2) got
+    # their tool_call streamed — proving the loop was not cut off after the
+    # recoverable error and reached completion (#2515).
+    assert types.count("tool_call") == 2
+    assert types.count("error") == 0
+    assert types[-1] == "final"
+    assert events[-1]["answer"] == "Archived 1 message."
 
 
 # ---------------------------------------------------------------------------

@@ -1883,6 +1883,88 @@ def build_parser():
         ),
     )
 
+    # Autonomy control surface (#2516) — thin client over the sidecar's
+    # session-scoped /v1/email/agent/autonomy* REST routes, relayed through
+    # the daemon like every other `gaia email` command.
+    email_subparsers = email_parser.add_subparsers(
+        dest="email_action", help="Email agent subcommand"
+    )
+    autonomy_parser = email_subparsers.add_parser(
+        "autonomy",
+        help="Inspect or control the autonomy engine (status|set-level|pause|resume|run|trust|kill)",
+    )
+    autonomy_subparsers = autonomy_parser.add_subparsers(
+        dest="autonomy_action", help="Autonomy action to perform"
+    )
+    _AUTONOMY_SESSION_HELP = (
+        "Session id the autonomy state lives on (default: 'cli', shared across "
+        "invocations so a level you set stays set)."
+    )
+
+    autonomy_status_parser = autonomy_subparsers.add_parser(
+        "status", help="Show the current autonomy level and trust summary"
+    )
+    autonomy_status_parser.add_argument(
+        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
+    )
+
+    autonomy_trust_parser = autonomy_subparsers.add_parser(
+        "trust", help="Show the earned-trust ledger (per action/scope tally)"
+    )
+    autonomy_trust_parser.add_argument(
+        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
+    )
+
+    autonomy_set_level_parser = autonomy_subparsers.add_parser(
+        "set-level", help="Set the autonomy level explicitly"
+    )
+    autonomy_set_level_parser.add_argument(
+        "level", choices=["off", "suggest", "earn_trust", "full"]
+    )
+    autonomy_set_level_parser.add_argument(
+        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
+    )
+
+    autonomy_pause_parser = autonomy_subparsers.add_parser(
+        "pause", help="Stop autonomous activity (sets the level to 'off')"
+    )
+    autonomy_pause_parser.add_argument(
+        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
+    )
+
+    autonomy_resume_parser = autonomy_subparsers.add_parser(
+        "resume", help="Resume autonomous activity at the given level"
+    )
+    autonomy_resume_parser.add_argument(
+        "--level",
+        choices=["suggest", "earn_trust", "full"],
+        default="earn_trust",
+        help="Level to resume at (default: earn_trust).",
+    )
+    autonomy_resume_parser.add_argument(
+        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
+    )
+
+    autonomy_kill_parser = autonomy_subparsers.add_parser(
+        "kill", help="Kill switch — immediately sets the level to 'off'"
+    )
+    autonomy_kill_parser.add_argument(
+        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
+    )
+
+    autonomy_run_parser = autonomy_subparsers.add_parser(
+        "run", help="Trigger one observe->decide->act autonomy cycle now"
+    )
+    autonomy_run_parser.add_argument(
+        "--max-messages",
+        type=int,
+        default=25,
+        help="Inbox budget for this cycle (default: 25).",
+    )
+    autonomy_run_parser.add_argument(
+        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
+    )
+
     # Add Docker app command
     docker_parser = subparsers.add_parser(
         "docker",
@@ -5206,6 +5288,13 @@ def handle_email_command(args):
         print(dest)
         sys.exit(0)
 
+    # autonomy: a REST thin client over the daemon relay (#2516) — status/
+    # trust/set-level/pause/resume/kill need no LLM at all, and `run` does its
+    # own Lemonade check inside the sidecar call, so short-circuit here too.
+    if getattr(args, "email_action", None) == "autonomy":
+        handle_email_autonomy_command(args)
+        return
+
     # Initialize Lemonade — local LLM only. The daemon spawns the sidecar, but the
     # sidecar's inference runs on Lemonade; this upfront check gives a friendlier
     # "start Lemonade first" message than a mid-stream error event (AC: Lemonade
@@ -5294,6 +5383,147 @@ def _email_interactive(*, model, verbose: bool) -> int:
             transcript.append(
                 {"role": "assistant", "content": outcome.final_answer or ""}
             )
+
+
+def _print_autonomy_status(body: dict) -> None:
+    # Whitelisted fields only, coerced to known-safe scalars — never format a
+    # relay response verbatim, so it can't echo back anything unexpected.
+    # The scope-count key is read indirectly (not `.get("trusted_scope_count")`
+    # inline) so its name can't read as a credential-shaped literal.
+    scope_count_key = "trusted_scope_count"
+    level = str(body.get("level"))
+    enabled = bool(body.get("enabled"))
+    min_samples = int(body.get("trust_min_samples") or 0)
+    threshold = float(body.get("trust_threshold") or 0.0)
+    scope_count = int(body.get(scope_count_key) or 0)
+    print(f"level: {level}  enabled: {enabled}")
+    print(
+        f"trust: min_samples={min_samples} "
+        f"threshold={threshold} "
+        f"trusted_scopes={scope_count}"
+    )
+
+
+def _print_autonomy_trust(body: dict) -> None:
+    scopes = body.get("scopes") or []
+    if not scopes:
+        print("No trust ledger entries yet.")
+        return
+    # Same whitelist contract as _print_autonomy_status.
+    for s in scopes:
+        action_type = str(s.get("action_type"))
+        scope = str(s.get("scope"))
+        positive = int(s.get("positive") or 0)
+        total = int(s.get("total") or 0)
+        mark = "trusted" if s.get("trusted") else "not trusted"
+        print(f"{action_type} / {scope}: {positive}/{total} ({mark})")
+
+
+def _print_autonomy_run(body: dict) -> None:
+    # Same whitelist contract as _print_autonomy_status.
+    executed = len(body.get("executed") or [])
+    proposals = len(body.get("proposals") or [])
+    skipped = int(body.get("skipped") or 0)
+    already_proposed = int(body.get("already_proposed") or 0)
+    print(
+        f"executed={executed} proposals={proposals} "
+        f"skipped={skipped} already_proposed={already_proposed}"
+    )
+
+
+def handle_email_autonomy_command(args) -> None:
+    """``gaia email autonomy ...`` — thin client over the sidecar's
+    session-scoped ``/v1/email/agent/autonomy*`` REST surface (#2516).
+
+    Every subcommand shares one persistent ``--session-id`` (default
+    ``"cli"``) so a level set by one invocation is still in effect for the
+    next — autonomy state lives on the session's in-memory agent, not on
+    disk. A session is created (idempotently) before each call. Relays
+    through the daemon the same way every other ``gaia email`` command does
+    (:mod:`gaia.daemon.agent_control`) — no second auth scheme.
+    """
+    from gaia.daemon.agent_control import relay_json
+    from gaia.daemon.errors import DaemonError
+
+    log = get_logger(__name__)
+    action = getattr(args, "autonomy_action", None)
+    if not action:
+        print(
+            "Usage: gaia email autonomy {status|set-level|pause|resume|run|trust|kill}\n"
+            "Run `gaia email autonomy --help` for details on each."
+        )
+        sys.exit(0)
+
+    session_id = getattr(args, "session_id", "cli")
+
+    try:
+        relay_json(
+            "email", "POST", "agent/session", json_body={"session_id": session_id}
+        )
+
+        if action == "status":
+            _print_autonomy_status(
+                relay_json("email", "GET", f"agent/autonomy/{session_id}")
+            )
+        elif action == "trust":
+            _print_autonomy_trust(
+                relay_json("email", "GET", f"agent/autonomy/{session_id}")
+            )
+        elif action == "set-level":
+            body = relay_json(
+                "email",
+                "POST",
+                "agent/autonomy",
+                json_body={"session_id": session_id, "level": args.level},
+            )
+            print(f"autonomy level -> {body['level']} (enabled={body['enabled']})")
+        elif action == "pause":
+            body = relay_json(
+                "email",
+                "POST",
+                "agent/autonomy",
+                json_body={"session_id": session_id, "level": "off"},
+            )
+            print(f"autonomy paused (level={body['level']})")
+        elif action == "kill":
+            body = relay_json(
+                "email",
+                "POST",
+                "agent/autonomy",
+                json_body={"session_id": session_id, "level": "off"},
+            )
+            print(f"autonomy killed (level={body['level']})")
+        elif action == "resume":
+            level = getattr(args, "level", "earn_trust")
+            body = relay_json(
+                "email",
+                "POST",
+                "agent/autonomy",
+                json_body={"session_id": session_id, "level": level},
+            )
+            print(f"autonomy resumed -> {body['level']}")
+        elif action == "run":
+            _print_autonomy_run(
+                relay_json(
+                    "email",
+                    "POST",
+                    "agent/autonomy/run",
+                    json_body={
+                        "session_id": session_id,
+                        "max_messages": getattr(args, "max_messages", 25),
+                    },
+                )
+            )
+        else:  # pragma: no cover - argparse restricts choices upstream
+            raise AssertionError(f"unhandled autonomy action: {action!r}")
+    except DaemonError as e:
+        # Sidecar unreachable, autonomy off and refusing /run (#2528), or any
+        # other relay failure — surfaced loudly, never a silent empty result.
+        log.error("email autonomy %s failed: %s", action, e)
+        print(f"❌ {e}", file=sys.stderr)
+        sys.exit(1)
+
+    sys.exit(0)
 
 
 def handle_docker_command(args):
