@@ -9,11 +9,12 @@ Two bugs this replaces:
 2. The setup flow could only fail as one opaque "connect your mailbox" prompt
    — no walkthrough, no verification, no browserless sign-in.
 
-``_ScriptedConsole`` / ``_FakeAgent`` are copied verbatim from
-``test_mailbox_onboarding_2469.py`` (not imported — this tree has no
-``tests/__init__.py``) so the real ``question.ask()`` resolves options,
-enforces strict rejection, and suppresses sensitive echoes exactly as it does
-in production; a hand-rolled fake ``ask`` would not reproduce that.
+``_ScriptedConsole`` / ``_FakeAgent`` are shared with
+``test_mailbox_onboarding_2469.py`` via ``conftest.py`` so the real
+``question.ask()`` resolves options, enforces strict rejection, and
+suppresses sensitive echoes exactly as it does in production — a hand-rolled
+fake ``ask`` would not reproduce that, and a second drifted copy of the fake
+would silently stop testing it.
 """
 
 from __future__ import annotations
@@ -21,43 +22,14 @@ from __future__ import annotations
 import json
 
 import pytest
-from gaia_agent_email import mailbox_state as ms
-from gaia_agent_email import question as q
+from conftest import FakeAgent as _FakeAgent
+from conftest import ScriptedConsole as _ScriptedConsole
 from gaia_agent_email.tools import onboarding_tools as ob
 
 OUTLOOK_SCOPES = [
     "https://graph.microsoft.com/Mail.ReadWrite",
     "https://graph.microsoft.com/Mail.Send",
 ]
-
-
-# ---------------------------------------------------------------------------
-# Fakes — verbatim copy, see module docstring.
-# ---------------------------------------------------------------------------
-
-
-class _ScriptedConsole:
-    """Records every question asked and replies from a fixed script."""
-
-    def __init__(self, answers):
-        self.answers = list(answers)
-        self.asked = []
-        self.info = []
-
-    def request_user_input_blocking(self, **kwargs):
-        self.asked.append(kwargs)
-        if not self.answers:
-            return q.NO_RESPONSE
-        return self.answers.pop(0)
-
-    def print_info(self, message):
-        self.info.append(message)
-
-
-class _FakeAgent:
-    def __init__(self, answers=(), can_answer_questions=True):
-        self.console = _ScriptedConsole(answers)
-        self.can_answer_questions = can_answer_questions
 
 
 def _connection(scopes=None, email="kalin@outlook.com", error=None):

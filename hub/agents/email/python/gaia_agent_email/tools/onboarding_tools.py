@@ -145,19 +145,22 @@ def _collect_oauth_client(agent: Any, provider: str) -> Dict[str, str]:
     )
 
     id_and_secret = "ID and secret" if wants_secret else "ID"
+    pronoun = "them" if wants_secret else "it"
+    stored_as = "They're" if wants_secret else "It's"
+    have_label = "I have them" if wants_secret else "I have it"
     proceed = ask(
         agent,
         (
             f"To connect {label} I need an OAuth client {id_and_secret} that you "
             "create once in your provider console — GAIA does not ship one yet, "
             "so this part I genuinely cannot do for you. The walkthrough is at "
-            f"{_OAUTH_DOCS_URL}. It's stored in your OS keychain, never sent "
-            "anywhere but the provider. Do you have it to hand?"
+            f"{_OAUTH_DOCS_URL}. {stored_as} stored in your OS keychain, never "
+            f"sent anywhere but the provider. Do you have {pronoun} to hand?"
         ),
         options=(
             Option(
                 _YES,
-                "I have it",
+                have_label,
                 f"You'll paste the client {id_and_secret.lower()}. Takes a few "
                 "seconds.",
             ),

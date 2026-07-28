@@ -23,6 +23,8 @@ import json
 import time
 
 import pytest
+from conftest import FakeAgent as _FakeAgent
+from conftest import ScriptedConsole as _ScriptedConsole
 from gaia_agent_email import mailbox_state as ms
 from gaia_agent_email import question as q
 from gaia_agent_email.tools import onboarding_tools as ob
@@ -34,32 +36,8 @@ GMAIL_SCOPES = [
 
 
 # ---------------------------------------------------------------------------
-# Fakes
+# Fakes — shared with every onboarding test module, see conftest.py.
 # ---------------------------------------------------------------------------
-
-
-class _ScriptedConsole:
-    """Records every question asked and replies from a fixed script."""
-
-    def __init__(self, answers):
-        self.answers = list(answers)
-        self.asked = []
-        self.info = []
-
-    def request_user_input_blocking(self, **kwargs):
-        self.asked.append(kwargs)
-        if not self.answers:
-            return q.NO_RESPONSE
-        return self.answers.pop(0)
-
-    def print_info(self, message):
-        self.info.append(message)
-
-
-class _FakeAgent:
-    def __init__(self, answers=(), can_answer_questions=True):
-        self.console = _ScriptedConsole(answers)
-        self.can_answer_questions = can_answer_questions
 
 
 def _connection(scopes=None, email="kalin@example.com", error=None):
