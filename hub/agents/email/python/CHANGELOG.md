@@ -53,6 +53,17 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A failed memory startup is now visible in chat, and blames the right
+  cause (#2519).** When the embedding model wasn't reachable, memory quietly
+  disabled itself: a log line and a REST field said so, but the agent's
+  answers made it look like a missing feature ("I don't have a tool to view
+  saved preferences") rather than a broken one. The agent now prints a
+  startup warning naming the real problem and the fix. It also used to blame
+  every failure on `GAIA_MEMORY_DISABLED=1` or a stopped Lemonade — the
+  common real case is neither: Lemonade is running fine but the embedding
+  model was never pulled. The message now tells those two apart and gives
+  the matching remedy (pull the model vs. start Lemonade), since acting on
+  the wrong one wastes the user's time.
 - **A trashed message is recoverable any time it's still in Trash, not just
   for a few seconds (#2523).** The only restore path (`restore_message`) was
   gated by a short undo window and a live `action_id`; once either was gone,
