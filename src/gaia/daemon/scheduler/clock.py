@@ -27,9 +27,11 @@ is likewise marked ``failed``, never quietly skipped.
 from __future__ import annotations
 
 import threading
+import time
 from typing import Any, Callable, Dict, List, Optional
 
 from gaia.daemon.scheduler import store
+from gaia.daemon.scheduler.models import STATUS_FAILED, STATUS_PENDING
 from gaia.database.mixin import DatabaseMixin
 from gaia.logger import get_logger
 
@@ -38,6 +40,11 @@ log = get_logger(__name__)
 # Executor signature: (job_row, db) -> None. ``db`` is the clock-owned per-pass
 # connection; executors must use it for any store writes, never a shared handle.
 JobExecutor = Callable[[Dict[str, Any], Any], None]
+
+# Generous busy_timeout (matches the daemon's custody store, #2153) so a brief
+# lock from a concurrent writer (a second driver during the migration window,
+# or a status-route job_counts() read) waits instead of raising SQLITE_BUSY.
+_BUSY_TIMEOUT_MS = 5000
 
 
 class _ClockDB(DatabaseMixin):
@@ -73,13 +80,24 @@ class DaemonClock:
         self._poll_seconds = poll_seconds
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._schema_ready = False
+        self._last_poll_at: Optional[float] = None
 
     # -- Store bootstrap ------------------------------------------------
 
     def _open_db(self) -> _ClockDB:
         db = _ClockDB()
         db.init_db(self._db_path)
-        store.init_schema(db)
+        # Per-connection pragma — must be set on every open, unlike the schema.
+        db.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
+        if not self._schema_ready:
+            # Once per instance, not once per poll pass: at a 30s default this
+            # ran forever on every tick — a permanent disk wakeup even with no
+            # jobs. CREATE TABLE IF NOT EXISTS is idempotent either way, so a
+            # rare cross-thread double-init (first call vs. the polling thread)
+            # is harmless, just not the common case.
+            store.init_schema(db)
+            self._schema_ready = True
         return db
 
     # -- Driving --------------------------------------------------------
@@ -95,6 +113,7 @@ class DaemonClock:
             return self._fire_due_on(db, now=now)
         finally:
             db.close_db()
+            self._last_poll_at = time.time()
 
     def _fire_due_on(self, db, *, now: Optional[float]) -> Dict[str, List[str]]:
         fired: List[str] = []
@@ -151,15 +170,52 @@ class DaemonClock:
         self._thread.start()
 
     def stop(self) -> None:
-        """Signal the polling thread to exit and wait for it."""
+        """Signal the polling thread to exit and wait for it.
+
+        Never lies about having stopped: if the thread is still alive after the
+        join timeout (a ``fire_due`` pass stuck, e.g. on a wedged filesystem),
+        this logs loudly at ERROR and leaves the thread reference in place so
+        ``running`` keeps reporting True — not a silently cleared, false
+        "stopped".
+        """
         self._stop_event.set()
-        if self._thread is not None:
-            self._thread.join(timeout=self._poll_seconds + 5)
-            self._thread = None
+        if self._thread is None:
+            return
+        self._thread.join(timeout=self._poll_seconds + 5)
+        if self._thread.is_alive():
+            log.error(
+                "daemon clock: polling thread did not stop within %.1fs of the "
+                "join timeout — a fire_due pass may be stuck. Leaving it "
+                "tracked as running rather than silently clearing state.",
+                self._poll_seconds + 5,
+            )
+            return
+        self._thread = None
 
     @property
     def running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    @property
+    def last_poll_at(self) -> Optional[float]:
+        """Timestamp of the most recently completed ``fire_due`` pass, or
+        ``None`` before the first one has run."""
+        return self._last_poll_at
+
+    def job_counts(self) -> Dict[str, int]:
+        """Point-in-time pending/failed counts for ``GET /daemon/v1/status``.
+
+        Opens its own connection (same rule as every other pass) and closes it
+        before returning.
+        """
+        db = self._open_db()
+        try:
+            return {
+                "pending": len(store.list_jobs(db, status=STATUS_PENDING)),
+                "failed": len(store.list_jobs(db, status=STATUS_FAILED)),
+            }
+        finally:
+            db.close_db()
 
     def _run(self) -> None:
         # Fire immediately on start so past-due jobs from a previous daemon run

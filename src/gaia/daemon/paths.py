@@ -63,6 +63,29 @@ def ensure_host_dir() -> Path:
     return d
 
 
+def scheduler_db_path() -> Path:
+    """The daemon-owned scheduler SQLite file (single clock's job store, #2379).
+
+    Hardened beyond its sibling ``custody_db_path()``: this store will eventually
+    hold recipients and subjects (email job payloads), so every call chmods the
+    host dir ``0700`` and, on first touch, creates the file itself ``0600`` —
+    mirroring the ``atomic_write_json(mode=0o600)`` precedent above. Mode bits
+    are meaningless on Windows and skipped there.
+    """
+    d = ensure_host_dir()
+    if os.name != "nt":
+        os.chmod(d, 0o700)
+    path = d / "scheduler.db"
+    if not path.exists():
+        try:
+            fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            os.close(fd)
+    return path
+
+
 def atomic_write_json(path: Path, payload, mode: int = 0o600) -> None:
     """Atomically persist *payload* as JSON at *path*, default file mode 0600.
 
