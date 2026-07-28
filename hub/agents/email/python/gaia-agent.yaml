@@ -23,14 +23,16 @@ icon: mail
 tools_count: 63
 
 language: python
-min_gaia_version: "0.23.0"
+# NOTE (#2590): stays at 0.22.0, not the setup_routes floor — see the
+# comment on the dependencies floor in pyproject.toml.
+min_gaia_version: "0.22.0"
 models: [Gemma-4-E4B-it-GGUF]
 
 python:
   entry_module: gaia_agent_email
   entry_class: EmailTriageAgent
   dependencies:
-    - "amd-gaia>=0.23.0"
+    - "amd-gaia>=0.22.0"
 
 requirements:
   min_memory_gb: 8
