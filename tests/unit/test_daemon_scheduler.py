@@ -127,3 +127,28 @@ def test_in_memory_path_rejected():
 def test_nonpositive_poll_rejected(tmp_path):
     with pytest.raises(ValueError, match="poll_seconds"):
         DaemonClock(str(tmp_path / "c.db"), executors={}, poll_seconds=0)
+
+
+def test_schema_initialized_once_not_per_poll_pass(tmp_path, monkeypatch):
+    """init_schema must run once per DaemonClock instance, not once per
+    fire_due pass (#2379) — repeated schema DDL on every poll is wasted work
+    on the daemon's single always-on clock."""
+    calls = []
+    original_init_schema = store.init_schema
+
+    def counting_init_schema(db):
+        calls.append(1)
+        return original_init_schema(db)
+
+    monkeypatch.setattr(store, "init_schema", counting_init_schema)
+
+    clock = DaemonClock(str(tmp_path / "clock.db"), executors={})
+    clock.fire_due(now=1.0)
+    clock.fire_due(now=2.0)
+    clock.fire_due(now=3.0)
+
+    assert len(calls) == 1, (
+        "init_schema must be invoked exactly once across the life of one "
+        f"DaemonClock instance, regardless of how many fire_due passes run; "
+        f"got {len(calls)} invocations"
+    )
