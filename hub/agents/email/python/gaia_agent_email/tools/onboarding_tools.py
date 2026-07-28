@@ -51,7 +51,7 @@ from gaia.logger import get_logger
 log = get_logger(__name__)
 
 #: Where a user goes to create the OAuth client they still have to supply.
-_OAUTH_DOCS_URL = "https://amd-gaia.ai/docs/guides/email"
+OAUTH_DOCS_URL = "https://amd-gaia.ai/docs/guides/email"
 
 #: Bound on the browser sign-in wait. Must exceed ``flow._FLOW_TIMEOUT_SECONDS``
 #: (120s) so the flow's own timeout is the one that fires, with its own message.
@@ -82,7 +82,7 @@ def _scope_labels(provider: str, scopes: List[str]) -> str:
     return "; ".join(labels) if labels else "the mailbox permissions it needs"
 
 
-def _status(agent: Any, message: str) -> None:
+def narrate(agent: Any, message: str) -> None:
     """Narrate a step to the live stream, if the surface has a console."""
     console = getattr(agent, "console", None)
     printer = getattr(console, "print_info", None)
@@ -140,7 +140,7 @@ def _collect_oauth_client(agent: Any, provider: str) -> Dict[str, str]:
 
     label = ms.provider_label(provider)
     wants_secret = _needs_client_secret(provider)
-    _status(
+    narrate(
         agent,
         f"{label} needs an OAuth client before I can sign you in.",
     )
@@ -155,7 +155,7 @@ def _collect_oauth_client(agent: Any, provider: str) -> Dict[str, str]:
             f"To connect {label} I need an OAuth client {id_and_secret} that you "
             "create once in your provider console — GAIA does not ship one yet, "
             "so this part I genuinely cannot do for you. The walkthrough is at "
-            f"{_OAUTH_DOCS_URL}. {stored_as} stored in your OS keychain, never "
+            f"{OAUTH_DOCS_URL}. {stored_as} stored in your OS keychain, never "
             f"sent anywhere but the provider. Do you have {pronoun} to hand?"
         ),
         options=(
@@ -176,7 +176,7 @@ def _collect_oauth_client(agent: Any, provider: str) -> Dict[str, str]:
     if proceed != _YES:
         raise _Declined(
             f"OK — nothing changed. Create a Desktop OAuth client for {label} "
-            f"({_OAUTH_DOCS_URL}), then ask me again and I'll take it from there."
+            f"({OAUTH_DOCS_URL}), then ask me again and I'll take it from there."
         )
 
     config: Dict[str, str] = {}
@@ -208,7 +208,20 @@ class _Declined(Exception):
     """The user said no. Not an error — a complete, respected answer."""
 
 
-def _connect_scopes(provider: str, agent_scopes: List[str]) -> List[str]:
+def _walkthrough_stuck_exc() -> type:
+    """Lazily return ``setup_walkthrough.WalkthroughStuck``.
+
+    A plain top-of-file import would be circular: ``setup_walkthrough``
+    imports ``connect_scopes``/``narrate``/``OAUTH_DOCS_URL`` from THIS
+    module. Deferring the import to call time (used only inside an
+    ``except`` clause) breaks the cycle without duplicating the class.
+    """
+    from gaia_agent_email.tools.setup_walkthrough import WalkthroughStuck
+
+    return WalkthroughStuck
+
+
+def connect_scopes(provider: str, agent_scopes: List[str]) -> List[str]:
     """The provider's catalog scopes plus the ones this agent needs, deduped.
 
     Mirrors what ``gaia connectors connect`` requests, so a mailbox connected
@@ -249,7 +262,7 @@ def _run_oauth(agent: Any, provider: str) -> Dict[str, Any]:
         # the mailbox as "default" instead of the address the user just signed
         # in with. The grant below stays narrow — identity is for the
         # connection, not for the agent.
-        "scopes": _connect_scopes(provider, scopes),
+        "scopes": connect_scopes(provider, scopes),
         # Committing the grant inside the same flow is what stops the
         # connected-but-unusable dead end this whole feature exists to remove.
         "grant_agents": {ms.AGENT_ID: scopes},
@@ -265,7 +278,7 @@ def _run_oauth(agent: Any, provider: str) -> Dict[str, Any]:
             "Retry, or connect from Settings → Connections in the Agent UI."
         )
 
-    _status(
+    narrate(
         agent,
         f"Opening your browser to sign in to {label}. If it didn't open, use "
         f"this link (valid for 2 minutes): {auth_url}",
@@ -286,6 +299,54 @@ def _run_oauth(agent: Any, provider: str) -> Dict[str, Any]:
     # idempotent and covers a provider path that ignores it.
     grant_agent(provider, ms.AGENT_ID, granted)
     return state
+
+
+def _run_connect(agent: Any, provider: str) -> None:
+    """Run whichever sign-in *provider* actually uses.
+
+    Microsoft goes through the guided device-code walkthrough (#2590) — no
+    client secret, no browser required. Every other provider keeps the
+    existing browser-loopback path.
+    """
+    if provider == "microsoft":
+        _run_microsoft_setup(agent)
+    else:
+        _run_oauth(agent, provider)
+
+
+def _run_microsoft_setup(agent: Any) -> Dict[str, Any]:
+    """First-time Microsoft connect: walk the guided setup if the OAuth
+    client isn't configured yet, then sign in with a device code.
+
+    Reuses ``_oauth_client_gap`` — the SAME check ``_collect_oauth_client``
+    uses — so "is a client already configured" has exactly one answer, not
+    two that could disagree. A mailbox that already has a client configured
+    (e.g. a reconnect) skips straight to sign-in — never re-walked.
+    """
+    from gaia.connectors._loop import run_sync
+    from gaia.connectors.handler import configure
+    from gaia.connectors.setup_routes import get_route
+    from gaia_agent_email.tools import setup_walkthrough as sw
+
+    gap = _oauth_client_gap("microsoft")
+    if gap is not None:
+        route = get_route("microsoft")
+        if route is None:
+            # Defensive — unreachable while setup_routes.ROUTES is exactly
+            # {"microsoft": MS_PERSONAL}. A future route removal must still
+            # fail as a legible message, never a crash or a silent no-op.
+            raise RuntimeError(
+                "No guided walkthrough exists for Microsoft yet. Connect from "
+                f"Settings → Connections in the Agent UI, or see {OAUTH_DOCS_URL}."
+            )
+        collected, _trace = sw.run_setup_walkthrough(agent, route)
+        run_sync(
+            configure(
+                "microsoft",
+                {"client_id": collected["client_id"], "save_only": True},
+            )
+        )
+    return sw.run_device_oauth(agent, "microsoft")
 
 
 _CLIENT_FIRST_BLURB = (
@@ -538,6 +599,13 @@ def _setup_mailbox_access(agent: Any, wanted: str) -> str:
                 ),
             }
         )
+    except _walkthrough_stuck_exc() as exc:
+        # A defined, honest handoff (design §3) — not a failure. The
+        # exception's own message is the user-facing text (mirrors
+        # _Declined), so it is shown directly rather than improvised here.
+        return _envelope_ok(
+            {"changed": False, "declined": False, "stuck": True, "message": str(exc)}
+        )
 
 
 def _setup_flow(agent: Any, wanted: str) -> str:
@@ -617,9 +685,9 @@ def _setup_flow(agent: Any, wanted: str) -> str:
         from gaia.connectors.grants import grant_agent
 
         grant_agent(provider, ms.AGENT_ID, ms.required_scopes(provider))
-        _status(agent, f"Allowed this agent to use {label}.")
+        narrate(agent, f"Allowed this agent to use {label}.")
     else:
-        _run_oauth(agent, provider)
+        _run_connect(agent, provider)
 
     final = ms.inspect_provider(provider, probe=True)
     if final["state"] != ms.STATE_OK:

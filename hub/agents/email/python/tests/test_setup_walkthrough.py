@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import pytest
 from conftest import FakeAgent as _FakeAgent
+from gaia.connectors import setup_routes as sr
 from gaia_agent_email.tools import setup_walkthrough as sw
 
 PROVIDER = "microsoft"
@@ -21,6 +22,8 @@ OUTLOOK_SCOPES = [
     "https://graph.microsoft.com/Mail.ReadWrite",
     "https://graph.microsoft.com/Mail.Send",
 ]
+
+_VALID_GUID = "11112222-bbbb-3333-cccc-4444dddd5555"
 
 
 @pytest.fixture()
@@ -146,7 +149,7 @@ def test_grants_the_agent_after_a_successful_poll(device_flow):
 
 
 def test_scopes_sent_to_the_device_flow_include_identity_scopes(device_flow):
-    """Mirrors _connect_scopes — without identity scopes the account shows as
+    """Mirrors connect_scopes — without identity scopes the account shows as
     "default" instead of the real address, the same #2469 divergence bug."""
     agent = _FakeAgent()
 
@@ -155,3 +158,100 @@ def test_scopes_sent_to_the_device_flow_include_identity_scopes(device_flow):
     started_scopes = device_flow["started"][1]
     for scope in OUTLOOK_SCOPES:
         assert scope in started_scopes
+
+
+# ---------------------------------------------------------------------------
+# The step driver — walks route.steps, narrates, traces, shape-checks.
+# ---------------------------------------------------------------------------
+
+
+def _device_code_steps():
+    return sr.steps_for(sr.MS_PERSONAL, sign_in=sr.SIGN_IN_DEVICE_CODE)
+
+
+def test_walks_every_device_code_step_in_order_and_skips_the_redirect_uri():
+    steps = _device_code_steps()
+    assert [s.id for s in steps] == [
+        "register",
+        "account_type",
+        "public_client_flows",
+        "permissions",
+        "client_id",
+    ]
+    agent = _FakeAgent(answers=["done", "done", "done", "done", _VALID_GUID])
+
+    collected, trace = sw.run_setup_walkthrough(agent, sr.MS_PERSONAL)
+
+    for step in steps:
+        assert any(step.title in m for m in agent.console.info)
+    # The redirect-URI step is loopback-only — never narrated on this route.
+    redirect_step = next(s for s in sr.MS_PERSONAL.steps if s.loopback_only)
+    assert not any(redirect_step.title in m for m in agent.console.info)
+    assert collected["client_id"] == _VALID_GUID
+
+
+def test_every_step_appends_a_trace_entry_never_claiming_unearned_verification():
+    agent = _FakeAgent(answers=["done", "done", "done", "done", _VALID_GUID])
+
+    _, trace = sw.run_setup_walkthrough(agent, sr.MS_PERSONAL)
+
+    steps = _device_code_steps()
+    assert [t["step_id"] for t in trace] == [s.id for s in steps]
+    for step, entry in zip(steps, trace):
+        if not step.verifiable:
+            assert entry["verified"] is False, entry
+    # The one verifiable step (client_id) IS traced verified once its shape
+    # check passes.
+    assert trace[-1] == {"step_id": "client_id", "verified": True}
+
+
+def test_cannot_see_portal_notice_is_said_exactly_once_at_the_first_step():
+    agent = _FakeAgent(answers=["done", "done", "done", "done", _VALID_GUID])
+
+    sw.run_setup_walkthrough(agent, sr.MS_PERSONAL)
+
+    mentions = [m for m in agent.console.info if "can't see your screen" in m]
+    assert len(mentions) == 1
+
+
+def test_client_id_shape_check_rejects_a_non_guid_without_echoing_it():
+    bogus = "not-even-close-to-a-guid"
+    agent = _FakeAgent(answers=["done", "done", "done", "done", bogus, _VALID_GUID])
+
+    collected, trace = sw.run_setup_walkthrough(agent, sr.MS_PERSONAL)
+
+    assert collected["client_id"] == _VALID_GUID
+    # The shape-check failure message is an AUTHORED CONSTANT — it must never
+    # echo back the value the user pasted (that is how a credential re-enters
+    # the transcript).
+    assert not any(bogus in m for m in agent.console.info)
+    assert any("doesn't look like an Application" in m for m in agent.console.info)
+
+
+def test_credential_prompt_never_offers_done_stuck_options():
+    """AC8 half: a credential ask is a plain free-text prompt, never the
+    navigation lane's Done/I'm-stuck options."""
+    agent = _FakeAgent(answers=["done", "done", "done", "done", _VALID_GUID])
+
+    sw.run_setup_walkthrough(agent, sr.MS_PERSONAL)
+
+    credential_call = agent.console.asked[-1]
+    assert credential_call["options"] == []
+    assert credential_call["allow_free_text"] is True
+
+
+def test_im_stuck_ends_the_walkthrough_honestly():
+    agent = _FakeAgent(answers=["done", "stuck"])
+
+    with pytest.raises(sw.WalkthroughStuck) as exc:
+        sw.run_setup_walkthrough(agent, sr.MS_PERSONAL)
+
+    assert exc.value.step.id == "account_type"
+    # No further steps were narrated past the one the user got stuck on.
+    later_titles = [s.title for s in _device_code_steps()[2:]]
+    assert not any(title in m for title in later_titles for m in agent.console.info)
+    # The exception's own message is what gets shown to the user (matching
+    # the existing _Declined pattern) — it must name the doc link and never
+    # improvise a substitute response.
+    assert "amd-gaia.ai" in str(exc.value)
+    assert "account_type" not in str(exc.value)  # the step's id, not its title
