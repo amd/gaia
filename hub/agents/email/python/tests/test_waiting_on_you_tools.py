@@ -7,9 +7,14 @@ Acceptance criteria covered:
 - A read-only tool returns inbound messages awaiting a reply, with sender,
   topic/subject, age, and thread id.
 - Detects a direct question by phrasing, not by the presence of ``?``.
-- Detects an informal meeting-time proposal, including the #2580 incident
-  wording ("any chance to meet this Thursday at 9am") which the existing
-  meeting heuristic does NOT catch.
+- Detects an informal meeting-time proposal via ``text_signals.
+  has_meeting_time_signal``, including the #2580 incident wording ("any
+  chance to meet this Thursday at 9am") — this predicate was added because
+  the existing calendar heuristic did not catch that phrasing at the time
+  (#2583 has since taught the calendar heuristic to catch it too via a
+  separate invite phrase; both paths detecting it is strictly better than
+  either alone, so this suite no longer asserts the calendar heuristic
+  can't see it — see ``TestMeetingTimeDetection``).
 - The two named adversarial corpus ids must NOT qualify even in isolation
   (no prior correspondence).
 - A PERSONAL-labelled direct question is still detected.
@@ -344,15 +349,17 @@ class TestGenuineExchangeCountsUserMessagesOnly:
 
 class TestMeetingTimeDetection:
     def test_incident_wording_qualifies_with_corroboration(self):
-        # #2580 incident wording: the existing calendar heuristic does NOT
-        # catch this phrasing (no _INVITE_PHRASES / _MEETING_NOUNS match).
-        assert (
-            detect_meeting_request_heuristic(
-                "", "Any chance to meet this Thursday at 9am?"
-            ).is_meeting_request
-            is False
-        ), "test setup assumption broken: the existing heuristic now catches this"
-
+        # #2580 incident wording. This module's own has_meeting_time_signal
+        # was added to catch it; #2583 separately taught the existing
+        # calendar heuristic to catch it too (via a dedicated invite
+        # phrase). Both paths detecting it is strictly better than either
+        # alone, so this test only asserts the detector's own behavior —
+        # it does NOT assert anything about whether the calendar heuristic
+        # can or can't see this phrasing (that used to be asserted here and
+        # broke the moment #2583 closed that gap; see
+        # test_direct_ask_signal_catches_what_the_meeting_heuristic_still_
+        # does_not below for phrasing the two paths genuinely still differ
+        # on).
         gmail = _backend(
             _outbound("s1", thread_id="t1", age_days=10),
             _inbound(
@@ -367,6 +374,32 @@ class TestMeetingTimeDetection:
         out = _run(gmail)
         assert len(out["waiting_on_you"]) == 1
         assert out["waiting_on_you"][0]["signal"] == SIGNAL_MEETING_TIME
+
+    def test_direct_ask_signal_catches_what_the_meeting_heuristic_still_does_not(
+        self,
+    ):
+        # Preserves the original coverage intent honestly: a phrasing that
+        # our own has_direct_ask_signal catches but the calendar meeting
+        # heuristic still does not (and should not) catch, since it has no
+        # meeting noun, no invite phrase, and no time token.
+        text = "Did you have a chance to look through the code?"
+        detection = detect_meeting_request_heuristic("", text)
+        assert detection.is_meeting_request is False
+
+        gmail = _backend(
+            _outbound("s1", thread_id="t1", age_days=10),
+            _inbound(
+                "r1",
+                thread_id="t1",
+                sender="Alice <alice@example.com>",
+                subject="Code review",
+                body=text,
+                age_days=2,
+            ),
+        )
+        out = _run(gmail)
+        assert len(out["waiting_on_you"]) == 1
+        assert out["waiting_on_you"][0]["signal"] == SIGNAL_DIRECT_ASK
 
     def test_meeting_noun_without_time_does_not_qualify(self):
         gmail = _backend(
