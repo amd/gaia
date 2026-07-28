@@ -49,6 +49,7 @@ class OAuthClientNotConfiguredError(ConfigurationError):
     ):
         self.provider_id = provider_id
         self.provider_label = provider_label
+        self.console_steps = console_steps
         super().__init__(
             self._build_message(
                 provider_id, provider_label, console_steps, docs, example
