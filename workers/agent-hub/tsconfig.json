@@ -16,5 +16,8 @@
     "isolatedModules": true,
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  // src only — test/ is typechecked by tsconfig.test.json, which adds Node
+  // types. Keeping them apart is what stops a Worker handler from compiling
+  // against a Node builtin it will not have at runtime.
+  "include": ["src/**/*.ts"]
 }

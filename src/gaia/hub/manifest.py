@@ -53,7 +53,9 @@ _SEMVER_RE = re.compile(
 # (filesystem:read, network:write, etc.)").
 _PERMISSION_RE = re.compile(r"^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$")
 
-VALID_LANGUAGES = frozenset({"python", "cpp"})
+# go/typescript admit the two shipped non-agent packages: the Go terminal hub
+# and the Electron Agent UI. Keep in lock-step with the Worker's manifest.ts.
+VALID_LANGUAGES = frozenset({"python", "cpp", "go", "typescript"})
 
 VALID_SECURITY_TIERS = frozenset({"verified", "community", "experimental"})
 

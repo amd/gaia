@@ -140,6 +140,8 @@ export interface AgentManifest {
   author: string;
   license: string;
   language: string;
+  /** Package kind: agent | app | component. Defaults to "agent" (#1716). */
+  type: string;
   category: string;
   tags: string[];
   icon: string;
@@ -185,6 +187,8 @@ export interface IndexEntry {
   latest_version: string;
   icon: string;
   language: string;
+  /** Package kind: agent | app | component. Defaults to "agent" (#1716). */
+  type: string;
   author: string;
   security_tier: string;
   download_size_bytes: number;

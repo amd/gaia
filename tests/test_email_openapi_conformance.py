@@ -959,6 +959,12 @@ def test_all_documented_paths_covered(committed_spec):
         # the cancel route is covered there too.
         ("post", "/v1/email/query"),
         ("post", "/v1/email/query/{run_id}/cancel"),
+        # Mid-run question resume (schema 2.6, #2469). Answering resumes the
+        # ORIGINAL stream, so there is no JSON body schema to conform to here
+        # either; behavioral conformance (resume, unknown run 404, stale
+        # request_id 409, the non-answering caller, keepalives while parked)
+        # lives in hub/agents/email/python/tests/test_query_resume_2469.py.
+        ("post", "/v1/email/query/{run_id}/respond"),
         # OAuth forward-OUT intake (schema 2.5, #2154). The daemon delivers
         # short-lived connector tokens here; behavioral conformance (auth,
         # unknown-provider, empty-token, metadata-only responses, withdraw)
