@@ -322,6 +322,11 @@ def test_stale_daemon_omitting_dev_src_dir_is_refused_not_a_false_success(
     out = capsys.readouterr().out
     assert "Python environment" in out
     assert "source:" not in out
+    # The remedy must name the REPO ROOT (/checkout-b), not the agent source
+    # dir (resolved) -- a bare "Python environment" substring check is what
+    # let a wrong-path remedy through the first time (real-world evidence).
+    assert "rooted at /checkout-b," in out
+    assert f"rooted at {resolved}" not in out
 
 
 def test_stale_daemon_returning_a_different_dev_src_dir_is_refused(monkeypatch, capsys):
@@ -352,6 +357,45 @@ def test_stale_daemon_returning_a_different_dev_src_dir_is_refused(monkeypatch, 
 
     out = capsys.readouterr().out
     assert "Python environment" in out
+    # The remedy must name the caller's REPO ROOT (/checkout-b, from the
+    # resolved dev_src_dir), not the stale daemon's reported agent subdir
+    # (/checkout-a/...) nor the caller's own agent subdir.
+    assert "rooted at /checkout-b," in out
+    assert f"rooted at {resolved}" not in out
+    assert "rooted at /checkout-a/hub/agents/toy-dev/python" not in out
+
+
+def test_stale_daemon_mismatch_with_non_standard_explicit_dev_src_dir_does_not_crash(
+    monkeypatch, capsys
+):
+    """An explicit --dev-src-dir that doesn't follow hub/agents/<id>/python
+    has no repo root to derive -- this must degrade to an honest, actionable
+    message (never a raw traceback, never a false "rooted at <subdir>" claim
+    that reproduces the original bug)."""
+    import requests
+
+    import gaia.daemon.client as client_mod
+    import gaia.daemon.sidecars.spec as spec_mod
+
+    resolved = Path("/some/arbitrary/directory")
+    monkeypatch.setattr(
+        spec_mod, "resolve_caller_mode", lambda agent_id, override=None: "dev"
+    )
+    monkeypatch.setattr(
+        spec_mod, "resolve_caller_dev_src_dir", lambda agent_id, **kw: resolved
+    )
+    monkeypatch.setattr(client_mod, "start_or_attach", lambda **k: _inst())
+    recorder = _RecordingPost(200, _ensure_payload(mode="dev"))
+    monkeypatch.setattr(requests, "post", recorder)
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli._handle_daemon_start_agent(
+            _args(mode="dev", dev_src_dir="/some/arbitrary/directory")
+        )
+    assert exc_info.value.code == 1
+
+    out = capsys.readouterr().out
+    assert f"rooted at {resolved}" not in out
 
 
 # ===========================================================================

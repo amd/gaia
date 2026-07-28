@@ -176,12 +176,10 @@ def repo_root_from_agent_dev_src_dir(dev_src_dir: Path, agent_id: str) -> Path:
     expected_tail = ("hub", "agents", agent_id, "python")
     parts = dev_src_dir.parts
     tail = parts[-len(expected_tail) :] if len(parts) >= len(expected_tail) else ()
-    # Case-insensitive on purpose: this checks program-defined literal
-    # convention words ("hub"/"agents"/"python") and the caller's own
-    # agent_id — never two independent user paths — so folding case here is
-    # not the "collapse two distinct POSIX directories" hazard the identity
-    # comparison above must avoid; it is comparing a path's shape against a
-    # known constant.
+    # Case-insensitive by design, unlike the identity comparison elsewhere in
+    # this module: this matches a path's SHAPE against fixed literals, not
+    # two independent user paths for equality, so it isn't the case-folding
+    # hazard that comparison must avoid.
     if tuple(p.lower() for p in tail) != tuple(t.lower() for t in expected_tail):
         raise DevSrcDirResolutionError(
             f"'{dev_src_dir}' does not end in the expected "

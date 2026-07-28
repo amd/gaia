@@ -7438,6 +7438,7 @@ def _handle_daemon_start_agent(args):
     from gaia.daemon.errors import DaemonError
     from gaia.daemon.sidecars.errors import DevSrcDirResolutionError
     from gaia.daemon.sidecars.spec import (
+        repo_root_from_agent_dev_src_dir,
         resolve_caller_dev_src_dir,
         resolve_caller_mode,
     )
@@ -7491,12 +7492,31 @@ def _handle_daemon_start_agent(args):
         # reports whatever IT resolved — never trust a match we can't verify.
         reported = body.get("dev_src_dir")
         if reported != str(dev_src_dir):
+            # The remedy must name the REPO ROOT — restarting a Python
+            # environment/editable install rooted at the agent SOURCE dir
+            # (dev_src_dir itself) does nothing to the daemon's own anchor.
+            try:
+                remedy_root = repo_root_from_agent_dev_src_dir(
+                    dev_src_dir, args.agent_id
+                )
+                remedy = (
+                    "Restart the daemon from a Python environment/editable "
+                    f"install rooted at {remedy_root}, or upgrade it."
+                )
+            except DevSrcDirResolutionError:
+                # Only reachable via an explicit --dev-src-dir that doesn't
+                # follow the hub/agents/<id>/python layout — no repo root
+                # exists to name, so say so rather than naming the agent
+                # subdir as something to "root a Python environment at".
+                remedy = (
+                    "Restart the daemon from the Python environment/editable "
+                    f"install that serves '{dev_src_dir}' as this agent's "
+                    "dev source, or upgrade it."
+                )
             print(
                 f"❌ the daemon reported dev source '{reported}' but expected "
                 f"'{dev_src_dir}' — the running daemon predates this fix and "
-                "silently ignored the dev-mode source check. Restart the "
-                "daemon from a Python environment/editable install rooted at "
-                f"{dev_src_dir}, or upgrade it."
+                f"silently ignored the dev-mode source check. {remedy}"
             )
             sys.exit(1)
 
