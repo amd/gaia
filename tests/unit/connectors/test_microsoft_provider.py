@@ -108,10 +108,26 @@ class TestRegistry:
             providers.get("microsoft")
 
         assert exc.value.console_steps == render_console_steps(MS_PERSONAL)
-        # And every step's actual instruction text is present verbatim — not
-        # just an independently-worded summary that happens to be 4 lines too.
+        # The CLI-facing text is explicitly the LOOPBACK rendering (covers
+        # whichever route the user ends up taking) — pin that explicitly, not
+        # just the default, so a default-flip can't silently change which
+        # steps a CLI user sees.
+        assert exc.value.console_steps == render_console_steps(
+            MS_PERSONAL, sign_in="loopback"
+        )
+        # Every LOOPBACK step's instruction text is present verbatim — not
+        # just an independently-worded summary that happens to match.
         for step in MS_PERSONAL.steps:
             assert step.instruction in exc.value.console_steps
+        # And the device-code rendering must genuinely differ: it drops the
+        # loopback-only redirect-URI step device code never uses (#2590) —
+        # the console text and the guided walkthrough are two DIFFERENT
+        # (but both route-derived) renderings, not one flat unfiltered dump.
+        device_rendering = render_console_steps(MS_PERSONAL, sign_in="device_code")
+        assert device_rendering != exc.value.console_steps
+        redirect_step = next(s for s in MS_PERSONAL.steps if s.loopback_only)
+        assert redirect_step.instruction not in device_rendering
+        assert redirect_step.instruction in exc.value.console_steps
 
     def test_microsoft_loads_from_keyring_without_env(self, monkeypatch):
         from gaia.connectors.store import save_provider_credentials
