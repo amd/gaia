@@ -11,6 +11,17 @@ the guided walkthrough is a different concern.
 **Outlook only.** No ``google_personal`` route, no account-kind interview, no
 resumability — see ``gaia.connectors.setup_routes`` and the #2590 plan for
 why those are out of scope here.
+
+**Navigation prompts keep free text (and the FAQ lane) for the WHOLE route
+here** — Microsoft has no client secret, and the Application (client) ID is
+public by design, so there is nothing on this route worth hiding from the
+TUI's cleartext echo. The Google route (#2594) will carry real secrets
+through its later steps; ITS navigation prompts must drop free text from the
+key-creation step onward so an open box right after the portal displays a
+secret never invites pasting it into scrollback (the TUI renders typed text
+in cleartext unless a prompt is marked ``sensitive``). That rule does not
+apply here — do not port it into this module without re-deriving it for a
+route that actually has something to hide.
 """
 
 from __future__ import annotations
@@ -176,12 +187,46 @@ def _collect_credential(agent: Any, step: Step) -> str:
     return value
 
 
-def _ask_nav(agent: Any, step: Step) -> str:
+#: Bound on FAQ-answering turns before the driver stops trying to match and
+#: just re-asks plainly. Never changes allow_free_text or the option set —
+#: an options-less prompt must never lose free text (AC8); this bound only
+#: controls when the driver stops attempting to answer.
+_FAQ_MAX_TURNS = 3
+
+#: Single authored constant for "that didn't match any FAQ" — never composed
+#: or paraphrased per-question, which is what would let a small local model
+#: invent an answer instead of admitting it doesn't have one.
+_FAQ_NO_MATCH = (
+    "I don't have a written answer for that one. Say \"I'm stuck\" and I'll "
+    "hand you off to the full guide, or \"Done\" once you've finished this "
+    "step."
+)
+
+
+def _faq_answer(step: Step, route: SetupRoute, question: str) -> Optional[str]:
+    """Match *question* against *step*'s FAQ, then *route*'s, by keyword.
+
+    Selection, never composition (design §5): the returned string, if any,
+    IS a ``QA.answer`` verbatim — never reworded, prefixed, or summarized.
+    """
+    needle = (question or "").strip().casefold()
+    for qa in step.faq:
+        if any(hint.casefold() in needle for hint in qa.question_hints):
+            return qa.answer
+    for qa in route.faq:
+        if any(hint.casefold() in needle for hint in qa.question_hints):
+            return qa.answer
+    return None
+
+
+def _ask_nav(agent: Any, step: Step, route: SetupRoute) -> str:
     """Ask the Done / I'm-stuck navigation question for a non-credential step.
 
-    ``allow_free_text=False`` with exactly two options, never zero (AC8) —
-    the FAQ lane (increment 6) adds free text back on top of this, it never
-    replaces the options.
+    ``allow_free_text=True`` with exactly two options, never zero (AC8): a
+    free-text answer that isn't a Done/Stuck match is treated as a genuine
+    question and run through the FAQ lane (design §5), then the SAME
+    question is re-asked with the SAME options and free text still enabled —
+    never ``allow_free_text=False`` on an options-less prompt.
     """
     options = (
         Option(_DONE, "Done", "I've finished this step — move to the next one."),
@@ -189,13 +234,23 @@ def _ask_nav(agent: Any, step: Step) -> str:
             _STUCK, "I'm stuck", "Show me the written guide instead, and stop here."
         ),
     )
-    return ask(
-        agent,
-        f"Done with: {step.title}?",
-        options=options,
-        allow_free_text=False,
-        timeout_seconds=_STEP_TIMEOUT_SECONDS,
-    )
+    question = f"Done with: {step.title}?"
+    turns = 0
+    while True:
+        raw = ask(
+            agent,
+            question,
+            options=options,
+            allow_free_text=True,
+            timeout_seconds=_STEP_TIMEOUT_SECONDS,
+        )
+        if raw in (_DONE, _STUCK):
+            return raw
+        turns += 1
+        answer = _faq_answer(step, route, raw)
+        narrate(agent, answer if answer is not None else _FAQ_NO_MATCH)
+        if turns >= _FAQ_MAX_TURNS:
+            turns = 0
 
 
 def run_setup_walkthrough(
@@ -230,7 +285,7 @@ def run_setup_walkthrough(
             trace.append({"step_id": step.id, "verified": step.verifiable})
             continue
 
-        answer = _ask_nav(agent, step)
+        answer = _ask_nav(agent, step, route)
         if answer == _STUCK:
             raise WalkthroughStuck(step, route)
         trace.append({"step_id": step.id, "verified": False})

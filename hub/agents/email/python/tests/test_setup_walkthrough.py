@@ -255,3 +255,119 @@ def test_im_stuck_ends_the_walkthrough_honestly():
     # improvise a substitute response.
     assert "amd-gaia.ai" in str(exc.value)
     assert "account_type" not in str(exc.value)  # the step's id, not its title
+
+
+# ---------------------------------------------------------------------------
+# FAQ lane — selection, never composition. Navigation prompts only.
+# ---------------------------------------------------------------------------
+
+
+def test_a_step_level_faq_answer_is_emitted_byte_for_byte():
+    """The invariant, asserted end-to-end: what got printed IS the authored
+    QA.answer — imported from the real route, compared with ==, not `in`. A
+    function-level test of the lookup alone would pass even if the driver
+    prepended something like "Good question — "."""
+    register_step = next(s for s in sr.MS_PERSONAL.steps if s.id == "register")
+    qa = register_step.faq[0]
+    assert "which account" in qa.question_hints
+
+    agent = _FakeAgent(
+        answers=[
+            "which account should I use?",
+            "done",
+            "done",
+            "done",
+            "done",
+            _VALID_GUID,
+        ]
+    )
+
+    sw.run_setup_walkthrough(agent, sr.MS_PERSONAL)
+
+    # List membership on a list of strings is Python `==` per element — the
+    # exact-match check the plan requires, not a substring `in` check that
+    # would also pass if the driver had prepended something to it.
+    assert qa.answer in agent.console.info
+
+
+def test_a_route_level_faq_answer_is_reachable_from_any_step():
+    """The client-secret FAQ lives on the ROUTE, not any one step — it must
+    still resolve when asked during a step with no matching step-level FAQ."""
+    route_qa = next(qa for qa in sr.MS_PERSONAL.faq if "secret" in qa.question_hints)
+
+    agent = _FakeAgent(
+        answers=[
+            "done",  # register
+            "do I need a client secret for this?",  # account_type — no step FAQ
+            "done",
+            "done",
+            "done",
+            _VALID_GUID,
+        ]
+    )
+
+    sw.run_setup_walkthrough(agent, sr.MS_PERSONAL)
+
+    assert route_qa.answer in agent.console.info
+
+
+def test_an_unmatched_question_returns_the_authored_no_match_string():
+    agent = _FakeAgent(
+        answers=[
+            "what is the airspeed velocity of an unladen swallow?",
+            "done",
+            "done",
+            "done",
+            "done",
+            _VALID_GUID,
+        ]
+    )
+
+    sw.run_setup_walkthrough(agent, sr.MS_PERSONAL)
+
+    assert sw._FAQ_NO_MATCH in agent.console.info
+
+
+def test_faq_turn_re_asks_with_the_same_options_and_free_text_still_enabled():
+    """A credential prompt is never given the FAQ lane (zero options), and no
+    NAVIGATION prompt is ever re-issued with allow_free_text=False and zero
+    options — asserted across the whole scripted walk, not one call."""
+    agent = _FakeAgent(
+        answers=[
+            "a question nobody wrote an answer for",
+            "done",
+            "done",
+            "done",
+            "done",
+            _VALID_GUID,
+        ]
+    )
+
+    sw.run_setup_walkthrough(agent, sr.MS_PERSONAL)
+
+    for call in agent.console.asked:
+        if call["allow_free_text"] is False:
+            assert call["options"], "allow_free_text=False with zero options"
+        # Every navigation prompt (has options) keeps allow_free_text True —
+        # the FAQ lane is never silently withdrawn mid-walk.
+        if call["options"]:
+            assert call["allow_free_text"] is True
+
+
+def test_credential_prompt_is_never_given_the_faq_lane():
+    """The credential ask has zero options — a free-text answer there is
+    ALWAYS taken as the literal value, never routed through FAQ matching."""
+    weird_but_literal_value = "why do you need this?"
+    agent = _FakeAgent(
+        answers=["done", "done", "done", "done", weird_but_literal_value, _VALID_GUID]
+    )
+
+    collected, _trace = sw.run_setup_walkthrough(agent, sr.MS_PERSONAL)
+
+    # It was rejected by the SHAPE CHECK (not a GUID), not silently
+    # reinterpreted as a question — the walkthrough asked again and got the
+    # real value next.
+    assert collected["client_id"] == _VALID_GUID
+    assert not any(
+        "which account" in m or sw._FAQ_NO_MATCH in m for m in agent.console.info
+    )
