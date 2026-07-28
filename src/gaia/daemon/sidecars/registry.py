@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from contextlib import contextmanager
 from typing import Callable, Optional
 
 import psutil
@@ -304,17 +305,63 @@ class SidecarRegistry:
             return {"agent_id": agent_id, "state": "stopped"}
         manager, agent_lock = holder
         with agent_lock:
-            if not manager.is_running:
-                return {"agent_id": agent_id, "state": "stopped"}
-            pid = manager.pid
-            manager.shutdown()
-            if pid is not None and psutil.pid_exists(pid):
-                raise StopFailedError(
-                    f"agent '{agent_id}' sidecar pid {pid} survived the "
-                    "tree-kill and is still alive. Inspect the process and "
-                    "kill it manually before retrying."
-                )
+            self._stop_locked(agent_id, manager)
         return {"agent_id": agent_id, "state": "stopped"}
+
+    def _stop_locked(self, agent_id: str, manager) -> None:
+        """Kill + verify, with *agent_id*'s per-agent lock already held."""
+        if not manager.is_running:
+            return
+        pid = manager.pid
+        manager.shutdown()
+        if pid is not None and psutil.pid_exists(pid):
+            raise StopFailedError(
+                f"agent '{agent_id}' sidecar pid {pid} survived the "
+                "tree-kill and is still alive. Inspect the process and "
+                "kill it manually before retrying."
+            )
+
+    @contextmanager
+    def hold_for_mutation(self, agent_id: str):
+        """Stop the sidecar and keep it stopped for the body of the ``with``.
+
+        Install/uninstall rewrite the very directory the sidecar runs from, so
+        stopping it once at t=0 is not enough: an ``ensure`` arriving mid-download
+        would respawn the process and the installer would then replace a live
+        binary (silently on POSIX, as a locked-file error on Windows). Holding
+        the per-agent lock makes ``ensure``/``stop`` of THIS agent wait until the
+        mutation finishes — other agents are unaffected.
+
+        Raises:
+            UnknownAgentError: no spec for *agent_id*.
+            StopFailedError: the pid survived the tree-kill — the caller MUST
+                abort rather than mutate a live process's directory.
+        """
+        spec = self._spec(agent_id)
+        _, agent_lock = self._holder(agent_id, spec)
+        with agent_lock:
+            # Re-read under the lock. ``ensure(mode=...)`` REPLACES the manager
+            # for a stopped agent, so the one captured a moment ago can be a
+            # stale object whose is_running is False while the manager that
+            # replaced it is live — stopping the stale one would leave a running
+            # sidecar and let the caller mutate its directory anyway.
+            manager, _ = self._holder(agent_id, spec)
+            self._stop_locked(agent_id, manager)
+            yield
+
+    def _holder(self, agent_id: str, spec: AgentSidecarSpec) -> tuple:
+        """The ``(manager, lock)`` pair for *agent_id*, creating it if needed.
+
+        The lock object is stable for an agent id's lifetime (``ensure`` reuses
+        it when it swaps the manager), which is what makes re-reading the
+        manager under that lock safe.
+        """
+        with self._lock:
+            holder = self._managers.get(agent_id)
+            if holder is None:
+                holder = (self._new_manager(agent_id, spec, None), threading.Lock())
+                self._managers[agent_id] = holder
+            return holder
 
     def shutdown_all(self) -> None:
         """Tree-kill every running sidecar (daemon shutdown path)."""

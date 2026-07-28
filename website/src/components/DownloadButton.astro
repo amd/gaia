@@ -2,7 +2,9 @@
 // Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// OS-detecting "Download the app" CTA for the GAIA Agent UI.
+// OS-detecting download CTA for the GAIA Agent UI (the Electron desktop app).
+// It names the Agent UI explicitly because it is no longer the only front
+// door — the terminal hub installs via TerminalHubCta.astro.
 // Progressive enhancement: with no JS it links to the GitHub releases page
 // (always works). JS detects the OS to set the label, then best-effort fetches
 // the latest release to deep-link the right installer + show the version.
@@ -17,20 +19,20 @@ interface Props {
 const { variant = 'primary', size = 'lg', class: className = '' } = Astro.props;
 
 const releasesUrl = 'https://github.com/amd/gaia/releases/latest';
-const variantCls =
-  variant === 'primary'
-    ? 'bg-g-gold text-black hover:brightness-110'
-    : 'border border-g-border text-g-text hover:border-g-gold/50';
-const sizeCls = size === 'lg' ? 'px-6 py-3 text-sm gap-2' : 'px-3.5 py-1.5 text-[13px] gap-1.5';
+const variantCls = variant === 'primary' ? 'g-btn-primary' : 'g-btn-secondary';
+const sizeCls = size === 'lg' ? 'px-6 py-3 text-[14px]' : 'px-3.5 py-1.5 text-[13px]';
 ---
 
 <a
   href={releasesUrl}
   data-download-cta
-  class={`inline-flex items-center rounded-md font-semibold transition-colors ${variantCls} ${sizeCls} ${className}`}
+  class={`g-btn ${variantCls} ${sizeCls} ${className}`}
 >
-  <span data-dl-label>Download the app</span>
-  <span data-dl-version class="font-normal opacity-70"></span>
+  <svg class="h-4 w-4 flex-none" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+  </svg>
+  <span data-dl-label>Download the Agent UI</span>
+  <span data-dl-version class="mono font-normal opacity-70"></span>
 </a>
 
 <script>
@@ -50,7 +52,7 @@ const sizeCls = size === 'lg' ? 'px-6 py-3 text-sm gap-2' : 'px-3.5 py-1.5 text-
     const osLabel = { windows: 'Windows', macos: 'macOS', linux: 'Linux' } as const;
     els.forEach((el) => {
       const label = el.querySelector('[data-dl-label]');
-      if (os && label) label.textContent = `Download for ${osLabel[os]}`;
+      if (os && label) label.textContent = `Agent UI for ${osLabel[os]}`;
     });
 
     // Best-effort: latest version + the installer asset matching this OS.

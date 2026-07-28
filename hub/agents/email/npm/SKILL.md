@@ -151,12 +151,12 @@ import { EmailClient } from "@amd-gaia/agent-email/client";
 const client = new EmailClient({ baseUrl: "http://127.0.0.1:8131", authToken });
 ```
 
-## Canonical agent-loop query (`POST /v1/email/query`, schema 2.4)
+## Canonical agent-loop query (`POST /v1/email/query`, schema 2.6)
 
 The v2 keystone (#2016): NL request in, the agent reasons and chains its tools, the
-**seven canonical Server-Sent Event types** out — `status` / `token` / `tool_call` /
-`tool_result` / `needs_confirmation` / `final` / `error`, terminated by exactly one
-`final` or `error`. This is the one loop every v2 front-door relays to. The **host
+**canonical Server-Sent Event types** out — `status` / `token` / `tool_call` /
+`tool_result` / `needs_confirmation` / `needs_input` / `final` / `error`, terminated by
+exactly one `final` or `error`. This is the one loop every v2 front-door relays to. The **host
 mints `run_id`** and **pushes** the transcript slice in `context`, so the sidecar
 stays stateless. The typed client wraps it (#2097): `query()` returns an async
 iterator of typed `QueryEvent`s; `cancelQuery(runId)` stops the run between steps:
@@ -174,6 +174,9 @@ for await (const ev of sidecar.client.query({
     case "tool_call":    console.log(`→ ${ev.tool}`, ev.args); break;
     case "tool_result":  console.log(`← ${ev.tool}`, ev.data); break;
     case "needs_confirmation": break; // run then ends with a final refusal (D1)
+    case "needs_input":               // PAUSED — answer, then keep iterating
+      await sidecar.client.respondToQuery(runId, ev.request_id, await askUser(ev));
+      break;
     case "final":        console.log(ev.answer); break;   // terminal
     case "error":        console.error(ev.detail); break; // terminal, verbatim
     default:             console.warn("unsupported event", ev); // future additive type
@@ -192,7 +195,23 @@ Rules an integration must respect:
   `QueryStreamError` for a non-SSE response / malformed event / stream that closes
   without a terminal). Never treat iterator completion without a `final` as success —
   the client already throws for you.
-- **Handle the `default` branch.** A `type` outside the frozen seven arrives as
+- **Gate `can_answer_questions` on the peer's version.** Call `version()` first:
+  a sidecar below `apiVersion` 2.6 does not know the field and answers `422` to
+  every request carrying it — including `false`. Omit it below 2.6 and treat
+  mid-run questions as unavailable.
+- **Declare `can_answer_questions` honestly.** It defaults to `false`. Set it
+  `true` only when a human is watching a UI that renders the question; a one-shot
+  or batch job must leave it off, and then gets an immediate actionable refusal
+  instead of a run parked on a question nobody can see.
+- **Answer `needs_input`, do not restart.** The run is parked on the SAME stream.
+  Call `respondToQuery(runId, ev.request_id, value)` and keep iterating the existing
+  iterator — issuing a fresh `query()` abandons the paused run. `value` is an
+  option's `value` (its `label` also works) or free text when `allow_free_text`.
+  Render every option's `description`: the label alone does not tell the user what
+  they are agreeing to. When `sensitive` is set, mask the input and never log it.
+  Ignoring the question is safe but wasteful — the run ends with an `error` after
+  `timeout_seconds`.
+- **Handle the `default` branch.** A `type` outside the canonical vocabulary arrives as
   `{ type: "unknown", eventType, raw }` — render an "unsupported event" placeholder or
   log it; it is never silently dropped.
 - **Long runs are normal.** `timeoutMs` bounds time-to-first-response only. To abort
@@ -202,7 +221,16 @@ Rules an integration must respect:
 A confirmation-requiring step (a destructive tool such as `send_now`) emits
 `needs_confirmation` then ends with a `final` refusal pointing at the fixed-function
 route — mint a token via `draft()`, then `send()` (stateless stub, epic decision D1;
-`confirm_url` omitted).
+`confirm_url` omitted). That is an **approval** and stays terminal and deny-by-default;
+a **question** (`needs_input`) is the resumable one. Do not treat them alike.
+
+**Mailbox setup is the agent's job now (#2469).** When the agent has no usable mailbox —
+not connected, credentials broken, missing a scope, or connected-but-not-granted — it
+asks the user about that specific problem via `needs_input` and fixes it, rather than
+returning an error telling them to run a CLI command. Two cases are worth knowing:
+the connected-but-not-granted case needs no browser at all (a local permission write),
+and connecting Google still requires the user to supply their own OAuth client ID and
+secret, so expect a `sensitive: true` question on that path.
 
 ## Stateful agent surface (`/v1/email/agent/*`, 0.4.0)
 
@@ -256,7 +284,8 @@ session — an overlapping `/query` returns **409**. See `SPEC.md` for the full 
 The agent can run **proactively** at the `earn_trust` level: it archives low-signal mail
 on its own **where your explicit preferences already sanction it** (a low-priority sender,
 or a category you default to archive), drafts replies for review, and **always asks before
-anything destructive** (send / forward / permanent-delete / RSVP).
+anything destructive** (send / forward / RSVP / quarantine). There is no permanent-delete —
+the agent only ever moves mail to Trash, which is always reversible.
 Turn it on and inspect the earned trust:
 
 ```js

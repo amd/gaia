@@ -1,0 +1,249 @@
+---
+title: "TUI Control MCP Server"
+description: "Let Claude Code drive the GAIA terminal hub while you watch the same live session"
+icon: "terminal"
+---
+
+<Info>
+  **Prerequisites:** the GAIA TUI binary, started with the control API on:
+  `gaia tui --control`.
+</Info>
+
+## Overview
+
+The GAIA TUI can expose a loopback control API, and this MCP server wraps it as
+tools. An assistant then navigates the hub, types into chat, and launches agents
+**in the session you are looking at** — same process, same terminal, frames
+updating live. It is not a headless replica and not a replay.
+
+That makes two things possible that were not before:
+
+- **Testing the TUI without a human at the keyboard.** Send keys, wait for a
+  condition, read the rendered screen, assert.
+- **Watching an assistant work.** You keep your terminal open; navigation,
+  filtering, and agent launches happen in front of you.
+
+```
+┌──────────────┐    stdio/HTTP    ┌───────────────────┐
+│ Claude Code  │ ◄──────────────► │ TUI Control MCP   │
+│ / MCP client │     MCP tools    │ server (Python)   │
+└──────────────┘                  └─────────┬─────────┘
+                                            │ loopback HTTP + bearer token
+                                            │ (discovered via ~/.gaia/tui/control.json)
+                                            ▼
+                                  ┌───────────────────┐
+                                  │ gaia tui --control│  ← the terminal you are watching
+                                  │ (Go / Bubble Tea) │
+                                  └───────────────────┘
+```
+
+Keys are injected into the running `tea.Program` with `Send`; the screen served
+back is the exact frame the renderer just drew.
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `tui_status` | Is a TUI running, and what is on screen conceptually: view, active agent, streaming, hub tab, selection, terminal size |
+| `tui_screen` | The rendered screen as plain text (ANSI stripped). The workhorse — read it after every action |
+| `tui_send_keys` | Inject named keys: `enter`, `esc`, `tab`, `shift+tab`, arrows, `pgup`/`pgdown`, `backspace`, `ctrl+c`, `?`, `/` … |
+| `tui_send_text` | Type a string as runes (what a human typing produces) |
+| `tui_wait_for` | Block until text appears (or disappears), with a timeout. **Use this instead of polling** |
+| `tui_launch_agent` | High level: find the agent by id across hub tabs, move the selection, launch it |
+| | *(refuses in a standalone `gaia chat` session, where esc quits instead of returning to a hub)* |
+| `tui_install_agent` / `tui_uninstall_agent` | High level: navigate to an agent and trigger the hub's install/uninstall binding |
+| `tui_resize` | Re-lay-out at a given size, e.g. 80x24 versus 200x50 |
+
+<Warning>
+  `tui_install_agent` needs an install keybinding on the hub screen, and the
+  hub does not have one yet — the tool reads the bindings off the footer rather
+  than guessing a key, so today it returns "not yet available" and lists what
+  the hub does offer. It starts working the moment the binding lands, with no
+  change here. Neither tool takes "the key was pressed" as success:
+  `tui_uninstall_agent` requires the agent to be gone from the hub's list, and
+  `tui_install_agent` requires the screen to have changed at all (an install
+  promotes the row to a different tab, so it may legitimately leave the current
+  one). A refusal quotes the hub's own status line.
+</Warning>
+
+<Note>
+  `tui_wait_for` is the one that makes automation reliable. Without it, every
+  caller busy-polls `tui_screen` and races the render. On timeout it reports
+  **what the screen actually contained**, so a failure is debuggable.
+</Note>
+
+`tui_send_keys`, `tui_send_text`, and `tui_resize` return only once the input has
+been *consumed and redrawn*, so reading `tui_screen` immediately after is
+race-free. They report `settled: false` if the model was still busy — the input
+is queued, so re-read the screen rather than assume it was dropped.
+
+That is not the same as "the consequences finished". Pressing `enter` to launch
+an agent is consumed at once, while the view switch it starts arrives a moment
+later — so wait on the outcome (`tui_wait_for`) rather than reading the screen
+once and concluding nothing happened.
+
+If the user has quit the TUI (or it is still starting), these tools fail with
+"the TUI is not accepting input" instead of reporting a success. Bubble Tea
+discards messages sent outside its event loop, so a success there would be a
+lie. `tui_status` and `tui_screen` keep working, and `tui_status` reports
+`running: false`.
+
+---
+
+## Setup with Claude Code
+
+<Steps>
+  <Step title="Start the TUI with the control API">
+    ```bash
+    gaia tui --control
+    ```
+
+    The TUI prints the port it bound and writes `~/.gaia/tui/control.json`
+    (mode `0600`) holding the pid, port, and bearer token. The token is never
+    printed. Add `--debug` to log every injected key, state transition, and
+    wait resolution to stderr.
+
+    For a fixed port: `gaia tui --control-port 8770`.
+  </Step>
+
+  <Step title="Add the MCP server to Claude Code">
+    ```bash
+    # Project-scoped (recommended)
+    claude mcp add gaia-tui -s project -- uv run python -m gaia.mcp.servers.tui_mcp --stdio
+
+    # Or user-scoped
+    claude mcp add gaia-tui -s user -- uv run python -m gaia.mcp.servers.tui_mcp --stdio
+    ```
+  </Step>
+
+  <Step title="Start a new Claude Code conversation">
+    MCP tools are loaded at conversation start, so open a new one. Ask for
+    `tui_status` first — it confirms the assistant can see your session.
+  </Step>
+</Steps>
+
+The server can also run over Streamable HTTP, the same as the Agent UI MCP
+server:
+
+```bash
+gaia mcp tui                 # HTTP on :8767  → http://localhost:8767/mcp
+gaia mcp tui --stdio         # stdio, for Claude Code
+gaia mcp tui --port 9100     # custom port
+
+# Equivalent module invocations
+uv run python -m gaia.mcp.servers.tui_mcp --stdio
+uv run python -m gaia.mcp.servers.tui_mcp --port 9100
+```
+
+---
+
+## Usage Examples
+
+### Navigate the hub
+
+```
+"Show me what's on the TUI right now, then switch to the Available tab
+ and tell me which agents are listed."
+```
+
+The assistant calls `tui_status`, `tui_send_keys(["tab"])`, `tui_wait_for`, and
+`tui_screen`. You watch the tab change in your terminal.
+
+### Launch an agent and ask it something
+
+```
+"Launch the email agent in the TUI and ask it to triage my inbox."
+```
+
+`tui_launch_agent("email")` walks the hub tabs until the agent is visible,
+moves the selection onto it, presses Enter, and waits for the chat view to
+open. Then `tui_send_text` + `tui_send_keys(["enter"])` sends the query.
+
+### Check the layout at a small terminal
+
+```
+"Resize the TUI to 80x24 and check nothing overflows."
+```
+
+`tui_resize(80, 24)` followed by `tui_screen`.
+
+---
+
+## Discovery and Trust
+
+The MCP server finds the TUI by reading `~/.gaia/tui/control.json` — there is
+no fixed port. Before trusting it, it checks **both**:
+
+1. the recorded pid is alive, and
+2. `GET /control/v1/status` answers with our service id and a **matching pid**.
+
+Either check failing means the file is stale: after a crash it can point at a
+port some unrelated process now owns. The tool then says so and names the
+remedy rather than talking to a stranger's socket.
+
+Every error is structured and actionable — no tracebacks, no leaked URLs, and
+never the token. With no TUI running, every tool answers with exactly that,
+plus the command to start one.
+
+<Warning>
+  Anything that can read `~/.gaia/tui/control.json` can drive your TUI. Start
+  the TUI without `--control` (the default) when you do not want that.
+</Warning>
+
+---
+
+## Configuration
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--stdio` | off | Use stdio transport (for Claude Code) |
+| `--port` | `8767` | HTTP MCP server port |
+| `--host` | `localhost` | HTTP MCP server host |
+
+Environment:
+
+| Variable | Description |
+|----------|-------------|
+| `GAIA_TUI_HOME` | Directory holding `control.json` (default `~/.gaia/tui`). Both halves read it, so tests can isolate a run from your real session. |
+
+---
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="'No GAIA TUI is running'">
+    The control file does not exist. Start the TUI with `gaia tui --control`
+    (plain `gaia tui` does not expose the API).
+  </Accordion>
+
+  <Accordion title="'stale control file' / pid is not running">
+    A previous TUI crashed without cleaning up. Start a fresh one with
+    `gaia tui --control` — it overwrites the registration.
+  </Accordion>
+
+  <Accordion title="Keys seem to do nothing">
+    Check `tui_status` first: a help overlay or confirmation dialog swallows
+    keys until it is dismissed (`esc`). If the hub still shows `Loading...`,
+    it has not received a terminal size — call `tui_resize`.
+  </Accordion>
+
+  <Accordion title="tui_wait_for keeps timing out">
+    The timeout reports the screen it actually saw. Compare it with what you
+    were matching on — styling is stripped in plain mode, so match on the text,
+    not on box-drawing characters. `gaia tui --control --debug` logs every
+    injected key and every wait resolution to stderr.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="TUI control API reference" icon="terminal" href="/reference/cli">
+    The HTTP endpoints, flags, and discovery file this server wraps.
+  </Card>
+  <Card title="Agent UI MCP Server" icon="plug" href="/guides/mcp/agent-ui">
+    The same idea for the browser-based Agent UI.
+  </Card>
+</CardGroup>

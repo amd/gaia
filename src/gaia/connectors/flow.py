@@ -269,7 +269,12 @@ async def start_authorization(
     # all concurrent SSE streams).
     async def _open_browser():
         try:
-            await loop.run_in_executor(None, webbrowser.open, authorization_url)
+            # Returns False rather than raising when no browser is registered —
+            # the normal case on headless Ubuntu, WSL and SSH sessions. Ignoring
+            # it leaves the user watching a "check your browser" message forever.
+            opened = await loop.run_in_executor(
+                None, webbrowser.open, authorization_url
+            )
         except Exception as e:
             # Best-effort — the authorization_url is also returned to
             # the caller for a copy-paste fallback.
@@ -277,6 +282,12 @@ async def start_authorization(
                 "flow: webbrowser.open failed (%s); fall back "
                 "to copy-paste of authorization_url",
                 e,
+            )
+            return
+        if not opened:
+            logger.warning(
+                "flow: no browser could be launched on this host; the user must "
+                "open authorization_url themselves"
             )
 
     asyncio.ensure_future(_open_browser())

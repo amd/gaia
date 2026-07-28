@@ -575,3 +575,210 @@ class TestLoadModelCorruptRouting:
 
         mock_delete.assert_not_called()
         mock_pull.assert_not_called()
+
+
+# ── #2513: context-overflow classification must work across backends ────
+#
+# The agent's trim-and-retry recovery only engages when this classifier
+# returns True. Before #2513 the check was three llama.cpp-only substrings
+# duplicated at both agent.py call sites (streaming and non-streaming), so
+# FastFlowLM's "Max length reached!" (the NPU backend) matched neither copy
+# and the recovery silently never ran.
+
+from unittest.mock import MagicMock
+
+import responses as _responses
+
+from gaia.llm.lemonade_client import is_context_overflow_error
+
+# Verbatim payload from issue #2513, measured live on an NPU/FastFlowLM box.
+_FLM_OVERFLOW_JSON = (
+    '{"error":{"code":400,"details":{"backend":"FastFlowLM",'
+    '"response":{"error":{"code":400,"message":"Max length reached!",'
+    '"type":"model_error"}}},"message":"Max length reached!",'
+    '"status_code":400,"type":"model_error"}}'
+)
+_FLM_OVERFLOW_TEXT = f"Error in chat completions (status 400): {_FLM_OVERFLOW_JSON}"
+
+
+def test_flm_overflow_payload_classifies_as_overflow() -> None:
+    """The exact FastFlowLM 400 from #2513 must classify as overflow."""
+    assert is_context_overflow_error(_FLM_OVERFLOW_TEXT) is True
+
+
+def test_flm_overflow_payload_is_case_insensitive() -> None:
+    assert is_context_overflow_error(_FLM_OVERFLOW_TEXT.upper()) is True
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "exceed_context_size",
+        "exceeds the available context size",
+        "got too long",
+    ],
+)
+def test_existing_llamacpp_phrasings_still_classify(phrase: str) -> None:
+    """No regression: the three original llama.cpp phrasings still match
+    when they arrive as plain (non-JSON) error text, same as before #2513.
+    """
+    text = f"Error in chat completions (status 400): request {phrase} for model X"
+    assert is_context_overflow_error(text) is True
+
+
+def test_llamacpp_json_envelope_still_classifies() -> None:
+    """The structured llama.cpp envelope shape also classifies via the
+    JSON-aware extraction path, not just the raw-text fallback."""
+    text = (
+        "Error in chat completions (status 400): "
+        '{"error": {"type": "exceed_context_size", '
+        '"message": "request (42000 tokens) exceeds the available '
+        'context size (4096 tokens)", "n_ctx": 4096}}'
+    )
+    assert is_context_overflow_error(text) is True
+
+
+def test_unrelated_400_does_not_classify_as_overflow() -> None:
+    """A malformed-request 400 must keep its current (non-overflow) behaviour."""
+    text = (
+        "Error in chat completions (status 400): "
+        '{"error": {"code": 400, "message": "Invalid request: '
+        '\'messages\' field is required", "type": "invalid_request_error"}}'
+    )
+    assert is_context_overflow_error(text) is False
+
+
+def test_structure_first_ignores_phrase_outside_json_envelope() -> None:
+    """A phrase appearing only OUTSIDE the parsed JSON message must not
+    produce a false positive -- structure wins over a naive whole-text scan.
+    """
+    text = (
+        'user note: "the wait got too long" '
+        '{"error": {"message": "Invalid parameter: temperature out of range", '
+        '"type": "invalid_request_error"}}'
+    )
+    assert is_context_overflow_error(text) is False
+
+
+def test_empty_text_does_not_classify() -> None:
+    assert is_context_overflow_error("") is False
+
+
+def test_non_json_text_falls_back_to_raw_scan() -> None:
+    """Plain-text (non-JSON) backend errors still match via the fallback."""
+    assert is_context_overflow_error("the model said max length reached") is True
+
+
+# ── #2513: auto-download retry must not blindly repeat non-model errors ──
+#
+# ``_execute_with_auto_download`` used to retry ANY error unconditionally
+# before even checking what it was -- doubling every failure, context
+# overflow included. The issue measured this as two identical 400s with
+# identical body sizes per turn.
+
+
+class TestExecuteWithAutoDownloadNarrowing:
+    """Only the missing-model condition this helper exists for gets a retry."""
+
+    def test_context_overflow_error_is_not_retried(self) -> None:
+        client = _client()
+        api_call = MagicMock()
+        error = LemonadeClientError(_FLM_OVERFLOW_TEXT)
+
+        with patch.object(client, "load_model") as mock_load:
+            with pytest.raises(LemonadeClientError) as exc_info:
+                client._execute_with_auto_download(
+                    api_call, "gemma4-it-e2b-FLM", True, error=error
+                )
+
+        # The SAME error is re-raised -- not a fresh one from a retry.
+        assert exc_info.value is error
+        api_call.assert_not_called()
+        mock_load.assert_not_called()
+
+    def test_missing_model_error_is_still_retried(self) -> None:
+        client = _client()
+        api_call = MagicMock(return_value={"choices": [{"message": {"content": "ok"}}]})
+        error = LemonadeClientError("model not loaded")
+
+        with patch.object(client, "load_model") as mock_load:
+            result = client._execute_with_auto_download(
+                api_call, "gemma4-it-e2b-FLM", True, error=error
+            )
+
+        assert result == {"choices": [{"message": {"content": "ok"}}]}
+        mock_load.assert_called_once()
+        api_call.assert_called_once()
+
+    def test_auto_download_disabled_re_raises_even_for_missing_model(self) -> None:
+        """``auto_download=False`` must still skip the retry -- the flag is
+        an explicit opt-out, not just a hint."""
+        client = _client()
+        api_call = MagicMock()
+        error = LemonadeClientError("model not loaded")
+
+        with patch.object(client, "load_model") as mock_load:
+            with pytest.raises(LemonadeClientError):
+                client._execute_with_auto_download(
+                    api_call, "gemma4-it-e2b-FLM", False, error=error
+                )
+
+        api_call.assert_not_called()
+        mock_load.assert_not_called()
+
+    @_responses.activate
+    def test_context_overflow_produces_exactly_one_http_request(self) -> None:
+        """End-to-end through ``chat_completions()``: a context-overflow 400
+        must not double the HTTP request -- #2513's measured symptom was
+        two identical 400s with identical body sizes per failure.
+        """
+        _responses.add(
+            _responses.POST,
+            "http://localhost:13305/api/v1/chat/completions",
+            body=_FLM_OVERFLOW_JSON,
+            status=400,
+        )
+        client = _client()
+        with (
+            patch.object(client, "_ensure_model_loaded"),
+            patch.object(client, "load_model") as mock_load,
+        ):
+            with pytest.raises(LemonadeClientError):
+                client.chat_completions(
+                    model="gemma4-it-e2b-FLM",
+                    messages=[{"role": "user", "content": "hi"}],
+                )
+        assert len(_responses.calls) == 1, (
+            "context-overflow 400 must not be retried -- "
+            f"saw {len(_responses.calls)} HTTP request(s)"
+        )
+        mock_load.assert_not_called()
+
+    @_responses.activate
+    def test_missing_model_still_retries_over_http(self) -> None:
+        """A genuine missing-model 400 still triggers the auto-download
+        load + one retried HTTP request (unchanged behaviour)."""
+        _responses.add(
+            _responses.POST,
+            "http://localhost:13305/api/v1/chat/completions",
+            json={"error": {"message": "model not loaded", "type": "model_not_loaded"}},
+            status=400,
+        )
+        _responses.add(
+            _responses.POST,
+            "http://localhost:13305/api/v1/chat/completions",
+            json={"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]},
+            status=200,
+        )
+        client = _client()
+        with (
+            patch.object(client, "_ensure_model_loaded"),
+            patch.object(client, "load_model") as mock_load,
+        ):
+            result = client.chat_completions(
+                model="gemma4-it-e2b-FLM",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+        assert result["choices"][0]["message"]["content"] == "ok"
+        assert len(_responses.calls) == 2
+        mock_load.assert_called_once()

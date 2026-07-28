@@ -205,12 +205,62 @@ class OutputHandler(ABC):
     def display_stats(self, stats: Dict[str, Any]):
         """Display performance statistics. Optional - default no-op."""
         ...
+
+    # === Confirmation of gated tools (#2210) ===
+
+    auto_approve_gated_tools: bool = False   # explicit unattended opt-in
+
+    def confirm_tool_execution(self, tool_name: str, tool_args: Dict[str, Any]) -> bool:
+        """Approve or deny a tool in ``Agent.confirmation_required_tools()``.
+
+        DENIES by default: a handler with no way to reach a human must not answer
+        on their behalf. Overridden by the CLI consoles (terminal prompt) and the
+        Agent UI handler (permission modal).
+        """
+        ...
+
+    def confirmation_denied_reason(self, tool_name: str) -> str:
+        """Why the last denial happened, for the ``{"status": "denied"}`` result."""
+        ...
+```
+
+<Warning>
+  A handler that inherits this default and cannot ask anyone will refuse every
+  gated tool. That is deliberate — silently approving shell commands, file writes,
+  and email sends is the failure mode this replaced. An intentionally unattended
+  host opts in with `auto_approve_gated_tools=True` or
+  `GAIA_AUTO_APPROVE_TOOLS=1` (read from the startup environment, so a `.env`
+  cannot set it), and every approval taken that way is logged.
+</Warning>
+
+### TerminalConfirmationMixin
+
+```python
+class TerminalConfirmationMixin:
+    """The terminal prompt shared by both CLI consoles.
+
+    Mixed into AgentConsole *and* SilentConsole: silence suppresses narration,
+    not consent — `gaia chat` builds a SilentConsole for a real user at a real
+    terminal.
+
+    - stdin AND stdout a TTY -> shows the tool and its literal arguments, then
+      reads `[y]es / [N]o / [a]lways for this tool`. Default is no; Ctrl-C and
+      EOF are no. "always" is per tool and never offered for
+      `run_shell_command` / `run_cli_command`.
+    - otherwise -> denies with an actionable message.
+    - a broken terminal (render or read fails) -> denies; the gate never raises
+      into the agent loop.
+    """
+
+    def confirm_tool_execution(self, tool_name: str, tool_args: Any) -> bool: ...
+    def reset_tool_approvals(self) -> None:
+        """Forget every "always allow" answer (new session / new user)."""
 ```
 
 ### AgentConsole
 
 ```python
-class AgentConsole(OutputHandler):
+class AgentConsole(TerminalConfirmationMixin, OutputHandler):
     """
     Rich console output for CLI applications.
 
@@ -222,8 +272,14 @@ class AgentConsole(OutputHandler):
     - Formatted tables for statistics
     """
 
-    def __init__(self):
-        """Initialize the AgentConsole with Rich library support."""
+    def __init__(self, auto_approve_gated_tools: bool = False):
+        """Initialize the AgentConsole with Rich library support.
+
+        Args:
+            auto_approve_gated_tools: Unattended harnesses only — run
+                confirmation-gated tools without asking. Every approval is logged.
+        """
+        self.auto_approve_gated_tools = auto_approve_gated_tools
         self.rich_available = RICH_AVAILABLE
         self.console = Console() if self.rich_available else None
         self.progress = ProgressIndicator()
@@ -274,7 +330,7 @@ class AgentConsole(OutputHandler):
 ### SilentConsole
 
 ```python
-class SilentConsole(OutputHandler):
+class SilentConsole(TerminalConfirmationMixin, OutputHandler):
     """
     Silent console that suppresses all output for JSON-only mode.
 
@@ -286,17 +342,27 @@ class SilentConsole(OutputHandler):
     All methods are no-ops except:
     - print_final_answer (unless silence_final_answer=True)
     - display_stats (if explicitly requested)
+    - confirm_tool_execution (still prompts on a terminal — consent is not
+      narration; the unattended denial notice is logged, not printed, so
+      JSON-only output stays parseable)
     """
 
-    def __init__(self, silence_final_answer: bool = False):
+    def __init__(
+        self,
+        silence_final_answer: bool = False,
+        auto_approve_gated_tools: bool = False,
+    ):
         """
         Initialize the silent console.
 
         Args:
             silence_final_answer: If True, suppress even the final answer
+            auto_approve_gated_tools: Unattended harnesses only — run
+                confirmation-gated tools without asking. Every approval is logged.
         """
         self.streaming_buffer = ""
         self.silence_final_answer = silence_final_answer
+        self.auto_approve_gated_tools = auto_approve_gated_tools
 
     def print_final_answer(self, answer: str, streaming: bool = True) -> None:
         """

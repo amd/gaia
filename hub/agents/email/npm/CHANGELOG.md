@@ -6,6 +6,50 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## Unreleased
 
+- **Opt-in preview: small on-device models can now decide phishing flags and
+  triage categories instead of keyword rules.** Turn it on with
+  `GAIA_EMAIL_USE_SLM=true` on the sidecar (or `use_slm=True` in config).
+  A compact classifier — running on the same local Lemonade server as the chat
+  model, so nothing leaves the machine — makes the phishing call, and a second
+  one labels the triage category before the bigger LLM is asked, which makes
+  triage faster on the messages it can answer (those results report no LLM
+  usage). It is experimental, so it stays off unless you turn it on. If the
+  models are unavailable for any reason, triage falls back to exactly the
+  previous behavior. No API shape changed.
+- **A trashed email is recoverable any time it's still in Trash — not just for
+  a few seconds after you delete it.** The only way back used to be a short
+  undo window right after trashing; miss it, and the agent told you the
+  message was stuck, even though Gmail actually keeps Trash for 30 days. It
+  can now find the message and restore it any time it's still there. The
+  agent also stopped calling a trashed message "archived" in its confirmation
+  — trash and archive recover differently, so it now says exactly what it did.
+- **The agent no longer claims it can permanently delete email — because it
+  can't.** Permanently deleting a Gmail message needs a scope GAIA
+  deliberately never asks for (it would hand over delete access to your whole
+  mailbox for one rare action), so every attempt failed. Asked directly, the
+  agent used to say it could do it anyway. Now it says plainly it can only
+  move mail to Trash.
+- **The agent sets up your mailbox itself, in the conversation.** Before, hitting
+  the email agent without a working mailbox produced an error and a shell command
+  to go run somewhere else — a dead end for anyone in a terminal or chat window.
+  It now works out *which* of the four problems it actually has (nothing
+  connected, credentials stopped working, a missing permission, or connected but
+  not allowed for this agent), says something specific about that one, and offers
+  to fix it right there. The connected-but-not-allowed case is fixed with no
+  browser at all. Connecting Google still needs your own OAuth client ID and
+  secret — the agent now tells you that up front with a link, instead of failing
+  later (#2469).
+  Integrators: `can_answer_questions` is only understood from 2.6 onward, so
+  check `version()` before sending it — an older sidecar rejects the unknown
+  field outright rather than ignoring it.
+- **New: the agent can ask you a question mid-run** — schema 2.6, additive. A new
+  non-terminal SSE event `needs_input` carries a question, 2-4 labelled options
+  each with a description of what choosing it does, and a free-text escape;
+  `respondToQuery(runId, requestId, value)` (`POST
+  /v1/email/query/{run_id}/respond`) delivers the answer and the ORIGINAL stream
+  resumes. An unanswered question ends the run with an error rather than hanging.
+  Approvals (`needs_confirmation`) are unchanged: still terminal, still
+  deny-by-default (#2469).
 - **Work/school Outlook (Microsoft 365 / Entra ID) mailboxes now work, not just
   personal Outlook.com.** The Microsoft connector previously signed in only
   against the `consumers` tenant, so a corporate Microsoft 365 account was

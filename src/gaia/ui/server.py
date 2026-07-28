@@ -416,6 +416,9 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 # activates on the "doc" profile — wired for future-proofing so
                 # this path doesn't silently diverge if that ever changes.
                 dynamic_tools = db.get_setting("dynamic_tools", "false") == "true"
+                # Nobody is watching a scheduled run, so confirmation-gated tools
+                # (shell, file writes) are denied here — same posture as an
+                # autonomous background tick (#2210).
                 config = ChatAgentConfig(
                     max_steps=5,
                     silent_mode=True,

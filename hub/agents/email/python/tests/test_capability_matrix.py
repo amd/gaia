@@ -24,6 +24,7 @@ so the module is loaded by file path, exactly like ``test_stamp_version.py`` and
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -59,7 +60,7 @@ _spec.loader.exec_module(capability_matrix)
 # see the plan for issue #2013 §1 for the derivation of every number below).
 # ---------------------------------------------------------------------------
 
-# 14 mixins in gaia_agent_email/tools/, keyed by module stem, 56 tools total.
+# 15 mixins in gaia_agent_email/tools/, keyed by module stem, 59 tools total.
 _EXPECTED_TOOLS_BY_MIXIN = {
     "read_tools": 8,
     "organize_tools": 15,
@@ -68,21 +69,26 @@ _EXPECTED_TOOLS_BY_MIXIN = {
     "schedule_tools": 4,
     "preference_tools": 4,
     "briefing_tools": 3,
-    "delete_tools": 3,
+    # #2523/#2533: permanent_delete removed (never advertised — the scope it
+    # needs is never granted); restore_trashed_message + search_trash added
+    # (state-reconciling restore, independent of the undo window/action_id).
+    "delete_tools": 4,
     "phishing_tools": 2,
     "voice_tools": 2,
     "followup_tools": 1,
     "profile_tools": 1,
     "summarize_tools": 1,
     "connection_tools": 1,
+    # #2469 agent-led onboarding: check_mailbox_access + setup_mailbox_access.
+    "onboarding_tools": 2,
 }
-_EXPECTED_TOOLS_TOTAL = 56
+_EXPECTED_TOOLS_TOTAL = 59
 assert sum(_EXPECTED_TOOLS_BY_MIXIN.values()) == _EXPECTED_TOOLS_TOTAL
 
 _EXPECTED_MCP_COUNT = 4
 _EXPECTED_EVAL_SUITE_COUNT = 6
-_EXPECTED_REST_FUNCTIONAL_COUNT = 21
-_EXPECTED_REST_IN_CONTRACT_COUNT = 24
+_EXPECTED_REST_FUNCTIONAL_COUNT = 22
+_EXPECTED_REST_IN_CONTRACT_COUNT = 25
 
 # The 6 eval suites are the *_gate_thresholds.json fixture stems at the repo
 # root (NOT under hub/agents/email/python/tests/ — this package ships no such
@@ -128,6 +134,8 @@ _EXPECTED_REST_OP_NAMES = {
     # #2016 streaming agent-loop surface: POST /v1/email/query and its cancel.
     "query",
     "query/{run_id}/cancel",
+    # #2469 mid-run question resume.
+    "query/{run_id}/respond",
     # #2154 OAuth forward-OUT intake. These live under /v1/connections (NOT
     # /v1/email/), so the naming scheme keeps their full path.
     "/v1/connections",
@@ -396,3 +404,41 @@ def test_eval_followup_plan_current(matrix):
         ), f"EVAL_FOLLOWUP_PLAN[{suite!r}] looks like a lazy placeholder: {text!r}"
 
     assert matrix.eval_suites["followups"]["wired"] is False
+
+
+# ---------------------------------------------------------------------------
+# Surface counts are derived everywhere, never written down
+# ---------------------------------------------------------------------------
+
+
+def test_definitions_section_agrees_with_the_computed_surface_counts(matrix):
+    """The Definitions blurb and the matrix header must state the same numbers.
+
+    They didn't: ``TOOLS_COUNT_DEFINITION`` was a finished string with "16
+    functional verbs" baked in, so the generated doc claimed 16 REST verbs in
+    its Definitions section and computed 21 a few lines below — in one file,
+    from one generator run. AC1's byte-identical check can't catch that; it
+    compares the doc to a regeneration, and both carried the same stale
+    literal. Now the blurb is a template fed by the derived counts.
+    """
+    rendered = capability_matrix.render_markdown(matrix)
+    rest = matrix.rest_functional_count
+    mcp = len(matrix.mcp_tools)
+
+    assert f"the REST API's {rest} functional verbs" in rendered
+    assert f"the MCP interface's {mcp} task-level tools" in rendered
+    assert f"({rest} REST functional + {mcp} MCP)" in rendered
+    assert f"- REST functional verbs: **{rest}**" in rendered
+
+
+def test_no_surface_count_literal_is_baked_into_the_definition():
+    """``TOOLS_COUNT_DEFINITION`` must interpolate, not hardcode."""
+    assert "{rest_functional}" in capability_matrix.TOOLS_COUNT_DEFINITION
+    assert "{mcp_tools}" in capability_matrix.TOOLS_COUNT_DEFINITION
+    assert not re.search(
+        r"\b\d+\s+functional verbs\b", capability_matrix.TOOLS_COUNT_DEFINITION
+    ), (
+        "a surface count was hardcoded back into TOOLS_COUNT_DEFINITION — it "
+        "will drift from the derived count again. Use the {rest_functional} / "
+        "{mcp_tools} placeholders."
+    )

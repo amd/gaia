@@ -17,11 +17,11 @@ module because every read tool that returns body bytes needs to honor it.
 
 from __future__ import annotations
 
-import os
 import re
 from datetime import date
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
+from gaia_agent_email.config import default_inbox_scan_ceiling
 from gaia_agent_email.gmail_backend import decode_message_body
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 
@@ -51,26 +51,6 @@ from gaia.connectors.formatting import format_connector_error
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
-
-# Default per-call ceiling for inbox-scanning tools (triage / pre-scan). Bounds
-# an interactive call so the LLM can't trigger a thousand-message scan that
-# blows latency and context. The eval benchmark scores a fixed labelled corpus
-# and needs to cover all of it deterministically, so it raises this ceiling via
-# GAIA_EMAIL_TRIAGE_MAX_MESSAGES — the per-email classification is identical
-# whether batched at 100 or at the corpus size, so the override is
-# measurement-neutral and only changes coverage, never a decision.
-DEFAULT_INBOX_SCAN_CEILING = 100
-
-
-def _inbox_scan_ceiling() -> int:
-    """Per-call ceiling for triage/pre-scan, overridable for the eval harness."""
-    raw = os.environ.get("GAIA_EMAIL_TRIAGE_MAX_MESSAGES")
-    if not raw:
-        return DEFAULT_INBOX_SCAN_CEILING
-    try:
-        return max(1, int(raw))
-    except (TypeError, ValueError):
-        return DEFAULT_INBOX_SCAN_CEILING
 
 
 # Maximum body length sent to the LLM. Larger messages are truncated with
@@ -803,8 +783,15 @@ def triage_inbox_impl(
     slm_classifier: Optional[Callable[..., Optional[Mapping[str, Any]]]] = None,
     slm_phishing_classifier: Optional[Callable[..., Optional[bool]]] = None,
     debug: bool = False,
+    progress: Optional[Callable[[int, int, str], None]] = None,
 ) -> Dict[str, Any]:
     """Triage the inbox using heuristic fast path + SLM + LLM fallback.
+
+    ``progress(done, total, subject)`` is called after each message when
+    supplied. A single LLM follow-up costs 9-31s locally, so a 25-message scan
+    can sit silent for a minute; the callback is what turns that into visible
+    movement. It must never break the scan — callers get their exceptions
+    swallowed and logged, because narration is not worth losing a triage over.
 
     For each message: fetch metadata, run the heuristic. If the heuristic
     is confident, record its category as the triage decision. Otherwise
@@ -983,6 +970,15 @@ def triage_inbox_impl(
                 debug=debug,
             )
             results.append(decision)
+            if progress is not None:
+                try:
+                    progress(
+                        len(results),
+                        len(listing.get("messages", [])),
+                        payload_headers.get("subject", "") or "(no subject)",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log.debug("triage progress callback failed: %s", exc)
         grouped = group_by_category(results)
         st["result_summary"] = {
             "total": grouped["total"],
@@ -1270,6 +1266,13 @@ class ReadToolsMixin:
     def _register_read_tools(self) -> None:
         gmail = self._gmail
         debug_flag = bool(getattr(self.config, "debug", False))
+        # An explicit EmailAgentConfig(inbox_scan_ceiling=...) must win over the
+        # environment. Hosts may pass a duck-typed config (see debug_flag), so
+        # an absent field falls back to the same env resolution the config field
+        # uses — resolved once here, never re-read per call.
+        scan_ceiling = getattr(self.config, "inbox_scan_ceiling", None)
+        if scan_ceiling is None:
+            scan_ceiling = default_inbox_scan_ceiling()
         agent = self  # captured for live access to ``_session_preferences``
 
         @tool
@@ -1549,7 +1552,14 @@ class ReadToolsMixin:
         # the fast alternative for "what's urgent right now" asks.
         @tool(timeout=600.0)
         def triage_inbox(max_messages: int = 25) -> str:
-            """Triage the inbox, returning per-message categories.
+            """Raw per-message classifier. NOT the tool for "triage my inbox".
+
+            When the user asks to triage, review, or check their inbox, call
+            ``pre_scan_inbox`` instead: it returns the typed card the chat
+            surface draws, so every message is shown. This tool returns an
+            unrendered verdict list that a model can only paraphrase — which
+            loses most of the inbox. Use it only when you need the raw
+            per-message categories for further computation.
 
             Categories: ``URGENT``, ``NEEDS_RESPONSE``, ``FYI``,
             ``PROMOTIONAL``, ``PERSONAL``. Each result also has ``is_spam`` and
@@ -1570,9 +1580,7 @@ class ReadToolsMixin:
             ``results``) as the complete view when results are condensed.
             """
             try:
-                max_messages = max(
-                    1, min(int(max_messages or 25), _inbox_scan_ceiling())
-                )
+                max_messages = max(1, min(int(max_messages or 25), scan_ceiling))
                 # Phase 2 (#1603): scan every connected mailbox, tag each item
                 # with its source mailbox, split the budget across mailboxes,
                 # and merge. LLM follow-up (#1107) is wired inside the agent
@@ -1582,10 +1590,33 @@ class ReadToolsMixin:
                 # (#2087): a large batch's verbatim verdict list overflows
                 # CONTEXT_TARGET_TOKENS when the agent re-reads it next turn.
                 # No-op below budget; verdicts themselves are unchanged.
+                # Narrate per message: a single LLM follow-up is 9-31s locally,
+                # so a silent scan looks hung. print_info reaches the live stream.
+                def _narrate(done: int, total: int, subject: str) -> None:
+                    console = getattr(agent, "console", None)
+                    emit = getattr(console, "print_info", None)
+                    if callable(emit):
+                        emit(f"Triaged {done}/{total} — {subject[:60]}")
+
+                # Only hosts that accept it get narration. Checked by signature,
+                # not try/except TypeError — that would swallow a real TypeError
+                # raised inside triage and blame it on the callback.
+                kwargs = {"max_messages": max_messages}
+                try:
+                    import inspect as _inspect
+
+                    if (
+                        "progress"
+                        in _inspect.signature(
+                            agent._triage_all_backends
+                        ).parameters
+                    ):
+                        kwargs["progress"] = _narrate
+                except (TypeError, ValueError) as exc:
+                    log.debug("triage: host signature unreadable (%s)", exc)
+
                 return _envelope_ok(
-                    condense_triage_result(
-                        agent._triage_all_backends(max_messages=max_messages)
-                    )
+                    condense_triage_result(agent._triage_all_backends(**kwargs))
                 )
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
@@ -1618,9 +1649,7 @@ class ReadToolsMixin:
                     (default 25, max 100).
             """
             try:
-                max_messages = max(
-                    1, min(int(max_messages or 25), _inbox_scan_ceiling())
-                )
+                max_messages = max(1, min(int(max_messages or 25), scan_ceiling))
                 # Phase 2 (#1603): pre-scan every connected mailbox, tag each
                 # section item with its source mailbox, split the budget, merge.
                 return _envelope_ok(

@@ -9,6 +9,55 @@ contract version is tracked separately as
 
 ### Added
 
+- **On-device SLM classifiers for phishing and triage category (experimental,
+  `use_slm=False` by default).** Two compact embedding classifiers
+  (`specific-ai-tools`, served by the same local Lemonade server as the chat
+  model) can run ahead of the LLM. Phishing is decided by the SLM alone when it
+  answers — the keyword/domain heuristic is not consulted for that message —
+  and the triage SLM resolves the category before the (slower) LLM classify
+  call whenever the heuristic is not confident, which also leaves `usage` null
+  for messages the LLM never saw. Every SLM path fails safe: an unreachable
+  server, a failed model pull, a prediction error, or a label outside the
+  taxonomy falls back to the existing heuristic + LLM flow, so the previous
+  behavior is the floor, not the risk. Enable with `use_slm=True` or
+  `GAIA_EMAIL_USE_SLM=true` — the `slm_triage_*` / `slm_phishing_*` model +
+  checkpoint pairs on `EmailAgentConfig` ship preconfigured. A half-configured
+  pair fails `validate()` loudly, and an unparseable `GAIA_EMAIL_USE_SLM` raises
+  instead of silently defaulting to off.
+
+- **Agent-led mailbox onboarding — the agent sets up its own access, in the
+  conversation (#2469).** Hitting the agent without a usable mailbox used to
+  end the run with an error and a shell command
+  (`gaia connectors connect google --scopes <scopes> --grant-agent
+  installed:email`) — unactionable for anyone sitting in a terminal chat or a
+  chat window. Two new tools replace it: `check_mailbox_access` classifies the
+  state (`not_connected` / `reauth_required` / `connection_missing_scopes` /
+  `agent_not_granted` / `ok`), and `setup_mailbox_access` walks the user
+  through the fix, asking only for what it cannot determine itself. Each state
+  opens with a **different** question, and the `agent_not_granted` case is
+  repaired with a local grant write — no browser, no re-sign-in. Connecting
+  Google still requires the user's own OAuth client ID and secret (GAIA ships
+  no first-party client); the flow now explains that up front with a link and
+  asks for the secret with a `sensitive` flag so surfaces mask it, instead of
+  failing on a token refresh later. Detection is live per call, so a mailbox
+  connected elsewhere (Agent UI, `gaia connectors`) means the agent stays quiet.
+
+- **Mid-run questions on `/v1/email/query` — contract 2.5 → 2.6, additive
+  (#2469).** The streaming agent loop could pause but never continue: a step
+  needing user input emitted an event and then deliberately killed the run.
+  Now a question emits the new **non-terminal** canonical SSE event
+  `needs_input` — `{run_id, request_id, question, options[{value, label,
+  description}], allow_free_text, sensitive?, respond_url, timeout_seconds?}` —
+  and the run stays parked on the open stream until
+  `POST /v1/email/query/{run_id}/respond` delivers the answer, at which point
+  the SAME stream resumes. A stale or unknown `request_id` is rejected (409)
+  rather than applied to whatever is pending; an unknown run is a 404; an
+  unanswered question times out and the run ends with an `error` instead of
+  hanging. The stream emits `:` heartbeat comments while parked so a client
+  read-idle watchdog does not abandon it. `needs_confirmation` and its
+  terminal, deny-by-default approval behaviour are deliberately unchanged
+  (resolves `docs/spec/agent-ui-query-sse-contract.md` §9 Q3).
+
 - **`list_connected_mailboxes` tool — the agent can report live mailbox
   connection state (#2401).** "Which mailbox are you connected to?" now names
   the actual connected account(s) instead of paraphrasing the system prompt's
@@ -20,6 +69,22 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A trashed message is recoverable any time it's still in Trash, not just
+  for a few seconds (#2523).** The only restore path (`restore_message`) was
+  gated by a short undo window and a live `action_id`; once either was gone,
+  the agent told the user the message was stuck, even though Gmail keeps
+  Trash for 30 days. `restore_trashed_message` reconciles with the live
+  mailbox state instead — no window, no id — and `search_trash` finds the
+  message first when the id was never held onto. The `trash_message`
+  confirmation now also says "moved to Trash", never "archived" — the two
+  have very different recoverability and conflating them was its own hazard.
+- **`permanent_delete` is no longer offered as a capability the agent doesn't
+  actually have (#2533).** Real Gmail permanent delete requires a
+  full-mailbox OAuth scope GAIA deliberately never requests (granting it
+  would let every GAIA agent delete a user's entire mailbox for the sake of
+  this one operation), so every call 403'd — yet asked directly, the agent
+  claimed it could do it. The tool is no longer registered; the agent now
+  says plainly it can move mail to Trash but not permanently delete it.
 - **Two-turn "archive several… then undo" is now actually reachable (#2456).**
   "Undo that" with no id no longer demands the internal batch uuid:
   `undo_archive_batch` recalls the most recently archived, still-undoable

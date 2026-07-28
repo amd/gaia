@@ -1,0 +1,230 @@
+package cards
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+// The width a card gets inside an 80-column terminal: chat passes m.width-4.
+const width80 = 76
+
+func TestPreScanPopulated(t *testing.T) {
+	out := Render("email_pre_scan", raw(t, populatedPreScan), width80)
+	t.Logf("\n%s", plain(out))
+
+	assertWidth(t, out, width80)
+	assertContains(t, out,
+		// Title carries the pre-cap scan size: 2 + 5 + 6 + 2.
+		"Inbox · 15 scanned",
+		// Sections are words, not colours (R2 — no colour-only signals).
+		"URGENT", "NEEDS A REPLY", "SUGGESTED ARCHIVE",
+		// Display name is extracted from the raw From header.
+		"Sarah Chen", "Prod incident follow-up",
+		// A bare address has no display name and stays as-is.
+		"billing@vendorco.com",
+		// Every urgent/actionable row carries its rationale.
+		"asked for a reply by Friday", "payment date has passed",
+		"waiting on your sign-off",
+		// Rows are numbered continuously across sections.
+		" 1  ", " 2  ", " 3  ", " 7  ",
+		"6 informational, not listed.",
+		"Using your priority senders: Sarah Chen, Priya N.",
+	)
+}
+
+func TestPreScanEmptyState(t *testing.T) {
+	out := Render("email_pre_scan", raw(t, emptyPreScan), width80)
+	t.Logf("\n%s", plain(out))
+
+	assertWidth(t, out, width80)
+	assertContains(t, out,
+		"Nothing needs you.",
+		"19 messages scanned · 0 urgent · 0 waiting on a reply",
+		"19 informational, not listed.",
+	)
+	// No empty section frames for buckets with nothing in them.
+	assertNotContains(t, out, "URGENT", "NEEDS A REPLY", "SUGGESTED ARCHIVE")
+}
+
+func TestPreScanCapsHitShowsNofM(t *testing.T) {
+	out := Render("email_pre_scan", raw(t, capsHitPreScan), width80)
+	t.Logf("\n%s", plain(out))
+
+	assertWidth(t, out, width80)
+
+	// `totals` is pre-cap; every list here is short of it. A bare count would
+	// imply the list is everything, which is exactly what `totals` exists to
+	// prevent — so each header must read "N of M" against the real total, and
+	// the trailing "+K more" must agree with it.
+	wantTotals := map[string]int{"URGENT": 9, "NEEDS A REPLY": 17, "SUGGESTED ARCHIVE": 31}
+	headers := sectionCounts(t, plain(out))
+	if len(headers) != len(wantTotals) {
+		t.Fatalf("got %d section headers, want %d: %v", len(headers), len(wantTotals), headers)
+	}
+	for label, total := range wantTotals {
+		h, ok := headers[label]
+		if !ok {
+			t.Fatalf("section %q missing from card:\n%s", label, plain(out))
+		}
+		if h.total != total {
+			t.Errorf("section %q header reads %q; want a total of %d", label, h.text, total)
+		}
+		if h.shown >= h.total {
+			t.Errorf("section %q shows %d of %d — the fixture caps every bucket, so this must be a strict subset", label, h.shown, h.total)
+		}
+		want := "+" + itoa(h.total-h.shown) + " more"
+		if !strings.Contains(plain(out), want) {
+			t.Errorf("section %q header says %q but the card never says %q", label, h.text, want)
+		}
+	}
+}
+
+type sectionHeaderCount struct {
+	text  string
+	shown int
+	total int
+}
+
+// sectionCounts reads the "N" / "N of M" count off each section header line.
+func sectionCounts(t *testing.T, rendered string) map[string]sectionHeaderCount {
+	t.Helper()
+	out := map[string]sectionHeaderCount{}
+	for _, label := range []string{"URGENT", "NEEDS A REPLY", "SUGGESTED ARCHIVE"} {
+		for _, line := range strings.Split(rendered, "\n") {
+			body := strings.TrimSpace(strings.Trim(line, "│"))
+			if !strings.HasPrefix(body, label) {
+				continue
+			}
+			count := strings.TrimSpace(strings.TrimPrefix(body, label))
+			h := sectionHeaderCount{text: count}
+			if shown, total, ok := strings.Cut(count, " of "); ok {
+				h.shown, h.total = atoi(t, shown), atoi(t, total)
+			} else {
+				h.shown = atoi(t, count)
+				h.total = h.shown
+			}
+			out[label] = h
+			break
+		}
+	}
+	return out
+}
+
+func atoi(t *testing.T, s string) int {
+	t.Helper()
+	n := 0
+	for _, r := range strings.TrimSpace(s) {
+		if r < '0' || r > '9' {
+			t.Fatalf("not a number: %q", s)
+		}
+		n = n*10 + int(r-'0')
+	}
+	return n
+}
+
+func TestPreScanUncappedShowsBareCount(t *testing.T) {
+	// When totals match the delivered lists there is nothing hidden, so the
+	// header must NOT read "2 of 2" — that reads as a truncation that isn't one.
+	out := Render("email_pre_scan", raw(t, populatedPreScan), width80)
+	if strings.Contains(plain(out), "2 of 2") {
+		t.Errorf("uncapped section rendered as %q; want a bare count\n%s", "2 of 2", plain(out))
+	}
+	assertNotContains(t, out, "+0 more")
+}
+
+func TestPreScanMailboxErrorsBanner(t *testing.T) {
+	out := Render("email_pre_scan", raw(t, mailboxErrorsPreScan), width80)
+	t.Logf("\n%s", plain(out))
+
+	assertWidth(t, out, width80)
+	assertContains(t, out,
+		// The broken grant is a warning banner, not a failed card.
+		"[!] Outlook wasn't scanned: token expired",
+		"Results below are unaffected.",
+		// Results that DID arrive are still shown.
+		"URGENT", "Sarah Chen", "Prod incident",
+		// Rows are tagged with their account, because more than one is in play.
+		"Gmail · asked for a reply by Friday",
+		"Outlook · needs sign-off today",
+	)
+}
+
+func TestPreScanSingleMailboxOmitsTag(t *testing.T) {
+	// One account: the mailbox tag is noise, so it is not drawn.
+	out := Render("email_pre_scan", raw(t, populatedPreScan), width80)
+	assertNotContains(t, out, "Gmail ·", "Outlook ·")
+}
+
+func TestPreScanMissingTotalsFallsBackToListLengths(t *testing.T) {
+	var envelope map[string]any
+	if err := json.Unmarshal([]byte(populatedPreScan), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	delete(envelope, "totals")
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := Render("email_pre_scan", data, width80)
+	assertWidth(t, out, width80)
+	// Derived totals equal the visible counts, so no section claims a hidden tail.
+	assertNotContains(t, out, " of ", "+")
+	assertContains(t, out, "URGENT", "Sarah Chen")
+}
+
+func TestPreScanInvalidPayload(t *testing.T) {
+	// `urgent` is an object where the schema says array — a schema-invalid
+	// payload must say so and dump the data, per contract §7.
+	bad := raw(t, `{"kind":"email_pre_scan","urgent":{"nope":1}}`)
+	out := Render("email_pre_scan", bad, width80)
+	t.Logf("\n%s", plain(out))
+
+	assertWidth(t, out, width80)
+	assertContains(t, out, "Invalid card", "Invalid email_pre_scan payload", "raw data:", "nope")
+}
+
+func TestPreScanWrongKindIsInvalid(t *testing.T) {
+	out := Render("email_pre_scan", raw(t, `{"kind":"something_else","urgent":[]}`), width80)
+	assertContains(t, out, "Invalid email_pre_scan payload", "kind is something_else")
+}
+
+func TestPreScanAt80x24(t *testing.T) {
+	// The whole point of the bound: an 80x24 terminal has 24 rows total, of
+	// which the header, dividers, input and status bar take 6. A card that
+	// cannot fit the remainder is a scroll trap, not a card.
+	out := Render("email_pre_scan", raw(t, populatedPreScan), width80)
+	assertWidth(t, out, width80)
+
+	lines := strings.Split(plain(out), "\n")
+	if len(lines) > 24 {
+		t.Errorf("card is %d lines; must stay within a 24-row terminal", len(lines))
+	}
+}
+
+func TestPreScanDegradesAtNarrowWidth(t *testing.T) {
+	// Narrow terminals truncate; they never break the frame.
+	for _, w := range []int{20, 24, 32, 40, 60, 76, 120} {
+		out := Render("email_pre_scan", raw(t, populatedPreScan), w)
+		assertWidth(t, out, w)
+		if !strings.Contains(plain(out), "URGENT") {
+			t.Errorf("width %d dropped the URGENT section:\n%s", w, plain(out))
+		}
+	}
+}
+
+func TestDisplaySender(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{`"Sarah Chen" <sarah@example.com>`, "Sarah Chen"},
+		{`Marcus Webb <marcus@example.org>`, "Marcus Webb"},
+		{`<solo@example.com>`, "solo@example.com"},
+		{`billing@vendorco.com`, "billing@vendorco.com"},
+		{``, "(unknown sender)"},
+		{`   `, "(unknown sender)"},
+	} {
+		if got := displaySender(tc.in); got != tc.want {
+			t.Errorf("displaySender(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

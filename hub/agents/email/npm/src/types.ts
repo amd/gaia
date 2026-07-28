@@ -693,6 +693,15 @@ export interface EmailQueryRequest {
   provider?: string;
   /** Agent-loop step ceiling (≥ 1). Omitted → the agent's configured default. */
   max_steps?: number;
+  /**
+   * Whether YOUR caller can render a {@link QueryNeedsInputEvent} and answer it
+   * with {@link EmailClient.respondToQuery}. Defaults to `false`, which is the
+   * safe answer: a caller that cannot answer would park the run until the
+   * question times out, which is indistinguishable from a hang. Set it `true`
+   * only from an interactive UI; leave it off for one-shots and batch jobs,
+   * which then get an immediate actionable refusal instead.
+   */
+  can_answer_questions?: boolean;
 }
 
 /** Progress narration (also carries folded step/thinking/plan lines). */
@@ -747,6 +756,45 @@ export interface QueryNeedsConfirmationEvent {
   confirm_url?: string;
 }
 
+/** One mutually-exclusive answer to a {@link QueryNeedsInputEvent}. */
+export interface QueryInputOption {
+  /** What to send back as `value`. */
+  value: string;
+  /** Short text the user picks. */
+  label: string;
+  /** What choosing this option will actually do. */
+  description?: string;
+}
+
+/**
+ * The agent is asking the user a QUESTION mid-run (schema 2.6, #2469).
+ *
+ * Unlike {@link QueryNeedsConfirmationEvent} this is **not terminal**: the run
+ * stays parked on the open stream. Answer it with
+ * {@link EmailClient.respondToQuery} and the SAME stream resumes — do not start
+ * a new `query()`. Leaving it unanswered is also handled: the run ends with an
+ * `error` once `timeout_seconds` elapses, it never hangs.
+ */
+export interface QueryNeedsInputEvent {
+  type: "needs_input";
+  /** The run this question belongs to (your minted run_id). */
+  run_id: string;
+  /** Identifies THIS question — send it back so a stale answer is rejectable. */
+  request_id: string;
+  /** The question to put to the user. */
+  question: string;
+  /** 0-4 mutually exclusive answers; empty means free text only. */
+  options: QueryInputOption[];
+  /** Whether a typed answer is accepted in addition to the options. */
+  allow_free_text: boolean;
+  /** The answer is a credential — mask it on input and never log it. */
+  sensitive?: boolean;
+  /** Where to POST the answer (`/v1/email/query/{run_id}/respond`). */
+  respond_url?: string;
+  /** After this many seconds with no answer the run fails loudly. */
+  timeout_seconds?: number;
+}
+
 /** Run usage metrics on the terminal `final` event (all fields optional). */
 export interface QueryUsage {
   /** Agent-loop steps taken. */
@@ -779,7 +827,7 @@ export interface QueryErrorEvent {
 }
 
 /**
- * A wire event whose `type` is outside the frozen seven. Per the contract's
+ * A wire event whose `type` is outside the canonical vocabulary. Per the contract's
  * evolution rule (spec §7) a newer sidecar may add event types additively; the
  * client surfaces them as this placeholder — visibly, never silently dropped.
  * Render an "unsupported event" affordance (or log it) in your default branch.
@@ -802,9 +850,22 @@ export type QueryEvent =
   | QueryToolCallEvent
   | QueryToolResultEvent
   | QueryNeedsConfirmationEvent
+  | QueryNeedsInputEvent
   | QueryFinalEvent
   | QueryErrorEvent
   | QueryUnknownEvent;
+
+/** Result of `POST /v1/email/query/{run_id}/respond` (query_routes.py: QueryRespondResponse). */
+export interface QueryRespondResponse {
+  /** The run the answer was delivered to. */
+  run_id: string;
+  /** The question that was answered. */
+  request_id: string;
+  /** True once the answer unblocked the run. */
+  accepted: boolean;
+  /** Always "ok" on success. */
+  status: string;
+}
 
 /** Result of `POST /v1/email/query/{run_id}/cancel` (query_routes.py: QueryCancelResponse). */
 export interface QueryCancelResponse {

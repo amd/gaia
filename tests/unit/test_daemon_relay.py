@@ -41,6 +41,8 @@ import time
 
 import pytest
 
+pytestmark = pytest.mark.allow_network
+
 from gaia.daemon.relay import (
     TERMINAL_TYPES,
     _run_id_from_body,

@@ -18,9 +18,16 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/components"
 )
 
-type eventMsg struct{ event interface{} }
+// eventMsg and doneMsg carry the channel they came from. Bubble Tea cannot
+// cancel an already-dispatched Cmd, so a cancelled turn's waitForEvent goroutine
+// stays parked on its old channel and delivers late — without the tag, that late
+// delivery would tear down whatever turn is running by then.
+type eventMsg struct {
+	ch    <-chan interface{}
+	event interface{}
+}
 type errMsg struct{ err error }
-type doneMsg struct{}
+type doneMsg struct{ ch <-chan interface{} }
 type sendQueryMsg struct{ query string }
 type channelReadyMsg struct{ ch <-chan interface{} }
 
@@ -88,7 +95,10 @@ type ChatModel struct {
 	messages  []Message
 	activity  []ActivityItem
 	streaming bool
-	buffer    strings.Builder
+	// buffer accumulates streamed answer text. A plain string, not a
+	// strings.Builder: Bubble Tea copies the model on every update, and a
+	// Builder panics the moment a copied non-zero one is written to again.
+	buffer string
 
 	input    textarea.Model
 	viewport viewport.Model
@@ -104,6 +114,17 @@ type ChatModel struct {
 
 	width  int
 	height int
+
+	// question is the mid-run question the agent is parked on, if any. Non-nil
+	// means the run is alive and waiting on THIS client — keystrokes go to it,
+	// not to the composer.
+	question *components.QuestionModel
+
+	// confirmation is the pending needs_confirmation modal, if any. Non-nil
+	// means a destructive/external tool call is asking for approval — every
+	// key except Ctrl+C goes to it (including Esc, which means "deny" here,
+	// not "cancel the turn" — see handleKey).
+	confirmation *components.ConfirmationModel
 
 	connected    bool
 	totalSteps   int
@@ -184,12 +205,20 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForEvent(m.events)
 
 	case eventMsg:
+		if m.supersededTurn(msg.ch) {
+			return m, nil
+		}
 		return m.handleEvent(msg.event)
 
 	case doneMsg:
+		if m.supersededTurn(msg.ch) {
+			return m, nil
+		}
 		m.streaming = false
 		m.events = nil
 		m.cancelFn = nil
+		m.question = nil
+		m.confirmation = nil
 		m.flushBuffer()
 		m.activity = nil
 		m.updateViewport()
@@ -199,12 +228,76 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streaming = false
 		m.events = nil
 		m.cancelFn = nil
+		m.question = nil
+		m.confirmation = nil
 		m.err = msg.err
 		m.messages = append(m.messages, Message{
 			Role:    RoleError,
 			Content: msg.err.Error(),
 		})
 		m.activity = nil
+		m.updateViewport()
+		return m, nil
+
+	case components.QuestionAnsweredMsg:
+		q := m.question
+		if q == nil || q.RequestID() != msg.RequestID {
+			// A late answer for a question that is no longer up — dropping it is
+			// correct, but never silently: the agent moved on.
+			return m, nil
+		}
+		m.messages = append(m.messages, Message{
+			Role:    RoleUser,
+			Content: q.AnswerLabel(msg.Value),
+		})
+		m.question = nil
+		m.updateViewport()
+		return m, m.answerQuestion(msg.RequestID, msg.Value)
+
+	case questionFailedMsg:
+		m.messages = append(m.messages, Message{
+			Role:    RoleError,
+			Content: msg.err.Error(),
+		})
+		m.updateViewport()
+		return m, nil
+
+	case components.ConfirmationTimeoutMsg:
+		if m.confirmation == nil {
+			// Already resolved (the run's own final/error got there first, the
+			// overwhelmingly common case against the current stateless email
+			// sidecar) or the turn moved on. Dropping is correct — nothing to warn.
+			return m, nil
+		}
+		c, cmd := m.confirmation.ResolveTimeout(msg)
+		m.confirmation = &c
+		return m, cmd
+
+	case components.ConfirmationDecidedMsg:
+		if m.confirmation == nil || m.confirmation.RunID() != msg.RunID {
+			// Stale — a decision for a confirmation that is no longer up (already
+			// resolved by the run ending first, or superseded). Drop it, same as a
+			// stale question answer.
+			return m, nil
+		}
+		return m.resolveConfirmationDecision(msg)
+
+	case confirmActionResultMsg:
+		word := "denied"
+		if msg.Approved {
+			word = "approved"
+		}
+		if msg.err != nil {
+			m.messages = append(m.messages, Message{
+				Role:    RoleError,
+				Content: fmt.Sprintf("could not deliver the %s decision for '%s': %v", word, msg.Action, msg.err),
+			})
+		} else {
+			m.messages = append(m.messages, Message{
+				Role:    RoleStatus,
+				Content: fmt.Sprintf("[!] %s decision for '%s' delivered", word, msg.Action),
+			})
+		}
 		m.updateViewport()
 		return m, nil
 
@@ -229,6 +322,26 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// A pending confirmation owns the keyboard too, but UNLIKE a question, Esc
+	// belongs to it: the issue's contract is "Esc denies", not "Esc cancels the
+	// turn". Ctrl+C is still the universal way out.
+	if m.confirmation != nil && msg.Type != tea.KeyCtrlC {
+		c, cmd := m.confirmation.Update(msg)
+		m.confirmation = &c
+		m.updateViewport()
+		return m, cmd
+	}
+
+	// A pending question owns the keyboard: the run is blocked on it, so a
+	// keystroke that fell through to the composer would go nowhere. Ctrl+C and
+	// Esc still cancel the turn — abandoning a question must stay possible.
+	if m.question != nil && msg.Type != tea.KeyCtrlC && msg.Type != tea.KeyEsc {
+		q, cmd := m.question.Update(msg)
+		m.question = &q
+		m.updateViewport()
+		return m, cmd
+	}
+
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		if m.streaming && m.cancelFn != nil {
@@ -237,6 +350,8 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.events = nil
 			m.cancelFn = nil
 			m.activity = nil
+			m.question = nil
+			m.confirmation = nil
 			m.messages = append(m.messages, Message{
 				Role:    RoleStatus,
 				Content: "cancelled",
@@ -253,6 +368,8 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.events = nil
 			m.cancelFn = nil
 			m.activity = nil
+			m.question = nil
+			m.confirmation = nil
 			m.messages = append(m.messages, Message{
 				Role:    RoleStatus,
 				Content: "cancelled",
@@ -296,15 +413,14 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			})
 			m.updateViewport()
 			return m, nil
-		case query == "/init":
-			m.messages = append(m.messages, Message{
-				Role:    RoleStatus,
-				Content: fmt.Sprintf("Initializing %s...", m.agentName),
-			})
-			m.updateViewport()
-			return m, nil
 		case query == "/clear":
 			m.messages = nil
+			// Daemon-transport agents are stateless per turn: the host pushes the
+			// transcript back as `context`, so clearing the view must clear that
+			// too or the "cleared" history keeps being sent.
+			if r, ok := m.client.(client.TranscriptResetter); ok {
+				r.ResetTranscript()
+			}
 			m.updateViewport()
 			return m, nil
 		}
@@ -336,7 +452,7 @@ func (m ChatModel) sendQuery(query string) (tea.Model, tea.Cmd) {
 	})
 	m.streaming = true
 	m.activity = nil
-	m.buffer.Reset()
+	m.buffer = ""
 	m.queryStart = time.Now()
 	m.firstEvent = false
 	m.ttft = 0
@@ -365,16 +481,42 @@ func waitForEvent(ch <-chan interface{}) tea.Cmd {
 		}
 		evt, ok := <-ch
 		if !ok {
-			return doneMsg{}
+			return doneMsg{ch: ch}
 		}
-		return eventMsg{event: evt}
+		return eventMsg{ch: ch, event: evt}
 	}
+}
+
+// supersededTurn reports whether a message belongs to a turn that is no longer
+// the current one, so it must be ignored rather than allowed to end the live turn.
+func (m ChatModel) supersededTurn(ch <-chan interface{}) bool {
+	return ch != nil && ch != m.events
+}
+
+// CancelActiveTurn stops any in-flight turn. The UI owns the per-turn context, so
+// tearing this view down has to cancel it — otherwise the transport keeps
+// streaming into a screen nobody is watching and the agent run stays alive.
+func (m *ChatModel) CancelActiveTurn() {
+	if m.cancelFn != nil {
+		m.cancelFn()
+		m.cancelFn = nil
+	}
+	m.streaming = false
+	m.events = nil
+	m.question = nil
+	m.confirmation = nil
 }
 
 func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 	if !m.firstEvent {
 		m.firstEvent = true
 		m.ttft = time.Since(m.queryStart)
+	}
+
+	// The daemon transport speaks the canonical seven-event contract; the
+	// subprocess transport speaks the legacy in-process vocabulary below.
+	if updated, cmd, handled := m.handleCanonicalEvent(evt); handled {
+		return updated, cmd
 	}
 
 	switch e := evt.(type) {
@@ -434,11 +576,10 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		}
 
 	case event.StepEvent:
+		// Tracked, not shown. "Step 2/50" is the agent loop's bound, not the
+		// user's progress — it says neither what is happening nor how far along
+		// the work is, and it pushed the informative tool line off the screen.
 		m.totalSteps = e.Step
-		m.activity = append(m.activity, ActivityItem{
-			Kind:    "step",
-			Content: fmt.Sprintf("Step %d/%d", e.Step, e.Total),
-		})
 
 	case event.StatusEvent:
 		if e.Status == "complete" {
@@ -479,7 +620,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case event.ChunkEvent:
-		m.buffer.WriteString(e.Content)
+		m.buffer += e.Content
 
 	case event.AgentErrorEvent:
 		m.messages = append(m.messages, Message{
@@ -514,7 +655,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 }
 
 func (m *ChatModel) flushBuffer() {
-	content := m.buffer.String()
+	content := m.buffer
 	if content == "" {
 		return
 	}
@@ -524,7 +665,7 @@ func (m *ChatModel) flushBuffer() {
 		Content:  content,
 		Rendered: rendered,
 	})
-	m.buffer.Reset()
+	m.buffer = ""
 }
 
 func (m *ChatModel) resize() {
@@ -547,6 +688,12 @@ func (m *ChatModel) resize() {
 	m.input.SetWidth(vpWidth - 2)
 
 	components.SetWordWrap(vpWidth - 4)
+	if m.question != nil {
+		m.question.SetWidth(m.cardWidth())
+	}
+	if m.confirmation != nil {
+		m.confirmation.SetWidth(m.cardWidth())
+	}
 	m.updateViewport()
 }
 
@@ -559,18 +706,31 @@ func (m *ChatModel) updateViewport() {
 		sb.WriteString("\n")
 	}
 
-	for _, msg := range m.messages {
-		sb.WriteString(m.renderMessage(msg))
+	for i := range m.messages {
+		// By index, not by value: rendering a card memoizes onto the message.
+		sb.WriteString(m.renderMessage(&m.messages[i]))
 		sb.WriteString("\n")
 	}
 
-	// Live region: show a compact summary of current streaming state
-	if m.streaming && len(m.activity) > 0 {
+	// The live region appears the moment a turn starts, not once the first tool
+	// lands — the silent gap before an agent's first event is exactly when a
+	// blank screen reads as a hang.
+	if m.streaming {
 		sb.WriteString(m.renderLiveRegion())
 		sb.WriteString("\n")
 	}
 
-	buf := m.buffer.String()
+	if m.confirmation != nil {
+		sb.WriteString(m.confirmation.View())
+		sb.WriteString("\n")
+	}
+
+	if m.question != nil {
+		sb.WriteString(m.question.View())
+		sb.WriteString("\n")
+	}
+
+	buf := m.buffer
 	if m.streaming && buf != "" {
 		sb.WriteString(assistantStyle.Render(buf))
 		sb.WriteString("\n")
@@ -595,10 +755,35 @@ func (m ChatModel) renderWelcome() string {
 	return title + "\n" + agent + "\n\n" + hint
 }
 
-func (m ChatModel) renderMessage(msg Message) string {
+// cardWidth is the outer width a render card may occupy. The viewport keeps a
+// couple of columns for its own gutter, so a card sized to the raw terminal
+// width wraps and the borders shear. It never exceeds the viewport itself —
+// a card wider than the window it lives in is the same shear by another route.
+func (m ChatModel) cardWidth() int {
+	w := m.width - 4
+	if w > m.viewport.Width && m.viewport.Width > 0 {
+		w = m.viewport.Width
+	}
+	if w < 1 {
+		w = 1
+	}
+	return w
+}
+
+// wrapForPane wraps text to the visible pane, leaving it untouched before the
+// first WindowSizeMsg (when no width is known yet).
+func (m ChatModel) wrapForPane(s string) string {
+	if m.width <= 0 {
+		return s
+	}
+	return components.WrapText(s, m.cardWidth())
+}
+
+func (m ChatModel) renderMessage(msg *Message) string {
 	switch msg.Role {
 	case RoleUser:
-		return userStyle.Render("▶ You: ") + msg.Content
+		// A free-text answer to a mid-run question lands here and can be long.
+		return m.wrapForPane(userStyle.Render("▶ You: ") + msg.Content)
 
 	case RoleAssistant:
 		content := msg.Content
@@ -640,83 +825,153 @@ func (m ChatModel) renderMessage(msg Message) string {
 		}
 		return panel
 
+	case RoleCard:
+		return msg.renderCard(m.cardWidth())
+
 	case RoleError:
 		panelWidth := m.width - 4
 		if panelWidth < 20 {
 			panelWidth = 20
 		}
-		return errorPanelStyle.Width(panelWidth).Render("⚠️  " + msg.Content)
+		return errorPanelStyle.Width(panelWidth).Render("[!] " + msg.Content)
 
 	case RoleStatus:
-		return statusMsgStyle.Render("  " + msg.Content)
+		// Wrapped, not clipped: the viewport does not soft-wrap, so a status
+		// line longer than the pane loses its tail — and for the ones that
+		// carry a remedy, the tail IS the remedy.
+		return statusMsgStyle.Render(m.wrapForPane("  " + msg.Content))
 
 	default:
 		return msg.Content
 	}
 }
 
-// renderLiveRegion renders a compact multi-line summary of current streaming state.
-// Shows step progress + latest activity with spinner.
+// workLogLines caps the live work log. Bounded so a long turn cannot push the
+// transcript off screen, deep enough that repeated tool calls read as progress.
+const workLogLines = 5
+
+// stillWorkingAfter is when the live region starts saying the wait is expected.
+// A local 4B model routinely takes 60-90s on an inbox triage; without this line
+// the user's next move is ctrl+c.
+const stillWorkingAfter = 20 * time.Second
+
+// renderLiveRegion draws a bounded work log for the running turn: a header with
+// the current step and elapsed time, then the last few activity lines with
+// consecutive repeats folded into a counter.
+//
+// Bounded, not two lines: on a turn touching dozens of messages, two static
+// lines are indistinguishable from a hang.
 func (m ChatModel) renderLiveRegion() string {
 	var lines []string
 
-	// Find the latest step and latest non-step activity
-	var latestStep *ActivityItem
-	var latestAction *ActivityItem
+	elapsed := time.Since(m.queryStart)
+	header := "Working"
 	for i := len(m.activity) - 1; i >= 0; i-- {
-		item := &m.activity[i]
-		if item.Kind == "step" && latestStep == nil {
-			latestStep = item
-		} else if item.Kind != "step" && latestAction == nil {
-			latestAction = item
-		}
-		if latestStep != nil && latestAction != nil {
+		if m.activity[i].Kind == "step" {
+			header = m.activity[i].Content
 			break
 		}
 	}
+	lines = append(lines, "  "+stepStyle.Render(m.spinner.View()+" "+header)+"  "+
+		activityStyle.Render(formatElapsed(elapsed)))
 
-	// Step progress line
-	if latestStep != nil {
-		lines = append(lines, "  "+stepStyle.Render(m.spinner.View()+" "+latestStep.Content))
+	log := collapseActivity(m.activity)
+	if len(log) > workLogLines {
+		log = log[len(log)-workLogLines:]
+	}
+	for _, item := range log {
+		lines = append(lines, m.renderActivityItem(item))
+	}
+	if len(log) == 0 {
+		lines = append(lines, "  "+activityStyle.Render("connecting..."))
 	}
 
-	// Current action line
-	if latestAction != nil {
-		line := m.renderActivityItem(*latestAction)
-		lines = append(lines, line)
-	} else if latestStep == nil {
-		// No activity yet — show generic spinner
-		lines = append(lines, "  "+activityStyle.Render(m.spinner.View()+" Connecting..."))
+	if elapsed >= stillWorkingAfter {
+		lines = append(lines, "  "+activityStyle.Render("└ still working — local model, usually 60-90s"))
 	}
 
 	return strings.Join(lines, "\n")
 }
 
-// renderActivityItem renders a single activity item with appropriate styling.
+// collapseActivity drops step markers (the header carries the current one) and
+// folds runs of the same tool into "name xN", so a triage that calls one tool
+// twenty times shows the repetition instead of flickering on a single line.
+func collapseActivity(items []ActivityItem) []ActivityItem {
+	var out []ActivityItem
+	for _, item := range items {
+		if item.Kind == "step" {
+			continue
+		}
+		if n := len(out); n > 0 {
+			last := &out[n-1]
+			if last.Kind == item.Kind && activityKey(*last) == activityKey(item) {
+				last.Repeat++
+				last.Done = item.Done
+				last.Success = item.Success
+				continue
+			}
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+// activityKey is what "the same activity twice" means: for a tool, the tool name
+// without its arguments, so `send_email: a@x` and `send_email: b@y` fold together.
+func activityKey(item ActivityItem) string {
+	if item.Kind != "tool" {
+		return item.Content
+	}
+	if i := strings.Index(item.Content, ":"); i >= 0 {
+		return item.Content[:i]
+	}
+	return item.Content
+}
+
+func formatElapsed(d time.Duration) string {
+	total := int(d.Seconds())
+	return fmt.Sprintf("%d:%02d", total/60, total%60)
+}
+
+// renderActivityItem renders a single work-log line. Markers are ASCII words and
+// punctuation, never emoji or colour alone — the state has to survive a terminal
+// with no colour and no emoji font.
 func (m ChatModel) renderActivityItem(item ActivityItem) string {
+	content := item.Content
+	if item.Repeat > 0 {
+		content += fmt.Sprintf(" x%d", item.Repeat+1)
+	}
+
 	switch item.Kind {
 	case "thinking":
-		content := item.Content
-		if len(content) > 80 {
-			content = content[:80] + "..."
+		if len(content) > 72 {
+			content = content[:72] + "..."
 		}
-		return "  " + thinkingStyle.Render("🧠 "+content)
+		return "       " + thinkingStyle.Render(content)
 
 	case "tool":
 		if item.Done {
-			if item.Success != nil && *item.Success {
-				return "  " + successStyle.Render("✓ ") + toolNameStyle.Render(item.Content)
-			} else if item.Success != nil {
-				return "  " + failStyle.Render("✗ ") + toolNameStyle.Render(item.Content)
+			if item.Success != nil && !*item.Success {
+				return "  " + failStyle.Render("[x] ") + toolNameStyle.Render(content)
 			}
+			return "  " + successStyle.Render("[ok] ") + toolNameStyle.Render(content)
 		}
-		return "  " + toolNameStyle.Render("🔧 "+item.Content)
+		return "  " + activityStyle.Render("[..] ") + toolNameStyle.Render(content)
+
+	case "confirm":
+		// Always added already-resolved (see resolveConfirmationDecision) — a
+		// confirmation has no separate "in progress" activity line, since the
+		// modal itself is the in-progress view.
+		if item.Success != nil && !*item.Success {
+			return "  " + failStyle.Render("[x] ") + toolNameStyle.Render(content)
+		}
+		return "  " + successStyle.Render("[ok] ") + toolNameStyle.Render(content)
 
 	case "status":
-		return "  " + lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("🎯 "+item.Content)
+		return "       " + lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render(content)
 
 	default:
-		return "  " + activityStyle.Render(item.Content)
+		return "       " + activityStyle.Render(content)
 	}
 }
 

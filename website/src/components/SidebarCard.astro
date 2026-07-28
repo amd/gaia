@@ -1,0 +1,41 @@
+---
+// Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+// Agent-detail sidebar card: a mono uppercase label over either label/value
+// rows (13px faint label left, 12.5px mono value right) or free-form slot
+// content. Rows are optional so the same card carries lists and prose.
+
+interface Row {
+  label: string;
+  value: string;
+  /** Secondary line under the value, for a qualifier the value alone implies wrongly. */
+  note?: string;
+}
+
+interface Props {
+  title: string;
+  rows?: Row[];
+  class?: string;
+}
+
+const { title, rows = [], class: className = '' } = Astro.props;
+---
+
+<section class={`g-card p-5 ${className}`}>
+  <h2 class="g-label mb-4">{title}</h2>
+  {rows.length > 0 && (
+    <dl class="flex flex-col gap-3">
+      {rows.map((r) => (
+        <div class="flex items-baseline justify-between gap-3.5">
+          <dt class="flex-none text-[13px] text-g-faint">{r.label}</dt>
+          <dd class="mono min-w-0 text-right text-[12.5px] text-g-text">
+            {r.value}
+            {r.note && <span class="mt-0.5 block font-sans text-[11px] leading-[1.45] text-g-faint">{r.note}</span>}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  )}
+  <slot />
+</section>

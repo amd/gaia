@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: MIT
 """Shared construction + caching for the SpecificAI SLM classifiers.
 
-The email agent uses two small-language-model classifiers (phishing
-confirmation and triage-category classification), each backed by a GGUF
-encoder served from the SAME local Lemonade server as the chat model (no
+With ``use_slm`` enabled the email agent runs two small-language-model
+classifiers (phishing and triage-category classification), each backed by a
+GGUF encoder served from the SAME local Lemonade server as the chat model (no
 cloud path — AC3 holds). Both are ``LemonadeEmbeddingClassifier`` instances
 from ``specific-ai-tools``.
 

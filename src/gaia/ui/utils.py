@@ -462,6 +462,11 @@ def safe_open_document(
     The fd is a raw OS file descriptor open for reading; callers must NOT
     close it — the context manager owns its lifetime.
     """
+    # 0. Reject NUL before any path operation — os.path.realpath/lstat raise
+    # ValueError (not OSError) on an embedded NUL, which no caller handles.
+    if "\x00" in path:
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
     raw = Path(path)
     home = Path.home().resolve()
 

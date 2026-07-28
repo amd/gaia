@@ -209,6 +209,37 @@ class TestLemonadeInstaller(unittest.TestCase):
         self.assertEqual(info.version, "10.7.0")
         self.assertEqual(info.path, r"C:\lemonade_server\bin\lemonade.exe")
 
+    @patch("gaia.installer.lemonade_installer.get_installed_version")
+    def test_check_installation_finds_macos_install(self, mock_get_version):
+        """`gaia init` reported "not installed" on a macOS box where lemond was
+        answering requests on the port GAIA itself probes (issue #1867).
+
+        Drives the REAL resolver through injected platform + filesystem probes
+        — patching resolve_lemonade here would only prove it was called, not
+        that macOS detection works.
+        """
+        from pathlib import Path
+
+        real_exists = Path.exists
+        present = {"/usr/local/bin/lemond", "/usr/local/bin/lemonade"}
+
+        mock_get_version.return_value = "10.10.0"
+        with (
+            patch("platform.system", return_value="Darwin"),
+            patch.dict("os.environ", {}, clear=True),
+            patch("shutil.which", return_value=None),
+            patch.object(
+                Path, "exists", lambda self: str(self.expanduser()) in present
+            ),
+        ):
+            info = LemonadeInstaller().check_installation()
+
+        self.assertIs(Path.exists, real_exists, "Path.exists must be restored")
+        self.assertTrue(info.installed, f"macOS install missed: {info.error}")
+        self.assertEqual(info.version, "10.10.0")
+        self.assertEqual(info.path, "/usr/local/bin/lemonade")
+        self.assertIsNone(info.error)
+
 
 class TestInstallResult(unittest.TestCase):
     """Test InstallResult dataclass."""
@@ -319,6 +350,187 @@ class TestInitCommand(unittest.TestCase):
         mock_install.assert_called_once()
         self.assertEqual(mock_install.call_args.args[0], agent_id)
         self.assertIs(mock_install.call_args.kwargs.get("trusted"), True)
+
+
+class TestStartRemedyIsRunnable(unittest.TestCase):
+    """`gaia init` must never hand the user a command that doesn't exist.
+
+    Every remedy below used to be the hardcoded legacy literal
+    ``lemonade-server serve`` — a CLI that modern Lemonade removed. On a
+    modern install the user was told to run something that errors out, with
+    no way forward (issue #1867). Each test pins the remedy to what the
+    resolver actually produced for a mocked *modern* install.
+    """
+
+    MODERN_LINUX = "systemctl --user start lemond"
+
+    def _modern_tooling(self):
+        from gaia.llm.lemonade_launcher import LemonadeTooling
+
+        return LemonadeTooling(
+            found=True,
+            kind="modern",
+            client_path="/usr/bin/lemonade",
+            server_launcher="/usr/bin/lemond",
+        )
+
+    def _capturing_cmd(self, profile="chat"):
+        """An InitCommand whose console writes to a buffer we can assert on."""
+        import io
+
+        from gaia.installer import init_command as ic
+
+        if not ic.RICH_AVAILABLE:
+            self.skipTest("rich not installed")
+
+        with patch("gaia.installer.init_command.LemonadeInstaller"):
+            cmd = ic.InitCommand(profile=profile, yes=False)
+        buf = io.StringIO()
+        cmd.console = ic.Console(file=buf, force_terminal=False, width=300)
+        return cmd, buf
+
+    def test_manual_start_prompt_uses_resolved_command(self):
+        """_ensure_server_running's manual prompt (auto-start failed)."""
+        from gaia.installer.init_command import INIT_PROFILES
+
+        cmd, buf = self._capturing_cmd("chat")
+        min_ctx = INIT_PROFILES["chat"].get("min_context_size")
+
+        with (
+            patch("sys.platform", "linux"),
+            patch("platform.system", return_value="Linux"),
+            patch(
+                "gaia.llm.lemonade_launcher.resolve_lemonade",
+                return_value=self._modern_tooling(),
+            ),
+            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_cls,
+            patch.object(cmd, "_auto_start_server", return_value=False),
+            patch("builtins.input", side_effect=EOFError),
+        ):
+            mock_client_cls.return_value.health_check.side_effect = ConnectionError(
+                "refused"
+            )
+            cmd._ensure_server_running()
+
+        out = buf.getvalue()
+        self.assertIn(self.MODERN_LINUX, out)
+        self.assertNotIn("lemonade-server", out)
+        # systemctl returns immediately — backgrounding it is nonsense.
+        self.assertNotIn(f"{self.MODERN_LINUX} &", out)
+        if min_ctx:
+            self.assertIn(f"LEMONADE_CTX_SIZE={min_ctx}", out)
+
+    def test_manual_start_prompt_backgrounds_a_blocking_legacy_command(self):
+        """A real legacy install DOES block the terminal, and the prompt
+        blocks on input() right after — so that command must get '&'."""
+        from gaia.llm.lemonade_launcher import LemonadeTooling
+
+        cmd, buf = self._capturing_cmd("chat")
+
+        with (
+            patch("sys.platform", "linux"),
+            patch("platform.system", return_value="Linux"),
+            patch(
+                "gaia.llm.lemonade_launcher.resolve_lemonade",
+                return_value=LemonadeTooling(
+                    found=True,
+                    kind="legacy",
+                    client_path="/usr/local/bin/lemonade-server",
+                    server_launcher="/usr/local/bin/lemonade-server",
+                ),
+            ),
+            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_cls,
+            patch.object(cmd, "_auto_start_server", return_value=False),
+            patch("builtins.input", side_effect=EOFError),
+        ):
+            mock_client_cls.return_value.health_check.side_effect = ConnectionError(
+                "refused"
+            )
+            cmd._ensure_server_running()
+
+        self.assertIn("/usr/local/bin/lemonade-server serve", buf.getvalue())
+        self.assertIn("&", buf.getvalue())
+
+    def test_manual_start_prompt_on_macos_does_not_invent_a_command(self):
+        """macOS resolves as not-found; the remedy must still be real."""
+        from gaia.llm.lemonade_launcher import LemonadeTooling
+
+        cmd, buf = self._capturing_cmd("chat")
+
+        with (
+            patch("sys.platform", "darwin"),
+            patch("platform.system", return_value="Darwin"),
+            patch(
+                "gaia.llm.lemonade_launcher.resolve_lemonade",
+                return_value=LemonadeTooling(found=False, kind="none"),
+            ),
+            patch("gaia.llm.lemonade_launcher.shutil.which", return_value=None),
+            patch("gaia.llm.lemonade_launcher._macos_app_installed", return_value=True),
+            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_cls,
+            patch.object(cmd, "_auto_start_server", return_value=False),
+            patch("builtins.input", side_effect=EOFError),
+        ):
+            mock_client_cls.return_value.health_check.side_effect = ConnectionError(
+                "refused"
+            )
+            cmd._ensure_server_running()
+
+        out = buf.getvalue()
+        self.assertNotIn("lemonade-server", out)
+        self.assertIn("Lemonade app", out)
+        # No shell command was offered, so the shell-rehash tip is noise.
+        self.assertNotIn("hash -r", out)
+
+    def test_hardware_detect_connection_error_uses_resolved_command(self):
+        """_check_device_available's ConnectionError branch."""
+        cmd, buf = self._capturing_cmd("npu")
+
+        with (
+            patch("platform.system", return_value="Linux"),
+            patch(
+                "gaia.llm.lemonade_launcher.resolve_lemonade",
+                return_value=self._modern_tooling(),
+            ),
+            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_cls,
+        ):
+            mock_client_cls.return_value.get_system_info.side_effect = ConnectionError(
+                "refused"
+            )
+            result = cmd._check_device_available()
+
+        out = buf.getvalue()
+        self.assertFalse(result)
+        self.assertIn(self.MODERN_LINUX, out)
+        self.assertNotIn("lemonade-server", out)
+
+    def test_ctx_size_failure_uses_resolved_command(self):
+        """_verify_setup's 'failed to configure N token context' branch."""
+        from gaia.installer.init_command import INIT_PROFILES
+
+        profile = next(p for p, c in INIT_PROFILES.items() if c.get("min_context_size"))
+        cmd, buf = self._capturing_cmd(profile)
+        min_ctx = INIT_PROFILES[profile]["min_context_size"]
+
+        with (
+            patch("platform.system", return_value="Linux"),
+            patch(
+                "gaia.llm.lemonade_launcher.resolve_lemonade",
+                return_value=self._modern_tooling(),
+            ),
+            patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_cls,
+            patch(
+                "gaia.llm.lemonade_manager.LemonadeManager.ensure_ready",
+                return_value=False,
+            ),
+        ):
+            mock_client_cls.return_value.health_check.return_value = {"status": "ok"}
+            result = cmd._verify_setup()
+
+        out = buf.getvalue()
+        self.assertFalse(result)
+        self.assertIn(self.MODERN_LINUX, out)
+        self.assertIn(f"LEMONADE_CTX_SIZE={min_ctx}", out)
+        self.assertNotIn("lemonade-server", out)
 
 
 class TestRunInit(unittest.TestCase):
@@ -840,12 +1052,21 @@ class TestEnsureLemonadeInstalledSkipsWhenPresent(unittest.TestCase):
         mock_installer.download_installer.assert_not_called()
         mock_installer.install.assert_not_called()
 
-    def test_older_version_below_minimum_triggers_install_in_ci(self):
+    @patch("gaia.llm.lemonade_client.LemonadeClient")
+    def test_older_version_below_minimum_triggers_install_in_ci(self, mock_client_cls):
         """Case 3b: installed << profile minimum, --yes -> upgrade is invoked.
 
         This case DOES download — verify the upgrade path is taken.
         """
         from gaia.installer.init_command import InitCommand
+        from gaia.llm.lemonade_client import LemonadeClientError
+
+        mock_client = MagicMock()
+        mock_client._send_request.side_effect = LemonadeClientError(
+            "connection refused"
+        )
+        mock_client.health_check.side_effect = LemonadeClientError("connection refused")
+        mock_client_cls.return_value = mock_client
 
         info = LemonadeInfo(
             installed=True,
@@ -954,9 +1175,18 @@ class TestLegacyFallback(unittest.TestCase):
     the runtime install path.  Linux uses PPA; Windows uses download+install.
     """
 
-    def test_not_installed_on_linux_proceeds_to_install_via_ppa(self):
+    @patch("gaia.llm.lemonade_client.LemonadeClient")
+    def test_not_installed_on_linux_proceeds_to_install_via_ppa(self, mock_client_cls):
         """On Linux: check_installation not-installed -> install called WITHOUT download."""
         from gaia.installer.init_command import InitCommand
+        from gaia.llm.lemonade_client import LemonadeClientError
+
+        mock_client = MagicMock()
+        mock_client._send_request.side_effect = LemonadeClientError(
+            "connection refused"
+        )
+        mock_client.health_check.side_effect = LemonadeClientError("connection refused")
+        mock_client_cls.return_value = mock_client
 
         info = LemonadeInfo(installed=False, error="lemonade-server not found in PATH")
 
@@ -984,11 +1214,22 @@ class TestLegacyFallback(unittest.TestCase):
         mock_installer.download_installer.assert_not_called()
         mock_installer.install.assert_called_once()
 
-    def test_not_installed_on_windows_proceeds_to_download_and_install(self):
+    @patch("gaia.llm.lemonade_client.LemonadeClient")
+    def test_not_installed_on_windows_proceeds_to_download_and_install(
+        self, mock_client_cls
+    ):
         """On Windows: check_installation not-installed -> download + install called."""
         from pathlib import Path as _P
 
         from gaia.installer.init_command import InitCommand
+        from gaia.llm.lemonade_client import LemonadeClientError
+
+        mock_client = MagicMock()
+        mock_client._send_request.side_effect = LemonadeClientError(
+            "connection refused"
+        )
+        mock_client.health_check.side_effect = LemonadeClientError("connection refused")
+        mock_client_cls.return_value = mock_client
 
         info = LemonadeInfo(installed=False, error="lemonade-server not found in PATH")
 

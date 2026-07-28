@@ -1,7 +1,21 @@
 ---
-interface Props { class?: string }
-const { class: className = '' } = Astro.props;
+// Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+// Mono uppercase section eyebrow. `pill` wraps it in a bordered pill with a
+// glowing gold dot (the hero / page-title treatment).
+interface Props {
+  class?: string;
+  pill?: boolean;
+}
+const { class: className = '', pill = false } = Astro.props;
 ---
-<div class={`text-[11px] font-bold tracking-[0.14em] uppercase text-g-gold-text ${className}`}>
-  <slot />
-</div>
+
+{pill ? (
+  <div class={`g-pill-eyebrow ${className}`}>
+    <span class="g-dot" aria-hidden="true"></span>
+    <span class="g-eyebrow"><slot /></span>
+  </div>
+) : (
+  <div class={`g-eyebrow ${className}`}><slot /></div>
+)}

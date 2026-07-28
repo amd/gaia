@@ -52,6 +52,10 @@ func TestGetMissingID(t *testing.T) {
 
 func TestBySectionInstalled(t *testing.T) {
 	c := NewCatalog()
+	// Nothing ships installed any more, so install one the way the daemon does.
+	c.ApplyHubCatalog(&HubCatalog{Agents: []HubEntry{{
+		ID: "email", Supervised: true, Installed: true, InstalledVersion: "1.0.0",
+	}}})
 	installed := c.BySection(SectionInstalled)
 	if len(installed) == 0 {
 		t.Fatal("BySection(Installed) returned empty")
@@ -104,8 +108,10 @@ func TestBySectionCoverage(t *testing.T) {
 func TestDashboardStats(t *testing.T) {
 	c := NewCatalog()
 	installed, active, idle := c.DashboardStats()
-	if installed != 1 {
-		t.Fatalf("DashboardStats() installed = %d, want 1 (bash only)", installed)
+	// A fresh machine has nothing installed. It used to claim one — the bash
+	// binary that was never built, let alone published.
+	if installed != 0 {
+		t.Fatalf("DashboardStats() installed = %d, want 0 on a fresh catalog", installed)
 	}
 	if active != 0 {
 		t.Fatalf("DashboardStats() active = %d, want 0", active)
@@ -148,8 +154,10 @@ func TestRemove(t *testing.T) {
 
 	c.Remove("bash")
 	agent = c.Get("bash")
-	if agent.Status != StatusAvailable {
-		t.Fatalf("after Remove, status = %s, want available", agent.Status)
+	// Not Available: the hub does not publish it, so offering an install would
+	// be a dead end. See TestRemoveDoesNotPromoteAnUnpublishedAgent.
+	if agent.Status != StatusComingSoon {
+		t.Fatalf("after Remove, status = %s, want coming soon", agent.Status)
 	}
 	if agent.BinaryPath != "" {
 		t.Fatalf("after Remove, BinaryPath = %q, want empty", agent.BinaryPath)
@@ -293,5 +301,53 @@ func TestAllSections(t *testing.T) {
 	}
 	if sections[2] != SectionComingSoon {
 		t.Fatalf("AllSections()[2] = %q, want %q", sections[2], SectionComingSoon)
+	}
+}
+
+func TestTransportZeroValueIsSubprocess(t *testing.T) {
+	var zero Transport
+	if zero != TransportSubprocess {
+		t.Fatalf("the zero Transport must be subprocess so existing entries keep working, got %v", zero)
+	}
+	if TransportSubprocess.String() != "subprocess" || TransportDaemon.String() != "daemon" {
+		t.Errorf("unexpected transport names: %q / %q", TransportSubprocess, TransportDaemon)
+	}
+}
+
+func TestEmailUsesTheDaemonTransport(t *testing.T) {
+	c := NewCatalog()
+
+	email := c.Get("email")
+	if email == nil {
+		t.Fatal("email is missing from the catalog")
+	}
+	if email.Transport != TransportDaemon {
+		t.Errorf("email transport = %v, want daemon (it is an HTTP sidecar, not a spawnable binary)", email.Transport)
+	}
+	if email.BinaryPath != "" {
+		t.Errorf("a daemon-transport agent must carry no binary path, got %q", email.BinaryPath)
+	}
+
+	// Every other seeded agent still uses the subprocess transport.
+	for _, a := range c.All() {
+		if a.ID == "email" {
+			continue
+		}
+		if a.Transport != TransportSubprocess {
+			t.Errorf("agent %q transport = %v, want subprocess", a.ID, a.Transport)
+		}
+	}
+}
+
+func TestSetMockBinarySkipsDaemonTransport(t *testing.T) {
+	c := NewCatalog()
+	c.SetStatus("email", StatusInstalled)
+	c.SetMockBinary("/tmp/mock-agent")
+
+	if got := c.Get("email").BinaryPath; got != "" {
+		t.Errorf("a daemon-transport agent must not get a mock binary, got %q", got)
+	}
+	if got := c.Get("bash").BinaryPath; got != "/tmp/mock-agent" {
+		t.Errorf("bash binary = %q, want the mock", got)
 	}
 }

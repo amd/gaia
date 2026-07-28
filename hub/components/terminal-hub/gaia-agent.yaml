@@ -1,0 +1,40 @@
+# The Go/Bubble Tea terminal hub — `gaia tui`. Published to the Agent Hub R2
+# catalog as a component (not an agent): it hosts agents rather than being one,
+# so it has no tools, no models, and no agent loop.
+#
+# Version tracks the core GAIA release: the binary is stamped at build time from
+# the release tag (build_tui.yml passes -X …cli.version), and this file is the
+# single source the publish workflow reads. Both are asserted equal in CI.
+id: terminal-hub
+name: GAIA Terminal Hub
+version: 0.22.0
+description: "Browse, install, and chat with GAIA agents from the terminal"
+author: AMD
+license: MIT
+
+type: component
+language: go
+
+category: tools
+tags: [tui, terminal, cli, hub]
+icon: terminal
+
+# A component hosts agents; it registers no @tool functions and loads no model
+# of its own. The chat it drives runs against whichever agent the user opens.
+tools_count: 0
+models: []
+
+min_gaia_version: "0.22.0"
+
+requirements:
+  # The binary is statically linked with CGO_ENABLED=0 and holds no model. The
+  # floor is the terminal client alone — the agent a user opens declares its own.
+  min_memory_gb: 1
+  platforms: [win-x64, win-arm64, linux-x64, linux-arm64, darwin-x64, darwin-arm64]
+
+interfaces:
+  tui: true
+  cli: true
+  pipe: true
+  api_server: false
+  mcp_server: false

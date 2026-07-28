@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL
+from gaia.llm.lemonade_launcher import describe_client_hint, describe_start_hint
 
 log = logging.getLogger(__name__)
 
@@ -321,8 +322,8 @@ class CodeIndexSDK:
                 f"Indexing aborted: all embedding calls failed for "
                 f"{len(new_chunks) + len(reused_chunks)} chunks. "
                 "Check that Lemonade Server is reachable and that "
-                f"{self.config.embedding_model!r} is loaded "
-                "(`lemonade-server load <model>` or `gaia init`)."
+                f"{self.config.embedding_model!r} is loaded. "
+                f"{describe_client_hint('load', self.config.embedding_model).instruction}"
             )
 
         embeddings = np.concatenate(embedding_parts, axis=0)
@@ -689,9 +690,10 @@ class CodeIndexSDK:
             raise RuntimeError(
                 f"Could not load embedding model "
                 f"{self.config.embedding_model!r}: {e}. "
-                "Verify Lemonade Server is running "
-                "(`lemonade-server serve`) and that the model is "
-                "downloaded (`gaia download <model>`)."
+                f"Verify Lemonade Server is running "
+                f"({describe_start_hint().instruction}) and that the model is "
+                f"downloaded "
+                f"({describe_client_hint('pull', self.config.embedding_model).instruction})."
             ) from e
 
         self._embedder = self._llm_client

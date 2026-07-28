@@ -344,7 +344,10 @@ def _pull_model(probe_base: str, model_id: str) -> None:
     """
     import requests
 
-    from gaia.llm.lemonade_client import lemonade_auth_headers, resolve_lemonade_api_key
+    from gaia.llm.lemonade_client import (
+        lemonade_auth_headers,
+        resolve_lemonade_api_key,
+    )
 
     resp = requests.post(
         f"{probe_base}/pull",
@@ -817,10 +820,9 @@ class EmailTriageService:
     ) -> EmailTriageResult:
         """Build a result using LLM escalation when heuristic confidence is low.
 
-        When ``use_slm`` is on (default), the triage SLM runs before the LLM
-        and the phishing SLM runs first for ``is_phishing`` (heuristics are
-        skipped on a usable SLM result). Any SLM miss falls back to the
-        existing heuristic + LLM path.
+        When ``use_slm`` is on (experimental, off by default), the triage SLM
+        runs before the LLM and the phishing SLM decides ``is_phishing`` alone.
+        Any SLM miss falls back to the existing heuristic + LLM path.
 
         ``extra_call_stats`` seeds the usage accumulator with stats from a
         call made before this method runs (e.g. #1889's thread-fold digest
@@ -838,26 +840,25 @@ class EmailTriageService:
         )
         from gaia_agent_email.tools.summarize_tools import summarize_email_llm
 
-        use_phishing_slm = bool(self.config.use_slm)
         heuristic = classify_category_heuristic(
             subject=subject,
             sender=sender_raw,
             label_ids=label_ids,
-            body=body,
-            check_phishing=not use_phishing_slm,
+            check_phishing=False,
         )
 
-        if use_phishing_slm:
+        # Phishing: the SLM decides alone when it answers; otherwise (disabled
+        # or an unusable answer) the deterministic heuristic decides.
+        is_phishing: Optional[bool] = None
+        if self.config.use_slm:
             is_phishing = classify_phishing_slm(
                 get_slm_phishing_classifier(self.config),
                 subject=subject,
                 sender=sender_raw,
                 body=body,
             )
-            if is_phishing is None:
-                is_phishing = detect_phishing(subject, sender_raw, body)
-        else:
-            is_phishing = heuristic.is_phishing
+        if is_phishing is None:
+            is_phishing = detect_phishing(subject, sender_raw, body)
 
         # Per-call LLM stats accumulate here so the result can report aggregate
         # usage (#1540). Reuses AgentResponse.stats — no new measurement.
@@ -869,6 +870,7 @@ class EmailTriageService:
         # the LLM when the heuristic abstains. Mirrors read_tools.py so REST
         # and the agent loop reach the same verdict on identical input (#2124).
         llm_result: Optional[dict] = None
+        category_from_llm = False
         if heuristic.confident:
             category = EmailCategory(heuristic.category)
         else:
@@ -895,6 +897,7 @@ class EmailTriageService:
                     context=context,
                 )
                 category = EmailCategory(llm_result["category"])
+                category_from_llm = True
 
         if not heuristic.spam_confident and llm_result is None:
             llm_result = classify_email_llm(
@@ -930,9 +933,11 @@ class EmailTriageService:
             is_spam=is_spam,
             is_phishing=is_phishing,
         )
+        # Only the LLM's own category carries its suggested_action; a spam-only
+        # escalation must not restyle an action derived from another category.
         suggested_action = (
             llm_result.get("suggested_action")
-            if llm_result is not None
+            if category_from_llm
             else default_action_for(category.value)
         ) or default_action_for(category.value)
         return EmailTriageResult(

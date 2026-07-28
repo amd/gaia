@@ -38,7 +38,7 @@ describe('renderMarkdown sanitization', () => {
 
   it('escapes inline HTML smuggled inside a heading', () => {
     const html = renderMarkdown('# Title <img src=x onerror=alert(1)>');
-    expect(html).toContain('<h1'); // the heading the renderer emits
+    expect(html).toContain('<h2'); // `#` is demoted to <h2> — the page owns the <h1>
     expect(html).not.toContain('<img'); // the smuggled tag is escaped
     expect(html).not.toMatch(/<[a-z][a-z0-9]*\b[^>]*\son\w+=/i);
     expect(html).toContain('&lt;img');

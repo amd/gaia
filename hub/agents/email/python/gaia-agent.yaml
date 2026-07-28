@@ -14,12 +14,13 @@ category: productivity
 tags: [email, gmail, calendar, triage]
 icon: mail
 # tools_count = the number of internal @tool-decorated agent-loop functions
-# across gaia_agent_email/tools/*.py mixins — NOT the REST (16 verbs) or MCP
-# (4 tools) surface. Full definition: CAPABILITY_MATRIX.md. Drift guards:
+# across gaia_agent_email/tools/*.py mixins — NOT the REST or MCP surface,
+# whose verb counts are derived. Full definition + current counts:
+# CAPABILITY_MATRIX.md. Drift guards:
 # tests/test_capability_matrix.py (AST-derived, reconciled against
 # __init__.py) and tests/test_email_agent.py (live registry, #1232);
 # a mismatch fails CI.
-tools_count: 56
+tools_count: 59
 
 language: python
 min_gaia_version: "0.22.0"
@@ -36,7 +37,7 @@ requirements:
   # Minimum Lemonade Server version the triage stack needs. Mirrors
   # gaia_agent_email.version.MIN_LEMONADE_VERSION (the runtime source of truth
   # for the GET /v1/email/init readiness check); a test keeps the two in
-  # lock-step. `gaia init` reads this manifest value for the install path.
+  # lock-step.
   min_lemonade_version: "10.2.0"
   platforms: [win-x64, linux-x64, darwin-arm64]
 

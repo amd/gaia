@@ -37,7 +37,11 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK
-from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, GPU_CTX_SIZE
+from gaia.llm.lemonade_client import (
+    DEFAULT_MODEL_NAME,
+    GPU_CTX_SIZE,
+    is_context_overflow_error,
+)
 
 if TYPE_CHECKING:
     from gaia.agents.base.goal_store import Goal, Proposal
@@ -1907,6 +1911,20 @@ Do NOT wrap conversational replies in JSON.
             cls.CONFIRMATION_REQUIRED_TOOLS
         )
 
+    def _confirmation_denied_error(self, tool_name: str) -> str:
+        """Explain a confirmation denial to the model in the tool result.
+
+        Consoles may expose ``confirmation_denied_reason`` to distinguish "a human
+        said no" from "nothing could ask a human" (#2210); duck-typed so custom
+        handlers without the hook still get the generic wording.
+        """
+        reason_hook = getattr(self.console, "confirmation_denied_reason", None)
+        if callable(reason_hook):
+            reason = reason_hook(tool_name)
+            if reason:
+                return str(reason)
+        return f"Tool '{tool_name}' was denied by the user."
+
     def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """
         Execute a tool by name with the provided arguments.
@@ -1977,13 +1995,14 @@ Do NOT wrap conversational replies in JSON.
                 return {"status": "error", "error": err}
 
         # Guardrail: require explicit user confirmation for high-risk tools.
-        # The SSEOutputHandler overrides this to block until the frontend
-        # responds; the default implementation auto-approves (CLI path).
+        # Consoles that cannot reach a human deny rather than answer for them
+        # (#2210): AgentConsole prompts on a TTY, SSEOutputHandler blocks on the
+        # frontend modal, everything else denies with an actionable message.
         if tool_name in self.confirmation_required_tools():
             if not self.console.confirm_tool_execution(tool_name, tool_args):
                 return {
                     "status": "denied",
-                    "error": f"Tool '{tool_name}' was denied by the user.",
+                    "error": self._confirmation_denied_error(tool_name),
                 }
 
         # Dynamic tool loader (#1449): record use for LRU recency. The name is
@@ -3254,11 +3273,7 @@ Do NOT wrap conversational replies in JSON.
                     except Exception as e:
                         logger.error(f"Unexpected error during streaming: {e}")
                         err_text = str(e).lower()
-                        is_ctx_overflow = (
-                            "exceed_context_size" in err_text
-                            or "exceeds the available context size" in err_text
-                            or "got too long" in err_text
-                        )
+                        is_ctx_overflow = is_context_overflow_error(err_text)
                         # See non-streaming branch for explanation: re-raise
                         # if model was loaded with the wrong (small) ctx so
                         # the chat helper can reload it at 32K.
@@ -3394,14 +3409,12 @@ Do NOT wrap conversational replies in JSON.
                             print(f"[DEBUG] Error calling LLM: {e}")
                         logger.error(f"Unexpected error calling LLM: {e}")
 
-                        # Did we hit a context-overflow mid-loop? Detect by
-                        # substring (typed exceptions get wrapped by AgentSDK).
+                        # Did we hit a context-overflow mid-loop? Classify by
+                        # structure-then-text since typed exceptions get
+                        # wrapped by AgentSDK and the backend's error shape
+                        # varies (llama.cpp vs. FastFlowLM, #2513).
                         err_text = str(e).lower()
-                        is_ctx_overflow = (
-                            "exceed_context_size" in err_text
-                            or "exceeds the available context size" in err_text
-                            or "got too long" in err_text
-                        )
+                        is_ctx_overflow = is_context_overflow_error(err_text)
                         # Detect "wrong ctx size loaded" — substring match on
                         # error text first (when raw payload is preserved),
                         # then probe Lemonade health if substring missed

@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+from gaia.llm.lemonade_launcher import describe_client_hint
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -86,20 +87,21 @@ class SDToolsMixin:
 
         Args:
             output_dir: Directory to save generated images (default: .gaia/cache/sd/images)
-            default_model: Default SD model (SD-Turbo for fast/default, SDXL-Base-1.0 for photorealistic)
+            default_model: Default SD model (SDXL-Turbo, the default; SD-Turbo for
+                faster/lower quality; SDXL-Base-1.0 for photorealistic)
             default_size: Default image size (None = auto: 512px for SD-1.5/Turbo, 1024px for SDXL)
             default_steps: Default inference steps (None = auto: 4 for Turbo, 20 for Base)
             default_cfg: Default CFG scale (None = auto: 1.0 for Turbo, 7.5 for Base)
 
         Example:
-            # Fast generation with defaults (SD-Turbo)
+            # Fast generation with defaults (SDXL-Turbo)
             self.init_sd()
 
             # Photorealistic with auto-settings
             self.init_sd(default_model="SDXL-Base-1.0")
 
-            # Fast stylized
-            self.init_sd(default_model="SDXL-Turbo")
+            # Faster, lower quality
+            self.init_sd(default_model="SD-Turbo")
 
             # Custom settings
             self.init_sd(default_model="SDXL-Base-1.0", default_steps=30)
@@ -563,7 +565,13 @@ class SDToolsMixin:
                 return {
                     "status": "unavailable",
                     "endpoint": f"{self.sd_client.base_url}/images/generations",
-                    "error": "No SD models available. Download with: lemonade-server pull SD-Turbo",
+                    # Name the model THIS instance will request, not a literal:
+                    # pulling a different one succeeds and still leaves the
+                    # user unable to generate.
+                    "error": (
+                        "No SD models available. "
+                        f"{describe_client_hint('pull', self.sd_default_model).instruction}"
+                    ),
                 }
         except LemonadeClientError as e:
             return {

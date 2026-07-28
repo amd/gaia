@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: MIT
 """Config + fail-safe wiring tests for the SLM layer.
 
-Covers: ``use_slm`` defaults on; ``slm_*`` fields exist; field names never hint
+Covers: ``use_slm`` defaults off (experimental) and is overridable via
+``GAIA_EMAIL_USE_SLM``; ``slm_*`` fields exist and stay preconfigured so enabling
+is a one-flag change; field names never hint
 at a cloud LLM (AC3); half-configured tasks fail loudly in ``validate()``;
 factories return ``None`` when unconfigured or when classifier construction
 fails. Hermetic: no Lemonade, no network, no download.
@@ -61,9 +63,12 @@ class TestFormatSlmInput:
 
 
 class TestConfigFields:
-    def test_slm_fields_exist_and_default_on(self):
+    def test_slm_defaults_off_but_stays_preconfigured(self, monkeypatch):
+        # Experimental, so opt-in — but the model/checkpoint pairs stay filled
+        # so enabling it is one flag, not five.
+        monkeypatch.delenv("GAIA_EMAIL_USE_SLM", raising=False)
         cfg = EmailAgentConfig()
-        assert cfg.use_slm is True
+        assert cfg.use_slm is False
         assert cfg.slm_triage_model
         assert cfg.slm_triage_checkpoint
         assert cfg.slm_phishing_model
@@ -125,6 +130,35 @@ class TestValidateMisconfig:
         ).validate()
 
 
+class TestUseSlmEnvSwitch:
+    """``GAIA_EMAIL_USE_SLM`` turns the experimental layer on without a code edit."""
+
+    def test_unset_is_off(self, monkeypatch):
+        monkeypatch.delenv("GAIA_EMAIL_USE_SLM", raising=False)
+        assert EmailAgentConfig().use_slm is False
+
+    @pytest.mark.parametrize("raw", ["true", "TRUE", " 1 ", "yes"])
+    def test_truthy_values_enable(self, monkeypatch, raw):
+        monkeypatch.setenv("GAIA_EMAIL_USE_SLM", raw)
+        assert EmailAgentConfig().use_slm is True
+
+    @pytest.mark.parametrize("raw", ["false", "0", "no", ""])
+    def test_falsy_values_disable(self, monkeypatch, raw):
+        monkeypatch.setenv("GAIA_EMAIL_USE_SLM", raw)
+        assert EmailAgentConfig().use_slm is False
+
+    def test_unparseable_value_fails_loudly(self, monkeypatch):
+        monkeypatch.setenv("GAIA_EMAIL_USE_SLM", "ture")
+        with pytest.raises(ConfigurationError) as exc:
+            EmailAgentConfig()
+        assert "GAIA_EMAIL_USE_SLM" in str(exc.value)
+        assert "ture" in str(exc.value)
+
+    def test_explicit_argument_beats_env(self, monkeypatch):
+        monkeypatch.setenv("GAIA_EMAIL_USE_SLM", "true")
+        assert EmailAgentConfig(use_slm=False).use_slm is False
+
+
 class TestResolveBaseUrl:
     def test_strips_api_v1_suffix(self):
         cfg = EmailAgentConfig(base_url="http://localhost:13305/api/v1")
@@ -139,6 +173,64 @@ class TestResolveBaseUrl:
         assert slm_common.resolve_base_url(cfg) == "http://localhost:13305"
 
 
+@pytest.mark.real_slm_build
+class TestLemonadeCallShape:
+    """The base URL we hand the real classifier must be one it accepts.
+
+    A stub returning success would only prove we called the library; these run
+    against the installed ``specific_ai_tools`` so a chat-style ``/api/v1``
+    base URL can't silently become ``…/api/v1/v1/models`` on the wire.
+    """
+
+    def test_resolved_url_survives_library_normalization(self):
+        lemonade = pytest.importorskip(
+            "specific_ai_tools.embedding_heads.integrations.lemonade"
+        )
+        for configured in (
+            "http://localhost:13305",
+            "http://localhost:13305/v1",
+            "http://localhost:13305/api/v1",
+        ):
+            resolved = slm_common.resolve_base_url(
+                EmailAgentConfig(base_url=configured)
+            )
+            assert resolved == "http://localhost:13305"
+            assert lemonade.normalize_lemonade_base_url(resolved) == resolved
+
+    def test_model_discovery_hits_server_root(self, monkeypatch):
+        pytest.importorskip("specific_ai_tools")
+        import requests
+
+        calls: list = []
+
+        class _Response:
+            ok = True
+            status_code = 200
+            text = "{}"
+
+            @staticmethod
+            def json():
+                # No "data" key -> the library raises before any HF fetch, so
+                # the test stays hermetic while still recording the real URL.
+                return {}
+
+        def _fake_request(method, url, **kwargs):
+            calls.append((method, url))
+            return _Response()
+
+        monkeypatch.setattr(requests, "request", _fake_request)
+
+        cfg = EmailAgentConfig(
+            base_url="http://localhost:13305/api/v1",
+            slm_phishing_model="phish",
+            slm_phishing_checkpoint="org/phish:m.gguf",
+        )
+        # Fail safe: the discovery error is swallowed into a None classifier.
+        assert get_slm_phishing_classifier(cfg) is None
+        assert calls == [("GET", "http://localhost:13305/v1/models")]
+
+
+@pytest.mark.real_slm_build
 class TestFactoryFailSafe:
     def test_empty_model_returns_none(self):
         cfg = EmailAgentConfig(
