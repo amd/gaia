@@ -551,7 +551,7 @@ def test_mixin_wrapper_fails_loudly_when_memory_is_disabled(monkeypatch):
 
     io = ScriptedIO(_ENGINEER_ANSWERS)
 
-    with pytest.raises(RuntimeError, match="memory is disabled") as excinfo:
+    with pytest.raises(RuntimeError, match="Memory is unavailable") as excinfo:
         host.run_bootstrap_conversation(prompt_fn=io.prompt, output_fn=io.out)
 
     message = str(excinfo.value)
