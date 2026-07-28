@@ -272,7 +272,13 @@ have nothing to add beyond the card, still write the one framing sentence.
 BRIEFING & TASKS:
 - For a daily briefing / morning brief / "summarize my inbox for today",
   call ``get_briefing`` — NOT ``pre_scan_inbox``. The briefing is the
-  dedicated tool for that ask; do not fall back to a raw pre-scan.
+  dedicated tool for that ask; do not fall back to a raw pre-scan. Unlike
+  pre-scan, no card renders the briefing — your reply is the whole answer.
+  Use the tool's precomputed ``data.summary``: state its ``headline``, list
+  each ``highlights`` entry individually (not just a count), say plainly
+  when ``needs_attention`` is false, and name every ``preferences_applied``
+  entry. Never assert an urgency judgement ``data.summary`` did not itself
+  compute.
 - For "extract action items" / "what do I need to do from my inbox", call
   ``extract_action_items`` — it scans your recent mail and captures the
   to-dos even if you have not triaged yet.
@@ -329,6 +335,15 @@ searching. NEVER dead-end on "give me a message ID / the exact subject line":
 if the reference is ambiguous the tool returns the candidate list for the user
 to pick from; if nothing matches it says so. Only when the tool reports multiple
 matches do you ask the user which one.
+
+You write the reply/forward body yourself. ``draft_reply``'s ``body`` and
+``draft_forward``'s optional ``body`` are the finished text for the draft, not
+a placeholder for the user to fill in — compose it from the source message
+plus any constraints the user gave (length, tone, points to hit) and call the
+tool with it in the SAME turn you resolve the target. Never ask the user to
+supply or dictate the wording first; that defeats the point of asking you to
+draft. Use the user's own words verbatim only when they explicitly hand you
+exact text to send.
 
 OUTPUT:
 Tool results come back as JSON envelopes ``{"ok": true, "data": ...}``
@@ -1325,10 +1340,16 @@ class EmailTriageAgent(
     def _autonomy_candidate(row: Dict[str, Any]) -> Optional[tuple]:
         """Map a triage result to a candidate ``(tool, action_type)`` or None.
 
-        Phase 2 only proposes/auto-executes the clearest reversible action —
-        archiving low-signal mail (promotional / FYI / spam). Phishing is left
-        to the ``quarantine_phishing_message`` floor tool; urgent / needs-response
-        / personal mail is never auto-touched. Reply drafting lands in Phase 3.
+        Spam and promotional mail are low-value clutter — archiving removes
+        them from the inbox. FYI mail is different: it's useful context worth
+        keeping visible, so it is never archived here, but it also needs no
+        reply, so mark_read clears the unread flag without hiding it (#2529 —
+        closes the gap between this map and the broader
+        ``trust.REVERSIBLE_AUTO_ACTIONS`` set the trust model already
+        declares). Phishing is left to the ``quarantine_phishing_message``
+        floor tool; urgent / needs-response / personal mail is never
+        auto-touched by ANY candidate, not just archive. Reply drafting lands
+        in a future phase.
         """
         from gaia_agent_email.tools.triage_heuristics import (
             CATEGORY_FYI,
@@ -1338,8 +1359,10 @@ class EmailTriageAgent(
         if row.get("is_phishing"):
             return None
         category = (row.get("category") or "").strip().upper()
-        if row.get("is_spam") or category in (CATEGORY_FYI, CATEGORY_PROMOTIONAL):
+        if row.get("is_spam") or category == CATEGORY_PROMOTIONAL:
             return ("archive_message", "archive")
+        if category == CATEGORY_FYI:
+            return ("mark_read", "mark_read")
         return None
 
     def _run_email_autonomy_cycle(
@@ -1354,6 +1377,14 @@ class EmailTriageAgent(
         ``proposals`` list holds ``Proposal`` objects the caller persists via
         :meth:`propose`. Kept side-effect-pure of GoalStore so it is unit-testable
         without touching ``~/.gaia/goals.db``.
+
+        ``report["decisions"]`` (#2529) is a per-message observability log —
+        one entry for every row that produced a candidate, whatever the
+        outcome (auto/draft/suggest/confirm) — so the guards that decide
+        NOT to act (the confirm floor, the importance guard) are as visible
+        as the ones that do. A row the candidate map never considered at all
+        (no signal, e.g. urgent/needs-response/personal mail) has no
+        ``decisions`` entry; it only bumps ``skipped``, same as before.
         """
         from gaia_agent_email.tools.read_tools import extract_sender_email
         from gaia_agent_email.tools.triage_heuristics import LABEL_IMPORTANT
@@ -1365,6 +1396,7 @@ class EmailTriageAgent(
             "level": self.config.autonomy_level,
             "executed": [],
             "proposals": [],
+            "decisions": [],
             "skipped": 0,
             "already_proposed": 0,
         }
@@ -1395,6 +1427,19 @@ class EmailTriageAgent(
                 is_important=is_important,
             )
             message_id = row.get("id")
+            # #2529: log what was considered, what was decided, and why —
+            # for EVERY candidate, not just the ones held back. Computed once
+            # here so it can't drift from the branch-specific handling below.
+            report["decisions"].append(
+                {
+                    "message_id": message_id,
+                    "tool": tool_name,
+                    "action": action_type,
+                    "outcome": decision.action,
+                    "reason": decision.reason,
+                    "sender": sender,
+                }
+            )
             if decision.action == "auto":
                 executed = self._autonomy_execute(action_type, row)
                 # Index the action so a later undo is attributed to this scope
@@ -1460,29 +1505,40 @@ class EmailTriageAgent(
         Only reversible actions reach here (the policy guarantees it). Returns
         the impl's result (carrying the ``action_id`` undo handle).
         """
-        from gaia_agent_email.tools.organize_tools import archive_message_impl
-
-        if action_type != "archive":
-            raise ValueError(
-                f"_autonomy_execute: no executor for action_type {action_type!r}. "
-                "The policy admitted an action the executor does not implement — "
-                "add an executor branch before widening the candidate map."
-            )
-        import uuid as _uuid
+        from gaia_agent_email.tools.organize_tools import (
+            archive_message_impl,
+            mark_read_impl,
+        )
 
         message_id = row.get("id")
         provider = row.get("mailbox") or self._provider_for_message(message_id, None)
         backend = self._backends[provider]
-        # Mint a batch_id so the auto-archive is undoable via undo_archive_batch
-        # (the same handle the REST/UI undo surface uses) — and undoing it feeds
-        # the learning loop as a correction.
-        return archive_message_impl(
-            backend,
-            self,
-            message_id=message_id,
-            mailbox=provider,
-            batch_id=_uuid.uuid4().hex,
-            debug=bool(getattr(self.config, "debug", False)),
+        debug = bool(getattr(self.config, "debug", False))
+
+        if action_type == "archive":
+            # Mint a batch_id so the auto-archive is undoable via
+            # undo_archive_batch (the same handle the REST/UI undo surface
+            # uses) — and undoing it feeds the learning loop as a correction.
+            return archive_message_impl(
+                backend,
+                self,
+                message_id=message_id,
+                mailbox=provider,
+                batch_id=uuid.uuid4().hex,
+                debug=debug,
+            )
+        if action_type == "mark_read":
+            return mark_read_impl(
+                backend,
+                self,
+                message_id=message_id,
+                mailbox=provider,
+                debug=debug,
+            )
+        raise ValueError(
+            f"_autonomy_execute: no executor for action_type {action_type!r}. "
+            "The policy admitted an action the executor does not implement — "
+            "add an executor branch before widening the candidate map."
         )
 
     def on_heartbeat(
@@ -1519,16 +1575,17 @@ class EmailTriageAgent(
         promotional category both learn from the same choice). This is how the
         agent "learns from your patterns": enough positives lift a scope over
         the trust bar and the next cycle acts silently; a correction pulls it
-        back below and the agent returns to asking.
+        back below and the agent returns to asking. Thin wrapper over
+        :func:`trust.record_autonomy_outcome`, which is the pure ``db``-over
+        version any ``DatabaseMixin`` holder can call (#2529).
         """
-        for scope in (
-            trust.sender_scope(sender) if sender else "",
-            trust.category_scope(category) if category else "",
-        ):
-            if scope:
-                trust.TrustLedger.record_outcome(
-                    self, action_type=action_type, scope=scope, positive=positive
-                )
+        trust.record_autonomy_outcome(
+            self,
+            action_type=action_type,
+            positive=positive,
+            sender=sender,
+            category=category,
+        )
 
     def note_action_undone(self, action_id: str) -> bool:
         """Capture a correction: an auto-executed action the user undid.
@@ -1537,18 +1594,46 @@ class EmailTriageAgent(
         negative outcome is recorded for its scope and the index row is marked
         resolved (so one undo is never counted twice). Returns True when a
         correction was captured, False when the id was not an autonomy action.
+        Thin wrapper over :func:`trust.note_autonomy_undo` (#2529).
         """
-        row = trust.lookup_autonomy_action(self, action_id=action_id)
-        if row is None:
-            return False
-        self.record_autonomy_outcome(
-            action_type=row["action_type"],
-            positive=False,
-            sender=row.get("sender") or "",
-            category=row.get("category") or "",
+        return trust.note_autonomy_undo(self, action_id=action_id)
+
+    def undo_autonomy_action(self, action_id: str) -> Dict[str, Any]:
+        """Undo one action and feed the correction to the trust ledger (#2529).
+
+        The general-purpose undo the REST autonomy surface uses to let a
+        caller reverse an auto-executed action, whatever its type: it
+        reverses the underlying mailbox mutation via
+        :func:`organize_tools.undo_reversible_action_impl`, then records a
+        negative outcome against the action's scope via
+        :meth:`note_action_undone` — but only when ``action_id`` was indexed
+        as an autonomy decision (:func:`trust.record_autonomy_action`).
+        Undoing a manually-executed action still reverses the mutation but
+        reports ``correction_captured: False``, the same tolerance
+        ``note_action_undone`` already has for a non-autonomy id.
+
+        Without this, the ledger can only ever ratchet trust up — no undo
+        could reach it for anything but a batch archive via the
+        conversational ``undo_archive_batch`` tool. Raises ``RuntimeError``
+        if ``action_id`` is unknown, already undone, or outside the undo
+        window; raises ``ValueError`` if its ``action_type`` has no reversal
+        implemented (both propagate — never a silent no-op).
+        """
+        from gaia_agent_email.tools.organize_tools import undo_reversible_action_impl
+
+        window = int(getattr(self.config, "undo_window_seconds", 120))
+        result = undo_reversible_action_impl(
+            self._backend_for_action,
+            self,
+            action_id=action_id,
+            window_seconds=window,
+            debug=bool(getattr(self.config, "debug", False)),
         )
-        trust.mark_autonomy_action_resolved(self, action_id=action_id)
-        return True
+        # Only AFTER the mutation is confirmed reversed — mirrors the ordering
+        # undo_archive_batch's tool closure already uses (capture the
+        # correction once the restore actually happened, never before).
+        result["correction_captured"] = self.note_action_undone(action_id)
+        return result
 
     def set_autonomy_level(self, level: str) -> Dict[str, Any]:
         """Change the autonomy level at runtime (pause / resume / kill switch).

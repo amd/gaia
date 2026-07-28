@@ -24,6 +24,24 @@ contract version is tracked separately as
   checkpoint pairs on `EmailAgentConfig` ship preconfigured. A half-configured
   pair fails `validate()` loudly, and an unparseable `GAIA_EMAIL_USE_SLM` raises
   instead of silently defaulting to off.
+  
+- **The autonomy trust model can now be exercised end to end — broader candidates, an undo
+  surface, and per-message decisions (#2529).** The proactive `earn_trust`/`full` loop's
+  candidate generator (`_autonomy_candidate`) only ever proposed `archive`, so the rest of
+  the declared reversible-action set, the nine-tool confirm floor, and the importance guard
+  were unreachable and unverifiable from outside. Now: FYI mail maps to `mark_read` instead
+  of `archive` (useful context stays visible, but no longer sits unread — PROMOTIONAL/spam
+  mail is unaffected, it still archives); `_run_email_autonomy_cycle`'s report gains a
+  `decisions` list — one entry per candidate considered (`message_id`, `tool`, `action`,
+  `outcome`, `reason`, `sender`) — so a held-back decision explains itself instead of only
+  being counted; and a new `EmailTriageAgent.undo_autonomy_action(action_id)` (exposed as
+  `POST /v1/email/agent/autonomy/undo`) reverses any auto-executed action and records a
+  negative outcome against its trust scope, generalizing the archive-only
+  `undo_archive_batch` correction path via a new `organize_tools.undo_reversible_action_impl`
+  and two pure `trust.py` functions (`record_autonomy_outcome`, `note_autonomy_undo`) that
+  `EmailTriageAgent`'s existing methods now delegate to. The confirm floor is unchanged and
+  still inviolable at every level — broadening the candidate map cannot make a floor tool
+  auto-executable.
 
 - **Agent-led mailbox onboarding — the agent sets up its own access, in the
   conversation (#2469).** Hitting the agent without a usable mailbox used to
@@ -69,6 +87,87 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **`draft_reply` / `draft_forward` actually draft instead of asking for the
+  text to draft (#2524).** Asked to draft a reply or forward, the agent
+  correctly located the source message and then asked the user to supply the
+  finished reply/forward text — the thing it was asked to write. Neither
+  tool's docstring nor the base system prompt ever told the model that
+  composing `body` is its own job; the only place that said so was the
+  voice-profile style guidance, which only appears once enough Sent-mail
+  history has been learned, so a fresh mailbox never saw it.
+  `draft_forward`'s `body` was already optional, ruling out a simple
+  required-parameter theory — this was a missing authorship contract, not a
+  schema-required-ness problem. Both tools' docstrings and the always-present
+  REPLYING/DRAFTING system-prompt section now say explicitly: the model
+  writes the body itself, from the source message plus any stated
+  constraints (length, tone, points to hit), in the same turn it resolves
+  the target — and only uses the user's own wording verbatim when they hand
+  it over explicitly. `send_draft` / `send_now` / `forward_message` remain
+  confirmation-gated; drafting still never sends.
+- **The inbox briefing carries a structured breakdown instead of one padded
+  sentence (#2525).** `get_briefing` already returned the full
+  `email_pre_scan` envelope (urgent/actionable messages, counts, applied
+  preferences) — the tool's own docstring was the bug: it told the model to
+  "write a short framing sentence, do not recite the JSON" as if a card
+  rendered the details, but unlike `pre_scan_inbox` no card renders a
+  briefing, so that one sentence was the entire answer. `summarize_briefing`
+  now computes the breakdown in code (total scanned, urgency/category
+  counts, the individual urgent/actionable messages, and named applied
+  preferences) so the reply can never assert an urgency judgement the
+  pre-scan classification did not itself make; the tool docstring and system
+  prompt now point the model at that computed `data.summary` instead of
+  asking it to compress everything away.
+- **Snoozing/scheduling by ordinary phrases like "tomorrow morning" now
+  actually works (#2526).** `schedule_send`/`snooze_message` used to hand
+  relative-time phrases straight to a strict ISO-8601 parser, which failed
+  and told the user in chat to supply ISO-8601 themselves — with an example
+  timestamp that was already in the past. No scheduled job was ever created.
+  The agent now resolves "tomorrow morning", "next monday", "in 3 hours",
+  "this evening", "tomorrow at 7" (and similar) itself before calling the
+  scheduling tools, anchored to the local time of the machine/process the
+  agent runs on (the same convention naive ISO-8601 timestamps already used
+  here — not UTC, not a per-user setting). A phrase that still can't be
+  resolved fails with a proposed concrete time (tomorrow 09:00 local)
+  instead of demanding a format. `cancel_scheduled_job` also now accepts a
+  1-based position ("2", "second") from the most recently shown
+  `list_scheduled_jobs` listing, since the user has no way to know the raw
+  job id from chat.
+- **`get_thread` returns every message in the right order — no more dropped
+  or duplicated entries on a multi-participant thread (#2531).** Asked to
+  list a full conversation chronologically, the agent could return the
+  right message count but the wrong contents — one side of a two-party
+  thread under-represented, entries duplicated, the last two messages
+  swapped. Gmail's thread API does not guarantee message order, and
+  `get_thread` — unlike its `summarize_thread` sibling, which already
+  sorted defensively — trusted raw backend order and handed the model an
+  unlabeled list to sort itself. `get_thread` now sorts by timestamp and
+  numbers each message with its position (`index`/`of_total`), giving the
+  model an authoritative order instead of one it has to compute.
+- **"Show me my inbox" now works on a real mailbox with the default NPU
+  profile (#2514).** `list_inbox` and `search_messages` capped each
+  message's body independently but never checked the COMBINED size of the
+  result — a realistic 25-message inbox built a >100KB tool response that
+  overflowed the NPU profile's 32768-token context window on the very
+  first tool call of a brand-new conversation, and `/clear` didn't help
+  since nothing had accumulated yet. Worse, the overflow sometimes surfaced
+  as a silently truncated message count (10 requested, 8 returned) rather
+  than a clear error. Both tools now shrink every message's body together
+  to fit the active device's context budget (GPU or NPU, whichever is
+  running) — messages are never dropped to make the count fit, and a
+  request too large even at the smallest usable body size fails with an
+  actionable error naming the limit instead of silently returning less
+  than was asked for.
+- **Calendar listing and conflict checks no longer 400 on a date-only range,
+  and never end a turn narrating a retry that didn't happen (#2517).**
+  `list_calendar_events` and `detect_calendar_conflicts` forwarded a
+  model-supplied bound like `2026-07-27` to Google verbatim; the live
+  Calendar API rejects a date-only `timeMin`/`timeMax` with a 400, so "what's
+  on my calendar the next 30 days" ran real tool calls and came back with no
+  events. Both tools now normalize `time_min`/`time_max` (and
+  `start_iso`/`end_iso`) to RFC 3339 before the request goes out — a bare
+  date or naive datetime is coerced to UTC, an already-qualified timestamp
+  passes through unchanged, and an unparseable bound raises an actionable
+  error naming what was received instead of reaching the backend at all.
 - **A trashed message is recoverable any time it's still in Trash, not just
   for a few seconds (#2523).** The only restore path (`restore_message`) was
   gated by a short undo window and a live `action_id`; once either was gone,

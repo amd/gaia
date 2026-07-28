@@ -71,6 +71,32 @@ def _promo_message(message_id: str, sender: str) -> dict:
     }
 
 
+def _fyi_message(message_id: str, sender: str) -> dict:
+    """A message the heuristic classifies confidently as FYI.
+
+    The ``CATEGORY_UPDATES`` label is the mechanical FYI signal, so no LLM
+    classifier is needed to reach a confident category. Subject/snippet are
+    deliberately benign (no deadline/commitment wording) so the confident-FYI
+    short-circuit is not vetoed by the #2113 commitment-signal guard.
+    """
+    internal_ms = int(time.time() * 1000)
+    return {
+        "id": message_id,
+        "threadId": f"thread_{message_id}",
+        "labelIds": ["INBOX", "UNREAD", "CATEGORY_UPDATES"],
+        "internalDate": str(internal_ms),
+        "snippet": "Your order has shipped and is on its way.",
+        "payload": {
+            "headers": [
+                {"name": "From", "value": f"Shop <{sender}>"},
+                {"name": "Subject", "value": "Your order has shipped"},
+                {"name": "Message-ID", "value": f"<{message_id}@x.com>"},
+                {"name": "Date", "value": "Mon, 12 Jun 2026 10:00:00 +0000"},
+            ],
+        },
+    }
+
+
 def _urgent_message(message_id: str, sender: str) -> dict:
     internal_ms = int(time.time() * 1000)
     return {
@@ -326,6 +352,31 @@ def test_triage_row_carries_label_ids(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# #2529 — candidate map narrowing: FYI mail is marked read, not archived
+# ---------------------------------------------------------------------------
+
+
+def test_full_level_marks_fyi_message_read_not_archived(tmp_path):
+    """FYI mail (useful context, no action needed) is narrowed off the
+    archive candidate and onto mark_read instead (#2529): it stays visible in
+    the inbox but no longer sits unread. PROMOTIONAL mail is unaffected — it
+    keeps archiving (see test_full_level_archives_immediately)."""
+    sender = "shop@retailer.com"
+    agent = _build_agent(tmp_path, [_fyi_message("f1", sender)], level=LEVEL_FULL)
+    report = agent._run_email_autonomy_cycle()
+
+    assert len(report["executed"]) == 1
+    entry = report["executed"][0]
+    assert entry["action"] == "mark_read"
+    assert entry["message_id"] == "f1"
+    assert "action_id" in entry  # undo handle recorded
+
+    labels = agent._gmail.get_message("f1").get("labelIds", [])
+    assert "INBOX" in labels  # stays in the inbox
+    assert "UNREAD" not in labels  # but no longer unread
+
+
+# ---------------------------------------------------------------------------
 # Hook + driver contract
 # ---------------------------------------------------------------------------
 
@@ -502,6 +553,128 @@ def test_undo_tool_captures_correction_end_to_end(tmp_path):
         agent, action_type="archive", scope=sender_scope(sender)
     )
     assert stats["negative"] == 1
+
+
+# ---------------------------------------------------------------------------
+# #2529 — the run report explains WHY, per message (the "decisions" log)
+# ---------------------------------------------------------------------------
+
+
+def test_decisions_report_explains_important_message_suggest(tmp_path):
+    """#2426/#2529: the report must not just hold back an auto-archive on a
+    provider-IMPORTANT message — it must say, per message, why. This is the
+    per-decision observability log the guard was previously silent about."""
+    agent = _build_agent(
+        tmp_path, [_security_important_message("s1")], level=LEVEL_FULL
+    )
+    report = agent._run_email_autonomy_cycle()
+
+    decisions = [d for d in report["decisions"] if d["message_id"] == "s1"]
+    assert len(decisions) == 1, report["decisions"]
+    decision = decisions[0]
+    assert decision["tool"] == "archive_message"
+    assert decision["action"] == "archive"
+    assert decision["outcome"] == "suggest"
+    assert "IMPORTANT" in decision["reason"]
+    assert decision["sender"] == "no-reply@accounts.google.com"
+
+
+def test_decisions_report_holds_confirm_gated_candidate(tmp_path):
+    """A candidate mapped to a confirm-gated tool must never auto-execute at
+    any level — driven directly since the real candidate generator never
+    proposes one of the nine confirm-floor tools (archive/mark_read never
+    are). Proves the floor holds AND is reported, not just asserted."""
+    agent = _build_agent(
+        tmp_path, [_promo_message("m1", "deals@shop.com")], level=LEVEL_FULL
+    )
+    with patch.object(
+        EmailTriageAgent,
+        "_autonomy_candidate",
+        staticmethod(lambda row: ("send_now", "send")),
+    ):
+        report = agent._run_email_autonomy_cycle()
+
+    assert report["executed"] == []
+    assert report["proposals"] == []
+    decisions = [d for d in report["decisions"] if d["message_id"] == "m1"]
+    assert len(decisions) == 1, report["decisions"]
+    decision = decisions[0]
+    assert decision["outcome"] == "confirm"
+    assert "confirmation" in decision["reason"].lower()
+
+
+def test_decisions_report_marks_draft_and_never_auto_sends(tmp_path):
+    """Reply/forward composition is always a draft, never sent unattended, at
+    any autonomy level — and the report says so per message. Same direct-
+    monkeypatch technique as the confirm-floor test above."""
+    agent = _build_agent(
+        tmp_path, [_promo_message("m1", "deals@shop.com")], level=LEVEL_FULL
+    )
+    with patch.object(
+        EmailTriageAgent,
+        "_autonomy_candidate",
+        staticmethod(lambda row: ("draft_reply", "draft_reply")),
+    ):
+        report = agent._run_email_autonomy_cycle()
+
+    assert report["executed"] == []
+    assert len(report["proposals"]) == 1
+    decisions = [d for d in report["decisions"] if d["message_id"] == "m1"]
+    assert len(decisions) == 1, report["decisions"]
+    assert decisions[0]["outcome"] == "draft"
+
+
+# ---------------------------------------------------------------------------
+# #2529 — general-purpose undo surface (undo_autonomy_action)
+# ---------------------------------------------------------------------------
+
+
+def test_undo_autonomy_action_lowers_trust_for_archive(tmp_path):
+    """The new general-purpose undo path does the same job the archive-only
+    undo_archive_batch tool already proves in
+    test_undo_tool_captures_correction_end_to_end — for the archive action."""
+    sender = "deals@shop.com"
+    agent = _build_agent(tmp_path, [_promo_message("m1", sender)], level=LEVEL_FULL)
+    report = agent._run_email_autonomy_cycle()
+    action_id = report["executed"][0]["action_id"]
+
+    result = agent.undo_autonomy_action(action_id)
+
+    assert result["undone"] is True
+    assert result["correction_captured"] is True
+
+    stats = TrustLedger.get_stats(
+        agent, action_type="archive", scope=sender_scope(sender)
+    )
+    assert stats["negative"] == 1
+    assert "INBOX" in agent._gmail.get_message("m1").get("labelIds", [])
+
+
+def test_undo_autonomy_action_lowers_trust_for_mark_read(tmp_path):
+    """Same as above, for the mark_read action the narrowed FYI candidate
+    (#2529) now produces — the general undo path must generalize beyond
+    archive, not just work for it."""
+    sender = "shop@retailer.com"
+    agent = _build_agent(tmp_path, [_fyi_message("f1", sender)], level=LEVEL_FULL)
+    report = agent._run_email_autonomy_cycle()
+    action_id = report["executed"][0]["action_id"]
+
+    result = agent.undo_autonomy_action(action_id)
+
+    assert result["undone"] is True
+    assert result["correction_captured"] is True
+
+    stats = TrustLedger.get_stats(
+        agent, action_type="mark_read", scope=sender_scope(sender)
+    )
+    assert stats["negative"] == 1
+    assert "UNREAD" in agent._gmail.get_message("f1").get("labelIds", [])
+
+
+def test_undo_autonomy_action_unknown_id_raises(tmp_path):
+    agent = _build_agent(tmp_path, [], level=LEVEL_OFF)
+    with pytest.raises(RuntimeError):
+        agent.undo_autonomy_action("not-a-real-action-id")
 
 
 # ---------------------------------------------------------------------------

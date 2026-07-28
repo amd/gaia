@@ -16,6 +16,17 @@ behind any entry — API shapes, endpoints, and version semantics — see
   usage). It is experimental, so it stays off unless you turn it on. If the
   models are unavailable for any reason, triage falls back to exactly the
   previous behavior. No API shape changed.
+- **Asking the agent to draft a reply or forward now actually drafts one,
+  instead of asking you to write it.** The agent would correctly find the
+  right email, then ask you to supply the reply or forward text — the exact
+  thing you'd asked it to write. Nothing told it that composing the message
+  was its own job (that instruction only existed once it had learned your
+  writing style from enough sent mail, so it never applied to a fresh
+  mailbox). It now writes the reply or forward itself from the original
+  message plus whatever you specified (length, tone, points to hit), and
+  still uses your exact wording when you hand it over yourself. Sending is
+  unchanged — every draft still needs your confirmation before it goes out
+  (#2524).
 - **A trashed email is recoverable any time it's still in Trash — not just for
   a few seconds after you delete it.** The only way back used to be a short
   undo window right after trashing; miss it, and the agent told you the
@@ -29,6 +40,19 @@ behind any entry — API shapes, endpoints, and version semantics — see
   mailbox for one rare action), so every attempt failed. Asked directly, the
   agent used to say it could do it anyway. Now it says plainly it can only
   move mail to Trash.
+- **Full autonomy now does more than archive, explains its decisions, and can be undone.**
+  Previously the proactive `earn_trust`/`full` loop only ever archived low-signal mail —
+  every other reversible action the trust model already declared (marking mail read,
+  starring, labeling) was unreachable, the run report never said *why* a message was held
+  back, and there was no way to undo an auto-executed action other than the archive-only
+  `undo_archive_batch` tool. Now: FYI mail is marked read instead of archived (it stays
+  visible, just no longer sits unread); `POST /v1/email/agent/autonomy/run` returns a new
+  `decisions[]` field explaining every candidate's outcome and reason, including "held back
+  for confirmation" and "held back — provider-flagged IMPORTANT"; and a new
+  `POST /v1/email/agent/autonomy/undo` reverses any auto-executed action and records the
+  correction against its trust scope, the same negative-feedback loop `undo_archive_batch`
+  already gave archives. The destructive floor (send/forward/permanent-delete/RSVP/quarantine)
+  is unaffected — it was already inviolable and stays that way at every level (#2529).
 - **The agent sets up your mailbox itself, in the conversation.** Before, hitting
   the email agent without a working mailbox produced an error and a shell command
   to go run somewhere else — a dead end for anyone in a terminal or chat window.
