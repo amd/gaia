@@ -32,7 +32,6 @@ pytest.importorskip("gaia_agent_email")  # noqa: E402
 from gaia_agent_email.tools.read_tools import merge_pre_scan_backends  # noqa: E402
 
 from gaia.connectors.errors import ConnectorsError  # noqa: E402
-
 from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
 
 

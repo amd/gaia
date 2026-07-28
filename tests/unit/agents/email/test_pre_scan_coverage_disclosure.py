@@ -54,9 +54,9 @@ def _has_coverage_disclosure(text: str) -> bool:
 class TestSystemPromptDisclosesCoverage:
     def test_pre_scan_behavior_section_tells_the_model_to_disclose_coverage(self):
         section_start = _SYSTEM_PROMPT.find("PRE-SCAN BEHAVIOR:")
-        assert section_start != -1, (
-            "PRE-SCAN BEHAVIOR: section not found in _SYSTEM_PROMPT"
-        )
+        assert (
+            section_start != -1
+        ), "PRE-SCAN BEHAVIOR: section not found in _SYSTEM_PROMPT"
         # A generous window after the header so we don't accidentally match
         # unrelated prose elsewhere in the (very long) system prompt.
         section = _SYSTEM_PROMPT[section_start : section_start + 1500]
