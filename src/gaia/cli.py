@@ -2854,6 +2854,15 @@ Examples:
         default=None,
         help="Sidecar mode: user (frozen binary, default) or dev (from source)",
     )
+    daemon_start_agent_parser.add_argument(
+        "--dev-src-dir",
+        default=None,
+        help=(
+            "Explicit dev-mode source directory (escape hatch for --mode dev "
+            "when this shell isn't inside a git work tree). Default: resolved "
+            "from this checkout via `git rev-parse --show-toplevel`."
+        ),
+    )
     daemon_stop_agent_parser = daemon_subparsers.add_parser(
         "stop-agent", help="Stop one agent's sidecar (the daemon keeps running)"
     )
@@ -7427,18 +7436,39 @@ def _handle_daemon_start_agent(args):
 
     from gaia.daemon import client
     from gaia.daemon.errors import DaemonError
+    from gaia.daemon.sidecars.errors import DevSrcDirResolutionError
+    from gaia.daemon.sidecars.spec import resolve_caller_dev_src_dir, resolve_caller_mode
+
+    # Resolve THIS process's own intent before ever contacting the daemon —
+    # the daemon is a long-lived singleton with its own environment and
+    # checkout, neither of which reflect the caller's (issue #2588).
+    resolved_mode = resolve_caller_mode(args.agent_id, override=args.mode)
+    dev_src_dir = None
+    if resolved_mode == "dev":
+        try:
+            dev_src_dir = resolve_caller_dev_src_dir(
+                args.agent_id, explicit=args.dev_src_dir
+            )
+        except DevSrcDirResolutionError as e:
+            print(f"❌ {e}")
+            sys.exit(1)
 
     try:
         inst = client.start_or_attach()
     except DaemonError as e:
         print(f"❌ {e}")
         sys.exit(1)
+
+    body_payload = {"mode": resolved_mode}
+    if dev_src_dir is not None:
+        body_payload["dev_src_dir"] = str(dev_src_dir)
+
     try:
         # Read generously: a first-run ensure may lazily fetch the binary.
         r = requests.post(
             f"{inst.base_url}/daemon/v1/agents/{args.agent_id}/ensure",
             headers={"Authorization": f"Bearer {inst.token}"},
-            json={"mode": args.mode},
+            json=body_payload,
             timeout=(5.0, 900.0),
         )
     except requests.exceptions.RequestException as e:
@@ -7452,11 +7482,28 @@ def _handle_daemon_start_agent(args):
         sys.exit(1)
     # The ensure body carries the sidecar bearer token — print ONLY these fields.
     body = r.json()
+
+    if dev_src_dir is not None:
+        # A daemon that predates #2588 silently ignores dev_src_dir and just
+        # reports whatever IT resolved — never trust a match we can't verify.
+        reported = body.get("dev_src_dir")
+        if reported != str(dev_src_dir):
+            print(
+                f"❌ the daemon reported dev source '{reported}' but expected "
+                f"'{dev_src_dir}' — the running daemon predates this fix and "
+                "silently ignored the dev-mode source check. Restart the "
+                "daemon from a Python environment/editable install rooted at "
+                f"{dev_src_dir}, or upgrade it."
+            )
+            sys.exit(1)
+
     print(
         f"✅ agent '{args.agent_id}' sidecar running "
         f"(mode: {body.get('mode')}, pid: {body.get('pid')}, "
         f"port: {body.get('port')}, api: v{body.get('api_version')})"
     )
+    if body.get("mode") == "dev" and body.get("dev_src_dir"):
+        print(f"   source: {body.get('dev_src_dir')}")
 
 
 def _handle_daemon_stop_agent(args):
