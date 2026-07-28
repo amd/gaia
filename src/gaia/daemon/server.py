@@ -20,11 +20,13 @@ import secrets
 import socket
 import time
 from pathlib import Path
+from typing import Callable, Dict, Optional
 
 from gaia.daemon.app import create_app
 from gaia.daemon.constants import HOST, RESERVED_PORT
 from gaia.daemon.errors import DaemonStartError
 from gaia.daemon.instance import DaemonInstance, remove_instance, write_instance
+from gaia.daemon.scheduler.clock import DaemonClock, JobExecutor
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -126,6 +128,78 @@ def _build_registry(specs, forwarder, *, custody_auth=None, custody_base_url=Non
     )
 
 
+def _build_clock(
+    db_path: str, *, executors: Optional[Dict[str, JobExecutor]] = None
+) -> DaemonClock:
+    """The daemon's single scheduled-job clock (#2379).
+
+    *executors* ships EMPTY in production — ``run()`` below calls this with no
+    ``executors`` argument at all. This lands the clock machinery only; no job
+    kind has a registered executor yet. Wiring a real one (email briefing/send
+    and beyond) is a deliberate follow-up (see the PR description), not an
+    oversight — reconciling jobs before an executor exists would permanently
+    fail-mark every one of them on first fire.
+    """
+    return DaemonClock(db_path, executors=executors or {})
+
+
+def _build_register(
+    *, specs, pid, port, token, host, started_at, refresher, clock
+) -> Callable[[], None]:
+    """The daemon's ``on_startup`` hook: reap stale sidecars, publish
+    instance.json, then start the connector-token refresher and the job clock.
+
+    Crash-safety (#2379): ``app.py``'s lifespan calls ``on_startup()`` OUTSIDE
+    its ``try``/``finally``, so if this raises, ``on_shutdown`` (the
+    ``_deregister`` hook) never runs to clean up. A ``clock.start()`` failure
+    must therefore roll back everything already done here — stop the
+    refresher and remove the ``instance.json`` just written — before
+    re-raising, so a failed startup never leaves a live polling thread or a
+    stale registry entry pointing at a daemon that is about to die.
+    """
+    from gaia.daemon.sidecars import ledger
+
+    def _register() -> None:
+        # Reap identity-confirmed sidecar survivors of a previous daemon that
+        # died hard (SIGKILL/OOM) BEFORE serving — never adopt them silently.
+        killed = ledger.reap_stale(specs)
+        if killed:
+            logger.info("daemon: reaped stale sidecar pids %s", killed)
+        write_instance(
+            DaemonInstance(
+                pid=pid, port=port, token=token, host=host, started_at=started_at
+            )
+        )
+        refresher.start()
+        try:
+            clock.start()
+        except Exception:
+            logger.exception("daemon: clock failed to start; rolling back registration")
+            refresher.stop()
+            remove_instance(only_pid=pid)
+            raise
+        logger.info("daemon: registered instance pid=%s port=%s", pid, port)
+
+    return _register
+
+
+def _build_deregister(
+    *, registry, custody_store, pid, refresher, clock
+) -> Callable[[], None]:
+    """The daemon's ``on_shutdown`` hook: stop the refresher and the clock
+    BEFORE tearing down sidecars, so neither races a sidecar mid-teardown."""
+
+    def _deregister() -> None:
+        refresher.stop()
+        clock.stop()
+        registry.shutdown_all()
+        custody_store.close()
+        remove_instance(only_pid=pid)
+        logger.info("daemon: deregistered instance pid=%s", pid)
+
+    return _deregister
+
+
 def run(host: str = HOST) -> None:
     """Start the daemon and serve until shutdown. Blocks."""
     import uvicorn
@@ -133,8 +207,7 @@ def run(host: str = HOST) -> None:
     from gaia.daemon.custody.auth import CustodyAuth
     from gaia.daemon.custody.store import CustodyStore
     from gaia.daemon.migrate import run_migrations
-    from gaia.daemon.paths import custody_db_path
-    from gaia.daemon.sidecars import ledger
+    from gaia.daemon.paths import custody_db_path, scheduler_db_path
     from gaia.daemon.sidecars.spec import builtin_specs
 
     # One-time versioned state migration (§0.10 step 0). Runs before the port is
@@ -186,26 +259,29 @@ def run(host: str = HOST) -> None:
     # sidecar model loads route through the broker rather than racing the slot.
     os.environ[BROKER_URL_ENV_VAR] = f"http://{host}:{port}"
 
-    def _register() -> None:
-        # Reap identity-confirmed sidecar survivors of a previous daemon that
-        # died hard (SIGKILL/OOM) BEFORE serving — never adopt them silently.
-        killed = ledger.reap_stale(specs)
-        if killed:
-            logger.info("daemon: reaped stale sidecar pids %s", killed)
-        write_instance(
-            DaemonInstance(
-                pid=pid, port=port, token=token, host=host, started_at=started_at
-            )
-        )
-        refresher.start()
-        logger.info("daemon: registered instance pid=%s port=%s", pid, port)
+    # The daemon's single scheduled-job clock (#2379): built here so both the
+    # register/deregister hooks and the status route share one instance. Ships
+    # with NO executors — see _build_clock's docstring for why that is
+    # deliberate, not an oversight.
+    clock = _build_clock(str(scheduler_db_path()))
 
-    def _deregister() -> None:
-        refresher.stop()
-        registry.shutdown_all()
-        custody_store.close()
-        remove_instance(only_pid=pid)
-        logger.info("daemon: deregistered instance pid=%s", pid)
+    _register = _build_register(
+        specs=specs,
+        pid=pid,
+        port=port,
+        token=token,
+        host=host,
+        started_at=started_at,
+        refresher=refresher,
+        clock=clock,
+    )
+    _deregister = _build_deregister(
+        registry=registry,
+        custody_store=custody_store,
+        pid=pid,
+        refresher=refresher,
+        clock=clock,
+    )
 
     app = create_app(
         token=token,
@@ -219,6 +295,7 @@ def run(host: str = HOST) -> None:
         broker=broker,
         custody_auth=custody_auth,
         custody_store=custody_store,
+        clock=clock,
     )
 
     config = uvicorn.Config(
