@@ -1246,7 +1246,7 @@
                 "type": "null"
               }
             ],
-            "description": "Estimated total UNREAD messages in the scanned mailbox(es), the denominator for scan coverage (#2584). Gmail reports a real API estimate; Outlook cannot honestly provide one and reports null — never a fabricated page-size number.",
+            "description": "Exact total UNREAD message count in the scanned mailbox(es), the denominator for scan coverage (#2584). Gmail reports this via labels().get's messagesUnread — an exact integer, not list_messages's resultSizeEstimate (measured 2.6x off on a real mailbox). Outlook has no equivalent honest source and reports null — never a fabricated page-size number.",
             "title": "Total Unread"
           },
           "totals": {

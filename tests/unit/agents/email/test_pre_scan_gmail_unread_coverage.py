@@ -1,16 +1,24 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-Failing acceptance tests for pre-scan's Gmail coverage honesty (#2584).
+Acceptance tests for pre-scan's Gmail coverage honesty (#2584).
 
-Bug: pre-scan's "how much did we actually cover" story conflates INBOX size
-with UNREAD count. ``triage_inbox_impl`` (called by ``pre_scan_inbox_impl``)
-lists messages with ``label_ids=["INBOX"]`` only -- never ``UNREAD`` -- so
-Gmail's ``resultSizeEstimate`` on that call describes the total inbox size,
-not the unread count a "what's new" pre-scan actually wants to report.
+Two bugs, one field:
 
-The fix adds ``UNREAD`` to the label filter and surfaces the resulting
-``resultSizeEstimate`` as the new ``total_unread`` top-level field.
+1. ``triage_inbox_impl`` (called by ``pre_scan_inbox_impl``) used to list
+   messages with ``label_ids=["INBOX"]`` only -- never ``UNREAD`` -- so
+   whatever coverage number came off that listing described total inbox
+   size, not the unread count a "what's new" pre-scan actually wants to
+   report. Fixed by adding ``UNREAD`` to the scanning query's label filter.
+
+2. ``total_unread`` was originally sourced from that same listing call's
+   ``resultSizeEstimate``. Measured against a real mailbox, that field
+   reported 201 while full pagination of the identical query found 523 real
+   message ids -- Google documents ``resultSizeEstimate`` as approximate,
+   and 2.6x off is not an honest scan-coverage denominator. Fixed by
+   sourcing ``total_unread`` from Gmail's ``labels().get(id="INBOX")``
+   instead, whose ``messagesUnread`` is an exact integer -- one call per
+   scan, not per message, never derived from ``list_messages`` at all.
 """
 
 from __future__ import annotations
@@ -97,13 +105,35 @@ class TestGmailUnreadLabelFilter:
 
 
 class TestTotalUnreadField:
-    def test_total_unread_reflects_result_size_estimate(self):
+    def test_total_unread_is_sourced_from_get_label_not_list_messages(self):
         gmail = _unread_inbox()
 
         out = pre_scan_inbox_impl(gmail, max_messages=25)
 
+        label_calls = [c for c in gmail.transport.calls if c[0] == "get_label"]
+        assert label_calls, (
+            "pre-scan must call get_label to source total_unread -- "
+            "list_messages's resultSizeEstimate is documented as "
+            "approximate and measured 2.6x off on a real mailbox (#2584)"
+        )
+        assert label_calls[0][1].get("label_id") == "INBOX"
         assert out["total_unread"] == _N_UNREAD_FIXTURE_MESSAGES, (
-            "total_unread must reflect the backend's reported "
-            f"resultSizeEstimate ({_N_UNREAD_FIXTURE_MESSAGES}); got "
+            "total_unread must reflect the exact labels().get(INBOX) "
+            f"messagesUnread count ({_N_UNREAD_FIXTURE_MESSAGES}); got "
             f"{out.get('total_unread')!r}"
+        )
+
+    def test_total_unread_never_calls_list_labels(self):
+        """``list_labels()`` returns Gmail's MINIMAL label form (no counts)
+        -- it must be ``get_label``, not ``list_labels``, or total_unread
+        would silently have no source at all.
+        """
+        gmail = _unread_inbox()
+
+        pre_scan_inbox_impl(gmail, max_messages=25)
+
+        list_labels_calls = [c for c in gmail.transport.calls if c[0] == "list_labels"]
+        assert not list_labels_calls, (
+            "pre-scan must not call list_labels for total_unread -- that "
+            "returns the minimal label form with no messagesUnread count"
         )

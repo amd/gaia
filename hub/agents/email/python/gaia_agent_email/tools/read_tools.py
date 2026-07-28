@@ -1119,6 +1119,40 @@ def _needs_review_sort_key(decision: Mapping[str, Any]) -> tuple:
     return (-internal_date, _looks_automated(decision.get("from", "")))
 
 
+def _fetch_total_unread(gmail) -> Optional[int]:
+    """Exact unread-inbox count via ``labels().get`` — NOT ``list_messages``'s
+    ``resultSizeEstimate`` (#2584).
+
+    Measured against a real mailbox: ``resultSizeEstimate`` for
+    ``label_ids=[INBOX, UNREAD]`` reported 201 while full pagination of the
+    identical query found 523 real message ids — Google documents that field
+    as approximate, and 2.6x off is not a fabricated-placeholder-grade lie
+    (the Outlook page-size case) but it is still not honest enough to state
+    as the scan-coverage denominator. The label resource's ``messagesUnread``
+    is an exact integer. One call per SCAN, not per message — ``list_labels``
+    returns the minimal label form with no counts, so this must be
+    ``get_label``, not that.
+
+    Backends that can't provide an honest count (Outlook — Graph has no
+    equivalent resource) return ``messagesUnread: None`` from their own
+    ``get_label``, which flows straight through here with no per-provider
+    branching. A backend that doesn't implement ``get_label`` at all (a
+    minimal test double, or a future provider) degrades the same way: this
+    field is supplementary coverage metadata, never allowed to abort the
+    scan itself if it can't be produced.
+    """
+    get_label = getattr(gmail, "get_label", None)
+    if not callable(get_label):
+        return None
+    try:
+        label = get_label("INBOX")
+    except ConnectorsError as exc:
+        log.warning("pre-scan: get_label(INBOX) failed, total_unread unknown: %s", exc)
+        return None
+    value = (label or {}).get("messagesUnread")
+    return int(value) if isinstance(value, (int, float)) else None
+
+
 def pre_scan_inbox_impl(
     gmail,
     *,
@@ -1301,7 +1335,7 @@ def pre_scan_inbox_impl(
                 "needs_review": len(needs_review),
             },
             "scanned": scanned,
-            "total_unread": triage.get("resultSizeEstimate"),
+            "total_unread": _fetch_total_unread(gmail),
             # Single-backend call: a backend failure always raises (never a
             # silent partial result), so this layer never degrades on its
             # own — only merge_pre_scan_backends' multi-mailbox fan-out can.
