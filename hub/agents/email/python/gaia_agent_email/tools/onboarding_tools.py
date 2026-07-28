@@ -117,6 +117,17 @@ def _oauth_client_gap(provider: str) -> Optional[str]:
     return None
 
 
+def _needs_client_secret(provider: str) -> bool:
+    """Whether *provider*'s token endpoint accepts a client secret at all.
+
+    Microsoft's route here is a public PKCE client — per the identity
+    platform docs it must NOT send one (``providers/microsoft.py``) — so
+    asking Outlook users for a secret is not just unnecessary, it is asking
+    for a credential that Microsoft never issues for this client type.
+    """
+    return provider == "google"
+
+
 def _collect_oauth_client(agent: Any, provider: str) -> Dict[str, str]:
     """Ask for the OAuth client credentials, but only the ones actually missing.
 
@@ -127,25 +138,28 @@ def _collect_oauth_client(agent: Any, provider: str) -> Dict[str, str]:
         return {}
 
     label = ms.provider_label(provider)
+    wants_secret = _needs_client_secret(provider)
     _status(
         agent,
         f"{label} needs an OAuth client before I can sign you in.",
     )
 
+    id_and_secret = "ID and secret" if wants_secret else "ID"
     proceed = ask(
         agent,
         (
-            f"To connect {label} I need an OAuth client ID and secret that you "
+            f"To connect {label} I need an OAuth client {id_and_secret} that you "
             "create once in your provider console — GAIA does not ship one yet, "
             "so this part I genuinely cannot do for you. The walkthrough is at "
-            f"{_OAUTH_DOCS_URL}. They're stored in your OS keychain, never sent "
-            "anywhere but the provider. Do you have them to hand?"
+            f"{_OAUTH_DOCS_URL}. It's stored in your OS keychain, never sent "
+            "anywhere but the provider. Do you have it to hand?"
         ),
         options=(
             Option(
                 _YES,
-                "I have them",
-                "You'll paste the client ID, then the secret. Takes a few seconds.",
+                "I have it",
+                f"You'll paste the client {id_and_secret.lower()}. Takes a few "
+                "seconds.",
             ),
             Option(
                 _NO,
@@ -169,18 +183,20 @@ def _collect_oauth_client(agent: Any, provider: str) -> Dict[str, str]:
             "(for Google it ends in .apps.googleusercontent.com).",
             allow_free_text=True,
         )
-    config["client_secret"] = ask(
-        agent,
-        f"Now the {label} OAuth client secret. It goes straight into your "
-        "OS keychain.",
-        allow_free_text=True,
-        sensitive=True,
-    )
-    if gap == "client_secret":
-        # Re-saving requires the id alongside the secret; reuse the stored one.
-        from gaia.connectors.providers import get as get_provider
+    if wants_secret:
+        config["client_secret"] = ask(
+            agent,
+            f"Now the {label} OAuth client secret. It goes straight into your "
+            "OS keychain.",
+            allow_free_text=True,
+            sensitive=True,
+        )
+        if gap == "client_secret":
+            # Re-saving requires the id alongside the secret; reuse the stored
+            # one.
+            from gaia.connectors.providers import get as get_provider
 
-        config["client_id"] = getattr(get_provider(provider), "client_id", "")
+            config["client_id"] = getattr(get_provider(provider), "client_id", "")
     return config
 
 
@@ -272,6 +288,14 @@ _CLIENT_FIRST_BLURB = (
     "First you'll paste an OAuth client ID and secret you create once in your "
     "provider console — GAIA does not ship one. Then your browser opens."
 )
+#: Microsoft's client is public-PKCE (no secret) and this route signs in with
+#: a short code, not a browser redirect — reusing ``_CLIENT_FIRST_BLURB``
+#: here would repeat the exact secret-mention bug this feature exists to fix.
+_CLIENT_FIRST_BLURB_NO_SECRET = (
+    "First I'll walk you through creating an OAuth client ID — GAIA does not "
+    "ship one, and this route needs no secret. Then you'll sign in with a "
+    "short code instead of a browser."
+)
 
 
 def _go_blurb(provider: str, when_client_ready: str) -> str:
@@ -283,7 +307,9 @@ def _go_blurb(provider: str, when_client_ready: str) -> str:
     """
     if _oauth_client_gap(provider) is None:
         return when_client_ready
-    return _CLIENT_FIRST_BLURB
+    if _needs_client_secret(provider):
+        return _CLIENT_FIRST_BLURB
+    return _CLIENT_FIRST_BLURB_NO_SECRET
 
 
 def _confirm_repair(agent: Any, state: Dict[str, Any]) -> bool:
