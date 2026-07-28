@@ -53,6 +53,17 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Calendar listing and conflict checks no longer 400 on a date-only range,
+  and never end a turn narrating a retry that didn't happen (#2517).**
+  `list_calendar_events` and `detect_calendar_conflicts` forwarded a
+  model-supplied bound like `2026-07-27` to Google verbatim; the live
+  Calendar API rejects a date-only `timeMin`/`timeMax` with a 400, so "what's
+  on my calendar the next 30 days" ran real tool calls and came back with no
+  events. Both tools now normalize `time_min`/`time_max` (and
+  `start_iso`/`end_iso`) to RFC 3339 before the request goes out — a bare
+  date or naive datetime is coerced to UTC, an already-qualified timestamp
+  passes through unchanged, and an unparseable bound raises an actionable
+  error naming what was received instead of reaching the backend at all.
 - **A trashed message is recoverable any time it's still in Trash, not just
   for a few seconds (#2523).** The only restore path (`restore_message`) was
   gated by a short undo window and a live `action_id`; once either was gone,
