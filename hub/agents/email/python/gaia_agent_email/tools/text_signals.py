@@ -166,7 +166,76 @@ def has_meeting_time_signal(subject_lower: str, body_lower: str) -> bool:
     return bool(_TIME_TOKEN_RE.search(text))
 
 
+# ---------------------------------------------------------------------------
+# Opt-out / substance signals
+# ---------------------------------------------------------------------------
+#
+# These exist for corroboration hardening (#2581 checkpoint fix): a
+# corroboration signal that trusts ANY prior message between the user and a
+# sender, regardless of content, is gameable — an adversarial verifier proved
+# that a single one-line prior contact (an unsubscribe reply, or an unrelated
+# one-off cold outreach) is enough to manufacture "known correspondent" or
+# "already replied to this thread" for every subsequent marketing message
+# from that address. Two content-aware checks close that gap:
+#
+# - ``is_opt_out_reply`` — a message where the USER told the sender to stop
+#   contacting them is evidence the user wants LESS contact from that
+#   address, never more. It must never count as corroboration, and the
+#   caller should treat it as an active signal to suppress that sender
+#   entirely, not just fail to corroborate on it.
+# - ``is_substantive_text`` — a single prior message only counts as
+#   corroboration if it has real content. A three-to-six-word one-liner
+#   ("what's the pricing?", "Please remove me from this list.") is not
+#   evidence of an ongoing relationship on its own; two or more such
+#   exchanges, or one message with real substance, is.
+
+_OPT_OUT_PHRASES: tuple[str, ...] = (
+    "unsubscribe",
+    "remove me from this list",
+    "remove me from your list",
+    "take me off this list",
+    "take me off your list",
+    "stop emailing me",
+    "stop contacting me",
+    "stop sending me",
+    "please stop sending",
+    "no longer interested",
+    "not interested, please remove",
+    "opt out",
+    "opt-out",
+    "do not contact me again",
+    "do not email me again",
+)
+
+
+def is_opt_out_reply(body_lower: str) -> bool:
+    """True when the text reads as the user asking to stop being contacted.
+
+    A message like this is evidence the sender relationship is unwanted, not
+    corroboration that it is genuine correspondence — see module docstring.
+    """
+    text = body_lower or ""
+    return any(phrase in text for phrase in _OPT_OUT_PHRASES)
+
+
+_MIN_SUBSTANTIVE_WORDS = 8
+
+
+def is_substantive_text(text: str, *, min_words: int = _MIN_SUBSTANTIVE_WORDS) -> bool:
+    """True when ``text`` has enough real content to read as a genuine
+    message rather than a one-line dismissal or a bare inquiry.
+
+    Word-count is a blunt instrument, deliberately: it is cheap, has no
+    false sense of precision, and is enough to separate "Please remove me
+    from this list." (6 words) or "what's the pricing?" (3 words) from an
+    actual reply.
+    """
+    return len((text or "").split()) >= min_words
+
+
 __all__ = [
     "has_direct_ask_signal",
     "has_meeting_time_signal",
+    "is_opt_out_reply",
+    "is_substantive_text",
 ]

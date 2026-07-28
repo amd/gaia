@@ -36,6 +36,13 @@ if str(_REPO_ROOT) not in sys.path:
 
 pytest.importorskip("gaia_agent_email")
 
+from gaia_agent_email.tools.calendar_tools import (  # noqa: E402
+    detect_meeting_request_heuristic,
+)
+from gaia_agent_email.tools.text_signals import (  # noqa: E402
+    has_direct_ask_signal,
+    has_meeting_time_signal,
+)
 from gaia_agent_email.tools.triage_heuristics import (  # noqa: E402
     _AUTOMATED_SENDER_KEYWORDS,
 )
@@ -80,12 +87,27 @@ def _question_mark_non_automated_subset() -> List[Dict[str, Any]]:
     return out
 
 
-def _run_isolated(rec: Dict[str, Any]) -> Dict[str, Any]:
-    """Score a corpus record as a standalone first-contact message: single
-    message, its own thread, no prior correspondence."""
+def _fires_signal(rec: Dict[str, Any]) -> bool:
+    """True when the candidate's text alone would fire a direct-ask or
+    meeting-time signal (either the leaf predicates or the gated existing
+    calendar heuristic) — the subset a corroboration-side exploit needs to
+    target, independent of whether corroboration is present."""
+    subject_lower = (rec.get("subject", "") or "").lower()
+    body_lower = (rec.get("body", "") or "").lower()
+    if has_direct_ask_signal(subject_lower, body_lower):
+        return True
+    if has_meeting_time_signal(subject_lower, body_lower):
+        return True
+    detection = detect_meeting_request_heuristic(
+        rec.get("subject", ""), rec.get("body", "")
+    )
+    return bool(detection.is_meeting_request and detection.confidence == "high")
+
+
+def _candidate_message(rec: Dict[str, Any]) -> Dict[str, Any]:
     body = rec.get("body", "") or ""
     to_addrs = rec.get("to") or [USER_EMAIL]
-    message = {
+    return {
         "id": rec["id"],
         "threadId": rec["id"],
         "labelIds": ["INBOX"],
@@ -104,9 +126,44 @@ def _run_isolated(rec: Dict[str, Any]) -> Dict[str, Any]:
         },
         "sizeEstimate": len(body),
     }
+
+
+def _outbound_message(
+    msg_id: str, *, thread_id: str, to: str, body: str, age_days: float
+) -> Dict[str, Any]:
+    return {
+        "id": msg_id,
+        "threadId": thread_id,
+        "labelIds": ["SENT"],
+        "snippet": body[:80],
+        "internalDate": str(int(NOW_MS - age_days * DAY_MS)),
+        "payload": {
+            "mimeType": "text/plain",
+            "filename": "",
+            "headers": [
+                {"name": "Subject", "value": "Re:"},
+                {"name": "From", "value": f"Me <{USER_EMAIL}>"},
+                {"name": "To", "value": to},
+                {"name": "Date", "value": f"{age_days} days ago"},
+            ],
+            "body": {"size": len(body), "data": _b64(body)},
+        },
+        "sizeEstimate": len(body),
+    }
+
+
+def _run_isolated(rec: Dict[str, Any]) -> Dict[str, Any]:
+    """Score a corpus record as a standalone first-contact message: single
+    message, its own thread, no prior correspondence."""
     gmail = FakeGmailBackend(user_email=USER_EMAIL)
-    gmail.add_message(message)
+    gmail.add_message(_candidate_message(rec))
     return detect_waiting_on_you_impl(gmail, now_ms=NOW_MS)
+
+
+def _sender_address(rec: Dict[str, Any]) -> str:
+    from gaia_agent_email.tools.read_tools import extract_sender_email
+
+    return extract_sender_email(rec.get("sender", ""))
 
 
 # ---------------------------------------------------------------------------
@@ -165,4 +222,99 @@ class TestPrecisionGate:
         assert false_positives == [], (
             f"detector qualified {len(false_positives)} of {len(subset)} rows "
             f"in the '?'-bearing non-automated subset: {false_positives}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint-fix gate: corroboration exercised, not structurally absent.
+#
+# The isolated-first-contact measurement above proves nothing about the
+# corroboration gate itself — every corpus row is a thread root with no
+# prior correspondence, so that gate never actually runs. An independent
+# adversarial verifier confirmed the isolated zero-FP number and then
+# manufactured corroboration two cheap ways, both of which used to qualify
+# 15/15 of the 25 rows whose text alone fires a direct-ask/meeting-time
+# signal (including both named regression ids). This section re-runs that
+# exact construction against the fixed detector and reports the count under
+# each — this, not the isolated-corpus number, is the real gate.
+# ---------------------------------------------------------------------------
+
+
+def _signal_firing_rows() -> List[Dict[str, Any]]:
+    return [r for r in _promotional_rows() if _fires_signal(r)]
+
+
+class TestCorroborationExercisedGate:
+    def test_signal_firing_subset_is_25_rows(self):
+        """Locks in the verifier's stated denominator."""
+        assert len(_signal_firing_rows()) == 25
+
+    def test_6a_prior_outbound_in_thread_does_not_manufacture_corroboration(
+        self, capsys
+    ):
+        """Verifier construction 6a: inject one earlier outbound message in
+        the SAME thread reading only "Please remove me from this list." —
+        this used to qualify 15/15 signal-firing rows, including both named
+        regression ids, because ``has_earlier_outbound`` was content-blind."""
+        rows = _signal_firing_rows()
+        false_positives = []
+        for rec in rows:
+            gmail = FakeGmailBackend(user_email=USER_EMAIL)
+            sender_addr = _sender_address(rec) or "sender@example.com"
+            gmail.add_message(
+                _outbound_message(
+                    f"{rec['id']}-prior",
+                    thread_id=rec["id"],
+                    to=sender_addr,
+                    body="Please remove me from this list.",
+                    age_days=30,
+                )
+            )
+            gmail.add_message(_candidate_message(rec))
+            out = detect_waiting_on_you_impl(gmail, now_ms=NOW_MS)
+            if out["waiting_on_you"]:
+                false_positives.append(rec["id"])
+        print(
+            f"\n6a (prior in-thread opt-out-shaped outbound) false positives "
+            f"over {len(rows)} signal-firing rows: {len(false_positives)} "
+            f"{false_positives}"
+        )
+        assert false_positives == [], (
+            f"6a construction qualified {len(false_positives)} of "
+            f"{len(rows)} rows: {false_positives}"
+        )
+
+    def test_6b_unrelated_prior_sent_thread_does_not_manufacture_corroboration(
+        self, capsys
+    ):
+        """Verifier construction 6b: inject one earlier, UNRELATED sent
+        thread to the same address reading only "what's the pricing?" — this
+        used to qualify 15/15 signal-firing rows via the known-correspondent
+        path, because a single one-off contact was treated as sufficient."""
+        rows = _signal_firing_rows()
+        false_positives = []
+        for rec in rows:
+            gmail = FakeGmailBackend(user_email=USER_EMAIL)
+            sender_addr = _sender_address(rec) or "sender@example.com"
+            gmail.add_message(
+                _outbound_message(
+                    f"{rec['id']}-unrelated-sent",
+                    thread_id=f"{rec['id']}-unrelated-thread",
+                    to=sender_addr,
+                    body="what's the pricing?",
+                    age_days=60,
+                )
+            )
+            gmail.add_message(_candidate_message(rec))
+            out = detect_waiting_on_you_impl(gmail, now_ms=NOW_MS)
+            if out["waiting_on_you"]:
+                false_positives.append(rec["id"])
+        print(
+            f"\n6b (one unrelated prior sent thread) false positives over "
+            f"{len(rows)} signal-firing rows: {len(false_positives)} "
+            f"{false_positives}"
+        )
+        assert false_positives == [], (
+            f"6b construction qualified {len(false_positives)} of "
+            f"{len(rows)} rows: {false_positives}"
         )

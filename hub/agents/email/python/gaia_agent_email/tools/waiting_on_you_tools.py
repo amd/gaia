@@ -30,10 +30,10 @@ Qualification therefore requires BOTH of:
    never confidence alone, since the heuristic returns
    ``confidence="high"`` on its no-signal branch too).
 2. Corroboration that this is genuine, ongoing correspondence:
-   - the thread already contains an earlier outbound message from the
+   - the thread already contains earlier outbound message(s) from the
      user (a real back-and-forth), or
-   - the sender is a known correspondent — someone the user has sent
-     mail to before, in any thread.
+   - the sender is a known correspondent — someone the user has
+     genuinely corresponded with before, in any thread.
 
    "Addressed to the user specifically, not a bulk recipient list" is
    deliberately NOT used as a corroboration path: the adversarial corpus
@@ -43,6 +43,29 @@ Qualification therefore requires BOTH of:
    recipient by name and contain genuine-looking ask phrasing). Treating
    single-recipient targeting as corroboration would let precisely the
    messages this detector exists to reject qualify.
+
+   IMPORTANT (checkpoint fix): "a prior message exists" is NOT itself
+   sufficient corroboration — an adversarial verifier proved that a single
+   one-line prior contact (an unsubscribe reply, or one unrelated cold
+   outreach to the same address) manufactures corroboration for every
+   subsequent marketing message from that sender. Real correspondence
+   requires either (a) more than one prior exchange, or (b) a single prior
+   message with real substance (``text_signals.is_substantive_text`` — a
+   floor against one-line dismissals/inquiries like "Please remove me from
+   this list." or "what's the pricing?"). A prior message where the user
+   told the sender to stop contacting them (``text_signals.
+   is_opt_out_reply``) never counts as corroboration and instead suppresses
+   that sender from ever qualifying — it is evidence of wanting LESS
+   contact, not more.
+
+3. An independent veto: if the existing category heuristic
+   (``triage_heuristics.classify_category_heuristic``, unmodified — see
+   that module's own docstring) confidently classifies the candidate
+   message as PROMOTIONAL, it never qualifies regardless of signal or
+   corroboration. Corroboration proves "we've had contact before"; it must
+   not be read as "therefore this specific message is personal", which is
+   an independent question the category heuristic already answers when it
+   is confident.
 
 Threads whose latest message is the user's own (i.e. already replied) are
 excluded, as are bulk/automated senders (reusing
@@ -67,8 +90,14 @@ from gaia_agent_email.tools.read_tools import extract_sender_email
 from gaia_agent_email.tools.text_signals import (
     has_direct_ask_signal,
     has_meeting_time_signal,
+    is_opt_out_reply,
+    is_substantive_text,
 )
-from gaia_agent_email.tools.triage_heuristics import _AUTOMATED_SENDER_KEYWORDS
+from gaia_agent_email.tools.triage_heuristics import (
+    _AUTOMATED_SENDER_KEYWORDS,
+    CATEGORY_PROMOTIONAL,
+    classify_category_heuristic,
+)
 from gaia_agent_email.verbose import log_tool_call
 
 from gaia.agents.base.tools import tool
@@ -122,10 +151,38 @@ def _has_meeting_signal(subject: str, body: str, subject_lower: str, body_lower:
     return _has_gated_meeting_signal(subject, body)
 
 
+def _is_genuine_exchange(bodies: List[str]) -> bool:
+    """True when a list of prior message bodies is real corroboration.
+
+    A single one-line message ("what's the pricing?", "Please remove me
+    from this list.") is not evidence of an ongoing relationship — it is
+    exactly what an adversarial verifier used to manufacture corroboration
+    for every subsequent marketing message from that address. Two or more
+    prior exchanges, OR one message with real substance, is the bar
+    (mirrors the plan's checkpoint-fix direction: "more than one, or a
+    substantive reply rather than a dismissal").
+    """
+    if len(bodies) >= 2:
+        return True
+    if len(bodies) == 1:
+        return is_substantive_text(bodies[0])
+    return False
+
+
 def _known_correspondents(
     gmail, *, user_email: str, max_sent: int
-) -> Set[str]:
-    """Bare addresses the user has sent mail to before, in any thread.
+) -> tuple:
+    """Addresses the user has genuinely corresponded with before.
+
+    Returns ``(bodies_by_address, opted_out)``:
+
+    - ``bodies_by_address``: address -> list of non-opt-out message bodies
+      the user sent to it (any thread). Callers apply
+      ``_is_genuine_exchange`` — a single one-line prior contact is not
+      itself sufficient corroboration (checkpoint fix).
+    - ``opted_out``: addresses the user has told, in any scanned message,
+      to stop contacting them. These must never qualify regardless of any
+      other signal, in this call or a later one against the same address.
 
     One bounded SENT-folder scan (mirrors ``check_followups_impl``'s scan
     shape) so this stays a cheap, single-purpose corroboration signal —
@@ -139,7 +196,8 @@ def _known_correspondents(
         if tid and tid not in thread_ids:
             thread_ids.append(tid)
 
-    correspondents: Set[str] = set()
+    bodies_by_address: Dict[str, List[str]] = {}
+    opted_out: Set[str] = set()
     for tid in thread_ids:
         thread = gmail.get_thread(tid)
         for msg in thread.get("messages", []) or []:
@@ -147,10 +205,17 @@ def _known_correspondents(
             frm = extract_sender_email(headers.get("from", ""))
             if frm != user_email:
                 continue
-            for addr in _recipient_addresses(headers.get("to", "")):
-                if addr != user_email:
-                    correspondents.add(addr)
-    return correspondents
+            body, _attachments = decode_message_body(msg.get("payload") or {})
+            body_lower = body.lower()
+            recipients = [
+                a for a in _recipient_addresses(headers.get("to", "")) if a != user_email
+            ]
+            if is_opt_out_reply(body_lower):
+                opted_out.update(recipients)
+                continue
+            for addr in recipients:
+                bodies_by_address.setdefault(addr, []).append(body)
+    return bodies_by_address, opted_out
 
 
 def detect_waiting_on_you_impl(
@@ -212,7 +277,7 @@ def detect_waiting_on_you_impl(
                 "distinguish inbound mail from the user's own replies"
             )
 
-        known_correspondents = _known_correspondents(
+        known_correspondent_bodies, opted_out_senders = _known_correspondents(
             gmail, user_email=user_email, max_sent=max_sent_lookback
         )
 
@@ -253,10 +318,33 @@ def detect_waiting_on_you_impl(
             if _is_automated_sender(sender_raw):
                 continue
 
+            sender_email = extract_sender_email(sender_raw)
+            if sender_email in opted_out_senders:
+                # The user has already told this address to stop contacting
+                # them — evidence of wanting LESS contact, never
+                # corroboration for MORE. Suppressed unconditionally.
+                continue
+
             subject = latest_headers.get("subject", "")
             body, _attachments = decode_message_body(latest.get("payload") or {})
             subject_lower = subject.lower()
             body_lower = body.lower()
+
+            # Independent veto: an existing, unmodified classifier that
+            # confidently calls this message PROMOTIONAL means prior contact
+            # cannot turn it into a personal ask — that is a separate
+            # question from "have we corresponded before".
+            category_verdict = classify_category_heuristic(
+                subject=subject,
+                sender=sender_raw,
+                label_ids=latest.get("labelIds", []),
+                body=body,
+            )
+            if (
+                category_verdict.category == CATEGORY_PROMOTIONAL
+                and category_verdict.confident
+            ):
+                continue
 
             if has_direct_ask_signal(subject_lower, body_lower):
                 signal = SIGNAL_DIRECT_ASK
@@ -265,14 +353,34 @@ def detect_waiting_on_you_impl(
             else:
                 continue
 
-            sender_email = extract_sender_email(sender_raw)
-            has_earlier_outbound = any(
-                extract_sender_email(_header_map(m).get("from", "")) == user_email
-                for m in ordered[:-1]
+            # Corroboration: a prior message existing is not enough on its
+            # own (checkpoint fix) — either the thread shows real depth
+            # (>=2 prior messages) or a single prior outbound is itself
+            # substantive; same bar applies to cross-thread correspondence.
+            prior_messages = ordered[:-1]
+            prior_outbound_bodies: List[str] = []
+            thread_has_opt_out = False
+            for m in prior_messages:
+                m_headers = _header_map(m)
+                if extract_sender_email(m_headers.get("from", "")) != user_email:
+                    continue
+                m_body, _ = decode_message_body(m.get("payload") or {})
+                if is_opt_out_reply(m_body.lower()):
+                    thread_has_opt_out = True
+                    continue
+                prior_outbound_bodies.append(m_body)
+
+            if thread_has_opt_out:
+                # The user asked THIS sender to stop, in this very thread —
+                # suppress regardless of everything else.
+                continue
+
+            has_earlier_outbound = bool(prior_outbound_bodies) and (
+                len(prior_messages) >= 2 or _is_genuine_exchange(prior_outbound_bodies)
             )
             if has_earlier_outbound:
                 corroboration = CORROBORATION_THREAD_REPLY
-            elif sender_email in known_correspondents:
+            elif _is_genuine_exchange(known_correspondent_bodies.get(sender_email, [])):
                 corroboration = CORROBORATION_KNOWN_CORRESPONDENT
             else:
                 # No corroboration that this is genuine correspondence —
@@ -349,8 +457,13 @@ class WaitingOnYouToolsMixin:
 
             A bare question mark or a human-looking sender name is NOT
             enough to qualify a message here — marketing and cold-outreach
-            mail routinely use both. This tool requires the corroboration
-            above before it will say someone is waiting on you.
+            mail routinely use both. Nor is a single one-line prior
+            contact (an old unsubscribe reply, a one-off cold outreach) —
+            real corroboration needs more than one exchange, or one
+            genuinely substantive message. A message an existing category
+            heuristic confidently calls promotional never qualifies
+            regardless of any of the above, and a sender the user has
+            told to stop contacting them is suppressed unconditionally.
 
             READ-ONLY: this tool only detects and reports. It never
             drafts, sends, labels, or archives anything.

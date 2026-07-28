@@ -127,13 +127,19 @@ def _inbound(
     )
 
 
+_SUBSTANTIVE_OUTBOUND_BODY = (
+    "Sure, I will take a look at the numbers and get back to you with any "
+    "questions before the review."
+)
+
+
 def _outbound(
     msg_id: str,
     *,
     thread_id: str,
     to: str = "alice@example.com",
     subject: str = "Re: Quick question",
-    body: str = "Sure, will do.",
+    body: str = _SUBSTANTIVE_OUTBOUND_BODY,
     age_days: float = 2,
     label_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:

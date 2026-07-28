@@ -16,13 +16,20 @@ contract version is tracked separately as
   meet Thursday?". Qualification requires BOTH a genuine ask/meeting-time
   signal (`text_signals.has_direct_ask_signal` / `has_meeting_time_signal`,
   new dependency-free leaf module `tools/text_signals.py`) AND corroboration
-  that the message is real correspondence (an earlier outbound message in the
-  thread, or a sender the user has emailed before) — sender shape and a bare
-  `?` alone are not enough (measured against the adversarial PROMOTIONAL
-  corpus: 47 of 104 rows carry a `?` from a non-automated-looking sender).
-  Bulk/automated senders are excluded via the existing
-  `triage_heuristics._AUTOMATED_SENDER_KEYWORDS` list; already-replied threads
-  are excluded; a meeting-signal check gates on
+  that the message is real correspondence — sender shape and a bare `?` alone
+  are not enough (measured against the adversarial PROMOTIONAL corpus: 47 of
+  104 rows carry a `?` from a non-automated-looking sender). Corroboration
+  itself requires more than a prior message merely existing: a single
+  one-line prior contact (an old unsubscribe reply, a one-off unrelated cold
+  outreach) is not sufficient on its own — real correspondence needs more
+  than one exchange, or one message with genuine substance
+  (`text_signals.is_substantive_text`); a message the existing category
+  heuristic confidently calls PROMOTIONAL never qualifies regardless of
+  corroboration; and a sender the user has told to stop contacting them
+  (`text_signals.is_opt_out_reply`) is suppressed unconditionally, since that
+  is evidence of wanting less contact, not more. Bulk/automated senders are
+  excluded via the existing `triage_heuristics._AUTOMATED_SENDER_KEYWORDS`
+  list; already-replied threads are excluded; a meeting-signal check gates on
   `is_meeting_request and confidence == "high"`, never confidence alone.
   Read-only — no archive, label, star, draft, or send.
 
