@@ -605,7 +605,9 @@ def detect_calendar_conflicts_impl(
         debug=debug,
     ) as st:
         data = cal.list_events(
-            calendar_id=calendar_id, time_min=start_iso, time_max=end_iso
+            calendar_id=calendar_id,
+            time_min=_normalize_time_bound(start_iso, param_name="start_iso"),
+            time_max=_normalize_time_bound(end_iso, param_name="end_iso"),
         )
         conflicts: List[Dict[str, Any]] = []
         for ev in data.get("items", []):
@@ -635,6 +637,43 @@ def detect_calendar_conflicts_impl(
 DEFAULT_LIST_WINDOW_DAYS = 30
 
 
+def _normalize_time_bound(value: Optional[str], *, param_name: str) -> Optional[str]:
+    """Normalize a caller-supplied time bound to RFC 3339 before it reaches
+    the Calendar API.
+
+    Google's ``timeMin``/``timeMax`` require a timezone-qualified timestamp —
+    a bare date (``2026-07-27``) or a naive datetime 400s on the live API
+    (#2517). Both are coerced to UTC at the parsed instant (a bare date lands
+    on that day's midnight boundary). A value that already carries an
+    explicit offset (``Z`` or ``+HH:MM``) passes through byte-identical —
+    reparsing and reformatting it is unnecessary and would risk drifting from
+    what the caller asked for.
+
+    Raises ``ValueError`` naming the received value on anything unparseable
+    — never forwarded to the backend to 400 on.
+    """
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        raise ValueError(
+            f"{param_name}={value!r} is empty; expected an RFC 3339 "
+            "timestamp (e.g. '2026-07-27T00:00:00Z') or a bare date "
+            "(e.g. '2026-07-27')"
+        )
+    normalized_for_parse = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        parsed = datetime.fromisoformat(normalized_for_parse)
+    except ValueError as exc:
+        raise ValueError(
+            f"{param_name}={value!r} is not a valid RFC 3339 timestamp or "
+            "date (expected e.g. '2026-07-27T00:00:00Z' or '2026-07-27')"
+        ) from exc
+    if parsed.tzinfo is not None:
+        return text
+    return parsed.replace(tzinfo=timezone.utc).isoformat()
+
+
 def list_calendar_events_impl(
     cal,
     *,
@@ -643,16 +682,21 @@ def list_calendar_events_impl(
     debug: bool = False,
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
-    """List events; explicit bounds pass through unchanged.
+    """List events; bounds are normalized to RFC 3339 before reaching the
+    backend.
 
     When BOTH bounds are absent, defaults to a forward window of
     ``now → +DEFAULT_LIST_WINDOW_DAYS`` — an unbounded listing makes the
     backend expand recurring series from their first-ever instance (#2162).
+    A bare date or naive datetime is coerced to UTC (#2517) — Google 400s on
+    a date-only ``timeMin``/``timeMax``.
     """
     if time_min is None and time_max is None:
         now_dt = now if now is not None else datetime.now(timezone.utc)
         time_min = now_dt.isoformat()
         time_max = (now_dt + timedelta(days=DEFAULT_LIST_WINDOW_DAYS)).isoformat()
+    time_min = _normalize_time_bound(time_min, param_name="time_min")
+    time_max = _normalize_time_bound(time_max, param_name="time_max")
     with log_tool_call(
         "list_calendar_events",
         {"time_min": time_min, "time_max": time_max},
@@ -851,6 +895,9 @@ class CalendarToolsMixin:
                         cal, time_min=time_min, time_max=time_max, debug=debug_flag
                     )
                 )
+            except ValueError as exc:
+                # Unparseable time bound — bad caller input, no stack trace.
+                return _envelope_err(str(exc))
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
             except Exception as exc:

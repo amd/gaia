@@ -1,63 +1,93 @@
 ---
 // Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
+
+// Sticky 66px header. Text-only wordmark — there is deliberately no logo glyph:
+// the real GAIA mark (public/gaia-icon.png) is a detailed illustration that
+// turns to mush at 22-26px, and inventing a substitute would put a fabricated
+// brand mark in the most identity-critical position on the site.
 import ThemeToggle from './ThemeToggle.astro';
 import DownloadButton from './DownloadButton.astro';
+
+// Section anchors live on the landing page, so they are absolute — the header
+// is shared with /hub and /hub/[id] where those sections don't exist.
+const NAV = [
+  { label: 'Run', href: '/#run' },
+  { label: 'Integrate', href: '/#integrate' },
+  { label: 'Build', href: '/#build' },
+  { label: 'Agent Hub', href: '/hub' },
+  { label: 'Docs', href: 'https://amd-gaia.ai/docs', external: true },
+];
 ---
 
-<header class="fixed top-0 inset-x-0 z-50 bg-g-bg/80 backdrop-blur-md border-b border-g-border">
-  <nav class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+<header
+  class="fixed inset-x-0 top-0 z-50 border-b border-g-border bg-g-hdr"
+  style="backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);"
+>
+  <nav class="g-shell flex h-[66px] items-center justify-between">
     <!-- Wordmark -->
     <a href="/" class="flex items-baseline gap-2">
-      <span class="text-base font-bold tracking-tight text-g-text">GAIA</span>
-      <span class="text-[10px] text-g-muted font-normal">by AMD</span>
+      <span class="font-display text-[18px] font-semibold tracking-[-0.02em] text-g-text">GAIA</span>
+      <span class="mono text-[10px] text-g-faint">/ AMD</span>
     </a>
 
-    <div class="flex items-center gap-1 sm:gap-2">
-      <!-- Desktop links -->
-      <a href="https://amd-gaia.ai/docs/quickstart" target="_blank" rel="noopener noreferrer" class="hidden sm:block px-3 py-2 text-sm text-g-muted hover:text-g-text transition-colors">Build</a>
-      <a href="/hub" class="hidden sm:block px-3 py-2 text-sm text-g-muted hover:text-g-text transition-colors">Agent Hub</a>
-      <a href="https://amd-gaia.ai/docs" target="_blank" rel="noopener noreferrer" class="hidden sm:block px-3 py-2 text-sm text-g-muted hover:text-g-text transition-colors">Docs</a>
-      <a href="https://github.com/amd/gaia" target="_blank" rel="noopener noreferrer" aria-label="GitHub" class="px-3 py-2 text-g-muted hover:text-g-text transition-colors">
-        <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+    <div class="flex items-center gap-1">
+      <div class="hidden items-center md:flex">
+        {NAV.map((item) => (
+          <a
+            href={item.href}
+            target={item.external ? '_blank' : undefined}
+            rel={item.external ? 'noopener noreferrer' : undefined}
+            class="rounded-g-btn px-3 py-2 text-[14px] text-g-muted transition-colors hover:text-g-text"
+          >{item.label}</a>
+        ))}
+      </div>
+
+      <a
+        href="https://github.com/amd/gaia"
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="GitHub"
+        class="rounded-g-btn p-2 text-g-muted transition-colors hover:text-g-text"
+      >
+        <svg class="h-[18px] w-[18px]" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
           <path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.17 6.839 9.49.5.092.682-.217.682-.482 0-.237-.008-.866-.013-1.7-2.782.604-3.369-1.341-3.369-1.341-.454-1.155-1.11-1.462-1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.831.092-.646.35-1.086.636-1.336-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0112 6.836c.85.004 1.705.115 2.504.337 1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.203 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.167 22 16.418 22 12c0-5.523-4.477-10-10-10z"/>
         </svg>
       </a>
-      <DownloadButton variant="primary" size="sm" class="hidden sm:inline-flex" />
+
       <ThemeToggle />
+      <DownloadButton size="sm" class="ml-1 hidden sm:inline-flex" />
 
       <!-- Mobile menu button -->
       <button
         id="mobile-menu-btn"
-        class="sm:hidden p-2 text-g-muted hover:text-g-text transition-colors"
+        class="rounded-g-btn p-2 text-g-muted transition-colors hover:text-g-text md:hidden"
         aria-label="Toggle menu"
         aria-expanded="false"
+        aria-controls="mobile-menu"
       >
-        <svg class="w-6 h-6 menu-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+        <svg class="menu-icon h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4 6h16M4 12h16M4 18h16"/>
         </svg>
-        <svg class="w-6 h-6 close-icon hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        <svg class="close-icon hidden h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M6 18L18 6M6 6l12 12"/>
         </svg>
       </button>
     </div>
   </nav>
 
-  <!-- Mobile Menu -->
-  <div id="mobile-menu" class="sm:hidden hidden border-t border-g-border bg-g-bg/95 backdrop-blur-md">
-    <div class="px-6 py-4 space-y-3">
-      <a href="https://amd-gaia.ai/docs/quickstart" target="_blank" rel="noopener noreferrer"
-         class="block text-g-muted hover:text-g-text transition-colors text-base font-medium py-2">
-        Build
-      </a>
-      <a href="/hub"
-         class="block text-g-muted hover:text-g-text transition-colors text-base font-medium py-2">
-        Agent Hub
-      </a>
-      <a href="https://amd-gaia.ai/docs" target="_blank" rel="noopener noreferrer"
-         class="block text-g-muted hover:text-g-text transition-colors text-base font-medium py-2">
-        Docs
-      </a>
+  <!-- Mobile menu -->
+  <div id="mobile-menu" class="hidden border-t border-g-border bg-g-bg/95 md:hidden" style="backdrop-filter: blur(14px);">
+    <div class="g-shell space-y-1 py-4">
+      {NAV.map((item) => (
+        <a
+          href={item.href}
+          target={item.external ? '_blank' : undefined}
+          rel={item.external ? 'noopener noreferrer' : undefined}
+          class="block py-2 text-[15px] font-medium text-g-muted transition-colors hover:text-g-text"
+        >{item.label}</a>
+      ))}
+      <DownloadButton size="sm" class="mt-3 w-full" />
     </div>
   </div>
 </header>
@@ -68,21 +98,22 @@ import DownloadButton from './DownloadButton.astro';
   const menuIcon = menuBtn?.querySelector('.menu-icon');
   const closeIcon = menuBtn?.querySelector('.close-icon');
 
-  menuBtn?.addEventListener('click', () => {
-    const isOpen = mobileMenu?.classList.toggle('hidden') === false;
-    menuBtn.setAttribute('aria-expanded', String(isOpen));
-    menuIcon?.classList.toggle('hidden', isOpen);
-    closeIcon?.classList.toggle('hidden', !isOpen);
-  });
+  const setOpen = (open: boolean) => {
+    mobileMenu?.classList.toggle('hidden', !open);
+    menuBtn?.setAttribute('aria-expanded', String(open));
+    menuIcon?.classList.toggle('hidden', open);
+    closeIcon?.classList.toggle('hidden', !open);
+  };
 
-  // Close menu when clicking outside
+  menuBtn?.addEventListener('click', () =>
+    setOpen(mobileMenu?.classList.contains('hidden') ?? false)
+  );
+
+  // Close on outside click, and after following an in-page anchor.
   document.addEventListener('click', (e) => {
     const target = e.target as Node | null;
-    if (!menuBtn?.contains(target) && !mobileMenu?.contains(target)) {
-      mobileMenu?.classList.add('hidden');
-      menuBtn?.setAttribute('aria-expanded', 'false');
-      menuIcon?.classList.remove('hidden');
-      closeIcon?.classList.add('hidden');
-    }
+    if (!menuBtn?.contains(target) && !mobileMenu?.contains(target)) setOpen(false);
   });
+  mobileMenu?.querySelectorAll('a').forEach((a) => a.addEventListener('click', () => setOpen(false)));
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setOpen(false); });
 </script>

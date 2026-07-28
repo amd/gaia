@@ -1,0 +1,50 @@
+---
+// Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+// One of the three "ways in" cards: icon chip + ordinal, audience label,
+// title, body, a `$` command pinned to the bottom, and a text CTA.
+
+import AgentIcon from './AgentIcon.astro';
+
+interface Props {
+  n: string;
+  icon: string;
+  who: string;
+  title: string;
+  body: string;
+  code: string;
+  cta: string;
+  href: string;
+  external?: boolean;
+}
+
+const { n, icon, who, title, body, code, cta, href, external = false } = Astro.props;
+---
+
+<div class="g-card g-card-lift relative flex flex-col overflow-hidden p-[26px]">
+  <div class="mb-5 flex items-center justify-between">
+    <span class="g-chip h-[42px] w-[42px] border-g-border2">
+      <AgentIcon name={icon} class="h-5 w-5" />
+    </span>
+    <span class="mono text-[34px] font-medium leading-none text-g-border2" aria-hidden="true">{n}</span>
+  </div>
+
+  <div class="g-label mb-1.5 text-g-gold-text">{who}</div>
+  <h3 class="g-h-card">{title}</h3>
+  <p class="g-body mb-5 mt-2.5">{body}</p>
+
+  <div class="g-cmd-plain mt-auto overflow-x-auto text-[12px]">
+    <span class="text-g-gold" aria-hidden="true">$</span>
+    <span class="whitespace-nowrap">{code}</span>
+  </div>
+
+  <a
+    href={href}
+    target={external ? '_blank' : undefined}
+    rel={external ? 'noopener noreferrer' : undefined}
+    class="g-cta-link mt-4 self-start"
+  >
+    {cta}<span aria-hidden="true">→</span>
+  </a>
+</div>
