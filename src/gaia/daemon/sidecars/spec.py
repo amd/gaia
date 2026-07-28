@@ -156,6 +156,41 @@ def agent_dev_src_dir(repo_root: Path, agent_id: str) -> Path:
     return repo_root / "hub" / "agents" / agent_id / "python"
 
 
+def repo_root_from_agent_dev_src_dir(dev_src_dir: Path, agent_id: str) -> Path:
+    """Invert :func:`agent_dev_src_dir`: recover the repo root a per-agent
+    dev-mode source dir was joined from.
+
+    A "restart the daemon" remedy must name the REPO ROOT — that's what a
+    Python environment/editable install is rooted at, and what the daemon's
+    own ``parents[4]`` anchor actually depends on — never the per-agent
+    source dir itself, which restarting from does nothing to change. Single
+    owner of the inverse join so that remedy can't independently drift from
+    :func:`agent_dev_src_dir`'s forward join.
+
+    Raises:
+        DevSrcDirResolutionError: *dev_src_dir* does not end in
+            ``hub/agents/<agent_id>/python`` — guessing a repo root from an
+            unexpected shape (e.g. an explicit ``--dev-src-dir`` pointed
+            somewhere else entirely) would be worse than refusing.
+    """
+    expected_tail = ("hub", "agents", agent_id, "python")
+    parts = dev_src_dir.parts
+    tail = parts[-len(expected_tail) :] if len(parts) >= len(expected_tail) else ()
+    # Case-insensitive on purpose: this checks program-defined literal
+    # convention words ("hub"/"agents"/"python") and the caller's own
+    # agent_id — never two independent user paths — so folding case here is
+    # not the "collapse two distinct POSIX directories" hazard the identity
+    # comparison above must avoid; it is comparing a path's shape against a
+    # known constant.
+    if tuple(p.lower() for p in tail) != tuple(t.lower() for t in expected_tail):
+        raise DevSrcDirResolutionError(
+            f"'{dev_src_dir}' does not end in the expected "
+            f"hub/agents/{agent_id}/python layout, so no repo root can be "
+            "derived from it to name in a restart remedy."
+        )
+    return Path(*parts[: -len(expected_tail)])
+
+
 def _default_email_src_dir() -> Path:
     # src/gaia/daemon/sidecars/spec.py -> repo root is parents[4]. This
     # follows the Python environment that launched the DAEMON, never a

@@ -635,10 +635,17 @@ def test_start_agent_from_wrong_checkout_is_refused_naming_both_checkouts(
         )
         combined = r.stdout + r.stderr
         assert r.returncode != 0, f"expected a refusal; got stdout={r.stdout!r}"
+        # The COMPARISON names both AGENT SOURCE dirs (AC-2).
         assert str(_TOY_DEV_FIXTURE_DIR) in combined
         assert str(expected_caller_path) in combined
         assert "Python environment" in combined
         assert "gaia daemon stop-agent toy-dev" not in combined
+        # The REMEDY must name the caller's REPO ROOT, not the agent source
+        # dir -- rooting a Python environment at the per-agent subdir does
+        # not move the daemon's parents[4] anchor, so the user would restart
+        # into the identical refusal (real-world evidence caught this).
+        assert f"rooted at {checkout_b.resolve()}." in combined
+        assert f"rooted at {expected_caller_path}" not in combined
 
         inst = client.attach()
         assert inst is not None, "the daemon must still have started"

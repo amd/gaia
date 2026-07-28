@@ -25,6 +25,8 @@ from tests.unit.test_daemon_agents_routes import _TOY_A, _FakeManager, _make_reg
 
 _CHECKOUT_A = Path("/fake/checkout-a/hub/agents/toy-dev/python")
 _CHECKOUT_B = Path("/fake/checkout-b/hub/agents/toy-dev/python")
+_CHECKOUT_A_REPO_ROOT = Path("/fake/checkout-a")
+_CHECKOUT_B_REPO_ROOT = Path("/fake/checkout-b")
 
 _TOY_DEV = dataclasses.replace(
     _TOY_A,
@@ -151,9 +153,18 @@ def test_mismatch_fresh_spawn_raises_naming_both_paths_and_python_environment():
     with pytest.raises(ModeConflictError) as exc_info:
         reg.ensure("toy-dev", mode="dev", dev_src_dir=str(_CHECKOUT_B))
     msg = str(exc_info.value)
+    # The COMPARISON names the two AGENT SOURCE dirs (AC-2).
     assert str(_CHECKOUT_A.resolve()) in msg
     assert str(_CHECKOUT_B.resolve()) in msg
     assert "Python environment" in msg
+    # The REMEDY names the caller's REPO ROOT, not the agent source dir --
+    # rooting a Python environment at the per-agent subdir does not move the
+    # daemon's parents[4] anchor by one inch, so a user following THAT
+    # literally would restart into the identical refusal (issue found in
+    # real-world evidence). A bare "Python environment" substring check
+    # can't catch a wrong path being named -- assert the exact phrase.
+    assert f"rooted at {_CHECKOUT_B_REPO_ROOT.resolve()}." in msg
+    assert f"rooted at {_CHECKOUT_B.resolve()}" not in msg
 
 
 def test_mismatch_fresh_spawn_does_not_name_stop_agent_command():
@@ -194,7 +205,13 @@ def test_mismatch_fresh_spawn_never_starts_a_manager_process():
     assert all(m.start_calls == 0 for m in created)
 
 
-def test_mismatch_against_already_running_dev_from_a_names_stop_agent_command():
+def test_mismatch_against_already_running_dev_from_a_does_not_name_stop_agent_command():
+    """A checkout mismatch is not a mode conflict: stopping the sidecar does
+    not change spec.dev_src_dir, so re-ensuring after a stop hits the
+    identical refusal. Unlike the genuine mode-conflict message (below),
+    stop-agent is neither necessary nor sufficient here -- restarting the
+    daemon is the only remedy, whether or not something is currently
+    running."""
     from gaia.daemon.sidecars.errors import ModeConflictError
 
     reg = _registry()
@@ -207,7 +224,8 @@ def test_mismatch_against_already_running_dev_from_a_names_stop_agent_command():
     assert str(_CHECKOUT_A.resolve()) in msg
     assert str(_CHECKOUT_B.resolve()) in msg
     assert "Python environment" in msg
-    assert "gaia daemon stop-agent toy-dev" in msg
+    assert f"rooted at {_CHECKOUT_B_REPO_ROOT.resolve()}." in msg
+    assert "gaia daemon stop-agent toy-dev" not in msg
 
 
 def test_mismatch_against_already_running_dev_from_a_does_not_return_a_success():

@@ -48,6 +48,70 @@ def test_agent_dev_src_dir_uses_the_given_agent_id_not_a_hardcoded_one():
 
 
 # ===========================================================================
+# repo_root_from_agent_dev_src_dir() -- the inverse join (issue #2588 redirect:
+# a "restart the daemon" remedy must name the REPO ROOT, never the per-agent
+# source dir -- rooting a Python environment at the latter changes nothing).
+# ===========================================================================
+
+
+def test_repo_root_from_agent_dev_src_dir_inverts_agent_dev_src_dir():
+    from gaia.daemon.sidecars.spec import (
+        agent_dev_src_dir,
+        repo_root_from_agent_dev_src_dir,
+    )
+
+    root = Path("/some/repo/root")
+    dev_src_dir = agent_dev_src_dir(root, "email")
+    assert repo_root_from_agent_dev_src_dir(dev_src_dir, "email") == root
+
+
+def test_repo_root_from_agent_dev_src_dir_uses_the_given_agent_id():
+    from gaia.daemon.sidecars.spec import (
+        agent_dev_src_dir,
+        repo_root_from_agent_dev_src_dir,
+    )
+
+    root = Path("/some/repo/root")
+    dev_src_dir = agent_dev_src_dir(root, "toy-dev")
+    assert repo_root_from_agent_dev_src_dir(dev_src_dir, "toy-dev") == root
+
+
+def test_repo_root_from_agent_dev_src_dir_rejects_unexpected_shape():
+    """Fails loudly rather than guessing a repo root from a path that does
+    not follow the hub/agents/<id>/python convention (e.g. an explicit
+    --dev-src-dir pointed somewhere else entirely)."""
+    from gaia.daemon.sidecars.errors import DevSrcDirResolutionError
+    from gaia.daemon.sidecars.spec import repo_root_from_agent_dev_src_dir
+
+    with pytest.raises(DevSrcDirResolutionError):
+        repo_root_from_agent_dev_src_dir(Path("/some/unrelated/path"), "email")
+
+
+def test_repo_root_from_agent_dev_src_dir_rejects_wrong_agent_id_in_the_tail():
+    from gaia.daemon.sidecars.errors import DevSrcDirResolutionError
+    from gaia.daemon.sidecars.spec import (
+        agent_dev_src_dir,
+        repo_root_from_agent_dev_src_dir,
+    )
+
+    dev_src_dir = agent_dev_src_dir(Path("/some/repo/root"), "email")
+    with pytest.raises(DevSrcDirResolutionError):
+        repo_root_from_agent_dev_src_dir(dev_src_dir, "toy-dev")
+
+
+def test_repo_root_from_agent_dev_src_dir_matches_convention_words_case_insensitively():
+    """The literal convention words (hub/agents/python) and the agent_id are
+    program-defined, not two independent user paths -- folding case here is
+    not the "collapse two distinct POSIX directories" hazard the identity
+    COMPARISON (in the registry gate) must avoid; it's shape-matching against
+    a known constant, so an uppercased real checkout is still invertible."""
+    from gaia.daemon.sidecars.spec import repo_root_from_agent_dev_src_dir
+
+    upper = Path("/SOME/REPO/ROOT/HUB/AGENTS/EMAIL/PYTHON")
+    assert repo_root_from_agent_dev_src_dir(upper, "email") == Path("/SOME/REPO/ROOT")
+
+
+# ===========================================================================
 # gaia.daemon.sidecars.errors.DevSrcDirResolutionError
 # ===========================================================================
 
