@@ -7437,7 +7437,10 @@ def _handle_daemon_start_agent(args):
     from gaia.daemon import client
     from gaia.daemon.errors import DaemonError
     from gaia.daemon.sidecars.errors import DevSrcDirResolutionError
-    from gaia.daemon.sidecars.spec import resolve_caller_dev_src_dir, resolve_caller_mode
+    from gaia.daemon.sidecars.spec import (
+        resolve_caller_dev_src_dir,
+        resolve_caller_mode,
+    )
 
     # Resolve THIS process's own intent before ever contacting the daemon —
     # the daemon is a long-lived singleton with its own environment and
