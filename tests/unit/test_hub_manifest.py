@@ -301,6 +301,15 @@ def test_invalid_language_raises():
         AgentManifest.from_dict(data)
 
 
+# cpp is covered by test_valid_cpp_manifest_parses — it needs its own `cpp:`
+# section, so it cannot ride the Python fixture here.
+@pytest.mark.parametrize("language", ["python", "go", "typescript"])
+def test_supported_languages_parse(language):
+    """go/typescript admit the terminal hub and the Agent UI as hub packages."""
+    data = dict(VALID_PYTHON_MANIFEST, language=language)
+    assert AgentManifest.from_dict(data).language == language
+
+
 def test_type_defaults_to_agent():
     data = dict(VALID_PYTHON_MANIFEST)
     assert "type" not in data

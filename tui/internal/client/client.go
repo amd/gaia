@@ -35,3 +35,19 @@ type AgentResponder interface {
 type TranscriptResetter interface {
 	ResetTranscript()
 }
+
+// AgentConfirmer is implemented by transports that can resolve a
+// needs_confirmation pause under the resume model (spec §5: the event carries
+// a non-empty confirm_url and the run stays paused server-side awaiting it).
+//
+// No shipped sidecar sets confirm_url today — every current agent speaks the
+// stateless stop-and-hand-off model, where needs_confirmation is immediately
+// terminal and there is nothing to resume. A transport still implements this
+// so a future resume-model peer is not left unreachable by the client; the UI
+// only calls it when the triggering event actually carried a confirm_url.
+type AgentConfirmer interface {
+	// Confirm delivers the user's decision for runID's pending confirmation.
+	// It returns an actionable error if the run is gone (the pause expired) or
+	// is not waiting on a confirmation.
+	Confirm(ctx context.Context, runID string, approved bool) error
+}

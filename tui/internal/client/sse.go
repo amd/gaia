@@ -497,6 +497,78 @@ type respondRequest struct {
 	Value     string `json:"value"`
 }
 
+// Confirm delivers an approve/deny decision for a needs_confirmation pause
+// under the resume model (spec §5). The path is the deterministic one the
+// spec documents for a confirm_url — "/v1/<agent>/query/{run_id}/confirm" —
+// built here rather than trusting a server-supplied confirm_url string
+// verbatim, exactly like Respond and cancelRun build their own paths instead
+// of taking one off the wire.
+//
+// No shipped sidecar implements this route today: the email agent's `/query`
+// speaks the stateless stop-and-hand-off model, where needs_confirmation ends
+// the run immediately and there is no server-side pause to resume. Calling
+// this against that sidecar gets a 404, handled below like any other
+// already-ended run — the same shape Respond already handles, not a new
+// failure class.
+func (s *SSEClient) Confirm(ctx context.Context, runID string, approved bool) error {
+	s.mu.Lock()
+	inst := s.inst
+	active := s.active
+	s.mu.Unlock()
+	if inst == nil || active == nil {
+		return fmt.Errorf(
+			"there is no live '%s' run to confirm — the run had already ended. Nothing was sent either way",
+			s.agentID)
+	}
+	if active.runID != runID {
+		return fmt.Errorf(
+			"the '%s' run this decision was for is no longer the active one — a new turn started first. Nothing was sent",
+			s.agentID)
+	}
+
+	payload, err := json.Marshal(confirmRequest{Approved: approved})
+	if err != nil {
+		return fmt.Errorf("could not encode the confirmation decision for '%s': %w", s.agentID, err)
+	}
+
+	resp, _, err := s.daemon.Do(ctx, inst, daemon.Request{
+		Method: http.MethodPost,
+		Path: fmt.Sprintf("/v1/%s/query/%s/confirm",
+			url.PathEscape(s.agentID), url.PathEscape(runID)),
+		Body: payload,
+		Header: http.Header{
+			"Content-Type": []string{"application/json"},
+		},
+		HTTPClient: s.cancelHTTP,
+		Op:         fmt.Sprintf("deliver the '%s' agent's confirmation decision", s.agentID),
+	})
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return nil
+	case http.StatusNotFound:
+		return fmt.Errorf(
+			"the '%s' run had already ended (no confirm endpoint to resume, or the run finished first), "+
+				"so the decision arrived too late. Nothing was sent either way",
+			s.agentID)
+	case http.StatusConflict:
+		return fmt.Errorf(
+			"the '%s' agent is no longer waiting on that confirmation — it already resolved. Nothing was sent",
+			s.agentID)
+	default:
+		return fmt.Errorf("delivering the '%s' agent's confirmation decision failed (%s)",
+			s.agentID, daemon.ErrorDetail(resp))
+	}
+}
+
+type confirmRequest struct {
+	Approved bool `json:"approved"`
+}
+
 // cancelRun asks the relay to drop a run we are abandoning.
 //
 // Best-effort: the sidecar may already be gone. It owns its own background
@@ -656,5 +728,6 @@ func newRunID() (string, error) {
 var (
 	_ AgentClient        = (*SSEClient)(nil)
 	_ AgentResponder     = (*SSEClient)(nil)
+	_ AgentConfirmer     = (*SSEClient)(nil)
 	_ TranscriptResetter = (*SSEClient)(nil)
 )

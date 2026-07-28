@@ -144,12 +144,14 @@ class EmailAgentConfig:
       usage).
     - ``output_dir``: where the agent dumps transcripts / artifacts.
     - ``undo_window_seconds``: how long after a soft-delete/archive the user
-      has to ``restore_message`` / ``undo_archive_batch``. After this window
-      the reversal raises with a "use Trash to recover" message. Defaults to
-      120 (a chat-speed floor) but is overridable via the
-      ``GAIA_EMAIL_UNDO_WINDOW_SECONDS`` env var so chat-mediated bulk
-      operations — which run through the slower LLM tool-loop — stay
-      undoable after completion (#2447).
+      has to ``restore_message`` / ``undo_archive_batch`` via their action_id.
+      After this window those two raise, pointing at their state-reconciling
+      counterparts instead (``restore_trashed_message`` / ``search_trash``
+      for trash — #2523 — has no window at all: it works any time the
+      message is still in Trash). Defaults to 120 (a chat-speed floor) but is
+      overridable via the ``GAIA_EMAIL_UNDO_WINDOW_SECONDS`` env var so
+      chat-mediated bulk operations — which run through the slower LLM
+      tool-loop — stay undoable after completion (#2447).
     - ``followup_window_days``: how many days a sent message may sit
       without an inbound reply before ``check_followups`` flags it
       (#1606). Must be a positive integer.

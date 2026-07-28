@@ -54,6 +54,16 @@ class SystemStatus(BaseModel):
     memory_available_gb: Optional[float] = None
     initialized: bool = False
     version: str = _gaia_version
+    # How to start Lemonade ON THIS HOST, resolved server-side by
+    # gaia.llm.lemonade_launcher.describe_start_hint. Served rather than
+    # hardcoded in the UI so one rule decides it: the UI cannot know whether
+    # this machine has a modern daemon, a legacy CLI, or a tray app, and a
+    # second copy of the answer is how `lemonade-server serve` survived in the
+    # banner long after it stopped existing. ``start_command`` is None on hosts
+    # started from a GUI — there is no shell command to give, and inventing one
+    # is the bug.
+    start_instruction: Optional[str] = None
+    start_command: Optional[str] = None
     # Extended Lemonade info (settings modal)
     lemonade_version: Optional[str] = None
     model_size_gb: Optional[float] = None

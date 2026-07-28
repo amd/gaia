@@ -32,6 +32,17 @@ GMAIL_SCOPES: tuple[str, ...] = (
     SCOPE_GMAIL_SEND,
 )
 
+# Deliberately NEVER requested (#2533) and NEVER included in GMAIL_SCOPES /
+# ALL_SCOPES / google.py's available_scopes: this is Gmail's full-mailbox
+# scope, required for DELETE /messages/{id} (permanent, unrecoverable
+# delete). Granting it would give every GAIA agent full-mailbox delete
+# access for the sake of one rare operation gmail.modify already lets the
+# agent approximate via Trash. Named here so LiveGmailBackend can reference
+# it in the actionable error it raises instead of attempting a call that
+# Google would 403 (ACCESS_TOKEN_SCOPE_INSUFFICIENT) after the user already
+# confirmed something irreversible.
+SCOPE_GMAIL_FULL_MAILBOX = "https://mail.google.com/"
+
 
 # ---------------------------------------------------------------------------
 # Calendar scopes

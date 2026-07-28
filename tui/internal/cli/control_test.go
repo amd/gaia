@@ -77,3 +77,61 @@ func TestControlPortAcceptsAUsablePort(t *testing.T) {
 		t.Errorf("got %+v, want port 8770", opts)
 	}
 }
+
+// TestAgentControlOptionsThreadsThroughForInteractive pins #2512: `chat --agent`
+// and `run <id>` used to accept --control-port and silently drop it — RunAgent
+// had no parameter to receive it at all, so nothing bound and nothing was
+// written to disk. This proves the decision function a real interactive launch
+// consults actually returns a bound port, the same "silent no-op" class
+// TestExplicitZeroPortStillEnablesControl pins for the bare root command.
+func TestAgentControlOptionsThreadsThroughForInteractive(t *testing.T) {
+	opts, err := agentControlOptions(false, 8815, true, false /* interactive: no --query */)
+	if err != nil {
+		t.Fatalf("agentControlOptions: %v", err)
+	}
+	if opts == nil {
+		t.Fatal("--agent ... --control-port 8815 (interactive) silently disabled the control API")
+	}
+	if opts.Port != 8815 {
+		t.Errorf("Port = %d, want 8815", opts.Port)
+	}
+}
+
+// TestAgentControlOptionsOffByDefault mirrors TestControlOffByDefault for the
+// --agent decision function: neither flag passed must never bind a port.
+func TestAgentControlOptionsOffByDefault(t *testing.T) {
+	opts, err := agentControlOptions(false, 0, false, false)
+	if err != nil {
+		t.Fatalf("agentControlOptions: %v", err)
+	}
+	if opts != nil {
+		t.Error("the control API must be off unless asked for")
+	}
+}
+
+// TestAgentControlOptionsRejectsOneShot: a --query run answers and exits before
+// any session exists for an assistant to attach to, so accepting --control there
+// would just move the silent no-op one call deeper instead of closing it. Loud
+// refusal, never an accepted-and-ignored flag.
+func TestAgentControlOptionsRejectsOneShot(t *testing.T) {
+	_, err := agentControlOptions(true, 0, false, true /* --query set */)
+	if err == nil {
+		t.Fatal("--control combined with --query was silently accepted")
+	}
+	if !strings.Contains(err.Error(), "--query") {
+		t.Errorf("error should name --query so the fix is obvious: %v", err)
+	}
+}
+
+// TestAgentControlOptionsOneShotWithoutControlIsUnaffected: --query alone (the
+// overwhelmingly common case) must not be penalized by a check that only exists
+// for the --control combination.
+func TestAgentControlOptionsOneShotWithoutControlIsUnaffected(t *testing.T) {
+	opts, err := agentControlOptions(false, 0, false, true /* --query set */)
+	if err != nil {
+		t.Fatalf("a bare one-shot with no --control must not be refused: %v", err)
+	}
+	if opts != nil {
+		t.Errorf("got %+v, want nil (control was never requested)", opts)
+	}
+}
